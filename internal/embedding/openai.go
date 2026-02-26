@@ -67,6 +67,9 @@ func newOpenAIModel() (EmbeddingModel, error) {
 		modelName = OpenAIDefaultModel
 	}
 	dimensions := config.GetEmbeddingDimensions()
+	if dimensions <= 0 {
+		dimensions = OpenAIDefaultDimension
+	}
 
 	return &openAIModel{
 		client:     &http.Client{Timeout: openAIHTTPTimeout},
