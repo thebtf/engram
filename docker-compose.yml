@@ -4,8 +4,10 @@
 # Client (hooks + MCP proxy) runs locally on each workstation.
 #
 # Usage:
+#   cp .env.example .env   # edit with your settings
 #   docker compose up -d
-#   # Then configure local client to point to this server.
+#
+# See docs/DEPLOYMENT.md for full setup instructions.
 
 services:
   postgres:
@@ -25,44 +27,26 @@ services:
       retries: 5
     restart: unless-stopped
 
-  worker:
+  # Combined worker + mcp-sse (default entrypoint runs both).
+  # To run separately, use: command: ["worker"] or command: ["mcp-sse"]
+  server:
     build:
       context: .
       target: server
-    command: ["worker"]
     ports:
       - "${WORKER_PORT:-37777}:37777"
+      - "${MCP_SSE_PORT:-37778}:37778"
     environment:
       DATABASE_DSN: "postgres://mnemonic:${POSTGRES_PASSWORD:-mnemonic}@postgres:5432/claude_mnemonic?sslmode=disable"
       CLAUDE_MNEMONIC_WORKER_HOST: "0.0.0.0"
       CLAUDE_MNEMONIC_WORKER_PORT: "37777"
-      CLAUDE_MNEMONIC_API_TOKEN: "${API_TOKEN:-}"
-      CLAUDE_MNEMONIC_EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-onnx}"
-      CLAUDE_MNEMONIC_EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
-      CLAUDE_MNEMONIC_EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
-      CLAUDE_MNEMONIC_EMBEDDING_MODEL_NAME: "${EMBEDDING_MODEL_NAME:-}"
-      CLAUDE_MNEMONIC_EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-384}"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-
-  mcp-sse:
-    build:
-      context: .
-      target: server
-    command: ["mcp-sse"]
-    ports:
-      - "${MCP_SSE_PORT:-37778}:37778"
-    environment:
-      DATABASE_DSN: "postgres://mnemonic:${POSTGRES_PASSWORD:-mnemonic}@postgres:5432/claude_mnemonic?sslmode=disable"
       CLAUDE_MNEMONIC_MCP_SSE_PORT: "37778"
       CLAUDE_MNEMONIC_API_TOKEN: "${API_TOKEN:-}"
-      CLAUDE_MNEMONIC_EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-onnx}"
+      CLAUDE_MNEMONIC_EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-openai}"
       CLAUDE_MNEMONIC_EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
       CLAUDE_MNEMONIC_EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
       CLAUDE_MNEMONIC_EMBEDDING_MODEL_NAME: "${EMBEDDING_MODEL_NAME:-}"
-      CLAUDE_MNEMONIC_EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-384}"
+      CLAUDE_MNEMONIC_EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-4096}"
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <!-- Background circle -->
+  <circle cx="128" cy="128" r="120" fill="#1e293b"/>
+  <circle cx="128" cy="128" r="120" stroke="#f59e0b" stroke-width="4" stroke-opacity="0.4"/>
+
+  <!-- Brain outline (left hemisphere) -->
+  <path d="M128 60 C100 60, 68 80, 68 112 C68 128, 76 140, 88 148 C80 156, 78 168, 82 180 C86 192, 100 200, 116 200 C124 200, 128 196, 128 196"
+        stroke="#f59e0b" stroke-width="6" stroke-linecap="round" fill="none"/>
+
+  <!-- Brain outline (right hemisphere) -->
+  <path d="M128 60 C156 60, 188 80, 188 112 C188 128, 180 140, 168 148 C176 156, 178 168, 174 180 C170 192, 156 200, 140 200 C132 200, 128 196, 128 196"
+        stroke="#f59e0b" stroke-width="6" stroke-linecap="round" fill="none"/>
+
+  <!-- Brain folds (left) -->
+  <path d="M128 76 C112 80, 92 96, 88 112" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <path d="M128 108 C108 112, 84 124, 80 140" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <path d="M128 140 C112 148, 96 164, 96 180" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.7"/>
+
+  <!-- Brain folds (right) -->
+  <path d="M128 76 C144 80, 164 96, 168 112" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <path d="M128 108 C148 112, 172 124, 176 140" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <path d="M128 140 C144 148, 160 164, 160 180" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.7"/>
+
+  <!-- Neural connection dots -->
+  <circle cx="88" cy="112" r="4" fill="#f59e0b" opacity="0.9"/>
+  <circle cx="168" cy="112" r="4" fill="#f59e0b" opacity="0.9"/>
+  <circle cx="80" cy="140" r="4" fill="#f59e0b" opacity="0.9"/>
+  <circle cx="176" cy="140" r="4" fill="#f59e0b" opacity="0.9"/>
+  <circle cx="96" cy="180" r="4" fill="#f59e0b" opacity="0.9"/>
+  <circle cx="160" cy="180" r="4" fill="#f59e0b" opacity="0.9"/>
+
+  <!-- Central stem -->
+  <line x1="128" y1="60" x2="128" y2="196" stroke="#f59e0b" stroke-width="2" opacity="0.3"/>
+
+  <!-- Memory chip symbol at bottom -->
+  <rect x="116" y="204" width="24" height="16" rx="2" fill="#f59e0b" opacity="0.8"/>
+  <line x1="120" y1="220" x2="120" y2="228" stroke="#f59e0b" stroke-width="2" opacity="0.6"/>
+  <line x1="128" y1="220" x2="128" y2="228" stroke="#f59e0b" stroke-width="2" opacity="0.6"/>
+  <line x1="136" y1="220" x2="136" y2="228" stroke="#f59e0b" stroke-width="2" opacity="0.6"/>
+
+  <!-- Plus symbol (top right) -->
+  <circle cx="192" cy="64" r="18" fill="#f59e0b" opacity="0.15"/>
+  <line x1="184" y1="64" x2="200" y2="64" stroke="#f59e0b" stroke-width="4" stroke-linecap="round"/>
+  <line x1="192" y1="56" x2="192" y2="72" stroke="#f59e0b" stroke-width="4" stroke-linecap="round"/>
+</svg>
