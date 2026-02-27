@@ -1,14 +1,14 @@
 #!/bin/bash
 # Claude Mnemonic - Remote Installation Script
-# Usage: curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash
 #
 # Or with a specific version:
-# curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.sh | bash -s -- v1.0.0
+# curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash -s -- v1.0.0
 
 set -e
 
 # Configuration
-GITHUB_REPO="lukaszraczylo/claude-mnemonic"
+GITHUB_REPO="thebtf/claude-mnemonic-plus"
 INSTALL_DIR="$HOME/.claude/plugins/marketplaces/claude-mnemonic"
 CACHE_DIR="$HOME/.claude/plugins/cache/claude-mnemonic/claude-mnemonic"
 PLUGINS_FILE="$HOME/.claude/plugins/installed_plugins.json"

@@ -196,7 +196,7 @@
           <CodeBlock :code="installCommands.macos">
             <span class="text-slate-500"># That's it. Seriously.</span>
             <br>
-            <span class="text-amber-400">curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.sh | bash</span>
+            <span class="text-amber-400">curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash</span>
           </CodeBlock>
         </div>
 
@@ -204,7 +204,7 @@
           <CodeBlock :code="installCommands.windows">
             <span class="text-slate-500"># PowerShell (as Administrator)</span>
             <br>
-            <span class="text-amber-400">irm https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.ps1 | iex</span>
+            <span class="text-amber-400">irm https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.ps1 | iex</span>
           </CodeBlock>
         </div>
 
@@ -448,8 +448,8 @@ const installTabs = [
 ]
 
 const installCommands = {
-  macos: `curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.sh | bash`,
-  windows: `irm https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.ps1 | iex`,
+  macos: `curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash`,
+  windows: `irm https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.ps1 | iex`,
   source: `git clone https://github.com/thebtf/claude-mnemonic-plus.git\ncd claude-mnemonic\nmake build && make install`,
 }
 

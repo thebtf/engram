@@ -1,5 +1,5 @@
 # Claude Mnemonic - Windows Uninstallation Script
-# Usage: irm https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/uninstall.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/uninstall.ps1 | iex
 #
 # Options:
 #   -KeepData    Keep the data directory (~/.claude-mnemonic/)

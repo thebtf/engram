@@ -302,7 +302,7 @@ release:
     ### Installation
 
     ```bash
-    curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.sh | bash
+    curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash
     ```
 
 signs:

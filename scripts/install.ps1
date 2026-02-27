@@ -1,8 +1,8 @@
 # Claude Mnemonic - Windows Installation Script
-# Usage: irm https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.ps1 | iex
 #
 # Or with a specific version:
-# $env:MNEMONIC_VERSION = "v1.0.0"; irm https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.ps1 | iex
+# $env:MNEMONIC_VERSION = "v1.0.0"; irm https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.ps1 | iex
 
 param(
     [string]$Version = $env:MNEMONIC_VERSION,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Configuration
-$GitHubRepo = "lukaszraczylo/claude-mnemonic"
+$GitHubRepo = "thebtf/claude-mnemonic-plus"
 $InstallDir = "$env:USERPROFILE\.claude\plugins\marketplaces\claude-mnemonic"
 $CacheDir = "$env:USERPROFILE\.claude\plugins\cache\claude-mnemonic\claude-mnemonic"
 $PluginsFile = "$env:USERPROFILE\.claude\plugins\installed_plugins.json"

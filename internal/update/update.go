@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	GitHubRepo       = "lukaszraczylo/claude-mnemonic"
+	GitHubRepo       = "thebtf/claude-mnemonic-plus"
 	ReleasesAPI      = "https://api.github.com/repos/" + GitHubRepo + "/releases/latest"
 	CheckInterval    = 24 * time.Hour
 	MaxExtractedSize = 250 * 1024 * 1024 // 250MB max per extracted file

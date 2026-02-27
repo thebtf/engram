@@ -76,14 +76,14 @@ defineProps({
   },
   installCommand: {
     type: String,
-    default: 'curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.sh | bash'
+    default: 'curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash'
   }
 })
 
 const copied = ref(false)
 
 function copyCommand() {
-  navigator.clipboard.writeText('curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.sh | bash')
+  navigator.clipboard.writeText('curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash')
   copied.value = true
   setTimeout(() => copied.value = false, 2000)
 }

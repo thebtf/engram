@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude Mnemonic - Uninstallation Script
-# Usage: curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/uninstall.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/uninstall.sh | bash
 #
 # Options:
 #   --keep-data    Keep the data directory (~/.claude-mnemonic/)

@@ -13,14 +13,11 @@ import (
 )
 
 // runMigrations runs all database migrations using gormigrate.
-func runMigrations(db *gorm.DB, sqlDB *sql.DB, embeddingDims int) error {
+func runMigrations(db *gorm.DB, embeddingDims int) error {
 	// Validate embedding dimensions before using in DDL statements.
 	if embeddingDims <= 0 {
 		return fmt.Errorf("invalid embedding dimensions: %d (must be positive)", embeddingDims)
 	}
-
-	// Keep sqlDB parameter intentionally for migration signature compatibility.
-	_ = sqlDB
 
 	// Enable pgvector extension before running any migrations.
 	// CREATE EXTENSION IF NOT EXISTS is idempotent.
@@ -707,7 +704,8 @@ func runMigrations(db *gorm.DB, sqlDB *sql.DB, embeddingDims int) error {
 		{
 			ID: "020_configurable_vector_dimensions",
 			Migrate: func(tx *gorm.DB) error {
-				const currentDimQuery = "SELECT atttypmod - 4 FROM pg_attribute WHERE attrelid = 'vectors'::regclass AND attname = 'embedding' AND atttypmod > 0"
+				// PostgreSQL stores vector(N) as atttypmod = N + 4; subtracting 4 yields actual dimension.
+			const currentDimQuery = "SELECT atttypmod - 4 FROM pg_attribute WHERE attrelid = 'vectors'::regclass AND attname = 'embedding' AND atttypmod > 0"
 				var current int
 				row := tx.Raw(currentDimQuery).Row()
 				if err := row.Scan(&current); err != nil {
@@ -787,6 +785,7 @@ func runMigrations(db *gorm.DB, sqlDB *sql.DB, embeddingDims int) error {
 
 func validateEmbeddingDimension(db *gorm.DB, expected int) error {
 	var actual int
+	// PostgreSQL stores vector(N) as atttypmod = N + 4; subtracting 4 yields actual dimension.
 	row := db.Raw("SELECT atttypmod - 4 FROM pg_attribute WHERE attrelid = 'vectors'::regclass AND attname = 'embedding' AND atttypmod > 0").Row()
 	if err := row.Scan(&actual); err != nil {
 		return fmt.Errorf("cannot read vector dimension from pg_attribute: %w", err)

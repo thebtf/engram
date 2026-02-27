@@ -735,6 +735,7 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 
 	// --- FTS path (observations only) ---
 	var ftsList []ScoredID
+	// ftsResultsCache holds FTS results for reuse as vector-error fallback in RRF fusion.
 	var ftsResultsCache []gorm.ScoredObservation
 	if m.observationStore != nil && (params.Type == "" || params.Type == "observations") {
 		ftsResults, err := m.observationStore.SearchObservationsFTSScored(ctx, params.Query, params.Project, params.Limit*2)
