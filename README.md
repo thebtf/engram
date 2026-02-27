@@ -4,89 +4,149 @@
 
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat-square&logo=go)](https://go.dev)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791?style=flat-square&logo=postgresql)](https://www.postgresql.org)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker)](https://www.docker.com)
 [![License](https://img.shields.io/github/license/thebtf/claude-mnemonic-plus?style=flat-square)](LICENSE)
 
 ---
 
 Fork of [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) extended with PostgreSQL+pgvector backend, hybrid search, memory consolidation lifecycle, session indexing, and MCP SSE transport for multi-workstation shared knowledge.
 
-## What's New in Plus
+## How It Works
 
-| Feature | Description |
-|---------|-------------|
-| **PostgreSQL + pgvector** | Replaced SQLite/sqlite-vec with PostgreSQL for scalable, concurrent storage |
-| **Hybrid Search** | Full-text search (tsvector) + vector similarity (pgvector) + RRF fusion |
-| **Memory Consolidation** | Automated relevance decay, creative association discovery, and forgetting lifecycle |
-| **Session Indexing** | JSONL session parser with workstation isolation and incremental indexing |
-| **Collections** | YAML-configurable collection model with context-aware routing |
-| **Smart Chunking** | AST-aware Go chunker + regex-based Python/TypeScript chunkers |
-| **MCP SSE Transport** | HTTP SSE server for remote MCP access across workstations |
-| **OpenAI-Compatible Embeddings** | Pluggable embedding provider (local ONNX or OpenAI REST API) |
-| **Token Authentication** | Bearer token auth for worker and SSE endpoints |
-| **Content-Addressable Storage** | Document store with markdown chunking and chunk-level vector search |
+Claude Mnemonic Plus uses a **client-server architecture**. The heavy lifting (database, search, embedding, consolidation) runs on a server — your workstations only need lightweight hooks and an MCP proxy.
 
-## Requirements
+```
+  Workstation A                 Workstation B
+  ┌──────────────┐              ┌──────────────┐
+  │  Claude Code  │              │  Claude Code  │
+  │  ┌─────────┐  │              │  ┌─────────┐  │
+  │  │  Hooks  │  │              │  │  Hooks  │  │
+  │  │MCP Proxy│  │              │  │MCP Proxy│  │
+  │  └────┬────┘  │              │  └────┬────┘  │
+  └───────┼───────┘              └───────┼───────┘
+          │ HTTP                         │ HTTP
+          └──────────┐    ┌──────────────┘
+                     ▼    ▼
+            ┌─────────────────────┐
+            │   Server (Docker)   │
+            │  ┌───────────────┐  │
+            │  │ Worker :37777 │  │
+            │  │ MCP SSE:37778 │  │
+            │  └───────┬───────┘  │
+            │          │          │
+            │  ┌───────▼───────┐  │
+            │  │  PostgreSQL   │  │
+            │  │  + pgvector   │  │
+            │  └───────────────┘  │
+            └─────────────────────┘
+```
 
-| Dependency | Required | Purpose |
-|------------|----------|---------|
-| **Claude Code CLI** | Yes | Host application (this is a plugin) |
-| **PostgreSQL 15+** | Yes | Primary data store |
-| **pgvector extension** | Yes | Vector similarity search |
-| **jq** | Yes | JSON processing during installation |
-| **Go 1.24+** | Build only | Required for building from source |
+**Server** (Docker on remote host / Unraid / NAS):
+- PostgreSQL 15+ with pgvector extension
+- Worker — HTTP API, dashboard, consolidation scheduler (:37777)
+- MCP SSE Server — remote MCP access (:37778)
+
+**Client** (each workstation):
+- Hooks — capture observations from Claude Code sessions, POST to remote worker
+- MCP Stdio Proxy — bridges Claude Code's stdio MCP protocol to the remote SSE server
 
 ---
 
-## Installation
+## Quick Start
 
-### Method 1: One-Line Remote Install (macOS / Linux)
+### 1. Deploy the Server
 
-The fastest way to get started. Downloads pre-built binaries, registers the plugin, configures MCP, and starts the worker automatically.
+#### Docker Compose (recommended)
+
+```bash
+git clone https://github.com/thebtf/claude-mnemonic-plus.git
+cd claude-mnemonic-plus
+
+# Optional: configure in .env file
+echo 'POSTGRES_PASSWORD=your-secure-password' > .env
+echo 'API_TOKEN=your-api-token' >> .env
+
+docker compose up -d
+```
+
+This starts three containers:
+- **postgres** — PostgreSQL 17 with pgvector (data persisted in Docker volume)
+- **worker** — HTTP API + dashboard at `http://your-server:37777`
+- **mcp-sse** — MCP SSE server at `http://your-server:37778`
+
+Verify:
+
+```bash
+curl http://your-server:37777/health
+```
+
+#### Existing PostgreSQL
+
+If you already have PostgreSQL with pgvector, just run the worker and MCP SSE containers:
+
+```bash
+# Pull and run directly
+docker compose up -d worker mcp-sse
+
+# Or override DATABASE_DSN to point to your existing PostgreSQL:
+DATABASE_DSN="postgres://user:pass@your-pg-host:5432/claude_mnemonic?sslmode=disable" \
+  docker compose up -d worker mcp-sse
+```
+
+Make sure pgvector extension is enabled:
+
+```sql
+\c claude_mnemonic
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+#### Unraid
+
+Install via Docker template:
+
+1. **Add container** in Unraid Docker tab
+2. Set **Repository**: `ghcr.io/thebtf/claude-mnemonic-plus:latest` (or build locally)
+3. Map port **37777** (worker) and **37778** (MCP SSE)
+4. Add path mapping for PostgreSQL data or point `DATABASE_DSN` to your existing PostgreSQL instance
+5. Set environment variables:
+   - `DATABASE_DSN` = `postgres://user:pass@your-pg:5432/claude_mnemonic?sslmode=disable`
+   - `CLAUDE_MNEMONIC_API_TOKEN` = your token (optional but recommended)
+   - `CLAUDE_MNEMONIC_EMBEDDING_PROVIDER` = `onnx` (default) or `openai`
+
+> **Tip:** If you run PostgreSQL as a separate Unraid container (e.g., the official `postgres` or `pgvector/pgvector` image), use its container IP or Unraid bridge network hostname in `DATABASE_DSN`.
+
+### 2. Set Up the Client
+
+The client runs on each workstation where you use Claude Code. It needs only the hooks (to capture observations) and the MCP stdio proxy (to access `nia` tools).
+
+#### Automatic Install (macOS / Linux)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash
 ```
 
-To install a specific version:
+This downloads pre-built binaries, registers hooks and MCP with Claude Code, and starts the local components.
+
+After install, configure the server connection:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash -s -- v1.0.0
+# Point hooks to your remote worker
+export CLAUDE_MNEMONIC_WORKER_HOST=your-server
+export CLAUDE_MNEMONIC_WORKER_PORT=37777
+
+# Point MCP to your remote SSE server
+# (configured automatically if you edit ~/.claude/settings.json — see Manual Setup)
 ```
 
-**What it does:**
-
-1. Detects your OS and architecture (macOS Intel/ARM, Linux amd64)
-2. Downloads the release archive from GitHub
-3. Installs binaries to `~/.claude/plugins/marketplaces/claude-mnemonic/`
-4. Registers plugin in Claude Code configuration files
-5. Configures MCP server in `~/.claude/settings.json`
-6. Sets up the statusline hook
-7. Starts the worker service on port 37777
-
-**Requires:** `curl`, `tar`, `jq`
-
-### Method 2: Build from Source (all platforms)
-
-For development or when you need the latest changes. Works on macOS, Linux, and Windows.
-
-**macOS / Linux:**
-
-```bash
-git clone https://github.com/thebtf/claude-mnemonic-plus.git
-cd claude-mnemonic-plus
-make build      # Build all binaries (worker, mcp-server, 6 hooks)
-make install    # Install to Claude Code, register plugin, start worker
-```
-
-**Windows (PowerShell):**
+#### Automatic Install (Windows PowerShell)
 
 ```powershell
+# Clone and build client binaries
 git clone https://github.com/thebtf/claude-mnemonic-plus.git
 cd claude-mnemonic-plus
 
-# Build all binaries
 $env:CGO_ENABLED = "1"
-go build -tags fts5 -ldflags "-s -w" -o bin\worker.exe .\cmd\worker
+go build -tags fts5 -ldflags "-s -w" -o bin\mcp-stdio-proxy.exe .\cmd\mcp-stdio-proxy
 go build -tags fts5 -ldflags "-s -w" -o bin\mcp-server.exe .\cmd\mcp
 go build -tags fts5 -ldflags "-s -w" -o bin\hooks\session-start.exe .\cmd\hooks\session-start
 go build -tags fts5 -ldflags "-s -w" -o bin\hooks\user-prompt.exe .\cmd\hooks\user-prompt
@@ -94,185 +154,92 @@ go build -tags fts5 -ldflags "-s -w" -o bin\hooks\post-tool-use.exe .\cmd\hooks\
 go build -tags fts5 -ldflags "-s -w" -o bin\hooks\subagent-stop.exe .\cmd\hooks\subagent-stop
 go build -tags fts5 -ldflags "-s -w" -o bin\hooks\stop.exe .\cmd\hooks\stop
 go build -tags fts5 -ldflags "-s -w" -o bin\hooks\statusline.exe .\cmd\hooks\statusline
-```
 
-Then follow [Windows Manual Installation](#windows-manual-installation) to register the plugin.
-
-`make install` (macOS/Linux) performs the same registration as the remote install script: copies binaries, updates `installed_plugins.json`, `settings.json`, and `known_marketplaces.json`, registers the MCP server, and starts the worker.
-
-**Requires:** Go 1.24+, CGO enabled, `make` (macOS/Linux) or PowerShell (Windows), `jq`
-
-### Method 3: Project-Level MCP Configuration
-
-If you only need the MCP tools for a specific project, add to the project's `.claude/settings.json`:
-
-**macOS / Linux:**
-
-```json
-{
-  "mcpServers": {
-    "claude-mnemonic": {
-      "command": "~/.claude/plugins/marketplaces/claude-mnemonic/mcp-server",
-      "args": ["--project", "${CLAUDE_PROJECT}"],
-      "env": {}
-    }
-  }
-}
-```
-
-**Windows:**
-
-```json
-{
-  "mcpServers": {
-    "claude-mnemonic": {
-      "command": "C:\\Users\\YOU\\.claude\\plugins\\marketplaces\\claude-mnemonic\\mcp-server.exe",
-      "args": ["--project", "${CLAUDE_PROJECT}"],
-      "env": {}
-    }
-  }
-}
-```
-
-This scopes the `nia` MCP tools to that project only. The worker must still be running.
-
-### Method 4: Global MCP Configuration
-
-To make the MCP tools available across all projects, add the same configuration to `~/.claude/settings.json` (macOS/Linux) or `%USERPROFILE%\.claude\settings.json` (Windows).
-
-> **Note:** Both `make install` and `scripts/install.sh` configure the global MCP server automatically. Manual configuration is only needed if you installed binaries manually or are on Windows.
-
-### Windows Manual Installation
-
-After building from source (see Method 2), register the plugin manually:
-
-```powershell
+# Install to Claude Code plugin directory
 $PluginDir = "$env:USERPROFILE\.claude\plugins\marketplaces\claude-mnemonic"
-
-# Create directories
 New-Item -ItemType Directory -Force -Path "$PluginDir\hooks"
 New-Item -ItemType Directory -Force -Path "$PluginDir\.claude-plugin"
 New-Item -ItemType Directory -Force -Path "$PluginDir\commands"
 
-# Copy binaries
-Copy-Item bin\worker.exe $PluginDir\
+Copy-Item bin\mcp-stdio-proxy.exe $PluginDir\
 Copy-Item bin\mcp-server.exe $PluginDir\
 Copy-Item bin\hooks\*.exe "$PluginDir\hooks\"
 Copy-Item plugin\hooks\hooks.json "$PluginDir\hooks\"
 Copy-Item plugin\commands\* "$PluginDir\commands\" -ErrorAction SilentlyContinue
-
-# Register MCP server in global settings
-$SettingsFile = "$env:USERPROFILE\.claude\settings.json"
-if (-not (Test-Path $SettingsFile)) { '{}' | Set-Content $SettingsFile }
-$settings = Get-Content $SettingsFile | ConvertFrom-Json
-if (-not $settings.mcpServers) { $settings | Add-Member -NotePropertyName mcpServers -NotePropertyValue @{} }
-$settings.mcpServers.'claude-mnemonic' = @{
-    command = "$PluginDir\mcp-server.exe"
-    args = @("--project", '${CLAUDE_PROJECT}')
-    env = @{}
-}
-$settings | ConvertTo-Json -Depth 10 | Set-Content $SettingsFile
-
-# Start worker
-Start-Process -NoNewWindow -FilePath "$PluginDir\worker.exe"
 ```
 
-To verify the worker is running:
+Then follow the manual MCP configuration below.
 
-```powershell
-Invoke-RestMethod http://localhost:37777/health
-```
+#### Manual Client Setup (all platforms)
 
----
+After building or downloading client binaries, register the MCP server in Claude Code.
 
-## PostgreSQL Setup
+**Option A: MCP SSE Proxy (recommended for remote server)**
 
-Before first use, create the database and enable the pgvector extension:
-
-```sql
-CREATE DATABASE claude_mnemonic;
-\c claude_mnemonic
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-Set the connection string:
-
-```bash
-export DATABASE_DSN="postgres://user:pass@localhost:5432/claude_mnemonic?sslmode=disable"
-```
-
-Or add to `~/.claude-mnemonic/settings.json`:
+Add to `~/.claude/settings.json` (macOS/Linux) or `%USERPROFILE%\.claude\settings.json` (Windows):
 
 ```json
 {
-  "database_dsn": "postgres://user:pass@localhost:5432/claude_mnemonic?sslmode=disable"
+  "mcpServers": {
+    "claude-mnemonic": {
+      "command": "/path/to/mcp-stdio-proxy",
+      "args": ["--sse-url", "http://your-server:37778"],
+      "env": {}
+    }
+  }
 }
 ```
 
-Tables are created automatically on first run via GORM AutoMigrate.
+This bridges Claude Code's stdio MCP protocol to the remote SSE server. All `nia` tools work transparently.
+
+**Option B: Direct MCP server (for local-only setups)**
+
+If running everything locally (server + client on same machine):
+
+```json
+{
+  "mcpServers": {
+    "claude-mnemonic": {
+      "command": "/path/to/mcp-server",
+      "args": ["--project", "${CLAUDE_PROJECT}"],
+      "env": {
+        "DATABASE_DSN": "postgres://user:pass@localhost:5432/claude_mnemonic?sslmode=disable"
+      }
+    }
+  }
+}
+```
+
+**Hooks configuration** is handled automatically by the install script. For manual setup, copy `plugin/hooks/hooks.json` to your plugin directory and ensure hook binaries are in the `hooks/` subdirectory.
 
 ---
 
-## Architecture
+## Features
 
-```
-+---------------------------------------------------------+
-|                     Claude Code                          |
-|  +----------+  +----------+  +---------------------+    |
-|  |  Hooks   |  |   MCP    |  |  MCP SSE Proxy      |    |
-|  | (HTTP)   |  | (stdio)  |  | (stdin->POST->SSE)  |    |
-|  +----+-----+  +----+-----+  +--------+------------+    |
-+-------|--------------|-----------------|-----------------+
-        |              |                 |
-        v              v                 v
-+---------------+ +---------------+ +-------------------+
-|   Worker      | |  MCP Server   | |  MCP SSE Server   |
-|  :37777       | |  (stdio)      | |  :37778           |
-|  HTTP API     | |  nia tools    | |  HTTP SSE         |
-|  Dashboard    | |               | |  Token Auth       |
-+-------+-------+ +-------+------+ +---------+---------+
-        |                 |                   |
-        v                 v                   v
-+--------------------------------------------------------+
-|                PostgreSQL + pgvector                     |
-|  +------------+ +----------+ +------------------------+ |
-|  | tsvector   | | pgvector | | GORM models            | |
-|  | GIN index  | | HNSW idx | | (observations,         | |
-|  | (FTS)      | | (cosine) | |  relations, etc.)      | |
-|  +------------+ +----------+ +------------------------+ |
-+--------------------------------------------------------+
-```
-
-### Components
-
-| Component | Binary | Description |
-|-----------|--------|-------------|
-| **Worker** | `bin/worker` | HTTP API (:37777), Vue dashboard, SSE events, consolidation scheduler |
-| **MCP Server** | `bin/mcp-server` | Stdio MCP server exposing 37+ `nia` tools |
-| **MCP SSE Server** | `bin/mcp-sse` | HTTP SSE transport (:37778) for remote MCP access |
-| **MCP Stdio Proxy** | `bin/mcp-stdio-proxy` | Bridges stdin/stdout to SSE server for remote hooks |
-| **Hooks** | `bin/hooks/*` | 6 Claude Code lifecycle hooks |
-
-### Hooks
-
-| Hook | Event | Purpose |
-|------|-------|---------|
-| `session-start` | SessionStart | Captures session context on startup |
-| `user-prompt` | UserPromptSubmit | Records user prompts |
-| `post-tool-use` | PostToolUse | Records tool invocations and results |
-| `subagent-stop` | SubagentStop | Captures subagent completion |
-| `stop` | Stop | Creates session summary on exit |
-| `statusline` | — | Displays memory status in Claude Code statusline |
+| Feature | Description |
+|---------|-------------|
+| **PostgreSQL + pgvector** | Scalable, concurrent storage with vector similarity search |
+| **Hybrid Search** | Full-text search (tsvector) + vector similarity (pgvector) + RRF fusion |
+| **37+ MCP Tools** | Search, timeline, decisions, changes, find_by_concept, bulk ops, health checks |
+| **Memory Consolidation** | Automated relevance decay, creative associations, and forgetting lifecycle |
+| **Session Indexing** | JSONL session parser with workstation isolation and incremental indexing |
+| **Collections** | YAML-configurable collection model with path-based context routing |
+| **Smart Chunking** | AST-aware Go chunker + regex-based Python/TypeScript chunkers |
+| **MCP SSE Transport** | HTTP SSE server for remote MCP access across workstations |
+| **OpenAI-Compatible Embeddings** | Local ONNX BGE (384D) or any OpenAI-compatible REST API |
+| **Token Authentication** | Bearer token auth for worker and SSE endpoints |
+| **Dashboard** | Vue-based web dashboard at worker port |
+| **17 Relation Types** | Knowledge graph edges (causes, fixes, supersedes, contradicts, explains, etc.) |
 
 ---
 
 ## Configuration
 
-Config file: `~/.claude-mnemonic/settings.json`
+All variables use the `CLAUDE_MNEMONIC_` prefix. Environment variables override config file values.
 
-All variables use the `CLAUDE_MNEMONIC_` prefix in the config file (e.g., `CLAUDE_MNEMONIC_WORKER_PORT`). Environment variables override config file values.
+Config file location: `~/.claude-mnemonic/settings.json`
 
-### Core Settings
+### Server Settings
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -280,41 +247,45 @@ All variables use the `CLAUDE_MNEMONIC_` prefix in the config file (e.g., `CLAUD
 | `DATABASE_MAX_CONNS` | `10` | Maximum database connections |
 | `WORKER_PORT` | `37777` | Worker HTTP API and dashboard port |
 | `WORKER_HOST` | `0.0.0.0` | Worker bind address |
-| `WORKER_TOKEN` | — | Bearer token for API authentication (optional) |
-| `CONTEXT_OBSERVATIONS` | `100` | Maximum memories returned per session |
-| `CONTEXT_FULL_COUNT` | `25` | Memories with full detail (rest are condensed) |
-
-### Embedding Settings
-
-| Variable | Default | Description |
-|----------|---------|-------------|
+| `API_TOKEN` | — | Bearer token for API authentication (recommended for remote) |
 | `EMBEDDING_PROVIDER` | `onnx` | Provider: `onnx` (local BGE) or `openai` (REST API) |
 | `EMBEDDING_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint URL |
-| `EMBEDDING_API_KEY` | — | API key (env-only, not stored in config) |
+| `EMBEDDING_API_KEY` | — | API key for OpenAI provider |
 | `EMBEDDING_MODEL_NAME` | `text-embedding-3-small` | Model name for OpenAI provider |
 | `EMBEDDING_DIMENSIONS` | `384` | Embedding vector dimensions |
-
-### Reranking Settings
-
-| Variable | Default | Description |
-|----------|---------|-------------|
 | `RERANKING_ENABLED` | `true` | Enable cross-encoder reranking |
 | `RERANKING_CANDIDATES` | `100` | Candidate results before reranking |
 | `RERANKING_RESULTS` | `10` | Final results after reranking |
+| `MCP_SSE_PORT` | `37778` | MCP SSE HTTP server port |
 
-### Session & Workstation Settings
+### Client Settings
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `WORKER_HOST` | `127.0.0.1` | Worker address (set to server IP for remote) |
+| `WORKER_PORT` | `37777` | Worker port |
+| `API_TOKEN` | — | Must match server token |
 | `SESSIONS_DIR` | `~/.claude/projects/` | Claude Code session JSONL directory |
 | `WORKSTATION_ID` | auto-generated | Override workstation identifier (8-char hex) |
-| `COLLECTION_CONFIG` | — | Path to collections YAML config file |
+| `CONTEXT_OBSERVATIONS` | `100` | Maximum memories returned per session |
+| `CONTEXT_FULL_COUNT` | `25` | Memories with full detail (rest condensed) |
 
-### MCP SSE Settings
+### Docker Compose `.env` File
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MCP_SSE_PORT` | `37778` | MCP SSE HTTP server port |
+```env
+POSTGRES_PASSWORD=your-secure-password
+POSTGRES_PORT=5432
+API_TOKEN=your-api-token
+WORKER_PORT=37777
+MCP_SSE_PORT=37778
+EMBEDDING_PROVIDER=onnx
+# For OpenAI-compatible embeddings:
+# EMBEDDING_PROVIDER=openai
+# EMBEDDING_BASE_URL=https://api.openai.com/v1
+# EMBEDDING_API_KEY=sk-...
+# EMBEDDING_MODEL_NAME=text-embedding-3-small
+# EMBEDDING_DIMENSIONS=384
+```
 
 ---
 
@@ -394,25 +365,11 @@ The `nia` MCP server exposes 37+ tools organized into six categories.
 
 ---
 
-## Hybrid Search
-
-Search combines three signals using Reciprocal Rank Fusion (RRF, k=60):
-
-1. **Vector Search** — pgvector cosine distance with HNSW index
-2. **Full-Text Search** — PostgreSQL tsvector with `websearch_to_tsquery` and GIN index
-3. **Metadata Filters** — type, project, concepts, files, date range
-
-Results are fused with configurable weights, then optionally reranked by a cross-encoder model. Short-circuit optimization skips fusion when any single result scores >= 0.85.
-
----
-
 ## Memory Consolidation Lifecycle
 
-The consolidation scheduler runs three automated cycles:
+The consolidation scheduler runs three automated cycles on the server:
 
 ### Relevance Decay (daily)
-
-Recalculates relevance scores:
 
 ```
 relevance = decay * (0.3 + 0.3*access) * relations * (0.5 + importance) * (0.7 + 0.3*confidence)
@@ -422,7 +379,7 @@ Where `decay = exp(-0.1 * ageDays)` and `access = exp(-0.05 * accessRecencyDays)
 
 ### Creative Associations (weekly)
 
-Samples observations, computes embedding similarity, and discovers relations:
+Samples observations, computes embedding similarity, discovers relations:
 
 | Relation | Condition |
 |----------|-----------|
@@ -441,32 +398,6 @@ Archives observations below relevance threshold. Protected observations are neve
 
 ---
 
-## Relation Types
-
-17 relation types for knowledge graph edges:
-
-| Type | Description |
-|------|-------------|
-| `causes` | A causes B |
-| `fixes` | A fixes B |
-| `supersedes` | A replaces B |
-| `depends_on` | A depends on B |
-| `relates_to` | General relationship |
-| `evolves_from` | A evolved from B |
-| `leads_to` | A leads to B (sequential) |
-| `similar_to` | A is similar to B |
-| `contradicts` | A contradicts B |
-| `reinforces` | A reinforces B |
-| `invalidated_by` | A invalidated by B |
-| `explains` | A explains B |
-| `shares_theme` | A shares theme with B |
-| `parallel_context` | A and B co-occurred |
-| `summarizes` | A summarizes B |
-| `part_of` | A is part of B |
-| `prefers_over` | A is preferred over B |
-
----
-
 ## Session Indexing
 
 Sessions are indexed from Claude Code JSONL files with workstation isolation:
@@ -478,105 +409,63 @@ session_id     = UUID from JSONL filename
 composite_key  = workstation_id:project_id:session_id
 ```
 
-Incremental indexing skips unchanged files (mtime-based). Search across sessions with full-text search via `websearch_to_tsquery`.
+Each workstation generates a unique ID automatically. Multiple workstations sharing one database keep their sessions isolated while search works across all of them.
 
 ---
 
-## Multi-Workstation Setup
+## Advanced: Full Local Development
 
-For shared brain across multiple machines:
-
-1. **Shared PostgreSQL** — Point all workstations to the same database via `DATABASE_DSN`
-2. **MCP SSE Transport** — Run the SSE server on an accessible host:
-   ```bash
-   # On the server:
-   ./bin/mcp-sse  # listens on :37778
-
-   # On remote workstations, use the stdio proxy:
-   ./bin/mcp-stdio-proxy --sse-url http://server:37778
-   ```
-3. **Token Auth** — Set `WORKER_TOKEN` for secure access across the network
-4. **Workstation Isolation** — Each machine gets a unique `workstation_id` (auto-generated from hostname + machine ID). Override with `WORKSTATION_ID` env var for consistent IDs.
-
----
-
-## File Layout After Installation
-
-**macOS / Linux:** `~/.claude/plugins/marketplaces/claude-mnemonic/`
-**Windows:** `%USERPROFILE%\.claude\plugins\marketplaces\claude-mnemonic\`
-
-```
-claude-mnemonic/
-  worker(.exe)              HTTP API server (:37777)
-  mcp-server(.exe)          MCP stdio server (nia tools)
-  hooks/
-    session-start(.exe)     SessionStart hook
-    user-prompt(.exe)       UserPromptSubmit hook
-    post-tool-use(.exe)     PostToolUse hook
-    subagent-stop(.exe)     SubagentStop hook
-    stop(.exe)              Stop hook
-    statusline(.exe)        Status line display
-    hooks.json              Hook configuration
-  commands/
-    restart.md              /restart slash command
-  .claude-plugin/
-    plugin.json             Plugin metadata
-    marketplace.json        Marketplace registration
-```
-
----
-
-## Development
+For development or running everything on a single machine without Docker:
 
 ```bash
-make build          # Build all binaries
-make test           # Run tests with race detector
-make test-coverage  # Run tests with coverage report
-make bench          # Run benchmarks
-make lint           # Run golangci-lint
-make fmt            # Format code
-make dev            # Run worker in development mode
-make clean          # Clean build artifacts
+git clone https://github.com/thebtf/claude-mnemonic-plus.git
+cd claude-mnemonic-plus
+make build      # Build all binaries
+make install    # Install plugin, register MCP, start worker
 ```
 
-### Worker Management
+This requires PostgreSQL + pgvector running locally. Set `DATABASE_DSN` before running.
+
+### Make Targets
 
 ```bash
+make build            # Build all binaries
+make install          # Install to Claude Code, register plugin, start worker
+make uninstall        # Remove plugin and stop worker
+make test             # Run tests with race detector
+make test-coverage    # Run tests with coverage report
 make start-worker     # Start worker in background
 make stop-worker      # Stop running worker
 make restart-worker   # Restart worker
+make dev              # Run worker in foreground (development mode)
+make clean            # Clean build artifacts
 ```
 
 ### Project Structure
 
 ```
 cmd/
-  mcp/                MCP stdio server
-  mcp-sse/            MCP SSE HTTP server
-  mcp-stdio-proxy/    stdin->SSE bridge
-  worker/             HTTP API + dashboard
-  hooks/              Claude Code lifecycle hooks
+  mcp/                MCP stdio server (local direct access)
+  mcp-sse/            MCP SSE HTTP server (remote access)
+  mcp-stdio-proxy/    stdio → SSE bridge (client-side)
+  worker/             HTTP API + dashboard (server-side)
+  hooks/              Claude Code lifecycle hooks (client-side)
 internal/
   chunking/           Smart document chunking (markdown, Go, Python, TypeScript)
   collections/        YAML collection config + context routing
   config/             Configuration management
-  consolidation/      Memory consolidation lifecycle (scheduler, associations, scoring)
+  consolidation/      Memory consolidation lifecycle
   db/gorm/            PostgreSQL GORM stores + migrations
   embedding/          ONNX BGE + OpenAI REST embedding providers
   mcp/                MCP server + SSE handler
-  pattern/            Pattern detection
-  privacy/            Secret stripping
-  reranking/          Cross-encoder reranking
   scoring/            Importance + relevance scoring
   search/             Hybrid search manager + RRF fusion
   sessions/           JSONL session parser + indexer
   vector/pgvector/    pgvector client + sync
-  watcher/            File watcher
-  worker/             HTTP handlers, middleware, SDK, SSE
+  worker/             HTTP handlers, middleware, SSE
 pkg/
   hooks/              Hook event client
-  models/             Domain models (observations, relations, patterns, etc.)
-  similarity/         Clustering utilities
+  models/             Domain models
 plugin/               Claude Code plugin definition
 ```
 
@@ -584,62 +473,50 @@ plugin/               Claude Code plugin definition
 
 ## Uninstall
 
-### If installed via `make install`:
+### Server
 
 ```bash
+docker compose down -v    # Stop and remove containers + data
+docker compose down       # Stop and remove containers (keep data)
+```
+
+### Client (macOS / Linux)
+
+```bash
+# Via install script:
+curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash -s -- --uninstall
+
+# Or via make (if built from source):
 make uninstall
 ```
 
-### If installed via remote script (macOS / Linux):
-
-```bash
-# Full uninstall (removes data directory too):
-curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash -s -- --uninstall
-
-# Keep data directory (~/.claude-mnemonic):
-curl -sSL https://raw.githubusercontent.com/thebtf/claude-mnemonic-plus/main/scripts/install.sh | bash -s -- --uninstall --keep-data
-```
-
-### Windows (PowerShell):
+### Client (Windows PowerShell)
 
 ```powershell
-# Stop worker
-Get-Process -Name worker -ErrorAction SilentlyContinue | Stop-Process -Force
+$PluginDir = "$env:USERPROFILE\.claude\plugins\marketplaces\claude-mnemonic"
+Remove-Item -Recurse -Force $PluginDir -ErrorAction SilentlyContinue
 
-# Remove plugin directory
-Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\marketplaces\claude-mnemonic"
-
-# Remove MCP server from settings
+# Remove MCP from settings
 $SettingsFile = "$env:USERPROFILE\.claude\settings.json"
 if (Test-Path $SettingsFile) {
-    $settings = Get-Content $SettingsFile | ConvertFrom-Json
-    $settings.mcpServers.PSObject.Properties.Remove('claude-mnemonic')
-    $settings | ConvertTo-Json -Depth 10 | Set-Content $SettingsFile
+    $s = Get-Content $SettingsFile | ConvertFrom-Json
+    $s.mcpServers.PSObject.Properties.Remove('claude-mnemonic')
+    $s | ConvertTo-Json -Depth 10 | Set-Content $SettingsFile
 }
 ```
-
-All methods stop the worker, remove binaries, and clean up Claude Code configuration files.
 
 ---
 
 ## Platform Support
 
-| Platform | Install Script | Build from Source | Notes |
-|----------|---------------|-------------------|-------|
-| macOS Intel (amd64) | Yes | Yes | Full support |
-| macOS Apple Silicon (arm64) | Yes | Yes | Full support |
-| Linux amd64 | Yes | Yes | Full support |
-| Linux arm64 | Yes | Yes | Full support |
-| Windows amd64 | No (use build from source) | Yes | PowerShell manual install; see [Windows Manual Installation](#windows-manual-installation) |
-
-### Windows Notes
-
-- All binaries are built with `.exe` extension (`worker.exe`, `mcp-server.exe`, etc.)
-- Plugin directory: `%USERPROFILE%\.claude\plugins\marketplaces\claude-mnemonic\`
-- Settings file: `%USERPROFILE%\.claude\settings.json`
-- The `Makefile` targets (`make install`, `make start-worker`) use Unix commands and are not compatible with Windows — use the PowerShell instructions instead
-- ONNX runtime requires `onnxruntime.dll` in `internal/embedding/assets/lib/windows-amd64/`
-- Worker logs: use `Start-Process` or run `worker.exe` directly in a terminal
+| Platform | Server (Docker) | Client Install Script | Client Build from Source |
+|----------|----------------|----------------------|------------------------|
+| macOS Intel | Yes | Yes | Yes |
+| macOS Apple Silicon | Yes | Yes | Yes |
+| Linux amd64 | Yes | Yes | Yes |
+| Linux arm64 | Yes | Yes | Yes |
+| Windows amd64 | Via WSL2/Docker Desktop | Build from source | Yes (PowerShell) |
+| Unraid | Yes (Docker template) | N/A | N/A |
 
 ---
 

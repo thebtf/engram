@@ -1,17 +1,72 @@
+# Claude Mnemonic Plus — Server Stack
+#
+# Provides: PostgreSQL + pgvector, Worker API, MCP SSE Server
+# Client (hooks + MCP proxy) runs locally on each workstation.
+#
+# Usage:
+#   docker compose up -d
+#   # Then configure local client to point to this server.
+
 services:
-  mnemonic:
-    build: .
-    ports:
-      - "37777:37777"
+  postgres:
+    image: pgvector/pgvector:pg17
     environment:
-      CLAUDE_MNEMONIC_DB_PATH: /data/claude-mnemonic.db
-      CLAUDE_MNEMONIC_WORKER_HOST: 0.0.0.0
-      CLAUDE_MNEMONIC_WORKER_PORT: 37777
-      # CLAUDE_MNEMONIC_API_TOKEN: "your-secret-token-here"
+      POSTGRES_DB: claude_mnemonic
+      POSTGRES_USER: mnemonic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mnemonic}
     volumes:
-      - mnemonic-data:/data
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mnemonic -d claude_mnemonic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      target: server
+    command: ["worker"]
+    ports:
+      - "${WORKER_PORT:-37777}:37777"
+    environment:
+      DATABASE_DSN: "postgres://mnemonic:${POSTGRES_PASSWORD:-mnemonic}@postgres:5432/claude_mnemonic?sslmode=disable"
+      CLAUDE_MNEMONIC_WORKER_HOST: "0.0.0.0"
+      CLAUDE_MNEMONIC_WORKER_PORT: "37777"
+      CLAUDE_MNEMONIC_API_TOKEN: "${API_TOKEN:-}"
+      CLAUDE_MNEMONIC_EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-onnx}"
+      CLAUDE_MNEMONIC_EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
+      CLAUDE_MNEMONIC_EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
+      CLAUDE_MNEMONIC_EMBEDDING_MODEL_NAME: "${EMBEDDING_MODEL_NAME:-}"
+      CLAUDE_MNEMONIC_EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-384}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mcp-sse:
+    build:
+      context: .
+      target: server
+    command: ["mcp-sse"]
+    ports:
+      - "${MCP_SSE_PORT:-37778}:37778"
+    environment:
+      DATABASE_DSN: "postgres://mnemonic:${POSTGRES_PASSWORD:-mnemonic}@postgres:5432/claude_mnemonic?sslmode=disable"
+      CLAUDE_MNEMONIC_MCP_SSE_PORT: "37778"
+      CLAUDE_MNEMONIC_API_TOKEN: "${API_TOKEN:-}"
+      CLAUDE_MNEMONIC_EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-onnx}"
+      CLAUDE_MNEMONIC_EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
+      CLAUDE_MNEMONIC_EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
+      CLAUDE_MNEMONIC_EMBEDDING_MODEL_NAME: "${EMBEDDING_MODEL_NAME:-}"
+      CLAUDE_MNEMONIC_EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-384}"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  mnemonic-data:
-
+  pgdata:
