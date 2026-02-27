@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lukaszraczylo/claude-mnemonic/internal/collections"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/config"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/embedding"
@@ -54,6 +55,12 @@ func main() {
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to load config, using defaults")
 		cfg = config.Default()
+	}
+
+	collectionRegistry, err := collections.Load(cfg.GetCollectionConfigPath())
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to load collection config, collections disabled")
+		collectionRegistry = &collections.Registry{}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -128,6 +135,7 @@ func main() {
 		scoreCalculator,
 		recalculator,
 		nil, // maintenanceService - handled by worker
+		collectionRegistry,
 	)
 	log.Info().Str("project", *project).Str("version", Version).Msg("Starting MCP server")
 

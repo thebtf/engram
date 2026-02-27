@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lukaszraczylo/claude-mnemonic/internal/collections"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/maintenance"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/scoring"
@@ -34,6 +35,7 @@ type Server struct {
 	scoreCalculator    *scoring.Calculator
 	recalculator       *scoring.Recalculator
 	maintenanceService *maintenance.Service
+	collectionRegistry *collections.Registry
 	version            string
 }
 
@@ -49,6 +51,7 @@ func NewServer(
 	scoreCalculator *scoring.Calculator,
 	recalculator *scoring.Recalculator,
 	maintenanceService *maintenance.Service,
+	collectionRegistry *collections.Registry,
 ) *Server {
 	return &Server{
 		searchMgr:          searchMgr,
@@ -63,6 +66,7 @@ func NewServer(
 		scoreCalculator:    scoreCalculator,
 		recalculator:       recalculator,
 		maintenanceService: maintenanceService,
+		collectionRegistry: collectionRegistry,
 	}
 }
 
@@ -171,20 +175,62 @@ func (s *Server) handleRequest(ctx context.Context, req *Request) *Response {
 
 // handleInitialize handles the initialize request.
 func (s *Server) handleInitialize(req *Request) *Response {
+	result := map[string]any{
+		"protocolVersion": "2024-11-05",
+		"capabilities": map[string]any{
+			"tools": map[string]any{},
+		},
+		"serverInfo": map[string]any{
+			"name":    "claude-mnemonic",
+			"version": s.version,
+		},
+	}
+
+	if instructions := s.buildInstructions(); instructions != "" {
+		result["instructions"] = instructions
+	}
+
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
-		Result: map[string]any{
-			"protocolVersion": "2024-11-05",
-			"capabilities": map[string]any{
-				"tools": map[string]any{},
-			},
-			"serverInfo": map[string]any{
-				"name":    "claude-mnemonic",
-				"version": s.version,
-			},
-		},
+		Result:  result,
 	}
+}
+
+func (s *Server) buildInstructions() string {
+	if s.collectionRegistry == nil {
+		return ""
+	}
+
+	collectionList := s.collectionRegistry.All()
+	if len(collectionList) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	count := 0
+	for _, collection := range collectionList {
+		if collection == nil || strings.TrimSpace(collection.Description) == "" {
+			continue
+		}
+
+		if count == 0 {
+			b.WriteString("# Available Collections\n\n")
+		} else {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("## ")
+		b.WriteString(collection.Name)
+		b.WriteString("\n")
+		b.WriteString(collection.Description)
+		count++
+	}
+
+	if count == 0 {
+		return ""
+	}
+
+	return b.String()
 }
 
 // handleToolsList returns the list of available tools.
