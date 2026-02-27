@@ -52,6 +52,7 @@ type Observation struct {
 	Project         string                  `gorm:"index:idx_observations_project;index:idx_observations_project_created,priority:1;not null"`
 	Scope           models.ObservationScope `gorm:"type:text;default:'project';check:scope IN ('project', 'global');index:idx_observations_scope;index:idx_observations_project_scope,priority:2"`
 	Type            models.ObservationType  `gorm:"type:text;check:type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change');index;not null"`
+	MemoryType      models.MemoryType       `gorm:"type:text;index:idx_observations_memory_type"`
 	CreatedAt       string                  `gorm:"not null"`
 	Facts           models.JSONStringArray  `gorm:"type:text"`
 	Narrative       sql.NullString          `gorm:"type:text"`
@@ -174,8 +175,8 @@ func (c *ObservationConflict) BeforeCreate(tx *gorm.DB) error {
 
 // ObservationRelation tracks relationships between observations.
 type ObservationRelation struct {
-	RelationType    models.RelationType            `gorm:"type:text;check:relation_type IN ('causes', 'fixes', 'supersedes', 'depends_on', 'relates_to', 'evolves_from');index:idx_relations_type;uniqueIndex:idx_relations_unique,priority:3;not null"`
-	DetectionSource models.RelationDetectionSource `gorm:"type:text;check:detection_source IN ('file_overlap', 'embedding_similarity', 'temporal_proximity', 'narrative_mention', 'concept_overlap', 'type_progression');not null"`
+	RelationType    models.RelationType            `gorm:"type:text;check:relation_type IN ('causes', 'fixes', 'supersedes', 'depends_on', 'relates_to', 'evolves_from', 'leads_to', 'similar_to', 'contradicts', 'reinforces', 'invalidated_by', 'explains', 'shares_theme', 'parallel_context', 'summarizes', 'part_of', 'prefers_over');index:idx_relations_type;uniqueIndex:idx_relations_unique,priority:3;not null"`
+	DetectionSource models.RelationDetectionSource `gorm:"type:text;check:detection_source IN ('file_overlap', 'embedding_similarity', 'temporal_proximity', 'narrative_mention', 'concept_overlap', 'type_progression', 'creative_association');not null"`
 	CreatedAt       string                         `gorm:"not null"`
 	Reason          sql.NullString                 `gorm:"type:text"`
 	ID              int64                          `gorm:"primaryKey;autoIncrement"`

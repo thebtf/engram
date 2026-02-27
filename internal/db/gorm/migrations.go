@@ -647,8 +647,54 @@ func runMigrations(db *gorm.DB, sqlDB *sql.DB) error {
 				return tx.Exec(`DROP TABLE IF EXISTS indexed_sessions CASCADE`).Error
 			},
 		},
+		// Migration 019: Extended relation types + memory type classification
+		{
+			ID: "019_extended_relation_types",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					// Drop old CHECK constraint and add new one with all 17 relation types
+					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_relation_type`,
+					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_relation_type CHECK (relation_type IN ('causes','fixes','supersedes','depends_on','relates_to','evolves_from','leads_to','similar_to','contradicts','reinforces','invalidated_by','explains','shares_theme','parallel_context','summarizes','part_of','prefers_over'))`,
+					// Drop old detection_source CHECK and add creative_association
+				`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_detection_source`,
+				`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_detection_source CHECK (detection_source IN ('file_overlap','embedding_similarity','temporal_proximity','narrative_mention','concept_overlap','type_progression','creative_association'))`,
+				// Add memory_type column to observations
+					`ALTER TABLE observations ADD COLUMN IF NOT EXISTS memory_type TEXT`,
+					`CREATE INDEX IF NOT EXISTS idx_observations_memory_type ON observations(memory_type)`,
+					// Backfill memory_type for existing rows based on type field
+					`UPDATE observations SET memory_type = CASE
+					WHEN type = 'decision' THEN 'decision'
+					WHEN type = 'bugfix' THEN 'insight'
+					WHEN type = 'feature' THEN 'context'
+					WHEN type = 'refactor' THEN 'pattern'
+					WHEN type = 'discovery' THEN 'insight'
+					WHEN type = 'change' THEN 'context'
+					ELSE 'context'
+					END WHERE memory_type IS NULL`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 019: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				sqls := []string{
+					`DROP INDEX IF EXISTS idx_observations_memory_type`,
+					`ALTER TABLE observations DROP COLUMN IF EXISTS memory_type`,
+					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_relation_type`,
+					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_relation_type CHECK (relation_type IN ('causes','fixes','supersedes','depends_on','relates_to','evolves_from'))`,
+					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_detection_source`,
+					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_detection_source CHECK (detection_source IN ('file_overlap','embedding_similarity','temporal_proximity','narrative_mention','concept_overlap','type_progression'))`,
+				}
+				for _, s := range sqls {
+					_ = tx.Exec(s).Error
+				}
+				return nil
+			},
+		},
 	})
-
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
 	}

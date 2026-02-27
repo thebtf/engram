@@ -27,7 +27,18 @@ const (
 	RelationRelatesTo RelationType = "relates_to"
 	// RelationEvolvesFrom means source observation evolved from target observation.
 	// Example: "This refined pattern evolved from that initial discovery"
-	RelationEvolvesFrom RelationType = "evolves_from"
+	RelationEvolvesFrom   RelationType = "evolves_from"
+	RelationLeadsTo       RelationType = "leads_to"
+	RelationSimilarTo     RelationType = "similar_to"
+	RelationContradicts   RelationType = "contradicts"
+	RelationReinforces    RelationType = "reinforces"
+	RelationInvalidatedBy RelationType = "invalidated_by"
+	RelationExplains      RelationType = "explains"
+	RelationSharesTheme   RelationType = "shares_theme"
+	RelationParallelCtx   RelationType = "parallel_context"
+	RelationSummarizes    RelationType = "summarizes"
+	RelationPartOf        RelationType = "part_of"
+	RelationPrefersOver   RelationType = "prefers_over"
 )
 
 // AllRelationTypes is the list of all valid relation types.
@@ -38,6 +49,17 @@ var AllRelationTypes = []RelationType{
 	RelationDependsOn,
 	RelationRelatesTo,
 	RelationEvolvesFrom,
+	RelationLeadsTo,
+	RelationSimilarTo,
+	RelationContradicts,
+	RelationReinforces,
+	RelationInvalidatedBy,
+	RelationExplains,
+	RelationSharesTheme,
+	RelationParallelCtx,
+	RelationSummarizes,
+	RelationPartOf,
+	RelationPrefersOver,
 }
 
 // RelationDetectionSource indicates how a relationship was detected.
@@ -56,6 +78,8 @@ const (
 	DetectionSourceConceptOverlap RelationDetectionSource = "concept_overlap"
 	// DetectionSourceTypeProgression means relationship was detected via type progression pattern.
 	DetectionSourceTypeProgression RelationDetectionSource = "type_progression"
+	// DetectionSourceCreativeAssociation means relationship was detected via consolidation association engine.
+	DetectionSourceCreativeAssociation RelationDetectionSource = "creative_association"
 )
 
 // ObservationRelation represents a directed relationship between two observations.

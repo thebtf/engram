@@ -156,6 +156,7 @@ func main() {
 		nil, // maintenanceService - handled by worker
 		collectionRegistry,
 		sessionIdxStore,
+		nil, // consolidationScheduler - not available in standalone MCP mode
 	)
 	log.Info().Str("project", *project).Str("version", Version).Msg("Starting MCP server")
 

@@ -161,6 +161,7 @@ func main() {
 		nil, // maintenanceService - handled by worker
 		collectionRegistry,
 		sessionIdxStore,
+		nil, // consolidationScheduler - not available in standalone MCP mode
 	)
 
 	sseHandler := mcp.NewSSEHandler(server)

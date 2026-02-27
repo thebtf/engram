@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lukaszraczylo/claude-mnemonic/internal/collections"
+	"github.com/lukaszraczylo/claude-mnemonic/internal/consolidation"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/maintenance"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/scoring"
@@ -25,20 +26,21 @@ import (
 // Server is the MCP server that exposes search tools.
 // Field order optimized for memory alignment (fieldalignment).
 type Server struct {
-	stdin              io.Reader
-	stdout             io.Writer
-	searchMgr          *search.Manager
-	observationStore   *gorm.ObservationStore
-	patternStore       *gorm.PatternStore
-	relationStore      *gorm.RelationStore
-	sessionStore       *gorm.SessionStore
-	vectorClient       vector.Client
-	scoreCalculator    *scoring.Calculator
-	recalculator       *scoring.Recalculator
-	maintenanceService *maintenance.Service
-	collectionRegistry *collections.Registry
-	sessionIdxStore    *sessions.Store
-	version            string
+	stdin                  io.Reader
+	stdout                 io.Writer
+	searchMgr              *search.Manager
+	observationStore       *gorm.ObservationStore
+	patternStore           *gorm.PatternStore
+	relationStore          *gorm.RelationStore
+	sessionStore           *gorm.SessionStore
+	vectorClient           vector.Client
+	scoreCalculator        *scoring.Calculator
+	recalculator           *scoring.Recalculator
+	maintenanceService     *maintenance.Service
+	collectionRegistry     *collections.Registry
+	sessionIdxStore        *sessions.Store
+	consolidationScheduler *consolidation.Scheduler
+	version                string
 }
 
 // NewServer creates a new MCP server.
@@ -55,22 +57,24 @@ func NewServer(
 	maintenanceService *maintenance.Service,
 	collectionRegistry *collections.Registry,
 	sessionIdxStore *sessions.Store,
+	consolidationScheduler *consolidation.Scheduler,
 ) *Server {
 	return &Server{
-		searchMgr:          searchMgr,
-		version:            version,
-		stdin:              os.Stdin,
-		stdout:             os.Stdout,
-		observationStore:   observationStore,
-		patternStore:       patternStore,
-		relationStore:      relationStore,
-		sessionStore:       sessionStore,
-		vectorClient:       vectorClient,
-		scoreCalculator:    scoreCalculator,
-		recalculator:       recalculator,
-		maintenanceService: maintenanceService,
-		collectionRegistry: collectionRegistry,
-		sessionIdxStore:    sessionIdxStore,
+		searchMgr:              searchMgr,
+		version:                version,
+		stdin:                  os.Stdin,
+		stdout:                 os.Stdout,
+		observationStore:       observationStore,
+		patternStore:           patternStore,
+		relationStore:          relationStore,
+		sessionStore:           sessionStore,
+		vectorClient:           vectorClient,
+		scoreCalculator:        scoreCalculator,
+		recalculator:           recalculator,
+		maintenanceService:     maintenanceService,
+		collectionRegistry:     collectionRegistry,
+		sessionIdxStore:        sessionIdxStore,
+		consolidationScheduler: consolidationScheduler,
 	}
 }
 
@@ -777,6 +781,21 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
+		{
+			Name:        "run_consolidation",
+			Description: "Manually trigger the memory consolidation lifecycle. Runs decay (relevance recalculation), creative association discovery, and optionally forgetting. Use when you want to consolidate memories immediately rather than waiting for scheduled intervals.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"cycle": map[string]any{
+						"type":        "string",
+						"enum":        []string{"all", "decay", "associations", "forgetting"},
+						"default":     "all",
+						"description": "Which consolidation cycle to run: 'all' runs everything, 'decay' recalculates relevance scores, 'associations' discovers creative associations, 'forgetting' archives low-relevance observations",
+					},
+				},
+			},
+		},
 	}
 
 	return &Response{
@@ -890,6 +909,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleSearchSessions(ctx, args)
 	case "list_sessions":
 		return s.handleListSessions(ctx, args)
+	case "run_consolidation":
+		return s.handleRunConsolidation(ctx, args)
 	}
 
 	// Original search-based tools
@@ -3481,4 +3502,45 @@ func (s *Server) handleListSessions(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("marshal results: %w", err)
 	}
 	return string(data), nil
+}
+
+func (s *Server) handleRunConsolidation(ctx context.Context, args json.RawMessage) (string, error) {
+	if s.consolidationScheduler == nil {
+		return "", fmt.Errorf("consolidation scheduler not available")
+	}
+
+	var params struct {
+		Cycle string `json:"cycle"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		params.Cycle = "all"
+	}
+	if params.Cycle == "" {
+		params.Cycle = "all"
+	}
+
+	var err error
+	switch params.Cycle {
+	case "all":
+		err = s.consolidationScheduler.RunAll(ctx)
+	case "decay":
+		err = s.consolidationScheduler.RunDecay(ctx)
+	case "associations":
+		err = s.consolidationScheduler.RunAssociations(ctx)
+	case "forgetting":
+		err = s.consolidationScheduler.RunForgetting(ctx)
+	default:
+		return "", fmt.Errorf("unknown cycle: %s (use 'all', 'decay', 'associations', or 'forgetting')", params.Cycle)
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("consolidation %s cycle failed: %w", params.Cycle, err)
+	}
+
+	result := map[string]any{
+		"status": "completed",
+		"cycle":  params.Cycle,
+	}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	return string(b), nil
 }

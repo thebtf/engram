@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,29 @@ const (
 	ObsTypeDiscovery ObservationType = "discovery"
 	ObsTypeChange    ObservationType = "change"
 )
+
+// MemoryType represents the classification for memory storage and retrieval.
+type MemoryType string
+
+const (
+	MemTypeDecision   MemoryType = "decision"
+	MemTypePattern    MemoryType = "pattern"
+	MemTypePreference MemoryType = "preference"
+	MemTypeStyle      MemoryType = "style"
+	MemTypeHabit      MemoryType = "habit"
+	MemTypeInsight    MemoryType = "insight"
+	MemTypeContext    MemoryType = "context"
+)
+
+var AllMemoryTypes = []MemoryType{
+	MemTypeDecision,
+	MemTypePattern,
+	MemTypePreference,
+	MemTypeStyle,
+	MemTypeHabit,
+	MemTypeInsight,
+	MemTypeContext,
+}
 
 // ObservationScope defines the visibility scope of an observation.
 type ObservationScope string
@@ -126,6 +150,7 @@ type Observation struct {
 	Project         string           `db:"project" json:"project"`
 	Scope           ObservationScope `db:"scope" json:"scope"`
 	Type            ObservationType  `db:"type" json:"type"`
+	MemoryType      MemoryType       `db:"memory_type" json:"memory_type"`
 	CreatedAt       string           `db:"created_at" json:"created_at"`
 	Subtitle        sql.NullString   `db:"subtitle" json:"subtitle,omitempty"`
 	Title           sql.NullString   `db:"title" json:"title,omitempty"`
@@ -151,6 +176,7 @@ type Observation struct {
 type ParsedObservation struct {
 	FileMtimes    map[string]int64
 	Type          ObservationType
+	MemoryType    MemoryType
 	Title         string
 	Subtitle      string
 	Narrative     string
@@ -166,6 +192,7 @@ type ParsedObservation struct {
 func (p *ParsedObservation) ToStoredObservation() *Observation {
 	return &Observation{
 		Type:          p.Type,
+		MemoryType:    p.MemoryType,
 		Title:         sql.NullString{String: p.Title, Valid: p.Title != ""},
 		Subtitle:      sql.NullString{String: p.Subtitle, Valid: p.Subtitle != ""},
 		Facts:         p.Facts,
@@ -190,6 +217,28 @@ func DetermineScope(concepts []string) ObservationScope {
 	return ScopeProject
 }
 
+// ClassifyMemoryType classifies an observation into a memory bucket.
+func ClassifyMemoryType(obs *ParsedObservation) MemoryType {
+	for _, c := range obs.Concepts {
+		cl := strings.ToLower(c)
+		switch {
+		case strings.Contains(cl, "architecture") || strings.Contains(cl, "design") || strings.Contains(cl, "choice"):
+			return MemTypeDecision
+		case strings.Contains(cl, "pattern") || strings.Contains(cl, "best-practice") || strings.Contains(cl, "anti-pattern"):
+			return MemTypePattern
+		case strings.Contains(cl, "preference") || strings.Contains(cl, "config") || strings.Contains(cl, "setting"):
+			return MemTypePreference
+		case strings.Contains(cl, "style") || strings.Contains(cl, "naming") || strings.Contains(cl, "format"):
+			return MemTypeStyle
+		case strings.Contains(cl, "workflow") || strings.Contains(cl, "habit") || strings.Contains(cl, "routine"):
+			return MemTypeHabit
+		case strings.Contains(cl, "insight") || strings.Contains(cl, "discovery") || strings.Contains(cl, "gotcha"):
+			return MemTypeInsight
+		}
+	}
+	return MemTypeContext
+}
+
 // ObservationJSON is a JSON-friendly representation of Observation.
 // It converts sql.NullString to plain strings for clean JSON output.
 type ObservationJSON struct {
@@ -198,6 +247,7 @@ type ObservationJSON struct {
 	SDKSessionID    string           `json:"sdk_session_id"`
 	Scope           ObservationScope `json:"scope"`
 	Type            ObservationType  `json:"type"`
+	MemoryType      string           `json:"memory_type"`
 	Title           string           `json:"title,omitempty"`
 	CreatedAt       string           `json:"created_at"`
 	Narrative       string           `json:"narrative,omitempty"`
@@ -228,6 +278,7 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		Project:         o.Project,
 		Scope:           o.Scope,
 		Type:            o.Type,
+		MemoryType:      string(o.MemoryType),
 		Facts:           o.Facts,
 		Concepts:        o.Concepts,
 		FilesRead:       o.FilesRead,
@@ -280,6 +331,7 @@ func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, pro
 		Project:         project,
 		Scope:           scope,
 		Type:            parsed.Type,
+		MemoryType:      ClassifyMemoryType(parsed),
 		Title:           sql.NullString{String: parsed.Title, Valid: parsed.Title != ""},
 		Subtitle:        sql.NullString{String: parsed.Subtitle, Valid: parsed.Subtitle != ""},
 		Facts:           parsed.Facts,

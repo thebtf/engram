@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/config"
+	"github.com/lukaszraczylo/claude-mnemonic/internal/consolidation"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/embedding"
 	"github.com/lukaszraczylo/claude-mnemonic/internal/pattern"
@@ -102,57 +103,58 @@ const maxRecentQueries = 100
 
 // Service is the main worker service orchestrator.
 type Service struct {
-	startTime          time.Time
-	ctx                context.Context
-	initError          error
-	server             *http.Server
-	reranker           *reranking.Service
-	observationStore   *gorm.ObservationStore
-	summaryStore       *gorm.SummaryStore
-	promptStore        *gorm.PromptStore
-	conflictStore      *gorm.ConflictStore
-	patternStore       *gorm.PatternStore
-	relationStore      *gorm.RelationStore
-	patternDetector    *pattern.Detector
-	sessionManager     *session.Manager
-	sseBroadcaster     *sse.Broadcaster
-	processor          *sdk.Processor
-	embedSvc           *embedding.Service
-	vectorClient       vector.Client
-	vectorSync         *pgvector.Sync
-	vectorSyncSem      chan struct{}
-	queryExpander      *expansion.Expander
-	scoreCalculator    *scoring.Calculator
-	recalculator       *scoring.Recalculator
-	router             *chi.Mux
-	store              *gorm.Store
-	retrievalStats     map[string]*RetrievalStats
-	sessionStore       *gorm.SessionStore
-	cancel             context.CancelFunc
-	cachedObsCounts    map[string]cachedCount
-	config             *config.Config
-	rebuildStatus      *RebuildStatus
-	staleQueue         chan staleVerifyRequest
-	bulkOpLimiter      *BulkOperationLimiter
-	dbWatcher          *watcher.Watcher
-	configWatcher      *watcher.Watcher
-	updater            *update.Updater
-	rateLimiter        *PerClientRateLimiter
-	tokenAuth          *TokenAuth
-	expensiveOpLimiter *ExpensiveOperationLimiter
-	version            string
-	recentQueriesBuf   [maxRecentQueries]RecentSearchQuery
-	wg                 sync.WaitGroup
-	recentQueriesLen   int
-	recentQueriesHead  int
-	statsCacheTTL      time.Duration
-	initMu             sync.RWMutex
-	rebuildStatusMu    sync.RWMutex
-	retrievalStatsMu   sync.RWMutex
-	recentQueriesMu    sync.RWMutex
-	cachedObsCountsMu  sync.RWMutex
-	staleQueueOnce     sync.Once
-	ready              atomic.Bool
+	startTime              time.Time
+	ctx                    context.Context
+	initError              error
+	server                 *http.Server
+	reranker               *reranking.Service
+	observationStore       *gorm.ObservationStore
+	summaryStore           *gorm.SummaryStore
+	promptStore            *gorm.PromptStore
+	conflictStore          *gorm.ConflictStore
+	patternStore           *gorm.PatternStore
+	relationStore          *gorm.RelationStore
+	patternDetector        *pattern.Detector
+	sessionManager         *session.Manager
+	sseBroadcaster         *sse.Broadcaster
+	processor              *sdk.Processor
+	embedSvc               *embedding.Service
+	vectorClient           vector.Client
+	vectorSync             *pgvector.Sync
+	vectorSyncSem          chan struct{}
+	queryExpander          *expansion.Expander
+	scoreCalculator        *scoring.Calculator
+	recalculator           *scoring.Recalculator
+	consolidationScheduler *consolidation.Scheduler
+	router                 *chi.Mux
+	store                  *gorm.Store
+	retrievalStats         map[string]*RetrievalStats
+	sessionStore           *gorm.SessionStore
+	cancel                 context.CancelFunc
+	cachedObsCounts        map[string]cachedCount
+	config                 *config.Config
+	rebuildStatus          *RebuildStatus
+	staleQueue             chan staleVerifyRequest
+	bulkOpLimiter          *BulkOperationLimiter
+	dbWatcher              *watcher.Watcher
+	configWatcher          *watcher.Watcher
+	updater                *update.Updater
+	rateLimiter            *PerClientRateLimiter
+	tokenAuth              *TokenAuth
+	expensiveOpLimiter     *ExpensiveOperationLimiter
+	version                string
+	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
+	wg                     sync.WaitGroup
+	recentQueriesLen       int
+	recentQueriesHead      int
+	statsCacheTTL          time.Duration
+	initMu                 sync.RWMutex
+	rebuildStatusMu        sync.RWMutex
+	retrievalStatsMu       sync.RWMutex
+	recentQueriesMu        sync.RWMutex
+	cachedObsCountsMu      sync.RWMutex
+	staleQueueOnce         sync.Once
+	ready                  atomic.Bool
 }
 
 // cachedCount stores a cached count value with expiration.
@@ -540,6 +542,28 @@ func (s *Service) initializeAsync() {
 		recalculator.Start(s.ctx)
 	}()
 	log.Info().Msg("Importance scoring system initialized")
+
+	// Start consolidation scheduler
+	relevanceCalc := scoring.NewRelevanceCalculator(nil) // default config
+	assocEngine := consolidation.NewAssociationEngine(s.embedSvc, consolidation.DefaultAssociationConfig(), log.Logger)
+	consolidationScheduler := consolidation.NewScheduler(
+		relevanceCalc,
+		assocEngine,
+		observationStore,
+		relationStore,
+		consolidation.DefaultSchedulerConfig(),
+		log.Logger,
+	)
+	s.initMu.Lock()
+	s.consolidationScheduler = consolidationScheduler
+	s.initMu.Unlock()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		consolidationScheduler.Start(s.ctx)
+	}()
+	log.Info().Msg("Consolidation scheduler started")
 
 	// Start pattern detector background analysis
 	if patternDetector != nil {
@@ -1702,6 +1726,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	log.Debug().Msg("Phase 3: Stopping background workers...")
 	if s.recalculator != nil {
 		s.recalculator.Stop()
+	}
+	if s.consolidationScheduler != nil {
+		s.consolidationScheduler.Stop()
 	}
 	if s.patternDetector != nil {
 		s.patternDetector.Stop()
