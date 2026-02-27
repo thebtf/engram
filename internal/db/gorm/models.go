@@ -303,3 +303,22 @@ type ContentChunk struct {
 
 // TableName returns the table name for ContentChunk.
 func (ContentChunk) TableName() string { return "content_chunks" }
+
+// IndexedSession represents an indexed Claude Code JSONL session.
+type IndexedSession struct {
+	ID            string         `gorm:"primaryKey;type:text" json:"id"`
+	WorkstationID string         `gorm:"type:text;not null;index:idx_sessions_ws" json:"workstation_id"`
+	ProjectID     string         `gorm:"type:text;not null;index:idx_sessions_proj" json:"project_id"`
+	ProjectPath   sql.NullString `gorm:"type:text" json:"project_path"`
+	GitBranch     sql.NullString `gorm:"type:text" json:"git_branch"`
+	FirstMsgAt    sql.NullTime   `gorm:"type:timestamptz" json:"first_msg_at"`
+	LastMsgAt     sql.NullTime   `gorm:"type:timestamptz" json:"last_msg_at"`
+	ExchangeCount int            `gorm:"default:0" json:"exchange_count"`
+	ToolCounts    sql.NullString `gorm:"type:jsonb" json:"tool_counts"`
+	Topics        sql.NullString `gorm:"type:jsonb" json:"topics"`
+	Content       sql.NullString `gorm:"type:text" json:"content"`
+	FileMtime     sql.NullTime   `gorm:"type:timestamptz" json:"file_mtime"`
+	IndexedAt     time.Time      `gorm:"autoCreateTime" json:"indexed_at"`
+}
+
+func (IndexedSession) TableName() string { return "indexed_sessions" }

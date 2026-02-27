@@ -607,6 +607,46 @@ func runMigrations(db *gorm.DB, sqlDB *sql.DB) error {
 				return nil
 			},
 		},
+		// Migration 018: Indexed sessions table for Phase 4 JSONL session indexing
+		{
+			ID: "018_session_indexing",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					`CREATE TABLE IF NOT EXISTS indexed_sessions (
+    id TEXT PRIMARY KEY,
+    workstation_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    project_path TEXT,
+    git_branch TEXT,
+    first_msg_at TIMESTAMPTZ,
+    last_msg_at TIMESTAMPTZ,
+    exchange_count INTEGER DEFAULT 0,
+    tool_counts JSONB,
+    topics JSONB,
+    content TEXT,
+    file_mtime TIMESTAMPTZ,
+    indexed_at TIMESTAMPTZ DEFAULT NOW(),
+    tsv TSVECTOR GENERATED ALWAYS AS (
+        to_tsvector('english', coalesce(content, ''))
+    ) STORED
+)`,
+					`CREATE INDEX IF NOT EXISTS idx_sessions_ws ON indexed_sessions(workstation_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_sessions_proj ON indexed_sessions(project_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_sessions_ws_proj ON indexed_sessions(workstation_id, project_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_sessions_last_msg ON indexed_sessions(last_msg_at DESC)`,
+					`CREATE INDEX IF NOT EXISTS idx_sessions_tsv ON indexed_sessions USING GIN(tsv)`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 018: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS indexed_sessions CASCADE`).Error
+			},
+		},
 	})
 
 	if err := m.Migrate(); err != nil {
