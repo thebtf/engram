@@ -70,7 +70,7 @@ defineProps({
   },
   githubUrl: {
     type: String,
-    default: 'https://github.com/lukaszraczylo/claude-mnemonic'
+    default: 'https://github.com/thebtf/claude-mnemonic-plus'
   },
   mobileMenuOpen: Boolean
 })

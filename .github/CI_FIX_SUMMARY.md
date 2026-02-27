@@ -57,7 +57,7 @@ The next CI run for PR #20 should pass. The workflow will:
 
 ## References
 
-- PR #20: https://github.com/lukaszraczylo/claude-mnemonic/pull/20
-- Failed CI run: https://github.com/lukaszraczylo/claude-mnemonic/actions/runs/20795930707/job/59729327008
+- PR #20: https://github.com/thebtf/claude-mnemonic-plus/pull/20
+- Failed CI run: https://github.com/thebtf/claude-mnemonic-plus/actions/runs/20795930707/job/59729327008
 - shared-actions fix: https://github.com/lukaszraczylo/shared-actions/commit/8f7f235
-- claude-mnemonic fix: https://github.com/lukaszraczylo/claude-mnemonic/commit/90ab909
+- claude-mnemonic fix: https://github.com/thebtf/claude-mnemonic-plus/commit/90ab909

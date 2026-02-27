@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/config"
+	"github.com/thebtf/claude-mnemonic-plus/internal/config"
 )
 
 const (

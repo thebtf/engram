@@ -5,7 +5,7 @@ package hybrid
 import (
 	"testing"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/vector"
+	"github.com/thebtf/claude-mnemonic-plus/internal/vector"
 	_ "github.com/mattn/go-sqlite3" // Import SQLite driver for CGO linking
 )
 

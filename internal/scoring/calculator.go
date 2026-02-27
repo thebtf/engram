@@ -5,7 +5,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 )
 
 // Calculator computes importance scores for observations.

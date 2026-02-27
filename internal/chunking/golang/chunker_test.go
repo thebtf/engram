@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/chunking"
+	"github.com/thebtf/claude-mnemonic-plus/internal/chunking"
 )
 
 func TestGoChunker_BasicFunctions(t *testing.T) {

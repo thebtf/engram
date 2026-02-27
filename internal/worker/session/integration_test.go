@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
+	"github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 

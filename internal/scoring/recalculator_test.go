@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 )
 
 // MockObservationStore is a mock implementation of ObservationStore for testing.

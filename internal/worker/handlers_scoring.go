@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 	"github.com/rs/zerolog/log"
 )
 

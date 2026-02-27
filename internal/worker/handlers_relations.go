@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 )
 
 // DefaultRelationsLimit is the default number of relations to return.

@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
+	"github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
 	_ "github.com/mattn/go-sqlite3"
 )
 

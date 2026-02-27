@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	gormdb "github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
+	gormdb "github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
 	"gorm.io/gorm"
 )
 

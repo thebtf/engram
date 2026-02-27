@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/vector"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
+	"github.com/thebtf/claude-mnemonic-plus/internal/vector"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
@@ -725,8 +725,6 @@ func (m *Manager) executeSearch(ctx context.Context, params SearchParams) (*Unif
 }
 
 // hybridSearch combines FTS (tsvector) and pgvector results using RRF fusion.
-// Strong-signal short-circuit: if top BM25 score >= 0.85 and gap to #2 >= 0.15,
-// skip vector search entirely for lower latency.
 func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
 	start := time.Now()
 	defer func() {
@@ -735,7 +733,7 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 		atomic.AddInt64(&m.metrics.VectorLatencyNs, latency)
 	}()
 
-	// --- FTS path (observations only, runs first for short-circuit check) ---
+	// --- FTS path (observations only) ---
 	var ftsList []ScoredID
 	var ftsResultsCache []gorm.ScoredObservation
 	if m.observationStore != nil && (params.Type == "" || params.Type == "observations") {
@@ -749,12 +747,6 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 					DocType: "observation",
 					Score:   BM25Normalize(r.Score),
 				}
-			}
-			// Strong-signal short-circuit: skip vector if BM25 is highly confident.
-			if len(ftsList) >= 2 &&
-				ftsList[0].Score >= 0.85 &&
-				(ftsList[0].Score-ftsList[1].Score) >= 0.15 {
-				return m.buildResultFromFTS(ftsResultsCache, params)
 			}
 		}
 	}

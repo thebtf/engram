@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/config"
+	"github.com/thebtf/claude-mnemonic-plus/internal/config"
 )
 
 // Version is set at build time via ldflags

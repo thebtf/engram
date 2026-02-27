@@ -10,7 +10,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/chunking"
+	"github.com/thebtf/claude-mnemonic-plus/internal/chunking"
 )
 
 // Chunker implements AST-aware chunking for TypeScript/JavaScript files.

@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/chunking"
+	"github.com/thebtf/claude-mnemonic-plus/internal/chunking"
 )
 
 // Chunker implements AST-aware chunking for Go files.

@@ -9,7 +9,7 @@
 
 ---
 
-Fork of [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) extended with PostgreSQL+pgvector backend, hybrid search, memory consolidation lifecycle, session indexing, and MCP SSE transport for multi-workstation shared knowledge.
+Fork of [claude-mnemonic](https://github.com/thebtf/claude-mnemonic-plus) extended with PostgreSQL+pgvector backend, hybrid search, memory consolidation lifecycle, session indexing, and MCP SSE transport for multi-workstation shared knowledge.
 
 ## How It Works
 
@@ -526,4 +526,4 @@ MIT
 
 ---
 
-**Upstream:** [lukaszraczylo/claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic)
+**Upstream:** [lukaszraczylo/claude-mnemonic](https://github.com/thebtf/claude-mnemonic-plus)

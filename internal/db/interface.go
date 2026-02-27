@@ -4,7 +4,7 @@ package db
 import (
 	"context"
 
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 )
 
 // ObservationReader defines read operations for observations.

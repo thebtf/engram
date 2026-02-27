@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/embedding"
+	"github.com/thebtf/claude-mnemonic-plus/internal/embedding"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

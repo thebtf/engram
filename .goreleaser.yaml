@@ -31,7 +31,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version={{.Version}}
+      - -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version={{.Version}}
     goos:
       - darwin
       - linux
@@ -60,7 +60,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version={{.Version}}
+      - -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version={{.Version}}
     goos:
       - darwin
       - linux
@@ -89,7 +89,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version={{.Version}}
+      - -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version={{.Version}}
     goos:
       - darwin
       - linux
@@ -118,7 +118,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version={{.Version}}
+      - -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version={{.Version}}
     goos:
       - darwin
       - linux
@@ -147,7 +147,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version={{.Version}}
+      - -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version={{.Version}}
     goos:
       - darwin
       - linux
@@ -176,7 +176,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version={{.Version}}
+      - -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version={{.Version}}
     goos:
       - darwin
       - linux
@@ -205,7 +205,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version={{.Version}}
+      - -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version={{.Version}}
     goos:
       - darwin
       - linux
@@ -234,7 +234,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version={{.Version}}
+      - -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version={{.Version}}
     goos:
       - darwin
       - linux

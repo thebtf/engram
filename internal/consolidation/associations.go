@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/embedding"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/internal/embedding"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 	"github.com/rs/zerolog"
 )
 

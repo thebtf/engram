@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/embedding"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/vector"
+	"github.com/thebtf/claude-mnemonic-plus/internal/embedding"
+	"github.com/thebtf/claude-mnemonic-plus/internal/vector"
 	pgvec "github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -19,7 +19,7 @@ import (
 // vectorRecord is the GORM model for the vectors table (created by migrations).
 type vectorRecord struct {
 	DocID        string       `gorm:"primaryKey;column:doc_id"`
-	Embedding    pgvec.Vector `gorm:"type:vector(384);column:embedding"`
+	Embedding    pgvec.Vector `gorm:"column:embedding"`
 	SQLiteID     int64        `gorm:"column:sqlite_id"`
 	DocType      string       `gorm:"column:doc_type"`
 	FieldType    string       `gorm:"column:field_type"`

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/embedding"
+	"github.com/thebtf/claude-mnemonic-plus/internal/embedding"
 )
 
 // initONNX initializes the ONNX runtime via the embedding service.

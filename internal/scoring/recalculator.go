@@ -8,8 +8,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 )
 
 // ObservationStore defines the interface for observation storage operations needed by the recalculator.

@@ -349,7 +349,7 @@ func (u *Updater) verifySigstoreBundle(ctx context.Context, checksumsPath, bundl
 	// Certificate identity matches GitHub Actions workflow for this repo
 	cmd := exec.CommandContext(ctx, "cosign", "verify-blob",
 		"--bundle", bundlePath,
-		"--certificate-identity-regexp", "https://github.com/lukaszraczylo/claude-mnemonic/.*",
+		"--certificate-identity-regexp", "https://github.com/thebtf/claude-mnemonic-plus/.*",
 		"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
 		checksumsPath,
 	)

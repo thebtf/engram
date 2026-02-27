@@ -17,10 +17,10 @@ import (
 
 	json "github.com/goccy/go-json"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/config"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/similarity"
+	"github.com/thebtf/claude-mnemonic-plus/internal/config"
+	"github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/similarity"
 	"github.com/rs/zerolog/log"
 )
 

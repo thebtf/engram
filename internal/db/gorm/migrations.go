@@ -7,12 +7,21 @@ import (
 	"time"
 
 	"github.com/go-gormigrate/gormigrate/v2"
+	"github.com/thebtf/claude-mnemonic-plus/internal/config"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 // runMigrations runs all database migrations using gormigrate.
-func runMigrations(db *gorm.DB, sqlDB *sql.DB) error {
+func runMigrations(db *gorm.DB, sqlDB *sql.DB, embeddingDims int) error {
+	if config.GetEmbeddingProvider() == "builtin" {
+		embeddingDims = 384
+	}
+
+	// Keep sqlDB parameter intentionally for migration signature compatibility.
+	_ = sqlDB
+
 	// Enable pgvector extension before running any migrations.
 	// CREATE EXTENSION IF NOT EXISTS is idempotent.
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
@@ -656,9 +665,9 @@ func runMigrations(db *gorm.DB, sqlDB *sql.DB) error {
 					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_relation_type`,
 					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_relation_type CHECK (relation_type IN ('causes','fixes','supersedes','depends_on','relates_to','evolves_from','leads_to','similar_to','contradicts','reinforces','invalidated_by','explains','shares_theme','parallel_context','summarizes','part_of','prefers_over'))`,
 					// Drop old detection_source CHECK and add creative_association
-				`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_detection_source`,
-				`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_detection_source CHECK (detection_source IN ('file_overlap','embedding_similarity','temporal_proximity','narrative_mention','concept_overlap','type_progression','creative_association'))`,
-				// Add memory_type column to observations
+					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_detection_source`,
+					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_detection_source CHECK (detection_source IN ('file_overlap','embedding_similarity','temporal_proximity','narrative_mention','concept_overlap','type_progression','creative_association'))`,
+					// Add memory_type column to observations
 					`ALTER TABLE observations ADD COLUMN IF NOT EXISTS memory_type TEXT`,
 					`CREATE INDEX IF NOT EXISTS idx_observations_memory_type ON observations(memory_type)`,
 					// Backfill memory_type for existing rows based on type field
@@ -694,10 +703,94 @@ func runMigrations(db *gorm.DB, sqlDB *sql.DB) error {
 				return nil
 			},
 		},
+		// Migration 020: Configure pgvector embedding dimensions.
+		{
+			ID: "020_configurable_vector_dimensions",
+			Migrate: func(tx *gorm.DB) error {
+				const currentDimQuery = "SELECT atttypmod - 4 FROM pg_attribute WHERE attrelid = 'vectors'::regclass AND attname = 'embedding' AND atttypmod > 0"
+				var current int
+				row := tx.Raw(currentDimQuery).Row()
+				if err := row.Scan(&current); err != nil {
+					if err == sql.ErrNoRows {
+						return nil
+					}
+					return fmt.Errorf("read current vector dimension: %w", err)
+				}
+				if current == embeddingDims {
+					return nil
+				}
+
+				log.Warn().Msgf("Embedding dimension changed from %d to %d, truncating vectors and content_chunks", current, embeddingDims)
+
+				sqls := []string{
+					"TRUNCATE vectors",
+					fmt.Sprintf("ALTER TABLE vectors ALTER COLUMN embedding TYPE vector(%d)", embeddingDims),
+					"DROP INDEX IF EXISTS idx_vectors_embedding_hnsw",
+					"CREATE INDEX idx_vectors_embedding_hnsw ON vectors USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
+					"TRUNCATE content_chunks",
+					fmt.Sprintf("ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(%d)", embeddingDims),
+					"DROP INDEX IF EXISTS idx_content_chunks_embedding_hnsw",
+					"CREATE INDEX idx_content_chunks_embedding_hnsw ON content_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 020: %w", err)
+					}
+				}
+
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return nil
+			},
+		},
+		// Migration 021: Fix patterns indexes — use status column instead of non-existent is_deprecated.
+		{
+			ID: "021_fix_patterns_indexes",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					`DROP INDEX IF EXISTS idx_patterns_frequency`,
+					`DROP INDEX IF EXISTS idx_patterns_type_project`,
+					`CREATE INDEX IF NOT EXISTS idx_patterns_frequency
+					 ON patterns(frequency DESC, last_seen_at_epoch DESC)
+					 WHERE status = 'active'`,
+					`CREATE INDEX IF NOT EXISTS idx_patterns_type_project
+					 ON patterns(type, project, frequency DESC)
+					 WHERE status = 'active'`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 021: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				_ = tx.Exec(`DROP INDEX IF EXISTS idx_patterns_frequency`).Error
+				_ = tx.Exec(`DROP INDEX IF EXISTS idx_patterns_type_project`).Error
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
 	}
 
+	if err := validateEmbeddingDimension(db, embeddingDims); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateEmbeddingDimension(db *gorm.DB, expected int) error {
+	var actual int
+	row := db.Raw("SELECT atttypmod - 4 FROM pg_attribute WHERE attrelid = 'vectors'::regclass AND attname = 'embedding' AND atttypmod > 0").Row()
+	if err := row.Scan(&actual); err != nil {
+		return fmt.Errorf("cannot read vector dimension from pg_attribute: %w", err)
+	}
+	if actual != expected {
+		return fmt.Errorf("embedding dimension mismatch: DB has vector(%d) but config says %d", actual, expected)
+	}
 	return nil
 }

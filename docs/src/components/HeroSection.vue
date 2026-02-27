@@ -72,7 +72,7 @@ defineProps({
   },
   secondaryCta: {
     type: Object,
-    default: () => ({ label: 'View Source', href: 'https://github.com/lukaszraczylo/claude-mnemonic', icon: 'fab fa-github' })
+    default: () => ({ label: 'View Source', href: 'https://github.com/thebtf/claude-mnemonic-plus', icon: 'fab fa-github' })
   },
   installCommand: {
     type: String,

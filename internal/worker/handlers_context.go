@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/reranking"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/search/expansion"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/vector"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/worker/sdk"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
+	"github.com/thebtf/claude-mnemonic-plus/internal/reranking"
+	"github.com/thebtf/claude-mnemonic-plus/internal/search/expansion"
+	"github.com/thebtf/claude-mnemonic-plus/internal/vector"
+	"github.com/thebtf/claude-mnemonic-plus/internal/worker/sdk"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 	"github.com/rs/zerolog/log"
 )
 

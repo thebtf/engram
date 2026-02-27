@@ -14,7 +14,7 @@ import (
 	"time"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/embedding"
+	"github.com/thebtf/claude-mnemonic-plus/internal/embedding"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )

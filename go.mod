@@ -1,4 +1,4 @@
-module github.com/lukaszraczylo/claude-mnemonic
+module github.com/thebtf/claude-mnemonic-plus
 
 go 1.25.1
 

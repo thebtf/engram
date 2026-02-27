@@ -2,8 +2,8 @@
 package worker
 
 import (
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/similarity"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/similarity"
 )
 
 // clusterObservations groups similar observations and returns only one representative per cluster.

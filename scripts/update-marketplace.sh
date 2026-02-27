@@ -46,22 +46,22 @@ jq --arg v "$VERSION" \
       "releaseDate": $d,
       "downloads": {
         "darwin-amd64": {
-          "url": "https://github.com/lukaszraczylo/claude-mnemonic/releases/download/\($vt)/claude-mnemonic_\($v)_darwin_amd64.tar.gz",
+          "url": "https://github.com/thebtf/claude-mnemonic-plus/releases/download/\($vt)/claude-mnemonic_\($v)_darwin_amd64.tar.gz",
           "sha256": $sha_da,
           "format": "tar.gz"
         },
         "darwin-arm64": {
-          "url": "https://github.com/lukaszraczylo/claude-mnemonic/releases/download/\($vt)/claude-mnemonic_\($v)_darwin_arm64.tar.gz",
+          "url": "https://github.com/thebtf/claude-mnemonic-plus/releases/download/\($vt)/claude-mnemonic_\($v)_darwin_arm64.tar.gz",
           "sha256": $sha_dar,
           "format": "tar.gz"
         },
         "linux-amd64": {
-          "url": "https://github.com/lukaszraczylo/claude-mnemonic/releases/download/\($vt)/claude-mnemonic_\($v)_linux_amd64.tar.gz",
+          "url": "https://github.com/thebtf/claude-mnemonic-plus/releases/download/\($vt)/claude-mnemonic_\($v)_linux_amd64.tar.gz",
           "sha256": $sha_la,
           "format": "tar.gz"
         },
         "windows-amd64": {
-          "url": "https://github.com/lukaszraczylo/claude-mnemonic/releases/download/\($vt)/claude-mnemonic_\($v)_windows_amd64.zip",
+          "url": "https://github.com/thebtf/claude-mnemonic-plus/releases/download/\($vt)/claude-mnemonic_\($v)_windows_amd64.zip",
           "sha256": $sha_wa,
           "format": "zip"
         }

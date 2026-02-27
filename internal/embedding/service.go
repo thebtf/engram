@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/config"
+	"github.com/thebtf/claude-mnemonic-plus/internal/config"
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
 	ort "github.com/yalue/onnxruntime_go"

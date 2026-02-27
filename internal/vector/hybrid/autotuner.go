@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/vector/sqlitevec"
+	"github.com/thebtf/claude-mnemonic-plus/internal/vector/sqlitevec"
 	"github.com/rs/zerolog/log"
 )
 

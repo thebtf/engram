@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/worker"
+	"github.com/thebtf/claude-mnemonic-plus/internal/worker"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )

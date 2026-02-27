@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/chunking"
+	"github.com/thebtf/claude-mnemonic-plus/internal/chunking"
 )
 
 // LanguageMarkdown is the Language constant for Markdown files.

@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/config"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/update"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/worker/session"
-	"github.com/lukaszraczylo/claude-mnemonic/internal/worker/sse"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/internal/config"
+	"github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
+	"github.com/thebtf/claude-mnemonic-plus/internal/update"
+	"github.com/thebtf/claude-mnemonic-plus/internal/worker/session"
+	"github.com/thebtf/claude-mnemonic-plus/internal/worker/sse"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

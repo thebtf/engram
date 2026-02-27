@@ -13,7 +13,7 @@
 //
 // To use this package instead of internal/db/sqlite:
 //
-//	import "github.com/lukaszraczylo/claude-mnemonic/internal/db/gorm"
+//	import "github.com/thebtf/claude-mnemonic-plus/internal/db/gorm"
 //
 //	store, err := gorm.NewStore(gorm.Config{
 //	    Path:     "/path/to/database.db",

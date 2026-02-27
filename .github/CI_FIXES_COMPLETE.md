@@ -109,6 +109,6 @@ All fixes are **additive only**:
 
 ## References
 
-- Original failure: https://github.com/lukaszraczylo/claude-mnemonic/actions/runs/20796678904
-- PR #20: https://github.com/lukaszraczylo/claude-mnemonic/pull/20
+- Original failure: https://github.com/thebtf/claude-mnemonic-plus/actions/runs/20796678904
+- PR #20: https://github.com/thebtf/claude-mnemonic-plus/pull/20
 - shared-actions fixes: commit 8f7f235

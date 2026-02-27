@@ -212,7 +212,7 @@
           <CodeBlock :code="installCommands.source">
             <span class="text-slate-500"># For contributors and tinkerers</span>
             <br>
-            <span class="text-amber-400">git clone https://github.com/lukaszraczylo/claude-mnemonic.git</span>
+            <span class="text-amber-400">git clone https://github.com/thebtf/claude-mnemonic-plus.git</span>
             <br>
             <span class="text-amber-400">cd claude-mnemonic</span>
             <br>
@@ -295,7 +295,7 @@
         </div>
 
         <p class="text-center text-slate-500 mt-6 sm:mt-8 text-xs sm:text-sm">
-          All settings can also be set via environment variables. See <a href="https://github.com/lukaszraczylo/claude-mnemonic#configuration" target="_blank" class="text-amber-400 hover:underline">full documentation</a> for all options.
+          All settings can also be set via environment variables. See <a href="https://github.com/thebtf/claude-mnemonic-plus#configuration" target="_blank" class="text-amber-400 hover:underline">full documentation</a> for all options.
         </p>
       </div>
     </section>
@@ -450,7 +450,7 @@ const installTabs = [
 const installCommands = {
   macos: `curl -sSL https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.sh | bash`,
   windows: `irm https://raw.githubusercontent.com/lukaszraczylo/claude-mnemonic/main/scripts/install.ps1 | iex`,
-  source: `git clone https://github.com/lukaszraczylo/claude-mnemonic.git\ncd claude-mnemonic\nmake build && make install`,
+  source: `git clone https://github.com/thebtf/claude-mnemonic-plus.git\ncd claude-mnemonic\nmake build && make install`,
 }
 
 const configOptions = [

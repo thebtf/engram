@@ -2,7 +2,7 @@
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 # Pass version to both main package and hooks package
-LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X github.com/lukaszraczylo/claude-mnemonic/pkg/hooks.Version=$(VERSION) -s -w" -buildvcs=false
+LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X github.com/thebtf/claude-mnemonic-plus/pkg/hooks.Version=$(VERSION) -s -w" -buildvcs=false
 BUILD_DIR := bin
 PLUGIN_DIR := plugin
 

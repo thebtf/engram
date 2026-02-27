@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/lukaszraczylo/claude-mnemonic/internal/vector"
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/models"
+	"github.com/thebtf/claude-mnemonic-plus/internal/vector"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/models"
 	"github.com/rs/zerolog/log"
 )
 

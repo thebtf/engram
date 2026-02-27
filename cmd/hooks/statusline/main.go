@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/lukaszraczylo/claude-mnemonic/pkg/hooks"
+	"github.com/thebtf/claude-mnemonic-plus/pkg/hooks"
 )
 
 // StatusInput is the JSON input from Claude Code's statusline feature.

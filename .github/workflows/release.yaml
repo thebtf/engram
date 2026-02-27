@@ -40,7 +40,7 @@ jobs:
               run: |
                   VERSION="${{ needs.release.outputs.version_tag }}"
                   curl -sSL -o checksums.txt \
-                    "https://github.com/lukaszraczylo/claude-mnemonic/releases/download/${VERSION}/checksums.txt"
+                    "https://github.com/thebtf/claude-mnemonic-plus/releases/download/${VERSION}/checksums.txt"
 
             - name: Generate marketplace.json with checksums
               run: |
@@ -65,7 +65,7 @@ jobs:
                       "email": "lukaszraczylo@users.noreply.github.com",
                       "url": "https://github.com/lukaszraczylo"
                     },
-                    "repository": "https://github.com/lukaszraczylo/claude-mnemonic",
+                    "repository": "https://github.com/thebtf/claude-mnemonic-plus",
                     "plugins": [
                       {
                         "name": "claude-mnemonic",
@@ -78,7 +78,7 @@ jobs:
                         "category": "productivity",
                         "tags": ["memory", "persistence", "search", "context"],
                         "license": "MIT",
-                        "homepage": "https://github.com/lukaszraczylo/claude-mnemonic",
+                        "homepage": "https://github.com/thebtf/claude-mnemonic-plus",
                         "releases": {
                           "latest": "${VERSION}",
                           "versions": {
@@ -86,17 +86,17 @@ jobs:
                               "releaseDate": "${TODAY}",
                               "downloads": {
                                 "darwin-arm64": {
-                                  "url": "https://github.com/lukaszraczylo/claude-mnemonic/releases/download/${VERSION_TAG}/claude-mnemonic_${VERSION}_darwin_arm64.tar.gz",
+                                  "url": "https://github.com/thebtf/claude-mnemonic-plus/releases/download/${VERSION_TAG}/claude-mnemonic_${VERSION}_darwin_arm64.tar.gz",
                                   "format": "tar.gz",
                                   "sha256": "${SHA_DARWIN_ARM64}"
                                 },
                                 "linux-amd64": {
-                                  "url": "https://github.com/lukaszraczylo/claude-mnemonic/releases/download/${VERSION_TAG}/claude-mnemonic_${VERSION}_linux_amd64.tar.gz",
+                                  "url": "https://github.com/thebtf/claude-mnemonic-plus/releases/download/${VERSION_TAG}/claude-mnemonic_${VERSION}_linux_amd64.tar.gz",
                                   "format": "tar.gz",
                                   "sha256": "${SHA_LINUX_AMD64}"
                                 },
                                 "windows-amd64": {
-                                  "url": "https://github.com/lukaszraczylo/claude-mnemonic/releases/download/${VERSION_TAG}/claude-mnemonic_${VERSION}_windows_amd64.zip",
+                                  "url": "https://github.com/thebtf/claude-mnemonic-plus/releases/download/${VERSION_TAG}/claude-mnemonic_${VERSION}_windows_amd64.zip",
                                   "format": "zip",
                                   "sha256": "${SHA_WINDOWS_AMD64}"
                                 }
