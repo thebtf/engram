@@ -33,6 +33,7 @@ type openAIEmbedRequest struct {
 	Input          interface{} `json:"input"`
 	Model          string      `json:"model"`
 	EncodingFormat string      `json:"encoding_format"`
+	Dimensions     int         `json:"dimensions,omitempty"`
 }
 
 type openAIEmbedResponse struct {
@@ -121,6 +122,7 @@ func (m *openAIModel) embedRequest(input interface{}) ([][]float32, error) {
 		Input:          input,
 		Model:          m.modelName,
 		EncodingFormat: "float",
+		Dimensions:     m.dimensions,
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -159,7 +161,16 @@ func (m *openAIModel) embedRequest(input interface{}) ([][]float32, error) {
 
 	results := make([][]float32, len(embedResp.Data))
 	for i, d := range embedResp.Data {
-		results[i] = d.Embedding
+		vec := d.Embedding
+		// Truncate or pad if model ignores the dimensions parameter.
+		if len(vec) > m.dimensions {
+			vec = vec[:m.dimensions]
+		} else if len(vec) < m.dimensions {
+			padded := make([]float32, m.dimensions)
+			copy(padded, vec)
+			vec = padded
+		}
+		results[i] = vec
 	}
 	return results, nil
 }
