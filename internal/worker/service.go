@@ -1361,6 +1361,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/context/count", s.handleContextCount)
 		r.Get("/api/context/inject", s.handleContextInject)
 		r.Get("/api/context/search", s.handleSearchByPrompt)
+		r.Post("/api/context/search", s.handleSearchByPrompt)
 		r.Get("/api/context/files", s.handleFileContext)
 
 		// Pattern routes

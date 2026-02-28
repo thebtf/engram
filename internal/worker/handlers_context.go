@@ -3,6 +3,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -22,10 +23,31 @@ import (
 // handleSearchByPrompt searches observations relevant to a user prompt.
 // IMPORTANT: This is on the critical startup path - must be fast!
 // No synchronous verification - just filter by staleness and return.
+// Supports both GET (query params) and POST (JSON body) to avoid URL length limits.
 func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	query := r.URL.Query().Get("query")
 	cwd := r.URL.Query().Get("cwd")
+
+	// For POST requests, allow JSON body to override query params.
+	if r.Method == http.MethodPost && r.Body != nil {
+		var body struct {
+			Project string `json:"project"`
+			Query   string `json:"query"`
+			Cwd     string `json:"cwd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			if body.Project != "" {
+				project = body.Project
+			}
+			if body.Query != "" {
+				query = body.Query
+			}
+			if body.Cwd != "" {
+				cwd = body.Cwd
+			}
+		}
+	}
 
 	if project == "" || query == "" {
 		http.Error(w, "project and query required", http.StatusBadRequest)
