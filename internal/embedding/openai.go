@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -162,9 +163,20 @@ func (m *openAIModel) embedRequest(input interface{}) ([][]float32, error) {
 	results := make([][]float32, len(embedResp.Data))
 	for i, d := range embedResp.Data {
 		vec := d.Embedding
-		// Truncate or pad if model ignores the dimensions parameter.
+		// Truncate if model ignores the dimensions parameter (MRL truncation).
 		if len(vec) > m.dimensions {
 			vec = vec[:m.dimensions]
+			// L2 normalize after truncation to preserve cosine similarity.
+			var norm float32
+			for _, v := range vec {
+				norm += v * v
+			}
+			if norm > 0 {
+				norm = float32(math.Sqrt(float64(norm)))
+				for j := range vec {
+					vec[j] /= norm
+				}
+			}
 		} else if len(vec) < m.dimensions {
 			padded := make([]float32, m.dimensions)
 			copy(padded, vec)
