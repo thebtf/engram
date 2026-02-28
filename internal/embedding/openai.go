@@ -34,7 +34,6 @@ type openAIEmbedRequest struct {
 	Input          interface{} `json:"input"`
 	Model          string      `json:"model"`
 	EncodingFormat string      `json:"encoding_format"`
-	Dimensions     int         `json:"dimensions,omitempty"`
 }
 
 type openAIEmbedResponse struct {
@@ -123,7 +122,6 @@ func (m *openAIModel) embedRequest(input interface{}) ([][]float32, error) {
 		Input:          input,
 		Model:          m.modelName,
 		EncodingFormat: "float",
-		Dimensions:     m.dimensions,
 	}
 
 	body, err := json.Marshal(reqBody)
