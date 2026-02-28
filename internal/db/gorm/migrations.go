@@ -762,7 +762,7 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 					 ON patterns(frequency DESC, last_seen_at_epoch DESC)
 					 WHERE status = 'active'`,
 					`CREATE INDEX IF NOT EXISTS idx_patterns_type_project
-					 ON patterns(type, project, frequency DESC)
+					 ON patterns(type, frequency DESC)
 					 WHERE status = 'active'`,
 				}
 				for _, s := range sqls {
