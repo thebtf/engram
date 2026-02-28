@@ -143,7 +143,9 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 
 			resp := s.handleRequest(ctx, &req)
-			s.sendResponse(resp)
+			if resp != nil {
+				s.sendResponse(resp)
+			}
 		}
 		scanDone <- scanner.Err()
 	}()
@@ -161,7 +163,14 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 // handleRequest dispatches the request to the appropriate handler.
+// JSON-RPC 2.0 notifications (requests without "id") MUST NOT receive a response.
 func (s *Server) handleRequest(ctx context.Context, req *Request) *Response {
+	// JSON-RPC 2.0: notifications have no "id" field — server MUST NOT respond.
+	if req.ID == nil {
+		s.handleNotification(req)
+		return nil
+	}
+
 	switch req.Method {
 	case "initialize":
 		return s.handleInitialize(req)
@@ -169,6 +178,17 @@ func (s *Server) handleRequest(ctx context.Context, req *Request) *Response {
 		return s.handleToolsList(req)
 	case "tools/call":
 		return s.handleToolsCall(ctx, req)
+	// Graceful stubs for unimplemented capabilities — return empty results
+	// instead of "Method not found" to prevent clients from treating missing
+	// features as errors.
+	case "resources/list":
+		return &Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"resources": []any{}}}
+	case "resources/templates/list":
+		return &Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"resourceTemplates": []any{}}}
+	case "prompts/list":
+		return &Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"prompts": []any{}}}
+	case "completion/complete":
+		return &Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"completion": map[string]any{"values": []any{}}}}
 	default:
 		return &Response{
 			JSONRPC: "2.0",
@@ -178,6 +198,18 @@ func (s *Server) handleRequest(ctx context.Context, req *Request) *Response {
 				Message: "Method not found",
 			},
 		}
+	}
+}
+
+// handleNotification processes JSON-RPC 2.0 notifications (no response sent).
+func (s *Server) handleNotification(req *Request) {
+	switch req.Method {
+	case "initialized", "notifications/initialized":
+		log.Debug().Str("method", req.Method).Msg("MCP client initialized")
+	case "cancelled", "notifications/cancelled":
+		log.Debug().Str("method", req.Method).Msg("MCP request cancelled by client")
+	default:
+		log.Warn().Str("method", req.Method).Msg("Unknown MCP notification received")
 	}
 }
 

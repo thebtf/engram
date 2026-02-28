@@ -131,6 +131,7 @@ type Service struct {
 	recalculator           *scoring.Recalculator
 	consolidationScheduler *consolidation.Scheduler
 	mcpSSEHandler          *mcp.SSEHandler
+	mcpStreamableHandler   *mcp.StreamableHandler
 	searchMgr              *search.Manager
 	collectionRegistry     *collections.Registry
 	sessionIdxStore        *sessions.Store
@@ -625,15 +626,17 @@ func (s *Service) initializeAsync() {
 		consolidationScheduler,
 	)
 	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
+	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer)
 
 	s.initMu.Lock()
 	s.searchMgr = searchMgr
 	s.collectionRegistry = collectionRegistry
 	s.sessionIdxStore = sessionIdxStore
 	s.mcpSSEHandler = mcpSSEHandler
+	s.mcpStreamableHandler = mcpStreamableHandler
 	s.initMu.Unlock()
 
-	log.Info().Msg("MCP SSE handler integrated into worker")
+	log.Info().Msg("MCP handlers integrated into worker (SSE + Streamable HTTP)")
 
 	// Mark as ready
 	s.ready.Store(true)
@@ -1304,11 +1307,12 @@ func (s *Service) setupRoutes() {
 	// Dashboard SSE endpoint (works before DB is ready)
 	s.router.Get("/api/events", s.sseBroadcaster.HandleSSE)
 
-	// MCP SSE routes (require DB ready, no timeout — long-lived SSE connections)
+	// MCP routes (require DB ready, no timeout — long-lived SSE connections)
 	s.router.Group(func(r chi.Router) {
 		r.Use(s.requireReady)
 		r.Handle("/sse", http.HandlerFunc(s.handleMCPSSE))
 		r.Handle("/message", http.HandlerFunc(s.handleMCPSSE))
+		r.Handle("/mcp", http.HandlerFunc(s.handleMCPStreamable))
 	})
 
 	// OpenAI-compatible model list endpoint. Intentionally outside requireReady group:
@@ -1405,6 +1409,20 @@ func (s *Service) handleMCPSSE(w http.ResponseWriter, r *http.Request) {
 
 	if handler == nil {
 		http.Error(w, "MCP SSE not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// handleMCPStreamable delegates POST /mcp requests to the Streamable HTTP handler.
+func (s *Service) handleMCPStreamable(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	handler := s.mcpStreamableHandler
+	s.initMu.RUnlock()
+
+	if handler == nil {
+		http.Error(w, "MCP Streamable HTTP not ready", http.StatusServiceUnavailable)
 		return
 	}
 

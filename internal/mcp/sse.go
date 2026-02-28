@@ -165,6 +165,13 @@ func (h *SSEHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := h.server.handleRequest(r.Context(), &req)
+
+	// Notifications return nil — no response to send, return 204 No Content.
+	if response == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	select {
 	case responseChannel <- response:
 	default:
