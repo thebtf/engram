@@ -202,112 +202,104 @@ func Load() (*Config, error) {
 	cfg := Default()
 
 	data, err := os.ReadFile(SettingsPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
-		}
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 
-	// Load settings into a map to preserve unknown fields
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return cfg, nil // Return defaults on parse error
-	}
-
-	// Map settings to config
-	if v, ok := settings["ENGRAM_WORKER_PORT"].(float64); ok {
-		cfg.WorkerPort = int(v)
-	}
-	// WorkerHost and WorkerToken are env-only (not settable via JSON file).
-	// WorkerToken in particular must never be persisted to disk.
-	if v, ok := settings["ENGRAM_DB_PATH"].(string); ok && v != "" {
-		cfg.DBPath = v
-	}
-	if v, ok := settings["ENGRAM_MODEL"].(string); ok {
-		cfg.Model = v
-	}
-	if v, ok := settings["CLAUDE_CODE_PATH"].(string); ok {
-		cfg.ClaudeCodePath = v
-	}
-	if v, ok := settings["ENGRAM_EMBEDDING_MODEL"].(string); ok && v != "" {
-		cfg.EmbeddingModel = v
-	}
-	// Reranking settings
-	if v, ok := settings["ENGRAM_RERANKING_ENABLED"].(bool); ok {
-		cfg.RerankingEnabled = v
-	}
-	if v, ok := settings["ENGRAM_RERANKING_CANDIDATES"].(float64); ok && v > 0 {
-		cfg.RerankingCandidates = int(v)
-	}
-	if v, ok := settings["ENGRAM_RERANKING_RESULTS"].(float64); ok && v > 0 {
-		cfg.RerankingResults = int(v)
-	}
-	if v, ok := settings["ENGRAM_RERANKING_ALPHA"].(float64); ok && v >= 0 && v <= 1 {
-		cfg.RerankingAlpha = v
-	}
-	if v, ok := settings["ENGRAM_RERANKING_MIN_IMPROVEMENT"].(float64); ok && v >= 0 {
-		cfg.RerankingMinImprovement = v
-	}
-	if v, ok := settings["ENGRAM_RERANKING_PURE_MODE"].(bool); ok {
-		cfg.RerankingPureMode = v
-	}
-	if v, ok := settings["ENGRAM_CONTEXT_OBSERVATIONS"].(float64); ok {
-		cfg.ContextObservations = int(v)
-	}
-	if v, ok := settings["ENGRAM_CONTEXT_FULL_COUNT"].(float64); ok {
-		cfg.ContextFullCount = int(v)
-	}
-	if v, ok := settings["ENGRAM_CONTEXT_SESSION_COUNT"].(float64); ok {
-		cfg.ContextSessionCount = int(v)
-	}
-	if v, ok := settings["ENGRAM_CONTEXT_OBS_TYPES"].(string); ok && v != "" {
-		cfg.ContextObsTypes = splitTrim(v)
-	}
-	if v, ok := settings["ENGRAM_CONTEXT_OBS_CONCEPTS"].(string); ok && v != "" {
-		cfg.ContextObsConcepts = splitTrim(v)
-	}
-	if v, ok := settings["ENGRAM_CONTEXT_RELEVANCE_THRESHOLD"].(float64); ok && v >= 0 && v <= 1 {
-		cfg.ContextRelevanceThreshold = v
-	}
-	if v, ok := settings["ENGRAM_CONTEXT_MAX_PROMPT_RESULTS"].(float64); ok && v >= 0 {
-		cfg.ContextMaxPromptResults = int(v)
-	}
-	// Graph settings
-	if v, ok := settings["ENGRAM_GRAPH_ENABLED"].(bool); ok {
-		cfg.GraphEnabled = v
-	}
-	if v, ok := settings["ENGRAM_GRAPH_MAX_HOPS"].(float64); ok && v > 0 {
-		cfg.GraphMaxHops = int(v)
-	}
-	if v, ok := settings["ENGRAM_GRAPH_BRANCH_FACTOR"].(float64); ok && v > 0 {
-		cfg.GraphBranchFactor = int(v)
-	}
-	if v, ok := settings["ENGRAM_GRAPH_EDGE_WEIGHT"].(float64); ok && v >= 0 && v <= 1 {
-		cfg.GraphEdgeWeight = v
-	}
-	if v, ok := settings["ENGRAM_GRAPH_REBUILD_INTERVAL_MIN"].(float64); ok && v > 0 {
-		cfg.GraphRebuildIntervalMin = int(v)
-	}
-	// Vector storage settings (LEANN Phase 2)
-	if v, ok := settings["ENGRAM_VECTOR_STORAGE_STRATEGY"].(string); ok && v != "" {
-		cfg.VectorStorageStrategy = v
-	}
-	if v, ok := settings["EMBEDDING_PROVIDER"].(string); ok && v != "" {
-		cfg.EmbeddingProvider = v
-	}
-	if v, ok := settings["EMBEDDING_BASE_URL"].(string); ok && v != "" {
-		cfg.EmbeddingBaseURL = v
-	}
-	// EMBEDDING_API_KEY is env-only, NOT loaded from JSON file.
-	if v, ok := settings["EMBEDDING_MODEL_NAME"].(string); ok && v != "" {
-		cfg.EmbeddingModelName = v
-	}
-	if v, ok := settings["EMBEDDING_DIMENSIONS"].(float64); ok && v > 0 {
-		cfg.EmbeddingDimensions = int(v)
-	}
-	if v, ok := settings["ENGRAM_HUB_THRESHOLD"].(float64); ok && v > 0 {
-		cfg.HubThreshold = int(v)
+	// Load settings from JSON file (skip if file doesn't exist)
+	if err == nil {
+		var settings map[string]interface{}
+		if err := json.Unmarshal(data, &settings); err == nil {
+			if v, ok := settings["ENGRAM_WORKER_PORT"].(float64); ok {
+				cfg.WorkerPort = int(v)
+			}
+			// WorkerHost and WorkerToken are env-only (not settable via JSON file).
+			if v, ok := settings["ENGRAM_DB_PATH"].(string); ok && v != "" {
+				cfg.DBPath = v
+			}
+			if v, ok := settings["ENGRAM_MODEL"].(string); ok {
+				cfg.Model = v
+			}
+			if v, ok := settings["CLAUDE_CODE_PATH"].(string); ok {
+				cfg.ClaudeCodePath = v
+			}
+			if v, ok := settings["ENGRAM_EMBEDDING_MODEL"].(string); ok && v != "" {
+				cfg.EmbeddingModel = v
+			}
+			if v, ok := settings["ENGRAM_RERANKING_ENABLED"].(bool); ok {
+				cfg.RerankingEnabled = v
+			}
+			if v, ok := settings["ENGRAM_RERANKING_CANDIDATES"].(float64); ok && v > 0 {
+				cfg.RerankingCandidates = int(v)
+			}
+			if v, ok := settings["ENGRAM_RERANKING_RESULTS"].(float64); ok && v > 0 {
+				cfg.RerankingResults = int(v)
+			}
+			if v, ok := settings["ENGRAM_RERANKING_ALPHA"].(float64); ok && v >= 0 && v <= 1 {
+				cfg.RerankingAlpha = v
+			}
+			if v, ok := settings["ENGRAM_RERANKING_MIN_IMPROVEMENT"].(float64); ok && v >= 0 {
+				cfg.RerankingMinImprovement = v
+			}
+			if v, ok := settings["ENGRAM_RERANKING_PURE_MODE"].(bool); ok {
+				cfg.RerankingPureMode = v
+			}
+			if v, ok := settings["ENGRAM_CONTEXT_OBSERVATIONS"].(float64); ok {
+				cfg.ContextObservations = int(v)
+			}
+			if v, ok := settings["ENGRAM_CONTEXT_FULL_COUNT"].(float64); ok {
+				cfg.ContextFullCount = int(v)
+			}
+			if v, ok := settings["ENGRAM_CONTEXT_SESSION_COUNT"].(float64); ok {
+				cfg.ContextSessionCount = int(v)
+			}
+			if v, ok := settings["ENGRAM_CONTEXT_OBS_TYPES"].(string); ok && v != "" {
+				cfg.ContextObsTypes = splitTrim(v)
+			}
+			if v, ok := settings["ENGRAM_CONTEXT_OBS_CONCEPTS"].(string); ok && v != "" {
+				cfg.ContextObsConcepts = splitTrim(v)
+			}
+			if v, ok := settings["ENGRAM_CONTEXT_RELEVANCE_THRESHOLD"].(float64); ok && v >= 0 && v <= 1 {
+				cfg.ContextRelevanceThreshold = v
+			}
+			if v, ok := settings["ENGRAM_CONTEXT_MAX_PROMPT_RESULTS"].(float64); ok && v >= 0 {
+				cfg.ContextMaxPromptResults = int(v)
+			}
+			if v, ok := settings["ENGRAM_GRAPH_ENABLED"].(bool); ok {
+				cfg.GraphEnabled = v
+			}
+			if v, ok := settings["ENGRAM_GRAPH_MAX_HOPS"].(float64); ok && v > 0 {
+				cfg.GraphMaxHops = int(v)
+			}
+			if v, ok := settings["ENGRAM_GRAPH_BRANCH_FACTOR"].(float64); ok && v > 0 {
+				cfg.GraphBranchFactor = int(v)
+			}
+			if v, ok := settings["ENGRAM_GRAPH_EDGE_WEIGHT"].(float64); ok && v >= 0 && v <= 1 {
+				cfg.GraphEdgeWeight = v
+			}
+			if v, ok := settings["ENGRAM_GRAPH_REBUILD_INTERVAL_MIN"].(float64); ok && v > 0 {
+				cfg.GraphRebuildIntervalMin = int(v)
+			}
+			if v, ok := settings["ENGRAM_VECTOR_STORAGE_STRATEGY"].(string); ok && v != "" {
+				cfg.VectorStorageStrategy = v
+			}
+			if v, ok := settings["EMBEDDING_PROVIDER"].(string); ok && v != "" {
+				cfg.EmbeddingProvider = v
+			}
+			if v, ok := settings["EMBEDDING_BASE_URL"].(string); ok && v != "" {
+				cfg.EmbeddingBaseURL = v
+			}
+			// EMBEDDING_API_KEY is env-only, NOT loaded from JSON file.
+			if v, ok := settings["EMBEDDING_MODEL_NAME"].(string); ok && v != "" {
+				cfg.EmbeddingModelName = v
+			}
+			if v, ok := settings["EMBEDDING_DIMENSIONS"].(float64); ok && v > 0 {
+				cfg.EmbeddingDimensions = int(v)
+			}
+			if v, ok := settings["ENGRAM_HUB_THRESHOLD"].(float64); ok && v > 0 {
+				cfg.HubThreshold = int(v)
+			}
+		}
 	}
 
 	// Environment variable overrides (take precedence over JSON settings)
@@ -320,19 +312,19 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN")); v != "" {
 		cfg.WorkerToken = v
 	}
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_PROVIDER", "EMBEDDING_PROVIDER"); v != "" {
 		cfg.EmbeddingProvider = v
 	}
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL"); v != "" {
 		cfg.EmbeddingBaseURL = v
 	}
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_API_KEY")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_API_KEY", "EMBEDDING_API_KEY"); v != "" {
 		cfg.EmbeddingAPIKey = v
 	}
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL_NAME")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_MODEL_NAME", "EMBEDDING_MODEL_NAME"); v != "" {
 		cfg.EmbeddingModelName = v
 	}
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_DIMENSIONS")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_DIMENSIONS", "EMBEDDING_DIMENSIONS"); v != "" {
 		if d, err := strconv.Atoi(v); err == nil && d > 0 {
 			cfg.EmbeddingDimensions = d
 		}
@@ -356,6 +348,17 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// envFirstOf returns the first non-empty env var value from the given keys.
+// Allows ENGRAM_-prefixed vars to take priority over legacy unprefixed vars.
+func envFirstOf(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // splitTrim splits a comma-separated string and trims whitespace.
@@ -416,7 +419,7 @@ func GetWorkerToken() string {
 
 // GetEmbeddingProvider returns the embedding provider ("builtin" or "openai").
 func GetEmbeddingProvider() string {
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_PROVIDER", "EMBEDDING_PROVIDER"); v != "" {
 		return v
 	}
 	return Get().EmbeddingProvider
@@ -424,7 +427,7 @@ func GetEmbeddingProvider() string {
 
 // GetEmbeddingBaseURL returns the OpenAI-compatible API base URL.
 func GetEmbeddingBaseURL() string {
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL"); v != "" {
 		return v
 	}
 	return Get().EmbeddingBaseURL
@@ -432,7 +435,7 @@ func GetEmbeddingBaseURL() string {
 
 // GetEmbeddingAPIKey returns the embedding API key (env-only, never from config file).
 func GetEmbeddingAPIKey() string {
-	return strings.TrimSpace(os.Getenv("EMBEDDING_API_KEY"))
+	return envFirstOf("ENGRAM_EMBEDDING_API_KEY", "EMBEDDING_API_KEY")
 }
 
 // GetDatabaseDSN returns the PostgreSQL DSN.
@@ -447,7 +450,7 @@ func GetDatabaseDSN() string {
 
 // GetEmbeddingModelName returns the embedding model name for external providers.
 func GetEmbeddingModelName() string {
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL_NAME")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_MODEL_NAME", "EMBEDDING_MODEL_NAME"); v != "" {
 		return v
 	}
 	if cfg := Get(); cfg.EmbeddingModelName != "" {
@@ -484,7 +487,7 @@ func GetWorkstationID() string {
 
 // GetEmbeddingDimensions returns the embedding vector dimensions for external providers.
 func GetEmbeddingDimensions() int {
-	if v := strings.TrimSpace(os.Getenv("EMBEDDING_DIMENSIONS")); v != "" {
+	if v := envFirstOf("ENGRAM_EMBEDDING_DIMENSIONS", "EMBEDDING_DIMENSIONS"); v != "" {
 		if d, err := strconv.Atoi(v); err == nil && d > 0 {
 			return d
 		}
