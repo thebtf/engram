@@ -720,15 +720,25 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 
 				log.Warn().Msgf("Embedding dimension changed from %d to %d, truncating vectors and content_chunks", current, embeddingDims)
 
+				// pgvector HNSW supports max 2000 dimensions; use IVFFlat for larger vectors.
+				vectorsIdx := "CREATE INDEX idx_vectors_embedding_hnsw ON vectors USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
+				chunksIdx := "CREATE INDEX idx_content_chunks_embedding_hnsw ON content_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
+				if embeddingDims > 2000 {
+					vectorsIdx = "CREATE INDEX idx_vectors_embedding_ivfflat ON vectors USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
+					chunksIdx = "CREATE INDEX idx_content_chunks_embedding_ivfflat ON content_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
+				}
+
 				sqls := []string{
 					"TRUNCATE vectors",
 					fmt.Sprintf("ALTER TABLE vectors ALTER COLUMN embedding TYPE vector(%d)", embeddingDims),
 					"DROP INDEX IF EXISTS idx_vectors_embedding_hnsw",
-					"CREATE INDEX idx_vectors_embedding_hnsw ON vectors USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
+					"DROP INDEX IF EXISTS idx_vectors_embedding_ivfflat",
+					vectorsIdx,
 					"TRUNCATE content_chunks",
 					fmt.Sprintf("ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(%d)", embeddingDims),
 					"DROP INDEX IF EXISTS idx_content_chunks_embedding_hnsw",
-					"CREATE INDEX idx_content_chunks_embedding_hnsw ON content_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
+					"DROP INDEX IF EXISTS idx_content_chunks_embedding_ivfflat",
+					chunksIdx,
 				}
 				for _, s := range sqls {
 					if err := tx.Exec(s).Error; err != nil {
