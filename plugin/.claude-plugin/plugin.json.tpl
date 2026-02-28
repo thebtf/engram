@@ -1,9 +1,8 @@
 {
-  "name": "claude-mnemonic",
+  "name": "engram",
   "version": "{{ .Version }}",
-  "description": "Persistent memory system for Claude Code - Go implementation with SQLite and ChromaDB",
+  "description": "Persistent memory for Claude Code — captures observations, stores knowledge across sessions, injects relevant context automatically",
   "author": {
-    "name": "lukaszraczylo",
-    "email": "lukaszraczylo@users.noreply.github.com"
+    "name": "thebtf"
   }
 }

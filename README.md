@@ -115,7 +115,25 @@ Install via Docker template:
 
 ### 2. Set Up the Client
 
-The client runs on each workstation where you use Claude Code. It needs only the hooks (to capture observations) and the MCP stdio proxy (to access `nia` tools).
+The client runs on each workstation where you use Claude Code. It connects to the server and provides hooks (to capture observations) and MCP tools (to access `nia` tools).
+
+#### Plugin Install (Recommended)
+
+The simplest way to install — works on all platforms (macOS, Linux, Windows):
+
+```
+/plugin marketplace add thebtf/engram-marketplace
+/plugin install engram
+```
+
+Then set environment variables:
+
+```bash
+export ENGRAM_URL="http://your-server:37777/mcp"
+export ENGRAM_API_TOKEN="your-api-token"
+```
+
+Restart Claude Code and verify with `/doctor`.
 
 #### Automatic Install (macOS / Linux)
 

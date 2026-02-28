@@ -299,7 +299,14 @@ release:
 
     Shared memory infrastructure for Claude Code workstations.
 
-    ### Installation
+    ### Quick Install (Plugin)
+
+    ```
+    /plugin marketplace add thebtf/engram-marketplace
+    /plugin install engram
+    ```
+
+    ### Manual Install (Local Deployment)
 
     ```bash
     curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash

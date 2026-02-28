@@ -1,19 +1,18 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "claude-mnemonic",
+  "name": "engram",
   "version": "{{ .Version }}",
-  "description": "Persistent memory system for Claude Code - stores observations, session summaries, and user prompts with semantic search",
+  "description": "Persistent memory for Claude Code — captures observations, stores knowledge across sessions, injects relevant context automatically",
   "owner": {
-    "name": "lukaszraczylo",
-    "email": "lukaszraczylo@users.noreply.github.com"
+    "name": "thebtf"
   },
   "plugins": [
     {
-      "name": "claude-mnemonic",
-      "description": "Persistent memory system for Claude Code - Go implementation with SQLite and ChromaDB",
+      "name": "engram",
+      "description": "Persistent memory system with PostgreSQL+pgvector backend and MCP integration",
       "version": "{{ .Version }}",
       "author": {
-        "name": "lukaszraczylo"
+        "name": "thebtf"
       },
       "source": "./",
       "category": "productivity"

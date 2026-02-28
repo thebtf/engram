@@ -1,14 +1,14 @@
 #!/bin/bash
 # Engram - Remote Installation Script
-# Usage: curl -sSL https://raw.githubusercontent.com/thebtf/engram-plus/main/scripts/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
 #
 # Or with a specific version:
-# curl -sSL https://raw.githubusercontent.com/thebtf/engram-plus/main/scripts/install.sh | bash -s -- v1.0.0
+# curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash -s -- v1.0.0
 
 set -e
 
 # Configuration
-GITHUB_REPO="thebtf/engram-plus"
+GITHUB_REPO="thebtf/engram"
 INSTALL_DIR="$HOME/.claude/plugins/marketplaces/engram"
 CACHE_DIR="$HOME/.claude/plugins/cache/engram/engram"
 PLUGINS_FILE="$HOME/.claude/plugins/installed_plugins.json"

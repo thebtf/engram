@@ -1,8 +1,8 @@
 # Engram - Windows Installation Script
-# Usage: irm https://raw.githubusercontent.com/thebtf/engram-plus/main/scripts/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
 #
 # Or with a specific version:
-# $env:MNEMONIC_VERSION = "v1.0.0"; irm https://raw.githubusercontent.com/thebtf/engram-plus/main/scripts/install.ps1 | iex
+# $env:MNEMONIC_VERSION = "v1.0.0"; irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
 
 param(
     [string]$Version = $env:MNEMONIC_VERSION,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Configuration
-$GitHubRepo = "thebtf/engram-plus"
+$GitHubRepo = "thebtf/engram"
 $InstallDir = "$env:USERPROFILE\.claude\plugins\marketplaces\engram"
 $CacheDir = "$env:USERPROFILE\.claude\plugins\cache\engram\engram"
 $PluginsFile = "$env:USERPROFILE\.claude\plugins\installed_plugins.json"
