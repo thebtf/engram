@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "engram": {
+      "type": "http",
+      "url": "${ENGRAM_URL}",
+      "headers": {
+        "Authorization": "Bearer ${ENGRAM_API_TOKEN}"
+      }
+    }
+  }
+}

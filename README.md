@@ -85,7 +85,27 @@ DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
 
 ### 2. Configure MCP
 
-Engram server exposes three MCP transports on the same port:
+#### With Plugin (recommended)
+
+The plugin registers the MCP server automatically via `.mcp.json`. Set two environment variables and install:
+
+```bash
+# Set environment variables (these are read by Claude Code at runtime)
+# Linux/macOS: add to shell profile; Windows: set as System Environment Variables
+ENGRAM_URL=http://your-server:37777/mcp
+ENGRAM_API_TOKEN=your-api-token
+```
+
+```
+/plugin marketplace add thebtf/engram-marketplace
+/plugin install engram
+```
+
+Restart Claude Code. The plugin provides hooks, skills, and MCP connection — all configured.
+
+#### Without Plugin (manual)
+
+If not using the plugin, configure MCP directly. Engram exposes three transports on the same port:
 
 | Transport | Endpoint | Protocol | Best For |
 |-----------|----------|----------|----------|
@@ -93,11 +113,7 @@ Engram server exposes three MCP transports on the same port:
 | **SSE** | `GET /sse` + `POST /message` | Server-Sent Events | Long-lived streaming |
 | **Stdio Proxy** | local binary | stdio ↔ SSE bridge | Clients that only support stdio |
 
-#### Streamable HTTP (recommended)
-
-Direct HTTP connection — no proxy binary needed, simplest setup.
-
-**User scope** (`~/.claude/settings.json` — all projects):
+**Streamable HTTP** — add to `~/.claude/settings.json` (user scope) or `.claude/settings.json` (project scope):
 
 ```json
 {
@@ -106,59 +122,24 @@ Direct HTTP connection — no proxy binary needed, simplest setup.
       "type": "url",
       "url": "http://your-server:37777/mcp",
       "headers": {
-        "Authorization": "Bearer your-api-token"
+        "Authorization": "Bearer ${ENGRAM_API_TOKEN}"
       }
     }
   }
 }
 ```
 
-**Project scope** (`.claude/settings.json` in project root — single project):
+Claude Code expands `${VAR}` references from your environment at runtime. You can also use literal values.
 
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "type": "url",
-      "url": "http://your-server:37777/mcp",
-      "headers": {
-        "Authorization": "Bearer your-api-token"
-      }
-    }
-  }
-}
-```
-
-**Claude Code CLI:**
+**CLI shortcut:**
 
 ```bash
-claude mcp add engram --transport http http://your-server:37777/mcp \
-  --header "Authorization: Bearer your-api-token"
+claude mcp add-json engram '{"type":"http","url":"http://your-server:37777/mcp","headers":{"Authorization":"Bearer ${ENGRAM_API_TOKEN}"}}' -s user
 ```
 
-Add `-s user` for user scope (default is project), `-s global` for global.
+**SSE Transport** — use `http://your-server:37777/sse` as the URL instead.
 
-#### SSE Transport
-
-Long-lived streaming connection. Use when you need server-initiated events.
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "type": "url",
-      "url": "http://your-server:37777/sse",
-      "headers": {
-        "Authorization": "Bearer your-api-token"
-      }
-    }
-  }
-}
-```
-
-#### Stdio Proxy (legacy)
-
-For MCP clients that only support stdio transport. Requires the `mcp-stdio-proxy` binary.
+**Stdio Proxy (legacy)** — for clients that only support stdio. Requires `mcp-stdio-proxy` binary:
 
 ```json
 {
