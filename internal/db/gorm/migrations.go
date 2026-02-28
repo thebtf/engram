@@ -720,12 +720,16 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 
 				log.Warn().Msgf("Embedding dimension changed from %d to %d, truncating vectors and content_chunks", current, embeddingDims)
 
-				// pgvector HNSW supports max 2000 dimensions; use IVFFlat for larger vectors.
+				// pgvector vector indexes (HNSW/IVFFlat) max out at 2000 dimensions.
+				// For >2000 dims, use halfvec (16-bit float) which supports up to 4096 dims
+				// with HNSW indexing. Precision loss is negligible for similarity search.
+				colType := fmt.Sprintf("vector(%d)", embeddingDims)
 				vectorsIdx := "CREATE INDEX idx_vectors_embedding_hnsw ON vectors USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
 				chunksIdx := "CREATE INDEX idx_content_chunks_embedding_hnsw ON content_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
 				if embeddingDims > 2000 {
-					vectorsIdx = "CREATE INDEX idx_vectors_embedding_ivfflat ON vectors USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
-					chunksIdx = "CREATE INDEX idx_content_chunks_embedding_ivfflat ON content_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
+					colType = fmt.Sprintf("halfvec(%d)", embeddingDims)
+					vectorsIdx = "CREATE INDEX idx_vectors_embedding_hnsw ON vectors USING hnsw (embedding halfvec_cosine_ops) WITH (m = 16, ef_construction = 64)"
+					chunksIdx = "CREATE INDEX idx_content_chunks_embedding_hnsw ON content_chunks USING hnsw (embedding halfvec_cosine_ops) WITH (m = 16, ef_construction = 64)"
 				}
 
 				sqls := []string{
@@ -734,12 +738,12 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 					"DROP INDEX IF EXISTS idx_vectors_embedding_hnsw",
 					"DROP INDEX IF EXISTS idx_vectors_embedding_ivfflat",
 					"TRUNCATE vectors",
-					fmt.Sprintf("ALTER TABLE vectors ALTER COLUMN embedding TYPE vector(%d)", embeddingDims),
+					fmt.Sprintf("ALTER TABLE vectors ALTER COLUMN embedding TYPE %s", colType),
 					vectorsIdx,
 					"DROP INDEX IF EXISTS idx_content_chunks_embedding_hnsw",
 					"DROP INDEX IF EXISTS idx_content_chunks_embedding_ivfflat",
 					"TRUNCATE content_chunks",
-					fmt.Sprintf("ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(%d)", embeddingDims),
+					fmt.Sprintf("ALTER TABLE content_chunks ALTER COLUMN embedding TYPE %s", colType),
 					chunksIdx,
 				}
 				for _, s := range sqls {
