@@ -1,61 +1,58 @@
 # Continuity State
 
-**Last Updated:** 2026-03-01
-**Session:** Plugin skill refinement + marketplace sync + release packaging
+**Last Updated:** 2026-03-02
+**Session:** Re-Genesis Phase 2 — Architecture finalization
 
 ## Current Goal
-Plugin v0.3.0 fully deployed to marketplace. Skill, commands, .mcp.json all synced.
+Finalize re-genesis architecture and begin Phase 1 implementation (Level 0 deterministic pipeline).
 
-## Active Work
+## Genesis Progress
+- Phase 1 (DECOMPOSE): DONE — problem analysis, current implementation audit
+- Phase 2 (DECIDE): DONE — Progressive Refinement architecture chosen
+- Phase 3 (FEATURE MAP): Not started
+- Phase 4 (SPECS): Not started
+- Phase 5 (VALIDATE): Not started
+- Phase 6 (CODIFY): Not started
 
-### Plugin Refinement — DONE (this session)
-- [x] Skill `plugin/skills/memory/SKILL.md` — renamed from using-engram → engram-memory → memory
-- [x] Frontmatter `name: memory` → produces `/engram:memory` (not `/engram-memory`)
-- [x] Added "Connection Check" section: call `check_system_health()`, never check env vars
-- [x] Added common mistake: "never check ENGRAM_URL/ENGRAM_API_TOKEN env vars"
-- [x] `.goreleaser.yaml` — added `plugin/skills/*/*.md` and `plugin/.mcp.json` to archives
-- [x] `scripts/install.sh` — added skills/ and .mcp.json copying
-- [x] Synced `doctor.md` and `restart.md` to marketplace (MCP-based doctor, improved restart)
-- [x] Fixed cache `hooks/hooks/` double nesting
-- [x] Marketplace version bumped: 0.1.0 → 0.2.0 → 0.3.0
+## Key Decisions (this session)
 
-### Marketplace Sync
-- Marketplace repo: `thebtf/engram-marketplace` (separate from main repo)
-- Main repo `plugin/` → must be manually synced to marketplace
-- Marketplace commits: 18256b9 (skill), ba0295e (commands), e5755d3 (v0.2.0), d843b38 (name fix), f20516d (v0.3.0)
+### Architecture: Progressive Refinement (replaces engram-processor daemon)
+- **Level 0**: Deterministic + embedding, server-side, no LLM. Solves Docker blocker.
+- **Level 1**: Batch LLM enrichment, client-side, optional. Upgrades quality.
+- **Level 2**: Consolidation. Already implemented.
 
-### MCP Config — VERIFIED
-- `${VAR}` expansion: Claude Code expands from process environment at runtime
-- `env` field: only for stdio servers. HTTP servers have NO env field
-- Plugin `.mcp.json` creates `plugin:engram:engram` entry — requires system env vars
-- Manual config in `.claude.json` works with literal values
-- Two entries can coexist but plugin one fails if env vars not set
+### Key Insights
+1. **Batch > real-time**: ECC continuous-learning-v2 validates this (hooks → JSONL, observer batches every 5min)
+2. **LLM optional**: ~80% classification is rule-based, embedding works on raw text, consumer is Claude
+3. **Content rot**: 4 types (code/decision/approach/discovery), batch handles all, pre-filter first+last Edit
+4. **No new binary**: Level 0 inside existing engram-server. No daemon, no WAL, no second port.
+5. **Embedding sufficient**: BGE-small (384d) or OpenAI REST, both already implemented
+6. **SQLite-vec is dead code**: `//go:build ignore` on 5/6 files, delete entirely
 
-### Phase 2: Benchmark — CODE COMPLETE, NOT COMMITTED
-- Task #32: 3 files by Codex: `internal/benchmark/{histogram.go, seed.go, benchmark_test.go}`
-- Build tag: `//go:build benchmark`
-- Verified: `go build`, `go vet` PASS
+### Challenge Report Applied (5 corrections)
+1. `formatObservationDocs` must handle Level 0 (NULL narrative → zero vectors without fix)
+2. `Observation` model needs `EnrichmentLevel` + `SourceEventIDs` fields + migration
+3. Stop hook must rewire from broken `/summarize` to `/finalize`
+4. Need `FormatEmbeddingText()` for BGE 512-token limit (raw JSON overflows)
+5. Early validation: test 80% classification accuracy claim against real data
 
-## Architecture Decision
-**Chosen:** Phased C→A — PostgreSQL-only first, Apache AGE conditional on benchmarks.
-**Plan:** `.agent/plans/storage-architecture-v2.md`
-
-## Commits This Session (main repo)
-- `5dad117` — fix: include skills and .mcp.json in release archives (amended with rename)
-- Previous session commits: 0502eeb, 0d366df, 9860993, 70f3680
+## Plan Document
+`.agent/plans/re-genesis-architecture.md` — fully updated, challenge-reviewed, corrections applied.
 
 ## Uncommitted Changes
-- `plugin/skills/memory/SKILL.md` — renamed from engram-memory/, updated content
-- Need to commit + push
+- `.agent/plans/re-genesis-architecture.md` — rewritten sections 1, 5, 6
+- `.agent/CONTINUITY.md` — updated
+- Memory files updated
 
 ## Key Files
-- Plugin skill: `plugin/skills/memory/SKILL.md`
-- Plugin MCP config: `plugin/.mcp.json`
-- Marketplace: `thebtf/engram-marketplace` (plugins/engram/)
-- Goreleaser: `.goreleaser.yaml` (archives section)
-- Install script: `scripts/install.sh`
+- Architecture: `.agent/plans/re-genesis-architecture.md`
+- Embedding: `internal/embedding/{model,service,openai}.go`
+- Vector sync: `internal/vector/pgvector/{client,sync}.go` (formatObservationDocs needs modification)
+- Observation model: `pkg/models/observation.go` (needs enrichment_level field)
+- Processing pipeline: `internal/worker/sdk/processor.go` (to be replaced)
+- Hooks: `cmd/hooks/{post-tool-use,stop,user-prompt,session-start}/main.go`
 
 ## Next Steps
-1. Commit pending skill rename in main repo
-2. Benchmark suite: code review, commit, run
-3. Consider CI automation for marketplace sync
+1. Continue genesis: Phase 3 (Feature Map) — list exact features for Phase 1 implementation
+2. Or: proceed directly to Phase 1 implementation (deterministic pipeline)
+3. Pending: Task #32 benchmark suite (code complete, not committed)
