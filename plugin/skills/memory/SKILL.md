@@ -1,5 +1,5 @@
 ---
-name: engram-memory
+name: memory
 description: Use when starting a session with Engram MCP tools available, when needing to recall past decisions or patterns, or when searching for knowledge captured across previous coding sessions
 ---
 
@@ -10,6 +10,17 @@ description: Use when starting a session with Engram MCP tools available, when n
 Engram is persistent shared memory for Claude Code. Hooks automatically capture observations from your coding sessions. Your job is to **use** that knowledge — search it, build on it, and keep it clean.
 
 **Core principle:** Hooks handle input. You handle output. The 40 MCP tools exist so you can retrieve, connect, and maintain the knowledge that hooks collect.
+
+## Connection Check
+
+**Do NOT check environment variables.** The MCP server may be configured in different ways (user settings, plugin config, manual). The only reliable test is calling a tool:
+
+```
+Tool: check_system_health()
+```
+
+- **Success** → Engram is connected. Use the tools below.
+- **Failure / tool not found** → Engram MCP is not available in this session. Hooks still collect data, but retrieval tools are unavailable.
 
 ## What Hooks Do Automatically
 
@@ -199,6 +210,7 @@ These tools cover specialized use cases beyond the top 10:
 
 | Mistake | Fix |
 |---------|-----|
+| Checking ENGRAM_URL / ENGRAM_API_TOKEN env vars | Do NOT check env vars. Call `check_system_health()` — if it works, Engram is connected regardless of config method |
 | Manually saving observations that hooks would capture | Trust the hooks — they capture tool use, prompts, and session summaries |
 | Ignoring injected context | Read `<engram-context>` (session start) and `<relevant-memory>` (per prompt) blocks — they contain prior knowledge |
 | Not searching before re-exploring code | `search` first — someone (maybe past you) already documented it |
