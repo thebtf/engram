@@ -583,6 +583,9 @@ func splitCamelCase(s string) string {
 // handleContextInject returns context for injection at session start.
 // IMPORTANT: This is on the critical startup path - must be fast!
 // No synchronous verification - just filter by staleness and return.
+// Response includes two sections:
+//   - recent: last 5 observations by created_at
+//   - relevant: top 10 semantic search results (if vector store is connected)
 func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	if project == "" {
@@ -613,43 +616,144 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		fullCount = 25
 	}
 
-	// Get recent observations
-	observations, err := s.observationStore.GetRecentObservations(r.Context(), project, limit)
+	ctx := r.Context()
+
+	// --- Recent section: last 5 observations by created_at ---
+	recentRaw, err := s.observationStore.GetRecentObservations(ctx, project, 5)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Fast staleness filter - NO verification (that's too slow for startup)
+	// Apply staleness filter to recent observations
 	var staleCount int
-	freshObservations := make([]*models.Observation, 0, len(observations))
-
-	for _, obs := range observations {
+	recentFresh := make([]*models.Observation, 0, len(recentRaw))
+	for _, obs := range recentRaw {
 		if len(obs.FileMtimes) > 0 {
 			var paths []string
 			for path := range obs.FileMtimes {
 				paths = append(paths, path)
 			}
 			currentMtimes := sdk.GetFileMtimes(paths, cwd)
-
 			if obs.CheckStaleness(currentMtimes) {
-				// Stale - exclude but don't verify (too slow)
-				// Queue for background verification instead
 				staleCount++
 				s.queueStaleVerification(obs.ID, cwd)
 				continue
 			}
 		}
-		freshObservations = append(freshObservations, obs)
+		recentFresh = append(recentFresh, obs)
 	}
 
-	// Cluster similar observations to remove duplicates
-	clusteredObservations := clusterObservations(freshObservations, 0.4)
-	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
+	// Build a set of IDs already in the recent section for deduplication
+	recentIDs := make(map[int64]struct{}, len(recentFresh))
+	for _, obs := range recentFresh {
+		recentIDs[obs.ID] = struct{}{}
+	}
+
+	// --- Relevant section: semantic search results with temporal boost ---
+	var relevantObservations []*models.Observation
+	if s.vectorClient != nil && s.vectorClient.IsConnected() {
+		query := project + " code development"
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, "")
+
+		vectorResults, vecErr := s.vectorClient.Query(ctx, query, 20, where)
+		if vecErr != nil {
+			log.Debug().Err(vecErr).Str("project", project).Msg("Vector query failed for context inject relevant section")
+		} else {
+			obsIDs := vector.ExtractObservationIDs(vectorResults, project)
+			if len(obsIDs) > 0 {
+				fetched, fetchErr := s.observationStore.GetObservationsByIDs(ctx, obsIDs, "score_desc", 10)
+				if fetchErr != nil {
+					log.Debug().Err(fetchErr).Msg("Failed to fetch relevant observations for context inject")
+				} else {
+					// Apply temporal boost: observations created within last 24h get 1.5x weight.
+					// Base scores are derived from fetch rank (position in score_desc result set).
+					// Observations newer than 24h receive a 1.5x multiplier before re-ranking.
+					now := time.Now().UnixMilli()
+					twentyFourHoursAgo := now - 24*60*60*1000
+
+					// Separate boosted (recent) and unboosted observations, deduplicate against recent section
+					type scoredObs struct {
+						obs   *models.Observation
+						score float64
+					}
+					scored := make([]scoredObs, 0, len(fetched))
+					for i, obs := range fetched {
+						if _, alreadyInRecent := recentIDs[obs.ID]; alreadyInRecent {
+							continue
+						}
+						// Base score inversely proportional to rank (higher rank = lower score)
+						baseScore := 1.0 / float64(i+1)
+						if obs.CreatedAtEpoch > twentyFourHoursAgo {
+							baseScore *= 1.5
+						}
+						scored = append(scored, scoredObs{obs: obs, score: baseScore})
+					}
+
+					// Sort by boosted score descending
+					sort.Slice(scored, func(i, j int) bool {
+						return scored[i].score > scored[j].score
+					})
+
+					// Take top 10
+					maxRelevant := 10
+					if len(scored) < maxRelevant {
+						maxRelevant = len(scored)
+					}
+					relevantObservations = make([]*models.Observation, maxRelevant)
+					for i := 0; i < maxRelevant; i++ {
+						relevantObservations[i] = scored[i].obs
+					}
+				}
+			}
+		}
+	}
+
+	// --- Backward-compat observations field: full recent list + relevant deduped union ---
+	// Get the full recent list (up to configured limit) for the legacy field
+	allRecentRaw, err := s.observationStore.GetRecentObservations(ctx, project, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var allFreshObservations []*models.Observation
+	for _, obs := range allRecentRaw {
+		if len(obs.FileMtimes) > 0 {
+			var paths []string
+			for path := range obs.FileMtimes {
+				paths = append(paths, path)
+			}
+			currentMtimes := sdk.GetFileMtimes(paths, cwd)
+			if obs.CheckStaleness(currentMtimes) {
+				staleCount++
+				s.queueStaleVerification(obs.ID, cwd)
+				continue
+			}
+		}
+		allFreshObservations = append(allFreshObservations, obs)
+	}
+
+	// Merge relevant observations into the union (those not already in allFreshObservations)
+	allFreshIDs := make(map[int64]struct{}, len(allFreshObservations))
+	for _, obs := range allFreshObservations {
+		allFreshIDs[obs.ID] = struct{}{}
+	}
+	unionObservations := make([]*models.Observation, len(allFreshObservations))
+	copy(unionObservations, allFreshObservations)
+	for _, obs := range relevantObservations {
+		if _, exists := allFreshIDs[obs.ID]; !exists {
+			unionObservations = append(unionObservations, obs)
+		}
+	}
+
+	// Cluster the union to remove duplicates
+	clusteredObservations := clusterObservations(unionObservations, 0.4)
+	duplicatesRemoved := len(unionObservations) - len(clusteredObservations)
 
 	// Record retrieval stats with staleness metrics
 	s.recordRetrievalStatsExtended(project, int64(len(clusteredObservations)), 0, 0,
-		int64(staleCount), int64(len(freshObservations)), int64(duplicatesRemoved), false)
+		int64(staleCount), int64(len(allFreshObservations)), int64(duplicatesRemoved), false)
 
 	// Increment retrieval counts for scoring (async, non-blocking)
 	if len(clusteredObservations) > 0 {
@@ -662,16 +766,20 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().
 		Str("project", project).
-		Int("total", len(observations)).
-		Int("fresh", len(freshObservations)).
+		Int("total", len(allRecentRaw)).
+		Int("fresh", len(allFreshObservations)).
 		Int("clustered", len(clusteredObservations)).
 		Int("duplicates", duplicatesRemoved).
 		Int("stale_excluded", staleCount).
+		Int("recent_section", len(recentFresh)).
+		Int("relevant_section", len(relevantObservations)).
 		Msg("Context injection with clustering")
 
 	writeJSON(w, map[string]any{
 		"project":            project,
 		"observations":       clusteredObservations,
+		"recent":             recentFresh,
+		"relevant":           relevantObservations,
 		"full_count":         fullCount,
 		"stale_excluded":     staleCount,
 		"duplicates_removed": duplicatesRemoved,
