@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/pkg/strutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -434,10 +435,4 @@ func sqrt(x float64) float64 {
 	return math.Sqrt(x)
 }
 
-// truncate truncates a string to maxLen characters.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
+var truncate = strutil.Truncate

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/thebtf/engram/pkg/models"
+	"github.com/thebtf/engram/pkg/strutil"
 )
 
 // ClassifyEvent determines the observation type from a raw tool event.
@@ -353,14 +354,7 @@ var (
 	standalonePathPattern = regexp.MustCompile(`(?:^|[\s"'])([A-Za-z]:\\[^\s"']+|/[^\s"']+\.[a-zA-Z0-9]+)`)
 )
 
-func containsAny(s string, needles []string) bool {
-	for _, n := range needles {
-		if strings.Contains(s, n) {
-			return true
-		}
-	}
-	return false
-}
+var containsAny = strutil.ContainsAny
 
 func extractFilePath(input string) string {
 	matches := filePathPattern.FindStringSubmatch(input)
@@ -401,9 +395,4 @@ func looksLikeFilePath(s string) bool {
 	return ext != "" && len(ext) <= 6 && len(s) > 5
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
+var truncate = strutil.Truncate

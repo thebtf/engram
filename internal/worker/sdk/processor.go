@@ -501,7 +501,7 @@ func (p *Processor) ProcessSummary(ctx context.Context, sessionDBID int64, sdkSe
 	log.Debug().
 		Int64("sessionId", sessionDBID).
 		Int("lastAssistantMsgLen", len(lastAssistantMsg)).
-		Str("lastAssistantMsgPreview", truncateForLog(lastAssistantMsg, 200)).
+		Str("lastAssistantMsgPreview", truncate(lastAssistantMsg, 200)).
 		Msg("ProcessSummary called")
 
 	// Skip summary generation if there's no meaningful assistant response
@@ -1164,13 +1164,6 @@ func hasMeaningfulContent(assistantMsg string) bool {
 	return matchCount >= 2
 }
 
-// truncateForLog truncates a string for logging purposes.
-func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
 
 const systemPrompt = `You are a memory extraction agent for Claude Code sessions. Your job is to analyze tool executions and extract meaningful observations that would be useful for future sessions.
 

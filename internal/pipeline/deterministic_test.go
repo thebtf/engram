@@ -852,7 +852,7 @@ func TestExtractFacts(t *testing.T) {
 			toolName:    "Bash",
 			toolInput:   `{"command": "` + strings.Repeat("x", 150) + `"}`,
 			toolResult:  "",
-			wantContain: []string{"Executed: " + strings.Repeat("x", 117) + "..."},
+			wantContain: []string{"Executed: " + strings.Repeat("x", 120) + "..."},
 		},
 		{
 			name:        "Read emits no facts",

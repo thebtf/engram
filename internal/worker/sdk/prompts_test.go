@@ -31,7 +31,7 @@ func TestTruncate(t *testing.T) {
 			name:     "longer_than_max",
 			input:    "hello world",
 			maxLen:   5,
-			expected: "hello... (truncated)",
+			expected: "hello...",
 		},
 		{
 			name:     "empty_string",
@@ -43,7 +43,7 @@ func TestTruncate(t *testing.T) {
 			name:     "zero_max_length",
 			input:    "hello",
 			maxLen:   0,
-			expected: "... (truncated)",
+			expected: "...",
 		},
 	}
 
@@ -147,8 +147,8 @@ func TestBuildObservationPrompt_TruncatesLongContent(t *testing.T) {
 
 	result := BuildObservationPrompt(exec)
 
-	// Input should be truncated to ~3000
-	assert.Contains(t, result, "truncated")
+	// Input should be truncated to ~3000 (suffix "...")
+	assert.Contains(t, result, "...")
 	// The result should not be excessively long
 	assert.Less(t, len(result), 10000)
 }
@@ -233,8 +233,8 @@ func TestBuildSummaryPrompt_TruncatesLongAssistantMessage(t *testing.T) {
 
 	result := BuildSummaryPrompt(req)
 
-	// Should contain truncation indicator
-	assert.Contains(t, result, "truncated")
+	// Should contain truncation indicator (suffix "...")
+	assert.Contains(t, result, "...")
 	// Result should be reasonable length (less than full 5000 + overhead)
 	assert.Less(t, len(result), 6000)
 }

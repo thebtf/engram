@@ -315,7 +315,7 @@ func TestTruncateForLog(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := truncateForLog(tt.input, tt.maxLen)
+			result := truncate(tt.input, tt.maxLen)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -950,7 +950,7 @@ func TestCaptureFileMtimes_DuplicatePaths(t *testing.T) {
 
 // TestTruncateForLog_ZeroLength tests truncation with zero length.
 func TestTruncateForLog_ZeroLength(t *testing.T) {
-	result := truncateForLog("hello", 0)
+	result := truncate("hello", 0)
 	assert.Equal(t, "...", result)
 }
 

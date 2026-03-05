@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/thebtf/engram/pkg/strutil"
 )
 
 // ObservationTypes defines valid observation types.
@@ -108,10 +110,4 @@ Thank you, this summary will be very useful for keeping track of our progress!`)
 	return sb.String()
 }
 
-// truncate truncates a string to the specified length.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "... (truncated)"
-}
+var truncate = strutil.Truncate
