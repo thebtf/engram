@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/thebtf/engram/pkg/hooks"
 )
@@ -63,15 +64,37 @@ func handlePostToolUse(ctx *hooks.HookContext, input *Input) (string, error) {
 
 	fmt.Fprintf(os.Stderr, "[post-tool-use] %s\n", input.ToolName)
 
-	// Send observation to worker
-	_, err := hooks.POST(ctx.Port, "/api/sessions/observations", map[string]interface{}{
-		"claudeSessionId": ctx.SessionID,
-		"project":         ctx.Project,
-		"tool_name":       input.ToolName,
-		"tool_input":      input.ToolInput,
-		"tool_response":   input.ToolResponse,
-		"cwd":             ctx.CWD,
+	// Determine workstation identity
+	workstationID, _ := os.Hostname()
+	if workstationID == "" {
+		workstationID = "unknown"
+	}
+
+	// Send raw event to the ingest endpoint (Level 0 deterministic pipeline).
+	// Falls back to the legacy observation endpoint if ingest returns 404
+	// (older server version without the ingest endpoint).
+	_, err := hooks.POST(ctx.Port, "/api/events/ingest", map[string]interface{}{
+		"session_id":     ctx.SessionID,
+		"project":        ctx.Project,
+		"tool_name":      input.ToolName,
+		"tool_input":     input.ToolInput,
+		"tool_result":    input.ToolResponse,
+		"workstation_id": workstationID,
 	})
+
+	// Backward compatibility: if the server doesn't support the new endpoint,
+	// fall back to the old one. hooks.POST returns an error containing "404"
+	// when the endpoint is not found.
+	if err != nil && strings.Contains(err.Error(), "404") {
+		_, err = hooks.POST(ctx.Port, "/api/sessions/observations", map[string]interface{}{
+			"claudeSessionId": ctx.SessionID,
+			"project":         ctx.Project,
+			"tool_name":       input.ToolName,
+			"tool_input":      input.ToolInput,
+			"tool_response":   input.ToolResponse,
+			"cwd":             ctx.CWD,
+		})
+	}
 
 	return "", err
 }
