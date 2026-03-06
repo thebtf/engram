@@ -473,6 +473,35 @@ func (s *Service) createReranker() reranking.Reranker {
 	}
 }
 
+// createHyDEGenerator creates a HyDE generator if enabled and configured.
+// Returns nil if HyDE is disabled or API config is missing (graceful no-op).
+func (s *Service) createHyDEGenerator() *expansion.HyDEGenerator {
+	if !s.config.HyDEEnabled {
+		return nil
+	}
+
+	timeout := time.Duration(s.config.HyDETimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 800 * time.Millisecond
+	}
+
+	cfg := expansion.HyDEConfig{
+		APIURL:    s.config.HyDEAPIURL,
+		APIKey:    s.config.HyDEAPIKey,
+		Model:     s.config.HyDEModel,
+		MaxTokens: s.config.HyDEMaxTokens,
+		Timeout:   timeout,
+		CacheTTL:  5 * time.Minute,
+	}
+
+	gen := expansion.NewHyDEGenerator(cfg)
+	log.Info().
+		Str("model", cfg.Model).
+		Bool("has_api", cfg.APIURL != "" && cfg.APIKey != "").
+		Msg("HyDE query expansion enabled")
+	return gen
+}
+
 // initializeAsync performs heavy initialization in the background.
 func (s *Service) initializeAsync() {
 	log.Info().Msg("Starting async initialization...")
@@ -540,7 +569,7 @@ func (s *Service) initializeAsync() {
 		}
 
 		// Create query expander for improved search recall
-		s.queryExpander = expansion.NewExpander(embedSvc)
+		s.queryExpander = expansion.NewExpander(embedSvc, s.createHyDEGenerator())
 		log.Info().Msg("Query expansion enabled")
 	}
 
@@ -848,7 +877,7 @@ func (s *Service) reinitializeDatabase() {
 		}
 
 		// Recreate query expander
-		s.queryExpander = expansion.NewExpander(embedSvc)
+		s.queryExpander = expansion.NewExpander(embedSvc, s.createHyDEGenerator())
 		log.Info().Msg("Query expansion reconnected after reinit")
 	}
 

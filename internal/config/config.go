@@ -85,6 +85,12 @@ type Config struct {
 	RerankingAPIModel         string   `json:"reranking_api_model"`    // default: "rerank-english-v3.0"
 	RerankingTimeoutMS        int      `json:"reranking_timeout_ms"`   // default: 500
 	RerankingAPIKey           string   // env-only: ENGRAM_RERANKING_API_KEY
+	HyDEEnabled               bool     `json:"hyde_enabled"`       // Enable HyDE query expansion (default: false)
+	HyDEAPIURL                string   `json:"hyde_api_url"`       // OpenAI-compatible chat API URL
+	HyDEModel                 string   `json:"hyde_model"`         // LLM model (default: "gpt-4o-mini")
+	HyDEMaxTokens             int      `json:"hyde_max_tokens"`    // Max tokens for LLM response (default: 150)
+	HyDETimeoutMS             int      `json:"hyde_timeout_ms"`    // Timeout in ms (default: 800)
+	HyDEAPIKey                string   // env-only: ENGRAM_HYDE_API_KEY
 	WorkerHost                string   // env-only
 	WorkerToken               string   // env-only
 	CollectionConfigPath      string   // env-only
@@ -200,6 +206,10 @@ func Default() *Config {
 		MaintenanceIntervalHours:  6,     // Run every 6 hours
 		ObservationRetentionDays:  0,     // 0 = no age-based deletion (keep all)
 		CleanupStaleObservations:  false, // Don't auto-cleanup stale observations
+		HyDEEnabled:               false,              // Opt-in: requires API configuration
+		HyDEModel:                 "gpt-4o-mini",      // Cost-efficient default
+		HyDEMaxTokens:             150,
+		HyDETimeoutMS:             800,                 // 800ms within 5s expansion budget
 		WorkerHost:                "127.0.0.1",
 		DatabaseMaxConns:          10,
 	}
@@ -352,6 +362,28 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_RERANKING_TIMEOUT_MS")); v != "" {
 		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
 			cfg.RerankingTimeoutMS = ms
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_HYDE_ENABLED")); v == "true" || v == "1" {
+		cfg.HyDEEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_HYDE_API_URL")); v != "" {
+		cfg.HyDEAPIURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_HYDE_API_KEY")); v != "" {
+		cfg.HyDEAPIKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_HYDE_MODEL")); v != "" {
+		cfg.HyDEModel = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_HYDE_MAX_TOKENS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.HyDEMaxTokens = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_HYDE_TIMEOUT_MS")); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			cfg.HyDETimeoutMS = ms
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("DATABASE_DSN")); v != "" {

@@ -41,6 +41,7 @@ type ExpandedQuery struct {
 // Expander provides context-aware query expansion.
 type Expander struct {
 	embedSvc       *embedding.Service
+	hydeGen        *HyDEGenerator
 	intentPatterns map[QueryIntent][]*regexp.Regexp
 	vocabulary     []VocabEntry
 	vocabVectors   [][]float32
@@ -62,6 +63,8 @@ type Config struct {
 	MinSimilarity float64
 	// EnableVocabularyExpansion enables finding related terms from observations
 	EnableVocabularyExpansion bool
+	// EnableHyDE enables hypothetical document embedding expansion
+	EnableHyDE bool
 }
 
 // DefaultConfig returns sensible default configuration.
@@ -74,9 +77,11 @@ func DefaultConfig() Config {
 }
 
 // NewExpander creates a new query expander.
-func NewExpander(embedSvc *embedding.Service) *Expander {
+// The hydeGen parameter is optional (nil disables HyDE expansion).
+func NewExpander(embedSvc *embedding.Service, hydeGen *HyDEGenerator) *Expander {
 	e := &Expander{
 		embedSvc:       embedSvc,
+		hydeGen:        hydeGen,
 		intentPatterns: buildIntentPatterns(),
 	}
 	return e
@@ -160,6 +165,18 @@ func (e *Expander) Expand(ctx context.Context, query string, cfg Config) []Expan
 	// Generate intent-based expansions
 	intentExpansions := e.expandByIntent(query, intent)
 	expansions = append(expansions, intentExpansions...)
+
+	// Generate HyDE expansion if enabled
+	if cfg.EnableHyDE && e.hydeGen != nil {
+		if hypothesis := e.hydeGen.Generate(ctx, query, intent); hypothesis != "" {
+			expansions = append(expansions, ExpandedQuery{
+				Query:  hypothesis,
+				Weight: 0.9,
+				Source: "hyde",
+				Intent: intent,
+			})
+		}
+	}
 
 	// Generate vocabulary-based expansions if enabled and we have vocabulary
 	if cfg.EnableVocabularyExpansion && e.embedSvc != nil && len(e.vocabulary) > 0 {

@@ -79,6 +79,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		expandCtx, expandCancel := context.WithTimeout(r.Context(), 5*time.Second)
 		cfg := expansion.DefaultConfig()
 		cfg.EnableVocabularyExpansion = false // Vocabulary expansion is optional
+		cfg.EnableHyDE = s.config.HyDEEnabled
 		expandedQueries = s.queryExpander.Expand(expandCtx, query, cfg)
 		expandCancel() // Cancel immediately after use (defer not needed - no panic possible between creation and here)
 		if len(expandedQueries) > 0 {
