@@ -2,19 +2,20 @@
 
 Engram uses a **client-server architecture**:
 
-- **Server** (Docker on remote host): Worker (API + MCP SSE) + PostgreSQL
-- **Client** (local workstation): hooks + MCP stdio proxy
+- **Server** (Docker on remote host): Worker (API + MCP) + PostgreSQL
+- **Client** (local workstation): Claude Code plugin (hooks + HTTP MCP)
 
 ```
   ┌─── Workstation A ────────────────┐      ┌─── Server (Docker) ──────────────┐
   │                                  │      │                                  │
   │  Claude Code                     │      │  ┌──────────────────────────┐    │
   │    ├── hooks ──POST──────────────────→  │  │  Worker :37777           │    │
-  │    └── mcp-stdio-proxy ──SSE─────────→  │  │  /api/* (hooks+dashboard)│    │
-  │                                  │      │  │  /sse, /message (MCP)    │    │
-  ├─── Workstation B ────────────────┤      │  └────────────┬─────────────┘    │
-  │  (same setup, shared brain)      │      │               │                  │
-  └──────────────────────────────────┘      │  ┌────────────▼─────────────┐    │
+  │    └── plugin ──HTTP─/mcp────────────→  │  │  /api/* (hooks+dashboard)│    │
+  │                                  │      │  │  /mcp   (Streamable HTTP)│    │
+  ├─── Workstation B ────────────────┤      │  │  /sse   (SSE, legacy)    │    │
+  │  (same setup, shared brain)      │      │  └────────────┬─────────────┘    │
+  └──────────────────────────────────┘      │               │                  │
+                                            │  ┌────────────▼─────────────┐    │
                                             │  │  PostgreSQL + pgvector    │    │
                                             │  │  :5432                    │    │
                                             │  └──────────────────────────┘    │
@@ -61,14 +62,14 @@ curl http://localhost:37777/health
 
 ### Option B: Unraid
 
-1. **PostgreSQL**: Install `pgvector/pgvector:pg17` from Community Applications (or use existing PostgreSQL instance). Create database `engram` with user `mnemonic`.
+1. **PostgreSQL**: Install `pgvector/pgvector:pg17` from Community Applications (or use existing PostgreSQL instance). Create database `engram` with user `engram`.
 
-2. **Engram**: Add the template from `deploy/unraid/unleashed-CMPlus.xml`:
-   - Go to Docker tab → Add Container → Template URL
-   - Paste: `https://raw.githubusercontent.com/thebtf/engram/main/deploy/unraid/unleashed-CMPlus.xml`
+2. **Engram**: Create a Docker container manually or use your own template:
+   - Image: `ghcr.io/thebtf/engram:main`
    - Configure `DATABASE_DSN` to point to your PostgreSQL instance
    - Set `ENGRAM_API_TOKEN` for security
    - Configure embedding provider (LiteLLM recommended)
+   - Map port `37777`
 
 3. **Enable pgvector** on first run:
    ```sql
@@ -83,7 +84,7 @@ curl http://localhost:37777/health
 # 1. Start PostgreSQL with pgvector
 docker run -d --name cmplus-postgres \
   -e POSTGRES_DB=engram \
-  -e POSTGRES_USER=mnemonic \
+  -e POSTGRES_USER=engram \
   -e POSTGRES_PASSWORD=change-me \
   -p 5432:5432 \
   -v cmplus-pgdata:/var/lib/postgresql/data \
@@ -94,7 +95,7 @@ docker build --target server -t cmplus-server .
 
 # 3. Start server (worker + MCP SSE on single port)
 docker run -d --name cmplus-server \
-  -e DATABASE_DSN="postgres://mnemonic:change-me@host.docker.internal:5432/engram?sslmode=disable" \
+  -e DATABASE_DSN="postgres://engram:change-me@host.docker.internal:5432/engram?sslmode=disable" \
   -e ENGRAM_API_TOKEN="your-secret-token" \
   -e ENGRAM_EMBEDDING_PROVIDER=openai \
   -e ENGRAM_EMBEDDING_BASE_URL=http://host.docker.internal:4000/v1 \
@@ -107,96 +108,75 @@ docker run -d --name cmplus-server \
 
 ## Client Setup
 
-The client runs locally on each workstation. It connects to the remote server.
+The client runs locally on each workstation. It connects to the remote server via the engram plugin.
 
-### Automated Setup (recommended)
+### Option A: Plugin Install (recommended)
 
-**macOS / Linux:**
-```bash
-curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
-```
+1. **Set environment variables** (add to shell profile or system environment):
 
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
-```
-
-After installation, configure the remote server connection:
-
-```bash
-# Edit Claude Code settings
-# ~/.claude/settings.json (macOS/Linux) or %USERPROFILE%\.claude\settings.json (Windows)
-```
-
-Add/update the MCP server entry to use the stdio proxy:
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "command": "<install-dir>/mcp-stdio-proxy",
-      "args": [
-        "--url", "http://your-server:37777",
-        "--token", "your-secret-token"
-      ]
-    }
-  }
-}
-```
-
-Configure hooks to point to the remote worker:
-
-```bash
-# Set environment variables (add to shell profile)
-export ENGRAM_WORKER_HOST=your-server
-export ENGRAM_WORKER_PORT=37777
-export ENGRAM_API_TOKEN=your-secret-token
-```
-
-### Manual Setup
-
-1. **Download binaries** from [GitHub Releases](https://github.com/thebtf/engram/releases):
-   - `mcp-stdio-proxy` (or `mcp-stdio-proxy.exe` on Windows)
-   - `hooks/` directory (session-start, user-prompt, post-tool-use, subagent-stop, stop, statusline)
-
-2. **Place binaries** in a permanent location:
-   ```
-   ~/.claude/plugins/marketplaces/engram/       (macOS/Linux)
-   %USERPROFILE%\.claude\plugins\marketplaces\engram\  (Windows)
+   **macOS / Linux** (`~/.bashrc` or `~/.zshrc`):
+   ```bash
+   export ENGRAM_URL=http://your-server:37777/mcp
+   export ENGRAM_API_TOKEN=your-secret-token
    ```
 
-3. **Configure Claude Code** `~/.claude/settings.json`:
+   **Windows** (PowerShell as admin):
+   ```powershell
+   [Environment]::SetEnvironmentVariable("ENGRAM_URL", "http://your-server:37777/mcp", "User")
+   [Environment]::SetEnvironmentVariable("ENGRAM_API_TOKEN", "your-secret-token", "User")
+   ```
+
+2. **Install the plugin** from [GitHub Releases](https://github.com/thebtf/engram/releases):
+
+   **macOS / Linux:**
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
+   ```
+
+   **Windows (PowerShell):**
+   ```powershell
+   irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
+   ```
+
+3. **Restart Claude Code** — the plugin uses Streamable HTTP MCP to connect directly to the server. No proxy binary needed.
+
+4. **Verify** — in Claude Code, run `/engram:doctor` to check connectivity.
+
+### Option B: Manual Setup
+
+1. **Set environment variables** as described in Option A.
+
+2. **Clone or download** the `plugin/` directory from the repo.
+
+3. **Register the plugin** — add to `~/.claude/settings.json`:
    ```json
    {
-     "mcpServers": {
-       "engram": {
-         "command": "/full/path/to/mcp-stdio-proxy",
-         "args": ["--url", "http://your-server:37777", "--token", "your-token"]
+     "projects": {
+       "*": {
+         "plugins": ["path/to/engram/plugin"]
        }
      }
    }
    ```
 
-4. **Configure hooks** — create or update `~/.claude/settings.json`:
-   ```json
-   {
-     "hooks": {
-       "session-start": "/path/to/hooks/session-start",
-       "user-prompt": "/path/to/hooks/user-prompt",
-       "post-tool-use": "/path/to/hooks/post-tool-use",
-       "subagent-stop": "/path/to/hooks/subagent-stop",
-       "stop": "/path/to/hooks/stop"
-     }
-   }
-   ```
+4. **Restart Claude Code.**
 
-5. **Set environment variables** for hooks to find the server:
-   ```bash
-   # ~/.bashrc, ~/.zshrc, or Windows Environment Variables
-   export ENGRAM_WORKER_HOST=your-server
-   export ENGRAM_WORKER_PORT=37777
-   export ENGRAM_API_TOKEN=your-secret-token
-   ```
+### Option C: stdio Proxy (for non-HTTP MCP clients)
+
+If your MCP client does not support HTTP transport, use the stdio-to-SSE proxy:
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "/path/to/engram-mcp-stdio-proxy",
+      "args": ["--url", "http://your-server:37777", "--token", "your-token"]
+    }
+  }
+}
+```
+
+> **Note:** Claude Code natively supports HTTP MCP — prefer Option A.
 
 ---
 
@@ -231,18 +211,32 @@ ENGRAM_EMBEDDING_PROVIDER=builtin
 
 ## Environment Variables Reference
 
+### Server Variables
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_DSN` | (required) | PostgreSQL connection string |
 | `ENGRAM_WORKER_HOST` | `0.0.0.0` | Worker bind address |
-| `ENGRAM_WORKER_PORT` | `37777` | Worker HTTP port (API + MCP SSE) |
+| `ENGRAM_WORKER_PORT` | `37777` | Worker HTTP port (API + MCP) |
 | `ENGRAM_API_TOKEN` | (empty) | Auth token for all endpoints |
 | `ENGRAM_EMBEDDING_PROVIDER` | `builtin` | `builtin` or `openai` |
 | `ENGRAM_EMBEDDING_BASE_URL` | `https://api.openai.com/v1` | Embedding API URL |
 | `ENGRAM_EMBEDDING_API_KEY` | (empty) | Embedding API key |
 | `ENGRAM_EMBEDDING_MODEL_NAME` | `text-embedding-3-small` | Model identifier |
-| `ENGRAM_EMBEDDING_DIMENSIONS` | `1536` | Vector dimensions |
+| `ENGRAM_EMBEDDING_DIMENSIONS` | `4096` | Vector dimensions |
+| `ENGRAM_EMBEDDING_TRUNCATE` | `true` | Truncate embeddings to fit dimensions |
+| `ENGRAM_GRAPH_PROVIDER` | (empty) | `falkordb` to enable graph backend |
+| `ENGRAM_FALKORDB_ADDR` | (empty) | FalkorDB address (e.g. `falkordb:6379`) |
+| `ENGRAM_FALKORDB_PASSWORD` | (empty) | FalkorDB password |
+| `ENGRAM_FALKORDB_GRAPH_NAME` | `engram` | FalkorDB graph name |
 | `DATABASE_MAX_CONNS` | `10` | PostgreSQL connection pool size |
+
+### Client Variables (set on each workstation)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENGRAM_URL` | (required) | Server MCP endpoint (e.g. `http://server:37777/mcp`) |
+| `ENGRAM_API_TOKEN` | (empty) | Auth token (same as server's `ENGRAM_API_TOKEN`) |
 
 ---
 
@@ -261,7 +255,12 @@ ENGRAM_EMBEDDING_PROVIDER=builtin
 # Server health
 curl http://your-server:37777/health
 
-# MCP SSE (with token)
+# MCP Streamable HTTP (with token)
+curl -X POST -H "Authorization: Bearer your-token" \
+  -H "Content-Type: application/json" \
+  http://your-server:37777/mcp
+
+# MCP SSE (legacy, with token)
 curl -H "Authorization: Bearer your-token" http://your-server:37777/sse
 ```
 
