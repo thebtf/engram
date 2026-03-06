@@ -1,0 +1,40 @@
+# Build artifacts
+bin/
+*.exe
+
+# Version control
+.git
+.gitea
+.github
+
+# Agent and planning files
+.agent/
+continuity.txt
+docs/
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Go caches (use Docker layer cache instead)
+.gocache/
+.gomodcache/
+.tmp-gocache/
+
+# Node modules (will be installed fresh in Docker)
+ui/node_modules/
+docs/node_modules/
+
+# Test artifacts
+coverage.out
+coverage.html
+
+# Worktrees
+engram-marketplace/
+
+# Local data
+*.db
+*.sqlite
