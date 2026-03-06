@@ -14,6 +14,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
+	graphpkg "github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/graph/falkordb"
 	"github.com/thebtf/engram/internal/consolidation"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
@@ -118,6 +120,8 @@ type Service struct {
 	conflictStore          *gorm.ConflictStore
 	patternStore           *gorm.PatternStore
 	relationStore          *gorm.RelationStore
+	graphStore             graphpkg.GraphStore
+	graphWriter            *graphpkg.AsyncGraphWriter
 	patternDetector        *pattern.Detector
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
@@ -530,6 +534,22 @@ func (s *Service) initializeAsync() {
 	patternStore := gorm.NewPatternStore(store)
 	relationStore := gorm.NewRelationStore(store)
 
+	// Initialize optional FalkorDB graph store
+	var gs graphpkg.GraphStore = &graphpkg.NoopGraphStore{}
+	var gw *graphpkg.AsyncGraphWriter
+	cfg := config.Get()
+	if cfg.GraphProvider == "falkordb" && cfg.FalkorDBAddr != "" {
+		fdb, err := falkordb.NewFalkorDBGraphStore(cfg)
+		if err != nil {
+			log.Warn().Err(err).Msg("FalkorDB connection failed, falling back to noop graph store")
+		} else {
+			gs = fdb
+			gw = graphpkg.NewAsyncGraphWriter(gs)
+			relationStore.SetCallback(gw.Enqueue)
+			log.Info().Msg("FalkorDB graph store enabled with async dual-write")
+		}
+	}
+
 	// Create observation store with conflict and relation stores for automatic detection
 	observationStore := gorm.NewObservationStore(store, nil, conflictStore, relationStore)
 
@@ -601,6 +621,8 @@ func (s *Service) initializeAsync() {
 	s.conflictStore = conflictStore
 	s.patternStore = patternStore
 	s.relationStore = relationStore
+	s.graphStore = gs
+	s.graphWriter = gw
 	s.sessionManager = sessionManager
 	s.processor = processor
 	s.embedSvc = embedSvc
@@ -840,6 +862,11 @@ func (s *Service) reinitializeDatabase() {
 	conflictStore := gorm.NewConflictStore(store)
 	patternStore := gorm.NewPatternStore(store)
 	relationStore := gorm.NewRelationStore(store)
+
+	// Re-wire graph writer callback if active
+	if s.graphWriter != nil {
+		relationStore.SetCallback(s.graphWriter.Enqueue)
+	}
 
 	// Create observation store with conflict and relation stores for automatic detection
 	observationStore := gorm.NewObservationStore(store, nil, conflictStore, relationStore)
@@ -1928,6 +1955,13 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	// Phase 3: Stop background workers (drain queues)
 	log.Debug().Msg("Phase 3: Stopping background workers...")
+	if s.graphWriter != nil {
+		s.graphWriter.Close()
+		log.Debug().Msg("Graph writer stopped")
+	}
+	if s.graphStore != nil {
+		collectError("graph_store", s.graphStore.Close())
+	}
 	if s.recalculator != nil {
 		s.recalculator.Stop()
 	}

@@ -11,9 +11,14 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+// RelationCallback is called after relations are stored in the database.
+// Fired AFTER transaction commits, not inside the transaction.
+type RelationCallback func(relations []*models.ObservationRelation)
+
 // RelationStore provides relation-related database operations using GORM.
 type RelationStore struct {
-	db *gorm.DB
+	db       *gorm.DB
+	callback RelationCallback
 }
 
 // NewRelationStore creates a new relation store.
@@ -21,6 +26,11 @@ func NewRelationStore(store *Store) *RelationStore {
 	return &RelationStore{
 		db: store.DB,
 	}
+}
+
+// SetCallback sets a callback that fires after relations are stored.
+func (s *RelationStore) SetCallback(cb RelationCallback) {
+	s.callback = cb
 }
 
 // StoreRelation stores a new observation relation.
@@ -65,6 +75,11 @@ func (s *RelationStore) StoreRelation(ctx context.Context, relation *models.Obse
 		return existing.ID, nil
 	}
 
+	// Fire callback AFTER successful store (not inside tx)
+	if s.callback != nil {
+		s.callback([]*models.ObservationRelation{relation})
+	}
+
 	return dbRelation.ID, nil
 }
 
@@ -74,7 +89,7 @@ func (s *RelationStore) StoreRelations(ctx context.Context, relations []*models.
 		return nil
 	}
 
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, rel := range relations {
 			dbRelation := &ObservationRelation{
 				SourceID:        rel.SourceID,
@@ -101,6 +116,16 @@ func (s *RelationStore) StoreRelations(ctx context.Context, relations []*models.
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Fire callback AFTER transaction commits
+	if s.callback != nil {
+		s.callback(relations)
+	}
+
+	return nil
 }
 
 // GetRelationsByObservationID retrieves all relations involving an observation (as source or target).
