@@ -29,6 +29,8 @@ services:
 
   # Worker with integrated MCP SSE (single port, single process)
   server:
+    image: ghcr.io/thebtf/engram:main
+    # To build locally instead: docker compose build server
     build:
       context: .
       target: server
