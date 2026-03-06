@@ -74,6 +74,7 @@ type SearchMetrics struct {
 	CacheHits         int64
 	CoalescedRequests int64
 	SearchErrors      int64
+	FTSShortCircuits  int64
 	histogramMu       sync.Mutex
 }
 
@@ -108,6 +109,7 @@ func (m *SearchMetrics) GetStats() map[string]any {
 		"cache_hits":            atomic.LoadInt64(&m.CacheHits),
 		"coalesced_requests":    atomic.LoadInt64(&m.CoalescedRequests),
 		"search_errors":         atomic.LoadInt64(&m.SearchErrors),
+		"fts_short_circuits":    atomic.LoadInt64(&m.FTSShortCircuits),
 		"avg_latency_ms":        avgLatencyMs,
 		"avg_vector_latency_ms": avgVectorLatencyMs,
 		"avg_filter_latency_ms": avgFilterLatencyMs,
@@ -750,6 +752,25 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 					Score:   BM25Normalize(r.Score),
 				}
 			}
+		}
+	}
+
+	// --- Strong-signal short-circuit ---
+	// If BM25 top score >= 0.85 AND gap to #2 >= 0.15, FTS alone is high confidence.
+	// Skip the expensive vector search entirely for immediate latency win.
+	if len(ftsList) >= 1 && ftsList[0].Score >= 0.85 {
+		gap := ftsList[0].Score
+		if len(ftsList) >= 2 {
+			gap = ftsList[0].Score - ftsList[1].Score
+		}
+		if gap >= 0.15 {
+			log.Debug().
+				Float64("top_score", ftsList[0].Score).
+				Float64("gap", gap).
+				Str("query", truncate(params.Query, queryLogTruncateLen)).
+				Msg("BM25 short-circuit: skipping vector search")
+			atomic.AddInt64(&m.metrics.FTSShortCircuits, 1)
+			return m.buildResultFromFTS(ftsResultsCache, params)
 		}
 	}
 
