@@ -31,7 +31,11 @@ c. Common issues:
    - 401/403 → wrong token in `ENGRAM_API_TOKEN` or `Authorization` header.
    - DNS resolution failed → hostname not reachable from this machine.
 
-d. Report the specific failure and suggest the fix.
+d. Report the specific failure and suggest the fix. Always include:
+
+> Run `/engram:setup` to configure or reconfigure your connection.
+
+e. If the URL appears to be a bare host without `/mcp` (e.g., `http://host:37777` instead of `http://host:37777/mcp`), suggest adding the `/mcp` path suffix.
 
 ### 3. Memory Health (only if step 1 succeeded)
 
