@@ -1,36 +1,32 @@
 # Continuity State
 
 **Last Updated:** 2026-03-06
-**Session:** Deployment Cleanup Deep Planning
+**Session:** Deployment Cleanup Implementation
 
 ## Done
 - Self-learning plan: all 3 phases complete (Phase 4 deferred to v1.1)
 - RAG improvements plan: ALL 3 PHASES COMPLETE
 - FalkorDB optional graph backend: ALL 6 PHASES COMPLETE
 - Embedding platform split: Windows build fix COMPLETE
-- **Deployment cleanup Phase 1 COMPLETE**: .env.example + DEPLOYMENT.md fixed
-  - Added missing vars: EMBEDDING_TRUNCATE, FalkorDB vars
-  - Fixed postgres user mnemonic -> engram, dimensions 1536 -> 4096
-  - Removed Unraid template reference (lives in personal repo)
-  - Updated client setup for plugin-first workflow
-  - Added Streamable HTTP to architecture diagram
-  - Added client variables section (ENGRAM_URL, ENGRAM_API_TOKEN)
+- **Deployment cleanup: ALL 4 PHASES COMPLETE** (6 commits)
+  - Phase 1: .env.example + DEPLOYMENT.md fixed (dimensions, postgres user, FalkorDB vars, client setup)
+  - Phase 2: Created `/engram:setup` command, updated doctor.md with setup reference
+  - Phase 4: Added mcp-stdio-proxy to goreleaser, updated release header
+  - Phase 3: Refactored install.sh and install.ps1 (deleted dead code, fixed binary names, added env var setup)
 - **ADRs written**:
-  - ADR-001: Belief revision and knowledge quality assurance (preliminary)
+  - ADR-001: Belief revision and knowledge quality assurance (preliminary, deferred to v1.1)
   - ADR-002: Plugin-first installation architecture (accepted)
-- **Deployment cleanup plan revised** after challenging-plans critique
 
 ## Now
-Deployment cleanup Phases 2-4 — plan approved, ready for implementation.
+Deployment cleanup plan fully implemented. Ready for push/PR.
 
-## Next (in order)
-1. **Phase 2**: Create plugin/commands/setup.md, update doctor.md
-2. **Phase 4**: Add mcp-stdio-proxy to goreleaser, update release header
-3. **Phase 3**: Refactor install scripts (delete dead code, fix binary names)
+## Next
+1. Push deployment cleanup commits and create PR
+2. Test goreleaser snapshot: `goreleaser release --snapshot --skip=publish`
+3. RAG improvements Phase 1 (from `.agent/plans/rag-improvements.md`)
 
 ## Open Questions
 - Gemini CLI API consistently 502 (model gemini-3.1-pro-preview-customtools not found)
-- Codex plan review timed out — critique from challenging-plans agent was sufficient
 
 ## Known Pre-existing Test Failures (Windows)
 - `TestSafeResolvePath` — Windows path separator mismatch
