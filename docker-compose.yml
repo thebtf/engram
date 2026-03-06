@@ -47,10 +47,28 @@ services:
       ENGRAM_EMBEDDING_MODEL_NAME: "${EMBEDDING_MODEL_NAME:-}"
       ENGRAM_EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-4096}"
       ENGRAM_EMBEDDING_TRUNCATE: "${EMBEDDING_TRUNCATE:-true}"
+      # Optional: FalkorDB graph backend
+      ENGRAM_GRAPH_PROVIDER: "${GRAPH_PROVIDER:-}"
+      ENGRAM_FALKORDB_ADDR: "${FALKORDB_ADDR:-}"
+      ENGRAM_FALKORDB_PASSWORD: "${FALKORDB_PASSWORD:-}"
+      ENGRAM_FALKORDB_GRAPH_NAME: "${FALKORDB_GRAPH_NAME:-engram}"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
+  # Optional: FalkorDB graph database for multi-hop relation traversal.
+  # Uncomment to enable graph-augmented search and relation exploration.
+  # Then set GRAPH_PROVIDER=falkordb and FALKORDB_ADDR=falkordb:6379 in .env
+  #
+  # falkordb:
+  #   image: falkordb/falkordb:latest
+  #   ports:
+  #     - "${FALKORDB_PORT:-6379}:6379"
+  #   volumes:
+  #     - falkordb_data:/data
+  #   restart: unless-stopped
+
 volumes:
   pgdata:
+  # falkordb_data:

@@ -14,6 +14,7 @@ import (
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/consolidation"
 	"github.com/thebtf/engram/internal/db/gorm"
+	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/maintenance"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
@@ -40,6 +41,7 @@ type Server struct {
 	collectionRegistry     *collections.Registry
 	sessionIdxStore        *sessions.Store
 	consolidationScheduler *consolidation.Scheduler
+	graphStore             graphpkg.GraphStore
 	version                string
 }
 
@@ -76,6 +78,11 @@ func NewServer(
 		sessionIdxStore:        sessionIdxStore,
 		consolidationScheduler: consolidationScheduler,
 	}
+}
+
+// SetGraphStore sets the graph store for graph-related MCP tools.
+func (s *Server) SetGraphStore(gs graphpkg.GraphStore) {
+	s.graphStore = gs
 }
 
 // Request represents a JSON-RPC request.
@@ -764,6 +771,27 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		},
 		{
+			Name:        "get_graph_neighbors",
+			Description: "Get graph neighbors of an observation via FalkorDB. Returns multi-hop neighbors with relationship types and hop distance. Requires FalkorDB graph backend to be configured.",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"observation_id"},
+				"properties": map[string]any{
+					"observation_id": map[string]any{"type": "number", "description": "Observation ID to find graph neighbors for"},
+					"max_hops":       map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "Maximum hop distance (1=direct neighbors, 2=neighbors of neighbors)"},
+					"limit":          map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100, "description": "Maximum number of neighbors to return"},
+				},
+			},
+		},
+		{
+			Name:        "get_graph_stats",
+			Description: "Get graph backend statistics. Returns provider, connection status, node count, and edge count.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
 			Name:        "get_observation_scoring_breakdown",
 			Description: "Get detailed scoring breakdown for an observation. Shows how importance scores are calculated including type weight, recency decay, feedback contribution, concept boost, and retrieval frequency. Useful for understanding why observations are ranked the way they are.",
 			InputSchema: map[string]any{
@@ -933,6 +961,10 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleAnalyzeSearchPatterns(ctx, args)
 	case "get_observation_relationships":
 		return s.handleGetObservationRelationships(ctx, args)
+	case "get_graph_neighbors":
+		return s.handleGetGraphNeighbors(ctx, args)
+	case "get_graph_stats":
+		return s.handleGetGraphStats(ctx)
 	case "get_observation_scoring_breakdown":
 		return s.handleGetObservationScoringBreakdown(ctx, args)
 	case "analyze_observation_importance":
@@ -3572,6 +3604,112 @@ func (s *Server) handleRunConsolidation(ctx context.Context, args json.RawMessag
 	result := map[string]any{
 		"status": "completed",
 		"cycle":  params.Cycle,
+	}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	return string(b), nil
+}
+
+// handleGetGraphNeighbors returns graph neighbors via FalkorDB.
+func (s *Server) handleGetGraphNeighbors(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ObservationID int64 `json:"observation_id"`
+		MaxHops       int   `json:"max_hops"`
+		Limit         int   `json:"limit"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid parameters: %w", err)
+	}
+	if params.ObservationID <= 0 {
+		return "", fmt.Errorf("observation_id is required")
+	}
+	if params.MaxHops <= 0 {
+		params.MaxHops = 2
+	}
+	if params.Limit <= 0 {
+		params.Limit = 20
+	}
+
+	if s.graphStore == nil {
+		result := map[string]any{"error": "graph backend not configured"}
+		b, _ := json.MarshalIndent(result, "", "  ")
+		return string(b), nil
+	}
+
+	if err := s.graphStore.Ping(ctx); err != nil {
+		result := map[string]any{"error": "graph backend not connected", "details": err.Error()}
+		b, _ := json.MarshalIndent(result, "", "  ")
+		return string(b), nil
+	}
+
+	neighbors, err := s.graphStore.GetNeighbors(ctx, params.ObservationID, params.MaxHops, params.Limit)
+	if err != nil {
+		return "", fmt.Errorf("get graph neighbors: %w", err)
+	}
+
+	// Enrich with observation details.
+	type NeighborInfo struct {
+		ID           int64  `json:"id"`
+		Title        string `json:"title"`
+		Type         string `json:"type"`
+		Project      string `json:"project"`
+		RelationType string `json:"relation_type"`
+		Hops         int    `json:"hops"`
+	}
+
+	result := make([]NeighborInfo, 0, len(neighbors))
+	for _, n := range neighbors {
+		info := NeighborInfo{
+			ID:           n.ObsID,
+			RelationType: string(n.RelationType),
+			Hops:         n.Hops,
+		}
+		// Try to enrich with observation details.
+		obs, err := s.observationStore.GetObservationByID(ctx, n.ObsID)
+		if err == nil && obs != nil {
+			info.Title = obs.Title.String
+			info.Type = string(obs.Type)
+			info.Project = obs.Project
+		}
+		result = append(result, info)
+	}
+
+	response := map[string]any{
+		"observation_id": params.ObservationID,
+		"max_hops":       params.MaxHops,
+		"neighbors":      result,
+		"count":          len(result),
+	}
+	b, _ := json.MarshalIndent(response, "", "  ")
+	return string(b), nil
+}
+
+// handleGetGraphStats returns graph backend statistics.
+func (s *Server) handleGetGraphStats(ctx context.Context) (string, error) {
+	if s.graphStore == nil {
+		result := map[string]any{
+			"provider":  "none",
+			"connected": false,
+		}
+		b, _ := json.MarshalIndent(result, "", "  ")
+		return string(b), nil
+	}
+
+	stats, err := s.graphStore.Stats(ctx)
+	if err != nil {
+		result := map[string]any{
+			"provider":  stats.Provider,
+			"connected": false,
+			"error":     err.Error(),
+		}
+		b, _ := json.MarshalIndent(result, "", "  ")
+		return string(b), nil
+	}
+
+	result := map[string]any{
+		"provider":   stats.Provider,
+		"connected":  stats.Connected,
+		"node_count": stats.NodeCount,
+		"edge_count": stats.EdgeCount,
 	}
 	b, _ := json.MarshalIndent(result, "", "  ")
 	return string(b), nil

@@ -326,6 +326,33 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		response["circuitBreaker"] = s.processor.CircuitBreakerMetrics()
 	}
 
+	// Add graph store stats
+	if s.graphStore != nil {
+		gs, err := s.graphStore.Stats(r.Context())
+		if err == nil {
+			response["graph"] = map[string]any{
+				"provider":   gs.Provider,
+				"connected":  gs.Connected,
+				"node_count": gs.NodeCount,
+				"edge_count": gs.EdgeCount,
+			}
+		} else {
+			response["graph"] = map[string]any{
+				"provider":  gs.Provider,
+				"connected": false,
+				"error":     err.Error(),
+			}
+		}
+		if s.graphWriter != nil {
+			enqueued, written, dropped := s.graphWriter.Stats()
+			response["graphWriter"] = map[string]any{
+				"enqueued": enqueued,
+				"written":  written,
+				"dropped":  dropped,
+			}
+		}
+	}
+
 	writeJSON(w, response)
 }
 
@@ -708,4 +735,24 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
 		},
 		"uptime": uptime,
 	})
+}
+
+// handleGraphSync triggers a manual re-sync of relations from PostgreSQL to FalkorDB.
+func (s *Service) handleGraphSync(w http.ResponseWriter, r *http.Request) {
+	if s.graphStore == nil {
+		writeJSON(w, map[string]any{"error": "graph backend not configured"})
+		return
+	}
+
+	if err := s.graphStore.Ping(r.Context()); err != nil {
+		http.Error(w, "graph backend not connected: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	// Run sync in background.
+	go func() {
+		s.syncGraphFromRelations()
+	}()
+
+	writeJSON(w, map[string]any{"status": "sync started in background"})
 }

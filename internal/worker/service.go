@@ -631,6 +631,11 @@ func (s *Service) initializeAsync() {
 	s.reranker = reranker
 	s.initMu.Unlock()
 
+	// Background sync: populate FalkorDB from existing PostgreSQL relations.
+	if _, ok := gs.(*graphpkg.NoopGraphStore); !ok && gs != nil {
+		go s.syncGraphFromRelations()
+	}
+
 	// Initialize pattern detector
 	patternDetector := pattern.NewDetector(patternStore, observationStore, pattern.DefaultConfig())
 
@@ -739,13 +744,14 @@ func (s *Service) initializeAsync() {
 		sessionIdxStore,
 		consolidationScheduler,
 	)
-	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
-	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer)
-
-	// Wire graph store into search manager for graph-augmented expansion.
+	// Wire graph store into MCP server and search manager.
 	if s.graphStore != nil {
+		mcpServer.SetGraphStore(s.graphStore)
 		searchMgr.SetGraphStore(s.graphStore)
 	}
+
+	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
+	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer)
 
 	s.initMu.Lock()
 	s.searchMgr = searchMgr
@@ -1463,6 +1469,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/projects", s.handleGetProjects)
 		r.Get("/api/stats", s.handleGetStats)
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)
+		r.Post("/api/graph/sync", s.handleGraphSync)
 		r.Get("/api/types", s.handleGetTypes)
 		r.Get("/api/models", s.handleGetModels)
 
@@ -1911,6 +1918,38 @@ func (s *Service) processAllSessions() {
 
 	// Broadcast status after processing
 	s.broadcastProcessingStatus()
+}
+
+// syncGraphFromRelations loads all relations from PostgreSQL and syncs them to FalkorDB.
+func (s *Service) syncGraphFromRelations() {
+	if s.graphStore == nil || s.relationStore == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	log.Info().Msg("Starting graph sync from PostgreSQL relations...")
+
+	// Load all relations (minConfidence=0 fetches everything).
+	const maxRelations = 100000
+	relations, err := s.relationStore.GetHighConfidenceRelations(ctx, 0, maxRelations)
+	if err != nil {
+		log.Error().Err(err).Msg("Graph sync: failed to load relations from PostgreSQL")
+		return
+	}
+
+	if len(relations) == 0 {
+		log.Info().Msg("Graph sync: no relations to sync")
+		return
+	}
+
+	if err := s.graphStore.SyncFromRelations(ctx, relations); err != nil {
+		log.Error().Err(err).Msg("Graph sync: SyncFromRelations failed")
+		return
+	}
+
+	log.Info().Int("total_synced", len(relations)).Msg("Graph sync from PostgreSQL complete")
 }
 
 // Shutdown gracefully shuts down the service.
