@@ -12,6 +12,35 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// vectorIndexSQL returns the CREATE INDEX statement for vectors and content_chunks tables
+// based on embedding dimensions. Uses tiered strategy:
+//   - ≤2000 dims: HNSW (pgvector native, exact recall)
+//   - >2000 dims: DiskANN via pgvectorscale (supports up to 16000 dims)
+//
+// If pgvectorscale is not available for >2000 dims, falls back to IVFFlat with a warning.
+func vectorIndexSQL(dims int, db *gorm.DB) (vectorsIdx, chunksIdx string) {
+	if dims <= 2000 {
+		return "CREATE INDEX idx_vectors_embedding_hnsw ON vectors USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
+			"CREATE INDEX idx_content_chunks_embedding_hnsw ON content_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
+	}
+
+	// >2000 dims: try pgvectorscale DiskANN
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vectorscale").Error; err == nil {
+		log.Info().Int("dims", dims).Msg("Using pgvectorscale DiskANN index for high-dimensional vectors")
+		return "CREATE INDEX idx_vectors_embedding_diskann ON vectors USING diskann (embedding vector_cosine_ops)",
+			"CREATE INDEX idx_content_chunks_embedding_diskann ON content_chunks USING diskann (embedding vector_cosine_ops)"
+	}
+
+	// Fallback: IVFFlat (no dimension limit, lower recall)
+	log.Warn().Int("dims", dims).Msg("pgvectorscale not available — falling back to IVFFlat index (lower recall). Install pgvectorscale for DiskANN support.")
+	lists := dims / 10
+	if lists < 100 {
+		lists = 100
+	}
+	return fmt.Sprintf("CREATE INDEX idx_vectors_embedding_ivfflat ON vectors USING ivfflat (embedding vector_cosine_ops) WITH (lists = %d)", lists),
+		fmt.Sprintf("CREATE INDEX idx_content_chunks_embedding_ivfflat ON content_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = %d)", lists)
+}
+
 // runMigrations runs all database migrations using gormigrate.
 func runMigrations(db *gorm.DB, embeddingDims int) error {
 	// Validate embedding dimensions before using in DDL statements.
@@ -720,23 +749,26 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 
 				log.Warn().Msgf("Embedding dimension changed from %d to %d, truncating vectors and content_chunks", current, embeddingDims)
 
-				// pgvector HNSW index supports up to 2000 dimensions for vector type.
-				// Use ENGRAM_EMBEDDING_DIMENSIONS=2000 (or lower) for indexed search.
 				colType := fmt.Sprintf("vector(%d)", embeddingDims)
+
+				// Tiered indexing: HNSW for ≤2000 dims, DiskANN (pgvectorscale) for >2000.
+				vectorsIdx, chunksIdx := vectorIndexSQL(embeddingDims, tx)
 
 				sqls := []string{
 					// Drop indexes BEFORE altering column type — PostgreSQL validates
 					// existing indexes against the new vector size during ALTER TABLE.
 					"DROP INDEX IF EXISTS idx_vectors_embedding_hnsw",
+					"DROP INDEX IF EXISTS idx_vectors_embedding_diskann",
 					"DROP INDEX IF EXISTS idx_vectors_embedding_ivfflat",
 					"TRUNCATE vectors",
 					fmt.Sprintf("ALTER TABLE vectors ALTER COLUMN embedding TYPE %s", colType),
-					"CREATE INDEX idx_vectors_embedding_hnsw ON vectors USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
+					vectorsIdx,
 					"DROP INDEX IF EXISTS idx_content_chunks_embedding_hnsw",
+					"DROP INDEX IF EXISTS idx_content_chunks_embedding_diskann",
 					"DROP INDEX IF EXISTS idx_content_chunks_embedding_ivfflat",
 					"TRUNCATE content_chunks",
 					fmt.Sprintf("ALTER TABLE content_chunks ALTER COLUMN embedding TYPE %s", colType),
-					"CREATE INDEX idx_content_chunks_embedding_hnsw ON content_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
+					chunksIdx,
 				}
 				for _, s := range sqls {
 					if err := tx.Exec(s).Error; err != nil {
