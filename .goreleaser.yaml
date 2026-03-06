@@ -221,6 +221,32 @@ builds:
       - goos: windows
         goarch: arm64
 
+  # MCP stdio-to-SSE proxy (for non-HTTP MCP clients)
+  - id: engram-mcp-stdio-proxy
+    main: ./cmd/mcp-stdio-proxy
+    binary: engram-mcp-stdio-proxy
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: darwin
+        goarch: amd64
+      - goos: linux
+        goarch: arm64
+      - goos: windows
+        goarch: arm64
+
   # Hook: statusline
   - id: hook-statusline
     main: ./cmd/hooks/statusline
@@ -304,18 +330,30 @@ release:
 
     Shared memory infrastructure for Claude Code workstations.
 
-    ### Quick Install (Plugin)
+    ### Install via Plugin Marketplace (recommended)
 
     ```
     /plugin marketplace add thebtf/engram-marketplace
     /plugin install engram
     ```
 
-    ### Manual Install (Local Deployment)
+    Then run `/engram:setup` to configure your server connection.
 
+    ### Install via Script
+
+    **macOS / Linux:**
     ```bash
     curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
     ```
+
+    **Windows (PowerShell):**
+    ```powershell
+    irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
+    ```
+
+    ### Server Deployment
+
+    See [DEPLOYMENT.md](https://github.com/thebtf/engram/blob/main/docs/DEPLOYMENT.md) for Docker setup.
 
 signs:
   - cmd: cosign
