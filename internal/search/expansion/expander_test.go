@@ -21,12 +21,12 @@ func TestExpanderSuite(t *testing.T) {
 
 func (s *ExpanderSuite) SetupTest() {
 	// Create expander without embedding service for basic tests
-	s.expander = NewExpander(nil)
+	s.expander = NewExpander(nil, nil)
 }
 
 // TestNewExpander tests expander creation.
 func (s *ExpanderSuite) TestNewExpander() {
-	e := NewExpander(nil)
+	e := NewExpander(nil, nil)
 	s.NotNil(e)
 	s.NotNil(e.intentPatterns)
 	s.Nil(e.embedSvc)
