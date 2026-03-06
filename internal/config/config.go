@@ -97,6 +97,11 @@ type Config struct {
 	CollectionConfigPath      string   // env-only
 	SessionsDir               string   // env-only: SESSIONS_DIR
 	WorkstationID             string   // env-only: WORKSTATION_ID
+	GraphProvider             string   `json:"graph_provider"`      // "falkordb" or "" (disabled)
+	FalkorDBAddr              string   // env-only: ENGRAM_FALKORDB_ADDR
+	FalkorDBPassword          string   // env-only: ENGRAM_FALKORDB_PASSWORD
+	FalkorDBGraphName         string   `json:"falkordb_graph_name"` // default: "engram"
+	GraphSearchExpansion      bool     `json:"graph_search_expansion"` // expand search via graph (default: true when graph provider set)
 }
 
 var (
@@ -214,6 +219,8 @@ func Default() *Config {
 		HyDETimeoutMS:             800,                 // 800ms within 5s expansion budget
 		WorkerHost:                "127.0.0.1",
 		DatabaseMaxConns:          10,
+		FalkorDBGraphName:         "engram",
+		GraphSearchExpansion:      true,
 	}
 }
 
@@ -409,6 +416,21 @@ func Load() (*Config, error) {
 	}
 	if v := strings.TrimSpace(os.Getenv("WORKSTATION_ID")); v != "" {
 		cfg.WorkstationID = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_GRAPH_PROVIDER")); v != "" {
+		cfg.GraphProvider = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_FALKORDB_ADDR")); v != "" {
+		cfg.FalkorDBAddr = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_FALKORDB_PASSWORD")); v != "" {
+		cfg.FalkorDBPassword = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_FALKORDB_GRAPH_NAME")); v != "" {
+		cfg.FalkorDBGraphName = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_GRAPH_SEARCH_EXPANSION")); v == "false" || v == "0" {
+		cfg.GraphSearchExpansion = false
 	}
 
 	return cfg, nil
