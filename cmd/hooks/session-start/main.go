@@ -59,6 +59,33 @@ func handleSessionStart(ctx *hooks.HookContext, input *Input) (string, error) {
 	fmt.Fprintf(os.Stderr, "[engram] Injecting %d observations from project memory (%d detailed, %d condensed)\n",
 		len(obsData), min(fullCount, len(obsData)), max(0, len(obsData)-fullCount))
 
+	// Extract observation IDs and mark as injected (non-blocking, fire-and-forget)
+	go func() {
+		var ids []int64
+		for _, o := range obsData {
+			if obs, ok := o.(map[string]interface{}); ok {
+				if id, ok := obs["id"].(float64); ok && id > 0 {
+					ids = append(ids, int64(id))
+				}
+			}
+		}
+		// Also include guidance IDs
+		if guidanceData, ok := result["guidance"].([]interface{}); ok {
+			for _, g := range guidanceData {
+				if gObs, ok := g.(map[string]interface{}); ok {
+					if id, ok := gObs["id"].(float64); ok && id > 0 {
+						ids = append(ids, int64(id))
+					}
+				}
+			}
+		}
+		if len(ids) > 0 {
+			_, _ = hooks.POST(ctx.Port, "/api/observations/mark-injected", map[string]interface{}{
+				"ids": ids,
+			})
+		}
+	}()
+
 	// Build context string
 	contextBuilder := "<engram-context>\n"
 	contextBuilder += fmt.Sprintf("# Project Memory (%d observations)\n", len(obsData))
