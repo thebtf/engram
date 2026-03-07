@@ -81,7 +81,7 @@ type Config struct {
 	ContextShowLastSummary    bool     `json:"context_show_last_summary"`
 	CleanupStaleObservations  bool     `json:"cleanup_stale_observations"`
 	RerankingProvider         string   `json:"reranking_provider"`     // "onnx" | "api" (default: "api")
-	RerankingAPIBaseURL       string   `json:"reranking_api_base_url"` // Cohere-compatible rerank endpoint
+	RerankingAPIBaseURL       string   `json:"reranking_api_base_url"` // Full rerank endpoint URL (e.g. http://host:port/v1/rerank)
 	RerankingAPIModel         string   `json:"reranking_api_model"`    // default: "rerank-english-v3.0"
 	RerankingTimeoutMS        int      `json:"reranking_timeout_ms"`   // default: 500
 	RerankingAPIKey           string   // env-only: ENGRAM_RERANKING_API_KEY

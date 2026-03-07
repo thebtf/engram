@@ -41,7 +41,7 @@ func TestAPIService_Rerank_Success(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Model:   "test-model",
 		Alpha:   0.7,
@@ -89,7 +89,7 @@ func TestAPIService_Rerank_429FallbackToOriginalOrder(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	})
@@ -114,7 +114,7 @@ func TestAPIService_Rerank_500FallbackToOriginalOrder(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	})
@@ -138,7 +138,7 @@ func TestAPIService_Rerank_TimeoutFallback(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Timeout: 200 * time.Millisecond,
 	})
@@ -173,7 +173,7 @@ func TestAPIService_Rerank_LimitApplied(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	})
@@ -203,7 +203,7 @@ func TestAPIService_RerankByScore_Success(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Alpha:   0.7,
 		Timeout: 5 * time.Second,
@@ -236,7 +236,7 @@ func TestAPIService_Score_Success(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	})
@@ -255,7 +255,7 @@ func TestAPIService_Score_APIUnavailable(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	})
@@ -279,7 +279,7 @@ func TestAPIService_Rerank_ResponseCountMismatch(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "test-key",
 		Alpha:   0.5,
 		Timeout: 5 * time.Second,
@@ -334,7 +334,7 @@ func TestAPIService_RankImprovement(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "key",
 		Alpha:   1.0, // Pure rerank score for predictable ordering
 		Timeout: 5 * time.Second,
@@ -367,7 +367,7 @@ func TestAPIService_Rerank_4xxError(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "key",
 		Timeout: 5 * time.Second,
 	})
@@ -416,7 +416,7 @@ func TestAPIService_ConcurrentRequests(t *testing.T) {
 	defer server.Close()
 
 	svc, err := NewAPIService(APIConfig{
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1/rerank",
 		APIKey:  "key",
 		Timeout: 5 * time.Second,
 	})

@@ -112,7 +112,7 @@ func (s *APIService) callAPI(query string, documents []string, topN int) ([]rera
 	ctx, cancel := context.WithTimeout(context.Background(), s.client.Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+"/v1/rerank", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create rerank request: %w", err)
 	}
