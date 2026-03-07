@@ -28,6 +28,11 @@ func NewIndexer(store *Store, sessionsDir string, workstationID string, logger z
 // IndexAll scans sessionsDir for *.jsonl files and indexes new/changed ones.
 // Returns count of sessions indexed.
 func (idx *Indexer) IndexAll(ctx context.Context) (int, error) {
+	if _, err := os.Stat(idx.sessionsDir); os.IsNotExist(err) {
+		idx.logger.Debug().Str("path", idx.sessionsDir).Msg("sessions directory not found, skipping indexing")
+		return 0, nil
+	}
+
 	count := 0
 
 	err := filepath.WalkDir(idx.sessionsDir, func(path string, d fs.DirEntry, walkErr error) error {
