@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/thebtf/engram/internal/instincts"
 )
@@ -23,19 +22,15 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	// Default to ~/.claude/homunculus/instincts/
-	dir := params.Path
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("get home directory: %w", err)
-		}
-		dir = filepath.Join(home, ".claude", "homunculus", "instincts")
+	// Resolve and validate path against allowed base directory
+	dir, err := instincts.ResolveDir(params.Path)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
 	}
 
 	// Check directory exists
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Sprintf("Instincts directory not found: %s", dir), nil
+		return "", fmt.Errorf("instincts directory not found: %s", dir)
 	}
 
 	result, err := instincts.Import(ctx, dir, s.vectorClient, s.observationStore)

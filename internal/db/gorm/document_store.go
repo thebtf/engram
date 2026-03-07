@@ -131,11 +131,10 @@ func (s *DocumentStore) UpsertChunks(ctx context.Context, hash string, chunks []
 	defer stmt.Close()
 
 	for _, c := range chunks {
-		var embArg any
-		if len(c.Embedding.Slice()) > 0 {
-			embArg = c.Embedding
+		if len(c.Embedding.Slice()) == 0 {
+			return fmt.Errorf("empty embedding for chunk seq %d (hash %s): chunks without embeddings cannot be searched", c.Seq, c.Hash)
 		}
-		if _, err := stmt.ExecContext(ctx, c.Hash, c.Seq, c.Text, c.Pos, c.Model, embArg); err != nil {
+		if _, err := stmt.ExecContext(ctx, c.Hash, c.Seq, c.Text, c.Pos, c.Model, c.Embedding); err != nil {
 			return fmt.Errorf("insert chunk %d: %w", c.Seq, err)
 		}
 	}
@@ -197,6 +196,15 @@ func (s *DocumentStore) SearchChunks(ctx context.Context, embedding []float32, c
 	}
 
 	return chunks, nil
+}
+
+// ChunksExist checks if any chunks exist for a given content hash.
+func (s *DocumentStore) ChunksExist(ctx context.Context, hash string) (bool, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&ContentChunk{}).Where("hash = ?", hash).Limit(1).Count(&count).Error; err != nil {
+		return false, fmt.Errorf("check chunks existence: %w", err)
+	}
+	return count > 0, nil
 }
 
 // DeactivateDocument marks a document as inactive.

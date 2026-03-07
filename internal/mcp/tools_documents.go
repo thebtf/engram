@@ -214,9 +214,9 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 	hashBytes := sha256.Sum256([]byte(params.Content))
 	newHash := hex.EncodeToString(hashBytes[:])
 	if doc.Hash.Valid && doc.Hash.String == newHash {
-		// Check if chunks already exist for this hash
-		existing, err := s.documentStore.SearchChunks(ctx, make([]float32, s.embedSvc.Dimensions()), params.Collection, 1)
-		if err == nil && len(existing) > 0 && existing[0].Hash == newHash {
+		// Check if chunks already exist for this exact content hash
+		exists, err := s.documentStore.ChunksExist(ctx, newHash)
+		if err == nil && exists {
 			return fmt.Sprintf("Document %s/%s already up-to-date (hash %s).", params.Collection, params.Path, newHash[:12]), nil
 		}
 	}
@@ -237,10 +237,12 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 		defer os.Remove(tmpPath)
 
 		if _, err := tmpFile.WriteString(params.Content); err != nil {
-			tmpFile.Close()
+			_ = tmpFile.Close()
 			return "", fmt.Errorf("write temp file: %w", err)
 		}
-		tmpFile.Close()
+		if err := tmpFile.Close(); err != nil {
+			return "", fmt.Errorf("close temp file: %w", err)
+		}
 
 		if s.chunkManager.SupportsFile(tmpPath) {
 			chunks, chunkErr := s.chunkManager.ChunkFile(ctx, tmpPath)

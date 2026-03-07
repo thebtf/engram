@@ -56,8 +56,9 @@ const (
 	SourceToolRead     SourceType = "tool_read"
 	SourceWebFetch     SourceType = "web_fetch"
 	SourceTodoWrite    SourceType = "todo_write"
-	SourceLLMDerived   SourceType = "llm_derived"
-	SourceUnknown      SourceType = "unknown"
+	SourceLLMDerived       SourceType = "llm_derived"
+	SourceInstinctImport   SourceType = "instinct_import"
+	SourceUnknown          SourceType = "unknown"
 )
 
 // ClassifySourceType maps a Claude Code tool name to its source type.

@@ -2,9 +2,9 @@ package worker
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/instincts"
@@ -22,18 +22,17 @@ func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) 
 	}
 	if r.Body != nil {
 		defer r.Body.Close()
-		_ = json.NewDecoder(r.Body).Decode(&params)
-	}
-
-	// Default to ~/.claude/homunculus/instincts/
-	dir := params.Path
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			http.Error(w, "Failed to get home directory", http.StatusInternalServerError)
+		if err := json.NewDecoder(r.Body).Decode(&params); err != nil && err != io.EOF {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		dir = filepath.Join(home, ".claude", "homunculus", "instincts")
+	}
+
+	// Resolve and validate path against allowed base directory
+	dir, err := instincts.ResolveDir(params.Path)
+	if err != nil {
+		http.Error(w, "Invalid path: "+err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -51,10 +50,10 @@ func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	result, err := instincts.Import(r.Context(), dir, vectorClient, obsStore)
-	if err != nil {
-		log.Error().Err(err).Msg("Instinct import failed")
-		http.Error(w, "Import failed: "+err.Error(), http.StatusInternalServerError)
+	result, importErr := instincts.Import(r.Context(), dir, vectorClient, obsStore)
+	if importErr != nil {
+		log.Error().Err(importErr).Msg("Instinct import failed")
+		http.Error(w, "Import failed: "+importErr.Error(), http.StatusInternalServerError)
 		return
 	}
 

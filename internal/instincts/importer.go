@@ -11,6 +11,14 @@ import (
 
 const defaultDedupThreshold = 0.85
 
+// Sentinel values for instinct imports that have no session/project context.
+// Using explicit markers instead of empty strings to satisfy NOT NULL constraints
+// and ensure cleanup logic correctly handles imported observations.
+const (
+	instinctSessionID = "instinct-import"
+	instinctProject   = "instinct-import"
+)
+
 // Import reads all instinct files from dir, deduplicates, and creates observations.
 func Import(ctx context.Context, dir string, vectorClient vector.Client, obsStore *gorm.ObservationStore) (*ImportResult, error) {
 	instincts, parseErrors := ParseDir(dir)
@@ -24,10 +32,13 @@ func Import(ctx context.Context, dir string, vectorClient vector.Client, obsStor
 	}
 
 	for _, inst := range instincts {
-		// Check for duplicate via vector similarity
+		// Check for duplicate via vector similarity.
+		// On dedup error, record the error and skip this instinct to avoid
+		// creating duplicates when the vector service is temporarily unavailable.
 		isDup, err := IsDuplicate(ctx, vectorClient, inst.Trigger, defaultDedupThreshold)
 		if err != nil {
-			log.Warn().Err(err).Str("id", inst.ID).Msg("Dedup check failed, importing anyway")
+			result.Errors = append(result.Errors, fmt.Sprintf("dedup check for %s: %v", inst.ID, err))
+			continue
 		}
 		if isDup {
 			result.Skipped++
@@ -37,13 +48,15 @@ func Import(ctx context.Context, dir string, vectorClient vector.Client, obsStor
 
 		// Convert instinct to parsed observation and store
 		parsed := ConvertToObservation(inst)
-		obsID, _, err := obsStore.StoreObservation(ctx, "", "", parsed, 0, 0)
+		obsID, _, err := obsStore.StoreObservation(ctx, instinctSessionID, instinctProject, parsed, 0, 0)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("store observation for %s: %v", inst.ID, err))
 			continue
 		}
 
-		// Update importance score from instinct confidence
+		// Update importance score from instinct confidence.
+		// Non-critical: the observation is already stored with the default score,
+		// so a failure here only means slightly less accurate ranking, not data loss.
 		importance := InstinctImportanceScore(inst.Confidence)
 		if err := obsStore.UpdateImportanceScore(ctx, obsID, importance); err != nil {
 			log.Warn().Err(err).Str("id", inst.ID).Msg("Failed to update importance score")
@@ -51,6 +64,10 @@ func Import(ctx context.Context, dir string, vectorClient vector.Client, obsStor
 
 		result.Imported++
 		log.Info().Str("id", inst.ID).Str("trigger", inst.Trigger).Msg("Imported instinct")
+	}
+
+	if result.Imported == 0 && len(result.Errors) > 0 {
+		return result, fmt.Errorf("no instincts imported: %d errors", len(result.Errors))
 	}
 
 	return result, nil
