@@ -56,15 +56,24 @@ function expandTranscriptPath(transcriptPath) {
   return transcriptPath;
 }
 
+const MAX_MESSAGES = 50;
+const MAX_MESSAGE_LENGTH = 5000;
+
+function truncateText(text, maxLen) {
+  if (typeof text !== 'string') return '';
+  return text.length <= maxLen ? text : text.slice(0, maxLen);
+}
+
 async function parseTranscript(transcriptPath) {
   const expandedPath = expandTranscriptPath(transcriptPath);
   if (!expandedPath) {
-    return { lastUser: '', lastAssistant: '' };
+    return { lastUser: '', lastAssistant: '', messages: [] };
   }
 
   return new Promise((resolve) => {
     let lastUser = '';
     let lastAssistant = '';
+    const messages = [];
 
     const stream = fs.createReadStream(expandedPath, {
       encoding: 'utf8',
@@ -73,7 +82,7 @@ async function parseTranscript(transcriptPath) {
 
     stream.on('error', (error) => {
       console.error(`[stop] Failed to read transcript: ${error.message}`);
-      resolve({ lastUser, lastAssistant });
+      resolve({ lastUser, lastAssistant, messages });
     });
 
     const rl = readline.createInterface({
@@ -107,13 +116,20 @@ async function parseTranscript(transcriptPath) {
 
       if (messageRole === 'user') {
         lastUser = messageText;
+        messages.push({ role: 'user', text: truncateText(messageText, MAX_MESSAGE_LENGTH) });
       } else if (messageRole === 'assistant') {
         lastAssistant = messageText;
+        messages.push({ role: 'assistant', text: truncateText(messageText, MAX_MESSAGE_LENGTH) });
+      }
+
+      // Ring buffer: keep only last MAX_MESSAGES
+      if (messages.length > MAX_MESSAGES) {
+        messages.shift();
       }
     });
 
     rl.on('close', () => {
-      resolve({ lastUser, lastAssistant });
+      resolve({ lastUser, lastAssistant, messages });
     });
   });
 }
@@ -142,7 +158,7 @@ async function handleStop(ctx, input) {
       ? input.TranscriptPath
       : '';
 
-  const { lastUser, lastAssistant } = await parseTranscript(transcriptPath);
+  const { lastUser, lastAssistant, messages } = await parseTranscript(transcriptPath);
 
   console.error(`[stop] Transcript path: ${transcriptPath}`);
   console.error(`[stop] Last user message length: ${String(lastUser).length}`);
@@ -164,6 +180,23 @@ async function handleStop(ctx, input) {
     });
   } catch (error) {
     console.error(`[stop] Warning: summary request failed: ${error.message}`);
+  }
+
+  // Extract learnings from session transcript (LLM-based, may take seconds)
+  if (messages.length > 0) {
+    const project = typeof ctx.Project === 'string' ? ctx.Project : '';
+    try {
+      const learnResult = await lib.requestPost(
+        `/api/sessions/${sessionID}/extract-learnings`,
+        { messages, project },
+        30000
+      );
+      const count = (learnResult && learnResult.count) || 0;
+      const status = (learnResult && learnResult.status) || 'unknown';
+      console.error(`[stop] extract-learnings: status=${status}, count=${count}`);
+    } catch (error) {
+      console.error(`[stop] Warning: extract-learnings failed: ${error.message}`);
+    }
   }
 
   return '';

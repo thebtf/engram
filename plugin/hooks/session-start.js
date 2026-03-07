@@ -85,6 +85,47 @@ async function handleSessionStart(ctx, input) {
   }
 
   contextBuilder += '</engram-context>\n';
+
+  // Render guidance block if server provides guidance observations
+  const guidance = Array.isArray(result.guidance) ? result.guidance : [];
+  if (guidance.length > 0) {
+    contextBuilder += '<engram-guidance>\n';
+    contextBuilder += '# Learned Behavioral Guidance\n';
+    contextBuilder += 'These are patterns learned from previous sessions. Follow them unless context demands otherwise.\n\n';
+
+    for (let i = 0; i < guidance.length; i++) {
+      const g = guidance[i];
+      if (!g || typeof g !== 'object') continue;
+
+      const gType = getString(g.type).toUpperCase();
+      const gTitle = getString(g.title);
+      const gNarrative = getString(g.narrative);
+
+      contextBuilder += `${i + 1}. [${gType}] ${gTitle}\n`;
+      if (gNarrative !== '') {
+        contextBuilder += `${gNarrative}\n`;
+      }
+      contextBuilder += formatFactsLine(g.facts);
+      contextBuilder += '\n';
+    }
+
+    contextBuilder += '</engram-guidance>\n';
+  }
+
+  // Mark all injected observation IDs (fire-and-forget)
+  const allObs = [...observations, ...guidance];
+  const ids = [];
+  for (const obs of allObs) {
+    if (obs && typeof obs === 'object' && typeof obs.id === 'number' && obs.id > 0) {
+      ids.push(obs.id);
+    }
+  }
+  if (ids.length > 0) {
+    lib.requestPost('/api/observations/mark-injected', { ids }, 3000).catch((err) => {
+      console.error(`[engram] mark-injected failed: ${err.message}`);
+    });
+  }
+
   return contextBuilder;
 }
 

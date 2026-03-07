@@ -26,6 +26,19 @@ async function handleUserPrompt(ctx, input) {
       ? searchResult.observations
       : [];
 
+    // Mark injected observation IDs (fire-and-forget)
+    const searchIds = [];
+    for (const obs of observations) {
+      if (obs && typeof obs === 'object' && typeof obs.id === 'number' && obs.id > 0) {
+        searchIds.push(obs.id);
+      }
+    }
+    if (searchIds.length > 0) {
+      lib.requestPost('/api/observations/mark-injected', { ids: searchIds }, 3000).catch((err) => {
+        console.error(`[engram] mark-injected failed: ${err.message}`);
+      });
+    }
+
     if (observations.length > 0) {
       observationCount = observations.length;
       let contextBuilder = '<relevant-memory>\n';
