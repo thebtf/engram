@@ -7,7 +7,7 @@
 
 Persistent shared memory infrastructure for Claude Code workstations.
 
-Engram captures observations from coding sessions, stores them in PostgreSQL + pgvector, and exposes **40 MCP tools** through the `nia` server — hybrid search, knowledge graph, memory consolidation, and session indexing across multiple workstations.
+Engram captures observations from coding sessions, stores them in PostgreSQL + pgvector, and exposes **48 MCP tools** through the MCP server — hybrid search, knowledge graph, memory consolidation, and session indexing across multiple workstations.
 
 ---
 
@@ -176,11 +176,9 @@ git clone https://github.com/thebtf/engram.git && cd engram
 
 $env:CGO_ENABLED = "1"
 go build -tags fts5 -ldflags "-s -w" -o bin\mcp-stdio-proxy.exe .\cmd\mcp-stdio-proxy
-go build -tags fts5 -ldflags "-s -w" -o bin\hooks\session-start.exe .\cmd\hooks\session-start
-go build -tags fts5 -ldflags "-s -w" -o bin\hooks\user-prompt.exe .\cmd\hooks\user-prompt
-go build -tags fts5 -ldflags "-s -w" -o bin\hooks\post-tool-use.exe .\cmd\hooks\post-tool-use
-go build -tags fts5 -ldflags "-s -w" -o bin\hooks\stop.exe .\cmd\hooks\stop
 ```
+
+Hooks are JavaScript and come pre-configured with the plugin. No build needed.
 
 ---
 
@@ -190,7 +188,7 @@ go build -tags fts5 -ldflags "-s -w" -o bin\hooks\stop.exe .\cmd\hooks\stop
 |---------|-------------|
 | **PostgreSQL + pgvector** | Concurrent storage with HNSW cosine vector index |
 | **Hybrid Search** | tsvector GIN + vector similarity + BM25, RRF fusion |
-| **40 MCP Tools** | Search, context, relations, bulk ops, sessions, maintenance |
+| **48 MCP Tools** | Search, context, relations, bulk ops, sessions, maintenance |
 | **Memory Consolidation** | Daily decay, weekly associations, quarterly forgetting |
 | **17 Relation Types** | Knowledge graph: causes, fixes, supersedes, contradicts, explains, shares_theme... |
 | **Session Indexing** | JSONL parser with workstation isolation, incremental indexing |
@@ -198,11 +196,12 @@ go build -tags fts5 -ldflags "-s -w" -o bin\hooks\stop.exe .\cmd\hooks\stop
 | **MCP Transports** | SSE + Streamable HTTP (`POST /mcp`) |
 | **Embeddings** | Local ONNX BGE (384D) or OpenAI-compatible REST API |
 | **Token Auth** | Bearer authentication for all endpoints |
+| **Instinct Import** | Import ECC instincts as guidance observations |
 | **Dashboard** | Vue-based web dashboard at worker port |
 
 ---
 
-## MCP Tools (40)
+## MCP Tools (48)
 
 <details>
 <summary><strong>Search & Discovery (11)</strong></summary>
@@ -278,6 +277,31 @@ go build -tags fts5 -ldflags "-s -w" -o bin\hooks\stop.exe .\cmd\hooks\stop
 |------|-------------|
 | `search_sessions` | Full-text search across indexed sessions |
 | `list_sessions` | List sessions with filtering |
+
+</details>
+
+<details>
+<summary><strong>Graph (2)</strong></summary>
+
+| Tool | Description |
+|------|-------------|
+| `get_graph_neighbors` | Get neighboring nodes in the knowledge graph |
+| `get_graph_stats` | Knowledge graph statistics |
+
+</details>
+
+<details>
+<summary><strong>Collections & Documents (7)</strong></summary>
+
+| Tool | Description |
+|------|-------------|
+| `list_collections` | List configured collections with document counts |
+| `list_documents` | List documents in a collection |
+| `get_document` | Retrieve full document content |
+| `ingest_document` | Ingest document: chunk, embed, store |
+| `search_collection` | Semantic search across document chunks |
+| `remove_document` | Deactivate a document |
+| `import_instincts` | Import instinct files as guidance observations |
 
 </details>
 
@@ -380,10 +404,11 @@ cmd/
   mcp-sse/            MCP SSE HTTP server (standalone)
   mcp-stdio-proxy/    stdio → SSE bridge (client-side)
   worker/             HTTP API + MCP SSE + MCP Streamable HTTP + dashboard
-  hooks/              Claude Code lifecycle hooks
+  hooks/              Claude Code lifecycle hooks (legacy Go, see plugin/hooks/)
 internal/
   chunking/           AST-aware document chunking (md, Go, Python, TS)
   collections/        YAML collection config + context routing
+  instincts/          Instinct parser and import
   config/             Configuration management
   consolidation/      Decay, associations, forgetting
   db/gorm/            PostgreSQL stores + auto-migrations
