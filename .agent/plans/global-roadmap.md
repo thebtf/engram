@@ -287,7 +287,6 @@ Tasks:
 
 ```
 Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6
-  (2h)      (3h)      (4h)      (4h)      (6h)      (8h)      (3h)
 ```
 
 Phases 0-2 are prerequisites for Docker deployment (Phase 0) and multi-workstation use (Phase 2).
