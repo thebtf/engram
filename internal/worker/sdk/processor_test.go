@@ -1137,17 +1137,17 @@ func TestSafeResolvePath(t *testing.T) {
 		},
 		{
 			name:     "absolute path without cwd",
-			path:     "/some/absolute/path",
+			path:     filepath.Join(tmpDir, "abs", "path"),
 			cwd:      "",
 			wantOk:   true,
-			wantPath: "/some/absolute/path",
+			wantPath: filepath.Join(tmpDir, "abs", "path"),
 		},
 		{
 			name:     "relative path without cwd",
-			path:     "relative/path",
+			path:     filepath.Join("relative", "path"),
 			cwd:      "",
 			wantOk:   true,
-			wantPath: "relative/path",
+			wantPath: filepath.Join("relative", "path"),
 		},
 		{
 			name:     "current directory reference",
@@ -1158,7 +1158,7 @@ func TestSafeResolvePath(t *testing.T) {
 		},
 		{
 			name:   "absolute path outside cwd",
-			path:   "/etc/passwd",
+			path:   filepath.Join(os.TempDir(), "outside", "passwd"),
 			cwd:    tmpDir,
 			wantOk: false,
 		},
