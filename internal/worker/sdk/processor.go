@@ -251,8 +251,8 @@ func (p *Processor) broadcast(event map[string]any) {
 }
 
 // MaxConcurrentLLMCalls is the maximum number of concurrent LLM calls.
-// This prevents overwhelming the API and manages resource usage.
-const MaxConcurrentLLMCalls = 4
+// Keep low for local models (e.g. 9B on GPU with limited parallelism).
+const MaxConcurrentLLMCalls = 2
 
 // NewProcessor creates a new SDK processor.
 // It requires at least one LLM backend: either an OpenAI-compatible API (ENGRAM_LLM_URL)

@@ -488,7 +488,7 @@ func TestGetFileContent(t *testing.T) {
 }
 
 func TestMaxConcurrentLLMCalls(t *testing.T) {
-	assert.Equal(t, 4, MaxConcurrentLLMCalls)
+	assert.Equal(t, 2, MaxConcurrentLLMCalls)
 }
 
 func TestObservationTypes(t *testing.T) {
