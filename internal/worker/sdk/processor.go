@@ -252,7 +252,7 @@ func (p *Processor) broadcast(event map[string]any) {
 
 // DefaultConcurrentLLMCalls is the default number of concurrent LLM calls.
 // Override with ENGRAM_LLM_CONCURRENCY env var.
-const DefaultConcurrentLLMCalls = 4
+const DefaultConcurrentLLMCalls = 2
 
 // NewProcessor creates a new SDK processor.
 // It requires at least one LLM backend: either an OpenAI-compatible API (ENGRAM_LLM_URL)
@@ -645,16 +645,36 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 	prompt = sanitizePrompt(prompt)
 
 	// Try LLM API first (OpenAI-compatible — works in Docker without Claude CLI)
-	// Use background context — parent ctx may have a shorter deadline (e.g. HTTP request context)
+	// Retry with backoff for transient errors (EOF, connection reset, 429, 503)
 	if p.llmClient != nil {
-		llmCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-
-		response, err := p.llmClient.Complete(llmCtx, systemPrompt, prompt)
-		if err != nil {
+		var lastErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				backoff := time.Duration(attempt*2) * time.Second
+				time.Sleep(backoff)
+			}
+			llmCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			response, err := p.llmClient.Complete(llmCtx, systemPrompt, prompt)
+			cancel()
+			if err == nil {
+				return response, nil
+			}
+			lastErr = err
+			errStr := err.Error()
+			// Retry only on transient errors
+			if strings.Contains(errStr, "EOF") ||
+				strings.Contains(errStr, "connection reset") ||
+				strings.Contains(errStr, "429") ||
+				strings.Contains(errStr, "503") {
+				log.Warn().Err(err).Int("attempt", attempt+1).Msg("LLM API transient error, retrying")
+				continue
+			}
+			// Non-transient error — don't retry
 			log.Warn().Err(err).Msg("LLM API call failed, trying CLI fallback")
-		} else {
-			return response, nil
+			break
+		}
+		if lastErr != nil {
+			log.Warn().Err(lastErr).Msg("LLM API call failed after retries, trying CLI fallback")
 		}
 	}
 
