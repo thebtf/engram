@@ -134,6 +134,73 @@ async function parseTranscript(transcriptPath) {
   });
 }
 
+/**
+ * Detect whether an injected observation was used or corrected in assistant messages.
+ * Returns: "used" | "corrected" | "ignored"
+ */
+function detectUtilitySignal(obs, assistantTextLower) {
+  const title = typeof obs.title === 'string' ? obs.title : '';
+  const facts = Array.isArray(obs.facts) ? obs.facts : [];
+
+  // Build search terms from title and facts (min length to avoid false positives)
+  const searchTerms = [];
+  if (title.length >= 10) {
+    searchTerms.push(title.toLowerCase());
+  }
+  for (const fact of facts) {
+    if (typeof fact === 'string' && fact.length >= 15) {
+      searchTerms.push(fact.toLowerCase());
+    }
+  }
+
+  if (searchTerms.length === 0) return 'ignored';
+
+  // Check for verbatim citation (any search term appears in assistant text)
+  let cited = false;
+  for (const term of searchTerms) {
+    if (assistantTextLower.includes(term)) {
+      cited = true;
+      break;
+    }
+  }
+
+  if (!cited) return 'ignored';
+
+  // Check for correction patterns near cited content
+  const correctionPatterns = [
+    'actually,',
+    "that's not",
+    'that is not',
+    'not quite',
+    'incorrect',
+    "that's wrong",
+    'that is wrong',
+    'correction:',
+    'outdated',
+    'no longer',
+    'has changed',
+    'was wrong',
+    'instead,',
+    'rather,',
+    'however,',
+    'but actually',
+  ];
+
+  for (const pattern of correctionPatterns) {
+    if (assistantTextLower.includes(pattern)) {
+      const patternIdx = assistantTextLower.indexOf(pattern);
+      for (const term of searchTerms) {
+        const termIdx = assistantTextLower.indexOf(term);
+        if (termIdx >= 0 && Math.abs(patternIdx - termIdx) < 500) {
+          return 'corrected';
+        }
+      }
+    }
+  }
+
+  return 'used';
+}
+
 async function handleStop(ctx, input) {
   console.error(`[stop] Raw input: ${String(ctx.RawInput || '')}`);
 
@@ -197,6 +264,39 @@ async function handleStop(ctx, input) {
     } catch (error) {
       console.error(`[stop] Warning: extract-learnings failed: ${error.message}`);
     }
+  }
+
+  // Detect utility signals for injected observations
+  try {
+    const injectedResult = await lib.requestGet(
+      `/api/sessions/${sessionID}/injected-observations`
+    );
+    const injectedObs = Array.isArray(injectedResult && injectedResult.observations)
+      ? injectedResult.observations
+      : [];
+
+    if (injectedObs.length > 0 && messages.length > 0) {
+      const assistantText = messages
+        .filter((m) => m.role === 'assistant')
+        .map((m) => m.text)
+        .join('\n');
+      const assistantTextLower = assistantText.toLowerCase();
+
+      for (const obs of injectedObs) {
+        if (!obs || typeof obs !== 'object' || typeof obs.id !== 'number') continue;
+
+        const signal = detectUtilitySignal(obs, assistantTextLower);
+        if (signal === 'ignored') continue;
+
+        lib.requestPost(`/api/observations/${obs.id}/utility`, { signal }, 3000).catch((err) => {
+          console.error(`[stop] utility signal failed for obs ${obs.id}: ${err.message}`);
+        });
+      }
+
+      console.error(`[stop] Checked ${injectedObs.length} injected observations for utility signals`);
+    }
+  } catch (error) {
+    console.error(`[stop] Warning: utility signal detection failed: ${error.message}`);
   }
 
   return '';

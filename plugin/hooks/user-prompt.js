@@ -14,6 +14,7 @@ async function handleUserPrompt(ctx, input) {
 
   let contextToInject = '';
   let observationCount = 0;
+  const searchIds = [];
 
   try {
     const searchResult = await lib.requestPost('/api/context/search', {
@@ -26,17 +27,11 @@ async function handleUserPrompt(ctx, input) {
       ? searchResult.observations
       : [];
 
-    // Mark injected observation IDs (fire-and-forget)
-    const searchIds = [];
+    // Collect injected observation IDs for per-session tracking (called after sessionID is known)
     for (const obs of observations) {
       if (obs && typeof obs === 'object' && typeof obs.id === 'number' && obs.id > 0) {
         searchIds.push(obs.id);
       }
-    }
-    if (searchIds.length > 0) {
-      lib.requestPost('/api/observations/mark-injected', { ids: searchIds }, 3000).catch((err) => {
-        console.error(`[engram] mark-injected failed: ${err.message}`);
-      });
     }
 
     if (observations.length > 0) {
@@ -112,6 +107,13 @@ async function handleUserPrompt(ctx, input) {
   const sessionID = Math.trunc(sessionDbId);
   const promptNo = Math.trunc(promptNumber);
   console.error(`[user-prompt] Session ${sessionID}, prompt #${promptNo}`);
+
+  // Mark injected observations for this session (per-session tracking + global counter)
+  if (searchIds.length > 0) {
+    lib.requestPost(`/api/sessions/${sessionID}/mark-injected`, { ids: searchIds }, 3000).catch((err) => {
+      console.error(`[engram] session mark-injected failed: ${err.message}`);
+    });
+  }
 
   lib
     .requestPost(`/sessions/${sessionID}/init`, {

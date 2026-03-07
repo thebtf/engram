@@ -1505,6 +1505,8 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/sessions/subagent-complete", s.handleSubagentComplete)
 		r.Post("/sessions/{id}/summarize", s.handleSummarize)
 		r.Post("/api/sessions/{id}/extract-learnings", s.handleExtractLearnings)
+		r.Post("/api/sessions/{sessionId}/mark-injected", s.handleSessionMarkInjected)
+		r.Get("/api/sessions/{sessionId}/injected-observations", s.handleGetSessionInjectedObservations)
 
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)

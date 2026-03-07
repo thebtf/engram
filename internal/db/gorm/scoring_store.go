@@ -393,6 +393,34 @@ func (s *ObservationStore) GetOldestObservations(ctx context.Context, project st
 	return toModelObservations(dbObservations), nil
 }
 
+// RecordSessionInjections records which observations were injected into a specific session.
+// Uses ON CONFLICT DO NOTHING for idempotency (safe to call multiple times per session).
+func (s *ObservationStore) RecordSessionInjections(ctx context.Context, sessionID int64, observationIDs []int64) error {
+	if len(observationIDs) == 0 {
+		return nil
+	}
+
+	placeholders := make([]string, len(observationIDs))
+	for i, oid := range observationIDs {
+		placeholders[i] = fmt.Sprintf("(%d, %d)", sessionID, oid)
+	}
+	query := "INSERT INTO session_observation_injections (session_id, observation_id) VALUES " +
+		strings.Join(placeholders, ", ") + " ON CONFLICT DO NOTHING"
+	return s.db.WithContext(ctx).Exec(query).Error
+}
+
+// GetSessionInjectedObservations returns observation IDs that were injected into a specific session.
+func (s *ObservationStore) GetSessionInjectedObservations(ctx context.Context, sessionID int64) ([]int64, error) {
+	var ids []int64
+	err := s.db.WithContext(ctx).
+		Raw("SELECT observation_id FROM session_observation_injections WHERE session_id = ?", sessionID).
+		Scan(&ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // IncrementImportanceScores atomically increments importance scores for multiple observations.
 // Each observation's score is increased by its delta, capped at the given maximum.
 // Uses atomic SQL to avoid read-then-write race with concurrent decay cycles.

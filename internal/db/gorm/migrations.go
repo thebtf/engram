@@ -999,6 +999,31 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 				return nil
 			},
 		},
+	// Migration 028: Per-session observation injection tracking for utility signal detection.
+	{
+		ID: "028_session_observation_injections",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE TABLE IF NOT EXISTS session_observation_injections (
+					id BIGSERIAL PRIMARY KEY,
+					session_id BIGINT NOT NULL,
+					observation_id BIGINT NOT NULL,
+					injected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					UNIQUE(session_id, observation_id)
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_soi_session_id ON session_observation_injections(session_id)`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 028: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec("DROP TABLE IF EXISTS session_observation_injections").Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
