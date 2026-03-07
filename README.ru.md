@@ -240,6 +240,9 @@ Hooks написаны на JavaScript и поставляются вместе 
 | `EMBEDDING_MODEL_NAME` | — | Имя модели для OpenAI-провайдера |
 | `EMBEDDING_DIMENSIONS` | `384` | Размерность вектора embedding |
 | `RERANKING_ENABLED` | `true` | Включить кросс-энкодерное переранжирование |
+| `ENGRAM_LLM_URL` | — | OpenAI-совместимый LLM endpoint для извлечения наблюдений |
+| `ENGRAM_LLM_API_KEY` | — | API-ключ для LLM endpoint |
+| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Модель для извлечения наблюдений |
 
 ### Клиент (только hooks)
 

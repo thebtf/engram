@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -41,8 +42,8 @@ func DefaultOpenAIConfig() OpenAIConfig {
 	}
 
 	if cfg.BaseURL == "" {
-		// Fall back to embedding URL base if set
-		if embURL := os.Getenv("ENGRAM_EMBEDDING_URL"); embURL != "" {
+		// Fall back to embedding base URL if set
+		if embURL := os.Getenv("ENGRAM_EMBEDDING_BASE_URL"); embURL != "" {
 			cfg.BaseURL = embURL
 		}
 	}
@@ -107,7 +108,12 @@ func (c *OpenAIClient) Complete(ctx context.Context, systemPrompt, userPrompt st
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/v1/chat/completions"
+	base := strings.TrimSuffix(c.baseURL, "/")
+	// Support both "http://host:port" and "http://host:port/v1" formats
+	if strings.HasSuffix(base, "/v1") {
+		base = strings.TrimSuffix(base, "/v1")
+	}
+	url := base + "/v1/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)

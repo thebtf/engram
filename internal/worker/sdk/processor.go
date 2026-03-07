@@ -19,6 +19,7 @@ import (
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/similarity"
 	"github.com/rs/zerolog/log"
@@ -207,11 +208,13 @@ type SyncSummaryFunc func(summary *models.SessionSummary)
 // This prevents unbounded goroutine spawning during high-volume observation ingestion.
 const MaxVectorSyncWorkers = 8
 
-// Processor handles SDK agent processing of observations and summaries using Claude Code CLI.
+// Processor handles SDK agent processing of observations and summaries.
+// Uses LLM API (OpenAI-compatible) as primary backend, with Claude CLI as optional fallback.
 // Field order optimized for memory alignment (fieldalignment).
 type Processor struct {
 	observationStore    *gorm.ObservationStore
 	summaryStore        *gorm.SummaryStore
+	llmClient           learning.LLMClient
 	broadcastFunc       BroadcastFunc
 	syncObservationFunc SyncObservationFunc
 	syncSummaryFunc     SyncSummaryFunc
@@ -247,36 +250,52 @@ func (p *Processor) broadcast(event map[string]any) {
 	}
 }
 
-// MaxConcurrentCLICalls is the maximum number of concurrent Claude CLI calls.
+// MaxConcurrentLLMCalls is the maximum number of concurrent LLM calls.
 // This prevents overwhelming the API and manages resource usage.
-const MaxConcurrentCLICalls = 4
+const MaxConcurrentLLMCalls = 4
 
 // NewProcessor creates a new SDK processor.
+// It requires at least one LLM backend: either an OpenAI-compatible API (ENGRAM_LLM_URL)
+// or a local Claude CLI binary. If neither is available, it returns an error.
 func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.SummaryStore) (*Processor, error) {
 	cfg := config.Get()
 
-	// Find Claude Code CLI
-	claudePath := cfg.ClaudeCodePath
-	if claudePath == "" {
-		// Try to find in PATH
-		path, err := exec.LookPath("claude")
-		if err != nil {
-			return nil, fmt.Errorf("claude CLI not found in PATH and CLAUDE_CODE_PATH not set")
-		}
-		claudePath = path
+	// Initialize LLM client (OpenAI-compatible API — works in Docker)
+	llmCfg := learning.DefaultOpenAIConfig()
+	var llmClient learning.LLMClient
+	openaiClient := learning.NewOpenAIClient(llmCfg)
+	if openaiClient.IsConfigured() {
+		llmClient = openaiClient
+		log.Info().Str("url", llmCfg.BaseURL).Str("model", llmCfg.Model).Msg("SDK processor using LLM API")
 	}
 
-	// Verify it exists
-	if _, err := os.Stat(claudePath); err != nil {
-		return nil, fmt.Errorf("claude CLI not found at %s: %w", claudePath, err)
+	// Find Claude Code CLI (optional fallback)
+	var claudePath string
+	cliPath := cfg.ClaudeCodePath
+	if cliPath == "" {
+		if path, err := exec.LookPath("claude"); err == nil {
+			cliPath = path
+		}
+	}
+	if cliPath != "" {
+		if _, err := os.Stat(cliPath); err == nil {
+			claudePath = cliPath
+			log.Info().Str("path", claudePath).Msg("SDK processor has Claude CLI fallback")
+		}
+	}
+
+	// Require at least one backend
+	if llmClient == nil && claudePath == "" {
+		return nil, fmt.Errorf("no LLM backend available: set ENGRAM_LLM_URL for API access, or install Claude CLI")
 	}
 
 	return &Processor{
 		claudePath:       claudePath,
 		model:            cfg.Model,
+		llmClient:        llmClient,
 		observationStore: observationStore,
 		summaryStore:     summaryStore,
-		sem:              make(chan struct{}, MaxConcurrentCLICalls),
+		sem:              make(chan struct{}, MaxConcurrentLLMCalls),
 		circuitBreaker:   NewCircuitBreaker(5, 60),                               // Open after 5 failures, reset after 60s
 		deduplicator:     NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
 		vectorSyncChan:   make(chan *models.Observation, MaxVectorSyncWorkers*2), // Buffered channel
@@ -338,8 +357,14 @@ func (p *Processor) CircuitBreakerMetrics() CircuitBreakerMetrics {
 
 // IsAvailable checks if the Claude CLI is available for processing.
 func (p *Processor) IsAvailable() bool {
-	_, err := os.Stat(p.claudePath)
-	return err == nil
+	if p.llmClient != nil {
+		return true
+	}
+	if p.claudePath != "" {
+		_, err := os.Stat(p.claudePath)
+		return err == nil
+	}
+	return false
 }
 
 // ProcessObservation processes a single tool observation and extracts insights.
@@ -395,11 +420,11 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 		return ctx.Err()
 	}
 
-	// Call Claude Code CLI
-	response, err := p.callClaudeCLI(ctx, prompt)
+	// Call LLM backend (API or CLI fallback)
+	response, err := p.callLLM(ctx, prompt)
 	if err != nil {
 		p.circuitBreaker.RecordFailure()
-		log.Error().Err(err).Str("tool", toolName).Msg("Failed to call Claude CLI for observation")
+		log.Error().Err(err).Str("tool", toolName).Msg("Failed to call LLM for observation extraction")
 		return err
 	}
 	p.circuitBreaker.RecordSuccess()
@@ -533,10 +558,10 @@ func (p *Processor) ProcessSummary(ctx context.Context, sessionDBID int64, sdkSe
 		return ctx.Err()
 	}
 
-	// Call Claude Code CLI
-	response, err := p.callClaudeCLI(ctx, prompt)
+	// Call LLM backend (API or CLI fallback)
+	response, err := p.callLLM(ctx, prompt)
 	if err != nil {
-		log.Error().Err(err).Int64("sessionId", sessionDBID).Msg("Failed to call Claude CLI for summary")
+		log.Error().Err(err).Int64("sessionId", sessionDBID).Msg("Failed to call LLM for summary")
 		return err
 	}
 
@@ -584,7 +609,7 @@ func (p *Processor) ProcessSummary(ctx context.Context, sessionDBID int64, sdkSe
 	return nil
 }
 
-// MaxPromptSize is the maximum size of a prompt that can be passed to the Claude CLI.
+// MaxPromptSize is the maximum size of a prompt that can be passed to the LLM.
 // This prevents resource exhaustion from extremely large prompts.
 const MaxPromptSize = 100 * 1024 // 100KB
 
@@ -601,27 +626,42 @@ func sanitizePrompt(s string) string {
 	}, s)
 }
 
-// callClaudeCLI calls the Claude Code CLI with the given prompt.
-func (p *Processor) callClaudeCLI(ctx context.Context, prompt string) (string, error) {
-	// Validate and sanitize prompt
+// callLLM calls the LLM backend with the given prompt.
+// Tries LLM API first (works in Docker), falls back to Claude CLI if available.
+func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) {
 	if len(prompt) > MaxPromptSize {
 		return "", fmt.Errorf("prompt exceeds maximum size of %d bytes", MaxPromptSize)
 	}
 	prompt = sanitizePrompt(prompt)
 
-	// Build the full prompt with system instructions
+	// Try LLM API first (OpenAI-compatible — works in Docker without Claude CLI)
+	if p.llmClient != nil {
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+
+		response, err := p.llmClient.Complete(ctx, systemPrompt, prompt)
+		if err != nil {
+			log.Warn().Err(err).Msg("LLM API call failed, trying CLI fallback")
+		} else {
+			return response, nil
+		}
+	}
+
+	// Fall back to Claude CLI if available
+	if p.claudePath != "" {
+		return p.callClaudeCLI(ctx, prompt)
+	}
+
+	return "", fmt.Errorf("no LLM backend available")
+}
+
+// callClaudeCLI calls the Claude Code CLI with the given prompt (fallback for when LLM API is unavailable).
+func (p *Processor) callClaudeCLI(ctx context.Context, prompt string) (string, error) {
 	fullPrompt := systemPrompt + "\n\n" + prompt
 
-	// Create command with timeout
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	// Use claude CLI with --print flag for non-interactive output
-	// and -p for prompt input
-	// Add --tools "" to disable tools (we only need text analysis)
-	// Add --strict-mcp-config to skip loading MCP servers
-	// Add --disable-slash-commands to skip command loading
-	// These flags significantly speed up processing by avoiding plugin/MCP initialization
 	cmd := exec.CommandContext(ctx, p.claudePath,
 		"--print",
 		"--tools", "",
@@ -629,27 +669,19 @@ func (p *Processor) callClaudeCLI(ctx context.Context, prompt string) (string, e
 		"--disable-slash-commands",
 		"-p", fullPrompt) // #nosec G204 -- claudePath is from config, fullPrompt is internal
 
-	// Set model if specified (use haiku for cost efficiency)
 	if p.model != "" {
 		cmd.Args = append([]string{cmd.Args[0], "--model", p.model}, cmd.Args[1:]...)
 	} else {
-		// Default to haiku for processing (cheap and fast)
 		cmd.Args = append([]string{cmd.Args[0], "--model", "haiku"}, cmd.Args[1:]...)
 	}
 
-	// Run from /tmp to avoid triggering our own hooks
-	// (hooks are triggered based on working directory)
-	cmd.Dir = "/tmp"
-
-	// Disable any plugin hooks by setting an env var that our hooks can check
+	cmd.Dir = os.TempDir()
 	cmd.Env = append(os.Environ(), "ENGRAM_INTERNAL=1")
 
-	// Capture output
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// Run command
 	err := cmd.Run()
 	if err != nil {
 		log.Error().
@@ -995,8 +1027,8 @@ Your response:`,
 		strings.Join(fileContents, "\n\n"),
 	)
 
-	// Call Claude CLI for quick verification
-	response, err := p.callClaudeCLI(ctx, prompt)
+	// Call LLM backend for quick verification
+	response, err := p.callLLM(ctx, prompt)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to verify observation, keeping it")
 		return true // On error, keep the observation

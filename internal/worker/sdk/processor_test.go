@@ -487,8 +487,8 @@ func TestGetFileContent(t *testing.T) {
 	})
 }
 
-func TestMaxConcurrentCLICalls(t *testing.T) {
-	assert.Equal(t, 4, MaxConcurrentCLICalls)
+func TestMaxConcurrentLLMCalls(t *testing.T) {
+	assert.Equal(t, 4, MaxConcurrentLLMCalls)
 }
 
 func TestObservationTypes(t *testing.T) {
@@ -514,7 +514,7 @@ func TestProcessorStruct(t *testing.T) {
 	p := &Processor{
 		claudePath: "/path/to/claude",
 		model:      "haiku",
-		sem:        make(chan struct{}, MaxConcurrentCLICalls),
+		sem:        make(chan struct{}, MaxConcurrentLLMCalls),
 	}
 
 	assert.Equal(t, "/path/to/claude", p.claudePath)

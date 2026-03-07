@@ -613,11 +613,11 @@ func (s *Service) initializeAsync() {
 		log.Info().Msg("Query expansion enabled")
 	}
 
-	// Create SDK processor (optional - will be nil if Claude CLI not available)
+	// Create SDK processor (optional - requires LLM API or Claude CLI)
 	var processor *sdk.Processor
 	proc, err := sdk.NewProcessor(observationStore, summaryStore)
 	if err != nil {
-		log.Debug().Err(err).Msg("SDK processor not available (expected in Docker)")
+		log.Warn().Err(err).Msg("SDK processor not available — set ENGRAM_LLM_URL for observation extraction")
 	} else {
 		processor = proc
 		// Set broadcast callback for SSE events
@@ -1004,7 +1004,7 @@ func (s *Service) reinitializeDatabase() {
 	var processor *sdk.Processor
 	proc, err := sdk.NewProcessor(observationStore, summaryStore)
 	if err != nil {
-		log.Debug().Err(err).Msg("SDK processor not available after reinit")
+		log.Warn().Err(err).Msg("SDK processor not available after reinit — set ENGRAM_LLM_URL")
 	} else {
 		processor = proc
 		processor.SetBroadcastFunc(func(event map[string]any) {

@@ -240,6 +240,9 @@ Hooks are JavaScript and come pre-configured with the plugin. No build needed.
 | `EMBEDDING_MODEL_NAME` | — | Model name for OpenAI provider |
 | `EMBEDDING_DIMENSIONS` | `384` | Embedding vector dimensions |
 | `RERANKING_ENABLED` | `true` | Enable cross-encoder reranking |
+| `ENGRAM_LLM_URL` | — | OpenAI-compatible LLM endpoint for observation extraction |
+| `ENGRAM_LLM_API_KEY` | — | API key for LLM endpoint |
+| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Model name for observation extraction |
 
 ### Client (hooks only)
 
