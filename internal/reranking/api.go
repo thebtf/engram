@@ -15,11 +15,12 @@ import (
 
 // APIConfig holds configuration for the API-based reranker.
 type APIConfig struct {
-	BaseURL  string
-	APIKey   string
-	Model    string
-	Alpha    float64
-	Timeout  time.Duration
+	BaseURL   string
+	APIKey    string
+	Model     string
+	Alpha     float64
+	Timeout   time.Duration
+	BatchSize int // Max documents per API call (default: 32)
 }
 
 // DefaultAPIConfig returns sensible defaults for the API reranker.
@@ -33,11 +34,12 @@ func DefaultAPIConfig() APIConfig {
 
 // APIService provides cross-encoder reranking via an external API (Cohere-compatible).
 type APIService struct {
-	client  *http.Client
-	baseURL string
-	apiKey  string
-	model   string
-	alpha   float64
+	client    *http.Client
+	baseURL   string
+	apiKey    string
+	model     string
+	alpha     float64
+	batchSize int
 }
 
 // NewAPIService creates a new API-based reranker.
@@ -64,14 +66,20 @@ func NewAPIService(cfg APIConfig) (*APIService, error) {
 		model = "rerank-english-v3.0"
 	}
 
+	batchSize := cfg.BatchSize
+	if batchSize <= 0 {
+		batchSize = defaultBatchSize
+	}
+
 	return &APIService{
 		client: &http.Client{
 			Timeout: timeout,
 		},
-		baseURL: cfg.BaseURL,
-		apiKey:  cfg.APIKey,
-		model:   model,
-		alpha:   alpha,
+		baseURL:   cfg.BaseURL,
+		apiKey:    cfg.APIKey,
+		model:     model,
+		alpha:     alpha,
+		batchSize: batchSize,
 	}, nil
 }
 
@@ -94,22 +102,21 @@ type rerankResponseResult struct {
 	RelevanceScore float64 `json:"relevance_score"`
 }
 
-// maxBatchSize is the maximum number of documents per rerank API call.
-// TEI (Text Embeddings Inference) limits batch size to 32.
-const maxBatchSize = 32
+// defaultBatchSize is the default maximum number of documents per rerank API call.
+const defaultBatchSize = 32
 
 // callAPI sends a rerank request to the API and returns scored results.
-// If documents exceed maxBatchSize, splits into batches and merges results.
+// If documents exceed batchSize, splits into batches and merges results.
 // On any error (timeout, 429, 5xx), returns nil to signal graceful degradation.
 func (s *APIService) callAPI(query string, documents []string, topN int) ([]rerankResponseResult, error) {
-	if len(documents) <= maxBatchSize {
+	if len(documents) <= s.batchSize {
 		return s.callAPIBatch(query, documents, topN, 0)
 	}
 
 	// Split into batches, merge results with corrected indices
 	var allResults []rerankResponseResult
-	for offset := 0; offset < len(documents); offset += maxBatchSize {
-		end := offset + maxBatchSize
+	for offset := 0; offset < len(documents); offset += s.batchSize {
+		end := offset + s.batchSize
 		if end > len(documents) {
 			end = len(documents)
 		}

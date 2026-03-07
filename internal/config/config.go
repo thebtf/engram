@@ -84,6 +84,7 @@ type Config struct {
 	RerankingAPIBaseURL       string   `json:"reranking_api_base_url"` // Full rerank endpoint URL (e.g. http://host:port/v1/rerank)
 	RerankingAPIModel         string   `json:"reranking_api_model"`    // default: "rerank-english-v3.0"
 	RerankingTimeoutMS        int      `json:"reranking_timeout_ms"`   // default: 500
+	RerankingBatchSize        int      `json:"reranking_batch_size"`   // default: 32
 	RerankingAPIKey           string   // env-only: ENGRAM_RERANKING_API_KEY
 	ContextMaxTokens          int      `json:"context_max_tokens"` // Token budget for context injection (default: 8000, 0=unlimited)
 	HyDEEnabled               bool     `json:"hyde_enabled"`       // Enable HyDE query expansion (default: false)
@@ -380,6 +381,11 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_RERANKING_TIMEOUT_MS")); v != "" {
 		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
 			cfg.RerankingTimeoutMS = ms
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RERANKING_BATCH_SIZE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.RerankingBatchSize = n
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONTEXT_MAX_TOKENS")); v != "" {

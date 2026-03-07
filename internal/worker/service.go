@@ -448,11 +448,12 @@ func (s *Service) createReranker() reranking.Reranker {
 		}
 
 		ranker, err := reranking.NewAPIService(reranking.APIConfig{
-			BaseURL: s.config.RerankingAPIBaseURL,
-			APIKey:  s.config.RerankingAPIKey,
-			Model:   s.config.RerankingAPIModel,
-			Alpha:   alpha,
-			Timeout: timeout,
+			BaseURL:   s.config.RerankingAPIBaseURL,
+			APIKey:    s.config.RerankingAPIKey,
+			Model:     s.config.RerankingAPIModel,
+			Alpha:     alpha,
+			Timeout:   timeout,
+			BatchSize: s.config.RerankingBatchSize,
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("API reranker creation failed - reranking disabled")
