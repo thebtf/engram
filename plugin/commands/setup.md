@@ -1,6 +1,6 @@
 # Engram Setup
 
-Configure the connection to your Engram server. This guide sets the environment variables needed for the plugin to connect.
+Configure the connection to your Engram server by editing `~/.claude/settings.json`.
 
 ## Instructions
 
@@ -24,34 +24,30 @@ If empty, note that the server must also have no `ENGRAM_API_TOKEN` set (or it w
 
 Store the answer as `API_TOKEN`.
 
-### 3. Set environment variables
+### 3. Update settings.json
 
-Detect the user's OS from the conversation context (or ask if unclear), then provide the appropriate commands.
+Read `~/.claude/settings.json`, then add `ENGRAM_URL` and `ENGRAM_API_TOKEN` to the `env` section. Use the Edit tool to modify the file directly.
 
-**macOS / Linux (zsh):**
+If the `env` section already exists, add the two keys to it. If it doesn't exist, create it.
 
-```bash
-echo 'export ENGRAM_URL={SERVER_URL}/mcp' >> ~/.zshrc
-echo 'export ENGRAM_API_TOKEN={API_TOKEN}' >> ~/.zshrc
-source ~/.zshrc
+**Example result (env section only):**
+
+```json
+{
+  "env": {
+    "ENGRAM_URL": "http://192.168.1.100:37777/mcp",
+    "ENGRAM_API_TOKEN": "your-token-here"
+  }
+}
 ```
 
-If the user uses bash instead of zsh, replace `~/.zshrc` with `~/.bashrc`.
-
-**Windows (PowerShell as Administrator):**
-
-```powershell
-[Environment]::SetEnvironmentVariable("ENGRAM_URL", "{SERVER_URL}/mcp", "User")
-[Environment]::SetEnvironmentVariable("ENGRAM_API_TOKEN", "{API_TOKEN}", "User")
-```
-
-Replace `{SERVER_URL}` and `{API_TOKEN}` with the actual values from steps 1 and 2.
+Replace values with the actual answers from steps 1 and 2. If the token is empty, set it to `""`.
 
 ### 4. Restart Claude Code
 
 Tell the user:
 
-> Environment variables are only read when Claude Code starts. Please **close and reopen Claude Code** for the changes to take effect.
+> Settings are only read when Claude Code starts. Please **close and reopen Claude Code** for the changes to take effect.
 
 ### 5. Verify connection
 
