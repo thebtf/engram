@@ -9,7 +9,7 @@ description: Use when starting a session with Engram MCP tools available, when n
 
 Engram is persistent shared memory for Claude Code. Hooks automatically capture observations from your coding sessions. Your job is to **use** that knowledge — search it, build on it, and keep it clean.
 
-**Core principle:** Hooks handle input. You handle output. The 40 MCP tools exist so you can retrieve, connect, and maintain the knowledge that hooks collect.
+**Core principle:** Hooks handle input. You handle output. The 48 MCP tools exist so you can retrieve, connect, and maintain the knowledge that hooks collect.
 
 ## Connection Check
 

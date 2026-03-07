@@ -8,9 +8,9 @@ STACKS: [GO]
 
 ## PROJECT OVERVIEW
 
-Shared memory infrastructure for Claude Code workstations.
-Originally forked from [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic),
-now an independent project with PostgreSQL+pgvector backend, Docker deployment, and multi-workstation support.
+Persistent shared memory infrastructure for Claude Code workstations.
+Single server (Docker on Unraid/NAS) stores observations in PostgreSQL 17 + pgvector,
+exposes 48 MCP tools via Streamable HTTP / SSE on port 37777.
 
 ## RULES
 
@@ -22,44 +22,36 @@ now an independent project with PostgreSQL+pgvector backend, Docker deployment, 
 | **No silent patching** | Report every discrepancy found |
 | **No time estimates** | Prioritize by value/risk/dependencies, not phantom duration |
 
-## PRIORITIZATION FRAMEWORK
-
-AI-assisted coding is **10-100x faster** than solo human development. Decisions based on time estimates ("2 weeks") use pre-AI timelines and lead to poor prioritization.
-
-**Decision factors (in order):**
-1. **Value**: High/Medium/Low user/business impact
-2. **Risk**: Known/Unknown complexity, security concerns
-3. **Dependencies**: What blocks what (ordering)
-4. **Reversibility**: Can we undo if wrong?
-5. **Context**: Relevant files already open?
-
-**Forbidden:** "Quick win", "too much work", "complex so defer"
-**Required:** "High value", "Unknown risk", "Blocked by X"
-
-<!-- Quality Gates: See .agent/rules/quality-gates.md -->
-
 ## CONVENTIONS
 
-- Language: Go 1.21+
-- Build: `make build` (uses goreleaser for releases)
+- Language: Go 1.25+
+- Build: `make build`
 - Test: `go test ./...`
-- Database: SQLite via GORM + sqlite-vec extension for vector search
-- Embedding: ONNX model (BGE) bundled in `internal/embedding/assets/`
-- Reranking: ONNX reranker model in `internal/reranking/assets/`
-- MCP server: `cmd/mcp/main.go` → serves as `nia` MCP tool
-- Worker: `cmd/worker/main.go` → HTTP API + SSE
-- Hooks: `cmd/hooks/` → Claude Code lifecycle hooks (session-start, post-tool-use, etc.)
-- Plugin: `plugin/` → Claude Code plugin definition
+- Database: PostgreSQL 17 + pgvector (HNSW cosine index)
+- Embedding: ONNX BGE (384D) or OpenAI-compatible REST API
+- Reranking: ONNX cross-encoder reranker
+- Worker: `cmd/worker/main.go` — HTTP API + MCP SSE + MCP Streamable HTTP + dashboard
+- Hooks: `plugin/hooks/` — JavaScript hooks for Claude Code lifecycle
+- Plugin: `plugin/` — Claude Code plugin definition + marketplace
+
+## KEY DIRECTORIES
+
+```
+cmd/worker/          — server entry point
+internal/mcp/        — MCP protocol, 48 tool handlers (tools_*.go)
+internal/search/     — hybrid search (tsvector + vector + BM25, RRF fusion)
+internal/scoring/    — importance + relevance scoring
+internal/embedding/  — ONNX BGE + OpenAI REST providers
+internal/worker/sdk/ — observation extraction (LLM API or Claude CLI)
+internal/learning/   — self-learning, LLM client
+plugin/hooks/        — JS hooks (session-start, user-prompt, post-tool-use, stop)
+```
 
 ## INSTRUCTION HIERARCHY
-
-When multiple instructions conflict, priority order:
 
 ```
 System prompts > Task/delegation > Global rules > Project rules > Defaults
 ```
-
-**Key principle:** Task-specific prompts can override general rules by design.
 
 ## SKILL LOADING
 
