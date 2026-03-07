@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
@@ -129,6 +130,8 @@ type Manager struct {
 	observationStore *gorm.ObservationStore
 	summaryStore     *gorm.SummaryStore
 	graphStore       graphpkg.GraphStore
+	documentStore    *gorm.DocumentStore
+	embedSvc         *embedding.Service
 	resultCache      map[string]*cachedResult
 	queryFrequency   map[string]*queryFrequencyInfo
 	cacheTTL         time.Duration
@@ -182,6 +185,12 @@ func NewManager(
 // SetGraphStore sets the graph store for graph-augmented search expansion.
 func (m *Manager) SetGraphStore(gs graphpkg.GraphStore) {
 	m.graphStore = gs
+}
+
+// SetDocumentStore sets the document store and embedding service for document search.
+func (m *Manager) SetDocumentStore(ds *gorm.DocumentStore, es *embedding.Service) {
+	m.documentStore = ds
+	m.embedSvc = es
 }
 
 // Close stops background goroutines and cleans up resources.
@@ -726,13 +735,90 @@ func (m *Manager) UnifiedSearch(ctx context.Context, params SearchParams) (*Unif
 
 // executeSearch performs the actual search without caching/coalescing.
 func (m *Manager) executeSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
+	// Document-only search when type="documents".
+	if params.Type == "documents" {
+		return m.documentSearch(ctx, params)
+	}
+
 	// Use hybrid search (FTS + vector with RRF fusion) when a query and vector client are available.
 	if params.Query != "" && m.vectorClient != nil && m.vectorClient.IsConnected() {
-		return m.hybridSearch(ctx, params)
+		result, err := m.hybridSearch(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		// Append document results for default (untyped) searches.
+		if params.Type == "" {
+			m.appendDocumentResults(ctx, params, result)
+		}
+		return result, nil
 	}
 
 	// Fall back to structured filter search when no query or vector unavailable.
-	return m.filterSearch(ctx, params)
+	result, err := m.filterSearch(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	if params.Type == "" {
+		m.appendDocumentResults(ctx, params, result)
+	}
+	return result, nil
+}
+
+// documentSearch performs a vector-only search across document chunks.
+func (m *Manager) documentSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
+	if m.documentStore == nil || m.embedSvc == nil || params.Query == "" {
+		return &UnifiedSearchResult{Query: params.Query}, nil
+	}
+
+	queryEmb, err := m.embedSvc.Embed(params.Query)
+	if err != nil {
+		log.Warn().Err(err).Msg("Document search: embedding failed")
+		return &UnifiedSearchResult{Query: params.Query}, nil
+	}
+
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	chunks, err := m.documentStore.SearchChunks(ctx, queryEmb, "", limit)
+	if err != nil {
+		log.Warn().Err(err).Msg("Document search: query failed")
+		return &UnifiedSearchResult{Query: params.Query}, nil
+	}
+
+	results := make([]SearchResult, 0, len(chunks))
+	for _, c := range chunks {
+		results = append(results, SearchResult{
+			Type:    "document",
+			Title:   c.Hash[:12] + "#" + strconv.Itoa(c.Seq),
+			Content: c.Text,
+		})
+	}
+
+	return &UnifiedSearchResult{
+		Query:      params.Query,
+		Results:    results,
+		TotalCount: len(results),
+	}, nil
+}
+
+// appendDocumentResults appends document chunk results to an existing search result.
+func (m *Manager) appendDocumentResults(ctx context.Context, params SearchParams, result *UnifiedSearchResult) {
+	if m.documentStore == nil || m.embedSvc == nil || params.Query == "" {
+		return
+	}
+
+	docResult, err := m.documentSearch(ctx, SearchParams{
+		Query: params.Query,
+		Limit: 5, // Limit document results in mixed search
+	})
+	if err != nil || len(docResult.Results) == 0 {
+		return
+	}
+
+	result.Results = append(result.Results, docResult.Results...)
+	result.TotalCount += docResult.TotalCount
 }
 
 // hybridSearch combines FTS (tsvector) and pgvector results using RRF fusion.

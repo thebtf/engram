@@ -818,6 +818,11 @@ func (s *Service) initializeAsync() {
 		searchMgr.SetGraphStore(s.graphStore)
 	}
 
+	// Wire document store into search manager for unified document search.
+	if documentStore != nil && embedSvc != nil {
+		searchMgr.SetDocumentStore(documentStore, embedSvc)
+	}
+
 	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
 	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer)
 
