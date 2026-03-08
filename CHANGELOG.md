@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-08
+
+### Added
+
+- **MCP instructions** — `buildInstructions()` returns comprehensive usage guide for all 48+ tools on `initialize` — any MCP client instantly knows how to use engram
+- **Marketplace auto-sync** — GitHub Actions workflow syncs `plugin/` to `thebtf/engram-marketplace` on push to main
+
+### Fixed
+
+- **Observation extraction in Docker** — replaced Claude CLI dependency (`claude --print`) with OpenAI-compatible LLM API (`ENGRAM_LLM_URL`). Observation pipeline was completely non-functional in Docker deployments where Claude CLI is not installed.
+- **MCP panic recovery** — added panic recovery with zerolog logging in Streamable HTTP handler
+- **FalkorDB int64 panic** — convert int64 to int for falkordb-go ParameterizedQuery params
+- LLM client URL normalization — handles both `http://host:port` and `http://host:port/v1` formats
+- LLM client fallback env var — now correctly reads `ENGRAM_EMBEDDING_BASE_URL` (was `ENGRAM_EMBEDDING_URL`)
+- Configurable LLM concurrency (`ENGRAM_LLM_CONCURRENCY`), timeout, and retry with backoff for transient errors
+- Reranking API key optional for TEI/direct backends; batch size configurable via `ENGRAM_RERANKING_BATCH_SIZE`
+
+### Changed
+
+- Plugin version bumped to 0.5.1
+
+## [0.3.0] - 2026-03-07
+
 ### Added
 
 - Collection MCP tools: `list_collections`, `list_documents`, `get_document`, `ingest_document`, `search_collection`, `remove_document` — YAML-configurable knowledge bases with smart chunking
@@ -16,14 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Observation extraction in Docker** — replaced Claude CLI dependency (`claude --print`) with OpenAI-compatible LLM API (`ENGRAM_LLM_URL`). Observation pipeline was completely non-functional in Docker deployments where Claude CLI is not installed.
-- LLM client URL normalization — handles both `http://host:port` and `http://host:port/v1` formats
-- LLM client fallback env var — now correctly reads `ENGRAM_EMBEDDING_BASE_URL` (was `ENGRAM_EMBEDDING_URL`)
 - AI review findings for collection tools and instinct import
 
 ### Changed
 
-- README updated to reflect current architecture and tool inventory
+- README complete documentation rewrite
 
 ## [0.2.0] - 2026-03-07
 
@@ -109,6 +129,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/thebtf/engram/compare/v0.3.0...v0.5.1
+[0.3.0]: https://github.com/thebtf/engram/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/thebtf/engram/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/thebtf/engram/releases/tag/v0.1.0
