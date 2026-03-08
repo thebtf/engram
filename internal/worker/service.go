@@ -166,6 +166,7 @@ type Service struct {
 	tokenAuth              *TokenAuth
 	expensiveOpLimiter     *ExpensiveOperationLimiter
 	logBuffer              *logbuf.RingBuffer
+	backfillTracker        *backfillTracker
 	version                string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
 	wg                     sync.WaitGroup
@@ -402,6 +403,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		expensiveOpLimiter: NewExpensiveOperationLimiter(),
 		bulkOpLimiter:      NewBulkOperationLimiter(60), // 60 second cooldown for bulk operations
 		logBuffer:          logBuffer,
+		backfillTracker:    newBackfillTracker(),
 		cachedObsCounts:    make(map[string]cachedCount),
 		statsCacheTTL:      time.Minute,             // Cache stats for 1 minute
 		vectorSyncSem:      make(chan struct{}, 10), // Limit to 10 concurrent vector syncs
@@ -1506,6 +1508,10 @@ func (s *Service) setupRoutes() {
 
 	// Instinct import endpoint
 	s.router.Post("/api/instincts/import", s.handleInstinctsImport)
+
+	// Backfill endpoints
+	s.router.Post("/api/backfill", s.handleBackfillIngest)
+	s.router.Get("/api/backfill/status", s.handleBackfillStatus)
 
 	// MCP routes (require DB ready, no timeout — long-lived SSE connections)
 	s.router.Group(func(r chi.Router) {
