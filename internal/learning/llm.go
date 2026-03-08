@@ -28,9 +28,10 @@ type OpenAIClient struct {
 
 // OpenAIConfig holds configuration for the OpenAI-compatible client.
 type OpenAIConfig struct {
-	BaseURL string // ENGRAM_LLM_URL (default: reuse ENGRAM_EMBEDDING_URL base)
-	APIKey  string // ENGRAM_LLM_API_KEY
-	Model   string // ENGRAM_LLM_MODEL (default: gpt-4o-mini)
+	BaseURL string        // ENGRAM_LLM_URL (default: reuse ENGRAM_EMBEDDING_URL base)
+	APIKey  string        // ENGRAM_LLM_API_KEY
+	Model   string        // ENGRAM_LLM_MODEL (default: gpt-4o-mini)
+	Timeout time.Duration // HTTP client timeout (default: 120s)
 }
 
 // DefaultOpenAIConfig returns config from environment variables.
@@ -57,11 +58,15 @@ func DefaultOpenAIConfig() OpenAIConfig {
 
 // NewOpenAIClient creates a new OpenAI-compatible LLM client.
 func NewOpenAIClient(cfg OpenAIConfig) *OpenAIClient {
+	timeout := 120 * time.Second
+	if cfg.Timeout > 0 {
+		timeout = cfg.Timeout
+	}
 	return &OpenAIClient{
 		baseURL: cfg.BaseURL,
 		apiKey:  cfg.APIKey,
 		model:   cfg.Model,
-		client:  &http.Client{Timeout: 120 * time.Second},
+		client:  &http.Client{Timeout: timeout},
 	}
 }
 
@@ -102,7 +107,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, systemPrompt, userPrompt st
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Timeout: 120, // Override LiteLLM proxy→backend timeout for slow local models
+		Timeout: 300, // Override LiteLLM proxy→backend timeout for slow local models
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
