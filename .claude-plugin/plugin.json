@@ -1,0 +1,11 @@
+{
+  "name": "engram",
+  "version": "0.5.0",
+  "description": "Persistent memory for Claude Code — captures observations, stores knowledge across sessions, injects relevant context automatically",
+  "author": {
+    "name": "thebtf"
+  },
+  "homepage": "https://github.com/thebtf/engram",
+  "repository": "https://github.com/thebtf/engram",
+  "license": "MIT"
+}
