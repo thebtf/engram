@@ -7,7 +7,9 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/rs/zerolog/log"
 )
@@ -47,7 +49,32 @@ func (h *StreamableHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := h.server.handleRequest(r.Context(), &req)
+	// Recover from panics inside handleRequest so that:
+	// 1. The full stack trace is logged via zerolog (visible in /api/logs)
+	// 2. The client gets a proper JSON-RPC error instead of HTTP 500 + empty body
+	// Without this, Chi's Recoverer only writes to stderr and returns bare 500.
+	var response *Response
+	func() {
+		defer func() {
+			if rvr := recover(); rvr != nil {
+				stack := string(debug.Stack())
+				log.Error().
+					Str("panic", fmt.Sprintf("%v", rvr)).
+					Str("stack", stack).
+					Str("method", req.Method).
+					Msg("PANIC in MCP handleRequest")
+				response = &Response{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &Error{
+						Code:    -32603,
+						Message: fmt.Sprintf("Internal error: %v", rvr),
+					},
+				}
+			}
+		}()
+		response = h.server.handleRequest(r.Context(), &req)
+	}()
 
 	h.writeCORS(w)
 
