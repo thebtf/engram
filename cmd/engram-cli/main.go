@@ -15,12 +15,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/thebtf/engram/internal/backfill"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -68,6 +70,14 @@ type backfillSessionResponse struct {
 	MetricsReport         string `json:"metrics_report,omitempty"`
 }
 
+// sessionResult holds the result of processing a single session file.
+type sessionResult struct {
+	file      string
+	resp      backfillSessionResponse
+	err       error
+	httpError bool
+}
+
 func runBackfill(args []string) {
 	fs := flag.NewFlagSet("backfill", flag.ExitOnError)
 	dirPtr := fs.String("dir", "", "Directory containing .jsonl session files")
@@ -78,11 +88,11 @@ func runBackfill(args []string) {
 	tokenPtr := fs.String("token", "", "API token for server authentication (or set ENGRAM_API_TOKEN)")
 	resume := fs.Bool("resume", false, "Resume from last checkpoint")
 	statePath := fs.String("state-file", backfill.DefaultProgressPath(), "Path to progress state file")
+	concurrency := fs.Int("concurrency", 3, "Number of sessions to process in parallel")
 
 	fs.Parse(args)
 
 	if *dirPtr == "" {
-		// Default to Claude Code projects directory
 		home, _ := os.UserHomeDir()
 		*dirPtr = filepath.Join(home, ".claude", "projects")
 		log.Printf("No --dir specified, defaulting to %s", *dirPtr)
@@ -90,6 +100,13 @@ func runBackfill(args []string) {
 
 	if *runID == "" {
 		*runID = fmt.Sprintf("run-%d", time.Now().Unix())
+	}
+
+	if *concurrency < 1 {
+		*concurrency = 1
+	}
+	if *concurrency > 10 {
+		*concurrency = 10
 	}
 
 	apiToken := *tokenPtr
@@ -132,7 +149,7 @@ func runBackfill(args []string) {
 		files = files[:*limitPtr]
 	}
 
-	log.Printf("Found %d session files to process (run_id: %s)", len(files), *runID)
+	log.Printf("Found %d session files to process (run_id: %s, concurrency: %d)", len(files), *runID, *concurrency)
 
 	if *dryRun {
 		var totalSize int64
@@ -153,90 +170,144 @@ func runBackfill(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// HTTP client with long timeout (server-side LLM extraction can take minutes per session)
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
-	totalStored, totalErrors, totalExtracted := 0, 0, 0
+	var totalStored, totalErrors, totalExtracted atomic.Int64
 
-	for i, sessionFile := range files {
-		if err := ctx.Err(); err != nil {
+	// Channel for files to process and results to collect
+	fileCh := make(chan indexedFile, *concurrency)
+	resultCh := make(chan sessionResult, *concurrency)
+
+	// Progress tracking must be serialized (single writer)
+	var progressMu sync.Mutex
+
+	// Launch worker goroutines
+	var wg sync.WaitGroup
+	for w := 0; w < *concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for item := range fileCh {
+				result := processOneSession(ctx, httpClient, *serverPtr, apiToken, *runID, item)
+				resultCh <- result
+			}
+		}()
+	}
+
+	// Launch result collector in background
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for result := range resultCh {
+			if result.err != nil {
+				totalErrors.Add(1)
+				log.Printf("    Error %s: %v", filepath.Base(result.file), result.err)
+			} else if result.httpError {
+				totalErrors.Add(1)
+			} else {
+				totalStored.Add(int64(result.resp.Stored))
+				totalExtracted.Add(int64(result.resp.ObservationsExtracted))
+				log.Printf("    %s: extracted=%d, stored=%d, skipped=%d, errors=%d",
+					filepath.Base(result.file),
+					result.resp.ObservationsExtracted, result.resp.Stored,
+					result.resp.Skipped, result.resp.Errors)
+			}
+
+			// Update progress (serialized)
+			progressMu.Lock()
+			if result.err == nil && !result.httpError {
+				progress.StoredCount += result.resp.Stored
+				progress.SkippedCount += result.resp.Skipped
+				progress.ErrorCount += result.resp.Errors
+			} else {
+				progress.ErrorCount++
+			}
+			progress.MarkProcessed(result.file)
+			if saveErr := progress.Save(*statePath); saveErr != nil {
+				log.Printf("    Warning: failed to save progress: %v", saveErr)
+			}
+			progressMu.Unlock()
+		}
+	}()
+
+	// Feed files to workers
+	for i, f := range files {
+		if ctx.Err() != nil {
 			log.Printf("Interrupted after %d/%d files", i, len(files))
 			break
 		}
-
-		// Read raw file content
-		content, readErr := os.ReadFile(sessionFile)
-		if readErr != nil {
-			log.Printf("  [%d/%d] Error reading %s: %v", i+1, len(files), filepath.Base(sessionFile), readErr)
-			totalErrors++
-			progress.ErrorCount++
-			continue
-		}
-
-		sessionID := filepath.Base(strings.TrimSuffix(sessionFile, ".jsonl"))
-		log.Printf("  [%d/%d] Processing %s (%.0f KB)...", i+1, len(files), sessionID, float64(len(content))/1024)
-
-		reqBody := backfillSessionRequest{
-			SessionID: sessionID,
-			RunID:     *runID,
-			Content:   string(content),
-		}
-
-		body, _ := json.Marshal(reqBody)
-		url := strings.TrimRight(*serverPtr, "/") + "/api/backfill/session"
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		if apiToken != "" {
-			req.Header.Set("Authorization", "Bearer "+apiToken)
-		}
-
-		resp, httpErr := httpClient.Do(req)
-		if httpErr != nil {
-			log.Printf("    Error: %v", httpErr)
-			totalErrors++
-			progress.ErrorCount++
-			continue
-		}
-
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("    Server error: %s %s", resp.Status, string(respBody))
-			totalErrors++
-			progress.ErrorCount++
-			continue
-		}
-
-		var sessionResp backfillSessionResponse
-		json.Unmarshal(respBody, &sessionResp)
-
-		totalStored += sessionResp.Stored
-		totalExtracted += sessionResp.ObservationsExtracted
-		log.Printf("    extracted=%d, stored=%d, skipped=%d, errors=%d",
-			sessionResp.ObservationsExtracted, sessionResp.Stored, sessionResp.Skipped, sessionResp.Errors)
-
-		// Update progress tracking
-		progress.StoredCount += sessionResp.Stored
-		progress.SkippedCount += sessionResp.Skipped
-		progress.ErrorCount += sessionResp.Errors
-		progress.MarkProcessed(sessionFile)
-		if saveErr := progress.Save(*statePath); saveErr != nil {
-			log.Printf("    Warning: failed to save progress: %v", saveErr)
-		}
+		log.Printf("  [%d/%d] Queuing %s", i+1, len(files), filepath.Base(f))
+		fileCh <- indexedFile{index: i, total: len(files), path: f}
 	}
+	close(fileCh)
 
-	// Save final progress state
+	// Wait for all workers to finish
+	wg.Wait()
+	close(resultCh)
+	<-done
+
+	// Save final progress
+	progressMu.Lock()
 	if saveErr := progress.Save(*statePath); saveErr != nil {
 		log.Printf("Warning: failed to save final progress: %v", saveErr)
 	}
+	progressMu.Unlock()
 
 	log.Printf("\n=== Backfill Complete ===")
-	log.Printf("Run ID:     %s", *runID)
-	log.Printf("Sessions:   %d", len(files))
-	log.Printf("Extracted:  %d", totalExtracted)
-	log.Printf("Stored:     %d", totalStored)
-	log.Printf("Errors:     %d", totalErrors)
-	log.Printf("State file: %s", *statePath)
+	log.Printf("Run ID:      %s", *runID)
+	log.Printf("Sessions:    %d", len(files))
+	log.Printf("Concurrency: %d", *concurrency)
+	log.Printf("Extracted:   %d", totalExtracted.Load())
+	log.Printf("Stored:      %d", totalStored.Load())
+	log.Printf("Errors:      %d", totalErrors.Load())
+	log.Printf("State file:  %s", *statePath)
+}
+
+type indexedFile struct {
+	index int
+	total int
+	path  string
+}
+
+// processOneSession sends a single session file to the server for extraction.
+func processOneSession(ctx context.Context, client *http.Client, server, token, runID string, item indexedFile) sessionResult {
+	content, err := os.ReadFile(item.path)
+	if err != nil {
+		return sessionResult{file: item.path, err: fmt.Errorf("read file: %w", err)}
+	}
+
+	sessionID := filepath.Base(strings.TrimSuffix(item.path, ".jsonl"))
+
+	reqBody := backfillSessionRequest{
+		SessionID: sessionID,
+		RunID:     runID,
+		Content:   string(content),
+	}
+
+	body, _ := json.Marshal(reqBody)
+	url := strings.TrimRight(server, "/") + "/api/backfill/session"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, httpErr := client.Do(req)
+	if httpErr != nil {
+		return sessionResult{file: item.path, err: httpErr}
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("    Server error for %s: %s %s", sessionID, resp.Status, string(respBody))
+		return sessionResult{file: item.path, httpError: true}
+	}
+
+	var sessionResp backfillSessionResponse
+	json.Unmarshal(respBody, &sessionResp)
+
+	return sessionResult{file: item.path, resp: sessionResp}
 }
 
 // findSessionFiles recursively finds all .jsonl files in a directory.
