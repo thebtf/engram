@@ -11,6 +11,10 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+// dedupThreshold is the cosine similarity threshold for semantic deduplication.
+// Observations with similarity above this value are considered duplicates and skipped.
+const dedupThreshold = 0.92
+
 // BackfillRequest is the request body for POST /api/backfill.
 type BackfillRequest struct {
 	// SessionID is a unique identifier for the source session (e.g. filename hash).
@@ -107,6 +111,7 @@ func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 
 	s.initMu.RLock()
 	obsStore := s.observationStore
+	vectorClient := s.vectorClient
 	s.initMu.RUnlock()
 
 	if obsStore == nil {
@@ -141,6 +146,20 @@ func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 		obs := extract.ConvertToObservation(xo, req.Project)
 		obs.Concepts = bo.Concepts
 		obs.FilesRead = bo.Files
+
+		// Semantic dedup: check if a very similar observation already exists
+		if vectorClient != nil && vectorClient.IsConnected() {
+			searchText := obs.Title + " " + obs.Narrative
+			results, qErr := vectorClient.Query(r.Context(), searchText, 1, nil)
+			if qErr == nil && len(results) > 0 && results[0].Similarity > dedupThreshold {
+				log.Debug().
+					Str("title", bo.Title).
+					Float64("similarity", results[0].Similarity).
+					Msg("backfill: skipping near-duplicate observation")
+				resp.Skipped++
+				continue
+			}
+		}
 
 		// Add backfill metadata
 		obs.Scope = models.ScopeProject
