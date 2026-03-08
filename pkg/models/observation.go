@@ -58,6 +58,7 @@ const (
 	SourceTodoWrite    SourceType = "todo_write"
 	SourceLLMDerived       SourceType = "llm_derived"
 	SourceInstinctImport   SourceType = "instinct_import"
+	SourceBackfill         SourceType = "backfill"
 	SourceUnknown          SourceType = "unknown"
 )
 
