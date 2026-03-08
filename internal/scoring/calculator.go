@@ -56,6 +56,15 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 	// Core score = 1.0 × type_weight × recency_decay
 	coreScore := 1.0 * typeWeight * recencyDecay
 
+	// Source-aware decay: backfill observations carry lower base importance.
+	// Formula: importance *= max(0.3, 1.0 - age_years * 0.2)
+	sourcePenalty := 1.0
+	if obs.SourceType == models.SourceBackfill {
+		ageYears := ageDays / 365.25
+		sourcePenalty = math.Max(0.3, 1.0-ageYears*0.2)
+		coreScore *= sourcePenalty
+	}
+
 	// 3. User feedback contribution: feedback × weight
 	feedbackContrib := float64(obs.UserFeedback) * c.config.FeedbackWeight
 
@@ -88,6 +97,7 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 	return ScoreComponents{
 		TypeWeight:       typeWeight,
 		RecencyDecay:     recencyDecay,
+		SourcePenalty:    sourcePenalty,
 		CoreScore:        coreScore,
 		FeedbackContrib:  feedbackContrib,
 		ConceptContrib:   conceptContrib,
@@ -102,6 +112,7 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 type ScoreComponents struct {
 	TypeWeight       float64 `json:"type_weight"`
 	RecencyDecay     float64 `json:"recency_decay"`
+	SourcePenalty    float64 `json:"source_penalty"`
 	CoreScore        float64 `json:"core_score"`
 	FeedbackContrib  float64 `json:"feedback_contrib"`
 	ConceptContrib   float64 `json:"concept_contrib"`
