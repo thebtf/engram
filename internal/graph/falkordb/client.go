@@ -128,8 +128,8 @@ func (s *FalkorDBGraphStore) StoreEdge(_ context.Context, edge graph.RelationEdg
 	defer conn.Close()
 
 	params := map[string]interface{}{
-		"src":     edge.SourceID,
-		"tgt":     edge.TargetID,
+		"src":     int(edge.SourceID),
+		"tgt":     int(edge.TargetID),
 		"relType": string(edge.RelationType),
 		"conf":    edge.Confidence,
 	}
@@ -158,8 +158,8 @@ func (s *FalkorDBGraphStore) StoreEdgesBatch(_ context.Context, edges []graph.Re
 
 	for _, edge := range edges {
 		params := map[string]interface{}{
-			"src":     edge.SourceID,
-			"tgt":     edge.TargetID,
+			"src":     int(edge.SourceID),
+			"tgt":     int(edge.TargetID),
 			"relType": string(edge.RelationType),
 			"conf":    edge.Confidence,
 		}
@@ -204,7 +204,7 @@ func (s *FalkorDBGraphStore) GetNeighbors(_ context.Context, obsID int64, maxHop
 	)
 
 	params := map[string]interface{}{
-		"id": obsID,
+		"id": int(obsID),
 	}
 
 	res, err := g.ParameterizedQuery(query, params)
@@ -263,8 +263,8 @@ func (s *FalkorDBGraphStore) GetPath(_ context.Context, fromID, toID int64) ([]i
 	defer conn.Close()
 
 	params := map[string]interface{}{
-		"from": fromID,
-		"to":   toID,
+		"from": int(fromID),
+		"to":   int(toID),
 	}
 
 	// FalkorDB requires shortestPath in WITH/RETURN clauses
@@ -320,8 +320,8 @@ func (s *FalkorDBGraphStore) SyncFromRelations(_ context.Context, relations []*m
 	synced := 0
 	for _, rel := range relations {
 		params := map[string]interface{}{
-			"src":     rel.SourceID,
-			"tgt":     rel.TargetID,
+			"src":     int(rel.SourceID),
+			"tgt":     int(rel.TargetID),
 			"relType": string(rel.RelationType),
 			"conf":    rel.Confidence,
 		}
