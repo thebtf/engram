@@ -861,7 +861,10 @@ func safeResolvePath(path, cwd string) (string, bool) {
 		// For absolute paths, verify they're within cwd if cwd is specified
 		if cwd != "" {
 			cleanCwd := filepath.Clean(cwd)
-			if !strings.HasPrefix(cleanPath, cleanCwd+string(filepath.Separator)) && cleanPath != cleanCwd {
+			// Use filepath.Rel for cross-platform safety (handles case-insensitive
+			// Windows paths correctly, unlike strings.HasPrefix)
+			rel, err := filepath.Rel(cleanCwd, cleanPath)
+			if err != nil || strings.HasPrefix(rel, "..") {
 				return "", false
 			}
 		}
