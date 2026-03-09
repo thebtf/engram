@@ -71,6 +71,9 @@ async function handleUserPrompt(ctx, input) {
         }
       }
 
+      contextBuilder += '\n---\n';
+      contextBuilder += 'REMINDER: Before modifying any file mentioned above, call `find_by_file(files="path")` to check for additional context. ';
+      contextBuilder += 'Before architectural decisions, call `decisions(query="...")`. These engram MCP tools are available and MUST be used.\n';
       contextBuilder += '</relevant-memory>\n';
       contextToInject = contextBuilder;
     }

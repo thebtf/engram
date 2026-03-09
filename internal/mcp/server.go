@@ -294,6 +294,14 @@ func (s *Server) buildInstructions() string {
 // It teaches any agent how to effectively use engram's tools without needing a plugin.
 const engramInstructions = `# Engram — Persistent Memory for AI Agents
 
+## MANDATORY Rules (non-negotiable)
+
+1. **BEFORE modifying any file** → call ` + "`find_by_file(files=\"path/to/file\")`" + ` to check what is known about it.
+2. **BEFORE architectural decisions** → call ` + "`decisions(query=\"...\")`" + ` to check prior choices.
+3. **BEFORE exploring unfamiliar code** → call ` + "`search(query=\"...\")`" + ` first — it may already be documented.
+4. **Read injected context** — ` + "`<engram-context>`" + ` and ` + "`<relevant-memory>`" + ` blocks contain prior knowledge. Use it.
+5. Do NOT check env vars — call ` + "`check_system_health()`" + ` to verify connectivity.
+
 Engram stores observations from coding sessions in PostgreSQL+pgvector and provides semantic search across them.
 Hooks automatically capture knowledge from your sessions. Your job is to **retrieve, connect, and maintain** that knowledge.
 
