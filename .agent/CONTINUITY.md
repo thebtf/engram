@@ -1,7 +1,7 @@
 # Continuity State
 
 **Last Updated:** 2026-03-09
-**Session:** Session backfill Phase 1 implementation
+**Session:** Full backfill + agent adoption improvements
 
 ## Done
 - Self-learning plan: all 3 phases complete (Phase 4 deferred to v1.1)
@@ -25,19 +25,29 @@
   - FR5: Temporal decay for backfill source in scoring (`d516072`)
   - FR6: Progress tracking with --resume and --state-file (`e17a60b`)
   - MCP tool: `backfill_status` via callback injection (`3585e43`)
+- **Server-side LLM extraction** (`493fa1f`):
+  - Added `POST /api/backfill/session` — server parses raw JSONL + extracts via LLM
+  - CLI v0.2.0 — thin client, no local LLM dependency
+  - Added `ProcessSession` method to `backfill.Runner`
+- **Agent adoption improvements** (`f914a27`):
+  - Added MANDATORY rules at top of MCP instructions (`internal/mcp/server.go`)
+  - Added reminder at end of `<relevant-memory>` block (`plugin/engram/hooks/user-prompt.js`)
+  - Goal: agents proactively call `find_by_file`, `decisions`, `search` before working
 
 ## Now
-Session backfill Phase 1 COMPLETE — all FRs + MCP tool. Ready for Phase 2 (pilot on 500 sessions).
+Full backfill running: `engram-cli backfill --concurrency 3 --resume` processing ~4301 sessions.
+Background task `b8tnhyi98`. At ~163/4301 (~3.8%) as of last check.
+Server restarted mid-run (Watchtower pulled new image from `f914a27` push) — ~12 connection errors around sessions 45-71, self-recovered.
 
 ## Verified Complete (this session audit)
 - Collection MCP Tools plan (`vast-wishing-taco.md`): ALL 5 phases done
 - RAG Improvements plan: ALL 3 phases done
 
 ## Next
-- Phase 2: Pilot backfill on 500 most recent sessions
-- Phase 2: Pilot on 500 sessions
-- Phase 3: User decision gate
-- Phase 4: Full 4695-session backfill
+- Monitor backfill completion (~4301 sessions total)
+- Phase 3: Quality gate — verify search precision hasn't degraded >5%
+- Phase 4: Quality report for user decision
+- Test agent adoption: verify new agents call engram tools proactively
 
 ## Open Questions
 - None
@@ -54,6 +64,7 @@ Session backfill Phase 1 COMPLETE — all FRs + MCP tool. Ready for Phase 2 (pil
 - Backfill server: `internal/worker/handlers_backfill.go`
 - Backfill spec: `.agent/specs/session-backfill.md`
 - Plugin source of truth: `plugin/` (hooks, skills, commands)
+- MCP instructions: `internal/mcp/server.go` (line 295, `engramInstructions` const)
 - FalkorDB client: `internal/graph/falkordb/client.go`
 - MCP streamable handler: `internal/mcp/streamable.go`
 
