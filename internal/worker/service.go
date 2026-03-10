@@ -1237,8 +1237,14 @@ func (s *Service) rebuildAllVectors(
 		Msg("Full vector rebuild complete")
 }
 
+// rebuildThrottleDelay is the pause between individual vector sync operations
+// during rebuild to avoid overwhelming the embedding service.
+const rebuildThrottleDelay = 200 * time.Millisecond
+
 // rebuildStaleVectors rebuilds only vectors with mismatched or unknown model versions.
-// This is more efficient than rebuilding all vectors when only some need updating.
+// Uses upsert (ON CONFLICT DO UPDATE) so stale vectors are overwritten in-place
+// without a dangerous delete-then-recreate cycle. Throttled to avoid overwhelming
+// the embedding service.
 func (s *Service) rebuildStaleVectors(
 	observationStore *gorm.ObservationStore,
 	summaryStore *gorm.SummaryStore,
@@ -1269,10 +1275,8 @@ func (s *Service) rebuildStaleVectors(
 	staleObsIDs := make(map[int64]bool)
 	staleSummaryIDs := make(map[int64]bool)
 	stalePromptIDs := make(map[int64]bool)
-	staleDocIDs := make([]string, 0, len(staleVectors))
 
 	for _, sv := range staleVectors {
-		staleDocIDs = append(staleDocIDs, sv.DocID)
 		switch sv.DocType {
 		case "observation":
 			staleObsIDs[sv.SQLiteID] = true
@@ -1283,26 +1287,18 @@ func (s *Service) rebuildStaleVectors(
 		}
 	}
 
-	// Delete stale vectors before re-syncing
-	if err := vectorClient.DeleteVectorsByDocIDs(s.ctx, staleDocIDs); err != nil {
-		log.Error().Err(err).Msg("Failed to delete stale vectors")
-		return
-	}
+	// NOTE: No pre-delete. AddDocuments uses ON CONFLICT (doc_id) DO UPDATE,
+	// so re-syncing overwrites stale vectors in-place. If sync fails, the old
+	// vector remains intact (stale but searchable) rather than being deleted.
 
-	var totalSynced atomic.Int64
-	var syncErrors atomic.Int64
-	var rebuildWg sync.WaitGroup
+	var totalSynced int
+	var syncErrors int
 
-	// Rebuild all three document types in parallel
-	rebuildWg.Add(3)
+	// Rebuild sequentially with throttling to avoid overwhelming the embedding service.
+	// Three doc types processed one after another (not in parallel).
 
-	// Rebuild stale observations in parallel
-	go func() {
-		defer rebuildWg.Done()
-		if len(staleObsIDs) == 0 {
-			return
-		}
-
+	// Phase 1: Observations
+	if len(staleObsIDs) > 0 {
 		ids := make([]int64, 0, len(staleObsIDs))
 		for id := range staleObsIDs {
 			ids = append(ids, id)
@@ -1311,27 +1307,33 @@ func (s *Service) rebuildStaleVectors(
 		observations, err := observationStore.GetObservationsByIDs(s.ctx, ids, "date_desc", 0)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to fetch observations for rebuild")
-			return
-		}
+		} else {
+			for i, obs := range observations {
+				select {
+				case <-s.ctx.Done():
+					log.Warn().Int("synced", totalSynced).Msg("Stale vector rebuild cancelled")
+					return
+				default:
+				}
 
-		for _, obs := range observations {
-			if err := vectorSync.SyncObservation(s.ctx, obs); err != nil {
-				log.Warn().Err(err).Int64("id", obs.ID).Msg("Failed to sync observation during rebuild")
-				syncErrors.Add(1)
-			} else {
-				totalSynced.Add(1)
+				if err := vectorSync.SyncObservation(s.ctx, obs); err != nil {
+					log.Warn().Err(err).Int64("id", obs.ID).Msg("Failed to sync observation during rebuild")
+					syncErrors++
+				} else {
+					totalSynced++
+				}
+
+				if i > 0 && i%50 == 0 {
+					log.Info().Int("progress", i).Int("total", len(observations)).Msg("Rebuilding observation vectors...")
+				}
+				time.Sleep(rebuildThrottleDelay)
 			}
+			log.Info().Int("count", len(observations)).Msg("Rebuilt stale observation vectors")
 		}
-		log.Info().Int("count", len(observations)).Msg("Rebuilt stale observation vectors")
-	}()
+	}
 
-	// Rebuild stale summaries in parallel
-	go func() {
-		defer rebuildWg.Done()
-		if len(staleSummaryIDs) == 0 {
-			return
-		}
-
+	// Phase 2: Summaries
+	if len(staleSummaryIDs) > 0 {
 		ids := make([]int64, 0, len(staleSummaryIDs))
 		for id := range staleSummaryIDs {
 			ids = append(ids, id)
@@ -1340,27 +1342,29 @@ func (s *Service) rebuildStaleVectors(
 		summaries, err := summaryStore.GetSummariesByIDs(s.ctx, ids, "date_desc", 0)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to fetch summaries for rebuild")
-			return
-		}
+		} else {
+			for _, summary := range summaries {
+				select {
+				case <-s.ctx.Done():
+					log.Warn().Int("synced", totalSynced).Msg("Stale vector rebuild cancelled")
+					return
+				default:
+				}
 
-		for _, summary := range summaries {
-			if err := vectorSync.SyncSummary(s.ctx, summary); err != nil {
-				log.Warn().Err(err).Int64("id", summary.ID).Msg("Failed to sync summary during rebuild")
-				syncErrors.Add(1)
-			} else {
-				totalSynced.Add(1)
+				if err := vectorSync.SyncSummary(s.ctx, summary); err != nil {
+					log.Warn().Err(err).Int64("id", summary.ID).Msg("Failed to sync summary during rebuild")
+					syncErrors++
+				} else {
+					totalSynced++
+				}
+				time.Sleep(rebuildThrottleDelay)
 			}
+			log.Info().Int("count", len(summaries)).Msg("Rebuilt stale summary vectors")
 		}
-		log.Info().Int("count", len(summaries)).Msg("Rebuilt stale summary vectors")
-	}()
+	}
 
-	// Rebuild stale prompts in parallel
-	go func() {
-		defer rebuildWg.Done()
-		if len(stalePromptIDs) == 0 {
-			return
-		}
-
+	// Phase 3: Prompts
+	if len(stalePromptIDs) > 0 {
 		ids := make([]int64, 0, len(stalePromptIDs))
 		for id := range stalePromptIDs {
 			ids = append(ids, id)
@@ -1369,27 +1373,31 @@ func (s *Service) rebuildStaleVectors(
 		prompts, err := promptStore.GetPromptsByIDs(s.ctx, ids, "date_desc", 0)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to fetch prompts for rebuild")
-			return
-		}
+		} else {
+			for _, prompt := range prompts {
+				select {
+				case <-s.ctx.Done():
+					log.Warn().Int("synced", totalSynced).Msg("Stale vector rebuild cancelled")
+					return
+				default:
+				}
 
-		for _, prompt := range prompts {
-			if err := vectorSync.SyncUserPrompt(s.ctx, prompt); err != nil {
-				log.Warn().Err(err).Int64("id", prompt.ID).Msg("Failed to sync prompt during rebuild")
-				syncErrors.Add(1)
-			} else {
-				totalSynced.Add(1)
+				if err := vectorSync.SyncUserPrompt(s.ctx, prompt); err != nil {
+					log.Warn().Err(err).Int64("id", prompt.ID).Msg("Failed to sync prompt during rebuild")
+					syncErrors++
+				} else {
+					totalSynced++
+				}
+				time.Sleep(rebuildThrottleDelay)
 			}
+			log.Info().Int("count", len(prompts)).Msg("Rebuilt stale prompt vectors")
 		}
-		log.Info().Int("count", len(prompts)).Msg("Rebuilt stale prompt vectors")
-	}()
-
-	// Wait for all three phases to complete
-	rebuildWg.Wait()
+	}
 
 	elapsed := time.Since(start)
 	log.Info().
-		Int64("total_synced", totalSynced.Load()).
-		Int64("errors", syncErrors.Load()).
+		Int("total_synced", totalSynced).
+		Int("errors", syncErrors).
 		Dur("elapsed", elapsed).
 		Msg("Granular vector rebuild complete")
 }
