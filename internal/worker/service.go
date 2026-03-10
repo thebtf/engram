@@ -271,7 +271,7 @@ func (s *Service) setupVectorSyncCallbacks(
 				return vectorSync.DeletePatterns(ctx, deletedIDs)
 			})
 			if err != nil {
-				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete patterns from sqlite-vec after retries")
+				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete patterns from vector store after retries")
 			}
 		})
 	}
@@ -324,7 +324,7 @@ func (s *Service) setupVectorSyncCallbacks(
 				return vectorSync.DeleteObservations(ctx, deletedIDs)
 			})
 			if err != nil {
-				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete observations from sqlite-vec after retries")
+				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete observations from vector store after retries")
 			}
 		})
 	}
@@ -336,7 +336,7 @@ func (s *Service) setupVectorSyncCallbacks(
 				return vectorSync.DeleteUserPrompts(ctx, deletedIDs)
 			})
 			if err != nil {
-				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete prompts from sqlite-vec")
+				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete prompts from vector store")
 			}
 		})
 	}

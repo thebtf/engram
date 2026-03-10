@@ -37,13 +37,6 @@ type StaleVectorInfo struct {
 	SQLiteID  int64
 }
 
-// ExtractedIDs contains database IDs extracted from query results, grouped by document type.
-type ExtractedIDs struct {
-	ObservationIDs []int64
-	SummaryIDs     []int64
-	PromptIDs      []int64
-}
-
 // HealthStats contains comprehensive health information about the vector store.
 type HealthStats struct {
 	TotalVectors  int64  `json:"total_vectors"`
@@ -103,40 +96,6 @@ func BuildWhereFilter(docType DocType, project string) map[string]interface{} {
 		where["project"] = project
 	}
 	return where
-}
-
-// ExtractIDsByDocType extracts database IDs from query results, grouped by document type.
-func ExtractIDsByDocType(results []QueryResult) *ExtractedIDs {
-	ids := &ExtractedIDs{}
-	seenObs := make(map[int64]bool)
-	seenSummary := make(map[int64]bool)
-	seenPrompt := make(map[int64]bool)
-
-	for _, result := range results {
-		id := extractSQLiteID(result.Metadata)
-		if id == 0 {
-			continue
-		}
-		docType, _ := result.Metadata["doc_type"].(string)
-		switch docType {
-		case string(DocTypeObservation):
-			if !seenObs[id] {
-				seenObs[id] = true
-				ids.ObservationIDs = append(ids.ObservationIDs, id)
-			}
-		case string(DocTypeSessionSummary):
-			if !seenSummary[id] {
-				seenSummary[id] = true
-				ids.SummaryIDs = append(ids.SummaryIDs, id)
-			}
-		case string(DocTypeUserPrompt):
-			if !seenPrompt[id] {
-				seenPrompt[id] = true
-				ids.PromptIDs = append(ids.PromptIDs, id)
-			}
-		}
-	}
-	return ids
 }
 
 // ExtractObservationIDs extracts observation database IDs from query results,

@@ -421,7 +421,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	tools := []Tool{
 		{
 			Name:        "search",
-			Description: "Unified search across all memory types (observations, sessions, and user prompts) using vector-first semantic search (sqlite-vec).",
+			Description: "Unified search across all memory types (observations, sessions, and user prompts) using vector-first semantic search (pgvector).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

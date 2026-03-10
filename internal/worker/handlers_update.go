@@ -101,8 +101,8 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	components = append(components, workerStatus)
 
-	// Check SQLite Database
-	dbStatus := ComponentHealth{Name: "SQLite Database", Status: "healthy"}
+	// Check Database
+	dbStatus := ComponentHealth{Name: "PostgreSQL", Status: "healthy"}
 	if s.store == nil {
 		dbStatus.Status = "unhealthy"
 		dbStatus.Message = "Not initialized"

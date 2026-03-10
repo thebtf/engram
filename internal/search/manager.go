@@ -119,7 +119,7 @@ func (m *SearchMetrics) GetStats() map[string]any {
 	}
 }
 
-// Manager provides unified search across SQLite and sqlite-vec.
+// Manager provides unified search across PostgreSQL and pgvector.
 type Manager struct {
 	ctx              context.Context
 	searchGroup      singleflight.Group
