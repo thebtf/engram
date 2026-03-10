@@ -85,3 +85,18 @@ docs/dist
 
 # Agent working state
 .agent/CONTINUITY.md
+.agent/CURRENT_STATUS.md
+.agent/LESSONS_LEARNED.md
+.agent/scratch/
+.agent/status/
+
+# Local Go caches (non-standard GOPATH)
+.gocache/
+.gomodcache/
+.tmp-gocache/
+
+# Session artifacts
+continuity.txt
+
+# Marketplace submodule (separate repo)
+engram-marketplace/
