@@ -114,7 +114,7 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	components = append(components, dbStatus)
 
-	// Check Vector DB (sqlite-vec)
+	// Check Vector DB (pgvector)
 	vectorStatus := ComponentHealth{Name: "Vector DB", Status: "healthy"}
 	if s.vectorClient == nil {
 		vectorStatus.Status = "degraded"

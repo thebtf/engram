@@ -180,7 +180,7 @@ func (s *Service) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 			defer cancel()
 			if err := s.vectorSync.SyncUserPrompt(ctx, promptWithSession); err != nil {
 				if s.ctx.Err() == nil { // Don't log during shutdown
-					log.Warn().Err(err).Int64("id", promptID).Msg("Failed to sync user prompt to sqlite-vec")
+					log.Warn().Err(err).Int64("id", promptID).Msg("Failed to sync user prompt to vector store")
 				}
 			}
 		})

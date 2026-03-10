@@ -17,7 +17,7 @@ import (
 )
 
 // handleGetObservations returns recent observations.
-// Supports optional query parameter for semantic search via sqlite-vec.
+// Supports optional query parameter for semantic search via vector store.
 // Supports pagination via limit and offset query parameters.
 func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) {
 	pagination := gorm.ParsePaginationParams(r, DefaultObservationsLimit)
@@ -88,7 +88,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleGetSummaries returns recent summaries.
-// Supports optional query parameter for semantic search via sqlite-vec.
+// Supports optional query parameter for semantic search via vector store.
 func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultSummariesLimit)
 	project := r.URL.Query().Get("project")
@@ -141,7 +141,7 @@ func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetPrompts returns recent user prompts.
-// Supports optional query parameter for semantic search via sqlite-vec.
+// Supports optional query parameter for semantic search via vector store.
 func (s *Service) handleGetPrompts(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultPromptsLimit)
 	project := r.URL.Query().Get("project")

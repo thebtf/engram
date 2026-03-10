@@ -259,7 +259,7 @@ func (s *Service) setupVectorSyncCallbacks(
 				return vectorSync.SyncPattern(s.ctx, p)
 			})
 			if err != nil {
-				log.Warn().Err(err).Int64("id", p.ID).Msg("Failed to sync pattern to sqlite-vec after retries")
+				log.Warn().Err(err).Int64("id", p.ID).Msg("Failed to sync pattern to vector store after retries")
 			}
 		})
 	}
@@ -283,7 +283,7 @@ func (s *Service) setupVectorSyncCallbacks(
 				return vectorSync.SyncObservation(s.ctx, obs)
 			})
 			if err != nil {
-				log.Warn().Err(err).Int64("id", obs.ID).Msg("Failed to sync observation to sqlite-vec after retries")
+				log.Warn().Err(err).Int64("id", obs.ID).Msg("Failed to sync observation to vector store after retries")
 			}
 			// Trigger pattern detection for the new observation
 			if patternDetector != nil {
@@ -312,7 +312,7 @@ func (s *Service) setupVectorSyncCallbacks(
 				return vectorSync.SyncSummary(s.ctx, summary)
 			})
 			if err != nil {
-				log.Warn().Err(err).Int64("id", summary.ID).Msg("Failed to sync summary to sqlite-vec after retries")
+				log.Warn().Err(err).Int64("id", summary.ID).Msg("Failed to sync summary to vector store after retries")
 			}
 		})
 	}
