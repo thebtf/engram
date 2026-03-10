@@ -1,5 +1,7 @@
 # Implementation Plan: Deployment & Installation Cleanup
 
+**Status:** COMPLETED (all 4 phases implemented, 2026-03-11)
+
 ## Summary
 Fix all deployment artifacts to match current client-server architecture.
 Server = Docker (worker + PostgreSQL + pgvector). Client = plugin (hooks + HTTP MCP).

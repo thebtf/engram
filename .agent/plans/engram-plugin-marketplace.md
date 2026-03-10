@@ -1,5 +1,7 @@
 # Implementation Plan: Engram Claude Code Plugin + Marketplace
 
+**Status:** COMPLETED (marketplace repo live, plugin functional, 2026-03-11)
+
 ## Summary
 
 Create a standalone marketplace repository (`thebtf/engram-marketplace`) that distributes Engram as a proper Claude Code plugin. The plugin connects to a remote Engram server via HTTP MCP, Node.js hook scripts, and provides skills/commands. This replaces the broken install scripts and untested onboarding flow.

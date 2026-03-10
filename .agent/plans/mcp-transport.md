@@ -1,6 +1,6 @@
 # Implementation Plan: MCP Transport (SSE + Streamable HTTP)
 
-**Status:** REVISED after critique (challenging-plans)
+**Status:** COMPLETED (SSE + Streamable HTTP both integrated in worker, standalone mcp-sse removed, 2026-03-11)
 
 ## Summary
 

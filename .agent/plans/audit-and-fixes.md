@@ -1,5 +1,7 @@
 # engram — Audit & Fixes Plan
 
+**Status:** COMPLETED (all items fixed or verified stale, 2026-03-11)
+
 **Audited:** 2026-02-27
 **Source:** Comprehensive architectural audit by Codex (session a35579e)
 **Docs:** `docs/arch/` (8 files, 1805 lines)

@@ -1,5 +1,7 @@
 # Implementation Plan: Engram RAG Improvements
 
+**Status:** COMPLETED (all 3 phases implemented, 2026-03-11)
+
 ## Summary
 
 Three improvements to Engram's RAG pipeline, projected from Advanced Agentic RAG Architecture onto the existing codebase. Each addresses a verified gap: (1) dead ONNX reranker replaced with API-based cross-encoder, (2) HyDE for improved query-document matching, (3) enhanced consolidation for self-learning. All are opt-in via config, backward-compatible, and follow existing patterns (openai.go HTTP client, config env-var overrides).
