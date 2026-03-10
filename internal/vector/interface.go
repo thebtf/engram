@@ -42,8 +42,4 @@ type Client interface {
 
 	// DeleteByObservationID removes all vectors associated with an observation ID.
 	DeleteByObservationID(ctx context.Context, obsID int64) error
-
-	// CacheStats returns basic cache size info for backward compatibility.
-	// Deprecated: Use GetCacheStats for comprehensive statistics.
-	CacheStats() (size int, maxSize int)
 }

@@ -338,13 +338,5 @@ func (c *Client) DeleteByObservationID(ctx context.Context, obsID int64) error {
 		Delete(&vectorRecord{}).Error
 }
 
-// CacheStats returns basic cache size info for backward compatibility.
-// pgvector has no local embedding cache; returns zeros.
-//
-// Deprecated: Use GetCacheStats for comprehensive statistics.
-func (c *Client) CacheStats() (size int, maxSize int) {
-	return 0, 0
-}
-
 // Compile-time check: Client must satisfy vector.Client.
 var _ vector.Client = (*Client)(nil)

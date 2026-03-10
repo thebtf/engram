@@ -1638,10 +1638,9 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 		}
 
 		// Cache stats
-		cacheSize, cacheMax := s.vectorClient.CacheStats()
+		cacheStats := s.vectorClient.GetCacheStats()
 		stats["embedding_cache"] = map[string]any{
-			"size":     cacheSize,
-			"max_size": cacheMax,
+			"hit_rate": cacheStats.HitRate(),
 		}
 
 		// Model version

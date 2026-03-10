@@ -300,10 +300,9 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		if count, err := s.vectorClient.Count(r.Context()); err == nil {
 			response["vectorCount"] = count
 		}
-		cacheSize, cacheMax := s.vectorClient.CacheStats()
+		cacheStats := s.vectorClient.GetCacheStats()
 		response["vectorCache"] = map[string]any{
-			"size":     cacheSize,
-			"max_size": cacheMax,
+			"hit_rate": cacheStats.HitRate(),
 		}
 	}
 
@@ -687,7 +686,6 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get cache stats from vector client
-	cacheSize, cacheMax := s.vectorClient.CacheStats()
 	cacheStats := s.vectorClient.GetCacheStats()
 	count, _ := s.vectorClient.Count(r.Context())
 
@@ -726,8 +724,6 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
 			"hits":    totalHits,
 			"misses":  totalMisses,
 			"hitRate": cacheStats.HitRate(),
-			"size":    cacheSize,
-			"maxSize": cacheMax,
 		},
 		"graph": map[string]any{
 			"traversals": 0,
