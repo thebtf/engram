@@ -50,6 +50,31 @@ Session starts → context already injected (automatic)
   └─ Session ending?             → (automatic via Stop hook)
 ```
 
+## Credential Management
+
+Engram provides encrypted credential storage via AES-256-GCM vault. Credentials are stored per-project or globally, encrypted at rest, and never appear in search results or context injection.
+
+| Tool | Purpose |
+|------|---------|
+| `store_credential` | Encrypt and store an API key, password, or token |
+| `get_credential` | Retrieve and decrypt a credential by name |
+| `list_credentials` | List credential names and metadata (no values) |
+| `delete_credential` | Delete a credential by name (scope-aware) |
+| `vault_status` | Check encryption status, key source, fingerprint, credential count |
+
+```
+Use: "Store my OpenAI API key"
+Tool: store_credential(name="openai_api_key", value="sk-...", scope="global")
+
+Use: "Get my OpenAI key"
+Tool: get_credential(name="openai_api_key")
+
+Use: "Check vault status"
+Tool: vault_status()
+```
+
+**Key source priority:** `ENGRAM_ENCRYPTION_KEY` env var > `ENGRAM_ENCRYPTION_KEY_FILE` > auto-generated `vault.key`. Auto-generated keys are saved to `DataDir()/vault.key` — back up this file to avoid losing access to stored credentials.
+
 ## Top 12 Tools (90% of Value)
 
 ### 1. `store_memory` — Explicitly remember something

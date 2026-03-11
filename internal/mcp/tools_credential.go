@@ -286,8 +286,14 @@ func (s *Server) handleVaultStatus(ctx context.Context, _ json.RawMessage) (stri
 		}
 	}
 
+	keySource := ""
+	if keyConfigured {
+		keySource = v.KeySource()
+	}
+
 	result := map[string]any{
 		"key_configured":   keyConfigured,
+		"key_source":       keySource,
 		"fingerprint":      fingerprint,
 		"credential_count": count,
 		"backup_reminder":  "Back up vault.key (or set ENGRAM_ENCRYPTION_KEY) — losing this key makes stored credentials unrecoverable",

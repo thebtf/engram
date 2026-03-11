@@ -322,6 +322,15 @@ Hooks automatically capture knowledge from your sessions. Your job is to **retri
 | ` + "`store_memory`" + ` | Explicitly remember something across sessions — decisions, patterns, preferences, insights. |
 | ` + "`recall_memory`" + ` | Retrieve stored knowledge by semantic search. Supports text/items/detailed formats. |
 
+### Credential Management (secure storage)
+| Tool | When to Use |
+|------|-------------|
+| ` + "`store_credential`" + ` | Securely store an API key, password, or token. Encrypted with AES-256-GCM. |
+| ` + "`get_credential`" + ` | Retrieve and decrypt a stored credential by name. |
+| ` + "`list_credentials`" + ` | List stored credentials (names and metadata only, no values). |
+| ` + "`delete_credential`" + ` | Delete a stored credential by name. Scope-aware (project or global). |
+| ` + "`vault_status`" + ` | Check vault encryption status: key configured, fingerprint, credential count, key source. |
+
 ### Search & Retrieval (primary workflow)
 | Tool | When to Use |
 |------|-------------|
@@ -415,6 +424,7 @@ Hooks automatically capture knowledge from your sessions. Your job is to **retri
 **Before architectural decisions:** ` + "`decisions`" + ` to check prior choices.
 **Debugging:** ` + "`find_related_observations`" + ` to trace cause chains.
 **Periodic cleanup:** ` + "`suggest_consolidations`" + ` → ` + "`merge_observations`" + ` → ` + "`trigger_maintenance`" + `.
+**Storing secrets:** ` + "`store_credential`" + ` for API keys, passwords, tokens. ` + "`vault_status`" + ` to verify encryption is active.
 
 ## Engram vs File-Based Memory
 

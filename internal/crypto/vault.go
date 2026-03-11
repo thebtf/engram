@@ -23,6 +23,7 @@ import (
 type Vault struct {
 	key         []byte // 32 bytes for AES-256
 	fingerprint string // SHA-256(key)[:16] hex
+	source      string // how the key was loaded: "env", "file", "auto_generated"
 }
 
 // NewVault creates a Vault by loading or generating the encryption key.
@@ -44,6 +45,7 @@ func NewVault(cfg *config.Config) (*Vault, error) {
 			return nil, fmt.Errorf("ENGRAM_ENCRYPTION_KEY must be 32 bytes (64 hex chars), got %d bytes", len(key))
 		}
 		log.Info().Msg("vault: loaded key from ENGRAM_ENCRYPTION_KEY env var")
+		return &Vault{key: key, fingerprint: computeFingerprint(key), source: "env"}, nil
 
 	case cfg.EncryptionKeyFile != "":
 		key, err = loadKeyFromFile(cfg.EncryptionKeyFile)
@@ -51,6 +53,7 @@ func NewVault(cfg *config.Config) (*Vault, error) {
 			return nil, fmt.Errorf("load key from ENGRAM_ENCRYPTION_KEY_FILE %q: %w", cfg.EncryptionKeyFile, err)
 		}
 		log.Info().Str("file", cfg.EncryptionKeyFile).Msg("vault: loaded key from file")
+		return &Vault{key: key, fingerprint: computeFingerprint(key), source: "file"}, nil
 
 	default:
 		keyFile := filepath.Join(config.DataDir(), "vault.key")
@@ -60,6 +63,7 @@ func NewVault(cfg *config.Config) (*Vault, error) {
 				return nil, fmt.Errorf("load auto-generated key from %q: %w", keyFile, err)
 			}
 			log.Info().Str("file", keyFile).Msg("vault: loaded auto-generated key")
+			return &Vault{key: key, fingerprint: computeFingerprint(key), source: "auto_generated"}, nil
 		} else {
 			key = make([]byte, 32)
 			if _, err = io.ReadFull(rand.Reader, key); err != nil {
@@ -74,11 +78,9 @@ func NewVault(cfg *config.Config) (*Vault, error) {
 			log.Warn().
 				Str("file", keyFile).
 				Msg("vault: auto-generated new encryption key — BACK UP THIS FILE to avoid losing access to stored credentials")
+			return &Vault{key: key, fingerprint: computeFingerprint(key), source: "auto_generated"}, nil
 		}
 	}
-
-	fp := computeFingerprint(key)
-	return &Vault{key: key, fingerprint: fp}, nil
 }
 
 // Encrypt encrypts plaintext using AES-256-GCM.
@@ -136,6 +138,11 @@ func (v *Vault) Decrypt(ciphertext []byte) (string, error) {
 // Fingerprint returns the first 16 hex chars of SHA-256(key).
 func (v *Vault) Fingerprint() string {
 	return v.fingerprint
+}
+
+// KeySource returns how the encryption key was loaded: "env", "file", or "auto_generated".
+func (v *Vault) KeySource() string {
+	return v.source
 }
 
 // MatchesFingerprint reports whether fp matches this vault's key fingerprint.

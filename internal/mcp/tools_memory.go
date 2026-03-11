@@ -88,12 +88,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	seen := make(map[string]bool)
 	var concepts []string
 	for _, tag := range params.Tags {
-		parts := strings.Split(tag, ":")
-		for i := range parts {
-			prefix := strings.Join(parts[:i+1], ":")
-			if !seen[prefix] {
-				seen[prefix] = true
-				concepts = append(concepts, prefix)
+		for _, part := range expandTagHierarchy(tag) {
+			if !seen[part] {
+				seen[part] = true
+				concepts = append(concepts, part)
 			}
 		}
 	}

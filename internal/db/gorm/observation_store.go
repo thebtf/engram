@@ -1215,7 +1215,7 @@ func (s *ObservationStore) GetCredential(ctx context.Context, name, project stri
 	var obs Observation
 	err := s.db.WithContext(ctx).
 		Where("type = ?", "credential").
-		Where("(title = ? OR narrative = ?)", name, name).
+		Where("title = ?", name).
 		Where("((project = ? AND scope = 'project') OR scope = 'global')", project).
 		Where("COALESCE(is_archived, 0) = 0").
 		Order(gorm.Expr("CASE WHEN project = ? AND scope = 'project' THEN 0 ELSE 1 END", project)).
@@ -1256,7 +1256,7 @@ func (s *ObservationStore) DeleteCredential(ctx context.Context, name, project, 
 	}
 	query := s.db.WithContext(ctx).
 		Where("type = ?", "credential").
-		Where("(title = ? OR narrative = ?)", name, name).
+		Where("title = ?", name).
 		Where("COALESCE(is_archived, 0) = 0")
 	if scope == "global" {
 		query = query.Where("scope = 'global'")

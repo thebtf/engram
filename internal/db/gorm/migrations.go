@@ -1095,7 +1095,9 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 				`ALTER TABLE observations ADD CONSTRAINT chk_observations_type CHECK (type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change', 'guidance'))`,
 			}
 			for _, s := range sqls {
-				_ = tx.Exec(s).Error
+				if err := tx.Exec(s).Error; err != nil {
+					log.Warn().Err(err).Str("sql", s).Msg("migration 031 rollback step failed")
+				}
 			}
 			return nil
 		},
