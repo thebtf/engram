@@ -20,7 +20,8 @@ const (
 	ObsTypeRefactor  ObservationType = "refactor"
 	ObsTypeDiscovery ObservationType = "discovery"
 	ObsTypeChange    ObservationType = "change"
-	ObsTypeGuidance  ObservationType = "guidance"
+	ObsTypeGuidance    ObservationType = "guidance"
+	ObsTypeCredential  ObservationType = "credential"
 )
 
 // MemoryType represents the classification for memory storage and retrieval.
@@ -214,18 +215,20 @@ type Observation struct {
 
 // ParsedObservation represents an observation parsed from SDK response XML.
 type ParsedObservation struct {
-	FileMtimes    map[string]int64
-	Type          ObservationType
-	MemoryType    MemoryType
-	SourceType    SourceType
-	Title         string
-	Subtitle      string
-	Narrative     string
-	Scope         ObservationScope
-	Facts         []string
-	Concepts      []string
-	FilesRead     []string
-	FilesModified []string
+	FileMtimes               map[string]int64
+	Type                     ObservationType
+	MemoryType               MemoryType
+	SourceType               SourceType
+	Title                    string
+	Subtitle                 string
+	Narrative                string
+	Scope                    ObservationScope
+	Facts                    []string
+	Concepts                 []string
+	FilesRead                []string
+	FilesModified            []string
+	EncryptedSecret          []byte // set for credential observations
+	EncryptionKeyFingerprint string // SHA-256(key)[:16] hex
 }
 
 // ToStoredObservation converts a ParsedObservation to the stored Observation format.

@@ -1069,6 +1069,37 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec("DROP TABLE IF EXISTS projects CASCADE").Error
 		},
 	},
+	// Migration 031: Add credential storage columns and update type constraint.
+	{
+		ID: "031_credential_storage",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`ALTER TABLE observations ADD COLUMN IF NOT EXISTS encrypted_secret BYTEA`,
+				`ALTER TABLE observations ADD COLUMN IF NOT EXISTS encryption_key_fingerprint TEXT`,
+				// Drop old type constraint and add new one that includes 'credential'
+				`ALTER TABLE observations DROP CONSTRAINT IF EXISTS chk_observations_type`,
+				`ALTER TABLE observations ADD CONSTRAINT chk_observations_type CHECK (type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change', 'guidance', 'credential'))`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 031: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			sqls := []string{
+				`ALTER TABLE observations DROP COLUMN IF EXISTS encrypted_secret`,
+				`ALTER TABLE observations DROP COLUMN IF EXISTS encryption_key_fingerprint`,
+				`ALTER TABLE observations DROP CONSTRAINT IF EXISTS chk_observations_type`,
+				`ALTER TABLE observations ADD CONSTRAINT chk_observations_type CHECK (type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change', 'guidance'))`,
+			}
+			for _, s := range sqls {
+				_ = tx.Exec(s).Error
+			}
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

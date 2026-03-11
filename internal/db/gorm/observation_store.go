@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -163,10 +164,12 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 		FilesRead:       models.JSONStringArray(obs.FilesRead),
 		FilesModified:   models.JSONStringArray(obs.FilesModified),
 		FileMtimes:      models.JSONInt64Map(obs.FileMtimes),
-		PromptNumber:    nullInt64(promptNumber),
-		DiscoveryTokens: discoveryTokens,
-		CreatedAt:       now.Format(time.RFC3339),
-		CreatedAtEpoch:  nowEpoch,
+		PromptNumber:             nullInt64(promptNumber),
+		DiscoveryTokens:          discoveryTokens,
+		CreatedAt:                now.Format(time.RFC3339),
+		CreatedAtEpoch:           nowEpoch,
+		EncryptedSecret:          obs.EncryptedSecret,
+		EncryptionKeyFingerprint: sql.NullString{String: obs.EncryptionKeyFingerprint, Valid: obs.EncryptionKeyFingerprint != ""},
 	}
 
 	err := s.db.WithContext(ctx).Create(dbObs).Error
@@ -1203,4 +1206,71 @@ func nullInt64(val int) sql.NullInt64 {
 		return sql.NullInt64{Valid: false}
 	}
 	return sql.NullInt64{Int64: int64(val), Valid: true}
+}
+
+// GetCredential retrieves a credential observation by name and project.
+// Project-scoped credentials shadow global credentials with the same name.
+// Returns nil, nil if not found.
+func (s *ObservationStore) GetCredential(ctx context.Context, name, project string) (*Observation, error) {
+	var obs Observation
+	err := s.db.WithContext(ctx).
+		Where("type = ?", "credential").
+		Where("(title = ? OR narrative = ?)", name, name).
+		Where("((project = ? AND scope = 'project') OR scope = 'global')", project).
+		Where("COALESCE(is_archived, 0) = 0").
+		Order(gorm.Expr("CASE WHEN project = ? AND scope = 'project' THEN 0 ELSE 1 END", project)).
+		First(&obs).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query credential: %w", err)
+	}
+	return &obs, nil
+}
+
+// ListCredentials returns all credential observations accessible from the given project
+// (project-scoped credentials for this project, plus global credentials).
+func (s *ObservationStore) ListCredentials(ctx context.Context, project string) ([]Observation, error) {
+	var obs []Observation
+	err := s.db.WithContext(ctx).
+		Where("type = ?", "credential").
+		Where("((project = ? AND scope = 'project') OR scope = 'global')", project).
+		Where("COALESCE(is_archived, 0) = 0").
+		Order("created_at_epoch DESC").
+		Find(&obs).Error
+	if err != nil {
+		return nil, fmt.Errorf("list credentials: %w", err)
+	}
+	return obs, nil
+}
+
+// DeleteCredential removes a credential observation by name and project scope.
+func (s *ObservationStore) DeleteCredential(ctx context.Context, name, project string) error {
+	result := s.db.WithContext(ctx).
+		Where("type = ?", "credential").
+		Where("(title = ? OR narrative = ?)", name, name).
+		Where("((project = ? AND scope = 'project') OR scope = 'global')", project).
+		Delete(&Observation{})
+	if result.Error != nil {
+		return fmt.Errorf("delete credential: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("credential %q not found", name)
+	}
+	return nil
+}
+
+// CountCredentials returns the total number of active (non-archived) credential observations.
+func (s *ObservationStore) CountCredentials(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Where("type = ?", "credential").
+		Where("COALESCE(is_archived, 0) = 0").
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("count credentials: %w", err)
+	}
+	return count, nil
 }
