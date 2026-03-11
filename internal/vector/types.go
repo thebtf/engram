@@ -86,16 +86,39 @@ func FilterByThreshold(results []QueryResult, threshold float64, maxResults int)
 	return filtered
 }
 
-// BuildWhereFilter creates a where filter map for vector queries.
-func BuildWhereFilter(docType DocType, project string) map[string]interface{} {
-	where := make(map[string]interface{})
+// WhereFilter represents a filter for vector queries, supporting OR conditions.
+type WhereFilter struct {
+	Clauses []WhereClause
+}
+
+// WhereClause is a single filter condition (equality or OR group).
+type WhereClause struct {
+	OrGroup []WhereClause
+	Column  string
+	Value   any
+}
+
+// BuildWhereFilter creates a filter for vector queries.
+// When includeGlobal is true and project is non-empty, results include
+// both project-specific AND global-scoped observations.
+func BuildWhereFilter(docType DocType, project string, includeGlobal bool) WhereFilter {
+	var filter WhereFilter
 	if docType != "" {
-		where["doc_type"] = string(docType)
+		filter.Clauses = append(filter.Clauses, WhereClause{Column: "doc_type", Value: string(docType)})
 	}
 	if project != "" {
-		where["project"] = project
+		if includeGlobal {
+			filter.Clauses = append(filter.Clauses, WhereClause{
+				OrGroup: []WhereClause{
+					{Column: "project", Value: project},
+					{Column: "scope", Value: "global"},
+				},
+			})
+		} else {
+			filter.Clauses = append(filter.Clauses, WhereClause{Column: "project", Value: project})
+		}
 	}
-	return where
+	return filter
 }
 
 // ExtractObservationIDs extracts observation database IDs from query results,

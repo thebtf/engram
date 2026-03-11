@@ -12,6 +12,7 @@ import (
 	"github.com/thebtf/engram/internal/backfill/extract"
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/sessions"
+	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -154,7 +155,7 @@ func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 		// Semantic dedup: check if a very similar observation already exists
 		if vectorClient != nil && vectorClient.IsConnected() {
 			searchText := obs.Title + " " + obs.Narrative
-			results, qErr := vectorClient.Query(r.Context(), searchText, 1, nil)
+			results, qErr := vectorClient.Query(r.Context(), searchText, 1, vector.WhereFilter{})
 			if qErr == nil && len(results) > 0 && results[0].Similarity > dedupThreshold {
 				log.Debug().
 					Str("title", bo.Title).
@@ -304,7 +305,7 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		// Semantic dedup: check if a very similar observation already exists.
 		if vectorClient != nil && vectorClient.IsConnected() {
 			searchText := obs.Title + " " + obs.Narrative
-			results, qErr := vectorClient.Query(r.Context(), searchText, 1, nil)
+			results, qErr := vectorClient.Query(r.Context(), searchText, 1, vector.WhereFilter{})
 			if qErr == nil && len(results) > 0 && results[0].Similarity > dedupThreshold {
 				log.Debug().
 					Str("title", obs.Title).

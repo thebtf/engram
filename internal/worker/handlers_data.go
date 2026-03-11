@@ -37,7 +37,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 
 	// Use vector search if query is provided and vector client is available
 	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, "")
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, "", false)
 		vectorResults, vecErr := s.vectorClient.Query(r.Context(), query, pagination.Limit*2, where)
 		if vecErr == nil && len(vectorResults) > 0 {
 			obsIDs := vector.ExtractObservationIDs(vectorResults, project)
@@ -106,7 +106,7 @@ func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 
 	// Use vector search if query is provided and vector client is available
 	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeSessionSummary, "")
+		where := vector.BuildWhereFilter(vector.DocTypeSessionSummary, "", false)
 		vectorResults, vecErr := s.vectorClient.Query(r.Context(), query, limit*2, where)
 		if vecErr == nil && len(vectorResults) > 0 {
 			summaryIDs := vector.ExtractSummaryIDs(vectorResults, project)
@@ -159,7 +159,7 @@ func (s *Service) handleGetPrompts(w http.ResponseWriter, r *http.Request) {
 
 	// Use vector search if query is provided and vector client is available
 	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeUserPrompt, "")
+		where := vector.BuildWhereFilter(vector.DocTypeUserPrompt, "", false)
 		vectorResults, vecErr := s.vectorClient.Query(r.Context(), query, limit*2, where)
 		if vecErr == nil && len(vectorResults) > 0 {
 			promptIDs := vector.ExtractPromptIDs(vectorResults, project)

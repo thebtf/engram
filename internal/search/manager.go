@@ -878,7 +878,7 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 	case "prompts":
 		docType = vector.DocTypeUserPrompt
 	}
-	where := vector.BuildWhereFilter(docType, params.Project)
+	where := vector.BuildWhereFilter(docType, params.Project, params.IncludeGlobal || params.Scope == "")
 
 	vectorResults, err := m.vectorClient.Query(ctx, params.Query, params.Limit*2, where)
 	if err != nil {

@@ -96,7 +96,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	// Try vector search first if available
 	var vectorSearchFailed bool
 	if s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, "")
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, "", false)
 
 		// Search with each expanded query and merge results
 		// Pre-allocate with estimated capacity to avoid repeated reallocation
@@ -416,7 +416,7 @@ func (s *Service) handleFileContext(w http.ResponseWriter, r *http.Request) {
 			// Build search query from file path
 			query := buildFileQuery(file)
 
-			where := vector.BuildWhereFilter(vector.DocTypeObservation, "")
+			where := vector.BuildWhereFilter(vector.DocTypeObservation, "", false)
 			vectorResults, vecErr := s.vectorClient.Query(ctx, query, limit*2, where)
 			if vecErr != nil {
 				log.Warn().Err(vecErr).Str("file", file).Msg("Vector search failed for file context")
@@ -772,7 +772,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	var relevantObservations []*models.Observation
 	if s.vectorClient != nil && s.vectorClient.IsConnected() {
 		query := project + " code development"
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, "")
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, "", false)
 
 		vectorResults, vecErr := s.vectorClient.Query(ctx, query, 20, where)
 		if vecErr != nil {

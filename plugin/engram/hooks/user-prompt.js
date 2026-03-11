@@ -155,8 +155,9 @@ async function handleUserPrompt(ctx, input) {
           const obsType = asString(obs.type).toUpperCase();
           const score = typeof obs.similarity === 'number' ? obs.similarity.toFixed(2) : '';
           const scoreTag = score ? ` [relevance: ${score}]` : '';
+          const scopeTag = (typeof obs.scope === 'string' && obs.scope === 'global') ? ' [GLOBAL]' : '';
 
-          contextBuilder += `## ${idx}. [${obsType}] ${title}${scoreTag}\n`;
+          contextBuilder += `## ${idx}. [${obsType}] ${title}${scopeTag}${scoreTag}\n`;
 
           if (Array.isArray(obs.facts) && obs.facts.length > 0) {
             contextBuilder += 'Key facts:\n';

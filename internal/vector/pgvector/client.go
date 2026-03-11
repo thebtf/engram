@@ -129,7 +129,7 @@ func (c *Client) DeleteDocuments(ctx context.Context, ids []string) error {
 }
 
 // Query performs a vector similarity search using cosine distance.
-func (c *Client) Query(ctx context.Context, query string, limit int, where map[string]any) ([]vector.QueryResult, error) {
+func (c *Client) Query(ctx context.Context, query string, limit int, where vector.WhereFilter) ([]vector.QueryResult, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -151,10 +151,20 @@ func (c *Client) Query(ctx context.Context, query string, limit int, where map[s
 	argIdx := 2
 
 	var whereClauses []string
-	for k, v := range where {
-		whereClauses = append(whereClauses, fmt.Sprintf("%s = $%d", k, argIdx))
-		args = append(args, v)
-		argIdx++
+	for _, clause := range where.Clauses {
+		if len(clause.OrGroup) > 0 {
+			var orParts []string
+			for _, oc := range clause.OrGroup {
+				orParts = append(orParts, fmt.Sprintf("%s = $%d", oc.Column, argIdx))
+				args = append(args, oc.Value)
+				argIdx++
+			}
+			whereClauses = append(whereClauses, "("+strings.Join(orParts, " OR ")+")")
+		} else {
+			whereClauses = append(whereClauses, fmt.Sprintf("%s = $%d", clause.Column, argIdx))
+			args = append(args, clause.Value)
+			argIdx++
+		}
 	}
 	args = append(args, limit)
 

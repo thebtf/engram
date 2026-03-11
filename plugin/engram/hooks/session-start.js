@@ -70,10 +70,11 @@ async function handleSessionStart(ctx, input) {
     const obsType = escapeXmlTags(getString(observation.type));
     const title = escapeXmlTags(getString(observation.title));
     const typeLabel = obsType.toUpperCase();
+    const scopeTag = (typeof observation.scope === 'string' && observation.scope === 'global') ? ' [GLOBAL]' : '';
 
     if (i < fullCount) {
       const narrative = escapeXmlTags(getString(observation.narrative));
-      contextBuilder += `## ${i + 1}. [${typeLabel}] ${title}\n`;
+      contextBuilder += `## ${i + 1}. [${typeLabel}] ${title}${scopeTag}\n`;
       if (narrative !== '') {
         contextBuilder += `${narrative}\n`;
       }
@@ -82,9 +83,9 @@ async function handleSessionStart(ctx, input) {
     } else {
       const subtitle = escapeXmlTags(getString(observation.subtitle));
       if (subtitle !== '') {
-        contextBuilder += `- [${typeLabel}] ${title}: ${subtitle}\n`;
+        contextBuilder += `- [${typeLabel}] ${title}${scopeTag}: ${subtitle}\n`;
       } else {
-        contextBuilder += `- [${typeLabel}] ${title}\n`;
+        contextBuilder += `- [${typeLabel}] ${title}${scopeTag}\n`;
       }
     }
   }

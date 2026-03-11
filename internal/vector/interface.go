@@ -13,7 +13,7 @@ type Client interface {
 	DeleteDocuments(ctx context.Context, ids []string) error
 
 	// Query performs a vector similarity search.
-	Query(ctx context.Context, query string, limit int, where map[string]any) ([]QueryResult, error)
+	Query(ctx context.Context, query string, limit int, where WhereFilter) ([]QueryResult, error)
 
 	// IsConnected checks if the vector store is available.
 	IsConnected() bool
