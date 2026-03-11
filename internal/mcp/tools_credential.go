@@ -12,7 +12,11 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// vaultOnce guards lazy vault initialization.
+// Vault singleton — initialized lazily on first credential operation.
+// If initialization fails (missing key file, invalid key), the error is permanent.
+// Restart the server after fixing the key configuration to retry.
+// Test isolation: vault state is package-level; tests that trigger getVault()
+// with failing config will poison all subsequent tests in the same binary.
 var (
 	sharedVault  *crypto.Vault
 	vaultInitErr error
@@ -56,6 +60,12 @@ func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage
 	if params.Scope == "" {
 		params.Scope = "project"
 	}
+	switch params.Scope {
+	case "project", "global":
+		// valid
+	default:
+		return "", fmt.Errorf("invalid scope %q: must be \"project\" or \"global\"", params.Scope)
+	}
 
 	v, err := getVault()
 	if err != nil {
@@ -92,7 +102,10 @@ func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage
 		EncryptionKeyFingerprint: v.Fingerprint(),
 	}
 
-	id, _, err := s.observationStore.StoreObservation(ctx, "", params.Project, obs, 0, 0)
+	// Use a stable synthetic session ID for vault-created credentials
+	// to avoid unique constraint violations on empty claude_session_id.
+	const vaultSessionID = "credential:vault"
+	id, _, err := s.observationStore.StoreObservation(ctx, vaultSessionID, params.Project, obs, 0, 0)
 	if err != nil {
 		return "", fmt.Errorf("store credential observation: %w", err)
 	}
@@ -222,6 +235,7 @@ func (s *Server) handleDeleteCredential(ctx context.Context, args json.RawMessag
 
 	var params struct {
 		Name    string `json:"name"`
+		Scope   string `json:"scope"`
 		Project string `json:"project"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
@@ -230,8 +244,17 @@ func (s *Server) handleDeleteCredential(ctx context.Context, args json.RawMessag
 	if params.Name == "" {
 		return "", fmt.Errorf("name is required")
 	}
+	if params.Scope == "" {
+		params.Scope = "project"
+	}
+	switch params.Scope {
+	case "project", "global":
+		// valid
+	default:
+		return "", fmt.Errorf("invalid scope %q: must be \"project\" or \"global\"", params.Scope)
+	}
 
-	if err := s.observationStore.DeleteCredential(ctx, params.Name, params.Project); err != nil {
+	if err := s.observationStore.DeleteCredential(ctx, params.Name, params.Project, params.Scope); err != nil {
 		return "", fmt.Errorf("delete credential: %w", err)
 	}
 

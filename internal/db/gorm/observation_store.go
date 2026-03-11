@@ -1245,13 +1245,25 @@ func (s *ObservationStore) ListCredentials(ctx context.Context, project string) 
 	return obs, nil
 }
 
-// DeleteCredential removes a credential observation by name and project scope.
-func (s *ObservationStore) DeleteCredential(ctx context.Context, name, project string) error {
-	result := s.db.WithContext(ctx).
+// DeleteCredential removes a credential observation by name and scope.
+// scope must be "project" or "global" (empty defaults to "project").
+// Project-scoped callers cannot delete global credentials — pass scope="global"
+// explicitly to delete a global credential (requires the caller to have verified
+// this intent, e.g. via MCP scope parameter validation).
+func (s *ObservationStore) DeleteCredential(ctx context.Context, name, project, scope string) error {
+	if scope == "" {
+		scope = "project"
+	}
+	query := s.db.WithContext(ctx).
 		Where("type = ?", "credential").
 		Where("(title = ? OR narrative = ?)", name, name).
-		Where("((project = ? AND scope = 'project') OR scope = 'global')", project).
-		Delete(&Observation{})
+		Where("COALESCE(is_archived, 0) = 0")
+	if scope == "global" {
+		query = query.Where("scope = 'global'")
+	} else {
+		query = query.Where("project = ? AND scope = 'project'", project)
+	}
+	result := query.Delete(&Observation{})
 	if result.Error != nil {
 		return fmt.Errorf("delete credential: %w", result.Error)
 	}

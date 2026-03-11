@@ -2,10 +2,12 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -137,8 +139,9 @@ func (v *Vault) Fingerprint() string {
 }
 
 // MatchesFingerprint reports whether fp matches this vault's key fingerprint.
+// Uses constant-time comparison to avoid timing side-channels on key-derived material.
 func (v *Vault) MatchesFingerprint(fp string) bool {
-	return v.fingerprint == fp
+	return subtle.ConstantTimeCompare([]byte(v.fingerprint), []byte(fp)) == 1
 }
 
 // computeFingerprint returns the first 16 hex chars of SHA-256(key).
@@ -159,8 +162,9 @@ func loadKeyFromFile(path string) ([]byte, error) {
 	if decoded, err := hex.DecodeString(hexStr); err == nil && len(decoded) == 32 {
 		return decoded, nil
 	}
-	// Fall back to raw bytes.
-	raw := []byte(data)
+	// Fall back to raw bytes (trimmed — file may have trailing newline that would
+	// cause a 32-byte key to appear as 33 bytes and fail the length check).
+	raw := bytes.TrimRight(data, "\r\n \t")
 	if len(raw) == 32 {
 		return raw, nil
 	}

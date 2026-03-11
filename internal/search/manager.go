@@ -725,22 +725,25 @@ func (m *Manager) UnifiedSearch(ctx context.Context, params SearchParams) (*Unif
 	searchResult := result.(*UnifiedSearchResult)
 
 	// Never return credential observations in search results (leak prevention).
-	filterCredentials(searchResult)
+	// Return a new struct to avoid mutating the shared singleflight result.
+	filtered := filterCredentials(searchResult)
 
-	// Cache the result
-	m.putInCache(cacheKey, searchResult)
+	// Cache the filtered result
+	m.putInCache(cacheKey, filtered)
 
 	// Track query frequency for cache warming
 	m.trackQueryFrequency(params)
 
-	return searchResult, nil
+	return filtered, nil
 }
 
 // filterCredentials removes credential observations from search results.
 // Credentials are only accessible via the dedicated get_credential MCP tool.
-func filterCredentials(result *UnifiedSearchResult) {
+// Returns a new *UnifiedSearchResult to avoid mutating the shared singleflight result,
+// which may be concurrently read by other waiters.
+func filterCredentials(result *UnifiedSearchResult) *UnifiedSearchResult {
 	if result == nil {
-		return
+		return nil
 	}
 	filtered := make([]SearchResult, 0, len(result.Results))
 	for _, r := range result.Results {
@@ -748,8 +751,10 @@ func filterCredentials(result *UnifiedSearchResult) {
 			filtered = append(filtered, r)
 		}
 	}
-	result.Results = filtered
-	result.TotalCount = len(filtered)
+	out := *result // shallow copy preserves all metadata fields
+	out.Results = filtered
+	out.TotalCount = len(filtered)
+	return &out
 }
 
 // executeSearch performs the actual search without caching/coalescing.
