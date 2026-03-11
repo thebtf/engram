@@ -1,8 +1,12 @@
 # Global Roadmap: engram → Shared Brain
 
-**Status**: Planning
+**Status**: COMPLETED (all 7 phases implemented, 2026-03-11)
 **Created**: 2026-02-26
-**Last Updated**: 2026-02-26
+**Last Updated**: 2026-03-11
+
+**Note**: The original plan specified SQLite+Qdrant, but implementation chose PostgreSQL+pgvector
+as the unified storage backend. FalkorDB was added as optional graph layer. MCP transport uses
+Streamable HTTP (not just SSE). All phases are complete; this document is historical.
 
 ---
 
