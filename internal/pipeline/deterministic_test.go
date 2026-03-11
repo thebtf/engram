@@ -1033,14 +1033,14 @@ func TestShouldSkipTool(t *testing.T) {
 		{"SlashCommand", true},
 		{"EnterWorktree", true},
 		{"ToolSearch", true},
+		{"Read", true},
+		{"Grep", true},
+		{"WebSearch", true},
 		// Tools that should NOT be skipped
 		{"Edit", false},
 		{"Write", false},
-		{"Read", false},
 		{"Bash", false},
-		{"Grep", false},
 		{"WebFetch", false},
-		{"WebSearch", false},
 		{"NotebookEdit", false},
 		// Unknown tools should not be skipped
 		{"UnknownTool", false},

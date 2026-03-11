@@ -104,10 +104,14 @@ type Config struct {
 	FalkorDBGraphName         string   `json:"falkordb_graph_name"` // default: "engram"
 	GraphSearchExpansion      bool     `json:"graph_search_expansion"` // expand search via graph (default: true when graph provider set)
 	TelemetryEnabled          bool     `json:"telemetry_enabled"`
-	SmartGCEnabled            bool     `json:"smart_gc_enabled"`
-	SmartGCThreshold          float64  `json:"smart_gc_threshold"`
-	SmartGCMinAgeDays         int      `json:"smart_gc_min_age_days"`
-	LogBufferSize             int      `json:"log_buffer_size"` // Ring buffer capacity for /api/logs (default: 10000)
+	SmartGCEnabled              bool     `json:"smart_gc_enabled"`
+	SmartGCThreshold            float64  `json:"smart_gc_threshold"`
+	SmartGCMinAgeDays           int      `json:"smart_gc_min_age_days"`
+	LogBufferSize               int      `json:"log_buffer_size"`               // Ring buffer capacity for /api/logs (default: 10000)
+	QueryExpansionTimeoutMS     int      `json:"query_expansion_timeout_ms"`    // Timeout for query expansion (default: 3000ms)
+	DedupSimilarityThreshold    float64  `json:"dedup_similarity_threshold"`    // Cosine similarity threshold for dedup clustering (default: 0.55)
+	DedupWindowSize             int      `json:"dedup_window_size"`             // Max observations considered for dedup (default: 200)
+	ClusteringThreshold         float64  `json:"clustering_threshold"`          // Similarity threshold for result clustering (default: 0.55)
 }
 
 var (
@@ -228,9 +232,13 @@ func Default() *Config {
 		FalkorDBGraphName:         "engram",
 		GraphSearchExpansion:      true,
 		TelemetryEnabled:          true,
-		SmartGCEnabled:            false, // Opt-in: archive low-value observations
-		SmartGCThreshold:          0.05,  // FinalScore below this = candidate for archival
-		SmartGCMinAgeDays:         14,    // Only consider observations older than 14 days
+		SmartGCEnabled:              false, // Opt-in: archive low-value observations
+		SmartGCThreshold:            0.05,  // FinalScore below this = candidate for archival
+		SmartGCMinAgeDays:           14,    // Only consider observations older than 14 days
+		QueryExpansionTimeoutMS:     3000,  // 3s cap for HyDE + synonym expansion
+		DedupSimilarityThreshold:    0.55,  // 55% similarity threshold for deduplication
+		DedupWindowSize:             200,   // Examine up to 200 candidates for dedup
+		ClusteringThreshold:         0.55,  // 55% similarity threshold for result clustering
 	}
 }
 
@@ -335,6 +343,18 @@ func Load() (*Config, error) {
 			}
 			if v, ok := settings["ENGRAM_HUB_THRESHOLD"].(float64); ok && v > 0 {
 				cfg.HubThreshold = int(v)
+			}
+			if v, ok := settings["ENGRAM_QUERY_EXPANSION_TIMEOUT_MS"].(float64); ok && v > 0 {
+				cfg.QueryExpansionTimeoutMS = int(v)
+			}
+			if v, ok := settings["ENGRAM_DEDUP_SIMILARITY_THRESHOLD"].(float64); ok && v > 0 && v <= 1.0 {
+				cfg.DedupSimilarityThreshold = v
+			}
+			if v, ok := settings["ENGRAM_DEDUP_WINDOW_SIZE"].(float64); ok && v > 0 {
+				cfg.DedupWindowSize = int(v)
+			}
+			if v, ok := settings["ENGRAM_CLUSTERING_THRESHOLD"].(float64); ok && v > 0 && v <= 1.0 {
+				cfg.ClusteringThreshold = v
 			}
 		}
 	}
@@ -466,6 +486,26 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_LOG_BUFFER_SIZE")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.LogBufferSize = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_QUERY_EXPANSION_TIMEOUT_MS")); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			cfg.QueryExpansionTimeoutMS = ms
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_DEDUP_SIMILARITY_THRESHOLD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1.0 {
+			cfg.DedupSimilarityThreshold = f
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_DEDUP_WINDOW_SIZE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.DedupWindowSize = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_CLUSTERING_THRESHOLD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1.0 {
+			cfg.ClusteringThreshold = f
 		}
 	}
 

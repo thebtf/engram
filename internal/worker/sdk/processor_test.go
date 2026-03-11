@@ -150,15 +150,15 @@ func TestShouldSkipTool(t *testing.T) {
 		{"ExitPlanMode", "ExitPlanMode", true},
 		{"Skill", "Skill", true},
 		{"SlashCommand", "SlashCommand", true},
+		{"Read", "Read", true},
+		{"Grep", "Grep", true},
+		{"WebSearch", "WebSearch", true},
 
 		// Tools that should NOT be skipped
-		{"Read", "Read", false},
 		{"Edit", "Edit", false},
 		{"Write", "Write", false},
-		{"Grep", "Grep", false},
 		{"Bash", "Bash", false},
 		{"WebFetch", "WebFetch", false},
-		{"WebSearch", "WebSearch", false},
 		{"NotebookEdit", "NotebookEdit", false},
 
 		// Unknown tool (should not be skipped)
@@ -1741,12 +1741,12 @@ func TestProcessObservation_SkipDuplicate(t *testing.T) {
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
 	// First call should try to process (will fail because claudePath doesn't exist)
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Read", input, output, 1, "/test/cwd")
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
 	// Expect error because claudePath doesn't exist
 	assert.Error(t, err)
 
 	// Second call with same input should be skipped as duplicate
-	err = p.ProcessObservation(ctx, "session-1", "project-1", "Read", input, output, 1, "/test/cwd")
+	err = p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
 	assert.NoError(t, err) // No error because it was skipped as duplicate
 }
 
@@ -1765,7 +1765,7 @@ func TestProcessObservation_CircuitBreakerOpen(t *testing.T) {
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Read", input, output, 1, "/test/cwd")
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "circuit breaker open")
 }
@@ -1789,7 +1789,7 @@ func TestProcessObservation_ContextCancel(t *testing.T) {
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Read", input, output, 1, "/test/cwd")
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }

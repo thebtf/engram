@@ -294,6 +294,10 @@ func ShouldSkipTool(toolName string) bool {
 		"SlashCommand":    true,
 		"EnterWorktree":   true,
 		"ToolSearch":      true,
+		// High-volume, low-value tools — create noise without meaningful observations
+		"Read":      true,
+		"Grep":      true,
+		"WebSearch": true,
 	}
 	return skipTools[toolName]
 }

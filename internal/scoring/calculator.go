@@ -78,10 +78,23 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 	conceptContrib := conceptBoost * c.config.ConceptWeight
 
 	// 5. Retrieval boost: log2(count + 1) × 0.1 × weight (diminishing returns)
+	// Temporal decay: boost decays based on time since last retrieval.
+	// Decay applies ONLY to RetrievalContrib, NOT to CoreScore — RecencyDecay
+	// already penalizes by created_at, so double-decay would over-penalize.
 	retrievalContrib := 0.0
 	if obs.RetrievalCount > 0 {
 		// log2(count + 1) gives diminishing returns: 1→1, 3→2, 7→3, 15→4, etc.
 		retrievalBoost := math.Log2(float64(obs.RetrievalCount)+1) * 0.1
+
+		// Apply temporal decay based on last retrieval time
+		if obs.LastRetrievedAt.Valid && obs.LastRetrievedAt.Int64 > 0 {
+			daysSinceLastRetrieval := now.Sub(time.UnixMilli(obs.LastRetrievedAt.Int64)).Hours() / 24.0
+			if daysSinceLastRetrieval < 0 {
+				daysSinceLastRetrieval = 0
+			}
+			retrievalBoost *= math.Exp(-0.05 * daysSinceLastRetrieval)
+		}
+
 		retrievalContrib = retrievalBoost * c.config.RetrievalWeight
 	}
 

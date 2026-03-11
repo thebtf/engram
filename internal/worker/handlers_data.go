@@ -249,15 +249,16 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	sessionsToday, _ := s.sessionStore.GetSessionsToday(r.Context())
 
 	response := map[string]any{
-		"uptime":           time.Since(s.startTime).String(),
-		"uptimeSeconds":    time.Since(s.startTime).Seconds(),
-		"activeSessions":   s.sessionManager.GetActiveSessionCount(),
-		"queueDepth":       s.sessionManager.GetTotalQueueDepth(),
-		"isProcessing":     s.sessionManager.IsAnySessionProcessing(),
-		"connectedClients": s.sseBroadcaster.ClientCount(),
-		"sessionsToday":    sessionsToday,
-		"retrieval":        retrievalStats,
-		"ready":            s.ready.Load(),
+		"uptime":             time.Since(s.startTime).String(),
+		"uptimeSeconds":      time.Since(s.startTime).Seconds(),
+		"activeSessions":     s.sessionManager.GetActiveSessionCount(),
+		"queueDepth":         s.sessionManager.GetTotalQueueDepth(),
+		"isProcessing":       s.sessionManager.IsAnySessionProcessing(),
+		"connectedClients":   s.sseBroadcaster.ClientCount(),
+		"sessionsToday":      sessionsToday,
+		"retrieval":          retrievalStats,
+		"ready":              s.ready.Load(),
+		"vectorSyncDropped":  s.vectorSyncDropped.Load(),
 	}
 
 	// Add memory stats

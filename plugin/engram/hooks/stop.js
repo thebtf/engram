@@ -164,6 +164,35 @@ function detectUtilitySignal(obs, assistantTextLower) {
     }
   }
 
+  // Fuzzy title matching: normalize and check >60% word overlap
+  if (!cited && title.length >= 10) {
+    const titleWords = title.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (titleWords.length >= 3) {
+      const assistantWords = new Set(assistantTextLower.split(/\s+/));
+      let matchCount = 0;
+      for (const w of titleWords) {
+        if (assistantWords.has(w)) matchCount++;
+      }
+      if (matchCount / titleWords.length > 0.6) {
+        cited = true;
+      }
+    }
+  }
+
+  // Concept keyword reuse: check if observation concepts appear in assistant tool calls
+  if (!cited && Array.isArray(obs.concepts) && obs.concepts.length > 0) {
+    let conceptMatches = 0;
+    for (const concept of obs.concepts) {
+      if (typeof concept === 'string' && concept.length >= 3 && assistantTextLower.includes(concept.toLowerCase())) {
+        conceptMatches++;
+      }
+    }
+    // At least 2 concept matches to signal relevance
+    if (conceptMatches >= 2) {
+      cited = true;
+    }
+  }
+
   if (!cited) return 'ignored';
 
   // Check for explicit correction patterns in a local window around each cited term.

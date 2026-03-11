@@ -136,6 +136,7 @@ type Service struct {
 	vectorClient           vector.Client
 	vectorSync             *pgvector.Sync
 	vectorSyncSem          chan struct{}
+	pendingVectorSyncs     chan int64
 	queryExpander          *expansion.Expander
 	scoreCalculator        *scoring.Calculator
 	recalculator           *scoring.Recalculator
@@ -180,6 +181,7 @@ type Service struct {
 	cachedObsCountsMu      sync.RWMutex
 	staleQueueOnce         sync.Once
 	ready                  atomic.Bool
+	vectorSyncDropped      atomic.Int64
 }
 
 // cachedCount stores a cached count value with expiration.
@@ -218,9 +220,14 @@ type RecentSearchQuery struct {
 }
 
 // asyncVectorSync executes a vector sync operation with rate limiting.
-// This prevents goroutine explosion during bulk operations.
-// All goroutines are tracked in s.wg for graceful shutdown.
+// Uses non-blocking semaphore to prevent goroutine accumulation under load.
+// Dropped syncs are enqueued for reconciliation within 60s.
 func (s *Service) asyncVectorSync(fn func()) {
+	s.asyncVectorSyncWithID(fn, 0)
+}
+
+// asyncVectorSyncWithID executes a vector sync with an observation ID for reconciliation.
+func (s *Service) asyncVectorSyncWithID(fn func(), obsID int64) {
 	s.wg.Add(1)
 	if s.vectorSyncSem == nil {
 		// Fallback if semaphore not initialized
@@ -233,12 +240,89 @@ func (s *Service) asyncVectorSync(fn func()) {
 
 	go func() {
 		defer s.wg.Done()
-		// Acquire semaphore slot
-		s.vectorSyncSem <- struct{}{}
-		defer func() { <-s.vectorSyncSem }()
-
-		fn()
+		select {
+		case s.vectorSyncSem <- struct{}{}:
+			defer func() { <-s.vectorSyncSem }()
+			fn()
+		default:
+			s.vectorSyncDropped.Add(1)
+			log.Warn().Int64("obs_id", obsID).Msg("vector sync dropped: semaphore full")
+			// Enqueue for reconciliation if we have an observation ID
+			if obsID > 0 {
+				select {
+				case s.pendingVectorSyncs <- obsID:
+				default:
+					log.Warn().Int64("obs_id", obsID).Msg("reconciliation channel full, vector sync permanently dropped")
+				}
+			}
+		}
 	}()
+}
+
+// startVectorReconciliation starts a background ticker that retries dropped vector syncs.
+func (s *Service) startVectorReconciliation() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-s.ctx.Done():
+				// Drain remaining on shutdown
+				s.drainPendingVectorSyncs()
+				return
+			case <-ticker.C:
+				s.drainPendingVectorSyncs()
+			}
+		}
+	}()
+}
+
+// drainPendingVectorSyncs processes all pending vector sync reconciliation IDs.
+func (s *Service) drainPendingVectorSyncs() {
+	if s.vectorSync == nil || s.observationStore == nil {
+		return
+	}
+
+	var ids []int64
+	for {
+		select {
+		case id := <-s.pendingVectorSyncs:
+			ids = append(ids, id)
+		default:
+			goto done
+		}
+	}
+done:
+
+	if len(ids) == 0 {
+		return
+	}
+
+	log.Info().Int("count", len(ids)).Msg("reconciling dropped vector syncs")
+
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
+
+	observations, err := s.observationStore.GetObservationsByIDs(ctx, ids, "", 0)
+	if err != nil {
+		log.Error().Err(err).Int("count", len(ids)).Msg("failed to fetch observations for vector reconciliation")
+		return
+	}
+
+	var synced, errors int
+	for _, obs := range observations {
+		if syncErr := s.vectorSync.SyncObservation(ctx, obs); syncErr != nil {
+			log.Warn().Err(syncErr).Int64("id", obs.ID).Msg("vector reconciliation sync failed")
+			errors++
+		} else {
+			synced++
+		}
+	}
+
+	log.Info().Int("synced", synced).Int("errors", errors).Int("total", len(ids)).Msg("vector reconciliation complete")
 }
 
 // setupVectorSyncCallbacks configures all vector sync related callbacks on stores and processors.
@@ -408,6 +492,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		cachedObsCounts:    make(map[string]cachedCount),
 		statsCacheTTL:      time.Minute,             // Cache stats for 1 minute
 		vectorSyncSem:      make(chan struct{}, 10), // Limit to 10 concurrent vector syncs
+		pendingVectorSyncs: make(chan int64, 1000),  // Buffer for dropped syncs awaiting reconciliation
 		ingestDedup:        newDeduplicationCache(5 * time.Minute),
 	}
 
@@ -646,6 +731,9 @@ func (s *Service) initializeAsync() {
 	s.graphWriter = gw
 	s.sessionManager = sessionManager
 	s.processor = processor
+	if processor != nil {
+		processor.SetDedupConfig(cfg.DedupSimilarityThreshold, cfg.DedupWindowSize)
+	}
 	s.embedSvc = embedSvc
 	s.vectorClient = vectorClient
 	s.vectorSync = vectorSync
@@ -855,6 +943,9 @@ func (s *Service) initializeAsync() {
 	// Start file watchers for auto-recreation on deletion
 	s.startWatchers()
 
+	// Start vector sync reconciliation ticker
+	s.startVectorReconciliation()
+
 	// Check if vectors need rebuilding (empty or model version mismatch) and trigger background rebuild
 	if vectorClient != nil && vectorSync != nil {
 		needsRebuild, reason := vectorClient.NeedsRebuild(s.ctx)
@@ -1043,6 +1134,9 @@ func (s *Service) reinitializeDatabase() {
 	s.patternDetector = patternDetector
 	s.sessionManager = sessionManager
 	s.processor = processor
+	if processor != nil {
+		processor.SetDedupConfig(s.config.DedupSimilarityThreshold, s.config.DedupWindowSize)
+	}
 	s.embedSvc = embedSvc
 	s.vectorClient = vectorClient
 	s.vectorSync = vectorSync

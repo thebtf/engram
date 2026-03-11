@@ -35,39 +35,147 @@ async function handleUserPrompt(ctx, input) {
     }
 
     if (observations.length > 0) {
-      observationCount = observations.length;
+      // Sort by similarity score (highest first)
+      observations.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+
+      // Dedup by title word overlap (>80% Jaccard = near-duplicate)
+      const dedupedObs = [];
+      for (const obs of observations) {
+        const title = asString(obs.title).toLowerCase();
+        const words = new Set(title.split(/\s+/).filter(w => w.length > 2));
+        let isDup = false;
+        for (const kept of dedupedObs) {
+          const keptTitle = asString(kept.title).toLowerCase();
+          const keptWords = new Set(keptTitle.split(/\s+/).filter(w => w.length > 2));
+          if (words.size === 0 || keptWords.size === 0) continue;
+          const intersection = [...words].filter(w => keptWords.has(w)).length;
+          const union = new Set([...words, ...keptWords]).size;
+          if (union > 0 && intersection / union > 0.8) {
+            isDup = true;
+            break;
+          }
+        }
+        if (!isDup) dedupedObs.push(obs);
+      }
+
+      // Group by type
+      const groups = {
+        decisions: [],
+        patterns: [],
+        changes: [],
+        general: [],
+      };
+      for (const obs of dedupedObs) {
+        const t = asString(obs.type).toLowerCase();
+        if (t === 'decision') {
+          groups.decisions.push(obs);
+        } else if (t === 'feature' || t === 'discovery') {
+          groups.patterns.push(obs);
+        } else if (t === 'change' || t === 'refactor') {
+          groups.changes.push(obs);
+        } else {
+          groups.general.push(obs);
+        }
+      }
+
+      // Token budget: ~4 chars per token, cap at 2000 tokens
+      const TOKEN_BUDGET = 2000;
+      let tokenCount = 0;
+      const budgetObs = [];
+
+      // Process in priority order: decisions > patterns > changes > general
+      const ordered = [
+        ...groups.decisions,
+        ...groups.patterns,
+        ...groups.changes,
+        ...groups.general,
+      ];
+      for (const obs of ordered) {
+        const title = asString(obs.title);
+        const narrative = asString(obs.narrative);
+        const facts = Array.isArray(obs.facts) ? obs.facts : [];
+        let chars = title.length + narrative.length + 50;
+        for (const f of facts) {
+          if (typeof f === 'string') chars += f.length;
+        }
+        const tokens = Math.ceil(chars / 4);
+        if (tokenCount + tokens > TOKEN_BUDGET && budgetObs.length > 0) {
+          break;
+        }
+        tokenCount += tokens;
+        budgetObs.push(obs);
+      }
+
+      const trimmed = ordered.length - budgetObs.length;
+      if (trimmed > 0) {
+        console.error(`[engram] Trimmed ${trimmed} observations to fit token budget (${TOKEN_BUDGET})`);
+      }
+
+      // Re-group after budget trimming
+      const finalGroups = {
+        decisions: [],
+        patterns: [],
+        changes: [],
+        general: [],
+      };
+      for (const obs of budgetObs) {
+        const t = asString(obs.type).toLowerCase();
+        if (t === 'decision') {
+          finalGroups.decisions.push(obs);
+        } else if (t === 'feature' || t === 'discovery') {
+          finalGroups.patterns.push(obs);
+        } else if (t === 'change' || t === 'refactor') {
+          finalGroups.changes.push(obs);
+        } else {
+          finalGroups.general.push(obs);
+        }
+      }
+
+      observationCount = budgetObs.length;
       let contextBuilder = '<relevant-memory>\n';
       contextBuilder += '# Relevant Knowledge From Previous Sessions\n';
       contextBuilder +=
         'IMPORTANT: Use this information to answer the question directly. Do NOT explore the codebase if the answer is here.\n\n';
 
-      for (let i = 0; i < observations.length; i++) {
-        const obs = observations[i];
-        if (!obs || typeof obs !== 'object') {
-          continue;
-        }
+      let idx = 1;
+      const sections = [
+        { key: 'decisions', label: 'Decisions' },
+        { key: 'patterns', label: 'Patterns & Best Practices' },
+        { key: 'changes', label: 'Recent Changes' },
+        { key: 'general', label: 'General Context' },
+      ];
 
-        const title = asString(obs.title);
-        const obsType = asString(obs.type);
-        contextBuilder += `## ${i + 1}. [${obsType}] ${title}\n`;
+      for (const section of sections) {
+        const sectionObs = finalGroups[section.key];
+        if (sectionObs.length === 0) continue;
 
-        if (Array.isArray(obs.facts) && obs.facts.length > 0) {
-          let hasFacts = false;
-          contextBuilder += 'Key facts:\n';
-          for (const fact of obs.facts) {
-            if (typeof fact === 'string' && fact !== '') {
-              hasFacts = true;
-              contextBuilder += `- ${fact}\n`;
+        contextBuilder += `### ${section.label}\n`;
+        for (const obs of sectionObs) {
+          const title = asString(obs.title);
+          const obsType = asString(obs.type).toUpperCase();
+          const score = typeof obs.similarity === 'number' ? obs.similarity.toFixed(2) : '';
+          const scoreTag = score ? ` [relevance: ${score}]` : '';
+
+          contextBuilder += `## ${idx}. [${obsType}] ${title}${scoreTag}\n`;
+
+          if (Array.isArray(obs.facts) && obs.facts.length > 0) {
+            contextBuilder += 'Key facts:\n';
+            let hasFacts = false;
+            for (const fact of obs.facts) {
+              if (typeof fact === 'string' && fact !== '') {
+                hasFacts = true;
+                contextBuilder += `- ${fact}\n`;
+              }
             }
+            if (hasFacts) contextBuilder += '\n';
           }
-          if (hasFacts) {
-            contextBuilder += '\n';
-          }
-        }
 
-        const narrative = asString(obs.narrative);
-        if (narrative !== '') {
-          contextBuilder += `${narrative}\n\n`;
+          const narrative = asString(obs.narrative);
+          if (narrative !== '') {
+            contextBuilder += `${narrative}\n\n`;
+          }
+
+          idx++;
         }
       }
 

@@ -212,20 +212,22 @@ const MaxVectorSyncWorkers = 8
 // Uses LLM API (OpenAI-compatible) as primary backend, with Claude CLI as optional fallback.
 // Field order optimized for memory alignment (fieldalignment).
 type Processor struct {
-	observationStore    *gorm.ObservationStore
-	summaryStore        *gorm.SummaryStore
-	llmClient           learning.LLMClient
-	broadcastFunc       BroadcastFunc
-	syncObservationFunc SyncObservationFunc
-	syncSummaryFunc     SyncSummaryFunc
-	circuitBreaker      *CircuitBreaker
-	deduplicator        *RequestDeduplicator
-	vectorSyncChan      chan *models.Observation
-	vectorSyncDone      chan struct{}
-	sem                 chan struct{}
-	claudePath          string
-	model               string
-	vectorSyncWg        sync.WaitGroup
+	observationStore         *gorm.ObservationStore
+	summaryStore             *gorm.SummaryStore
+	llmClient                learning.LLMClient
+	broadcastFunc            BroadcastFunc
+	syncObservationFunc      SyncObservationFunc
+	syncSummaryFunc          SyncSummaryFunc
+	circuitBreaker           *CircuitBreaker
+	deduplicator             *RequestDeduplicator
+	vectorSyncChan           chan *models.Observation
+	vectorSyncDone           chan struct{}
+	sem                      chan struct{}
+	claudePath               string
+	model                    string
+	dedupSimilarityThreshold float64
+	dedupWindowSize          int
+	vectorSyncWg             sync.WaitGroup
 }
 
 // SetBroadcastFunc sets the broadcast callback for SSE events.
@@ -241,6 +243,16 @@ func (p *Processor) SetSyncObservationFunc(fn SyncObservationFunc) {
 // SetSyncSummaryFunc sets the callback for syncing summaries to vector DB.
 func (p *Processor) SetSyncSummaryFunc(fn SyncSummaryFunc) {
 	p.syncSummaryFunc = fn
+}
+
+// SetDedupConfig sets deduplication parameters.
+func (p *Processor) SetDedupConfig(threshold float64, windowSize int) {
+	if threshold > 0 && threshold <= 1.0 {
+		p.dedupSimilarityThreshold = threshold
+	}
+	if windowSize > 0 {
+		p.dedupWindowSize = windowSize
+	}
 }
 
 // broadcast sends an event via the broadcast callback if set.
@@ -300,16 +312,18 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 	}
 
 	return &Processor{
-		claudePath:       claudePath,
-		model:            cfg.Model,
-		llmClient:        llmClient,
-		observationStore: observationStore,
-		summaryStore:     summaryStore,
-		sem:              make(chan struct{}, concurrency),
-		circuitBreaker:   NewCircuitBreaker(5, 60),                               // Open after 5 failures, reset after 60s
-		deduplicator:     NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
-		vectorSyncChan:   make(chan *models.Observation, MaxVectorSyncWorkers*2), // Buffered channel
-		vectorSyncDone:   make(chan struct{}),
+		claudePath:               claudePath,
+		model:                    cfg.Model,
+		llmClient:                llmClient,
+		observationStore:         observationStore,
+		summaryStore:             summaryStore,
+		sem:                      make(chan struct{}, concurrency),
+		circuitBreaker:           NewCircuitBreaker(5, 60),                               // Open after 5 failures, reset after 60s
+		deduplicator:             NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
+		vectorSyncChan:           make(chan *models.Observation, MaxVectorSyncWorkers*2), // Buffered channel
+		vectorSyncDone:           make(chan struct{}),
+		dedupSimilarityThreshold: 0.4, // Will be overridden by config
+		dedupWindowSize:          50,  // Will be overridden by config
 	}, nil
 }
 
@@ -447,14 +461,13 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 	}
 
 	// Get existing observations for deduplication
-	existingObs, err := p.observationStore.GetRecentObservations(ctx, project, 50)
+	existingObs, err := p.observationStore.GetRecentObservations(ctx, project, p.dedupWindowSize)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to get existing observations for dedup check")
 		existingObs = nil // Continue without dedup
 	}
 
 	// Store each observation (with deduplication check)
-	const similarityThreshold = 0.4 // Same threshold as retrieval clustering
 	var storedCount, skippedCount int
 
 	for _, obs := range observations {
@@ -465,7 +478,7 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 		storedObs := obs.ToStoredObservation()
 
 		// Check if this observation is too similar to existing ones
-		if existingObs != nil && similarity.IsSimilarToAny(storedObs, existingObs, similarityThreshold) {
+		if existingObs != nil && similarity.IsSimilarToAny(storedObs, existingObs, p.dedupSimilarityThreshold) {
 			log.Debug().
 				Str("type", string(obs.Type)).
 				Str("title", obs.Title).
@@ -750,13 +763,18 @@ func shouldSkipTool(toolName string) bool {
 		// Skill/command execution (meta-operations)
 		"Skill":        true,
 		"SlashCommand": true,
+
+		// High-volume, low-value tools — create noise without meaningful observations
+		"Read":      true,
+		"Grep":      true,
+		"WebSearch": true,
 	}
 
 	skip, found := skipTools[toolName]
 	if found {
 		return skip
 	}
-	return false // Process remaining tools: Read, Edit, Write, Grep, Bash, WebFetch, WebSearch, NotebookEdit
+	return false // Process remaining tools: Edit, Write, Bash, WebFetch, NotebookEdit
 }
 
 // shouldSkipTrivialOperation performs local pre-filtering to skip trivial operations

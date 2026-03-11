@@ -76,7 +76,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	var expandedQueries []expansion.ExpandedQuery
 	var detectedIntent string
 	if s.queryExpander != nil {
-		expandCtx, expandCancel := context.WithTimeout(r.Context(), 15*time.Second)
+		expandCtx, expandCancel := context.WithTimeout(r.Context(), time.Duration(s.config.QueryExpansionTimeoutMS)*time.Millisecond)
 		cfg := expansion.DefaultConfig()
 		cfg.EnableVocabularyExpansion = false // Vocabulary expansion is optional
 		cfg.EnableHyDE = s.config.HyDEEnabled
@@ -265,7 +265,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cluster similar observations to remove duplicates
-	clusteredObservations := clusterObservations(freshObservations, 0.4)
+	clusteredObservations := clusterObservations(freshObservations, s.config.ClusteringThreshold)
 	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
 
 	// Sort by similarity score (highest first) if we have scores and didn't rerank
@@ -895,7 +895,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cluster the union to remove duplicates
-	clusteredObservations := clusterObservations(unionObservations, 0.4)
+	clusteredObservations := clusterObservations(unionObservations, s.config.ClusteringThreshold)
 	duplicatesRemoved := len(unionObservations) - len(clusteredObservations)
 
 	// Record retrieval stats with staleness metrics
