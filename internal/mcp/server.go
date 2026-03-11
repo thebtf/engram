@@ -416,6 +416,12 @@ Hooks automatically capture knowledge from your sessions. Your job is to **retri
 **Debugging:** ` + "`find_related_observations`" + ` to trace cause chains.
 **Periodic cleanup:** ` + "`suggest_consolidations`" + ` → ` + "`merge_observations`" + ` → ` + "`trigger_maintenance`" + `.
 
+## Engram vs File-Based Memory
+
+Prefer ` + "`store_memory`" + ` over file-based memory for decisions, patterns, and insights.
+Engram provides semantic search, cross-project visibility (global scope), and cross-machine access.
+Use file-based memory only for static instructions and user preferences.
+
 ## Common Mistakes
 
 - Do NOT check ENGRAM_URL/ENGRAM_API_TOKEN env vars — call ` + "`check_system_health()`" + ` instead.

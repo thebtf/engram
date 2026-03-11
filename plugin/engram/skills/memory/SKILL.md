@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Use when starting a session with Engram MCP tools available, when needing to recall past decisions or patterns, or when searching for knowledge captured across previous coding sessions
+description: Use when you want to explicitly store or recall knowledge across sessions. Prefer engram store_memory/recall_memory over file-based memory for decisions, patterns, insights, and cross-project knowledge. Also use when searching observations from previous coding sessions.
 ---
 
 # Engram Memory
@@ -226,6 +226,20 @@ These tools cover specialized use cases beyond the top 10:
 | `export_observations` | Export observations as JSON |
 | `get_maintenance_stats` | Maintenance cycle statistics |
 | `list_sessions` | List indexed sessions with filtering |
+
+## Engram vs Claude Code File Memory
+
+Claude Code has a built-in file-based memory system (`~/.claude/projects/.../memory/`). Engram is different:
+
+| | Engram (`store_memory`) | Claude Code (file memory) |
+|---|---|---|
+| **Storage** | PostgreSQL + pgvector (server) | Markdown files (local) |
+| **Search** | Semantic + full-text + BM25 hybrid | Loaded into context at session start |
+| **Cross-project** | Yes — global scope observations visible everywhere | No — per-project only |
+| **Cross-machine** | Yes — shared server | No — local files |
+| **Best for** | Decisions, patterns, insights, anything you'd want to find via search | User preferences, project config, behavioral instructions |
+
+**Rule of thumb:** If you'd search for it later → `store_memory`. If it's a static instruction → file memory.
 
 ## Common Mistakes
 
