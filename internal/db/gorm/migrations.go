@@ -1034,6 +1034,41 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`ALTER TABLE content_chunks DROP COLUMN IF EXISTS text`).Error
 		},
 	},
+	// Migration 030: Projects lookup table for stable cross-platform project identity.
+	// Maps canonical git-remote-based project IDs to legacy path-based aliases,
+	// enabling zero-downtime migration as clients upgrade to git-remote IDs.
+	{
+		ID: "030_projects_table",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE TABLE IF NOT EXISTS projects (
+					id            TEXT PRIMARY KEY,
+					git_remote    TEXT,
+					relative_path TEXT,
+					legacy_ids    TEXT[],
+					display_name  TEXT,
+					created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`,
+				// Unique constraint on (git_remote, relative_path) for ON CONFLICT upserts.
+				// Partial index excludes rows without a git_remote (path-based fallback projects).
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_remote_path
+				 ON projects(git_remote, relative_path)
+				 WHERE git_remote IS NOT NULL`,
+				// GIN index on legacy_ids array for fast alias lookup via @> operator.
+				`CREATE INDEX IF NOT EXISTS idx_projects_legacy_ids
+				 ON projects USING GIN(legacy_ids)`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 030: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec("DROP TABLE IF EXISTS projects CASCADE").Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

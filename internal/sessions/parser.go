@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -175,10 +176,45 @@ func WorkstationID() string {
 	return hex.EncodeToString(hash[:])[:8]
 }
 
-// ProjectID computes a deterministic 8-char hexadecimal ID from the cwd path.
+// ProjectID computes a deterministic 8-char hexadecimal project ID.
+// Tries git remote origin URL first (stable across machines and OS path layouts),
+// falls back to SHA-256 of the absolute path if not a git repo or has no remote.
 func ProjectID(cwdPath string) string {
+	if id, err := GitRemoteProjectID(cwdPath); err == nil && id != "" {
+		return id
+	}
 	hash := sha256.Sum256([]byte(cwdPath))
 	return hex.EncodeToString(hash[:])[:8]
+}
+
+// GitRemoteProjectID computes a stable 8-char project ID from the git remote origin URL
+// and the repository-relative path of cwdPath (via git rev-parse --show-prefix).
+// Returns "", error if cwdPath is not inside a git repo or has no remote configured.
+func GitRemoteProjectID(cwdPath string) (string, error) {
+	remoteURL, err := runGitCommand(cwdPath, "remote", "get-url", "origin")
+	if err != nil {
+		return "", fmt.Errorf("git remote get-url origin: %w", err)
+	}
+	if remoteURL == "" {
+		return "", fmt.Errorf("git remote origin URL is empty")
+	}
+	relativePath, err := runGitCommand(cwdPath, "rev-parse", "--show-prefix")
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --show-prefix: %w", err)
+	}
+	key := remoteURL + "/" + relativePath
+	hash := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(hash[:])[:8], nil
+}
+
+// runGitCommand runs git with the given args inside cwdPath and returns trimmed stdout.
+func runGitCommand(cwdPath string, args ...string) (string, error) {
+	fullArgs := append([]string{"-C", cwdPath}, args...)
+	out, err := exec.Command("git", fullArgs...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // CompositeKey builds the isolation key: workstation_id:project_id:session_id.

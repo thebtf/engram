@@ -27,12 +27,56 @@ function isInternalHook() {
   return process.env.ENGRAM_INTERNAL === '1';
 }
 
-function ProjectIDWithName(cwd) {
+/**
+ * getGitRemoteID attempts to compute a stable, cross-platform project ID
+ * from the git remote origin URL and the relative path within the repo.
+ * Returns an object with projectID, gitRemote, and relativePath on success.
+ * Returns null if the directory is not a git repository or has no remote.
+ */
+function getGitRemoteID(cwd) {
+  try {
+    const execSync = require('child_process').execSync;
+    const opts = { cwd, stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 };
+    const remoteURL = execSync('git remote get-url origin', opts).toString().trim();
+    if (!remoteURL) return null;
+    const relativePath = execSync('git rev-parse --show-prefix', opts).toString().trim();
+    const key = remoteURL + '/' + relativePath;
+    const hash = crypto.createHash('sha256').update(key).digest('hex');
+    const dirName = path.basename(path.resolve(cwd || ''));
+    return {
+      projectID: dirName + '_' + hash.slice(0, 8),
+      gitRemote: remoteURL,
+      relativePath: relativePath,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * LegacyProjectID always returns the OLD path-based project ID (6-char hash).
+ * Used during migration to send both old and new IDs to the server,
+ * allowing the server to re-associate existing observations.
+ */
+function LegacyProjectID(cwd) {
   const resolvedPath = path.resolve(cwd || '');
   const dirName = path.basename(resolvedPath);
   const hash = crypto.createHash('sha256').update(resolvedPath).digest('hex');
-  const shortHash = hash.slice(0, 6);
-  return `${dirName}_${shortHash}`;
+  return dirName + '_' + hash.slice(0, 6);
+}
+
+/**
+ * ProjectIDWithName returns the canonical project ID for the given working directory.
+ * Prefers a stable git-remote-based ID (cross-platform, cross-OS-path).
+ * Falls back to a path-based ID for non-git directories.
+ */
+function ProjectIDWithName(cwd) {
+  const gitResult = getGitRemoteID(cwd);
+  if (gitResult) {
+    return gitResult.projectID;
+  }
+  // Fallback: path-based ID for directories without a git remote.
+  return LegacyProjectID(cwd);
 }
 
 function buildRequestHeaders(includeJsonBody = false) {
@@ -151,6 +195,7 @@ async function RunHook(hookName, handler) {
     PermissionMode: typeof input.permission_mode === 'string' ? input.permission_mode : '',
     HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
     Project: ProjectIDWithName(typeof input.cwd === 'string' ? input.cwd : ''),
+    LegacyProject: LegacyProjectID(typeof input.cwd === 'string' ? input.cwd : ''),
     RawInput: rawInput,
   };
 
@@ -192,6 +237,7 @@ async function RunStatuslineHook(handler, offlineRenderer) {
 module.exports = {
   getServerURL,
   ProjectIDWithName,
+  LegacyProjectID,
   requestGet,
   requestPost,
   RunHook,

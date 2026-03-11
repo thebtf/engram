@@ -340,3 +340,17 @@ type TelemetrySnapshot struct {
 }
 
 func (TelemetrySnapshot) TableName() string { return "telemetry_snapshots" }
+
+// Project represents a repository's stable identity record for cross-platform project ID resolution.
+// Maps a canonical git-remote-based project ID to optional legacy path-based aliases,
+// enabling zero-downtime migration when clients upgrade to git-remote IDs.
+type Project struct {
+	GitRemote    sql.NullString         `gorm:"column:git_remote;index"`
+	RelativePath sql.NullString         `gorm:"column:relative_path"`
+	DisplayName  sql.NullString         `gorm:"column:display_name"`
+	LegacyIDs    models.JSONStringArray `gorm:"column:legacy_ids;type:text"`
+	ID           string                 `gorm:"primaryKey"`
+	CreatedAt    time.Time              `gorm:"autoCreateTime"`
+}
+
+func (Project) TableName() string { return "projects" }
