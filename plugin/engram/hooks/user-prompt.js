@@ -27,20 +27,27 @@ async function handleUserPrompt(ctx, input) {
       ? searchResult.observations
       : [];
 
+    // Filter out credentials from context injection (leak prevention).
+    // Credentials are only accessible via the dedicated get_credential MCP tool.
+    const safeObservations = observations.filter(obs => {
+      const t = asString(obs.type).toLowerCase();
+      return t !== 'credential';
+    });
+
     // Collect injected observation IDs for per-session tracking (called after sessionID is known)
-    for (const obs of observations) {
+    for (const obs of safeObservations) {
       if (obs && typeof obs === 'object' && typeof obs.id === 'number' && obs.id > 0) {
         searchIds.push(obs.id);
       }
     }
 
-    if (observations.length > 0) {
+    if (safeObservations.length > 0) {
       // Sort by similarity score (highest first)
-      observations.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+      safeObservations.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
 
       // Dedup by title word overlap (>80% Jaccard = near-duplicate)
       const dedupedObs = [];
-      for (const obs of observations) {
+      for (const obs of safeObservations) {
         const title = asString(obs.title).toLowerCase();
         const words = new Set(title.split(/\s+/).filter(w => w.length > 2));
         let isDup = false;

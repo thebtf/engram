@@ -1069,6 +1069,64 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
+	// Credential vault tools — only advertise when observation store is available
+	if s.observationStore != nil {
+		tools = append(tools,
+			Tool{
+				Name:        "store_credential",
+				Description: "Securely store an encrypted credential (API key, password, token). Value is encrypted with AES-256-GCM.",
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"name", "value"},
+					"properties": map[string]any{
+						"name":  map[string]any{"type": "string", "description": "Credential name/identifier"},
+						"value": map[string]any{"type": "string", "description": "Secret value to encrypt and store"},
+						"scope": map[string]any{"type": "string", "enum": []string{"project", "global"}, "default": "project", "description": "Scope: 'project' (default) or 'global' (cross-project)"},
+						"tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional concept tags"},
+					},
+				},
+			},
+			Tool{
+				Name:        "get_credential",
+				Description: "Retrieve and decrypt a stored credential by name. Returns the decrypted value.",
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"name"},
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string", "description": "Credential name to retrieve"},
+					},
+				},
+			},
+			Tool{
+				Name:        "list_credentials",
+				Description: "List all stored credentials (names and metadata only, no values).",
+				InputSchema: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+			Tool{
+				Name:        "delete_credential",
+				Description: "Delete a stored credential by name.",
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"name"},
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string", "description": "Credential name to delete"},
+					},
+				},
+			},
+			Tool{
+				Name:        "vault_status",
+				Description: "Check vault encryption status: key configured, fingerprint, credential count.",
+				InputSchema: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+		)
+	}
+
 	// Document / Collection tools — only advertise when dependencies are available
 	if s.documentStore != nil {
 		tools = append(tools,
@@ -1285,6 +1343,16 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleImportInstincts(ctx, args)
 	case "backfill_status":
 		return s.handleBackfillStatus()
+	case "store_credential":
+		return s.handleStoreCredential(ctx, args)
+	case "get_credential":
+		return s.handleGetCredential(ctx, args)
+	case "list_credentials":
+		return s.handleListCredentials(ctx, args)
+	case "delete_credential":
+		return s.handleDeleteCredential(ctx, args)
+	case "vault_status":
+		return s.handleVaultStatus(ctx, args)
 	case "store_memory":
 		return s.handleStoreMemory(ctx, args)
 	case "recall_memory":

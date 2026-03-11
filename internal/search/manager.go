@@ -724,6 +724,9 @@ func (m *Manager) UnifiedSearch(ctx context.Context, params SearchParams) (*Unif
 
 	searchResult := result.(*UnifiedSearchResult)
 
+	// Never return credential observations in search results (leak prevention).
+	filterCredentials(searchResult)
+
 	// Cache the result
 	m.putInCache(cacheKey, searchResult)
 
@@ -731,6 +734,22 @@ func (m *Manager) UnifiedSearch(ctx context.Context, params SearchParams) (*Unif
 	m.trackQueryFrequency(params)
 
 	return searchResult, nil
+}
+
+// filterCredentials removes credential observations from search results.
+// Credentials are only accessible via the dedicated get_credential MCP tool.
+func filterCredentials(result *UnifiedSearchResult) {
+	if result == nil {
+		return
+	}
+	filtered := make([]SearchResult, 0, len(result.Results))
+	for _, r := range result.Results {
+		if r.Type != "credential" {
+			filtered = append(filtered, r)
+		}
+	}
+	result.Results = filtered
+	result.TotalCount = len(filtered)
 }
 
 // executeSearch performs the actual search without caching/coalescing.

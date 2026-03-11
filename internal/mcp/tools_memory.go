@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
@@ -57,6 +58,11 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		log.Debug().
 			Int("soft_limit", softLimit).
 			Msg("store_memory: content truncated to soft limit")
+	}
+
+	// Reject content containing plaintext secrets — use store_credential instead.
+	if privacy.ContainsSecrets(params.Content) {
+		return "", fmt.Errorf("content appears to contain secrets (API keys, tokens, passwords). Use store_credential for secret values, not store_memory")
 	}
 
 	// Classify observation type from content keywords when not provided.
