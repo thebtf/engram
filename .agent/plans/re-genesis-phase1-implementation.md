@@ -1,5 +1,7 @@
 # Engram Re-Genesis Phase 1: Implementation Plan
 
+**Status:** COMPLETED (deterministic pipeline implemented in internal/pipeline/, 2026-03-11)
+
 ## Summary
 
 Phase 1 implements the **Deterministic Pipeline (Level 0)** — server-side observation extraction

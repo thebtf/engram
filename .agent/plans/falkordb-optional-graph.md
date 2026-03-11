@@ -1,5 +1,7 @@
 # Implementation Plan: Optional FalkorDB Graph Backend
 
+**Status:** COMPLETED (FalkorDB graph backend implemented and integrated, 2026-03-11)
+
 ## Summary
 
 Add FalkorDB as an optional, supplementary graph backend for engram. When connected, it provides persistent graph storage and efficient multi-hop traversal for relation queries and search expansion. When unavailable, engram continues using PostgreSQL `observation_relations` table for all graph operations — zero degradation.
