@@ -1,104 +1,179 @@
 /**
- * Assumed OpenClaw Plugin SDK interfaces.
+ * Local type definitions matching the real OpenClaw Plugin SDK.
  *
- * These are locally defined since no SDK package is available.
- * The shapes are inferred from the plugin spec and architectural analysis.
- * They will need adjustment once the real SDK is available.
+ * These are locally defined since no SDK package is published.
+ * Shapes match openclaw/openclaw:src/plugins/types.ts (verified via Nia research).
  */
 
 // ---------------------------------------------------------------------------
 // Core SDK types
 // ---------------------------------------------------------------------------
 
+/** Logger provided by the SDK on the plugin API. */
+export interface PluginLogger {
+  debug(message: string, ...args: unknown[]): void;
+  info(message: string, ...args: unknown[]): void;
+  warn(message: string, ...args: unknown[]): void;
+  error(message: string, ...args: unknown[]): void;
+}
+
+/** Runtime services exposed by the SDK. */
+export interface PluginRuntime {
+  tools: {
+    createMemorySearchTool(): unknown;
+  };
+}
+
+/** OpenClaw global config (opaque to plugins). */
+export type OpenClawConfig = Record<string, unknown>;
+
+/** JSON Schema for plugin config (static, declared in plugin definition). */
+export type OpenClawPluginConfigSchema = Record<string, unknown>;
+
 export interface OpenClawPluginApi {
-  /** Register a lifecycle hook handler. */
-  registerHook<E extends HookEventName>(
-    event: E,
-    handler: HookHandler<HookEventMap[E]>,
+  /** Plugin ID. */
+  id: string;
+  /** Plugin display name. */
+  name: string;
+  /** OpenClaw global config. */
+  config: OpenClawConfig;
+  /** Plugin-specific config from the user's OpenClaw settings. */
+  pluginConfig?: Record<string, unknown>;
+  /** Runtime services. */
+  runtime: PluginRuntime;
+  /** Logger scoped to this plugin. */
+  logger: PluginLogger;
+
+  /** Register a tool or tool factory. */
+  registerTool(
+    toolOrFactory: AnyAgentTool | AnyAgentTool[] | ToolFactory,
+    opts?: { names?: string[] },
   ): void;
 
-  /** Register a native agent tool. */
-  registerTool(tool: ToolDefinition): void;
+  /** Register a lifecycle hook handler (typed). */
+  on<K extends PluginHookName>(
+    hookName: K,
+    handler: PluginHookHandler<K>,
+    opts?: { priority?: number },
+  ): void;
+
+  /** Register a CLI extension. */
+  registerCli(
+    registrar: (ctx: { program: CliProgram }) => void,
+    opts?: { commands?: string[] },
+  ): void;
+
+  /** Register a background service. */
+  registerService(service: OpenClawPluginService): void;
 
   /** Register a slash command. */
-  registerCommand(command: CommandDefinition): void;
+  registerCommand(command: OpenClawPluginCommandDefinition): void;
 
-  /** Log a message at the given level. */
-  log(level: 'debug' | 'info' | 'warn' | 'error', message: string): void;
+  /** Resolve a workspace-relative path safely. */
+  resolvePath(input: string): string;
 }
 
 export interface OpenClawPluginDefinition {
-  name: string;
-  version: string;
-  kind: 'memory' | 'tool' | 'formatter' | 'generic';
+  /** Unique plugin identifier. */
+  id: string;
+  /** Optional display name. */
+  name?: string;
+  /** Human-readable description. */
+  description?: string;
+  /** Version string. */
+  version?: string;
+  /** Plugin kind — "memory" is an exclusive slot. */
+  kind?: 'memory' | 'context-engine';
+  /** JSON Schema for plugin config (declared statically). */
+  configSchema?: OpenClawPluginConfigSchema;
   /**
-   * Called once when the plugin is loaded. The plugin should register all
-   * hooks, tools, and commands here.
+   * Called once when the plugin is loaded. Register all hooks, tools,
+   * commands, and services here.
    */
-  initialize(api: OpenClawPluginApi, config: Record<string, unknown>): void | Promise<void>;
+  register?: (api: OpenClawPluginApi) => void | Promise<void>;
+  /** Optional activation phase (called after all plugins registered). */
+  activate?: (api: OpenClawPluginApi) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
-// Hook event types
+// Tool types (TypeBox-compatible)
 // ---------------------------------------------------------------------------
 
-export type HookEventName =
-  | 'session_start'
-  | 'before_prompt_build'
-  | 'after_tool_call'
-  | 'before_compaction'
-  | 'session_end';
+/** A TSchema-compatible object (from @sinclair/typebox). */
+export type TSchema = Record<string, unknown>;
+
+export interface AnyAgentTool {
+  name: string;
+  label?: string;
+  description: string;
+  /** TypeBox Type.Object schema for tool parameters. */
+  parameters: TSchema;
+  /** Execute the tool. Returns a string result. */
+  execute(toolCallId: string, params: Record<string, unknown>): Promise<string>;
+}
+
+/** Tool factory: receives context, returns array of tools. */
+export type ToolFactory = (ctx: OpenClawPluginToolContext) => AnyAgentTool[];
+
+export interface OpenClawPluginToolContext {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  agentDir?: string;
+  agentId?: string;
+  sessionKey?: string;
+  /** Per-conversation ID, regenerated on /new and /reset. */
+  sessionId?: string;
+  messageChannel?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Hook types — 24 hook names
+// ---------------------------------------------------------------------------
+
+export type PluginHookName =
+  | 'before_model_resolve' | 'before_prompt_build' | 'before_agent_start'
+  | 'llm_input' | 'llm_output' | 'agent_end'
+  | 'before_compaction' | 'after_compaction' | 'before_reset'
+  | 'message_received' | 'message_sending' | 'message_sent'
+  | 'before_tool_call' | 'after_tool_call' | 'tool_result_persist'
+  | 'before_message_write' | 'session_start' | 'session_end'
+  | 'subagent_spawning' | 'subagent_delivery_target' | 'subagent_spawned'
+  | 'subagent_ended' | 'gateway_start' | 'gateway_stop';
 
 /** Base fields present in every hook event. */
 export interface BaseHookEvent {
-  /** Unique ID for this agent session. */
-  agentId: string;
-  /** Optional workspace directory for the session. */
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
   workspaceDir?: string;
-  /** ISO timestamp when the event fired. */
-  timestamp: string;
+  timestamp?: string;
 }
 
 export interface SessionStartEvent extends BaseHookEvent {
-  /** Optional user-supplied prompt that initiated the session. */
   initialPrompt?: string;
 }
 
 export interface BeforePromptBuildEvent extends BaseHookEvent {
-  /** The user's current prompt text. */
-  prompt: string;
-  /** Conversation turn index (0-based). */
-  turnIndex: number;
+  prompt?: string;
+  turnIndex?: number;
 }
 
 export interface AfterToolCallEvent extends BaseHookEvent {
-  /** Name of the tool that was called. */
-  toolName: string;
-  /** Tool input arguments (already JSON-serialized or object). */
-  toolInput: unknown;
-  /** Tool result (already JSON-serialized or object). */
-  toolResult: unknown;
-  /** Whether the tool call succeeded. */
-  success: boolean;
-  /** Error message if the tool call failed. */
+  toolName?: string;
+  toolInput?: unknown;
+  toolResult?: unknown;
+  success?: boolean;
   error?: string;
 }
 
 export interface BeforeCompactionEvent extends BaseHookEvent {
-  /**
-   * Recent conversation messages before compaction.
-   * Shape is assumed — may be an array of {role, content} objects.
-   */
-  messages: ConversationMessage[];
-  /** Reason for compaction (context limit, manual, etc.). */
+  messages?: ConversationMessage[];
   reason?: string;
 }
 
 export interface SessionEndEvent extends BaseHookEvent {
-  /** Final messages in the session. */
   messages?: ConversationMessage[];
-  /** Reason for session end. */
-  reason?: 'normal' | 'error' | 'timeout' | 'manual';
+  reason?: string;
 }
 
 export interface ConversationMessage {
@@ -107,9 +182,21 @@ export interface ConversationMessage {
 }
 
 // ---------------------------------------------------------------------------
-// Hook event → type map
+// Hook handler return types
 // ---------------------------------------------------------------------------
 
+export interface PromptBuildResult {
+  prependContext?: string;
+  appendSystemContext?: string;
+}
+
+export interface SessionStartResult {
+  appendSystemContext?: string;
+}
+
+export type HookResult = void | PromptBuildResult | SessionStartResult | undefined;
+
+/** Map hook names to their event types (for hooks we use). */
 export interface HookEventMap {
   session_start: SessionStartEvent;
   before_prompt_build: BeforePromptBuildEvent;
@@ -118,77 +205,55 @@ export interface HookEventMap {
   session_end: SessionEndEvent;
 }
 
-// ---------------------------------------------------------------------------
-// Hook handler return types
-// ---------------------------------------------------------------------------
-
-/** Return value for before_prompt_build: context to inject. */
-export interface PromptBuildResult {
-  /** Text prepended before each user prompt turn (per-turn dynamic context). */
-  prependContext?: string;
-  /** Text appended to the system prompt (static session-level context). */
-  appendSystemContext?: string;
-}
-
-/** Return value for session_start. */
-export interface SessionStartResult {
-  /** Text to append to the system prompt for the session. */
-  appendSystemContext?: string;
-}
-
-/** Generic hook return — void or a result object. */
-export type HookResult =
-  | void
-  | PromptBuildResult
-  | SessionStartResult
-  | undefined;
-
-export type HookHandler<E> = (event: E) => HookResult | Promise<HookResult>;
+/** Generic hook handler type. */
+export type PluginHookHandler<K extends PluginHookName> =
+  K extends keyof HookEventMap
+    ? (event: HookEventMap[K]) => HookResult | Promise<HookResult>
+    : (event: BaseHookEvent) => HookResult | Promise<HookResult>;
 
 // ---------------------------------------------------------------------------
-// Tool types
+// Service types
 // ---------------------------------------------------------------------------
 
-export interface ToolDefinition {
+export interface OpenClawPluginService {
   name: string;
-  description: string;
-  /** JSON Schema for the tool's input parameters. */
-  parameters: Record<string, unknown>;
-  /** Called when the agent invokes this tool. */
-  execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolExecuteResult>;
-}
-
-export interface ToolContext {
-  agentId: string;
-  workspaceDir?: string;
-}
-
-export interface ToolExecuteResult {
-  content: string;
-  /** Whether the tool call was successful. */
-  success: boolean;
+  start(): Promise<void> | void;
+  stop(): Promise<void> | void;
 }
 
 // ---------------------------------------------------------------------------
 // Command types
 // ---------------------------------------------------------------------------
 
-export interface CommandDefinition {
-  /** The slash command trigger, e.g. "/memory". */
-  command: string;
+export interface OpenClawPluginCommandDefinition {
+  name: string;
   description: string;
-  /** Optional usage hint. */
   usage?: string;
-  /** Called when the user runs this command. */
   execute(args: string[], context: CommandContext): Promise<CommandResult>;
 }
 
 export interface CommandContext {
-  agentId: string;
+  agentId?: string;
   workspaceDir?: string;
+  sessionId?: string;
 }
 
 export interface CommandResult {
-  /** Output to display to the user. */
   output: string;
+}
+
+// ---------------------------------------------------------------------------
+// CLI types (minimal — Commander-like)
+// ---------------------------------------------------------------------------
+
+export interface CliProgram {
+  command(name: string): CliCommand;
+}
+
+export interface CliCommand {
+  command(name: string): CliCommand;
+  description(desc: string): CliCommand;
+  argument(name: string, desc?: string): CliCommand;
+  option(flags: string, desc?: string, defaultValue?: unknown): CliCommand;
+  action(fn: (...args: unknown[]) => void | Promise<void>): CliCommand;
 }

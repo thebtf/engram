@@ -1,6 +1,7 @@
 {
   "name": "engram",
-  "version": "0.1.0",
+  "id": "engram",
+  "version": "0.2.0",
   "displayName": "Engram Memory",
   "description": "Connects OpenClaw agents to engram persistent memory server for long-term context retention",
   "kind": "memory",
@@ -66,10 +67,17 @@
   "tools": [
     "engram_search",
     "engram_remember",
-    "engram_decisions"
+    "engram_decisions",
+    "memory_search",
+    "memory_store",
+    "memory_forget",
+    "memory_get"
   ],
   "commands": [
-    "/memory",
-    "/remember"
-  ]
+    "memory",
+    "remember"
+  ],
+  "cli": {
+    "commands": ["memory"]
+  }
 }

@@ -5,7 +5,7 @@
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import type { CommandDefinition, CommandContext, CommandResult } from '../types/openclaw.js';
+import type { OpenClawPluginCommandDefinition, CommandContext, CommandResult } from '../types/openclaw.js';
 
 /**
  * Build the /memory command definition.
@@ -13,9 +13,9 @@ import type { CommandDefinition, CommandContext, CommandResult } from '../types/
 export function buildMemoryCommand(
   client: EngramRestClient,
   config: PluginConfig,
-): CommandDefinition {
+): OpenClawPluginCommandDefinition {
   return {
-    command: '/memory',
+    name: 'memory',
     description: 'Show engram memory server status and recent observations',
     usage: '/memory',
 
@@ -33,7 +33,7 @@ async function runMemoryCommand(
   client: EngramRestClient,
   config: PluginConfig,
 ): Promise<CommandResult> {
-  const identity = resolveIdentity(context.agentId, context.workspaceDir);
+  const identity = resolveIdentity(context.agentId ?? '', context.workspaceDir);
   const project = config.project ?? identity.projectId;
 
   if (!client.isAvailable()) {
@@ -57,7 +57,7 @@ async function runMemoryCommand(
   lines.push(`Server: ${config.url}`);
   if (health?.version) lines.push(`Version: ${health.version}`);
   lines.push(`Project: ${project}`);
-  lines.push(`Agent ID: ${context.agentId}`);
+  lines.push(`Agent ID: ${context.agentId ?? ''}`);
   if (context.workspaceDir) lines.push(`Workspace: ${context.workspaceDir}`);
 
   if (selfCheck?.components) {

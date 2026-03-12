@@ -63,6 +63,10 @@ export interface BulkImportResponse {
   errors?: string[];
 }
 
+export interface BulkDeleteResponse {
+  deleted: number;
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -185,6 +189,14 @@ export class EngramRestClient {
     observations: BulkImportRequest[],
   ): Promise<BulkImportResponse | null> {
     return this.post<BulkImportResponse>('/api/observations/bulk-import', observations);
+  }
+
+  /**
+   * Bulk-delete observations by ID.
+   * POST /api/observations/bulk-delete
+   */
+  async bulkDelete(ids: string[]): Promise<BulkDeleteResponse | null> {
+    return this.post<BulkDeleteResponse>('/api/observations/bulk-delete', { ids });
   }
 
   /** Returns true if the server is currently considered reachable. */

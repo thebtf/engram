@@ -9,7 +9,7 @@
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import type { BeforeCompactionEvent, ConversationMessage } from '../types/openclaw.js';
+import type { BeforeCompactionEvent, ConversationMessage, PluginLogger } from '../types/openclaw.js';
 
 /** Maximum recent messages to include in the backfill payload. */
 const MAX_MESSAGES = 20;
@@ -27,11 +27,13 @@ export function handleBeforeCompaction(
   event: BeforeCompactionEvent,
   client: EngramRestClient,
   config: PluginConfig,
+  logger?: PluginLogger,
 ): void {
   if (!client.isAvailable()) return;
   if (!config.autoExtract) return;
 
-  const identity = resolveIdentity(event.agentId, event.workspaceDir);
+  const agentId = event.agentId ?? '';
+  const identity = resolveIdentity(agentId, event.workspaceDir);
   const project = config.project ?? identity.projectId;
 
   const messages = Array.isArray(event.messages) ? event.messages : [];
@@ -45,12 +47,12 @@ export function handleBeforeCompaction(
 
   // Fire-and-forget — do not await
   void client.backfillSession({
-    session_id: event.agentId,
+    session_id: agentId,
     project,
     content: truncated,
   });
 
-  console.warn(
+  (logger ?? console).warn(
     `[engram] before-compaction: submitting ${recent.length} messages for backfill (project ${project})`,
   );
 }

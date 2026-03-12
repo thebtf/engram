@@ -9,7 +9,7 @@
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import type { CommandDefinition, CommandContext, CommandResult } from '../types/openclaw.js';
+import type { OpenClawPluginCommandDefinition, CommandContext, CommandResult } from '../types/openclaw.js';
 
 const CONTENT_MAX_CHARS = 900;
 
@@ -19,9 +19,9 @@ const CONTENT_MAX_CHARS = 900;
 export function buildRememberCommand(
   client: EngramRestClient,
   config: PluginConfig,
-): CommandDefinition {
+): OpenClawPluginCommandDefinition {
   return {
-    command: '/remember',
+    name: 'remember',
     description: 'Quickly store a note in engram memory',
     usage: '/remember <text to remember>',
 
@@ -49,7 +49,7 @@ async function runRememberCommand(
     return { output: 'engram is currently unreachable — cannot store memory' };
   }
 
-  const identity = resolveIdentity(context.agentId, context.workspaceDir);
+  const identity = resolveIdentity(context.agentId ?? '', context.workspaceDir);
   const project = config.project ?? identity.projectId;
 
   // Use the first sentence (up to 80 chars) as the title

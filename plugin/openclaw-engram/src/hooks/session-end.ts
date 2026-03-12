@@ -8,7 +8,7 @@
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import type { SessionEndEvent, ConversationMessage } from '../types/openclaw.js';
+import type { SessionEndEvent, ConversationMessage, PluginLogger } from '../types/openclaw.js';
 
 const MAX_MESSAGES = 20;
 const CONTENT_MAX_CHARS = 6000;
@@ -24,11 +24,13 @@ export function handleSessionEnd(
   event: SessionEndEvent,
   client: EngramRestClient,
   config: PluginConfig,
+  logger?: PluginLogger,
 ): void {
   if (!client.isAvailable()) return;
   if (!config.autoExtract) return;
 
-  const identity = resolveIdentity(event.agentId, event.workspaceDir);
+  const agentId = event.agentId ?? '';
+  const identity = resolveIdentity(agentId, event.workspaceDir);
   const project = config.project ?? identity.projectId;
 
   const messages: ConversationMessage[] = Array.isArray(event.messages) ? event.messages : [];
@@ -47,12 +49,12 @@ export function handleSessionEnd(
 
   // Fire-and-forget — do not await
   void client.backfillSession({
-    session_id: event.agentId,
+    session_id: agentId,
     project,
     content: truncated,
   });
 
-  console.warn(
+  (logger ?? console).warn(
     `[engram] session-end: submitted ${recent.length} messages for backfill` +
       ` (project ${project}, reason: ${event.reason ?? 'unknown'})`,
   );

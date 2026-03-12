@@ -1,151 +1,156 @@
 /**
- * engram_remember — native SDK tool for storing observations in engram memory.
- *
- * The project scope is automatically set to the agentId.
+ * engram_remember + memory_store — store observations in engram memory.
  */
 
 import { z } from 'zod';
+import { Type } from '@sinclair/typebox';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import type { ToolDefinition, ToolContext, ToolExecuteResult } from '../types/openclaw.js';
+import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const CONTENT_MAX_CHARS = 900;
 
 const RememberParamsSchema = z.object({
-  title: z.string().min(1).describe('Short descriptive title for the observation'),
-  content: z.string().min(1).describe('Content/narrative to remember'),
-  type: z
-    .enum(['decision', 'feature', 'change', 'refactor', 'discovery', 'context'])
-    .default('context')
-    .describe('Observation type'),
-  scope: z
-    .enum(['project', 'global'])
-    .default('project')
-    .describe('Scope: project-local or global'),
-  tags: z
-    .array(z.string())
-    .optional()
-    .describe('Optional tags for the observation'),
+  title: z.string().min(1),
+  content: z.string().min(1),
+  type: z.enum(['decision', 'feature', 'change', 'refactor', 'discovery', 'context']).default('context'),
+  scope: z.enum(['project', 'global']).default('project'),
+  tags: z.array(z.string()).optional(),
 });
 
-type RememberParams = z.infer<typeof RememberParamsSchema>;
+const StoreParamsSchema = z.object({
+  text: z.string().min(1).optional(),
+  content: z.string().min(1).optional(),
+  title: z.string().optional(),
+  category: z.enum(['preference', 'decision', 'entity', 'fact', 'other']).optional(),
+  tags: z.array(z.string()).optional(),
+}).refine((d) => Boolean(d.text || d.content), { message: 'Either text or content is required' });
 
-/**
- * Build the engram_remember tool definition.
- */
-export function buildEngramRememberTool(
+const rememberParameters = Type.Object({
+  title: Type.String({ description: 'Short descriptive title for the observation' }),
+  content: Type.String({ description: 'Content/narrative to remember (max 900 chars)' }),
+  type: Type.Optional(Type.Union([
+    Type.Literal('decision'), Type.Literal('feature'), Type.Literal('change'),
+    Type.Literal('refactor'), Type.Literal('discovery'), Type.Literal('context'),
+  ], { description: 'Observation type', default: 'context' })),
+  scope: Type.Optional(Type.Union([
+    Type.Literal('project'), Type.Literal('global'),
+  ], { description: 'Scope: project-local or global', default: 'project' })),
+  tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional tags' })),
+});
+
+const storeParameters = Type.Object({
+  text: Type.Optional(Type.String({ description: 'Text to remember (compat alias for content)' })),
+  content: Type.Optional(Type.String({ description: 'Content to remember' })),
+  title: Type.Optional(Type.String({ description: 'Short title (auto-generated if omitted)' })),
+  category: Type.Optional(Type.Union([
+    Type.Literal('preference'), Type.Literal('decision'), Type.Literal('entity'),
+    Type.Literal('fact'), Type.Literal('other'),
+  ], { description: 'Memory category' })),
+  tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional tags' })),
+});
+
+const CATEGORY_TO_TYPE: Record<string, string> = {
+  preference: 'context',
+  decision: 'decision',
+  entity: 'context',
+  fact: 'discovery',
+  other: 'context',
+};
+
+async function storeObservation(
+  title: string,
+  content: string,
+  type: string,
+  scope: string,
+  tags: string[] | undefined,
+  ctx: OpenClawPluginToolContext,
   client: EngramRestClient,
   config: PluginConfig,
-): ToolDefinition {
+): Promise<string> {
+  if (!client.isAvailable()) {
+    return 'engram is currently unreachable — memory store unavailable';
+  }
+
+  const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
+  const project = config.project ?? identity.projectId;
+
+  const trimmedContent = content.length > CONTENT_MAX_CHARS ? content.slice(0, CONTENT_MAX_CHARS) : content;
+
+  const observation: BulkImportRequest = {
+    title,
+    content: trimmedContent,
+    type,
+    project,
+    scope,
+    tags,
+  };
+
+  const response = await client.bulkImport([observation]);
+  if (!response) {
+    return 'engram store failed — server returned no response';
+  }
+
+  if (response.imported > 0) {
+    return `Stored: "${title}" (type: ${type}, scope: ${scope})`;
+  }
+  if (response.skipped > 0) {
+    return `Observation skipped (likely a near-duplicate): "${title}"`;
+  }
+
+  const errMsg = response.errors?.join(', ') ?? 'unknown error';
+  return `Failed to store observation: ${errMsg}`;
+}
+
+export function createEngramRememberTool(
+  ctx: OpenClawPluginToolContext,
+  client: EngramRestClient,
+  config: PluginConfig,
+): AnyAgentTool {
   return {
     name: 'engram_remember',
     description:
       'Store an observation in engram persistent memory. ' +
       'Use this to record decisions, discoveries, patterns, or important context for future sessions.',
-    parameters: {
-      type: 'object',
-      properties: {
-        title: {
-          type: 'string',
-          description: 'Short descriptive title for the observation',
-        },
-        content: {
-          type: 'string',
-          description: 'Content/narrative to remember (max 900 chars)',
-        },
-        type: {
-          type: 'string',
-          enum: ['decision', 'feature', 'change', 'refactor', 'discovery', 'context'],
-          description: 'Observation type',
-          default: 'context',
-        },
-        scope: {
-          type: 'string',
-          enum: ['project', 'global'],
-          description: 'Scope: project-local or global',
-          default: 'project',
-        },
-        tags: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Optional tags for the observation',
-        },
-      },
-      required: ['title', 'content'],
-    },
+    parameters: rememberParameters,
 
-    async execute(
-      params: Record<string, unknown>,
-      context: ToolContext,
-    ): Promise<ToolExecuteResult> {
+    async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
       const parsed = RememberParamsSchema.safeParse(params);
       if (!parsed.success) {
-        return {
-          success: false,
-          content: `Invalid parameters: ${parsed.error.message}`,
-        };
+        return `Invalid parameters: ${parsed.error.message}`;
       }
-      return runRemember(parsed.data, context, client, config);
+      return storeObservation(
+        parsed.data.title, parsed.data.content, parsed.data.type, parsed.data.scope,
+        parsed.data.tags, ctx, client, config,
+      );
     },
   };
 }
 
-async function runRemember(
-  params: RememberParams,
-  context: ToolContext,
+export function createMemoryStoreTool(
+  ctx: OpenClawPluginToolContext,
   client: EngramRestClient,
   config: PluginConfig,
-): Promise<ToolExecuteResult> {
-  if (!client.isAvailable()) {
-    return {
-      success: false,
-      content: 'engram is currently unreachable — memory store unavailable',
-    };
-  }
-
-  const identity = resolveIdentity(context.agentId, context.workspaceDir);
-  const project = config.project ?? identity.projectId;
-
-  const content = params.content.length > CONTENT_MAX_CHARS
-    ? params.content.slice(0, CONTENT_MAX_CHARS)
-    : params.content;
-
-  const observation: BulkImportRequest = {
-    title: params.title,
-    content,
-    type: params.type,
-    project,
-    scope: params.scope,
-    tags: params.tags,
-  };
-
-  const response = await client.bulkImport([observation]);
-
-  if (!response) {
-    return {
-      success: false,
-      content: 'engram store failed — server returned no response',
-    };
-  }
-
-  if (response.imported > 0) {
-    return {
-      success: true,
-      content: `Stored: "${params.title}" (type: ${params.type}, scope: ${params.scope})`,
-    };
-  }
-
-  if (response.skipped > 0) {
-    return {
-      success: true,
-      content: `Observation skipped (likely a near-duplicate): "${params.title}"`,
-    };
-  }
-
-  const errMsg = response.errors?.join(', ') ?? 'unknown error';
+): AnyAgentTool {
   return {
-    success: false,
-    content: `Failed to store observation: ${errMsg}`,
+    name: 'memory_store',
+    label: 'Store Memory',
+    description:
+      'Store a memory for future sessions. Accepts text or content parameter.',
+    parameters: storeParameters,
+
+    async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
+      const parsed = StoreParamsSchema.safeParse(params);
+      if (!parsed.success) {
+        return `Invalid parameters: ${parsed.error.message}`;
+      }
+
+      const content = parsed.data.text ?? parsed.data.content ?? '';
+      const title = parsed.data.title ?? (content.length > 80 ? content.slice(0, 77) + '...' : content);
+      const type = parsed.data.category ? (CATEGORY_TO_TYPE[parsed.data.category] ?? 'context') : 'context';
+
+      return storeObservation(title, content, type, 'project', parsed.data.tags, ctx, client, config);
+    },
   };
 }

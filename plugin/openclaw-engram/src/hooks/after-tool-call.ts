@@ -29,7 +29,8 @@ export function handleAfterToolCall(
   if (!client.isAvailable()) return;
   if (!config.autoExtract) return;
 
-  const identity = resolveIdentity(event.agentId, event.workspaceDir);
+  const agentId = event.agentId ?? '';
+  const identity = resolveIdentity(agentId, event.workspaceDir);
   const project = config.project ?? identity.projectId;
 
   const toolInput = truncate(JSON.stringify(event.toolInput ?? ''), TOOL_INPUT_MAX_CHARS);
@@ -37,9 +38,9 @@ export function handleAfterToolCall(
 
   // Fire-and-forget — do not await
   void client.ingestEvent({
-    session_id: event.agentId,
+    session_id: agentId,
     project,
-    tool_name: event.toolName,
+    tool_name: event.toolName ?? 'unknown',
     tool_input: toolInput,
     tool_result: toolResult,
   });

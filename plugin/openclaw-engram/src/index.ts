@@ -1,18 +1,24 @@
 /**
  * OpenClaw Engram Plugin
  *
- * Connects OpenClaw's AI gateway to engram's persistent memory server via REST API.
+ * Connects OpenClaw agents to engram persistent memory via REST API.
  * Provides:
  *   - Session-level static context injection (appendSystemContext)
  *   - Per-turn dynamic context search (prependContext)
  *   - Automatic self-learning via tool event ingestion
  *   - Transcript backfill on compaction / session end
- *   - Agent tools: engram_search, engram_remember, engram_decisions
+ *   - Agent tools: engram_search, engram_remember, engram_decisions,
+ *                  memory_search, memory_store, memory_forget, memory_get
  *   - Slash commands: /memory, /remember
+ *   - CLI: openclaw memory status|search|store
  */
 
-import type { OpenClawPluginDefinition, OpenClawPluginApi } from './types/openclaw.js';
-import { parseConfig } from './config.js';
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from './types/openclaw.js';
+import { parseConfig, getJsonSchema } from './config.js';
 import { EngramRestClient } from './client.js';
 
 import { handleSessionStart } from './hooks/session-start.js';
@@ -21,9 +27,11 @@ import { handleAfterToolCall } from './hooks/after-tool-call.js';
 import { handleBeforeCompaction } from './hooks/before-compaction.js';
 import { handleSessionEnd } from './hooks/session-end.js';
 
-import { buildEngramSearchTool } from './tools/engram-search.js';
-import { buildEngramRememberTool } from './tools/engram-remember.js';
-import { buildEngramDecisionsTool } from './tools/engram-decisions.js';
+import { createEngramSearchTool, createMemorySearchTool } from './tools/engram-search.js';
+import { createEngramRememberTool, createMemoryStoreTool } from './tools/engram-remember.js';
+import { createEngramDecisionsTool } from './tools/engram-decisions.js';
+import { createMemoryForgetTool } from './tools/memory-forget.js';
+import { createMemoryGetTool } from './tools/memory-get.js';
 
 import { buildMemoryCommand } from './commands/memory.js';
 import { buildRememberCommand } from './commands/remember.js';
@@ -33,48 +41,66 @@ import { buildRememberCommand } from './commands/remember.js';
 // ---------------------------------------------------------------------------
 
 const plugin: OpenClawPluginDefinition = {
-  name: 'engram',
-  version: '0.1.0',
+  id: 'engram',
+  name: 'Engram Memory',
+  description: 'Persistent shared memory via engram server',
+  version: '0.2.0',
   kind: 'memory',
+  configSchema: getJsonSchema(),
 
-  async initialize(api: OpenClawPluginApi, rawConfig: Record<string, unknown>): Promise<void> {
-    // Parse and validate config — throws ZodError with a clear message on misconfiguration
-    const config = parseConfig(rawConfig);
+  async register(api: OpenClawPluginApi): Promise<void> {
+    const config = parseConfig(api.pluginConfig ?? {});
     const client = new EngramRestClient(config);
 
-    api.log('info', `[engram] initializing — server: ${config.url}`);
+    api.logger.info(`[engram] initializing — server: ${config.url}`);
 
     // ------------------------------------------------------------------
     // Hooks
     // ------------------------------------------------------------------
 
-    api.registerHook('session_start', (event) =>
-      handleSessionStart(event, client, config),
+    api.on('session_start', (event) =>
+      handleSessionStart(event, client, config, api.logger),
     );
 
-    api.registerHook('before_prompt_build', (event) =>
-      handleBeforePromptBuild(event, client, config),
+    api.on('before_prompt_build', (event) =>
+      handleBeforePromptBuild(event, client, config, api.logger),
     );
 
-    api.registerHook('after_tool_call', (event) => {
+    api.on('after_tool_call', (event) => {
       handleAfterToolCall(event, client, config);
     });
 
-    api.registerHook('before_compaction', (event) => {
-      handleBeforeCompaction(event, client, config);
+    api.on('before_compaction', (event) => {
+      handleBeforeCompaction(event, client, config, api.logger);
     });
 
-    api.registerHook('session_end', (event) => {
-      handleSessionEnd(event, client, config);
+    api.on('session_end', (event) => {
+      handleSessionEnd(event, client, config, api.logger);
     });
 
     // ------------------------------------------------------------------
-    // Tools
+    // Tools (factory pattern)
     // ------------------------------------------------------------------
 
-    api.registerTool(buildEngramSearchTool(client, config));
-    api.registerTool(buildEngramRememberTool(client, config));
-    api.registerTool(buildEngramDecisionsTool(client, config));
+    const toolFactory = (ctx: OpenClawPluginToolContext) => [
+      createEngramSearchTool(ctx, client, config),
+      createMemorySearchTool(ctx, client, config),
+      createEngramRememberTool(ctx, client, config),
+      createMemoryStoreTool(ctx, client, config),
+      createEngramDecisionsTool(ctx, client, config),
+      createMemoryForgetTool(ctx, client, config),
+      createMemoryGetTool(ctx, client, config, api),
+    ];
+
+    api.registerTool(toolFactory, {
+      names: [
+        'engram_search', 'memory_search',
+        'engram_remember', 'memory_store',
+        'engram_decisions',
+        'memory_forget',
+        'memory_get',
+      ],
+    });
 
     // ------------------------------------------------------------------
     // Commands
@@ -83,7 +109,66 @@ const plugin: OpenClawPluginDefinition = {
     api.registerCommand(buildMemoryCommand(client, config));
     api.registerCommand(buildRememberCommand(client, config));
 
-    api.log('info', '[engram] plugin initialized successfully');
+    // ------------------------------------------------------------------
+    // CLI: openclaw memory <subcommand>
+    // ------------------------------------------------------------------
+
+    api.registerCli(({ program }) => {
+      const memCmd = program.command('memory').description('Engram memory operations');
+
+      memCmd
+        .command('status')
+        .description('Show engram server status')
+        .action(async () => {
+          const health = await client.health();
+          const status = health?.status ?? 'UNKNOWN';
+          const version = health?.version ? ` v${health.version}` : '';
+          console.log(`engram: ${status}${version} (${config.url})`);
+        });
+
+      memCmd
+        .command('search')
+        .description('Search engram memory')
+        .argument('<query>', 'Search query')
+        .action(async (query: unknown) => {
+          const response = await client.searchContext({
+            project: config.project ?? 'cli',
+            query: String(query),
+          });
+          const obs = response?.observations ?? [];
+          if (obs.length === 0) {
+            console.log('No results found.');
+            return;
+          }
+          for (const o of obs) {
+            const score = typeof o.similarity === 'number' ? ` [${o.similarity.toFixed(2)}]` : '';
+            console.log(`- ${o.title}${score}`);
+          }
+        });
+
+      memCmd
+        .command('store')
+        .description('Store a memory')
+        .argument('<text>', 'Text to remember')
+        .action(async (text: unknown) => {
+          const textStr = String(text);
+          const title = textStr.length > 80 ? textStr.slice(0, 77) + '...' : textStr;
+          const response = await client.bulkImport([{
+            title,
+            content: textStr.slice(0, 900),
+            type: 'context',
+            project: config.project ?? 'cli',
+            scope: 'project',
+          }]);
+          if (response && response.imported > 0) {
+            console.log(`Stored: "${title}"`);
+          } else {
+            console.log('Failed to store memory.');
+          }
+        });
+    }, { commands: ['memory'] });
+
+    api.logger.info('[engram] plugin registered successfully');
   },
 };
 

@@ -13,6 +13,7 @@ import { formatContext } from '../context/formatter.js';
 import type {
   BeforePromptBuildEvent,
   PromptBuildResult,
+  PluginLogger,
 } from '../types/openclaw.js';
 
 /**
@@ -27,18 +28,20 @@ export async function handleBeforePromptBuild(
   event: BeforePromptBuildEvent,
   client: EngramRestClient,
   config: PluginConfig,
+  logger?: PluginLogger,
 ): Promise<PromptBuildResult | void> {
   if (!client.isAvailable()) return;
   if (!event.prompt || event.prompt.trim() === '') return;
 
-  const identity = resolveIdentity(event.agentId, event.workspaceDir);
+  const agentId = event.agentId ?? '';
+  const identity = resolveIdentity(agentId, event.workspaceDir);
   const project = config.project ?? identity.projectId;
 
   const response = await client.searchContext({
     project,
     query: event.prompt,
     cwd: event.workspaceDir,
-    agent_id: event.agentId,
+    agent_id: agentId,
   });
 
   if (!response || !Array.isArray(response.observations) || response.observations.length === 0) {
@@ -51,21 +54,21 @@ export async function handleBeforePromptBuild(
   );
 
   if (trimmedCount > 0) {
-    console.warn(
+    (logger ?? console).warn(
       `[engram] before-prompt-build: trimmed ${trimmedCount} observations to fit token budget`,
     );
   }
 
   if (!context) return;
 
-  console.warn(
+  (logger ?? console).warn(
     `[engram] before-prompt-build: injecting ${injectedIds.length} observations for project ${project}`,
   );
 
   // Mark injected observations (fire-and-forget)
   if (injectedIds.length > 0) {
     const sessionResp = await client.initSession({
-      claudeSessionId: event.agentId,
+      claudeSessionId: agentId,
       project,
       prompt: event.prompt,
     });

@@ -10,6 +10,7 @@ import { formatContext } from '../context/formatter.js';
 import type {
   SessionStartEvent,
   SessionStartResult,
+  PluginLogger,
 } from '../types/openclaw.js';
 
 /**
@@ -24,14 +25,16 @@ export async function handleSessionStart(
   event: SessionStartEvent,
   client: EngramRestClient,
   config: PluginConfig,
+  logger?: PluginLogger,
 ): Promise<SessionStartResult | void> {
   if (!client.isAvailable()) return;
 
-  const identity = resolveIdentity(event.agentId, event.workspaceDir);
+  const agentId = event.agentId ?? '';
+  const identity = resolveIdentity(agentId, event.workspaceDir);
   const project = config.project ?? identity.projectId;
 
   const response = await client.getContextInject(
-    event.agentId,
+    agentId,
     event.workspaceDir,
   );
 
@@ -45,7 +48,7 @@ export async function handleSessionStart(
   );
 
   if (trimmedCount > 0) {
-    console.warn(`[engram] session-start: trimmed ${trimmedCount} observations to fit token budget`);
+    (logger ?? console).warn(`[engram] session-start: trimmed ${trimmedCount} observations to fit token budget`);
   }
 
   if (!context) return;
@@ -57,12 +60,12 @@ export async function handleSessionStart(
 
   // Initialize session tracking (fire-and-forget)
   void client.initSession({
-    claudeSessionId: event.agentId,
+    claudeSessionId: agentId,
     project,
     prompt: event.initialPrompt,
   });
 
-  console.warn(
+  (logger ?? console).warn(
     `[engram] session-start: injected ${injectedIds.length} observations for project ${project}`,
   );
 
