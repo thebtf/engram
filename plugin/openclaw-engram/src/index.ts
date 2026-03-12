@@ -22,6 +22,8 @@ import type {
 } from './types/openclaw.js';
 import { parseConfig, getJsonSchema } from './config.js';
 import { EngramRestClient } from './client.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 import { handleSessionStart } from './hooks/session-start.js';
 import { handleBeforePromptBuild } from './hooks/before-prompt-build.js';
@@ -126,10 +128,10 @@ const plugin: OpenClawPluginDefinition = {
         const pathArgs = parts.filter((a) => !a.startsWith('--'));
         const migratePath = pathArgs.length > 0 ? pathArgs.join(' ') : undefined;
 
-        // Resolve workspace from the plugin API — slash commands (Telegram, Discord)
-        // don't carry workspaceDir in PluginCommandContext, but api.resolvePath does.
-        let workspaceDir: string | undefined;
-        try { workspaceDir = api.resolvePath('.'); } catch { /* unavailable */ }
+        // Resolve workspace: slash commands (Telegram, Discord) don't carry
+        // workspaceDir in PluginCommandContext. Use plugin config or default agent path.
+        const workspaceDir = config.workspaceDir
+          ?? join(homedir(), '.openclaw', 'workspace');
         const toolCtx: OpenClawPluginToolContext = { workspaceDir };
         const tool = createMemoryMigrateTool(toolCtx, client, config, api);
         const result = await tool.execute('cmd-migrate', { dryRun, force, path: migratePath });

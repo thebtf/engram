@@ -41,6 +41,14 @@ export const PluginConfigSchema = z.object({
    */
   autoExtract: z.boolean().default(true),
 
+  /**
+   * Workspace directory path for memory file discovery (MEMORY.md, memory/).
+   * Required for /migrate command when called from channel context (Telegram, Discord)
+   * where PluginCommandContext doesn't carry workspaceDir.
+   * Defaults to ~/.openclaw/workspace/ (default agent workspace).
+   */
+  workspaceDir: z.string().optional(),
+
   /** Log verbosity level. */
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('warn'),
 });
@@ -73,6 +81,7 @@ export function getJsonSchema(): Record<string, unknown> {
       tokenBudget: { type: 'number', description: 'Token budget for context injection', default: 2000 },
       timeoutMs: { type: 'number', description: 'Per-request timeout (ms)', default: 5000 },
       autoExtract: { type: 'boolean', description: 'Auto-extract on compaction/session-end', default: true },
+      workspaceDir: { type: 'string', description: 'Workspace dir for /migrate (default: ~/.openclaw/workspace/)' },
       logLevel: { type: 'string', enum: ['debug', 'info', 'warn', 'error'], default: 'warn' },
     },
     required: ['url', 'token'],
