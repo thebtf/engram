@@ -64,9 +64,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			Msg("store_memory: content truncated to soft limit")
 	}
 
-	// Reject content containing plaintext secrets — use store_credential instead.
+	// Redact secrets from content before storing — warn and continue rather than reject.
 	if privacy.ContainsSecrets(params.Content) {
-		return "", fmt.Errorf("content appears to contain secrets (API keys, tokens, passwords). Use store_credential for secret values, not store_memory")
+		log.Warn().Msg("store_memory: content contains secrets — redacting before storage")
+		params.Content = privacy.RedactSecrets(params.Content)
 	}
 
 	// Classify observation type from content keywords when not provided.

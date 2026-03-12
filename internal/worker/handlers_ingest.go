@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/pipeline"
+	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -97,6 +98,16 @@ func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 	// Stringify tool_input and tool_result for pipeline functions
 	toolInputStr := toJSONString(req.ToolInput)
 	toolResultStr := toJSONString(req.ToolResult)
+
+	// Redact secrets from tool input/result before any pipeline processing.
+	if privacy.ContainsSecrets(toolInputStr) {
+		log.Warn().Str("tool", req.ToolName).Msg("ingest: tool_input contains secrets — redacting before pipeline processing")
+		toolInputStr = privacy.RedactSecrets(toolInputStr)
+	}
+	if privacy.ContainsSecrets(toolResultStr) {
+		log.Warn().Str("tool", req.ToolName).Msg("ingest: tool_result contains secrets — redacting before pipeline processing")
+		toolResultStr = privacy.RedactSecrets(toolResultStr)
+	}
 
 	// Filter: skip tools that should never be observed
 	if pipeline.ShouldSkipTool(req.ToolName) {

@@ -1,5 +1,19 @@
 # Technical Debt
 
+## Privacy / Secret Detection (2026-03-12)
+
+### ~~P1: privacy/secrets.go functions never called from production code~~ — RESOLVED 2026-03-12
+`ContainsSecrets()`, `RedactSecrets()`, and `SanitizeObservation()` in `internal/privacy/secrets.go`
+were fully implemented and tested but unreachable from any production path.
+
+**Resolution:**
+- `internal/mcp/tools_memory.go` `handleStoreMemory`: changed from hard-reject to warn-and-redact.
+  Content containing secrets is now logged at WARN level and redacted via `RedactSecrets()` before storage.
+- `internal/worker/handlers_ingest.go` `handleIngestEvent`: secret detection added on `toolInputStr` and
+  `toolResultStr` immediately after stringification, before any pipeline processing. Secrets are redacted
+  in-memory; the raw event stored in `raw_events` may still contain original data (source-of-truth store).
+
+
 ## Credential Storage (2026-03-12)
 
 ### ~~S2: vault_status missing key_source field~~ — RESOLVED 2026-03-12
