@@ -7,8 +7,8 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
-import { readFile, readdir, writeFile, stat } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { readFile, readdir, writeFile, stat, lstat } from 'node:fs/promises';
+import { join, relative, resolve, normalize } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
@@ -93,9 +93,17 @@ async function runMigration(
   const marker = params.force ? null : await loadMarker(markerPath);
 
   // Discover files
-  const filePaths = params.path
-    ? [api.resolvePath(params.path)]
-    : await discoverMemoryFiles(workspaceDir);
+  let filePaths: string[];
+  if (params.path) {
+    const resolved = normalize(resolve(api.resolvePath(params.path)));
+    const normalizedWs = normalize(resolve(workspaceDir));
+    if (!resolved.startsWith(normalizedWs)) {
+      return `Path "${params.path}" resolves outside the workspace — access denied.`;
+    }
+    filePaths = [resolved];
+  } else {
+    filePaths = await discoverMemoryFiles(workspaceDir);
+  }
 
   if (filePaths.length === 0) {
     return 'No memory files found in workspace (checked MEMORY.md and memory/**/*.md).';
@@ -139,9 +147,16 @@ async function runMigration(
       lines.push(`Skipped (already migrated): ${skippedFiles.length} file(s)\n`);
     }
     lines.push('Chunks:');
+    let truncatedCount = 0;
     for (const chunk of allChunks) {
+      const willTruncate = chunk.content.length > CONTENT_MAX_CHARS;
+      if (willTruncate) truncatedCount++;
+      const truncTag = willTruncate ? ` [TRUNCATED: ${chunk.content.length} → ${CONTENT_MAX_CHARS} chars]` : '';
       const preview = chunk.content.length > 80 ? chunk.content.slice(0, 77) + '...' : chunk.content;
-      lines.push(`- [${chunk.type}] "${chunk.title}" (from ${chunk.sourcePath}): ${preview}`);
+      lines.push(`- [${chunk.type}] "${chunk.title}" (from ${chunk.sourcePath})${truncTag}: ${preview}`);
+    }
+    if (truncatedCount > 0) {
+      lines.push(`\nNote: ${truncatedCount} chunk(s) exceed ${CONTENT_MAX_CHARS} chars and will be truncated on import.`);
     }
     return lines.join('\n');
   }
@@ -163,6 +178,7 @@ async function runMigration(
   let totalImported = 0;
   let totalSkipped = 0;
   const errors: string[] = [];
+  let hasFailures = false;
 
   for (let i = 0; i < observations.length; i += 50) {
     const batch = observations.slice(i, i + 50);
@@ -170,18 +186,25 @@ async function runMigration(
     if (response) {
       totalImported += response.imported;
       totalSkipped += response.skipped;
-      if (response.errors) errors.push(...response.errors);
+      if (response.errors) {
+        errors.push(...response.errors);
+        hasFailures = true;
+      }
     } else {
       errors.push(`Batch ${Math.floor(i / 50) + 1} failed — server returned no response`);
+      hasFailures = true;
     }
   }
 
-  // Save marker
-  const updatedMarker: MigrationMarker = {
-    lastMigrated: new Date().toISOString(),
-    files: { ...(marker?.files ?? {}), ...newFileHashes },
-  };
-  await saveMarker(markerPath, updatedMarker);
+  // Save marker only if ALL batches succeeded — partial failure must not
+  // mark files as "done" or subsequent runs will silently skip them.
+  if (!hasFailures) {
+    const updatedMarker: MigrationMarker = {
+      lastMigrated: new Date().toISOString(),
+      files: { ...(marker?.files ?? {}), ...newFileHashes },
+    };
+    await saveMarker(markerPath, updatedMarker);
+  }
 
   // Report
   const lines: string[] = [];
@@ -189,7 +212,12 @@ async function runMigration(
   lines.push(`  Imported: ${totalImported} observation(s)`);
   if (totalSkipped > 0) lines.push(`  Skipped (duplicates): ${totalSkipped}`);
   if (skippedFiles.length > 0) lines.push(`  Skipped files (already migrated): ${skippedFiles.length}`);
-  if (errors.length > 0) lines.push(`  Errors: ${errors.join(', ')}`);
+  if (errors.length > 0) {
+    lines.push(`  Errors: ${errors.join(', ')}`);
+    lines.push(`  Note: marker NOT saved due to errors — re-run to retry failed chunks.`);
+  }
+  const truncated = observations.filter((o) => o.content.length === CONTENT_MAX_CHARS).length;
+  if (truncated > 0) lines.push(`  Truncated: ${truncated} chunk(s) exceeded ${CONTENT_MAX_CHARS} chars`);
   return lines.join('\n');
 }
 
@@ -216,14 +244,16 @@ async function discoverMemoryFiles(workspaceDir: string): Promise<string[]> {
   return files;
 }
 
-async function findMdFiles(dir: string): Promise<string[]> {
+async function findMdFiles(dir: string, depth = 0): Promise<string[]> {
+  if (depth > 10) return []; // Guard against excessive nesting
   const results: string[] = [];
   try {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue; // Prevent symlink cycles
       const fullPath = join(dir, entry.name);
       if (entry.isDirectory()) {
-        const nested = await findMdFiles(fullPath);
+        const nested = await findMdFiles(fullPath, depth + 1);
         results.push(...nested);
       } else if (entry.isFile() && entry.name.endsWith('.md')) {
         results.push(fullPath);
@@ -248,8 +278,12 @@ function splitIntoChunks(content: string, sourcePath: string): MemoryChunk[] {
   let currentTitle = '';
   let currentContent: string[] = [];
 
+  let inFence = false;
   for (const line of lines) {
-    const headerMatch = line.match(/^##\s+(.+)/);
+    if (line.startsWith('```')) {
+      inFence = !inFence;
+    }
+    const headerMatch = !inFence ? line.match(/^##\s+(.+)/) : null;
     if (headerMatch) {
       if (currentContent.length > 0) {
         sections.push({
