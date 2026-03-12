@@ -225,21 +225,49 @@ export interface OpenClawPluginService {
 // Command types
 // ---------------------------------------------------------------------------
 
+/**
+ * Context passed to plugin command handlers by the SDK.
+ * Commands are channel-facing (Telegram, Discord, etc.), not agent-facing.
+ */
+export interface PluginCommandContext {
+  senderId?: string;
+  channel: string;
+  channelId?: string;
+  isAuthorizedSender: boolean;
+  /** Raw command arguments after the command name (single string, not array). */
+  args?: string;
+  commandBody: string;
+  config: OpenClawConfig;
+  from?: string;
+  to?: string;
+  accountId?: string;
+  messageThreadId?: number;
+}
+
+/**
+ * Result returned by a plugin command handler.
+ * Must contain `text` field (not `output`).
+ */
+export interface PluginCommandResult {
+  text: string;
+}
+
+/**
+ * Handler function for plugin commands.
+ */
+export type PluginCommandHandler = (
+  ctx: PluginCommandContext,
+) => PluginCommandResult | Promise<PluginCommandResult>;
+
 export interface OpenClawPluginCommandDefinition {
   name: string;
   description: string;
-  usage?: string;
-  execute(args: string[], context: CommandContext): Promise<CommandResult>;
-}
-
-export interface CommandContext {
-  agentId?: string;
-  workspaceDir?: string;
-  sessionId?: string;
-}
-
-export interface CommandResult {
-  output: string;
+  /** Whether this command accepts arguments. */
+  acceptsArgs?: boolean;
+  /** Whether only authorized senders can use this command (default: true). */
+  requireAuth?: boolean;
+  /** The handler function — SDK checks typeof handler === "function". */
+  handler: PluginCommandHandler;
 }
 
 // ---------------------------------------------------------------------------

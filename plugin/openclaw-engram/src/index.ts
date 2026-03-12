@@ -18,8 +18,7 @@ import type {
   OpenClawPluginDefinition,
   OpenClawPluginApi,
   OpenClawPluginToolContext,
-  CommandContext,
-  CommandResult,
+  PluginCommandContext,
 } from './types/openclaw.js';
 import { parseConfig, getJsonSchema } from './config.js';
 import { EngramRestClient } from './client.js';
@@ -52,7 +51,7 @@ const plugin: OpenClawPluginDefinition = {
   kind: 'memory',
   configSchema: getJsonSchema(),
 
-  async register(api: OpenClawPluginApi): Promise<void> {
+  register(api: OpenClawPluginApi): void {
     const config = parseConfig(api.pluginConfig ?? {});
     const client = new EngramRestClient(config);
 
@@ -118,22 +117,19 @@ const plugin: OpenClawPluginDefinition = {
     api.registerCommand({
       name: 'migrate',
       description: 'Import local memory files (MEMORY.md, memory/**/*.md) into engram',
-      usage: '/migrate [--dry-run] [--force] [path]',
-      async execute(args: string[], context: CommandContext): Promise<CommandResult> {
-        const dryRun = args.includes('--dry-run');
-        const force = args.includes('--force');
-        const pathArgs = args.filter((a) => !a.startsWith('--'));
-        const path = pathArgs.length > 0 ? pathArgs.join(' ') : undefined;
+      acceptsArgs: true,
+      async handler(ctx: PluginCommandContext) {
+        const rawArgs = (ctx.args ?? '').trim();
+        const parts = rawArgs.split(/\s+/).filter(Boolean);
+        const dryRun = parts.includes('--dry-run');
+        const force = parts.includes('--force');
+        const pathArgs = parts.filter((a) => !a.startsWith('--'));
+        const migratePath = pathArgs.length > 0 ? pathArgs.join(' ') : undefined;
 
-        const toolCtx: OpenClawPluginToolContext = {
-          agentId: context.agentId,
-          workspaceDir: context.workspaceDir,
-          sessionId: context.sessionId,
-        };
-
+        const toolCtx: OpenClawPluginToolContext = {};
         const tool = createMemoryMigrateTool(toolCtx, client, config, api);
-        const result = await tool.execute('cmd-migrate', { dryRun, force, path });
-        return { output: result };
+        const result = await tool.execute('cmd-migrate', { dryRun, force, path: migratePath });
+        return { text: result };
       },
     });
 
