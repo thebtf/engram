@@ -95,7 +95,7 @@ export function inferType(_sourcePath: string, content: string): string {
   if (lower.includes('decision') || lower.includes('chose') || lower.includes('decided')) return 'decision';
   if (lower.includes('bug') || lower.includes('fix') || lower.includes('resolved')) return 'bugfix';
   if (lower.includes('pattern') || lower.includes('convention')) return 'discovery';
-  return 'context';
+  return 'change';
 }
 
 // ---------------------------------------------------------------------------

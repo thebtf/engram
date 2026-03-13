@@ -3,7 +3,7 @@
  *
  * Usage: /remember <text>
  *
- * Stores the provided text as a "context" type observation in the current project.
+ * Stores the provided text as a "change" type observation in the current project.
  */
 
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
@@ -51,7 +51,7 @@ export function buildRememberCommand(
       const observation: BulkImportRequest = {
         title,
         content,
-        type: 'context',
+        type: 'change',
         project,
         scope: 'project',
       };

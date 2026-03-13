@@ -14,7 +14,7 @@ const CONTENT_MAX_CHARS = 900;
 const RememberParamsSchema = z.object({
   title: z.string().min(1),
   content: z.string().min(1),
-  type: z.enum(['decision', 'feature', 'change', 'refactor', 'discovery', 'context']).default('context'),
+  type: z.enum(['decision', 'feature', 'change', 'refactor', 'discovery', 'bugfix']).default('change'),
   scope: z.enum(['project', 'global']).default('project'),
   tags: z.array(z.string()).optional(),
 });
@@ -32,8 +32,8 @@ const rememberParameters = Type.Object({
   content: Type.String({ description: 'Content/narrative to remember (max 900 chars)' }),
   type: Type.Optional(Type.Union([
     Type.Literal('decision'), Type.Literal('feature'), Type.Literal('change'),
-    Type.Literal('refactor'), Type.Literal('discovery'), Type.Literal('context'),
-  ], { description: 'Observation type', default: 'context' })),
+    Type.Literal('refactor'), Type.Literal('discovery'), Type.Literal('bugfix'),
+  ], { description: 'Observation type', default: 'change' })),
   scope: Type.Optional(Type.Union([
     Type.Literal('project'), Type.Literal('global'),
   ], { description: 'Scope: project-local or global', default: 'project' })),
@@ -52,11 +52,11 @@ const storeParameters = Type.Object({
 });
 
 const CATEGORY_TO_TYPE: Record<string, string> = {
-  preference: 'context',
+  preference: 'change',
   decision: 'decision',
-  entity: 'context',
+  entity: 'change',
   fact: 'discovery',
-  other: 'context',
+  other: 'change',
 };
 
 async function storeObservation(
@@ -148,7 +148,7 @@ export function createMemoryStoreTool(
 
       const content = parsed.data.text ?? parsed.data.content ?? '';
       const title = parsed.data.title ?? (content.length > 80 ? content.slice(0, 77) + '...' : content);
-      const type = parsed.data.category ? (CATEGORY_TO_TYPE[parsed.data.category] ?? 'context') : 'context';
+      const type = parsed.data.category ? (CATEGORY_TO_TYPE[parsed.data.category] ?? 'change') : 'change';
 
       return storeObservation(title, content, type, 'project', parsed.data.tags, ctx, client, config);
     },

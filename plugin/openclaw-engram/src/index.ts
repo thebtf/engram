@@ -187,7 +187,7 @@ const plugin: OpenClawPluginDefinition = {
           const response = await client.bulkImport([{
             title,
             content: textStr.slice(0, 900),
-            type: 'context',
+            type: 'change',
             project: config.project ?? 'cli',
             scope: 'project',
           }]);
