@@ -10,7 +10,7 @@ import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import type { OpenClawPluginService, PluginLogger } from '../types/openclaw.js';
+import type { OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from '../types/openclaw.js';
 import { resolveIdentity } from '../identity.js';
 import {
   splitIntoChunks,
@@ -24,7 +24,7 @@ import {
 const DEBOUNCE_MS = 1500;
 
 class FileWatcherService implements OpenClawPluginService {
-  readonly name = 'file-watcher';
+  readonly id = 'file-watcher';
   private watcher: FSWatcher | null = null;
   private readonly debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private readonly inFlight: Set<string> = new Set();
@@ -41,7 +41,7 @@ class FileWatcherService implements OpenClawPluginService {
     this.projectId = config.project ?? identity.projectId;
   }
 
-  start(): void {
+  start(_ctx: OpenClawPluginServiceContext): void {
     const watchPaths = [
       join(this.workspaceDir, 'MEMORY.md'),
       join(this.workspaceDir, 'memory'),
@@ -65,7 +65,7 @@ class FileWatcherService implements OpenClawPluginService {
     this.logger.debug(`[file-watcher] watching ${this.workspaceDir}`);
   }
 
-  stop(): void {
+  stop(_ctx: OpenClawPluginServiceContext): void {
     this.stopped = true;
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer);

@@ -215,10 +215,14 @@ export type PluginHookHandler<K extends PluginHookName> =
 // Service types
 // ---------------------------------------------------------------------------
 
+export interface OpenClawPluginServiceContext {
+  logger: PluginLogger;
+}
+
 export interface OpenClawPluginService {
-  name: string;
-  start(): Promise<void> | void;
-  stop(): Promise<void> | void;
+  id: string;
+  start(ctx: OpenClawPluginServiceContext): Promise<void> | void;
+  stop(ctx: OpenClawPluginServiceContext): Promise<void> | void;
 }
 
 // ---------------------------------------------------------------------------
