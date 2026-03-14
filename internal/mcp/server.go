@@ -465,6 +465,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				"type": "object",
 				"properties": map[string]any{
 					"query":     map[string]any{"type": "string", "description": "Natural language search query for semantic ranking"},
+					"preset":    map[string]any{"type": "string", "enum": []string{"decisions", "changes", "how_it_works"}, "description": "Shortcut presets that set type/concept filters automatically"},
 					"type":      map[string]any{"type": "string", "enum": []string{"observations", "sessions", "prompts"}, "description": "Filter by document type"},
 					"project":   map[string]any{"type": "string", "description": "Filter by project name"},
 					"obs_type":  map[string]any{"type": "string", "description": "Filter observations by type"},
@@ -482,13 +483,14 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		{
 			Name:        "timeline",
-			Description: "Fetch timeline of observations around a specific point in time.",
+			Description: "Fetch timeline of observations around a specific point in time. Consolidates get_context_timeline, get_timeline_by_query, and get_recent_context.",
 			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"anchor_id": map[string]any{"type": "number", "description": "Observation ID to use as anchor"},
-					"query":     map[string]any{"type": "string", "description": "Natural language query to find anchor observation"},
+					"mode":      map[string]any{"type": "string", "enum": []string{"anchor", "query", "recent"}, "default": "anchor", "description": "Timeline mode: anchor (by ID), query (search+timeline), recent (latest observations)"},
+					"anchor_id": map[string]any{"type": "number", "description": "Observation ID to use as anchor (mode=anchor)"},
+					"query":     map[string]any{"type": "string", "description": "Natural language query to find anchor observation (mode=query)"},
 					"before":    map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
 					"after":     map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
 					"project":   map[string]any{"type": "string"},
@@ -694,6 +696,21 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"project":        map[string]any{"type": "string", "description": "Filter by project name"},
 					"min_similarity": map[string]any{"type": "number", "default": 0.7, "minimum": 0.0, "maximum": 1.0, "description": "Minimum similarity threshold (0-1)"},
 					"limit":          map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
+				},
+			},
+		},
+		{
+			Name:        "graph_query",
+			Description: "Unified graph query tool. Consolidates find_related_observations, get_observation_relationships, and get_graph_neighbors.",
+			tier:        tierAdmin,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]any{
+					"mode":      map[string]any{"type": "string", "enum": []string{"related", "relationships", "neighbors"}, "default": "related", "description": "Graph query mode"},
+					"id":        map[string]any{"type": "number", "description": "Observation ID to query around"},
+					"max_depth": map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "Maximum traversal depth (mode=relationships)"},
+					"limit":     map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
 				},
 			},
 		},
@@ -1392,6 +1409,21 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	// Special handlers for non-search tools
 	switch name {
+	case "graph_query":
+		// Consolidated graph tool — routes by mode parameter
+		gm, gErr := parseArgs(args)
+		if gErr != nil {
+			return "", gErr
+		}
+		mode := coerceString(gm["mode"], "related")
+		switch mode {
+		case "relationships":
+			return s.handleGetObservationRelationships(ctx, args)
+		case "neighbors":
+			return s.handleGetGraphNeighbors(ctx, args)
+		default: // "related"
+			return s.handleFindRelatedObservations(ctx, args)
+		}
 	case "find_related_observations":
 		return s.handleFindRelatedObservations(ctx, args)
 	case "find_similar_observations":
@@ -1499,9 +1531,32 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 
 	switch name {
 	case "search":
-		result, err = s.searchMgr.UnifiedSearch(ctx, params)
+		// Handle preset parameter for consolidated search
+		preset := coerceString(m["preset"], "")
+		switch preset {
+		case "decisions":
+			result, err = s.searchMgr.Decisions(ctx, params)
+		case "changes":
+			result, err = s.searchMgr.Changes(ctx, params)
+		case "how_it_works":
+			result, err = s.searchMgr.HowItWorks(ctx, params)
+		default:
+			result, err = s.searchMgr.UnifiedSearch(ctx, params)
+		}
+
+	// Timeline tools: consolidated via mode/alias
 	case "timeline":
-		result, err = s.handleTimeline(ctx, m)
+		mode := coerceString(m["mode"], "")
+		switch mode {
+		case "query":
+			result, err = s.handleTimelineByQuery(ctx, m)
+		case "recent":
+			result, err = s.searchMgr.UnifiedSearch(ctx, params)
+		default: // "anchor" or empty — default behavior
+			result, err = s.handleTimeline(ctx, m)
+		}
+
+	// Search aliases (backward compatibility)
 	case "decisions":
 		result, err = s.searchMgr.Decisions(ctx, params)
 	case "changes":
@@ -1519,10 +1574,13 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		result, err = s.searchMgr.UnifiedSearch(ctx, params)
 	case "get_recent_context":
 		result, err = s.searchMgr.UnifiedSearch(ctx, params)
+
+	// Timeline aliases (backward compatibility)
 	case "get_context_timeline":
 		result, err = s.handleTimeline(ctx, m)
 	case "get_timeline_by_query":
 		result, err = s.handleTimelineByQuery(ctx, m)
+
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
