@@ -29,32 +29,36 @@ export function handleBeforeCompaction(
   config: PluginConfig,
   logger?: PluginLogger,
 ): void {
-  if (!client.isAvailable()) return;
-  if (!config.autoExtract) return;
+  try {
+    if (!client.isAvailable()) return;
+    if (!config.autoExtract) return;
 
-  const agentId = event.agentId ?? '';
-  const identity = resolveIdentity(agentId, event.workspaceDir);
-  const project = config.project ?? identity.projectId;
+    const agentId = event.agentId ?? '';
+    const identity = resolveIdentity(agentId, event.workspaceDir);
+    const project = config.project ?? identity.projectId;
 
-  const messages = Array.isArray(event.messages) ? event.messages : [];
-  const recent = messages.slice(-MAX_MESSAGES);
-  const content = serializeMessages(recent);
-  if (!content) return;
+    const messages = Array.isArray(event.messages) ? event.messages : [];
+    const recent = messages.slice(-MAX_MESSAGES);
+    const content = serializeMessages(recent);
+    if (!content) return;
 
-  const truncated = content.length > CONTENT_MAX_CHARS
-    ? content.slice(0, CONTENT_MAX_CHARS)
-    : content;
+    const truncated = content.length > CONTENT_MAX_CHARS
+      ? content.slice(0, CONTENT_MAX_CHARS)
+      : content;
 
-  // Fire-and-forget — do not await
-  void client.backfillSession({
-    session_id: agentId,
-    project,
-    content: truncated,
-  });
+    // Fire-and-forget — do not await
+    void client.backfillSession({
+      session_id: agentId,
+      project,
+      content: truncated,
+    });
 
-  (logger ?? console).warn(
-    `[engram] before-compaction: submitting ${recent.length} messages for backfill (project ${project})`,
-  );
+    (logger ?? console).warn(
+      `[engram] before-compaction: submitting ${recent.length} messages for backfill (project ${project})`,
+    );
+  } catch (err) {
+    (logger ?? console).error('[engram] hook error:', err);
+  }
 }
 
 // ---------------------------------------------------------------------------

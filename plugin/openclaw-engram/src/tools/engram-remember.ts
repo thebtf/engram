@@ -95,7 +95,7 @@ async function storeObservation(
   if (response.imported > 0) {
     return `Stored: "${title}" (type: ${type}, scope: ${scope})`;
   }
-  if (response.skipped > 0) {
+  if (response.skipped_duplicates > 0) {
     return `Observation skipped (likely a near-duplicate): "${title}"`;
   }
 

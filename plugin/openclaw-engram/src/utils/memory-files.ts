@@ -105,7 +105,11 @@ export function inferType(_sourcePath: string, content: string): string {
 export async function loadMarker(path: string): Promise<MigrationMarker | null> {
   try {
     const raw = await readFile(path, 'utf-8');
-    return JSON.parse(raw) as MigrationMarker;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.files !== 'object') {
+      return null; // corrupted marker, treat as fresh
+    }
+    return parsed as MigrationMarker;
   } catch {
     return null;
   }

@@ -62,7 +62,7 @@ export type BulkImportRequest = BulkObservationInput;
 
 export interface BulkImportResponse {
   imported: number;
-  skipped: number;
+  skipped_duplicates: number;
   errors?: string[];
 }
 
@@ -194,7 +194,7 @@ export class EngramRestClient {
   async bulkImport(
     observations: BulkObservationInput[],
   ): Promise<BulkImportResponse | null> {
-    if (observations.length === 0) return { imported: 0, skipped: 0 };
+    if (observations.length === 0) return { imported: 0, skipped_duplicates: 0 };
 
     // All observations in a batch must share the same project.
     const project = observations[0].project;
@@ -214,11 +214,22 @@ export class EngramRestClient {
   }
 
   /**
-   * Bulk-delete observations by ID.
-   * POST /api/observations/bulk-delete
+   * Bulk-delete (archive) observations by ID.
+   * POST /api/observations/bulk-status  { action: "archive", ids, reason }
+   *
+   * The server has no dedicated bulk-delete endpoint. Archiving is the closest
+   * equivalent — it removes observations from search results and context injection.
    */
   async bulkDelete(ids: string[]): Promise<BulkDeleteResponse | null> {
-    return this.post<BulkDeleteResponse>('/api/observations/bulk-delete', { ids });
+    const numericIds = ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
+    if (numericIds.length === 0) return { deleted: 0 };
+
+    const resp = await this.post<{ updated: number; failed: number }>(
+      '/api/observations/bulk-status',
+      { action: 'archive', ids: numericIds, reason: 'Deleted via memory_forget' },
+    );
+    if (!resp) return null;
+    return { deleted: resp.updated };
   }
 
   /** Returns true if the server is currently considered reachable. */

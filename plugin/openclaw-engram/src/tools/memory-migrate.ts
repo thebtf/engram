@@ -191,7 +191,7 @@ async function runMigration(
     const response = await client.bulkImport(batch);
     if (response) {
       totalImported += response.imported;
-      totalSkipped += response.skipped;
+      totalSkipped += response.skipped_duplicates;
       if (response.errors) {
         errors.push(...response.errors);
         hasFailures = true;

@@ -27,56 +27,62 @@ export async function handleSessionStart(
   config: PluginConfig,
   logger?: PluginLogger,
 ): Promise<SessionStartResult | void> {
-  if (!client.isAvailable()) return;
+  try {
+    if (!client.isAvailable()) return;
 
-  const agentId = event.agentId ?? '';
-  const identity = resolveIdentity(agentId, event.workspaceDir);
-  const project = config.project ?? identity.projectId;
+    const agentId = event.agentId ?? '';
+    const identity = resolveIdentity(agentId, event.workspaceDir);
+    const project = config.project ?? identity.projectId;
 
-  const response = await client.getContextInject(
-    agentId,
-    event.workspaceDir,
-  );
+    const response = await client.getContextInject(
+      agentId,
+      event.workspaceDir,
+    );
 
-  if (!response || !Array.isArray(response.observations) || response.observations.length === 0) {
-    return;
+    if (!response || !Array.isArray(response.observations) || response.observations.length === 0) {
+      return;
+    }
+
+    const { context, injectedIds, trimmedCount } = formatContext(
+      response.observations,
+      { tokenBudget: config.tokenBudget },
+    );
+
+    if (trimmedCount > 0) {
+      (logger ?? console).warn(`[engram] session-start: trimmed ${trimmedCount} observations to fit token budget`);
+    }
+
+    if (!context) return;
+
+    // Mark observations as injected (fire-and-forget)
+    if (injectedIds.length > 0 && response.sessionId) {
+      void client.markInjected(response.sessionId, injectedIds);
+    }
+
+    // Initialize session tracking (fire-and-forget)
+    const claudeSessionId = event.sessionId ?? agentId;
+    if (!claudeSessionId) {
+      (logger ?? console).warn('[engram] session-start: no sessionId or agentId available — skipping session init');
+    } else {
+      void client.initSession({
+        claudeSessionId,
+        project,
+        prompt: event.initialPrompt,
+      });
+    }
+
+    (logger ?? console).warn(
+      `[engram] session-start: injected ${injectedIds.length} observations for project ${project}`,
+    );
+
+    // Build static instructions + dynamic session context
+    const staticInstructions = buildStaticInstructions(project);
+    const fullContext = staticInstructions + '\n\n' + context;
+
+    return { appendSystemContext: fullContext };
+  } catch (err) {
+    (logger ?? console).error('[engram] hook error:', err);
   }
-
-  const { context, injectedIds, trimmedCount } = formatContext(
-    response.observations,
-    { tokenBudget: config.tokenBudget },
-  );
-
-  if (trimmedCount > 0) {
-    (logger ?? console).warn(`[engram] session-start: trimmed ${trimmedCount} observations to fit token budget`);
-  }
-
-  if (!context) return;
-
-  // Mark observations as injected (fire-and-forget)
-  if (injectedIds.length > 0 && response.sessionId) {
-    void client.markInjected(response.sessionId, injectedIds);
-  }
-
-  // Initialize session tracking (fire-and-forget)
-  const sessionId = event.sessionId ?? agentId;
-  if (sessionId) {
-    void client.initSession({
-      claudeSessionId: sessionId,
-      project,
-      prompt: event.initialPrompt,
-    });
-  }
-
-  (logger ?? console).warn(
-    `[engram] session-start: injected ${injectedIds.length} observations for project ${project}`,
-  );
-
-  // Build static instructions + dynamic session context
-  const staticInstructions = buildStaticInstructions(project);
-  const fullContext = staticInstructions + '\n\n' + context;
-
-  return { appendSystemContext: fullContext };
 }
 
 /**

@@ -30,63 +30,67 @@ export async function handleBeforePromptBuild(
   config: PluginConfig,
   logger?: PluginLogger,
 ): Promise<PromptBuildResult | void> {
-  if (!client.isAvailable()) return;
-  if (!event.prompt || event.prompt.trim() === '') return;
-
-  const agentId = event.agentId ?? '';
-  const identity = resolveIdentity(agentId, event.workspaceDir);
-  const project = config.project ?? identity.projectId;
-
-  let response;
   try {
-    response = await client.searchContext({
-      project,
-      query: event.prompt,
-      cwd: event.workspaceDir,
-      agent_id: agentId,
-    });
-  } catch (err) {
-    (logger ?? console).warn('[engram] before-prompt-build: searchContext failed', err);
-    return;
-  }
+    if (!client.isAvailable()) return;
+    if (!event.prompt || event.prompt.trim() === '') return;
 
-  if (!response || !Array.isArray(response.observations) || response.observations.length === 0) {
-    return;
-  }
+    const agentId = event.agentId ?? '';
+    const identity = resolveIdentity(agentId, event.workspaceDir);
+    const project = config.project ?? identity.projectId;
 
-  const { context, injectedIds, trimmedCount } = formatContext(
-    response.observations,
-    { tokenBudget: config.tokenBudget },
-  );
-
-  if (trimmedCount > 0) {
-    (logger ?? console).warn(
-      `[engram] before-prompt-build: trimmed ${trimmedCount} observations to fit token budget`,
-    );
-  }
-
-  if (!context) return;
-
-  (logger ?? console).warn(
-    `[engram] before-prompt-build: injecting ${injectedIds.length} observations for project ${project}`,
-  );
-
-  // Mark injected observations (fire-and-forget)
-  if (injectedIds.length > 0) {
+    let response;
     try {
-      const sessionResp = await client.initSession({
-        claudeSessionId: event.sessionId ?? agentId,
+      response = await client.searchContext({
         project,
-        prompt: event.prompt,
+        query: event.prompt,
+        cwd: event.workspaceDir,
+        agent_id: agentId,
       });
-      if (sessionResp && !sessionResp.skipped && sessionResp.sessionDbId) {
-        void client.markInjected(sessionResp.sessionDbId, injectedIds)
-          .catch(() => { /* swallow — fire-and-forget */ });
-      }
-    } catch {
-      // Non-critical — context was already injected
+    } catch (err) {
+      (logger ?? console).warn('[engram] before-prompt-build: searchContext failed', err);
+      return;
     }
-  }
 
-  return { prependContext: context };
+    if (!response || !Array.isArray(response.observations) || response.observations.length === 0) {
+      return;
+    }
+
+    const { context, injectedIds, trimmedCount } = formatContext(
+      response.observations,
+      { tokenBudget: config.tokenBudget },
+    );
+
+    if (trimmedCount > 0) {
+      (logger ?? console).warn(
+        `[engram] before-prompt-build: trimmed ${trimmedCount} observations to fit token budget`,
+      );
+    }
+
+    if (!context) return;
+
+    (logger ?? console).warn(
+      `[engram] before-prompt-build: injecting ${injectedIds.length} observations for project ${project}`,
+    );
+
+    // Mark injected observations (fire-and-forget)
+    if (injectedIds.length > 0) {
+      try {
+        const sessionResp = await client.initSession({
+          claudeSessionId: event.sessionId ?? agentId,
+          project,
+          prompt: event.prompt,
+        });
+        if (sessionResp && !sessionResp.skipped && sessionResp.sessionDbId) {
+          void client.markInjected(sessionResp.sessionDbId, injectedIds)
+            .catch(() => { /* swallow — fire-and-forget */ });
+        }
+      } catch {
+        // Non-critical — context was already injected
+      }
+    }
+
+    return { prependContext: context };
+  } catch (err) {
+    (logger ?? console).error('[engram] hook error:', err);
+  }
 }

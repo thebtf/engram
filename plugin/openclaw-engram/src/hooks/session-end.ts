@@ -26,39 +26,43 @@ export function handleSessionEnd(
   config: PluginConfig,
   logger?: PluginLogger,
 ): void {
-  if (!client.isAvailable()) return;
-  if (!config.autoExtract) return;
+  try {
+    if (!client.isAvailable()) return;
+    if (!config.autoExtract) return;
 
-  const agentId = event.agentId ?? '';
-  const identity = resolveIdentity(agentId, event.workspaceDir);
-  const project = config.project ?? identity.projectId;
+    const agentId = event.agentId ?? '';
+    const identity = resolveIdentity(agentId, event.workspaceDir);
+    const project = config.project ?? identity.projectId;
 
-  const messages: ConversationMessage[] = Array.isArray(event.messages) ? event.messages : [];
-  if (messages.length === 0) return;
+    const messages: ConversationMessage[] = Array.isArray(event.messages) ? event.messages : [];
+    if (messages.length === 0) return;
 
-  const recent = messages.slice(-MAX_MESSAGES);
-  const content = recent
-    .map((m) => `[${m.role}]: ${m.content}`)
-    .join('\n\n');
+    const recent = messages.slice(-MAX_MESSAGES);
+    const content = recent
+      .map((m) => `[${m.role}]: ${m.content}`)
+      .join('\n\n');
 
-  if (!content) return;
+    if (!content) return;
 
-  const truncated = content.length > CONTENT_MAX_CHARS
-    ? content.slice(0, CONTENT_MAX_CHARS)
-    : content;
+    const truncated = content.length > CONTENT_MAX_CHARS
+      ? content.slice(0, CONTENT_MAX_CHARS)
+      : content;
 
-  const sessionId = event.sessionId ?? '';
-  if (!sessionId) return;
+    const sessionId = event.sessionId ?? '';
+    if (!sessionId) return;
 
-  // Fire-and-forget — do not await
-  void client.backfillSession({
-    session_id: sessionId,
-    project,
-    content: truncated,
-  });
+    // Fire-and-forget — do not await
+    void client.backfillSession({
+      session_id: sessionId,
+      project,
+      content: truncated,
+    });
 
-  (logger ?? console).warn(
-    `[engram] session-end: submitted ${recent.length} messages for backfill` +
-      ` (project ${project}, reason: ${event.reason ?? 'unknown'})`,
-  );
+    (logger ?? console).warn(
+      `[engram] session-end: submitted ${recent.length} messages for backfill` +
+        ` (project ${project}, reason: ${event.reason ?? 'unknown'})`,
+    );
+  } catch (err) {
+    (logger ?? console).error('[engram] hook error:', err);
+  }
 }

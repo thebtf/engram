@@ -35,7 +35,7 @@ export function buildRememberCommand(
         return { text: 'engram is currently unreachable — cannot store memory' };
       }
 
-      const identity = resolveIdentity('', undefined);
+      const identity = resolveIdentity('', config.workspaceDir ?? process.cwd());
       const project = config.project ?? identity.projectId;
 
       // Use the first sentence (up to 80 chars) as the title
@@ -65,7 +65,7 @@ export function buildRememberCommand(
         return { text: `Stored: "${title}"` };
       }
 
-      if (response.skipped > 0) {
+      if (response.skipped_duplicates > 0) {
         return { text: `Skipped (likely a near-duplicate): "${title}"` };
       }
 
