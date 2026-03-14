@@ -319,34 +319,6 @@ func TestCriticalConcepts(t *testing.T) {
 	assert.Equal(t, expected, CriticalConcepts)
 }
 
-// TestLoad_ClaudeCodePath tests claude code path loading.
-func TestLoad_ClaudeCodePath(t *testing.T) {
-	// Create temp dir
-	tempDir, err := os.MkdirTemp("", "config-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tempDir)
-	defer os.Setenv("HOME", origHome)
-
-	// Create data dir and settings
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
-	require.NoError(t, err)
-
-	settingsJSON := `{"CLAUDE_CODE_PATH": "/usr/local/bin/claude"}`
-	err = os.WriteFile(
-		filepath.Join(tempDir, ".engram", "settings.json"),
-		[]byte(settingsJSON),
-		0600,
-	)
-	require.NoError(t, err)
-
-	cfg, err := Load()
-	require.NoError(t, err)
-	assert.Equal(t, "/usr/local/bin/claude", cfg.ClaudeCodePath)
-}
-
 // TestGet tests the global config getter.
 func TestGet(t *testing.T) {
 	// Save and restore HOME

@@ -42,7 +42,6 @@ type Config struct {
 	ContextFullField          string `json:"context_full_field"`
 	DBPath                    string `json:"db_path"`
 	Model                     string `json:"model"`
-	ClaudeCodePath            string `json:"claude_code_path"`
 	EmbeddingModel            string `json:"embedding_model"`
 	VectorStorageStrategy     string `json:"vector_storage_strategy"`
 	EmbeddingProvider         string `json:"embedding_provider"`
@@ -117,7 +116,6 @@ type Config struct {
 	StoreMemorySummarize        bool     `json:"store_memory_summarize"`        // Use LLM to summarize long content (default: false)
 	EncryptionKeyFile      string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
 	EncryptionKey          string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
-	LocalVerificationEnabled bool `json:"local_verification_enabled"` // Enable local file reads and CLI calls (default: false, for Docker/remote)
 }
 
 var (
@@ -274,9 +272,6 @@ func Load() (*Config, error) {
 			}
 			if v, ok := settings["ENGRAM_MODEL"].(string); ok {
 				cfg.Model = v
-			}
-			if v, ok := settings["CLAUDE_CODE_PATH"].(string); ok {
-				cfg.ClaudeCodePath = v
 			}
 			if v, ok := settings["ENGRAM_EMBEDDING_MODEL"].(string); ok && v != "" {
 				cfg.EmbeddingModel = v
@@ -521,10 +516,6 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENCRYPTION_KEY")); v != "" {
 		cfg.EncryptionKey = v
 	}
-	if v := strings.TrimSpace(os.Getenv("LOCAL_VERIFICATION_ENABLED")); v != "" {
-		cfg.LocalVerificationEnabled = v == "true" || v == "1"
-	}
-
 	return cfg, nil
 }
 

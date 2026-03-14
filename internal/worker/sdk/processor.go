@@ -2,13 +2,11 @@
 package sdk
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -223,7 +221,6 @@ type Processor struct {
 	vectorSyncChan           chan *models.Observation
 	vectorSyncDone           chan struct{}
 	sem                      chan struct{}
-	claudePath               string
 	model                    string
 	dedupSimilarityThreshold float64
 	dedupWindowSize          int
@@ -285,31 +282,11 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 		Bool("llm_configured", llmClient != nil).
 		Str("llm_url", llmCfg.BaseURL).
 		Str("llm_model", llmCfg.Model).
-		Bool("local_verification", cfg.LocalVerificationEnabled).
 		Msg("SDK processor backend summary")
 
-	// Find Claude Code CLI (optional fallback — only in local mode)
-	var claudePath string
-	if cfg.LocalVerificationEnabled {
-		cliPath := cfg.ClaudeCodePath
-		if cliPath == "" {
-			if path, err := exec.LookPath("claude"); err == nil {
-				cliPath = path
-			}
-		}
-		if cliPath != "" {
-			if _, err := os.Stat(cliPath); err == nil {
-				claudePath = cliPath
-				log.Info().Str("path", claudePath).Msg("SDK processor has Claude CLI fallback")
-			}
-		}
-	} else {
-		log.Info().Msg("SDK processor: local verification disabled (set LOCAL_VERIFICATION_ENABLED=true for local dev)")
-	}
-
-	// Require at least one backend
-	if llmClient == nil && claudePath == "" {
-		return nil, fmt.Errorf("no LLM backend available: set ENGRAM_LLM_URL for API access, or install Claude CLI")
+	// Require LLM backend
+	if llmClient == nil {
+		return nil, fmt.Errorf("no LLM backend available: set ENGRAM_LLM_URL for API access")
 	}
 
 	// Configurable concurrency
@@ -323,7 +300,6 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 	}
 
 	return &Processor{
-		claudePath:               claudePath,
 		model:                    cfg.Model,
 		llmClient:                llmClient,
 		observationStore:         observationStore,
@@ -387,14 +363,7 @@ func (p *Processor) CircuitBreakerMetrics() CircuitBreakerMetrics {
 
 // IsAvailable checks if an LLM backend (API or CLI) is available for processing.
 func (p *Processor) IsAvailable() bool {
-	if p.llmClient != nil {
-		return true
-	}
-	if p.claudePath != "" {
-		_, err := os.Stat(p.claudePath)
-		return err == nil
-	}
-	return false
+	return p.llmClient != nil
 }
 
 // ProcessObservation processes a single tool observation and extracts insights.
@@ -698,60 +667,14 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 			break
 		}
 		if lastErr != nil {
-			log.Warn().Err(lastErr).Msg("LLM API call failed after retries, trying CLI fallback")
+			log.Warn().Err(lastErr).Msg("LLM API call failed after retries")
 		}
 	}
 
-	// Fall back to Claude CLI if available
-	if p.claudePath != "" {
-		return p.callClaudeCLI(ctx, prompt)
-	}
-
 	if lastErr != nil {
-		return "", fmt.Errorf("no LLM backend available: llm_configured=%v, claude_cli=%q, last_error=%w",
-			p.llmClient != nil, p.claudePath, lastErr)
+		return "", fmt.Errorf("LLM call failed after retries: %w", lastErr)
 	}
-	return "", fmt.Errorf("no LLM backend available: llm_configured=%v, claude_cli=%q",
-		p.llmClient != nil, p.claudePath)
-}
-
-// callClaudeCLI calls the Claude Code CLI with the given prompt (fallback for when LLM API is unavailable).
-func (p *Processor) callClaudeCLI(ctx context.Context, prompt string) (string, error) {
-	fullPrompt := systemPrompt + "\n\n" + prompt
-
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, p.claudePath,
-		"--print",
-		"--tools", "",
-		"--strict-mcp-config",
-		"--disable-slash-commands",
-		"-p", fullPrompt) // #nosec G204 -- claudePath is from config, fullPrompt is internal
-
-	if p.model != "" {
-		cmd.Args = append([]string{cmd.Args[0], "--model", p.model}, cmd.Args[1:]...)
-	} else {
-		cmd.Args = append([]string{cmd.Args[0], "--model", "haiku"}, cmd.Args[1:]...)
-	}
-
-	cmd.Dir = os.TempDir()
-	cmd.Env = append(os.Environ(), "ENGRAM_INTERNAL=1")
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("stderr", stderr.String()).
-			Msg("Claude CLI execution failed")
-		return "", fmt.Errorf("claude CLI failed: %w (stderr: %s)", err, stderr.String())
-	}
-
-	return stdout.String(), nil
+	return "", fmt.Errorf("no LLM backend available")
 }
 
 // shouldSkipTool returns true for tools that aren't worth processing.
@@ -1015,21 +938,14 @@ func captureFileMtimesParallel(paths map[string]struct{}, cwd string) map[string
 
 // GetFileMtimes returns current modification times for a list of file paths.
 // This is used for staleness checking when injecting context.
-// Returns empty map when local verification is disabled (Docker/remote mode).
+// In Docker/remote mode, os.Stat on client paths returns error → empty map (no-op).
 func GetFileMtimes(paths []string, cwd string) map[string]int64 {
-	if !config.Get().LocalVerificationEnabled {
-		return map[string]int64{}
-	}
 	return captureFileMtimes(paths, nil, cwd)
 }
 
 // GetFileContent reads file content for verification purposes.
-// Returns content and ok status.
-// Returns empty when local verification is disabled (Docker/remote mode).
+// Returns content and ok status. In Docker/remote mode, files don't exist → ("", false).
 func GetFileContent(path, cwd string) (string, bool) {
-	if !config.Get().LocalVerificationEnabled {
-		return "", false
-	}
 
 	absPath, ok := safeResolvePath(path, cwd)
 	if !ok {
