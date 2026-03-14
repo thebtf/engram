@@ -154,6 +154,7 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 		SDKSessionID:    sdkSessionID,
 		Project:         project,
 		Scope:           scope,
+		AgentID:         obs.AgentID,
 		Type:            obs.Type,
 		SourceType:      obs.SourceType,
 		Title:           nullString(obs.Title),
@@ -388,6 +389,27 @@ func (s *ObservationStore) GetRecentObservations(ctx context.Context, project st
 	var dbObservations []Observation
 	err := s.db.WithContext(ctx).
 		Scopes(projectScopeFilter(project), importanceOrdering()).
+		Limit(limit).
+		Find(&dbObservations).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelObservations(dbObservations), nil
+}
+
+// GetRecentObservationsFiltered retrieves recent observations using a ScopeFilter.
+// When f.AgentID is set, also includes scope="agent" observations for that agent.
+// Results are ordered by importance_score DESC, then created_at_epoch DESC.
+func (s *ObservationStore) GetRecentObservationsFiltered(ctx context.Context, f ScopeFilter, limit int) ([]*models.Observation, error) {
+	if f.AgentID == "" {
+		return s.GetRecentObservations(ctx, f.Project, limit)
+	}
+
+	var dbObservations []Observation
+	err := s.db.WithContext(ctx).
+		Scopes(agentScopeFilter(f), importanceOrdering()).
 		Limit(limit).
 		Find(&dbObservations).Error
 
@@ -657,6 +679,58 @@ func (s *ObservationStore) SearchObservationsFTS(ctx context.Context, query, pro
 	return observations, nil
 }
 
+// SearchObservationsFTSFiltered performs full-text search with a ScopeFilter.
+// When f.AgentID is set, also includes scope="agent" observations for that agent.
+// Falls back to LIKE search if FTS fails.
+func (s *ObservationStore) SearchObservationsFTSFiltered(ctx context.Context, query string, f ScopeFilter, limit int) ([]*models.Observation, error) {
+	if f.AgentID == "" {
+		return s.SearchObservationsFTS(ctx, query, f.Project, limit)
+	}
+
+	if limit <= 0 {
+		limit = 10
+	}
+
+	keywords := extractKeywords(query)
+	if len(keywords) == 0 {
+		return nil, nil
+	}
+
+	ftsQuery := `
+		SELECT o.id, o.sdk_session_id, o.project, COALESCE(o.scope, 'project') as scope, o.type,
+		       o.title, o.subtitle, o.facts, o.narrative, o.concepts, o.files_read, o.files_modified,
+		       o.file_mtimes, o.prompt_number, o.discovery_tokens, o.created_at, o.created_at_epoch,
+		       COALESCE(o.importance_score, 1.0) as importance_score,
+		       COALESCE(o.user_feedback, 0) as user_feedback,
+		       COALESCE(o.retrieval_count, 0) as retrieval_count,
+		       o.last_retrieved_at_epoch, o.score_updated_at_epoch,
+		       COALESCE(o.is_superseded, 0) as is_superseded
+		FROM observations o
+		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
+		  AND (o.scope = 'global' OR (o.scope = 'project' AND o.project = $2) OR (o.scope = 'agent' AND o.agent_id = $3))
+		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) DESC,
+		         COALESCE(o.importance_score, 1.0) DESC
+		LIMIT $4
+	`
+
+	rows, err := s.rawDB.QueryContext(ctx, ftsQuery, query, f.Project, f.AgentID, limit)
+	if err != nil {
+		return s.searchObservationsLikeFiltered(ctx, keywords, f, limit)
+	}
+	defer rows.Close()
+
+	observations, err := scanObservationRows(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(observations) == 0 {
+		return s.searchObservationsLikeFiltered(ctx, keywords, f, limit)
+	}
+
+	return observations, nil
+}
+
 // ScoredObservation pairs an observation with its raw BM25 relevance score.
 // Score is a raw PostgreSQL ts_rank value; callers normalize with BM25Normalize.
 type ScoredObservation struct {
@@ -768,6 +842,45 @@ func (s *ObservationStore) searchObservationsLike(ctx context.Context, keywords 
 	whereClause := strings.Join(conditions, " OR ")
 	fullWhere := "(" + whereClause + ") AND (project = ? OR scope = 'global')"
 	args = append(args, project)
+
+	var dbObservations []Observation
+	err := s.db.WithContext(ctx).
+		Where(fullWhere, args...).
+		Scopes(importanceOrdering()).
+		Limit(limit).
+		Find(&dbObservations).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelObservations(dbObservations), nil
+}
+
+// searchObservationsLikeFiltered is the agent-scoped LIKE fallback for FTS failures.
+// It extends searchObservationsLike to also include scope="agent" observations for the given agent.
+func (s *ObservationStore) searchObservationsLikeFiltered(ctx context.Context, keywords []string, f ScopeFilter, limit int) ([]*models.Observation, error) {
+	if len(keywords) == 0 {
+		return nil, nil
+	}
+
+	const maxKeywords = 2
+	if len(keywords) > maxKeywords {
+		keywords = keywords[:maxKeywords]
+	}
+
+	conditions := make([]string, 0, len(keywords))
+	args := make([]any, 0, len(keywords)*3+2)
+
+	for _, kw := range keywords {
+		pattern := "%" + kw + "%"
+		conditions = append(conditions, "(title LIKE ? OR subtitle LIKE ? OR narrative LIKE ?)")
+		args = append(args, pattern, pattern, pattern)
+	}
+
+	whereClause := strings.Join(conditions, " OR ")
+	fullWhere := "(" + whereClause + ") AND (scope = 'global' OR (scope = 'project' AND project = ?) OR (scope = 'agent' AND agent_id = ?))"
+	args = append(args, f.Project, f.AgentID)
 
 	var dbObservations []Observation
 	err := s.db.WithContext(ctx).
@@ -1056,11 +1169,29 @@ func (s *ObservationStore) CleanupOldObservations(ctx context.Context, project s
 // GORM Scopes (Reusable Query Filters)
 // ====================
 
+// ScopeFilter defines the visibility scope for observation queries.
+// When AgentID is set, agent-scoped observations matching that agent are also included.
+type ScopeFilter struct {
+	Project string
+	AgentID string // If set, include scope="agent" observations with this agent_id
+}
+
 // projectScopeFilter filters observations by project scope.
 // Includes project-scoped observations for the specified project AND global observations.
 func projectScopeFilter(project string) func(*gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
 		return db.Where("(project = ? AND (scope IS NULL OR scope = 'project')) OR scope = 'global'", project)
+	}
+}
+
+// agentScopeFilter filters observations by project + agent scope.
+// Includes: scope="global", scope="project" for this project, and scope="agent" for this agent_id.
+func agentScopeFilter(f ScopeFilter) func(*gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		return db.Where(
+			"scope = 'global' OR (scope = 'project' AND project = ?) OR (scope = 'agent' AND agent_id = ?)",
+			f.Project, f.AgentID,
+		)
 	}
 }
 
@@ -1166,6 +1297,7 @@ func toModelObservation(o *Observation) *models.Observation {
 		SDKSessionID:    o.SDKSessionID,
 		Project:         o.Project,
 		Scope:           o.Scope,
+		AgentID:         o.AgentID,
 		Type:            o.Type,
 		SourceType:      o.SourceType,
 		Title:           o.Title,

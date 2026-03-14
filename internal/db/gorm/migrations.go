@@ -1106,6 +1106,43 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil
 		},
 	},
+	// Migration 032: Agent scoping — add agent_id column and update scope check constraint.
+	{
+		ID: "032_agent_scoping",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				// Add agent_id column (nullable; empty string means no agent)
+				`ALTER TABLE observations ADD COLUMN IF NOT EXISTS agent_id TEXT NOT NULL DEFAULT ''`,
+				// Index for agent-scoped lookups
+				`CREATE INDEX IF NOT EXISTS idx_observations_agent_id ON observations(agent_id) WHERE agent_id != ''`,
+				// Drop old scope check constraint and add new one that includes 'agent'
+				`ALTER TABLE observations DROP CONSTRAINT IF EXISTS chk_observations_scope`,
+				`ALTER TABLE observations ADD CONSTRAINT chk_observations_scope CHECK (scope IN ('project', 'global', 'agent'))`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 032: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			sqls := []string{
+				// Rewrite agent-scoped observations to 'project' before restoring old constraint
+				`UPDATE observations SET scope = 'project' WHERE scope = 'agent'`,
+				`ALTER TABLE observations DROP CONSTRAINT IF EXISTS chk_observations_scope`,
+				`ALTER TABLE observations ADD CONSTRAINT chk_observations_scope CHECK (scope IN ('project', 'global'))`,
+				`DROP INDEX IF EXISTS idx_observations_agent_id`,
+				`ALTER TABLE observations DROP COLUMN IF EXISTS agent_id`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					log.Warn().Err(err).Str("sql", s).Msg("migration 032 rollback step failed")
+				}
+			}
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

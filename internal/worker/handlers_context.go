@@ -28,6 +28,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	query := r.URL.Query().Get("query")
 	cwd := r.URL.Query().Get("cwd")
+	agentID := r.URL.Query().Get("agent_id")
 
 	// For POST requests, allow JSON body to override query params.
 	if r.Method == http.MethodPost && r.Body != nil {
@@ -47,18 +48,19 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 			if body.Cwd != "" {
 				cwd = body.Cwd
 			}
+			if body.AgentID != "" {
+				agentID = body.AgentID
+			}
 			// agent_id acts as project scope for OpenClaw agents without filesystem context
-			if project == "" && body.AgentID != "" {
-				project = body.AgentID
+			if project == "" && agentID != "" {
+				project = agentID
 			}
 		}
 	}
 
-	// Also accept agent_id as query param fallback
-	if project == "" {
-		if agentID := r.URL.Query().Get("agent_id"); agentID != "" {
-			project = agentID
-		}
+	// Also accept agent_id as query param fallback for project
+	if project == "" && agentID != "" {
+		project = agentID
 	}
 
 	if project == "" || query == "" {
@@ -173,11 +175,12 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		if vectorSearchFailed {
 			log.Info().Str("project", project).Msg("Using FTS fallback due to vector search failure")
 		}
-		observations, err = s.observationStore.SearchObservationsFTS(r.Context(), query, project, limit)
+		scopeFilter := gorm.ScopeFilter{Project: project, AgentID: agentID}
+		observations, err = s.observationStore.SearchObservationsFTSFiltered(r.Context(), query, scopeFilter, limit)
 		if err != nil {
 			// FTS might fail if query has special chars, try without
 			log.Warn().Err(err).Str("query", query).Msg("FTS search failed, falling back to recent")
-			observations, err = s.observationStore.GetRecentObservations(r.Context(), project, limit)
+			observations, err = s.observationStore.GetRecentObservationsFiltered(r.Context(), scopeFilter, limit)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -718,11 +721,10 @@ func splitCamelCase(s string) string {
 //   - relevant: top 10 semantic search results (if vector store is connected)
 func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
+	agentID := r.URL.Query().Get("agent_id")
 	// agent_id acts as project scope for OpenClaw agents without filesystem context
-	if project == "" {
-		if agentID := r.URL.Query().Get("agent_id"); agentID != "" {
-			project = agentID
-		}
+	if project == "" && agentID != "" {
+		project = agentID
 	}
 	if project == "" {
 		http.Error(w, "project required", http.StatusBadRequest)
@@ -771,7 +773,8 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// --- Recent section: last 5 observations by created_at ---
-	recentRaw, err := s.observationStore.GetRecentObservations(ctx, project, 5)
+	scopeFilter := gorm.ScopeFilter{Project: project, AgentID: agentID}
+	recentRaw, err := s.observationStore.GetRecentObservationsFiltered(ctx, scopeFilter, 5)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -892,7 +895,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 
 	// --- Backward-compat observations field: full recent list + relevant deduped union ---
 	// Get the full recent list (up to configured limit) for the legacy field
-	allRecentRaw, err := s.observationStore.GetRecentObservations(ctx, project, limit)
+	allRecentRaw, err := s.observationStore.GetRecentObservationsFiltered(ctx, scopeFilter, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

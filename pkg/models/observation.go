@@ -89,6 +89,9 @@ const (
 	// ScopeGlobal means the observation is visible across all projects.
 	// Used for best practices, advanced patterns, and generalizable knowledge.
 	ScopeGlobal ObservationScope = "global"
+	// ScopeAgent means the observation is only visible to the specific agent that created it.
+	// Used for per-agent private memory (e.g., Neuromancer, Jeeves).
+	ScopeAgent ObservationScope = "agent"
 )
 
 // GlobalizableConcepts are concept tags that indicate an observation
@@ -184,6 +187,7 @@ type Observation struct {
 	SDKSessionID    string           `db:"sdk_session_id" json:"sdk_session_id"`
 	Project         string           `db:"project" json:"project"`
 	Scope           ObservationScope `db:"scope" json:"scope"`
+	AgentID         string           `db:"agent_id" json:"agent_id,omitempty"`
 	Type            ObservationType  `db:"type" json:"type"`
 	MemoryType      MemoryType       `db:"memory_type" json:"memory_type"`
 	SourceType      SourceType       `db:"source_type" json:"source_type,omitempty"`
@@ -223,6 +227,7 @@ type ParsedObservation struct {
 	Subtitle                 string
 	Narrative                string
 	Scope                    ObservationScope
+	AgentID                  string
 	Facts                    []string
 	Concepts                 []string
 	FilesRead                []string
@@ -246,6 +251,7 @@ func (p *ParsedObservation) ToStoredObservation() *Observation {
 		FilesRead:     p.FilesRead,
 		FilesModified: p.FilesModified,
 		FileMtimes:    p.FileMtimes,
+		AgentID:       p.AgentID,
 	}
 }
 
@@ -294,6 +300,7 @@ type ObservationJSON struct {
 	Subtitle        string           `json:"subtitle,omitempty"`
 	SDKSessionID    string           `json:"sdk_session_id"`
 	Scope           ObservationScope `json:"scope"`
+	AgentID         string           `json:"agent_id,omitempty"`
 	Type            ObservationType  `json:"type"`
 	MemoryType      string           `json:"memory_type"`
 	SourceType      string           `json:"source_type,omitempty"`
@@ -328,6 +335,7 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		SDKSessionID:    o.SDKSessionID,
 		Project:         o.Project,
 		Scope:           o.Scope,
+		AgentID:         o.AgentID,
 		Type:            o.Type,
 		MemoryType:      string(o.MemoryType),
 		SourceType:      string(o.SourceType),
@@ -384,6 +392,7 @@ func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, pro
 		SDKSessionID:    sdkSessionID,
 		Project:         project,
 		Scope:           scope,
+		AgentID:         parsed.AgentID,
 		Type:            parsed.Type,
 		MemoryType:      ClassifyMemoryType(parsed),
 		SourceType:      parsed.SourceType,
