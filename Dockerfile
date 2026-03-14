@@ -39,15 +39,9 @@ ENV VERSION=${VERSION}
 # Build server binary (worker with integrated MCP SSE)
 RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram-server ./cmd/worker
 
-# Build client-side binaries: MCP stdio proxy + hooks
+# Build client-side binaries: MCP stdio proxy
 RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/mcp-stdio-proxy ./cmd/mcp-stdio-proxy
 RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram-mcp ./cmd/mcp
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/hooks/session-start ./cmd/hooks/session-start
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/hooks/user-prompt ./cmd/hooks/user-prompt
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/hooks/post-tool-use ./cmd/hooks/post-tool-use
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/hooks/subagent-stop ./cmd/hooks/subagent-stop
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/hooks/stop ./cmd/hooks/stop
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/hooks/statusline ./cmd/hooks/statusline
 
 # --- Server image: worker + MCP SSE ---
 FROM debian:bookworm-slim AS server
@@ -77,8 +71,7 @@ WORKDIR /app
 
 COPY --from=builder /out/mcp-stdio-proxy /app/mcp-stdio-proxy
 COPY --from=builder /out/engram-mcp /app/engram-mcp
-COPY --from=builder /out/hooks/ /app/hooks/
-COPY plugin/engram/hooks/hooks.json /app/hooks/hooks.json
+COPY plugin/engram/hooks/ /app/hooks/
 COPY plugin/engram/commands/ /app/commands/
 COPY plugin/.claude-plugin/ /app/.claude-plugin/
 

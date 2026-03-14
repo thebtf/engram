@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"gorm.io/gorm"
 )
@@ -176,6 +177,34 @@ func (s *Store) SearchSessions(ctx context.Context, query string, limit int) ([]
 	}
 
 	return results, nil
+}
+
+// CheckSessionsExist returns the subset of provided IDs that already exist in the database.
+func (s *Store) CheckSessionsExist(ctx context.Context, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	query := `SELECT id FROM indexed_sessions WHERE id = ANY($1)`
+	rows, err := s.rawDB.QueryContext(ctx, query, pq.Array(ids))
+	if err != nil {
+		return nil, fmt.Errorf("check sessions exist: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	existing := make([]string, 0, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan session id: %w", err)
+		}
+		existing = append(existing, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session ids: %w", err)
+	}
+
+	return existing, nil
 }
 
 // GetSessionMtime returns (mtime, found, error) for skip check.

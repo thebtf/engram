@@ -239,12 +239,84 @@ async function RunStatuslineHook(handler, offlineRenderer) {
   }
 }
 
+/**
+ * WorkstationID returns a deterministic 8-char hex ID from hostname + machine_id.
+ * Matches the server-side sessions.WorkstationID() logic:
+ *   - On Linux: reads /etc/machine-id; falls back to hostname if unavailable.
+ *   - On other platforms: uses hostname as both components (machine_id = hostname).
+ */
+function WorkstationID() {
+  const os = require('os');
+  const fs = require('fs');
+  const hostname = os.hostname();
+
+  let machineID = '';
+  if (os.platform() === 'linux') {
+    try {
+      machineID = fs.readFileSync('/etc/machine-id', 'utf8').trim();
+    } catch {
+      // /etc/machine-id not available; fall back to hostname.
+    }
+  }
+  if (!machineID) {
+    machineID = hostname;
+  }
+
+  const input = hostname + machineID;
+  const hash = crypto.createHash('sha256').update(input).digest('hex');
+  return hash.slice(0, 8);
+}
+
+/**
+ * requestUpload sends raw content (text/ndjson) to the server.
+ * Optionally gzip-compresses bodies larger than 500 KB.
+ */
+async function requestUpload(endpoint, content, timeoutMs = 15000) {
+  const zlib = require('zlib');
+  const url = resolveRequestURL(endpoint);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const headers = buildRequestHeaders(false);
+    headers['Content-Type'] = 'application/x-ndjson';
+
+    let body = content;
+    if (typeof content === 'string' && content.length > 500 * 1024) {
+      body = zlib.gzipSync(Buffer.from(content, 'utf8'));
+      headers['Content-Encoding'] = 'gzip';
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}: ${text}`);
+    }
+
+    if (!text) {
+      return {};
+    }
+
+    return JSON.parse(text);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 module.exports = {
   getServerURL,
   ProjectIDWithName,
   LegacyProjectID,
+  WorkstationID,
   requestGet,
   requestPost,
+  requestUpload,
   RunHook,
   RunStatuslineHook,
   writeResponse,

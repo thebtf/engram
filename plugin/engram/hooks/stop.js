@@ -301,6 +301,25 @@ async function handleStop(ctx, input) {
     }
   }
 
+  // Index session transcript for full-text search
+  try {
+    const expandedPath = expandTranscriptPath(transcriptPath);
+    if (expandedPath) {
+      const stat = fs.statSync(expandedPath);
+      if (stat.size > 0 && stat.size <= 5 * 1024 * 1024) {
+        const transcriptContent = fs.readFileSync(expandedPath, 'utf8');
+        const wsId = lib.WorkstationID();
+        const endpoint = `/api/sessions/index?workstation_id=${encodeURIComponent(wsId)}&session_id=${encodeURIComponent(ctx.SessionID)}`;
+        const indexResult = await lib.requestUpload(endpoint, transcriptContent, 15000);
+        console.error(`[stop] session indexed: status=${indexResult.status || 'unknown'}, exchanges=${indexResult.exchange_count || 0}`);
+      } else if (stat.size > 5 * 1024 * 1024) {
+        console.error(`[stop] session transcript too large (${stat.size} bytes), skipping indexing`);
+      }
+    }
+  } catch (err) {
+    console.error(`[stop] session index failed: ${err.message}`);
+  }
+
   // Detect utility signals for injected observations
   try {
     const injectedResult = await lib.requestGet(

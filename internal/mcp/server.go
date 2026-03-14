@@ -1025,11 +1025,27 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		// Import instincts tool (always available — observation store is required for MCP)
 		{
 			Name:        "import_instincts",
-			Description: "Import ECC instinct files from a directory into Engram as guidance observations. Idempotent — duplicates are skipped via vector similarity check.",
+			Description: "Import ECC instinct files as guidance observations. Supports sending file content directly (preferred for remote servers) or reading from a local path (legacy). Idempotent — duplicates are skipped via vector similarity check.",
 			InputSchema: map[string]any{
 				"type": "object",
+				"anyOf": []map[string]any{
+					{"required": []string{"files"}},
+					{"required": []string{"path"}},
+				},
 				"properties": map[string]any{
-					"path": map[string]any{"type": "string", "description": "Path to instincts directory (defaults to ~/.claude/homunculus/instincts/)"},
+					"files": map[string]any{
+						"type":        "array",
+						"description": "Array of instinct files with content (preferred for client-server mode)",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"name":    map[string]any{"type": "string", "description": "Filename (e.g. 'my-instinct.md')"},
+								"content": map[string]any{"type": "string", "description": "Full file content including YAML frontmatter"},
+							},
+							"required": []string{"name", "content"},
+						},
+					},
+					"path": map[string]any{"type": "string", "description": "[DEPRECATED] Local filesystem path to instincts directory. Use 'files' parameter instead for remote servers."},
 				},
 			},
 		},

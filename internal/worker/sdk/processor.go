@@ -281,19 +281,23 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 		log.Info().Str("url", llmCfg.BaseURL).Str("model", llmCfg.Model).Msg("SDK processor using LLM API")
 	}
 
-	// Find Claude Code CLI (optional fallback)
+	// Find Claude Code CLI (optional fallback — only in local mode)
 	var claudePath string
-	cliPath := cfg.ClaudeCodePath
-	if cliPath == "" {
-		if path, err := exec.LookPath("claude"); err == nil {
-			cliPath = path
+	if cfg.LocalVerificationEnabled {
+		cliPath := cfg.ClaudeCodePath
+		if cliPath == "" {
+			if path, err := exec.LookPath("claude"); err == nil {
+				cliPath = path
+			}
 		}
-	}
-	if cliPath != "" {
-		if _, err := os.Stat(cliPath); err == nil {
-			claudePath = cliPath
-			log.Info().Str("path", claudePath).Msg("SDK processor has Claude CLI fallback")
+		if cliPath != "" {
+			if _, err := os.Stat(cliPath); err == nil {
+				claudePath = cliPath
+				log.Info().Str("path", claudePath).Msg("SDK processor has Claude CLI fallback")
+			}
 		}
+	} else {
+		log.Info().Msg("SDK processor: local verification disabled (set LOCAL_VERIFICATION_ENABLED=true for local dev)")
 	}
 
 	// Require at least one backend
@@ -999,13 +1003,22 @@ func captureFileMtimesParallel(paths map[string]struct{}, cwd string) map[string
 
 // GetFileMtimes returns current modification times for a list of file paths.
 // This is used for staleness checking when injecting context.
+// Returns empty map when local verification is disabled (Docker/remote mode).
 func GetFileMtimes(paths []string, cwd string) map[string]int64 {
+	if !config.Get().LocalVerificationEnabled {
+		return map[string]int64{}
+	}
 	return captureFileMtimes(paths, nil, cwd)
 }
 
 // GetFileContent reads file content for verification purposes.
 // Returns content and ok status.
+// Returns empty when local verification is disabled (Docker/remote mode).
 func GetFileContent(path, cwd string) (string, bool) {
+	if !config.Get().LocalVerificationEnabled {
+		return "", false
+	}
+
 	absPath, ok := safeResolvePath(path, cwd)
 	if !ok {
 		// Reject paths that attempt directory traversal

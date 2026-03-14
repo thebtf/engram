@@ -2,15 +2,19 @@
 package worker
 
 import (
+	"compress/gzip"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
-	"strings"
-
 	"github.com/go-chi/chi/v5"
+	"github.com/thebtf/engram/internal/sessions"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/worker/session"
@@ -480,4 +484,176 @@ func (s *Service) handleExtractLearnings(w http.ResponseWriter, r *http.Request)
 		"status": "ok",
 		"count":  stored,
 	})
+}
+
+// maxSessionIndexBody is the per-request body limit for session indexing (5 MB).
+const maxSessionIndexBody = 5 * 1024 * 1024
+
+// handleIndexSession accepts a raw JSONL session transcript and indexes it.
+// POST /api/sessions/index?workstation_id=<wsid>&session_id=<optional>
+func (s *Service) handleIndexSession(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	store := s.sessionIdxStore
+	s.initMu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	workstationID := r.URL.Query().Get("workstation_id")
+	if workstationID == "" {
+		http.Error(w, "workstation_id query param required", http.StatusBadRequest)
+		return
+	}
+
+	sessionIDOverride := r.URL.Query().Get("session_id")
+
+	// Apply per-endpoint body limit.
+	body := http.MaxBytesReader(w, r.Body, maxSessionIndexBody)
+	defer func() { _ = body.Close() }()
+
+	var reader io.Reader = body
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		gz, err := gzip.NewReader(body)
+		if err != nil {
+			http.Error(w, "invalid gzip body", http.StatusBadRequest)
+			return
+		}
+		defer func() { _ = gz.Close() }()
+		// Limit the decompressed stream to prevent gzip bomb attacks;
+		// the compressed-stream limit above only applies to the wire bytes.
+		reader = io.LimitReader(gz, maxSessionIndexBody)
+	}
+
+	meta, err := sessions.ParseSessionReader(reader)
+	if err != nil {
+		// On body too large, ParseSessionReader may return a partial result.
+		// We still attempt to index what was parsed.
+		log.Warn().Err(err).Msg("Session parse error (may be partial)")
+	}
+
+	if meta == nil {
+		http.Error(w, "failed to parse session", http.StatusBadRequest)
+		return
+	}
+
+	// Override session ID from query param if provided (client knows the Claude session ID).
+	if sessionIDOverride != "" {
+		meta.SessionID = sessionIDOverride
+	}
+	if meta.SessionID == "" {
+		http.Error(w, "session_id not found in transcript and not provided via query param", http.StatusBadRequest)
+		return
+	}
+
+	// Build content from exchanges.
+	parts := make([]string, 0, len(meta.Exchanges)*2)
+	for _, exchange := range meta.Exchanges {
+		parts = append(parts, exchange.UserText)
+		parts = append(parts, exchange.AssistantText)
+	}
+	content := strings.Join(parts, "\n")
+
+	counts := meta.ToolCounts
+	if counts == nil {
+		counts = make(map[string]int)
+	}
+	toolCounts, err := json.Marshal(counts)
+	if err != nil {
+		http.Error(w, "failed to marshal tool counts", http.StatusInternalServerError)
+		return
+	}
+
+	projectID := ""
+	if meta.ProjectPath != "" {
+		projectID = sessions.ProjectID(meta.ProjectPath)
+	}
+
+	indexed := &gormdb.IndexedSession{
+		ID:            meta.SessionID,
+		WorkstationID: workstationID,
+		ProjectID:     projectID,
+		ProjectPath:   sql.NullString{String: meta.ProjectPath, Valid: meta.ProjectPath != ""},
+		GitBranch:     sql.NullString{String: meta.GitBranch, Valid: meta.GitBranch != ""},
+		FirstMsgAt:    sql.NullTime{Time: meta.FirstMsgAt, Valid: !meta.FirstMsgAt.IsZero()},
+		LastMsgAt:     sql.NullTime{Time: meta.LastMsgAt, Valid: !meta.LastMsgAt.IsZero()},
+		ExchangeCount: meta.ExchangeCount,
+		ToolCounts:    sql.NullString{String: string(toolCounts), Valid: true},
+		Content:       sql.NullString{String: content, Valid: content != ""},
+		FileMtime:     sql.NullTime{Time: time.Now().UTC(), Valid: true},
+	}
+
+	if err := store.UpsertSession(r.Context(), indexed); err != nil {
+		log.Error().Err(err).Str("session_id", meta.SessionID).Msg("Failed to upsert indexed session")
+		http.Error(w, "failed to store session", http.StatusInternalServerError)
+		return
+	}
+
+	status := "indexed"
+	if meta.ExchangeCount == 0 && len(meta.Exchanges) == 0 {
+		status = "empty"
+	}
+
+	log.Info().
+		Str("session_id", meta.SessionID).
+		Str("workstation_id", workstationID).
+		Int("exchange_count", meta.ExchangeCount).
+		Msg("Session indexed via REST API")
+
+	writeJSON(w, map[string]any{
+		"status":         status,
+		"session_id":     meta.SessionID,
+		"exchange_count": meta.ExchangeCount,
+	})
+}
+
+// CheckSessionsRequest is the request body for checking which sessions are already indexed.
+type CheckSessionsRequest struct {
+	SessionIDs []string `json:"session_ids"`
+}
+
+// handleCheckSessions returns which session IDs from the request are NOT yet indexed.
+// POST /api/sessions/check
+func (s *Service) handleCheckSessions(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	store := s.sessionIdxStore
+	s.initMu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req CheckSessionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.SessionIDs) == 0 {
+		writeJSON(w, map[string]any{"missing": []string{}})
+		return
+	}
+
+	existing, err := store.CheckSessionsExist(r.Context(), req.SessionIDs)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to check session existence")
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+
+	existingSet := make(map[string]struct{}, len(existing))
+	for _, id := range existing {
+		existingSet[id] = struct{}{}
+	}
+
+	missing := make([]string, 0, len(req.SessionIDs))
+	for _, id := range req.SessionIDs {
+		if _, ok := existingSet[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+
+	writeJSON(w, map[string]any{"missing": missing})
 }

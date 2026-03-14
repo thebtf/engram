@@ -95,23 +95,8 @@ func main() {
 	relationStore := gorm.NewRelationStore(store)
 	sessionStore := gorm.NewSessionStore(store)
 
-	// Initialize session indexer
+	// Initialize session index store (clients push transcripts via REST API)
 	sessionIdxStore := sessions.NewStore(store)
-	wsID := config.GetWorkstationID()
-	if wsID == "" {
-		wsID = sessions.WorkstationID()
-	}
-	sessionsDir := config.GetSessionsDir()
-	sessionIndexer := sessions.NewIndexer(sessionIdxStore, sessionsDir, wsID, log.Logger)
-
-	go func() {
-		count, err := sessionIndexer.IndexAll(ctx)
-		if err != nil {
-			log.Warn().Err(err).Msg("Session indexing failed")
-		} else if count > 0 {
-			log.Info().Int("indexed", count).Msg("Session indexing complete")
-		}
-	}()
 
 	// Initialize embedding service and vector client
 	var vectorClient vector.Client

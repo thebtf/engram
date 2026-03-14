@@ -18,7 +18,7 @@ The fork targets shared-team usage and production-ready durability:
 +---------------------------------------------------------+
 |                     Claude Code                          |
 |  +----------+  +----------+  +---------------------+    |
-|  |  Hooks   |  |   MCP    |  |  MCP SSE Proxy      |    |
+|  | JS Hooks |  |   MCP    |  |  MCP SSE Proxy      |    |
 |  | (HTTP)   |  | (stdio)  |  | (stdin->POST->SSE)  |    |
 |  +----+-----+  +----+-----+  +--------+------------+    |
 +-------|--------------|-----------------|-----------------+
@@ -44,7 +44,7 @@ The fork targets shared-team usage and production-ready durability:
 
 ## How the System Behaves End-to-End
 
-1. Claude Code lifecycle hooks and tool events write observations through the worker API and session parser.
+1. Claude Code lifecycle hooks (JS, executed via node) and tool events write observations through the worker API and session parser.
 2. Worker endpoints and background tasks score, route, consolidate, and persist observations and relations in PostgreSQL.
 3. MCP tools expose memory operations to Claude on three transport modes:
    - Local stdio transport (`bin/mcp-server`) for per-session operation.
@@ -61,7 +61,7 @@ The fork targets shared-team usage and production-ready durability:
 | `bin/worker`          | Persistent HTTP daemon on `:37777` with REST API, dashboard, SSE broadcast, consolidation scheduler |
 | `bin/mcp-server`      | MCP stdio server exposing `nia` tools (per Claude Code session) |
 | `bin/mcp-stdio-proxy` | Stdio bridge that forwards JSON-RPC over POST and SSE |
-| `bin/hooks/*`         | Six lifecycle hooks: `session-start`, `user-prompt`, `post-tool-use`, `subagent-stop`, `stop`, `statusline` |
+| `plugin/engram/hooks/*.js` | Six JS lifecycle hooks executed via `node`: `session-start`, `user-prompt`, `post-tool-use`, `subagent-stop`, `stop`, `statusline` |
 
 The MCP stdio server exposes 37 tools across search, memory metadata, and consolidation controls.
 
@@ -72,7 +72,8 @@ The MCP stdio server exposes 37 tools across search, memory metadata, and consol
 **Decision:** Use PostgreSQL + pgvector for all persistence and search.
 
 **Why:**  
-The hook-driven and MCP-driven write paths are concurrent and long-running, which requires strong transactional control, better process isolation, and lower contention risk than single-file SQLite.  
+The hook-driven and MCP-driven write paths are concurrent and long-running, which requires strong transactional control, better process isolation, and lower contention risk than single-file SQLite.
+Hooks run as JS scripts on the client, sending HTTP requests to the remote worker.  
 PostgreSQL also provides built-in extension support:
 - `tsvector` + GIN index for full-text relevance and filtering.
 - `pgvector` + HNSW index for fast approximate nearest-neighbor vector search.

@@ -157,7 +157,6 @@ type Service struct {
 	config                 *config.Config
 	rebuildStatus          *RebuildStatus
 	staleQueue             chan staleVerifyRequest
-	dbWatcher              *watcher.Watcher
 	configWatcher          *watcher.Watcher
 	updater                *update.Updater
 	similarityTelemetry    *telemetry.SimilarityTelemetry
@@ -836,24 +835,8 @@ func (s *Service) initializeAsync() {
 		collectionRegistry = &collections.Registry{}
 	}
 
-	// Initialize session index store and background indexer
+	// Initialize session index store (clients push transcripts via REST API)
 	sessionIdxStore := sessions.NewStore(store)
-	wsID := config.GetWorkstationID()
-	if wsID == "" {
-		wsID = sessions.WorkstationID()
-	}
-	sessionsDir := config.GetSessionsDir()
-	sessionIndexer := sessions.NewIndexer(sessionIdxStore, sessionsDir, wsID, log.Logger)
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		count, idxErr := sessionIndexer.IndexAll(s.ctx)
-		if idxErr != nil {
-			log.Warn().Err(idxErr).Msg("Session indexing failed")
-		} else if count > 0 {
-			log.Info().Int("indexed", count).Msg("Session indexing complete")
-		}
-	}()
 
 	// Initialize search manager for MCP tools
 	searchMgr := search.NewManager(observationStore, summaryStore, promptStore, vectorClient)
@@ -1633,6 +1616,10 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/sessions/{sessionId}/mark-injected", s.handleSessionMarkInjected)
 		r.Get("/api/sessions/{sessionId}/injected-observations", s.handleGetSessionInjectedObservations)
 
+		// Session transcript indexing (client pushes JSONL for FTS)
+		r.Post("/api/sessions/index", s.handleIndexSession)
+		r.Post("/api/sessions/check", s.handleCheckSessions)
+
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
 
@@ -2164,9 +2151,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	// Phase 2: Stop file watchers (prevent new DB recreation)
 	log.Debug().Msg("Phase 2: Stopping watchers...")
-	if s.dbWatcher != nil {
-		_ = s.dbWatcher.Stop()
-	}
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Stop()
 	}

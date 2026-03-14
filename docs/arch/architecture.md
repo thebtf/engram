@@ -10,13 +10,13 @@ graph TB
     subgraph "Claude Code Workstation"
         CC["Claude Code<br/>(AI Agent)"]
 
-        subgraph "Hooks (Go binaries)"
-            H1["session-start"]
-            H2["post-tool-use"]
-            H3["stop"]
-            H4["user-prompt"]
-            H5["statusline"]
-            H6["subagent-stop"]
+        subgraph "Hooks (JS — plugin/engram/hooks)"
+            H1["session-start.js"]
+            H2["post-tool-use.js"]
+            H3["stop.js"]
+            H4["user-prompt.js"]
+            H5["statusline.js"]
+            H6["subagent-stop.js"]
         end
 
         CC -->|lifecycle events| H1
@@ -122,7 +122,6 @@ graph TB
             SESS_IDX["Session Indexer"]
             PRIV["Privacy<br/>• Secret stripping<br/>• PII redaction"]
             MAINT["Maintenance"]
-            WATCH["DB Watcher"]
             UPD["Auto-Updater"]
         end
     end
@@ -299,7 +298,7 @@ Scheduler runs 3 independent cycles:
 |---------|---------|-----------|
 | `cmd/worker` | HTTP API server | `main()` |
 | `cmd/mcp` | MCP stdio server | `main()` |
-| `cmd/hooks/*` | Claude Code lifecycle hooks | `handlePostToolUse()`, etc. |
+| `plugin/engram/hooks/*.js` | JS lifecycle hooks (node) | `session-start.js`, `stop.js`, etc. |
 | `internal/worker` | Service orchestrator, HTTP handlers | `Service` |
 | `internal/mcp` | MCP protocol implementation | `Server` |
 | `internal/pipeline` | Level 0 deterministic extraction | `ClassifyEvent()`, `GenerateTitle()` |
@@ -317,7 +316,6 @@ Scheduler runs 3 independent cycles:
 | `internal/privacy` | Secret/PII stripping | `Stripper` |
 | `internal/config` | Configuration management | `Config` |
 | `pkg/models` | Shared domain models | `Observation`, `ObservationRelation` |
-| `pkg/hooks` | Hook utilities | `RunHook()`, `POST()` |
 | `pkg/similarity` | Cosine similarity/clustering | `CosineSimilarity()` |
 
 ## Relation Types

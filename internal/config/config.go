@@ -96,7 +96,6 @@ type Config struct {
 	WorkerHost                string   // env-only
 	WorkerToken               string   // env-only
 	CollectionConfigPath      string   // env-only
-	SessionsDir               string   // env-only: SESSIONS_DIR
 	WorkstationID             string   // env-only: WORKSTATION_ID
 	GraphProvider             string   `json:"graph_provider"`      // "falkordb" or "" (disabled)
 	FalkorDBAddr              string   // env-only: ENGRAM_FALKORDB_ADDR
@@ -116,8 +115,9 @@ type Config struct {
 	StoreMemorySoftLimit        int      `json:"store_memory_soft_limit"`       // Chars above which content is truncated (default: 1000)
 	StoreMemoryDedupThreshold   float64  `json:"store_memory_dedup_threshold"`  // Cosine similarity for dedup (default: 0.92)
 	StoreMemorySummarize        bool     `json:"store_memory_summarize"`        // Use LLM to summarize long content (default: false)
-	EncryptionKeyFile string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
-	EncryptionKey     string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
+	EncryptionKeyFile      string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
+	EncryptionKey          string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
+	LocalVerificationEnabled bool `json:"local_verification_enabled"` // Enable local file reads and CLI calls (default: false, for Docker/remote)
 }
 
 var (
@@ -456,9 +456,6 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("COLLECTION_CONFIG")); v != "" {
 		cfg.CollectionConfigPath = v
 	}
-	if v := strings.TrimSpace(os.Getenv("SESSIONS_DIR")); v != "" {
-		cfg.SessionsDir = v
-	}
 	if v := strings.TrimSpace(os.Getenv("WORKSTATION_ID")); v != "" {
 		cfg.WorkstationID = v
 	}
@@ -523,6 +520,9 @@ func Load() (*Config, error) {
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENCRYPTION_KEY")); v != "" {
 		cfg.EncryptionKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("LOCAL_VERIFICATION_ENABLED")); v != "" {
+		cfg.LocalVerificationEnabled = v == "true" || v == "1"
 	}
 
 	return cfg, nil
@@ -647,15 +647,6 @@ func GetCollectionConfigPath() string {
 	return filepath.Join(home, ".config", "engram", "collections.yml")
 }
 
-// GetSessionsDir returns the sessions directory.
-// Falls back to ~/.claude/projects/ if not set.
-func GetSessionsDir() string {
-	if v := os.Getenv("SESSIONS_DIR"); v != "" {
-		return v
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "projects")
-}
 
 // GetWorkstationID returns the workstation identifier from environment.
 // Returns empty string if not set; caller should fall back to sessions.WorkstationID().

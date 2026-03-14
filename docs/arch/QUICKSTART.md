@@ -71,7 +71,7 @@ cd engram
 # Download ONNX runtime libraries for local embeddings (required even if using OpenAI)
 make setup-libs
 
-# Build all binaries (worker, mcp-server, 6 hooks) + Vue dashboard
+# Build all binaries (worker, mcp-server) + Vue dashboard
 make build
 ```
 
@@ -80,14 +80,9 @@ Build artifacts are placed in `bin/`:
 bin/
   worker
   mcp-server
-  hooks/
-    session-start
-    user-prompt
-    post-tool-use
-    subagent-stop
-    stop
-    statusline
 ```
+
+Hooks are JavaScript files in `plugin/engram/hooks/` — no compilation needed.
 
 ---
 
@@ -115,7 +110,7 @@ make restart-worker
 
 ## Step 5: Install Plugin Into Claude Code
 
-The `make install` command copies binaries, registers the plugin, and configures the MCP server in Claude Code:
+The `make install` command copies binaries and hooks, registers the plugin, and configures the MCP server in Claude Code:
 
 ```bash
 make install
@@ -123,8 +118,8 @@ make install
 
 This does the following:
 1. Stops any running worker
-2. Copies binaries to `~/.claude/plugins/marketplaces/engram/`
-3. Updates `~/.claude/installed_plugins.json` and `~/.claude/known_marketplaces.json`
+2. Copies binaries and JS hooks to `~/.claude/plugins/marketplaces/engram/`
+3. Updates `~/.claude/plugins/installed_plugins.json` and `~/.claude/plugins/known_marketplaces.json`
 4. Registers the MCP server in `~/.claude/settings.json`
 5. Writes hook configuration to `~/.claude/plugins/.../hooks/hooks.json`
 6. Starts the worker

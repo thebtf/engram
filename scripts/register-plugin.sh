@@ -72,7 +72,7 @@ EOF
 
     # Enable the plugin in settings.json and configure statusline
     # First ensure enabledPlugins object exists, then add our plugin
-    STATUSLINE_CMD="$MARKETPLACE_PATH/hooks/statusline"
+    STATUSLINE_CMD="node \"$MARKETPLACE_PATH/hooks/statusline.js\""
     STATUSLINE_ENTRY=$(cat <<EOF
 {
     "type": "command",

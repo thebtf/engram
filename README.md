@@ -452,7 +452,7 @@ cmd/
   mcp/                MCP stdio server (local direct access)
   mcp-stdio-proxy/    stdio -> SSE bridge (client-side)
   worker/             HTTP API + MCP SSE + MCP Streamable HTTP + dashboard
-  hooks/              Claude Code lifecycle hooks (legacy Go, see plugin/hooks/)
+  engram-cli/         CLI client for engram operations
 internal/
   chunking/           AST-aware document chunking (md, Go, Python, TS)
   collections/        YAML collection config + context routing
@@ -470,7 +470,6 @@ internal/
   vector/pgvector/    pgvector client + sync
   worker/             HTTP handlers, middleware, service
 pkg/
-  hooks/              Hook event client
   models/             Domain models + relation types
   strutil/            Shared string utilities
 plugin/               Claude Code plugin definition + marketplace

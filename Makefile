@@ -2,7 +2,7 @@
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 # Pass version to both main package and hooks package
-LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X github.com/thebtf/engram/pkg/hooks.Version=$(VERSION) -s -w" -buildvcs=false
+LDFLAGS := -ldflags "-X main.Version=$(VERSION) -s -w" -buildvcs=false
 BUILD_DIR := bin
 PLUGIN_DIR := plugin
 
@@ -14,7 +14,7 @@ GOARCH ?= $(shell go env GOARCH)
 export CGO_ENABLED=1
 BUILD_TAGS := -tags "fts5"
 
-.PHONY: all build clean test install lint hooks worker mcp stop-worker start-worker restart-worker dashboard website dev-website setup-libs
+.PHONY: all build clean test install lint worker mcp stop-worker start-worker restart-worker dashboard website dev-website setup-libs
 
 all: build
 
@@ -23,7 +23,7 @@ setup-libs:
 	@./scripts/download-onnx-libs.sh all
 
 # Build all binaries
-build: setup-libs dashboard worker hooks mcp
+build: setup-libs dashboard worker mcp
 
 # Build Vue dashboard
 dashboard:
@@ -41,17 +41,6 @@ worker:
 	@mkdir -p $(BUILD_DIR)
 	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/worker
 
-# Build all hooks
-hooks:
-	@echo "Building hooks..."
-	@mkdir -p $(BUILD_DIR)/hooks
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/hooks/session-start ./cmd/hooks/session-start
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/hooks/user-prompt ./cmd/hooks/user-prompt
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/hooks/post-tool-use ./cmd/hooks/post-tool-use
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/hooks/subagent-stop ./cmd/hooks/subagent-stop
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/hooks/stop ./cmd/hooks/stop
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/hooks/statusline ./cmd/hooks/statusline
-
 # Build MCP server
 mcp:
 	@echo "Building MCP server..."
@@ -63,47 +52,23 @@ build-all: build-linux build-darwin build-windows
 
 build-linux:
 	@echo "Building for Linux..."
-	@mkdir -p $(BUILD_DIR)/linux-amd64/hooks
+	@mkdir -p $(BUILD_DIR)/linux-amd64
 	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/engram-server ./cmd/worker
 	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/engram-mcp ./cmd/mcp
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/hooks/session-start ./cmd/hooks/session-start
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/hooks/user-prompt ./cmd/hooks/user-prompt
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/hooks/post-tool-use ./cmd/hooks/post-tool-use
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/hooks/subagent-stop ./cmd/hooks/subagent-stop
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/hooks/stop ./cmd/hooks/stop
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/hooks/statusline ./cmd/hooks/statusline
 
 build-darwin:
 	@echo "Building for macOS..."
-	@mkdir -p $(BUILD_DIR)/darwin-amd64/hooks $(BUILD_DIR)/darwin-arm64/hooks
+	@mkdir -p $(BUILD_DIR)/darwin-amd64 $(BUILD_DIR)/darwin-arm64
 	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/engram-server ./cmd/worker
 	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/engram-server ./cmd/worker
 	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/engram-mcp ./cmd/mcp
 	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/engram-mcp ./cmd/mcp
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/hooks/session-start ./cmd/hooks/session-start
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/hooks/session-start ./cmd/hooks/session-start
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/hooks/user-prompt ./cmd/hooks/user-prompt
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/hooks/user-prompt ./cmd/hooks/user-prompt
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/hooks/post-tool-use ./cmd/hooks/post-tool-use
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/hooks/post-tool-use ./cmd/hooks/post-tool-use
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/hooks/subagent-stop ./cmd/hooks/subagent-stop
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/hooks/subagent-stop ./cmd/hooks/subagent-stop
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/hooks/stop ./cmd/hooks/stop
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/hooks/stop ./cmd/hooks/stop
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/hooks/statusline ./cmd/hooks/statusline
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/hooks/statusline ./cmd/hooks/statusline
 
 build-windows:
 	@echo "Building for Windows..."
-	@mkdir -p $(BUILD_DIR)/windows-amd64/hooks
+	@mkdir -p $(BUILD_DIR)/windows-amd64
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/engram-server.exe ./cmd/worker
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/engram-mcp.exe ./cmd/mcp
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/hooks/session-start.exe ./cmd/hooks/session-start
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/hooks/user-prompt.exe ./cmd/hooks/user-prompt
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/hooks/post-tool-use.exe ./cmd/hooks/post-tool-use
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/hooks/subagent-stop.exe ./cmd/hooks/subagent-stop
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/hooks/stop.exe ./cmd/hooks/stop
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/hooks/statusline.exe ./cmd/hooks/statusline
 
 # Stop any running worker
 stop-worker:
@@ -141,8 +106,7 @@ install: build stop-worker
 	@mkdir -p $(HOME)/.claude/plugins/marketplaces/engram/commands
 	cp $(BUILD_DIR)/engram-server $(HOME)/.claude/plugins/marketplaces/engram/
 	cp $(BUILD_DIR)/engram-mcp $(HOME)/.claude/plugins/marketplaces/engram/
-	cp $(BUILD_DIR)/hooks/* $(HOME)/.claude/plugins/marketplaces/engram/hooks/
-	cp $(PLUGIN_DIR)/hooks/hooks.json $(HOME)/.claude/plugins/marketplaces/engram/hooks/
+	cp $(PLUGIN_DIR)/engram/hooks/* $(HOME)/.claude/plugins/marketplaces/engram/hooks/
 	@# Copy slash commands if they exist
 	@if [ -d "$(PLUGIN_DIR)/commands" ]; then cp -r $(PLUGIN_DIR)/commands/* $(HOME)/.claude/plugins/marketplaces/engram/commands/ 2>/dev/null || true; fi
 	@# Copy static plugin metadata
@@ -215,7 +179,6 @@ help:
 	@echo "  make build          - Build all binaries"
 	@echo "  make worker         - Build worker service only"
 	@echo "  make mcp            - Build MCP server only"
-	@echo "  make hooks          - Build hooks only"
 	@echo "  make build-all      - Build for all platforms"
 	@echo "  make install        - Install to Claude plugins directory (restarts worker)"
 	@echo "  make uninstall      - Remove from Claude plugins directory"

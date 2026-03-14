@@ -47,24 +47,23 @@ This document maps all runtime binaries and internal Go components for `engram`.
 - **Behavior**: reads MCP JSON-RPC from `stdin`, `POST`s to remote SSE endpoint, returns response via `stdout`.
 - **Use**: remote machines that connect to centralized MCP-SSE worker.
 
-## Hooks (`cmd/hooks/*`)
+## Hooks (`plugin/engram/hooks/`)
 
-All hooks use `pkg/hooks.RunHook(name, handler)` and call worker endpoints.
+All hooks are JavaScript files executed via `node` by Claude Code's plugin system.
+Hook registration is defined in `hooks.json`. Each hook calls the remote worker API via HTTP.
 
-1. `session-start`
+1. `session-start.js`
    - `GET /api/context/inject?project=X&cwd=Y`
    - returns observations as `<engram-context>...</engram-context>`
-   - first 25 observations: `title`, `narrative`, `facts`
-   - remaining observations: `title`, `subtitle`
-2. `user-prompt`
+2. `user-prompt.js`
    - `POST` to worker to record user prompt text and prompt number
-3. `post-tool-use`
+3. `post-tool-use.js`
    - `POST` to worker to record tool invocations and outputs
-4. `subagent-stop`
+4. `subagent-stop.js`
    - `POST` to worker to record subagent completion event
-5. `stop`
+5. `stop.js`
    - `POST` to worker to generate session summary from session activity
-6. `statusline`
+6. `statusline.js`
    - `GET` worker status endpoint
    - injects memory count into Claude Code statusline
 
@@ -259,17 +258,9 @@ All hooks use `pkg/hooks.RunHook(name, handler)` and call worker endpoints.
   - tarball extraction and binary replacement
   - optional restart path
 - Models: `Release`, `Asset`, `UpdateInfo`, `UpdateStatus`.
-- Targets: `worker`, `mcp-server`, and hook binaries.
+- Targets: `worker`, `mcp-server`.
 
 ## `pkg` Packages
-
-### `pkg/hooks`
-
-- `RunHook(name, handler)` orchestration framework.
-- Inputs:
-  - `BaseInput{SessionID, Project, CWD}`
-  - `HookContext{Port, Project, CWD}`
-- GET/POST helper helpers call worker API endpoints.
 
 ### `pkg/models`
 
@@ -292,7 +283,7 @@ All hooks use `pkg/hooks.RunHook(name, handler)` and call worker endpoints.
 ```text
 Claude Code
   |
-  +-- session-start ----> GET /api/context/inject ---------> Worker :37777
+  +-- session-start.js --> GET /api/context/inject ---------> Worker :37777
   |                        <-- observations JSON <-----------+
   |                       builds <engram-context>
   |
@@ -302,10 +293,10 @@ Claude Code
   |     +-> SearchManager -> hybridSearch -> [FTS + pgvector + RRF]
   |     +-> SessionIndexer (background) -> JSONL files
   |
-  +-- user-prompt ------> POST /api/hooks/user-prompt ----> Worker
-  +-- post-tool-use ----> POST /api/hooks/post-tool-use --> Worker
-  +-- stop -------------> POST /api/hooks/stop -----------> Worker
-  +-- statusline -------> GET /api/status ----------------> Worker
+  +-- user-prompt.js ----> POST /api/hooks/user-prompt ----> Worker
+  +-- post-tool-use.js --> POST /api/hooks/post-tool-use --> Worker
+  +-- stop.js -----------> POST /api/hooks/stop -----------> Worker
+  +-- statusline.js -----> GET /api/status ----------------> Worker
   |
   +-- (remote) mcp-stdio-proxy --> SSE POST --> mcp-sse :37778 --> PostgreSQL
 
