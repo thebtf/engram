@@ -1179,7 +1179,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools,
 			Tool{
 				Name:        "store_credential",
-				Description: "Securely store an encrypted credential (API key, password, token). Value is encrypted with AES-256-GCM.",
+				Description: "[Vault] Securely store an encrypted credential (API key, password, token). Value is encrypted with AES-256-GCM.",
 				tier:        tierUseful,
 				InputSchema: map[string]any{
 					"type":     "object",
@@ -1194,7 +1194,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "get_credential",
-				Description: "Retrieve and decrypt a stored credential by name. Returns the decrypted value.",
+				Description: "[Vault] Retrieve and decrypt a stored credential by name. Returns the decrypted value.",
 				tier:        tierUseful,
 				InputSchema: map[string]any{
 					"type":     "object",
@@ -1206,7 +1206,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "list_credentials",
-				Description: "List all stored credentials (names and metadata only, no values).",
+				Description: "[Vault] List all stored credentials (names and metadata only, no values).",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":       "object",
@@ -1215,7 +1215,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "delete_credential",
-				Description: "Delete a stored credential by name.",
+				Description: "[Vault] Delete a stored credential by name.",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
@@ -1227,7 +1227,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "vault_status",
-				Description: "Check vault encryption status: key configured, fingerprint, credential count.",
+				Description: "[Vault] Check vault encryption status: key configured, fingerprint, credential count.",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":       "object",
@@ -1242,7 +1242,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools,
 			Tool{
 				Name:        "list_collections",
-				Description: "List all configured document collections with active document counts.",
+				Description: "[Documents] List all configured document collections with active document counts.",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":       "object",
@@ -1251,7 +1251,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "list_documents",
-				Description: "List documents in a collection with metadata (path, title, hash, timestamps).",
+				Description: "[Documents] List documents in a collection with metadata (path, title, hash, timestamps).",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
@@ -1263,7 +1263,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "get_document",
-				Description: "Retrieve full document content by collection and path.",
+				Description: "[Documents] Retrieve full document content by collection and path.",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
@@ -1276,7 +1276,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "remove_document",
-				Description: "Deactivate (soft delete) a document from a collection. The document and its chunks remain in storage but are excluded from search.",
+				Description: "[Documents] Deactivate (soft delete) a document from a collection. The document and its chunks remain in storage but are excluded from search.",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
@@ -1295,7 +1295,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools,
 			Tool{
 				Name:        "ingest_document",
-				Description: "Ingest a document into a collection. Chunks the content, generates embeddings, and stores for semantic search. Skips re-embedding if content hash unchanged.",
+				Description: "[Documents] Ingest a document into a collection. Chunks the content, generates embeddings, and stores for semantic search. Skips re-embedding if content hash unchanged.",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
@@ -1310,7 +1310,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "search_collection",
-				Description: "Semantic search across document chunks in a collection. Returns ranked results with chunk text.",
+				Description: "[Documents] Semantic search across document chunks in a collection. Returns ranked results with chunk text.",
 				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
