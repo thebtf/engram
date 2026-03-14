@@ -67,12 +67,15 @@ func (s *Server) handleListDocuments(ctx context.Context, args json.RawMessage) 
 		return "", fmt.Errorf("document store not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Collection string `json:"collection"`
+		Collection string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Collection = coerceString(m["collection"], "")
 	if params.Collection == "" {
 		return "", fmt.Errorf("collection is required")
 	}
@@ -124,13 +127,17 @@ func (s *Server) handleGetDocument(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("document store not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Collection string `json:"collection"`
-		Path       string `json:"path"`
+		Collection string
+		Path       string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Collection = coerceString(m["collection"], "")
+	params.Path = coerceString(m["path"], "")
 	if params.Collection == "" || params.Path == "" {
 		return "", fmt.Errorf("collection and path are required")
 	}
@@ -164,13 +171,17 @@ func (s *Server) handleRemoveDocument(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("document store not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Collection string `json:"collection"`
-		Path       string `json:"path"`
+		Collection string
+		Path       string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Collection = coerceString(m["collection"], "")
+	params.Path = coerceString(m["path"], "")
 	if params.Collection == "" || params.Path == "" {
 		return "", fmt.Errorf("collection and path are required")
 	}
@@ -191,15 +202,21 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("embedding service not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Collection string `json:"collection"`
-		Path       string `json:"path"`
-		Content    string `json:"content"`
-		Title      string `json:"title"`
+		Collection string
+		Path       string
+		Content    string
+		Title      string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Collection = coerceString(m["collection"], "")
+	params.Path = coerceString(m["path"], "")
+	params.Content = coerceString(m["content"], "")
+	params.Title = coerceString(m["title"], "")
 	if params.Collection == "" || params.Path == "" || params.Content == "" {
 		return "", fmt.Errorf("collection, path, and content are required")
 	}
@@ -304,14 +321,19 @@ func (s *Server) handleSearchCollection(ctx context.Context, args json.RawMessag
 		return "", fmt.Errorf("embedding service not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Query      string `json:"query"`
-		Collection string `json:"collection"`
-		Limit      int    `json:"limit"`
+		Query      string
+		Collection string
+		Limit      int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Query = coerceString(m["query"], "")
+	params.Collection = coerceString(m["collection"], "")
+	params.Limit = coerceInt(m["limit"], 0)
 	if params.Query == "" {
 		return "", fmt.Errorf("query is required")
 	}

@@ -23,17 +23,29 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("observation store not available")
 	}
 
-	var params struct {
-		Tags       []string `json:"tags"`
-		Content    string   `json:"content"`
-		Title      string   `json:"title"`
-		Type       string   `json:"type"`
-		Scope      string   `json:"scope"`
-		Project    string   `json:"project"`
-		Importance *float64 `json:"importance"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+
+	var params struct {
+		Tags       []string
+		Content    string
+		Title      string
+		Type       string
+		Scope      string
+		Project    string
+		Importance *float64
+	}
+	params.Tags = coerceStringSlice(m["tags"])
+	params.Content = coerceString(m["content"], "")
+	params.Title = coerceString(m["title"], "")
+	params.Type = coerceString(m["type"], "")
+	params.Scope = coerceString(m["scope"], "")
+	params.Project = coerceString(m["project"], "")
+	if v, ok := m["importance"]; ok && v != nil {
+		f := coerceFloat64(v, 0)
+		params.Importance = &f
 	}
 	if params.Content == "" {
 		return "", fmt.Errorf("content is required")
@@ -196,17 +208,25 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("search manager not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Tags    []string `json:"tags"`
-		Query   string   `json:"query"`
-		Type    string   `json:"type"`
-		Format  string   `json:"format"`
-		Limit   int      `json:"limit"`
-		Project string   `json:"project"`
+		Tags    []string
+		Query   string
+		Type    string
+		Format  string
+		Limit   int
+		Project string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Tags = coerceStringSlice(m["tags"])
+	params.Query = coerceString(m["query"], "")
+	params.Type = coerceString(m["type"], "")
+	params.Format = coerceString(m["format"], "")
+	params.Limit = coerceInt(m["limit"], 0)
+	params.Project = coerceString(m["project"], "")
 	if params.Query == "" {
 		return "", fmt.Errorf("query is required")
 	}

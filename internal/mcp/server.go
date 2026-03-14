@@ -137,11 +137,19 @@ type ToolCallParams struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+// Tool tier constants for tool visibility grouping.
+const (
+	tierCore    = 1 // T1: Always visible — most-used tools
+	tierUseful  = 2 // T2: Visible by default — regularly useful tools
+	tierAdmin   = 3 // T3+: Hidden by default — admin, analytics, bulk ops
+)
+
 // Tool represents an MCP tool definition.
 type Tool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
+	tier        int            // not exported, not serialized — used for tiering
 }
 
 // Run starts the MCP server loop.
@@ -452,10 +460,12 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "search",
 			Description: "Unified search across all memory types (observations, sessions, and user prompts) using vector-first semantic search (pgvector).",
+			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query":     map[string]any{"type": "string", "description": "Natural language search query for semantic ranking"},
+					"preset":    map[string]any{"type": "string", "enum": []string{"decisions", "changes", "how_it_works"}, "description": "Shortcut presets that set type/concept filters automatically"},
 					"type":      map[string]any{"type": "string", "enum": []string{"observations", "sessions", "prompts"}, "description": "Filter by document type"},
 					"project":   map[string]any{"type": "string", "description": "Filter by project name"},
 					"obs_type":  map[string]any{"type": "string", "description": "Filter observations by type"},
@@ -473,12 +483,14 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		{
 			Name:        "timeline",
-			Description: "Fetch timeline of observations around a specific point in time.",
+			Description: "Fetch timeline of observations around a specific point in time. Consolidates get_context_timeline, get_timeline_by_query, and get_recent_context.",
+			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"anchor_id": map[string]any{"type": "number", "description": "Observation ID to use as anchor"},
-					"query":     map[string]any{"type": "string", "description": "Natural language query to find anchor observation"},
+					"mode":      map[string]any{"type": "string", "enum": []string{"anchor", "query", "recent"}, "default": "anchor", "description": "Timeline mode: anchor (by ID), query (search+timeline), recent (latest observations)"},
+					"anchor_id": map[string]any{"type": "number", "description": "Observation ID to use as anchor (mode=anchor)"},
+					"query":     map[string]any{"type": "string", "description": "Natural language query to find anchor observation (mode=query)"},
 					"before":    map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
 					"after":     map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
 					"project":   map[string]any{"type": "string"},
@@ -492,6 +504,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "decisions",
 			Description: "Semantic shortcut for finding architectural, design, and implementation decisions.",
+			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"query"},
@@ -507,6 +520,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "changes",
 			Description: "Semantic shortcut for finding code changes, refactorings, and modifications.",
+			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"query"},
@@ -522,6 +536,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "how_it_works",
 			Description: "Semantic shortcut for understanding system architecture, design patterns, and implementation details.",
+			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"query"},
@@ -537,6 +552,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "find_by_concept",
 			Description: "Find observations tagged with specific concepts.",
+			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"concepts"},
@@ -557,6 +573,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "find_by_file",
 			Description: "Find observations related to specific file paths.",
+			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"files"},
@@ -577,6 +594,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "find_by_type",
 			Description: "Find observations of specific types.",
+			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"type"},
@@ -597,6 +615,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_recent_context",
 			Description: "Get recent session context for timeline display.",
+			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -614,6 +633,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_context_timeline",
 			Description: "Get timeline of observations around a specific observation ID.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"anchor_id"},
@@ -632,6 +652,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_timeline_by_query",
 			Description: "Combined search + timeline tool. First searches for observations matching the query, then returns timeline around the best match.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"query"},
@@ -652,6 +673,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "find_related_observations",
 			Description: "Find observations related to a given observation ID filtered by confidence threshold. Returns related observations sorted by confidence score. Useful for discovering relevant context.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"id"},
@@ -665,6 +687,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "find_similar_observations",
 			Description: "Find observations semantically similar to a query or observation. Uses vector similarity search to find related content. Useful for detecting duplicates before creating new observations.",
+			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"query"},
@@ -677,8 +700,24 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		},
 		{
+			Name:        "graph_query",
+			Description: "Unified graph query tool. Consolidates find_related_observations, get_observation_relationships, and get_graph_neighbors.",
+			tier:        tierAdmin,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]any{
+					"mode":      map[string]any{"type": "string", "enum": []string{"related", "relationships", "neighbors"}, "default": "related", "description": "Graph query mode"},
+					"id":        map[string]any{"type": "number", "description": "Observation ID to query around"},
+					"max_depth": map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "Maximum traversal depth (mode=relationships)"},
+					"limit":     map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
+				},
+			},
+		},
+		{
 			Name:        "get_patterns",
 			Description: "Get detected patterns from observations. Patterns represent recurring themes, workflows, or practices discovered across observations.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -692,6 +731,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_memory_stats",
 			Description: "Get statistics about the memory system including observation counts, vector stats, pattern counts, and search metrics.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -700,6 +740,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "bulk_delete_observations",
 			Description: "Delete multiple observations by their IDs. Returns count of successfully deleted observations.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"ids"},
@@ -712,6 +753,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "bulk_mark_superseded",
 			Description: "Mark multiple observations as superseded (stale). Useful for cleanup without permanent deletion.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"ids"},
@@ -723,6 +765,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "bulk_boost_observations",
 			Description: "Boost or reduce the importance score of multiple observations. Positive values increase importance, negative decrease.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"ids", "boost"},
@@ -735,6 +778,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "trigger_maintenance",
 			Description: "Trigger an immediate maintenance run (cleanup old observations, optimize database).",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -743,6 +787,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_maintenance_stats",
 			Description: "Get statistics about the maintenance system including last run time, cleanup counts, and configuration.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -751,6 +796,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "merge_observations",
 			Description: "Merge two observations into one. The target observation is kept and boosted, the source is marked as superseded. Useful for deduplication without data loss.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"source_id", "target_id"},
@@ -764,6 +810,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_observation",
 			Description: "Get a single observation by its ID. Returns full observation details including all metadata.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"id"},
@@ -775,6 +822,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "edit_observation",
 			Description: "Edit an existing observation. Only provided fields will be updated, others remain unchanged. Useful for correcting errors, adding details, or updating scope.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"id"},
@@ -794,6 +842,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_observation_quality",
 			Description: "Get quality metrics for an observation. Returns completeness score, usage stats, and improvement suggestions.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"id"},
@@ -805,6 +854,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "suggest_consolidations",
 			Description: "Find observations that could be merged or consolidated. Returns groups of similar observations with merge recommendations.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -817,6 +867,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "tag_observation",
 			Description: "Add or remove concept tags from an observation. Tags help with organization and filtering. Use mode 'add' to add new tags, 'remove' to remove specific tags, or 'set' to replace all tags.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"id", "tags"},
@@ -830,6 +881,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_observations_by_tag",
 			Description: "Find all observations that have a specific concept tag. Useful for browsing by category.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"tag"},
@@ -843,6 +895,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_temporal_trends",
 			Description: "Analyze observation creation patterns over time. Returns daily counts, peak activity times, and trend insights. Useful for understanding work patterns.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -855,6 +908,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_data_quality_report",
 			Description: "Get a comprehensive quality assessment of observations. Shows completeness distribution, common issues, and improvement suggestions.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -866,6 +920,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "batch_tag_by_pattern",
 			Description: "Apply tags to observations matching a pattern. Useful for retroactive organization and categorization.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"pattern", "tags"},
@@ -881,6 +936,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "explain_search_ranking",
 			Description: "Debug search results by showing score breakdown for top matches. Explains why each observation ranked where it did.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"query"},
@@ -894,6 +950,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "export_observations",
 			Description: "Export observations in various formats for backup or analysis.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -909,6 +966,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "check_system_health",
 			Description: "Comprehensive system health check. Returns status of all subsystems (database, vectors, cache, search) with actionable diagnostics.",
+			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -917,6 +975,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "analyze_search_patterns",
 			Description: "Analyze search query patterns to identify common searches, missed queries, and optimization opportunities.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -928,6 +987,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_observation_relationships",
 			Description: "Get relationship graph for an observation. Shows how observations relate to each other (depends_on, extends, conflicts_with, supersedes). Useful for understanding dependencies and context.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"id"},
@@ -940,6 +1000,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_graph_neighbors",
 			Description: "Get graph neighbors of an observation via FalkorDB. Returns multi-hop neighbors with relationship types and hop distance. Requires FalkorDB graph backend to be configured.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"observation_id"},
@@ -953,6 +1014,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_graph_stats",
 			Description: "Get graph backend statistics. Returns provider, connection status, node count, and edge count.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -961,6 +1023,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "get_observation_scoring_breakdown",
 			Description: "Get detailed scoring breakdown for an observation. Shows how importance scores are calculated including type weight, recency decay, feedback contribution, concept boost, and retrieval frequency. Useful for understanding why observations are ranked the way they are.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"id"},
@@ -972,6 +1035,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "analyze_observation_importance",
 			Description: "Analyze observation importance patterns in a project. Returns statistics on feedback distribution, top-scoring observations, most-retrieved observations, and concept weights. Useful for understanding what makes observations valuable.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -986,6 +1050,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "search_sessions",
 			Description: "Full-text search across indexed Claude Code sessions.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"query"},
@@ -998,6 +1063,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "list_sessions",
 			Description: "List indexed Claude Code sessions with optional workstation/project filters.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1011,6 +1077,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "run_consolidation",
 			Description: "Manually trigger the memory consolidation lifecycle. Runs decay (relevance recalculation), creative association discovery, and optionally forgetting. Use when you want to consolidate memories immediately rather than waiting for scheduled intervals.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1027,6 +1094,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		{
 			Name:        "import_instincts",
 			Description: "Import ECC instinct files as guidance observations. Supports sending file content directly (preferred for remote servers) or reading from a local path (legacy). Idempotent — duplicates are skipped via vector similarity check.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",
 				"anyOf": []map[string]any{
@@ -1057,6 +1125,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, Tool{
 			Name:        "backfill_status",
 			Description: "Get status of backfill runs — total runs, per-run stored/skipped/error counts, and total observations imported from historical sessions.",
+			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -1070,6 +1139,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			Tool{
 				Name:        "store_memory",
 				Description: "Explicitly store a memory/observation. Use when you want to remember something specific across sessions.",
+				tier:        tierCore,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"content"},
@@ -1087,6 +1157,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			Tool{
 				Name:        "recall_memory",
 				Description: "Recall memories/observations by semantic search. Use to retrieve previously stored knowledge.",
+				tier:        tierCore,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"query"},
@@ -1108,7 +1179,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools,
 			Tool{
 				Name:        "store_credential",
-				Description: "Securely store an encrypted credential (API key, password, token). Value is encrypted with AES-256-GCM.",
+				Description: "[Vault] Securely store an encrypted credential (API key, password, token). Value is encrypted with AES-256-GCM.",
+				tier:        tierUseful,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"name", "value"},
@@ -1122,7 +1194,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "get_credential",
-				Description: "Retrieve and decrypt a stored credential by name. Returns the decrypted value.",
+				Description: "[Vault] Retrieve and decrypt a stored credential by name. Returns the decrypted value.",
+				tier:        tierUseful,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"name"},
@@ -1133,7 +1206,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "list_credentials",
-				Description: "List all stored credentials (names and metadata only, no values).",
+				Description: "[Vault] List all stored credentials (names and metadata only, no values).",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":       "object",
 					"properties": map[string]any{},
@@ -1141,7 +1215,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "delete_credential",
-				Description: "Delete a stored credential by name.",
+				Description: "[Vault] Delete a stored credential by name.",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"name"},
@@ -1152,7 +1227,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "vault_status",
-				Description: "Check vault encryption status: key configured, fingerprint, credential count.",
+				Description: "[Vault] Check vault encryption status: key configured, fingerprint, credential count.",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":       "object",
 					"properties": map[string]any{},
@@ -1166,7 +1242,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools,
 			Tool{
 				Name:        "list_collections",
-				Description: "List all configured document collections with active document counts.",
+				Description: "[Documents] List all configured document collections with active document counts.",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":       "object",
 					"properties": map[string]any{},
@@ -1174,7 +1251,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "list_documents",
-				Description: "List documents in a collection with metadata (path, title, hash, timestamps).",
+				Description: "[Documents] List documents in a collection with metadata (path, title, hash, timestamps).",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"collection"},
@@ -1185,7 +1263,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "get_document",
-				Description: "Retrieve full document content by collection and path.",
+				Description: "[Documents] Retrieve full document content by collection and path.",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"collection", "path"},
@@ -1197,7 +1276,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "remove_document",
-				Description: "Deactivate (soft delete) a document from a collection. The document and its chunks remain in storage but are excluded from search.",
+				Description: "[Documents] Deactivate (soft delete) a document from a collection. The document and its chunks remain in storage but are excluded from search.",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"collection", "path"},
@@ -1215,7 +1295,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools,
 			Tool{
 				Name:        "ingest_document",
-				Description: "Ingest a document into a collection. Chunks the content, generates embeddings, and stores for semantic search. Skips re-embedding if content hash unchanged.",
+				Description: "[Documents] Ingest a document into a collection. Chunks the content, generates embeddings, and stores for semantic search. Skips re-embedding if content hash unchanged.",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"collection", "path", "content"},
@@ -1229,7 +1310,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 			Tool{
 				Name:        "search_collection",
-				Description: "Semantic search across document chunks in a collection. Returns ranked results with chunk text.",
+				Description: "[Documents] Semantic search across document chunks in a collection. Returns ranked results with chunk text.",
+				tier:        tierAdmin,
 				InputSchema: map[string]any{
 					"type":     "object",
 					"required": []string{"query"},
@@ -1241,6 +1323,34 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		)
+	}
+
+	// Tool tiering: parse optional cursor from request params.
+	// No cursor / empty → return T1+T2 tools only + nextCursor: "all"
+	// cursor: "all" → return ALL tools
+	var listParams struct {
+		Cursor string `json:"cursor"`
+	}
+	if req.Params != nil {
+		_ = json.Unmarshal(req.Params, &listParams)
+	}
+
+	if listParams.Cursor != "all" {
+		// Filter to primary tools (T1 + T2)
+		primary := make([]Tool, 0, len(tools))
+		for _, t := range tools {
+			if t.tier <= tierUseful {
+				primary = append(primary, t)
+			}
+		}
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: map[string]any{
+				"tools":      primary,
+				"nextCursor": "all",
+			},
+		}
 	}
 
 	return &Response{
@@ -1299,6 +1409,21 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	// Special handlers for non-search tools
 	switch name {
+	case "graph_query":
+		// Consolidated graph tool — routes by mode parameter
+		gm, gErr := parseArgs(args)
+		if gErr != nil {
+			return "", gErr
+		}
+		mode := coerceString(gm["mode"], "related")
+		switch mode {
+		case "relationships":
+			return s.handleGetObservationRelationships(ctx, args)
+		case "neighbors":
+			return s.handleGetGraphNeighbors(ctx, args)
+		default: // "related"
+			return s.handleFindRelatedObservations(ctx, args)
+		}
 	case "find_related_observations":
 		return s.handleFindRelatedObservations(ctx, args)
 	case "find_similar_observations":
@@ -1394,20 +1519,44 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRecallMemory(ctx, args)
 	}
 
-	// Original search-based tools
-	var params search.SearchParams
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	// Search-based tools: use parseArgs + coercion instead of direct unmarshal
+	// to handle MCP clients sending numeric values as strings or floats.
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
+	params := buildSearchParams(m)
 
 	var result *search.UnifiedSearchResult
-	var err error
 
 	switch name {
 	case "search":
-		result, err = s.searchMgr.UnifiedSearch(ctx, params)
+		// Handle preset parameter for consolidated search
+		preset := coerceString(m["preset"], "")
+		switch preset {
+		case "decisions":
+			result, err = s.searchMgr.Decisions(ctx, params)
+		case "changes":
+			result, err = s.searchMgr.Changes(ctx, params)
+		case "how_it_works":
+			result, err = s.searchMgr.HowItWorks(ctx, params)
+		default:
+			result, err = s.searchMgr.UnifiedSearch(ctx, params)
+		}
+
+	// Timeline tools: consolidated via mode/alias
 	case "timeline":
-		result, err = s.handleTimeline(ctx, args)
+		mode := coerceString(m["mode"], "")
+		switch mode {
+		case "query":
+			result, err = s.handleTimelineByQuery(ctx, m)
+		case "recent":
+			result, err = s.searchMgr.UnifiedSearch(ctx, params)
+		default: // "anchor" or empty — default behavior
+			result, err = s.handleTimeline(ctx, m)
+		}
+
+	// Search aliases (backward compatibility)
 	case "decisions":
 		result, err = s.searchMgr.Decisions(ctx, params)
 	case "changes":
@@ -1425,10 +1574,13 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		result, err = s.searchMgr.UnifiedSearch(ctx, params)
 	case "get_recent_context":
 		result, err = s.searchMgr.UnifiedSearch(ctx, params)
+
+	// Timeline aliases (backward compatibility)
 	case "get_context_timeline":
-		result, err = s.handleTimeline(ctx, args)
+		result, err = s.handleTimeline(ctx, m)
 	case "get_timeline_by_query":
-		result, err = s.handleTimelineByQuery(ctx, args)
+		result, err = s.handleTimelineByQuery(ctx, m)
+
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
@@ -1460,12 +1612,9 @@ type TimelineParams struct {
 	DateEnd   int64  `json:"dateEnd"`
 }
 
-// handleTimeline handles timeline requests.
-func (s *Server) handleTimeline(ctx context.Context, args json.RawMessage) (*search.UnifiedSearchResult, error) {
-	var params TimelineParams
-	if err := json.Unmarshal(args, &params); err != nil {
-		return nil, fmt.Errorf("invalid timeline params: %w", err)
-	}
+// handleTimeline handles timeline requests using pre-parsed args map.
+func (s *Server) handleTimeline(ctx context.Context, m map[string]any) (*search.UnifiedSearchResult, error) {
+	params := buildTimelineParams(m)
 
 	if params.Before <= 0 {
 		params.Before = 10
@@ -1509,12 +1658,9 @@ func (s *Server) handleTimeline(ctx context.Context, args json.RawMessage) (*sea
 	return s.searchMgr.UnifiedSearch(ctx, searchParams)
 }
 
-// handleTimelineByQuery handles combined search + timeline requests.
-func (s *Server) handleTimelineByQuery(ctx context.Context, args json.RawMessage) (*search.UnifiedSearchResult, error) {
-	var params TimelineParams
-	if err := json.Unmarshal(args, &params); err != nil {
-		return nil, fmt.Errorf("invalid timeline params: %w", err)
-	}
+// handleTimelineByQuery handles combined search + timeline requests using pre-parsed args map.
+func (s *Server) handleTimelineByQuery(ctx context.Context, m map[string]any) (*search.UnifiedSearchResult, error) {
+	params := buildTimelineParams(m)
 
 	if params.Query == "" {
 		return nil, fmt.Errorf("query is required")
@@ -1540,20 +1686,25 @@ func (s *Server) handleTimelineByQuery(ctx context.Context, args json.RawMessage
 	}
 
 	// Now get timeline around that result
-	params.AnchorID = result.Results[0].ID
-	return s.handleTimeline(ctx, args)
+	m["anchor_id"] = result.Results[0].ID
+	return s.handleTimeline(ctx, m)
 }
 
 // handleFindRelatedObservations finds observations related to a given observation ID.
 func (s *Server) handleFindRelatedObservations(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		ID            int64   `json:"id"`
-		MinConfidence float64 `json:"min_confidence"`
-		Limit         int     `json:"limit"`
+		ID            int64
+		MinConfidence float64
+		Limit         int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.ID = coerceInt64(m["id"], 0)
+	params.MinConfidence = coerceFloat64(m["min_confidence"], 0)
+	params.Limit = coerceInt(m["limit"], 0)
 
 	if params.ID == 0 {
 		return "", fmt.Errorf("id is required")
@@ -1639,15 +1790,21 @@ func (s *Server) sendError(id any, code int, message string, data any) {
 
 // handleFindSimilarObservations finds observations semantically similar to a query.
 func (s *Server) handleFindSimilarObservations(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Query         string  `json:"query"`
-		Project       string  `json:"project"`
-		MinSimilarity float64 `json:"min_similarity"`
-		Limit         int     `json:"limit"`
+		Query         string
+		Project       string
+		MinSimilarity float64
+		Limit         int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Query = coerceString(m["query"], "")
+	params.Project = coerceString(m["project"], "")
+	params.MinSimilarity = coerceFloat64(m["min_similarity"], 0)
+	params.Limit = coerceInt(m["limit"], 0)
 
 	if params.Query == "" {
 		return "", fmt.Errorf("query is required")
@@ -1733,15 +1890,21 @@ func (s *Server) handleFindSimilarObservations(ctx context.Context, args json.Ra
 
 // handleGetPatterns returns patterns from the pattern store.
 func (s *Server) handleGetPatterns(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Type    string `json:"type"`
-		Project string `json:"project"`
-		Query   string `json:"query"`
-		Limit   int    `json:"limit"`
+		Type    string
+		Project string
+		Query   string
+		Limit   int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Type = coerceString(m["type"], "")
+	params.Project = coerceString(m["project"], "")
+	params.Query = coerceString(m["query"], "")
+	params.Limit = coerceInt(m["limit"], 0)
 
 	if params.Limit == 0 {
 		params.Limit = 20
@@ -1751,7 +1914,6 @@ func (s *Server) handleGetPatterns(ctx context.Context, args json.RawMessage) (s
 	}
 
 	var patterns []*models.Pattern
-	var err error
 
 	// Query patterns based on filters
 	if params.Query != "" {
@@ -1839,15 +2001,17 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 
 // handleBulkDeleteObservations deletes multiple observations by ID.
 func (s *Server) handleBulkDeleteObservations(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		IDs           []int64 `json:"ids"`
-		DeleteVectors bool    `json:"delete_vectors"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	params.DeleteVectors = true // default
 
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	var params struct {
+		IDs           []int64
+		DeleteVectors bool
 	}
+	params.IDs = coerceInt64Slice(m["ids"])
+	params.DeleteVectors = coerceBool(m["delete_vectors"], true)
 
 	if len(params.IDs) == 0 {
 		return "", fmt.Errorf("ids is required")
@@ -1903,12 +2067,15 @@ func (s *Server) handleBulkDeleteObservations(ctx context.Context, args json.Raw
 
 // handleBulkMarkSuperseded marks multiple observations as superseded.
 func (s *Server) handleBulkMarkSuperseded(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		IDs []int64 `json:"ids"`
+		IDs []int64
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.IDs = coerceInt64Slice(m["ids"])
 
 	if len(params.IDs) == 0 {
 		return "", fmt.Errorf("ids is required")
@@ -1939,13 +2106,17 @@ func (s *Server) handleBulkMarkSuperseded(ctx context.Context, args json.RawMess
 
 // handleBulkBoostObservations boosts the importance score of multiple observations.
 func (s *Server) handleBulkBoostObservations(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		IDs   []int64 `json:"ids"`
-		Boost float64 `json:"boost"`
+		IDs   []int64
+		Boost float64
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.IDs = coerceInt64Slice(m["ids"])
+	params.Boost = coerceFloat64(m["boost"], 0)
 
 	if len(params.IDs) == 0 {
 		return "", fmt.Errorf("ids is required")
@@ -2058,14 +2229,19 @@ func (s *Server) handleGetMaintenanceStats(_ context.Context) (string, error) {
 
 // handleMergeObservations merges two observations, keeping the target and superseding the source.
 func (s *Server) handleMergeObservations(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		SourceID int64   `json:"source_id"`
-		TargetID int64   `json:"target_id"`
-		Boost    float64 `json:"boost"`
+		SourceID int64
+		TargetID int64
+		Boost    float64
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.SourceID = coerceInt64(m["source_id"], 0)
+	params.TargetID = coerceInt64(m["target_id"], 0)
+	params.Boost = coerceFloat64(m["boost"], 0)
 
 	if params.SourceID == 0 || params.TargetID == 0 {
 		return "", fmt.Errorf("source_id and target_id are required")
@@ -2135,12 +2311,15 @@ func (s *Server) handleMergeObservations(ctx context.Context, args json.RawMessa
 
 // handleGetObservation returns a single observation by ID.
 func (s *Server) handleGetObservation(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		ID int64 `json:"id"`
+		ID int64
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.ID = coerceInt64(m["id"], 0)
 
 	if params.ID == 0 {
 		return "", fmt.Errorf("id is required")
@@ -2164,20 +2343,43 @@ func (s *Server) handleGetObservation(ctx context.Context, args json.RawMessage)
 
 // handleEditObservation updates an existing observation with provided fields.
 func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Title         *string  `json:"title,omitempty"`
-		Subtitle      *string  `json:"subtitle,omitempty"`
-		Narrative     *string  `json:"narrative,omitempty"`
-		Scope         *string  `json:"scope,omitempty"`
-		Facts         []string `json:"facts,omitempty"`
-		Concepts      []string `json:"concepts,omitempty"`
-		FilesRead     []string `json:"files_read,omitempty"`
-		FilesModified []string `json:"files_modified,omitempty"`
-		ID            int64    `json:"id"`
+		Title         *string
+		Subtitle      *string
+		Narrative     *string
+		Scope         *string
+		Facts         []string
+		Concepts      []string
+		FilesRead     []string
+		FilesModified []string
+		ID            int64
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	params.ID = coerceInt64(m["id"], 0)
+	if v, ok := m["title"]; ok && v != nil {
+		s := coerceString(v, "")
+		params.Title = &s
 	}
+	if v, ok := m["subtitle"]; ok && v != nil {
+		s := coerceString(v, "")
+		params.Subtitle = &s
+	}
+	if v, ok := m["narrative"]; ok && v != nil {
+		s := coerceString(v, "")
+		params.Narrative = &s
+	}
+	if v, ok := m["scope"]; ok && v != nil {
+		s := coerceString(v, "")
+		params.Scope = &s
+	}
+	params.Facts = coerceStringSlice(m["facts"])
+	params.Concepts = coerceStringSlice(m["concepts"])
+	params.FilesRead = coerceStringSlice(m["files_read"])
+	params.FilesModified = coerceStringSlice(m["files_modified"])
 
 	if params.ID == 0 {
 		return "", fmt.Errorf("id is required")
@@ -2240,12 +2442,15 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 
 // handleGetObservationQuality returns quality metrics for an observation.
 func (s *Server) handleGetObservationQuality(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		ID int64 `json:"id"`
+		ID int64
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.ID = coerceInt64(m["id"], 0)
 
 	if params.ID == 0 {
 		return "", fmt.Errorf("id is required")
@@ -2350,14 +2555,19 @@ func (s *Server) handleGetObservationQuality(ctx context.Context, args json.RawM
 
 // handleSuggestConsolidations finds observations that could be merged.
 func (s *Server) handleSuggestConsolidations(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Project       string  `json:"project"`
-		MinSimilarity float64 `json:"min_similarity"`
-		Limit         int     `json:"limit"`
+		Project       string
+		MinSimilarity float64
+		Limit         int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Project = coerceString(m["project"], "")
+	params.MinSimilarity = coerceFloat64(m["min_similarity"], 0)
+	params.Limit = coerceInt(m["limit"], 0)
 
 	// Set defaults
 	if params.MinSimilarity == 0 {
@@ -2499,16 +2709,19 @@ func (s *Server) handleSuggestConsolidations(ctx context.Context, args json.RawM
 
 // handleTagObservation adds, removes, or sets tags on an observation.
 func (s *Server) handleTagObservation(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Mode string   `json:"mode"`
-		Tags []string `json:"tags"`
-		ID   int64    `json:"id"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	params.Mode = "add" // default
 
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	var params struct {
+		Mode string
+		Tags []string
+		ID   int64
 	}
+	params.Mode = coerceString(m["mode"], "add")
+	params.Tags = coerceStringSlice(m["tags"])
+	params.ID = coerceInt64(m["id"], 0)
 
 	if params.ID == 0 {
 		return "", fmt.Errorf("id is required")
@@ -2586,16 +2799,19 @@ func (s *Server) handleTagObservation(ctx context.Context, args json.RawMessage)
 
 // handleGetObservationsByTag retrieves observations with a specific concept tag.
 func (s *Server) handleGetObservationsByTag(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Tag     string `json:"tag"`
-		Project string `json:"project"`
-		Limit   int    `json:"limit"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	params.Limit = 50 // default
 
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	var params struct {
+		Tag     string
+		Project string
+		Limit   int
 	}
+	params.Tag = coerceString(m["tag"], "")
+	params.Project = coerceString(m["project"], "")
+	params.Limit = coerceInt(m["limit"], 50)
 
 	if params.Tag == "" {
 		return "", fmt.Errorf("tag is required")
@@ -2651,17 +2867,19 @@ func (s *Server) handleGetObservationsByTag(ctx context.Context, args json.RawMe
 
 // handleGetTemporalTrends analyzes observation creation patterns over time.
 func (s *Server) handleGetTemporalTrends(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Project string `json:"project"`
-		GroupBy string `json:"group_by"`
-		Days    int    `json:"days"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	params.Days = 30
-	params.GroupBy = "day"
 
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	var params struct {
+		Project string
+		GroupBy string
+		Days    int
 	}
+	params.Project = coerceString(m["project"], "")
+	params.GroupBy = coerceString(m["group_by"], "day")
+	params.Days = coerceInt(m["days"], 30)
 
 	if params.Days < 1 || params.Days > 365 {
 		params.Days = 30
@@ -2775,15 +2993,17 @@ func (s *Server) handleGetTemporalTrends(ctx context.Context, args json.RawMessa
 
 // handleGetDataQualityReport generates a comprehensive quality assessment.
 func (s *Server) handleGetDataQualityReport(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Project string `json:"project"`
-		Limit   int    `json:"limit"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	params.Limit = 100
 
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	var params struct {
+		Project string
+		Limit   int
 	}
+	params.Project = coerceString(m["project"], "")
+	params.Limit = coerceInt(m["limit"], 100)
 
 	if params.Limit < 10 || params.Limit > 500 {
 		params.Limit = 100
@@ -2925,19 +3145,23 @@ func (s *Server) handleGetDataQualityReport(ctx context.Context, args json.RawMe
 
 // handleBatchTagByPattern applies tags to observations matching a pattern.
 func (s *Server) handleBatchTagByPattern(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Pattern    string   `json:"pattern"`
-		Project    string   `json:"project"`
-		Tags       []string `json:"tags"`
-		MaxMatches int      `json:"max_matches"`
-		DryRun     bool     `json:"dry_run"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	params.DryRun = true
-	params.MaxMatches = 100
 
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	var params struct {
+		Pattern    string
+		Project    string
+		Tags       []string
+		MaxMatches int
+		DryRun     bool
 	}
+	params.Pattern = coerceString(m["pattern"], "")
+	params.Project = coerceString(m["project"], "")
+	params.Tags = coerceStringSlice(m["tags"])
+	params.MaxMatches = coerceInt(m["max_matches"], 100)
+	params.DryRun = coerceBool(m["dry_run"], true)
 
 	if params.Pattern == "" {
 		return "", fmt.Errorf("pattern is required")
@@ -3031,16 +3255,19 @@ func (s *Server) handleBatchTagByPattern(ctx context.Context, args json.RawMessa
 
 // handleExplainSearchRanking explains why each observation ranked where it did in search results.
 func (s *Server) handleExplainSearchRanking(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Query   string `json:"query"`
-		Project string `json:"project"`
-		TopN    int    `json:"top_n"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	params.TopN = 5 // default
 
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	var params struct {
+		Query   string
+		Project string
+		TopN    int
 	}
+	params.Query = coerceString(m["query"], "")
+	params.Project = coerceString(m["project"], "")
+	params.TopN = coerceInt(m["top_n"], 5)
 
 	if params.Query == "" {
 		return "", fmt.Errorf("query is required")
@@ -3139,20 +3366,25 @@ func (s *Server) handleExplainSearchRanking(ctx context.Context, args json.RawMe
 
 // handleExportObservations exports observations in various formats.
 func (s *Server) handleExportObservations(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Format    string `json:"format"`
-		Project   string `json:"project"`
-		ObsType   string `json:"obs_type"`
-		Limit     int    `json:"limit"`
-		DateStart int64  `json:"date_start"`
-		DateEnd   int64  `json:"date_end"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	params.Format = "json"
-	params.Limit = 100
 
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	var params struct {
+		Format    string
+		Project   string
+		ObsType   string
+		Limit     int
+		DateStart int64
+		DateEnd   int64
 	}
+	params.Format = coerceString(m["format"], "json")
+	params.Project = coerceString(m["project"], "")
+	params.ObsType = coerceString(m["obs_type"], "")
+	params.Limit = coerceInt(m["limit"], 100)
+	params.DateStart = coerceInt64(m["date_start"], 0)
+	params.DateEnd = coerceInt64(m["date_end"], 0)
 
 	if params.Limit < 1 || params.Limit > 1000 {
 		params.Limit = 100
@@ -3484,13 +3716,17 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 
 // handleAnalyzeSearchPatterns analyzes search query patterns.
 func (s *Server) handleAnalyzeSearchPatterns(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Days int `json:"days"`
-		TopN int `json:"top_n"`
+		Days int
+		TopN int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid params: %w", err)
-	}
+	params.Days = coerceInt(m["days"], 0)
+	params.TopN = coerceInt(m["top_n"], 0)
 
 	if params.Days <= 0 {
 		params.Days = 7
@@ -3602,13 +3838,17 @@ func (s *Server) handleAnalyzeSearchPatterns(ctx context.Context, args json.RawM
 
 // handleGetObservationRelationships returns the relationship graph for an observation.
 func (s *Server) handleGetObservationRelationships(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		ID       int64 `json:"id"`
-		MaxDepth int   `json:"max_depth"`
+		ID       int64
+		MaxDepth int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid params: %w", err)
-	}
+	params.ID = coerceInt64(m["id"], 0)
+	params.MaxDepth = coerceInt(m["max_depth"], 0)
 
 	if params.ID <= 0 {
 		return "", fmt.Errorf("id is required and must be positive")
@@ -3696,12 +3936,15 @@ func (s *Server) handleGetObservationRelationships(ctx context.Context, args jso
 
 // handleGetObservationScoringBreakdown returns detailed scoring breakdown for an observation.
 func (s *Server) handleGetObservationScoringBreakdown(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		ID int64 `json:"id"`
+		ID int64
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.ID = coerceInt64(m["id"], 0)
 
 	if params.ID <= 0 {
 		return "", fmt.Errorf("id is required and must be positive")
@@ -3760,15 +4003,31 @@ func (s *Server) handleGetObservationScoringBreakdown(ctx context.Context, args 
 
 // handleAnalyzeObservationImportance returns importance analysis for a project's observations.
 func (s *Server) handleAnalyzeObservationImportance(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		IncludeTopScored      *bool  `json:"include_top_scored"`
-		IncludeMostRetrieved  *bool  `json:"include_most_retrieved"`
-		IncludeConceptWeights *bool  `json:"include_concept_weights"`
-		Project               string `json:"project"`
-		Limit                 int    `json:"limit"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+
+	var params struct {
+		IncludeTopScored      *bool
+		IncludeMostRetrieved  *bool
+		IncludeConceptWeights *bool
+		Project               string
+		Limit                 int
+	}
+	params.Project = coerceString(m["project"], "")
+	params.Limit = coerceInt(m["limit"], 0)
+	if v, ok := m["include_top_scored"]; ok && v != nil {
+		b := coerceBool(v, true)
+		params.IncludeTopScored = &b
+	}
+	if v, ok := m["include_most_retrieved"]; ok && v != nil {
+		b := coerceBool(v, true)
+		params.IncludeMostRetrieved = &b
+	}
+	if v, ok := m["include_concept_weights"]; ok && v != nil {
+		b := coerceBool(v, true)
+		params.IncludeConceptWeights = &b
 	}
 
 	// Set defaults
@@ -3876,13 +4135,17 @@ func (s *Server) handleSearchSessions(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("session indexing not configured")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
+		Query string
+		Limit int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Query = coerceString(m["query"], "")
+	params.Limit = coerceInt(m["limit"], 0)
 	if params.Query == "" {
 		return "", fmt.Errorf("query is required")
 	}
@@ -3938,15 +4201,21 @@ func (s *Server) handleListSessions(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("session indexing not configured")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		WorkstationID string `json:"workstation_id"`
-		ProjectID     string `json:"project_id"`
-		Limit         int    `json:"limit"`
-		Offset        int    `json:"offset"`
+		WorkstationID string
+		ProjectID     string
+		Limit         int
+		Offset        int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.WorkstationID = coerceString(m["workstation_id"], "")
+	params.ProjectID = coerceString(m["project_id"], "")
+	params.Limit = coerceInt(m["limit"], 0)
+	params.Offset = coerceInt(m["offset"], 0)
 	if params.Limit <= 0 {
 		params.Limit = 20
 	}
@@ -4005,17 +4274,19 @@ func (s *Server) handleRunConsolidation(ctx context.Context, args json.RawMessag
 		return "", fmt.Errorf("consolidation scheduler not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Cycle string `json:"cycle"`
+		Cycle string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		params.Cycle = "all"
-	}
+	params.Cycle = coerceString(m["cycle"], "all")
 	if params.Cycle == "" {
 		params.Cycle = "all"
 	}
 
-	var err error
 	switch params.Cycle {
 	case "all":
 		err = s.consolidationScheduler.RunAll(ctx)
@@ -4043,14 +4314,19 @@ func (s *Server) handleRunConsolidation(ctx context.Context, args json.RawMessag
 
 // handleGetGraphNeighbors returns graph neighbors via FalkorDB.
 func (s *Server) handleGetGraphNeighbors(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		ObservationID int64 `json:"observation_id"`
-		MaxHops       int   `json:"max_hops"`
-		Limit         int   `json:"limit"`
+		ObservationID int64
+		MaxHops       int
+		Limit         int
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid parameters: %w", err)
-	}
+	params.ObservationID = coerceInt64(m["observation_id"], 0)
+	params.MaxHops = coerceInt(m["max_hops"], 0)
+	params.Limit = coerceInt(m["limit"], 0)
 	if params.ObservationID <= 0 {
 		return "", fmt.Errorf("observation_id is required")
 	}

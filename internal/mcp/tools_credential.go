@@ -31,16 +31,23 @@ func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("observation store not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Tags    []string `json:"tags"`
-		Name    string   `json:"name"`
-		Value   string   `json:"value"`
-		Scope   string   `json:"scope"`
-		Project string   `json:"project"`
+		Tags    []string
+		Name    string
+		Value   string
+		Scope   string
+		Project string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Tags = coerceStringSlice(m["tags"])
+	params.Name = coerceString(m["name"], "")
+	params.Value = coerceString(m["value"], "")
+	params.Scope = coerceString(m["scope"], "")
+	params.Project = coerceString(m["project"], "")
 	if params.Name == "" {
 		return "", fmt.Errorf("name is required")
 	}
@@ -122,13 +129,17 @@ func (s *Server) handleGetCredential(ctx context.Context, args json.RawMessage) 
 		return "", fmt.Errorf("observation store not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Name    string `json:"name"`
-		Project string `json:"project"`
+		Name    string
+		Project string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Name = coerceString(m["name"], "")
+	params.Project = coerceString(m["project"], "")
 	if params.Name == "" {
 		return "", fmt.Errorf("name is required")
 	}
@@ -179,12 +190,15 @@ func (s *Server) handleListCredentials(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("observation store not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Project string `json:"project"`
+		Project string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Project = coerceString(m["project"], "")
 
 	creds, err := s.observationStore.ListCredentials(ctx, params.Project)
 	if err != nil {
@@ -226,14 +240,19 @@ func (s *Server) handleDeleteCredential(ctx context.Context, args json.RawMessag
 		return "", fmt.Errorf("observation store not available")
 	}
 
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
 	var params struct {
-		Name    string `json:"name"`
-		Scope   string `json:"scope"`
-		Project string `json:"project"`
+		Name    string
+		Scope   string
+		Project string
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
+	params.Name = coerceString(m["name"], "")
+	params.Scope = coerceString(m["scope"], "")
+	params.Project = coerceString(m["project"], "")
 	if params.Name == "" {
 		return "", fmt.Errorf("name is required")
 	}

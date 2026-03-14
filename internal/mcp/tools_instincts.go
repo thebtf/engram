@@ -19,16 +19,28 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("observation store not available")
 	}
 
-	var params struct {
-		Files []instincts.InstinctFile `json:"files"`
-		Path  string                   `json:"path"`
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+
+	var params struct {
+		Files []instincts.InstinctFile
+		Path  string
+	}
+	params.Path = coerceString(m["path"], "")
+	if filesRaw, ok := m["files"].([]any); ok {
+		for _, item := range filesRaw {
+			if fm, ok := item.(map[string]any); ok {
+				params.Files = append(params.Files, instincts.InstinctFile{
+					Name:    coerceString(fm["name"], ""),
+					Content: coerceString(fm["content"], ""),
+				})
+			}
+		}
 	}
 
 	var result *instincts.ImportResult
-	var err error
 
 	if len(params.Files) > 0 {
 		// Client-server mode: content sent over the wire

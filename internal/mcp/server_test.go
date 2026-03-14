@@ -405,21 +405,63 @@ func TestHandleToolsList(t *testing.T) {
 	require.True(t, ok)
 	assert.NotEmpty(t, tools)
 
-	// Verify expected tools are present
+	// Default response (no cursor) should return only T1+T2 tools
 	toolNames := make(map[string]bool)
 	for _, tool := range tools {
 		toolNames[tool.Name] = true
 	}
 
-	expectedTools := []string{
-		"search", "timeline", "decisions", "changes",
-		"how_it_works", "find_by_concept", "find_by_file",
-		"find_by_type", "get_recent_context", "get_context_timeline",
-		"get_timeline_by_query",
+	// T1 (core) tools must be present
+	t1Tools := []string{
+		"search", "decisions", "find_by_file",
+		"how_it_works", "check_system_health",
+	}
+	for _, name := range t1Tools {
+		assert.True(t, toolNames[name], "expected T1 tool %s to be present", name)
 	}
 
-	for _, name := range expectedTools {
-		assert.True(t, toolNames[name], "expected tool %s to be present", name)
+	// T2 (useful) tools must be present
+	t2Tools := []string{
+		"changes", "find_by_type", "find_by_concept",
+		"find_similar_observations", "get_recent_context", "timeline",
+	}
+	for _, name := range t2Tools {
+		assert.True(t, toolNames[name], "expected T2 tool %s to be present", name)
+	}
+
+	// T3 (admin) tools must NOT be present in default listing
+	t3Tools := []string{
+		"get_context_timeline", "get_timeline_by_query",
+		"bulk_delete_observations", "trigger_maintenance",
+	}
+	for _, name := range t3Tools {
+		assert.False(t, toolNames[name], "T3 tool %s should not be in default listing", name)
+	}
+
+	// Verify nextCursor is returned
+	nextCursor, ok := result["nextCursor"].(string)
+	assert.True(t, ok, "nextCursor should be present")
+	assert.Equal(t, "all", nextCursor)
+
+	// Verify cursor: "all" returns ALL tools
+	reqAll := &Request{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "tools/list",
+		Params:  json.RawMessage(`{"cursor":"all"}`),
+	}
+	respAll := server.handleToolsList(reqAll)
+	resultAll, _ := respAll.Result.(map[string]any)
+	allTools, _ := resultAll["tools"].([]Tool)
+	assert.Greater(t, len(allTools), len(tools), "cursor=all should return more tools than default")
+
+	// T3 tools should now be present
+	allToolNames := make(map[string]bool)
+	for _, tool := range allTools {
+		allToolNames[tool.Name] = true
+	}
+	for _, name := range t3Tools {
+		assert.True(t, allToolNames[name], "T3 tool %s should be present with cursor=all", name)
 	}
 }
 
@@ -1516,18 +1558,6 @@ func TestHandleGetObservationScoringBreakdown_Validation(t *testing.T) {
 }
 
 // TestHandleTimeline_InvalidJSON tests timeline with invalid JSON.
-func TestHandleTimeline_InvalidJSON(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	ctx := context.Background()
-
-	_, err := server.handleTimeline(ctx, json.RawMessage(`{invalid`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid timeline params")
-}
-
-// TestHandleTimelineByQuery_EmptyQuery tests timeline by query with empty query.
 func TestHandleTimelineByQuery_EmptyQuery(t *testing.T) {
 	t.Parallel()
 
@@ -1535,21 +1565,9 @@ func TestHandleTimelineByQuery_EmptyQuery(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty query should error
-	_, err := server.handleTimelineByQuery(ctx, json.RawMessage(`{}`))
+	_, err := server.handleTimelineByQuery(ctx, map[string]any{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "query is required")
-}
-
-// TestHandleTimelineByQuery_InvalidJSON tests timeline by query with invalid JSON.
-func TestHandleTimelineByQuery_InvalidJSON(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	ctx := context.Background()
-
-	_, err := server.handleTimelineByQuery(ctx, json.RawMessage(`{invalid`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid timeline params")
 }
 
 // TestHandleTimeline_NoAnchorNoQuery tests timeline with no anchor and no query.
@@ -1560,7 +1578,7 @@ func TestHandleTimeline_NoAnchorNoQuery(t *testing.T) {
 	ctx := context.Background()
 
 	// No anchor_id and no query should return empty result
-	result, err := server.handleTimeline(ctx, json.RawMessage(`{}`))
+	result, err := server.handleTimeline(ctx, map[string]any{})
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Empty(t, result.Results)
@@ -1574,7 +1592,7 @@ func TestHandleTimeline_WithDefaults(t *testing.T) {
 	ctx := context.Background()
 
 	// With anchor_id = 0, should return empty result
-	result, err := server.handleTimeline(ctx, json.RawMessage(`{"anchor_id": 0}`))
+	result, err := server.handleTimeline(ctx, map[string]any{"anchor_id": float64(0)})
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Empty(t, result.Results)
@@ -1660,10 +1678,12 @@ func TestCallTool_ToolNameRecognition(t *testing.T) {
 
 	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
+	// Use cursor: "all" to get complete tool list
 	req := &Request{
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "tools/list",
+		Params:  json.RawMessage(`{"cursor":"all"}`),
 	}
 
 	resp := server.handleToolsList(req)
@@ -2204,7 +2224,7 @@ func TestHandleAnalyzeSearchPatterns_Validation(t *testing.T) {
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid params",
+			errContains: "invalid arguments",
 		},
 	}
 
@@ -2626,17 +2646,16 @@ func TestHandleGetMaintenanceStats_NilService(t *testing.T) {
 	assert.Contains(t, err.Error(), "maintenance service not available")
 }
 
-// TestHandleTimeline_ParameterDefaultsNew tests timeline parameter defaults.
-func TestHandleTimeline_ParameterDefaultsNew(t *testing.T) {
+// TestHandleTimeline_EmptyMap tests timeline with empty map returns empty result.
+func TestHandleTimeline_EmptyMap(t *testing.T) {
 	t.Parallel()
 
 	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	// Invalid JSON should fail
-	_, err := server.handleTimeline(ctx, json.RawMessage(`{invalid`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid timeline params")
+	result, err := server.handleTimeline(ctx, map[string]any{})
+	require.NoError(t, err)
+	assert.Empty(t, result.Results)
 }
 
 // TestHandleTimelineByQuery_ValidationExtended tests timeline_by_query validation.
@@ -2646,34 +2665,10 @@ func TestHandleTimelineByQuery_ValidationExtended(t *testing.T) {
 	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	tests := []struct {
-		name        string
-		args        string
-		errContains string
-		wantErr     bool
-	}{
-		{
-			name:        "invalid json",
-			args:        `{invalid`,
-			wantErr:     true,
-			errContains: "invalid timeline params",
-		},
-		{
-			name:        "missing query",
-			args:        `{}`,
-			wantErr:     true,
-			errContains: "query is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := server.handleTimelineByQuery(ctx, json.RawMessage(tt.args))
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.errContains)
-		})
-	}
+	// Missing query should error
+	_, err := server.handleTimelineByQuery(ctx, map[string]any{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "query is required")
 }
 
 // TestHandleSuggestConsolidations_ValidationExtended tests suggest_consolidations validation.
