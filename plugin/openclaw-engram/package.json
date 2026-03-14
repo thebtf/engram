@@ -1,6 +1,6 @@
 {
   "name": "openclaw-engram",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "OpenClaw plugin that connects to engram persistent memory server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,8 +11,12 @@
   },
   "files": [
     "dist/",
-    "openclaw.plugin.json"
+    "openclaw.plugin.json",
+    "scripts/"
   ],
+  "bin": {
+    "openclaw-engram-install": "scripts/install.sh"
+  },
   "keywords": [
     "openclaw",
     "engram",
