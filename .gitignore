@@ -83,12 +83,8 @@ logs/
 dist/
 docs/dist
 
-# Agent working state
-.agent/CONTINUITY.md
-.agent/CURRENT_STATUS.md
-.agent/LESSONS_LEARNED.md
-.agent/scratch/
-.agent/status/
+# Agent working state (entire directory)
+.agent/
 
 # Local Go caches (non-standard GOPATH)
 .gocache/
