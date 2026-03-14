@@ -15,6 +15,9 @@ import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import { resolve, basename } from 'node:path';
 
+// Module-level memoization cache — keyed by resolved cwd path
+const gitRemoteCache = new Map<string, GitRemoteResult | null>();
+
 export interface ProjectIdentity {
   /** Primary project identifier used for engram scoping. */
   projectId: string;
@@ -41,6 +44,9 @@ interface GitRemoteResult {
  * Returns null if the directory is not a git repository or has no remote.
  */
 function getGitRemoteID(cwd: string): GitRemoteResult | null {
+  const cacheKey = resolve(cwd);
+  if (gitRemoteCache.has(cacheKey)) return gitRemoteCache.get(cacheKey)!;
+
   try {
     const opts = {
       cwd,
@@ -48,17 +54,25 @@ function getGitRemoteID(cwd: string): GitRemoteResult | null {
       timeout: 3000,
     };
     const remoteURL = execSync('git remote get-url origin', opts).toString().trim();
-    if (!remoteURL) return null;
+    if (!remoteURL) {
+      gitRemoteCache.set(cacheKey, null);
+      return null;
+    }
     const relativePath = execSync('git rev-parse --show-prefix', opts).toString().trim();
     const key = remoteURL + '/' + relativePath;
     const hash = createHash('sha256').update(key).digest('hex');
-    const dirName = basename(resolve(cwd));
-    return {
-      projectId: dirName + '_' + hash.slice(0, 8),
+    // Derive repo name from remote URL so projectId is stable across checkouts
+    const repoName =
+      remoteURL.replace(/\/$/, '').split('/').pop()?.replace(/\.git$/, '') || 'repo';
+    const result: GitRemoteResult = {
+      projectId: repoName + '_' + hash.slice(0, 8),
       gitRemote: remoteURL,
       relativePath,
     };
+    gitRemoteCache.set(cacheKey, result);
+    return result;
   } catch {
+    gitRemoteCache.set(cacheKey, null);
     return null;
   }
 }

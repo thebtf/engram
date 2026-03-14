@@ -17,7 +17,8 @@
       },
       "token": {
         "type": "string",
-        "description": "Bearer token for engram API authentication"
+        "description": "Bearer token for engram API authentication",
+        "uiHints": { "sensitive": true }
       },
       "project": {
         "type": "string",

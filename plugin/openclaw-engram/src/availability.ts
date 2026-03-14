@@ -19,7 +19,7 @@ export class AvailabilityTracker {
    * availability if the server was in cooldown.
    */
   recordSuccess(): void {
-    const wasUnavailable = !this.isAvailable();
+    const wasUnavailable = this.unavailableSince !== null;
     this.consecutiveFailures = 0;
     this.unavailableSince = null;
     if (wasUnavailable) {
@@ -33,10 +33,7 @@ export class AvailabilityTracker {
    */
   recordFailure(): void {
     this.consecutiveFailures += 1;
-    if (
-      this.consecutiveFailures >= STRIKE_THRESHOLD &&
-      this.unavailableSince === null
-    ) {
+    if (this.consecutiveFailures >= STRIKE_THRESHOLD) {
       this.unavailableSince = Date.now();
       console.warn(
         `[engram] server marked unavailable after ${STRIKE_THRESHOLD} consecutive failures — ` +

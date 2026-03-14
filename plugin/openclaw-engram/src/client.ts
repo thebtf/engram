@@ -280,7 +280,7 @@ export class EngramRestClient {
 
       this.availability.recordSuccess();
 
-      if (!text) return {} as T;
+      if (!text) return null;
       return JSON.parse(text) as T;
     } catch (err: unknown) {
       this.availability.recordFailure();
@@ -307,6 +307,6 @@ function extractOrigin(rawUrl: string): string {
     const parsed = new URL(trimmed);
     return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, '')}`;
   } catch {
-    return trimmed.replace(/\/[^/]*$/, '');
+    return trimmed.replace(/\/$/, '');
   }
 }

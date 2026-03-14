@@ -37,12 +37,18 @@ export async function handleBeforePromptBuild(
   const identity = resolveIdentity(agentId, event.workspaceDir);
   const project = config.project ?? identity.projectId;
 
-  const response = await client.searchContext({
-    project,
-    query: event.prompt,
-    cwd: event.workspaceDir,
-    agent_id: agentId,
-  });
+  let response;
+  try {
+    response = await client.searchContext({
+      project,
+      query: event.prompt,
+      cwd: event.workspaceDir,
+      agent_id: agentId,
+    });
+  } catch (err) {
+    (logger ?? console).warn('[engram] before-prompt-build: searchContext failed', err);
+    return;
+  }
 
   if (!response || !Array.isArray(response.observations) || response.observations.length === 0) {
     return;

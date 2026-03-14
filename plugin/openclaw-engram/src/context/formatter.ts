@@ -187,7 +187,7 @@ function applyTokenBudget(
       if (typeof f === 'string') chars += f.length;
     }
     const tokens = Math.ceil(chars / 4);
-    if (tokenCount + tokens > tokenBudget && budgeted.length > 0) break;
+    if (tokenCount + tokens > tokenBudget) continue;
     tokenCount += tokens;
     budgeted.push(obs);
   }

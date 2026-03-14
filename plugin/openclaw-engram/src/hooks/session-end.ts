@@ -47,7 +47,7 @@ export function handleSessionEnd(
     ? content.slice(0, CONTENT_MAX_CHARS)
     : content;
 
-  const sessionId = event.sessionId ?? agentId;
+  const sessionId = event.sessionId ?? '';
   if (!sessionId) return;
 
   // Fire-and-forget — do not await
