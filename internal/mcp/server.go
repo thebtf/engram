@@ -468,6 +468,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"offset":    map[string]any{"type": "number", "default": 0, "minimum": 0},
 					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
 				},
+				"required": []string{},
 			},
 		},
 		{
@@ -1268,12 +1269,13 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 	result, err := s.callTool(ctx, params.Name, params.Arguments)
 	if err != nil {
+		log.Error().Err(err).Str("tool", params.Name).Msg("Tool call failed")
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
 			Error: &Error{
 				Code:    -32000,
-				Message: "Tool error",
+				Message: "Tool error: " + err.Error(),
 				Data:    err.Error(),
 			},
 		}

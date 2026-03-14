@@ -714,16 +714,25 @@ func (m *Manager) UnifiedSearch(ctx context.Context, params SearchParams) (*Unif
 		return cached, nil
 	}
 
-	// Use singleflight to coalesce concurrent identical requests
-	result, err, _ := m.searchGroup.Do(cacheKey, func() (any, error) {
-		return m.executeSearch(ctx, params)
+	// Use singleflight to coalesce concurrent identical requests.
+	// DoChan + detached context prevents a cancelled caller from poisoning
+	// the shared execution for all coalesced waiters.
+	ch := m.searchGroup.DoChan(cacheKey, func() (any, error) {
+		execCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return m.executeSearch(execCtx, params)
 	})
 
-	if err != nil {
-		return nil, err
+	var searchResult *UnifiedSearchResult
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		searchResult = res.Val.(*UnifiedSearchResult)
 	}
-
-	searchResult := result.(*UnifiedSearchResult)
 
 	// Never return credential observations in search results (leak prevention).
 	// Return a new struct to avoid mutating the shared singleflight result.

@@ -281,6 +281,13 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 		log.Info().Str("url", llmCfg.BaseURL).Str("model", llmCfg.Model).Msg("SDK processor using LLM API")
 	}
 
+	log.Info().
+		Bool("llm_configured", llmClient != nil).
+		Str("llm_url", llmCfg.BaseURL).
+		Str("llm_model", llmCfg.Model).
+		Bool("local_verification", cfg.LocalVerificationEnabled).
+		Msg("SDK processor backend summary")
+
 	// Find Claude Code CLI (optional fallback — only in local mode)
 	var claudePath string
 	if cfg.LocalVerificationEnabled {
@@ -663,8 +670,8 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 
 	// Try LLM API first (OpenAI-compatible — works in Docker without Claude CLI)
 	// Retry with backoff for transient errors (EOF, connection reset, 429, 503)
+	var lastErr error
 	if p.llmClient != nil {
-		var lastErr error
 		for attempt := 0; attempt < 3; attempt++ {
 			if attempt > 0 {
 				backoff := time.Duration(attempt*2) * time.Second
@@ -681,8 +688,13 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 			// Retry only on transient errors
 			if strings.Contains(errStr, "EOF") ||
 				strings.Contains(errStr, "connection reset") ||
+				strings.Contains(errStr, "connection refused") ||
+				strings.Contains(errStr, "no such host") ||
 				strings.Contains(errStr, "429") ||
-				strings.Contains(errStr, "503") {
+				strings.Contains(errStr, "500") ||
+				strings.Contains(errStr, "502") ||
+				strings.Contains(errStr, "503") ||
+				strings.Contains(errStr, "504") {
 				log.Warn().Err(err).Int("attempt", attempt+1).Msg("LLM API transient error, retrying")
 				continue
 			}
@@ -700,7 +712,12 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 		return p.callClaudeCLI(ctx, prompt)
 	}
 
-	return "", fmt.Errorf("no LLM backend available")
+	if lastErr != nil {
+		return "", fmt.Errorf("no LLM backend available: llm_configured=%v, claude_cli=%q, last_error=%w",
+			p.llmClient != nil, p.claudePath, lastErr)
+	}
+	return "", fmt.Errorf("no LLM backend available: llm_configured=%v, claude_cli=%q",
+		p.llmClient != nil, p.claudePath)
 }
 
 // callClaudeCLI calls the Claude Code CLI with the given prompt (fallback for when LLM API is unavailable).
