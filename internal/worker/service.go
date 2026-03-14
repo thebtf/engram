@@ -157,7 +157,6 @@ type Service struct {
 	config                 *config.Config
 	rebuildStatus          *RebuildStatus
 	staleQueue             chan staleVerifyRequest
-	dbWatcher              *watcher.Watcher
 	configWatcher          *watcher.Watcher
 	updater                *update.Updater
 	similarityTelemetry    *telemetry.SimilarityTelemetry
@@ -2152,9 +2151,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	// Phase 2: Stop file watchers (prevent new DB recreation)
 	log.Debug().Msg("Phase 2: Stopping watchers...")
-	if s.dbWatcher != nil {
-		_ = s.dbWatcher.Stop()
-	}
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Stop()
 	}
