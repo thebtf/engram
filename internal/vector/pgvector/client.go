@@ -286,12 +286,9 @@ func (c *Client) GetStaleVectors(ctx context.Context) ([]vector.StaleVectorInfo,
 	infos := make([]vector.StaleVectorInfo, len(records))
 	for i, r := range records {
 		infos[i] = vector.StaleVectorInfo{
-			DocID:     r.DocID,
-			DocType:   r.DocType,
-			FieldType: r.FieldType,
-			Project:   r.Project,
-			Scope:     r.Scope,
-			SQLiteID:  r.SQLiteID,
+			DocID:    r.DocID,
+			DocType:  r.DocType,
+			SQLiteID: r.SQLiteID,
 		}
 	}
 	return infos, nil

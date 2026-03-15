@@ -29,12 +29,9 @@ type QueryResult struct {
 
 // StaleVectorInfo contains information about a vector that needs rebuilding.
 type StaleVectorInfo struct {
-	DocID     string
-	DocType   string
-	FieldType string
-	Project   string
-	Scope     string
-	SQLiteID  int64
+	DocID    string
+	DocType  string
+	SQLiteID int64
 }
 
 // HealthStats contains comprehensive health information about the vector store.
