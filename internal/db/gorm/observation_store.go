@@ -1427,7 +1427,11 @@ type SearchMissStat struct {
 }
 
 // RecordSearchMiss stores a search query that returned 0 results.
+// Query is capped at 500 chars to prevent storage flooding.
 func (s *ObservationStore) RecordSearchMiss(ctx context.Context, project, query string) error {
+	if len(query) > 500 {
+		query = query[:500]
+	}
 	return s.db.WithContext(ctx).Exec(
 		`INSERT INTO search_misses (project, query, created_at) VALUES (?, ?, NOW())`,
 		project, query,

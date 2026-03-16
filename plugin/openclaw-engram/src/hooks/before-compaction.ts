@@ -37,7 +37,7 @@ export function handleBeforeCompaction(
 
     const agentId = ctx.agentId ?? '';
     const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
-    if (!sessionId) return; // no session identity available — skip
+    if (!sessionId?.trim()) return; // no session identity available — skip
     const identity = resolveIdentity(agentId, ctx.workspaceDir);
     const project = config.project ?? identity.projectId;
 

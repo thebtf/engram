@@ -33,7 +33,7 @@ export function handleAfterToolCall(
 
   const agentId = ctx.agentId ?? '';
   const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
-  if (!sessionId) return; // no session identity available — skip
+  if (!sessionId?.trim()) return; // no session identity available — skip
   const identity = resolveIdentity(agentId, ctx.workspaceDir);
   const project = config.project ?? identity.projectId;
 
@@ -90,30 +90,33 @@ async function checkContradictions(
   // Take a snippet of the written content as the search query
   const snippet = content.slice(0, 200);
 
-  const response = await client.searchDecisions({
-    query: snippet,
-    project,
-    limit: 5,
-  });
+  // Timeout: 3s max for contradiction check (fire-and-forget, must not stall)
+  const response = await Promise.race([
+    client.searchDecisions({ query: snippet, project, limit: 5 }),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+  ]);
 
   if (!response?.observations?.length) return;
 
-  // Check each decision's narrative for rejection patterns
+  const contentLower = content.toLowerCase();
+  const rejectionPatterns = [
+    'instead of',
+    'not ',
+    'rather than',
+    'rejected',
+    'avoid ',
+    "don't use",
+    'do not use',
+  ];
+
+  // Check each decision's narrative for rejection patterns (hard limit: 50 checks)
+  let checksPerformed = 0;
   for (const obs of response.observations) {
     const narrative = obs.narrative ?? '';
     const lowerNarrative = narrative.toLowerCase();
 
-    // Look for rejection signals in the decision narrative
-    const rejectionPatterns = [
-      'instead of',
-      'not ',
-      'rather than',
-      'rejected',
-      'avoid ',
-      "don't use",
-      'do not use',
-    ];
     for (const pattern of rejectionPatterns) {
+      if (++checksPerformed > 50) return;
       const idx = lowerNarrative.indexOf(pattern);
       if (idx === -1) continue;
 
@@ -123,7 +126,7 @@ async function checkContradictions(
       if (!rejectedTerm || rejectedTerm.length < 3) continue;
 
       // Check if the written content contains the rejected term
-      if (content.toLowerCase().includes(rejectedTerm)) {
+      if (contentLower.includes(rejectedTerm)) {
         (logger ?? console).warn(
           `[engram] CONTRADICTION: written code contains "${rejectedTerm}" which was rejected in decision: "${obs.title ?? narrative.slice(0, 80)}"`,
         );

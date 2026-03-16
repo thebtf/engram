@@ -113,6 +113,9 @@ export function estimateContextFill(messages?: unknown[]): ContextFill {
 }
 
 function makeTier(tier: ContextTier, reason: string, fillMultiplier = 1.0): TierResult {
+  if (tier === 'NONE') {
+    return { tier, tokenBudget: 0, reason };
+  }
   return {
     tier,
     tokenBudget: Math.round(TOKEN_BUDGETS[tier] * fillMultiplier),

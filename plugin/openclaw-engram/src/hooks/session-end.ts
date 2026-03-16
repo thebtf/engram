@@ -52,7 +52,7 @@ export function handleSessionEnd(
       : stripped;
 
     const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
-    if (!sessionId) return;
+    if (!sessionId?.trim()) return;
 
     // Fire-and-forget — do not await
     void client.backfillSession({
