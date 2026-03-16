@@ -174,8 +174,13 @@ func ValidateXML(raw string) ValidationResult {
 }
 
 // BuildUserPrompt constructs the user prompt for LLM extraction.
+// Transcript content is sanitized to prevent XML tag injection (AG06-005).
 func BuildUserPrompt(projectPath, gitBranch string, durationMin, exchangeCount int, chunkInfo, alreadyExtracted, transcript string) string {
-	return fmt.Sprintf(UserPromptTemplate, projectPath, gitBranch, durationMin, exchangeCount, chunkInfo, alreadyExtracted, transcript)
+	// Strip XML-like tags that could break the prompt boundary
+	sanitized := strings.ReplaceAll(transcript, "</session_transcript>", "[/session_transcript]")
+	sanitized = strings.ReplaceAll(sanitized, "</observations>", "[/observations]")
+	sanitized = strings.ReplaceAll(sanitized, "<observation>", "[observation]")
+	return fmt.Sprintf(UserPromptTemplate, projectPath, gitBranch, durationMin, exchangeCount, chunkInfo, alreadyExtracted, sanitized)
 }
 
 // BuildAlreadyExtracted builds the <already_extracted> context block for multi-chunk dedup.
