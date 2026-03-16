@@ -1565,10 +1565,9 @@ func (s *Service) setupRoutes() {
 	// Readiness check - returns 200 only when fully initialized
 	s.router.Get("/api/ready", s.handleReady)
 
-	// Admin/management routes — require authentication, work before DB is ready
+	// Admin/management routes — authentication applied globally via setupMiddleware.
+	// Grouped for logical organization; no additional middleware needed.
 	s.router.Group(func(r chi.Router) {
-		r.Use(s.tokenAuth.Middleware)
-
 		// Rebuild status endpoint for visibility into vector rebuild progress
 		r.Get("/api/rebuild-status", s.handleRebuildStatus)
 

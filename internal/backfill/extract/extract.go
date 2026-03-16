@@ -5,10 +5,14 @@ package extract
 import (
 	"encoding/xml"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/thebtf/engram/pkg/models"
 )
+
+// xmlTagRe matches XML-like tags to prevent prompt boundary injection.
+var xmlTagRe = regexp.MustCompile(`</?(?:session_transcript|observations?|metadata|no_observations_found)[^>]*>`)
 
 // SystemPrompt is the frozen poc-v1 extraction prompt for historical sessions.
 const SystemPrompt = `You are an expert Principal Staff Engineer responsible for maintaining the permanent architectural memory of a project.
@@ -176,10 +180,10 @@ func ValidateXML(raw string) ValidationResult {
 // BuildUserPrompt constructs the user prompt for LLM extraction.
 // Transcript content is sanitized to prevent XML tag injection (AG06-005).
 func BuildUserPrompt(projectPath, gitBranch string, durationMin, exchangeCount int, chunkInfo, alreadyExtracted, transcript string) string {
-	// Strip XML-like tags that could break the prompt boundary
-	sanitized := strings.ReplaceAll(transcript, "</session_transcript>", "[/session_transcript]")
-	sanitized = strings.ReplaceAll(sanitized, "</observations>", "[/observations]")
-	sanitized = strings.ReplaceAll(sanitized, "<observation>", "[observation]")
+	// Replace XML tags that could break prompt boundaries with bracketed equivalents
+	sanitized := xmlTagRe.ReplaceAllStringFunc(transcript, func(tag string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(tag, "<", "["), ">", "]")
+	})
 	return fmt.Sprintf(UserPromptTemplate, projectPath, gitBranch, durationMin, exchangeCount, chunkInfo, alreadyExtracted, sanitized)
 }
 
