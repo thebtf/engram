@@ -21,10 +21,24 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// handleSearchByPrompt searches observations relevant to a user prompt.
-// IMPORTANT: This is on the critical startup path - must be fast!
-// No synchronous verification - just filter by staleness and return.
-// Supports both GET (query params) and POST (JSON body) to avoid URL length limits.
+// handleSearchByPrompt godoc
+// @Summary Search observations by prompt
+// @Description Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. Supports both GET (query params) and POST (JSON body) to avoid URL length limits.
+// @Tags Search
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Project filter"
+// @Param query query string false "Search query"
+// @Param cwd query string false "Working directory (ignored server-side)"
+// @Param agent_id query string false "Agent ID (acts as project scope if project empty)"
+// @Param limit query int false "Number of results (default 50, max 200)"
+// @Param body body object false "POST body: {project, query, agent_id, cwd, limit}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "project and query required"
+// @Failure 500 {string} string "internal error"
+// @Router /api/context/search [get]
+// @Router /api/context/search [post]
 func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	query := r.URL.Query().Get("query")
@@ -365,8 +379,18 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleFileContext returns observations relevant to specific files being worked on.
-// Uses vector similarity search to find observations that mention or relate to the given files.
+// handleFileContext godoc
+// @Summary Get file context
+// @Description Returns observations relevant to specific files being worked on, using vector similarity search.
+// @Tags Context
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string true "Project name"
+// @Param files query string true "Comma-separated file paths (max 20)"
+// @Param limit query int false "Results per file (default 10, max 50)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Router /api/context/files [get]
 func (s *Service) handleFileContext(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	if project == "" {
@@ -724,12 +748,22 @@ func splitCamelCase(s string) string {
 	return result.String()
 }
 
-// handleContextInject returns context for injection at session start.
-// IMPORTANT: This is on the critical startup path - must be fast!
-// No synchronous verification - just filter by staleness and return.
-// Response includes two sections:
-//   - recent: last 5 observations by created_at
-//   - relevant: top 10 semantic search results (if vector store is connected)
+// handleContextInject godoc
+// @Summary Inject context for session start
+// @Description Returns context for injection at session start. Response includes recent (last 5), relevant (top 10 semantic), and guidance sections. Supports GET (deprecated) and POST. Critical startup path — optimized for speed.
+// @Tags Context
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Project name (required)"
+// @Param agent_id query string false "Agent ID (acts as project scope if project empty)"
+// @Param format query string false "Response format: 'compact' for minimal payload"
+// @Param body body object false "POST body: {project, agent_id, cwd, legacy_project, git_remote, relative_path}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "project required"
+// @Failure 500 {string} string "internal error"
+// @Router /api/context/inject [post]
+// @Router /api/context/inject [get]
 func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	var project, agentID, cwd, legacyProject, gitRemote, relativePath string
 
@@ -1065,8 +1099,18 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSearchDecisions searches observations using decision-optimized semantic search.
-// It is a thin REST wrapper over searchMgr.Decisions().
+// handleSearchDecisions godoc
+// @Summary Search decisions
+// @Description Searches observations using decision-optimized semantic search. Thin REST wrapper over the search manager's Decisions method.
+// @Tags Search
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body object true "Search params: query, project (required), limit (optional)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "query and project required"
+// @Failure 500 {string} string "internal error"
+// @Router /api/decisions/search [post]
 func (s *Service) handleSearchDecisions(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Query   string `json:"query"`
@@ -1116,7 +1160,17 @@ func (s *Service) handleSearchDecisions(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleContextCount returns the count of observations for a project.
+// handleContextCount godoc
+// @Summary Get observation count
+// @Description Returns the count of observations for a project (cached).
+// @Tags Context
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string true "Project name"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "project required"
+// @Failure 500 {string} string "internal error"
+// @Router /api/context/count [get]
 func (s *Service) handleContextCount(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	if project == "" {
@@ -1151,7 +1205,19 @@ func (s *Service) trackSearchMiss(project, query string) {
 	}
 }
 
-// handleSearchMissAnalytics returns aggregated analytics for search queries that returned zero results.
+// handleSearchMissAnalytics godoc
+// @Summary Get search miss analytics
+// @Description Returns aggregated analytics for search queries that returned zero results, useful for self-tuning.
+// @Tags Search
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body object true "Params: project (required), limit (optional)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "project required"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "store not available"
+// @Router /api/analytics/search-misses [post]
 func (s *Service) handleSearchMissAnalytics(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Project string `json:"project"`

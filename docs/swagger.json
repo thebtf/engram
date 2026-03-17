@@ -1,0 +1,5082 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Persistent shared memory infrastructure for AI agents. Stores observations in PostgreSQL + pgvector, exposes MCP tools via HTTP/SSE.",
+        "title": "Engram API",
+        "contact": {},
+        "version": "1.0.0"
+    },
+    "host": "localhost:37777",
+    "basePath": "/",
+    "paths": {
+        "/api/analytics/search-misses": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns aggregated analytics for search queries that returned zero results, useful for self-tuning.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Search"
+                ],
+                "summary": "Get search miss analytics",
+                "parameters": [
+                    {
+                        "description": "Params: project (required), limit (optional)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "project required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "store not available",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backfill": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Stores pre-extracted observations from a backfill run. Supports semantic deduplication via vector similarity.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Backfill"
+                ],
+                "summary": "Ingest backfill observations",
+                "parameters": [
+                    {
+                        "description": "Backfill observations",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.BackfillRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.BackfillResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "observation store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backfill/session": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Accepts raw JSONL session content, runs server-side LLM extraction, and stores resulting observations with semantic deduplication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Backfill"
+                ],
+                "summary": "Backfill session with LLM extraction",
+                "parameters": [
+                    {
+                        "description": "Session content and metadata",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.BackfillSessionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.BackfillSessionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "LLM not configured or store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backfill/status": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns status of all active backfill runs including stored/skipped/error counts per run.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Backfill"
+                ],
+                "summary": "Get backfill status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.BackfillStatus"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/context/count": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the count of observations for a project (cached).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Context"
+                ],
+                "summary": "Get observation count",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "project",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "project required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/context/files": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns observations relevant to specific files being worked on, using vector similarity search.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Context"
+                ],
+                "summary": "Get file context",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "project",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated file paths (max 20)",
+                        "name": "files",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Results per file (default 10, max 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/context/inject": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns context for injection at session start. Response includes recent (last 5), relevant (top 10 semantic), and guidance sections. Supports GET (deprecated) and POST. Critical startup path — optimized for speed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Context"
+                ],
+                "summary": "Inject context for session start",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name (required)",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Agent ID (acts as project scope if project empty)",
+                        "name": "agent_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Response format: 'compact' for minimal payload",
+                        "name": "format",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "project required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/context/search": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. Supports both GET (query params) and POST (JSON body) to avoid URL length limits.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Search"
+                ],
+                "summary": "Search observations by prompt",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project filter",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Search query",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Working directory (ignored server-side)",
+                        "name": "cwd",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Agent ID (acts as project scope if project empty)",
+                        "name": "agent_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "project and query required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/decisions/search": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Searches observations using decision-optimized semantic search. Thin REST wrapper over the search manager's Decisions method.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Search"
+                ],
+                "summary": "Search decisions",
+                "parameters": [
+                    {
+                        "description": "Search params: query, project (required), limit (optional)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "query and project required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/events/ingest": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Receives raw tool events from Claude Code hooks. Stores in raw_events, runs deterministic Level 0 pipeline, creates an observation, and triggers async embedding.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Events"
+                ],
+                "summary": "Ingest tool event",
+                "parameters": [
+                    {
+                        "description": "Tool event data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.IngestRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/graph/stats": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns graph statistics for the dashboard, using relation data to compute knowledge graph metrics.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Graph"
+                ],
+                "summary": "Get graph statistics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/graph/sync": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Triggers a manual re-sync of relations from PostgreSQL to FalkorDB. Runs in background.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Graph"
+                ],
+                "summary": "Sync graph from relations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "graph backend not connected",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/health": {
+            "get": {
+                "description": "Returns 200 OK immediately (even during init) so hooks can connect quickly. Use /api/ready for full readiness check.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/instincts/import": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Imports instinct files from a directory on the server. Validates path against allowed base directory.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Instincts"
+                ],
+                "summary": "Import instincts",
+                "parameters": [
+                    {
+                        "description": "Optional: {path: '/path/to/instincts'}",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid path",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "directory not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "import failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "observation store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/logs": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns log entries as JSON snapshot or SSE stream (follow mode). Supports level filtering and text search.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Get log entries",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Number of entries (default 100, max 10000)",
+                        "name": "lines",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Minimum log level: trace, debug, info, warn, error, fatal",
+                        "name": "level",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive text search",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "If true, switches to SSE streaming mode",
+                        "name": "follow",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "log buffer not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/models": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns available embedding models with default and current model info. Cacheable for 1 hour.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "List embedding models",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns recent observations with optional semantic search via vector store. Supports pagination.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "List observations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Semantic search query",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Pagination offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/archival-stats": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns archival statistics including counts and trends.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Import/Export"
+                ],
+                "summary": "Get archival statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/archive": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Archives observations by ID list or by age criteria. Supports batch archival with parallel processing and per-observation error tracking.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Import/Export"
+                ],
+                "summary": "Archive observations",
+                "parameters": [
+                    {
+                        "description": "Archive criteria: ids, project, max_age_days, reason",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.ArchiveRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/archived": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns archived observations, optionally filtered by project.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Import/Export"
+                ],
+                "summary": "List archived observations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Observation"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/bulk-import": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Imports multiple observations in a single request. Supports deduplication within the batch. Max batch size: 100.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Import/Export"
+                ],
+                "summary": "Bulk import observations",
+                "parameters": [
+                    {
+                        "description": "Observations to import",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.BulkImportRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.BulkImportResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/bulk-status": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Updates status for multiple observations in one request. Actions: supersede, archive, set_feedback. Max 500 IDs.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Import/Export"
+                ],
+                "summary": "Bulk status update",
+                "parameters": [
+                    {
+                        "description": "Bulk action request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.BulkStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/duplicates": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Finds potential duplicate observations using Jaccard similarity clustering. Returns groups of similar observations.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Import/Export"
+                ],
+                "summary": "Find duplicate observations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "number",
+                        "description": "Similarity threshold (default 0.6, range 0-1)",
+                        "name": "threshold",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of observations to check (default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/export": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Exports observations in JSON or CSV format. Supports filtering by project, scope, and type. Returns file as download attachment.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Import/Export"
+                ],
+                "summary": "Export observations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Export format: json or csv (default json)",
+                        "name": "format",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by scope: project, global",
+                        "name": "scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by observation type",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 1000, max 5000)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/mark-injected": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Records that observations were injected into Claude Code context by incrementing injection counts.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Mark observations as injected",
+                "parameters": [
+                    {
+                        "description": "IDs to mark: {ids: [1,2,3]}",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/most-retrieved": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the most frequently retrieved observations by retrieval count.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Get most retrieved observations",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 10)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Observation"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/recently-injected": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns observations that have been recently injected into Claude Code context.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Get recently injected observations",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/top": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the highest-scoring observations by importance score.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Get top-scoring observations",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 10)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Observation"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns a single observation by its ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "Get observation by ID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Observation"
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "observation not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Updates an existing observation's fields. Only provided fields are updated.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "Update an observation",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to update",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.UpdateObservationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "observation not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/{id}/feedback": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Records user feedback (thumbs up/down) for an observation and recalculates its importance score.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Submit observation feedback",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Feedback value (-1, 0, or 1)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.FeedbackRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/{id}/graph": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the relation graph for an observation up to the specified depth.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Relations"
+                ],
+                "summary": "Get relation graph",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Graph traversal depth (default 2, max 5)",
+                        "name": "depth",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid observation id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/{id}/related": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns observations related to a given one, filtered by minimum confidence.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Relations"
+                ],
+                "summary": "Get related observations",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "number",
+                        "description": "Minimum confidence threshold (default 0.4, range 0-1)",
+                        "name": "min_confidence",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Observation"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid observation id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/{id}/relations": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns all relations for a specific observation with full details.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Relations"
+                ],
+                "summary": "Get observation relations",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.RelationWithDetails"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid observation id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/{id}/score": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns a breakdown of how an observation's importance score was calculated, including all scoring components.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Explain observation score",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid observation id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "observation not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/{id}/unarchive": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Restores an archived observation to active status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Import/Export"
+                ],
+                "summary": "Unarchive observation",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid observation id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/observations/{id}/utility": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Records a utility signal (used, corrected, ignored) for an observation, updating its utility score via EMA.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Record utility signal",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Observation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Utility signal",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.UtilityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/patterns": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns all active patterns, optionally filtered by type or project.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "List patterns",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by pattern type",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Pattern"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/patterns/by-name": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns a pattern by its unique name.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "Get pattern by name",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Pattern name",
+                        "name": "name",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Pattern"
+                        }
+                    },
+                    "400": {
+                        "description": "query parameter 'name' is required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "pattern not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/patterns/merge": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Merges a source pattern into a target pattern. Source pattern is consumed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "Merge patterns",
+                "parameters": [
+                    {
+                        "description": "Source and target pattern IDs",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.MergePatternsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/patterns/search": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Performs full-text search on patterns.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "Search patterns",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search query",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Pattern"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "query parameter 'q' is required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/patterns/stats": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns aggregate statistics about patterns including counts by type and status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "Get pattern statistics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/patterns/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns a single pattern by its ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "Get pattern by ID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Pattern ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Pattern"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid pattern ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "pattern not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Deletes a pattern by its ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "Delete pattern",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Pattern ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid pattern ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/patterns/{id}/deprecate": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Marks a pattern as deprecated.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "Deprecate pattern",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Pattern ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid pattern ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/patterns/{id}/insight": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns a formatted insight string for a pattern, generated by the pattern detector.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Patterns"
+                ],
+                "summary": "Get pattern insight",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Pattern ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid pattern ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "pattern detector not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns all known projects. Response is cacheable for 5 minutes.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "List projects",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/prompts": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns recent user prompts with optional semantic search via vector store.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "List user prompts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Semantic search query",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.UserPromptWithSession"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/ready": {
+            "get": {
+                "description": "Returns 200 only when fully initialized, 503 otherwise.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Readiness check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "init error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service initializing",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rebuild-status": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the current status of vector rebuild operations, providing visibility into long-running rebuild operations.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Vectors"
+                ],
+                "summary": "Get vector rebuild status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/relations/stats": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns statistics about relations including total count, high confidence count, and breakdown by type.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Relations"
+                ],
+                "summary": "Get relation statistics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/relations/type/{type}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns all relations of a specific type (e.g., supersedes, contradicts, extends).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Relations"
+                ],
+                "summary": "Get relations by type",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relation type",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 50, max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.ObservationRelation"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid relation type",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/restart": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Restarts the worker process (general restart, not tied to update).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Restart worker",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/scoring/concepts": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns all concept weights used in scoring calculations.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Get concept weights",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/scoring/concepts/{concept}": {
+            "put": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Updates the weight for a specific concept used in scoring calculations.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Update concept weight",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Concept name",
+                        "name": "concept",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Weight: {weight: 0.5}",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/scoring/recalculate": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Triggers an immediate background recalculation of all observation importance scores.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Trigger score recalculation",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "recalculator not available",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/scoring/stats": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns scoring statistics including feedback distribution and recalculator stats.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Get scoring statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/search/analytics": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns comprehensive search analytics including vector search rate, zero result rate, top keywords, and query type distribution.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Analytics"
+                ],
+                "summary": "Get search analytics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/search/recent": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns recent search queries for analytics purposes.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Analytics"
+                ],
+                "summary": "Get recent search queries",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 20)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/selfcheck": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the health status of all system components (PostgreSQL, Vector DB, SDK Processor, SSE, Reranker).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Self-check all components",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.SelfCheckResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Looks up a session by its Claude session ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Get session by Claude session ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Claude session ID",
+                        "name": "claudeSessionId",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "400": {
+                        "description": "claudeSessionId required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "session not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/check": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns which session IDs from the request are NOT yet indexed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Check which sessions are indexed",
+                "parameters": [
+                    {
+                        "description": "Session IDs to check",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.CheckSessionsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "database error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/index": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Accepts a raw JSONL session transcript and indexes it. Supports gzip-compressed bodies.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Index session transcript",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Workstation ID",
+                        "name": "workstation_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override session ID",
+                        "name": "session_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/init": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Handles session initialization from user-prompt hook. Idempotent — duplicate requests within a short time window return existing prompt data.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Initialize session from user-prompt hook",
+                "parameters": [
+                    {
+                        "description": "Session init params",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.SessionInitRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.SessionInitResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/observations": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Handles observation posting from post-tool-use hook. Creates session on-the-fly if not found.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Post observation from hook",
+                "parameters": [
+                    {
+                        "description": "Observation data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.ObservationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/subagent-complete": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Handles subagent/Task completion notifications. Triggers immediate processing of any queued observations from the subagent.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Notify subagent completion",
+                "parameters": [
+                    {
+                        "description": "Subagent completion data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.SubagentCompleteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/{id}/extract-learnings": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Runs LLM-based extraction of behavioral patterns from a session transcript and stores resulting guidance observations.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Extract learnings from session",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Session database ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Session messages and project",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.ExtractLearningsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "extraction failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/{sessionId}/injected-observations": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns observations that were injected into a specific session's context.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Get observations injected into session",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Session database ID",
+                        "name": "sessionId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid session id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/{sessionId}/mark-injected": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Records which observations were injected into a specific session. Dual-writes to per-session table and global injection_count counter.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scoring"
+                ],
+                "summary": "Mark observations injected for session",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Session database ID",
+                        "name": "sessionId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "IDs to mark: {ids: [1,2,3]}",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/stats": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns comprehensive worker statistics including uptime, memory, database health, vector cache, graph, and rate limiter stats.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Analytics"
+                ],
+                "summary": "Get worker statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter stats by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/stats/retrieval": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns detailed retrieval statistics including hit rates and latency.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Analytics"
+                ],
+                "summary": "Get retrieval statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/summaries": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns recent session summaries with optional semantic search via vector store.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "List summaries",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Semantic search query",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.SessionSummary"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "bad request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/telemetry/similarity": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the latest similarity telemetry data. Optionally filter by project to get a single snapshot.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Analytics"
+                ],
+                "summary": "Get similarity telemetry",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by project",
+                        "name": "project",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/types": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the canonical list of observation and concept types. Cacheable for 24 hours.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "List observation and concept types",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/update/apply": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Downloads and applies an available update in the background.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Update"
+                ],
+                "summary": "Apply update",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/update/check": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Checks for available updates from the release server. Returns current version and availability info. Handles rate limiting gracefully.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Update"
+                ],
+                "summary": "Check for updates",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/update/restart": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Restarts the worker with the new binary after an update has been applied. Requires update state to be 'done'.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Update"
+                ],
+                "summary": "Restart after update",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "no update has been applied",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/update/status": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns the current update status (idle, downloading, done, error).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Update"
+                ],
+                "summary": "Get update status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/vector/metrics": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns vector database metrics for the dashboard including queries, latency, storage, and cache stats. Returns enabled: false if vector features are not available.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Vectors"
+                ],
+                "summary": "Get vector database metrics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/vectors/health": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns comprehensive health information about the vector database including health score, warnings, cache hit rate, and rebuild status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Vectors"
+                ],
+                "summary": "Get vector database health",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "vector client not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/vectors/rebuild": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Rebuilds all vectors from observations, summaries, and prompts. Returns 409 if already in progress, 429 if called too frequently (5 min cooldown).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Vectors"
+                ],
+                "summary": "Trigger full vector rebuild",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "rebuild already in progress",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "rebuild requested too recently",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "vector sync not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/version": {
+            "get": {
+                "description": "Returns the worker version string for version checking.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Get worker version",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{id}/init": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Initializes an SDK agent session in the session manager. Observations are processed asynchronously.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Start SDK agent session",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Session database ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Session start params",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.SessionStartRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "invalid session id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "session not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{id}/summarize": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Handles summarize requests from the stop hook. Queues a summarization request for background processing.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Summarize session",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Session database ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Last messages for summarization",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.SummarizeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "invalid session id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/models": {
+            "get": {
+                "description": "Returns available embedding models in OpenAI-compatible format. Compatible with LiteLLM proxy model listing.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "List embedding models (OpenAI-compatible)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "github_com_thebtf_engram_internal_learning.Message": {
+            "type": "object",
+            "properties": {
+                "role": {
+                    "description": "\"user\" or \"assistant\"",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_thebtf_engram_pkg_models.JSONInt64Map": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "integer",
+                "format": "int64"
+            }
+        },
+        "github_com_thebtf_engram_pkg_models.MemoryType": {
+            "type": "string",
+            "enum": [
+                "decision",
+                "pattern",
+                "preference",
+                "style",
+                "habit",
+                "insight",
+                "context",
+                "guidance"
+            ],
+            "x-enum-varnames": [
+                "MemTypeDecision",
+                "MemTypePattern",
+                "MemTypePreference",
+                "MemTypeStyle",
+                "MemTypeHabit",
+                "MemTypeInsight",
+                "MemTypeContext",
+                "MemTypeGuidance"
+            ]
+        },
+        "github_com_thebtf_engram_pkg_models.Observation": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string"
+                },
+                "concepts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_at_epoch": {
+                    "type": "integer"
+                },
+                "discovery_tokens": {
+                    "type": "integer"
+                },
+                "enrichment_level": {
+                    "type": "integer"
+                },
+                "facts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "file_mtimes": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.JSONInt64Map"
+                },
+                "files_modified": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "files_read": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "importance_score": {
+                    "type": "number"
+                },
+                "injection_count": {
+                    "type": "integer"
+                },
+                "is_stale": {
+                    "type": "boolean"
+                },
+                "is_superseded": {
+                    "type": "boolean"
+                },
+                "last_retrieved_at_epoch": {
+                    "$ref": "#/definitions/sql.NullInt64"
+                },
+                "memory_type": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.MemoryType"
+                },
+                "narrative": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "prompt_number": {
+                    "$ref": "#/definitions/sql.NullInt64"
+                },
+                "raw_content": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "retrieval_count": {
+                    "type": "integer"
+                },
+                "scope": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.ObservationScope"
+                },
+                "score_updated_at_epoch": {
+                    "$ref": "#/definitions/sql.NullInt64"
+                },
+                "sdk_session_id": {
+                    "type": "string"
+                },
+                "source_event_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "source_type": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.SourceType"
+                },
+                "subtitle": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "title": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "type": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.ObservationType"
+                },
+                "user_feedback": {
+                    "type": "integer"
+                },
+                "utility_score": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_thebtf_engram_pkg_models.ObservationRelation": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_at_epoch": {
+                    "type": "integer"
+                },
+                "detection_source": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.RelationDetectionSource"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "relation_type": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.RelationType"
+                },
+                "source_id": {
+                    "type": "integer"
+                },
+                "target_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_thebtf_engram_pkg_models.ObservationScope": {
+            "type": "string",
+            "enum": [
+                "project",
+                "global",
+                "agent"
+            ],
+            "x-enum-varnames": [
+                "ScopeProject",
+                "ScopeGlobal",
+                "ScopeAgent"
+            ]
+        },
+        "github_com_thebtf_engram_pkg_models.ObservationType": {
+            "type": "string",
+            "enum": [
+                "decision",
+                "bugfix",
+                "feature",
+                "refactor",
+                "discovery",
+                "change",
+                "guidance",
+                "credential"
+            ],
+            "x-enum-varnames": [
+                "ObsTypeDecision",
+                "ObsTypeBugfix",
+                "ObsTypeFeature",
+                "ObsTypeRefactor",
+                "ObsTypeDiscovery",
+                "ObsTypeChange",
+                "ObsTypeGuidance",
+                "ObsTypeCredential"
+            ]
+        },
+        "github_com_thebtf_engram_pkg_models.Pattern": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_at_epoch": {
+                    "type": "integer"
+                },
+                "description": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "frequency": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "last_seen_at": {
+                    "type": "string"
+                },
+                "last_seen_at_epoch": {
+                    "type": "integer"
+                },
+                "merged_into_id": {
+                    "$ref": "#/definitions/sql.NullInt64"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "observation_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "recommendation": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "signature": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.PatternStatus"
+                },
+                "type": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.PatternType"
+                }
+            }
+        },
+        "github_com_thebtf_engram_pkg_models.PatternStatus": {
+            "type": "string",
+            "enum": [
+                "active",
+                "deprecated",
+                "merged"
+            ],
+            "x-enum-varnames": [
+                "PatternStatusActive",
+                "PatternStatusDeprecated",
+                "PatternStatusMerged"
+            ]
+        },
+        "github_com_thebtf_engram_pkg_models.PatternType": {
+            "type": "string",
+            "enum": [
+                "bug",
+                "refactor",
+                "architecture",
+                "anti-pattern",
+                "best-practice"
+            ],
+            "x-enum-varnames": [
+                "PatternTypeBug",
+                "PatternTypeRefactor",
+                "PatternTypeArchitecture",
+                "PatternTypeAntiPattern",
+                "PatternTypeBestPractice"
+            ]
+        },
+        "github_com_thebtf_engram_pkg_models.RelationDetectionSource": {
+            "type": "string",
+            "enum": [
+                "file_overlap",
+                "embedding_similarity",
+                "temporal_proximity",
+                "narrative_mention",
+                "concept_overlap",
+                "type_progression",
+                "creative_association"
+            ],
+            "x-enum-varnames": [
+                "DetectionSourceFileOverlap",
+                "DetectionSourceEmbeddingSimilarity",
+                "DetectionSourceTemporalProximity",
+                "DetectionSourceNarrativeMention",
+                "DetectionSourceConceptOverlap",
+                "DetectionSourceTypeProgression",
+                "DetectionSourceCreativeAssociation"
+            ]
+        },
+        "github_com_thebtf_engram_pkg_models.RelationType": {
+            "type": "string",
+            "enum": [
+                "causes",
+                "fixes",
+                "supersedes",
+                "depends_on",
+                "relates_to",
+                "evolves_from",
+                "leads_to",
+                "similar_to",
+                "contradicts",
+                "reinforces",
+                "invalidated_by",
+                "explains",
+                "shares_theme",
+                "parallel_context",
+                "summarizes",
+                "part_of",
+                "prefers_over"
+            ],
+            "x-enum-varnames": [
+                "RelationCauses",
+                "RelationFixes",
+                "RelationSupersedes",
+                "RelationDependsOn",
+                "RelationRelatesTo",
+                "RelationEvolvesFrom",
+                "RelationLeadsTo",
+                "RelationSimilarTo",
+                "RelationContradicts",
+                "RelationReinforces",
+                "RelationInvalidatedBy",
+                "RelationExplains",
+                "RelationSharesTheme",
+                "RelationParallelCtx",
+                "RelationSummarizes",
+                "RelationPartOf",
+                "RelationPrefersOver"
+            ]
+        },
+        "github_com_thebtf_engram_pkg_models.RelationWithDetails": {
+            "type": "object",
+            "properties": {
+                "relation": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.ObservationRelation"
+                },
+                "source_title": {
+                    "type": "string"
+                },
+                "source_type": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.ObservationType"
+                },
+                "target_title": {
+                    "type": "string"
+                },
+                "target_type": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.ObservationType"
+                }
+            }
+        },
+        "github_com_thebtf_engram_pkg_models.SessionSummary": {
+            "type": "object",
+            "properties": {
+                "completed": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_at_epoch": {
+                    "type": "integer"
+                },
+                "discovery_tokens": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "investigated": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "learned": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "next_steps": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "notes": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "prompt_number": {
+                    "$ref": "#/definitions/sql.NullInt64"
+                },
+                "request": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "sdk_session_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_thebtf_engram_pkg_models.SourceType": {
+            "type": "string",
+            "enum": [
+                "tool_verified",
+                "tool_read",
+                "web_fetch",
+                "todo_write",
+                "llm_derived",
+                "instinct_import",
+                "backfill",
+                "unknown",
+                "manual"
+            ],
+            "x-enum-varnames": [
+                "SourceToolVerified",
+                "SourceToolRead",
+                "SourceWebFetch",
+                "SourceTodoWrite",
+                "SourceLLMDerived",
+                "SourceInstinctImport",
+                "SourceBackfill",
+                "SourceUnknown",
+                "SourceManual"
+            ]
+        },
+        "github_com_thebtf_engram_pkg_models.UserPromptWithSession": {
+            "type": "object",
+            "properties": {
+                "claude_session_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_at_epoch": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "matched_observations": {
+                    "type": "integer"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "prompt_number": {
+                    "type": "integer"
+                },
+                "prompt_text": {
+                    "type": "string"
+                },
+                "sdk_session_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.ArchiveRequest": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "max_age_days": {
+                    "type": "integer"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.BackfillObservation": {
+            "type": "object",
+            "properties": {
+                "concepts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "narrative": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.BackfillRequest": {
+            "type": "object",
+            "properties": {
+                "observations": {
+                    "description": "Observations are the extracted observations to store.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_worker.BackfillObservation"
+                    }
+                },
+                "project": {
+                    "description": "Project is the project path from session metadata.",
+                    "type": "string"
+                },
+                "run_id": {
+                    "description": "RunID groups observations from the same backfill run (for rollback).",
+                    "type": "string"
+                },
+                "session_id": {
+                    "description": "SessionID is a unique identifier for the source session (e.g. filename hash).",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.BackfillResponse": {
+            "type": "object",
+            "properties": {
+                "errors": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "integer"
+                },
+                "stored": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.BackfillSessionRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "description": "Content is the raw JSONL session data.",
+                    "type": "string"
+                },
+                "project": {
+                    "description": "Project overrides the project path from session metadata. Empty = use parsed value.",
+                    "type": "string"
+                },
+                "run_id": {
+                    "description": "RunID groups observations from the same backfill run.",
+                    "type": "string"
+                },
+                "session_id": {
+                    "description": "SessionID identifies the source session (e.g. UUID from filename).",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.BackfillSessionResponse": {
+            "type": "object",
+            "properties": {
+                "errors": {
+                    "type": "integer"
+                },
+                "metrics_report": {
+                    "type": "string"
+                },
+                "observations_extracted": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "integer"
+                },
+                "stored": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.BackfillStatus": {
+            "type": "object",
+            "properties": {
+                "active_runs": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/internal_worker.RunInfo"
+                    }
+                },
+                "total_observations": {
+                    "type": "integer"
+                },
+                "total_runs": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.BulkImportRequest": {
+            "type": "object",
+            "properties": {
+                "observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_worker.BulkObservationInput"
+                    }
+                },
+                "project": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.BulkImportResponse": {
+            "type": "object",
+            "properties": {
+                "errors": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "imported": {
+                    "type": "integer"
+                },
+                "skipped_duplicates": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.BulkObservationInput": {
+            "type": "object",
+            "properties": {
+                "concepts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "facts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "files_modified": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "files_read": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "narrative": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "subtitle": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.BulkStatusRequest": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "feedback": {
+                    "type": "integer"
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.CheckSessionsRequest": {
+            "type": "object",
+            "properties": {
+                "session_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_worker.ComponentHealth": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "\"healthy\", \"degraded\", \"unhealthy\"",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.ExtractLearningsRequest": {
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_thebtf_engram_internal_learning.Message"
+                    }
+                },
+                "project": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.FeedbackRequest": {
+            "type": "object",
+            "properties": {
+                "feedback": {
+                    "description": "-1 (thumbs down), 0 (neutral), 1 (thumbs up)",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.IngestRequest": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "tool_input": {},
+                "tool_name": {
+                    "type": "string"
+                },
+                "tool_result": {},
+                "workstation_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.MergePatternsRequest": {
+            "type": "object",
+            "properties": {
+                "source_id": {
+                    "type": "integer"
+                },
+                "target_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.ObservationRequest": {
+            "type": "object",
+            "properties": {
+                "claudeSessionId": {
+                    "type": "string"
+                },
+                "cwd": {
+                    "type": "string"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "tool_input": {},
+                "tool_name": {
+                    "type": "string"
+                },
+                "tool_response": {}
+            }
+        },
+        "internal_worker.RunInfo": {
+            "type": "object",
+            "properties": {
+                "errors": {
+                    "type": "integer"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "sessions": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "integer"
+                },
+                "stored": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.SelfCheckResponse": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_worker.ComponentHealth"
+                    }
+                },
+                "overall": {
+                    "description": "\"healthy\", \"degraded\", \"unhealthy\"",
+                    "type": "string"
+                },
+                "uptime": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.SessionInitRequest": {
+            "type": "object",
+            "properties": {
+                "claudeSessionId": {
+                    "type": "string"
+                },
+                "matchedObservations": {
+                    "type": "integer"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "prompt": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.SessionInitResponse": {
+            "type": "object",
+            "properties": {
+                "promptNumber": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "sessionDbId": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_worker.SessionStartRequest": {
+            "type": "object",
+            "properties": {
+                "promptNumber": {
+                    "type": "integer"
+                },
+                "userPrompt": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.SubagentCompleteRequest": {
+            "type": "object",
+            "properties": {
+                "claudeSessionId": {
+                    "type": "string"
+                },
+                "project": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.SummarizeRequest": {
+            "type": "object",
+            "properties": {
+                "lastAssistantMessage": {
+                    "type": "string"
+                },
+                "lastUserMessage": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.UpdateObservationRequest": {
+            "type": "object",
+            "properties": {
+                "concepts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "facts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "files_modified": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "files_read": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "narrative": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "subtitle": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.UtilityRequest": {
+            "type": "object",
+            "properties": {
+                "signal": {
+                    "description": "\"used\", \"corrected\", \"ignored\"",
+                    "type": "string"
+                }
+            }
+        },
+        "sql.NullInt64": {
+            "type": "object",
+            "properties": {
+                "int64": {
+                    "type": "integer",
+                    "format": "int64"
+                },
+                "valid": {
+                    "description": "Valid is true if Int64 is not NULL",
+                    "type": "boolean"
+                }
+            }
+        },
+        "sql.NullString": {
+            "type": "object",
+            "properties": {
+                "string": {
+                    "type": "string"
+                },
+                "valid": {
+                    "description": "Valid is true if String is not NULL",
+                    "type": "boolean"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "name": "X-Auth-Token",
+            "in": "header"
+        }
+    }
+}

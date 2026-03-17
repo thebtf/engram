@@ -99,7 +99,18 @@ func (t *backfillTracker) snapshot() map[string]*RunInfo {
 	return cp
 }
 
-// handleBackfillIngest handles POST /api/backfill — stores extracted observations.
+// handleBackfillIngest godoc
+// @Summary Ingest backfill observations
+// @Description Stores pre-extracted observations from a backfill run. Supports semantic deduplication via vector similarity.
+// @Tags Backfill
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body BackfillRequest true "Backfill observations"
+// @Success 200 {object} BackfillResponse
+// @Failure 400 {string} string "bad request"
+// @Failure 503 {string} string "observation store not initialized"
+// @Router /api/backfill [post]
 func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 	var req BackfillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -192,7 +203,14 @@ func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleBackfillStatus handles GET /api/backfill/status.
+// handleBackfillStatus godoc
+// @Summary Get backfill status
+// @Description Returns status of all active backfill runs including stored/skipped/error counts per run.
+// @Tags Backfill
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} BackfillStatus
+// @Router /api/backfill/status [get]
 func (s *Service) handleBackfillStatus(w http.ResponseWriter, r *http.Request) {
 	runs := s.backfillTracker.snapshot()
 	totalObs := 0
@@ -232,8 +250,18 @@ type BackfillSessionResponse struct {
 	MetricsReport        string `json:"metrics_report,omitempty"`
 }
 
-// handleBackfillSession handles POST /api/backfill/session — accepts raw JSONL content,
-// runs server-side LLM extraction, and stores the resulting observations.
+// handleBackfillSession godoc
+// @Summary Backfill session with LLM extraction
+// @Description Accepts raw JSONL session content, runs server-side LLM extraction, and stores resulting observations with semantic deduplication.
+// @Tags Backfill
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body BackfillSessionRequest true "Session content and metadata"
+// @Success 200 {object} BackfillSessionResponse
+// @Failure 400 {string} string "bad request"
+// @Failure 503 {string} string "LLM not configured or store not initialized"
+// @Router /api/backfill/session [post]
 func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) {
 	var req BackfillSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

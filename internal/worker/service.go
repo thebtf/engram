@@ -43,6 +43,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // Service configuration constants
@@ -1577,6 +1578,10 @@ func (s *Service) setupRoutes() {
 	// Readiness check - returns 200 only when fully initialized
 	s.router.Get("/api/ready", s.handleReady)
 
+	// OpenAPI docs (read-only spec; protected by global auth middleware if ENGRAM_API_TOKEN is set)
+	s.router.Get("/api/docs", http.RedirectHandler("/api/docs/index.html", http.StatusMovedPermanently).ServeHTTP)
+	s.router.Get("/api/docs/*", httpSwagger.WrapHandler)
+
 	// Admin/management routes — authentication applied globally via setupMiddleware.
 	// Grouped for logical organization; no additional middleware needed.
 	s.router.Group(func(r chi.Router) {
@@ -1637,10 +1642,10 @@ func (s *Service) setupRoutes() {
 		// Session routes
 		r.Post("/api/sessions/init", s.handleSessionInit)
 		r.Get("/api/sessions", s.handleGetSessionByClaudeID)
-		r.Post("/sessions/{id}/init", s.handleSessionStart)
+		r.Post("/api/sessions/{id}/init", s.handleSessionStart)
 		r.Post("/api/sessions/observations", s.handleObservation)
 		r.Post("/api/sessions/subagent-complete", s.handleSubagentComplete)
-		r.Post("/sessions/{id}/summarize", s.handleSummarize)
+		r.Post("/api/sessions/{id}/summarize", s.handleSummarize)
 		r.Post("/api/sessions/{id}/extract-learnings", s.handleExtractLearnings)
 		r.Post("/api/sessions/{sessionId}/mark-injected", s.handleSessionMarkInjected)
 		r.Get("/api/sessions/{sessionId}/injected-observations", s.handleGetSessionInjectedObservations)

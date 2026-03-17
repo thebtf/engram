@@ -1,0 +1,3356 @@
+basePath: /
+definitions:
+  github_com_thebtf_engram_internal_learning.Message:
+    properties:
+      role:
+        description: '"user" or "assistant"'
+        type: string
+      text:
+        type: string
+    type: object
+  github_com_thebtf_engram_pkg_models.JSONInt64Map:
+    additionalProperties:
+      format: int64
+      type: integer
+    type: object
+  github_com_thebtf_engram_pkg_models.MemoryType:
+    enum:
+    - decision
+    - pattern
+    - preference
+    - style
+    - habit
+    - insight
+    - context
+    - guidance
+    type: string
+    x-enum-varnames:
+    - MemTypeDecision
+    - MemTypePattern
+    - MemTypePreference
+    - MemTypeStyle
+    - MemTypeHabit
+    - MemTypeInsight
+    - MemTypeContext
+    - MemTypeGuidance
+  github_com_thebtf_engram_pkg_models.Observation:
+    properties:
+      agent_id:
+        type: string
+      concepts:
+        items:
+          type: string
+        type: array
+      created_at:
+        type: string
+      created_at_epoch:
+        type: integer
+      discovery_tokens:
+        type: integer
+      enrichment_level:
+        type: integer
+      facts:
+        items:
+          type: string
+        type: array
+      file_mtimes:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.JSONInt64Map'
+      files_modified:
+        items:
+          type: string
+        type: array
+      files_read:
+        items:
+          type: string
+        type: array
+      id:
+        type: integer
+      importance_score:
+        type: number
+      injection_count:
+        type: integer
+      is_stale:
+        type: boolean
+      is_superseded:
+        type: boolean
+      last_retrieved_at_epoch:
+        $ref: '#/definitions/sql.NullInt64'
+      memory_type:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.MemoryType'
+      narrative:
+        $ref: '#/definitions/sql.NullString'
+      project:
+        type: string
+      prompt_number:
+        $ref: '#/definitions/sql.NullInt64'
+      raw_content:
+        $ref: '#/definitions/sql.NullString'
+      retrieval_count:
+        type: integer
+      scope:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.ObservationScope'
+      score_updated_at_epoch:
+        $ref: '#/definitions/sql.NullInt64'
+      sdk_session_id:
+        type: string
+      source_event_ids:
+        items:
+          type: integer
+        type: array
+      source_type:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.SourceType'
+      subtitle:
+        $ref: '#/definitions/sql.NullString'
+      title:
+        $ref: '#/definitions/sql.NullString'
+      type:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.ObservationType'
+      user_feedback:
+        type: integer
+      utility_score:
+        type: number
+    type: object
+  github_com_thebtf_engram_pkg_models.ObservationRelation:
+    properties:
+      confidence:
+        type: number
+      created_at:
+        type: string
+      created_at_epoch:
+        type: integer
+      detection_source:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.RelationDetectionSource'
+      id:
+        type: integer
+      reason:
+        type: string
+      relation_type:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.RelationType'
+      source_id:
+        type: integer
+      target_id:
+        type: integer
+    type: object
+  github_com_thebtf_engram_pkg_models.ObservationScope:
+    enum:
+    - project
+    - global
+    - agent
+    type: string
+    x-enum-varnames:
+    - ScopeProject
+    - ScopeGlobal
+    - ScopeAgent
+  github_com_thebtf_engram_pkg_models.ObservationType:
+    enum:
+    - decision
+    - bugfix
+    - feature
+    - refactor
+    - discovery
+    - change
+    - guidance
+    - credential
+    type: string
+    x-enum-varnames:
+    - ObsTypeDecision
+    - ObsTypeBugfix
+    - ObsTypeFeature
+    - ObsTypeRefactor
+    - ObsTypeDiscovery
+    - ObsTypeChange
+    - ObsTypeGuidance
+    - ObsTypeCredential
+  github_com_thebtf_engram_pkg_models.Pattern:
+    properties:
+      confidence:
+        type: number
+      created_at:
+        type: string
+      created_at_epoch:
+        type: integer
+      description:
+        $ref: '#/definitions/sql.NullString'
+      frequency:
+        type: integer
+      id:
+        type: integer
+      last_seen_at:
+        type: string
+      last_seen_at_epoch:
+        type: integer
+      merged_into_id:
+        $ref: '#/definitions/sql.NullInt64'
+      name:
+        type: string
+      observation_ids:
+        items:
+          type: integer
+        type: array
+      projects:
+        items:
+          type: string
+        type: array
+      recommendation:
+        $ref: '#/definitions/sql.NullString'
+      signature:
+        items:
+          type: string
+        type: array
+      status:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.PatternStatus'
+      type:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.PatternType'
+    type: object
+  github_com_thebtf_engram_pkg_models.PatternStatus:
+    enum:
+    - active
+    - deprecated
+    - merged
+    type: string
+    x-enum-varnames:
+    - PatternStatusActive
+    - PatternStatusDeprecated
+    - PatternStatusMerged
+  github_com_thebtf_engram_pkg_models.PatternType:
+    enum:
+    - bug
+    - refactor
+    - architecture
+    - anti-pattern
+    - best-practice
+    type: string
+    x-enum-varnames:
+    - PatternTypeBug
+    - PatternTypeRefactor
+    - PatternTypeArchitecture
+    - PatternTypeAntiPattern
+    - PatternTypeBestPractice
+  github_com_thebtf_engram_pkg_models.RelationDetectionSource:
+    enum:
+    - file_overlap
+    - embedding_similarity
+    - temporal_proximity
+    - narrative_mention
+    - concept_overlap
+    - type_progression
+    - creative_association
+    type: string
+    x-enum-varnames:
+    - DetectionSourceFileOverlap
+    - DetectionSourceEmbeddingSimilarity
+    - DetectionSourceTemporalProximity
+    - DetectionSourceNarrativeMention
+    - DetectionSourceConceptOverlap
+    - DetectionSourceTypeProgression
+    - DetectionSourceCreativeAssociation
+  github_com_thebtf_engram_pkg_models.RelationType:
+    enum:
+    - causes
+    - fixes
+    - supersedes
+    - depends_on
+    - relates_to
+    - evolves_from
+    - leads_to
+    - similar_to
+    - contradicts
+    - reinforces
+    - invalidated_by
+    - explains
+    - shares_theme
+    - parallel_context
+    - summarizes
+    - part_of
+    - prefers_over
+    type: string
+    x-enum-varnames:
+    - RelationCauses
+    - RelationFixes
+    - RelationSupersedes
+    - RelationDependsOn
+    - RelationRelatesTo
+    - RelationEvolvesFrom
+    - RelationLeadsTo
+    - RelationSimilarTo
+    - RelationContradicts
+    - RelationReinforces
+    - RelationInvalidatedBy
+    - RelationExplains
+    - RelationSharesTheme
+    - RelationParallelCtx
+    - RelationSummarizes
+    - RelationPartOf
+    - RelationPrefersOver
+  github_com_thebtf_engram_pkg_models.RelationWithDetails:
+    properties:
+      relation:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.ObservationRelation'
+      source_title:
+        type: string
+      source_type:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.ObservationType'
+      target_title:
+        type: string
+      target_type:
+        $ref: '#/definitions/github_com_thebtf_engram_pkg_models.ObservationType'
+    type: object
+  github_com_thebtf_engram_pkg_models.SessionSummary:
+    properties:
+      completed:
+        $ref: '#/definitions/sql.NullString'
+      created_at:
+        type: string
+      created_at_epoch:
+        type: integer
+      discovery_tokens:
+        type: integer
+      id:
+        type: integer
+      investigated:
+        $ref: '#/definitions/sql.NullString'
+      learned:
+        $ref: '#/definitions/sql.NullString'
+      next_steps:
+        $ref: '#/definitions/sql.NullString'
+      notes:
+        $ref: '#/definitions/sql.NullString'
+      project:
+        type: string
+      prompt_number:
+        $ref: '#/definitions/sql.NullInt64'
+      request:
+        $ref: '#/definitions/sql.NullString'
+      sdk_session_id:
+        type: string
+    type: object
+  github_com_thebtf_engram_pkg_models.SourceType:
+    enum:
+    - tool_verified
+    - tool_read
+    - web_fetch
+    - todo_write
+    - llm_derived
+    - instinct_import
+    - backfill
+    - unknown
+    - manual
+    type: string
+    x-enum-varnames:
+    - SourceToolVerified
+    - SourceToolRead
+    - SourceWebFetch
+    - SourceTodoWrite
+    - SourceLLMDerived
+    - SourceInstinctImport
+    - SourceBackfill
+    - SourceUnknown
+    - SourceManual
+  github_com_thebtf_engram_pkg_models.UserPromptWithSession:
+    properties:
+      claude_session_id:
+        type: string
+      created_at:
+        type: string
+      created_at_epoch:
+        type: integer
+      id:
+        type: integer
+      matched_observations:
+        type: integer
+      project:
+        type: string
+      prompt_number:
+        type: integer
+      prompt_text:
+        type: string
+      sdk_session_id:
+        type: string
+    type: object
+  internal_worker.ArchiveRequest:
+    properties:
+      ids:
+        items:
+          type: integer
+        type: array
+      max_age_days:
+        type: integer
+      project:
+        type: string
+      reason:
+        type: string
+    type: object
+  internal_worker.BackfillObservation:
+    properties:
+      concepts:
+        items:
+          type: string
+        type: array
+      files:
+        items:
+          type: string
+        type: array
+      narrative:
+        type: string
+      outcome:
+        type: string
+      title:
+        type: string
+      type:
+        type: string
+    type: object
+  internal_worker.BackfillRequest:
+    properties:
+      observations:
+        description: Observations are the extracted observations to store.
+        items:
+          $ref: '#/definitions/internal_worker.BackfillObservation'
+        type: array
+      project:
+        description: Project is the project path from session metadata.
+        type: string
+      run_id:
+        description: RunID groups observations from the same backfill run (for rollback).
+        type: string
+      session_id:
+        description: SessionID is a unique identifier for the source session (e.g.
+          filename hash).
+        type: string
+    type: object
+  internal_worker.BackfillResponse:
+    properties:
+      errors:
+        type: integer
+      skipped:
+        type: integer
+      stored:
+        type: integer
+    type: object
+  internal_worker.BackfillSessionRequest:
+    properties:
+      content:
+        description: Content is the raw JSONL session data.
+        type: string
+      project:
+        description: Project overrides the project path from session metadata. Empty
+          = use parsed value.
+        type: string
+      run_id:
+        description: RunID groups observations from the same backfill run.
+        type: string
+      session_id:
+        description: SessionID identifies the source session (e.g. UUID from filename).
+        type: string
+    type: object
+  internal_worker.BackfillSessionResponse:
+    properties:
+      errors:
+        type: integer
+      metrics_report:
+        type: string
+      observations_extracted:
+        type: integer
+      skipped:
+        type: integer
+      stored:
+        type: integer
+    type: object
+  internal_worker.BackfillStatus:
+    properties:
+      active_runs:
+        additionalProperties:
+          $ref: '#/definitions/internal_worker.RunInfo'
+        type: object
+      total_observations:
+        type: integer
+      total_runs:
+        type: integer
+    type: object
+  internal_worker.BulkImportRequest:
+    properties:
+      observations:
+        items:
+          $ref: '#/definitions/internal_worker.BulkObservationInput'
+        type: array
+      project:
+        type: string
+    type: object
+  internal_worker.BulkImportResponse:
+    properties:
+      errors:
+        items:
+          type: string
+        type: array
+      failed:
+        type: integer
+      imported:
+        type: integer
+      skipped_duplicates:
+        type: integer
+    type: object
+  internal_worker.BulkObservationInput:
+    properties:
+      concepts:
+        items:
+          type: string
+        type: array
+      facts:
+        items:
+          type: string
+        type: array
+      files_modified:
+        items:
+          type: string
+        type: array
+      files_read:
+        items:
+          type: string
+        type: array
+      narrative:
+        type: string
+      scope:
+        type: string
+      subtitle:
+        type: string
+      title:
+        type: string
+      type:
+        type: string
+    type: object
+  internal_worker.BulkStatusRequest:
+    properties:
+      action:
+        type: string
+      feedback:
+        type: integer
+      ids:
+        items:
+          type: integer
+        type: array
+      reason:
+        type: string
+    type: object
+  internal_worker.CheckSessionsRequest:
+    properties:
+      session_ids:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_worker.ComponentHealth:
+    properties:
+      message:
+        type: string
+      name:
+        type: string
+      status:
+        description: '"healthy", "degraded", "unhealthy"'
+        type: string
+    type: object
+  internal_worker.ExtractLearningsRequest:
+    properties:
+      messages:
+        items:
+          $ref: '#/definitions/github_com_thebtf_engram_internal_learning.Message'
+        type: array
+      project:
+        type: string
+    type: object
+  internal_worker.FeedbackRequest:
+    properties:
+      feedback:
+        description: -1 (thumbs down), 0 (neutral), 1 (thumbs up)
+        type: integer
+    type: object
+  internal_worker.IngestRequest:
+    properties:
+      project:
+        type: string
+      session_id:
+        type: string
+      tool_input: {}
+      tool_name:
+        type: string
+      tool_result: {}
+      workstation_id:
+        type: string
+    type: object
+  internal_worker.MergePatternsRequest:
+    properties:
+      source_id:
+        type: integer
+      target_id:
+        type: integer
+    type: object
+  internal_worker.ObservationRequest:
+    properties:
+      claudeSessionId:
+        type: string
+      cwd:
+        type: string
+      project:
+        type: string
+      tool_input: {}
+      tool_name:
+        type: string
+      tool_response: {}
+    type: object
+  internal_worker.RunInfo:
+    properties:
+      errors:
+        type: integer
+      run_id:
+        type: string
+      sessions:
+        type: integer
+      skipped:
+        type: integer
+      stored:
+        type: integer
+    type: object
+  internal_worker.SelfCheckResponse:
+    properties:
+      components:
+        items:
+          $ref: '#/definitions/internal_worker.ComponentHealth'
+        type: array
+      overall:
+        description: '"healthy", "degraded", "unhealthy"'
+        type: string
+      uptime:
+        type: string
+      version:
+        type: string
+    type: object
+  internal_worker.SessionInitRequest:
+    properties:
+      claudeSessionId:
+        type: string
+      matchedObservations:
+        type: integer
+      project:
+        type: string
+      prompt:
+        type: string
+    type: object
+  internal_worker.SessionInitResponse:
+    properties:
+      promptNumber:
+        type: integer
+      reason:
+        type: string
+      sessionDbId:
+        type: integer
+      skipped:
+        type: boolean
+    type: object
+  internal_worker.SessionStartRequest:
+    properties:
+      promptNumber:
+        type: integer
+      userPrompt:
+        type: string
+    type: object
+  internal_worker.SubagentCompleteRequest:
+    properties:
+      claudeSessionId:
+        type: string
+      project:
+        type: string
+    type: object
+  internal_worker.SummarizeRequest:
+    properties:
+      lastAssistantMessage:
+        type: string
+      lastUserMessage:
+        type: string
+    type: object
+  internal_worker.UpdateObservationRequest:
+    properties:
+      concepts:
+        items:
+          type: string
+        type: array
+      facts:
+        items:
+          type: string
+        type: array
+      files_modified:
+        items:
+          type: string
+        type: array
+      files_read:
+        items:
+          type: string
+        type: array
+      narrative:
+        type: string
+      scope:
+        type: string
+      subtitle:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_worker.UtilityRequest:
+    properties:
+      signal:
+        description: '"used", "corrected", "ignored"'
+        type: string
+    type: object
+  sql.NullInt64:
+    properties:
+      int64:
+        format: int64
+        type: integer
+      valid:
+        description: Valid is true if Int64 is not NULL
+        type: boolean
+    type: object
+  sql.NullString:
+    properties:
+      string:
+        type: string
+      valid:
+        description: Valid is true if String is not NULL
+        type: boolean
+    type: object
+host: localhost:37777
+info:
+  contact: {}
+  description: Persistent shared memory infrastructure for AI agents. Stores observations
+    in PostgreSQL + pgvector, exposes MCP tools via HTTP/SSE.
+  title: Engram API
+  version: 1.0.0
+paths:
+  /api/analytics/search-misses:
+    post:
+      consumes:
+      - application/json
+      description: Returns aggregated analytics for search queries that returned zero
+        results, useful for self-tuning.
+      parameters:
+      - description: 'Params: project (required), limit (optional)'
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: project required
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: store not available
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get search miss analytics
+      tags:
+      - Search
+  /api/backfill:
+    post:
+      consumes:
+      - application/json
+      description: Stores pre-extracted observations from a backfill run. Supports
+        semantic deduplication via vector similarity.
+      parameters:
+      - description: Backfill observations
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.BackfillRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.BackfillResponse'
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "503":
+          description: observation store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Ingest backfill observations
+      tags:
+      - Backfill
+  /api/backfill/session:
+    post:
+      consumes:
+      - application/json
+      description: Accepts raw JSONL session content, runs server-side LLM extraction,
+        and stores resulting observations with semantic deduplication.
+      parameters:
+      - description: Session content and metadata
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.BackfillSessionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.BackfillSessionResponse'
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "503":
+          description: LLM not configured or store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Backfill session with LLM extraction
+      tags:
+      - Backfill
+  /api/backfill/status:
+    get:
+      description: Returns status of all active backfill runs including stored/skipped/error
+        counts per run.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.BackfillStatus'
+      security:
+      - ApiKeyAuth: []
+      summary: Get backfill status
+      tags:
+      - Backfill
+  /api/context/count:
+    get:
+      description: Returns the count of observations for a project (cached).
+      parameters:
+      - description: Project name
+        in: query
+        name: project
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: project required
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get observation count
+      tags:
+      - Context
+  /api/context/files:
+    get:
+      description: Returns observations relevant to specific files being worked on,
+        using vector similarity search.
+      parameters:
+      - description: Project name
+        in: query
+        name: project
+        required: true
+        type: string
+      - description: Comma-separated file paths (max 20)
+        in: query
+        name: files
+        required: true
+        type: string
+      - description: Results per file (default 10, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get file context
+      tags:
+      - Context
+  /api/context/inject:
+    post:
+      consumes:
+      - application/json
+      description: Returns context for injection at session start. Response includes
+        recent (last 5), relevant (top 10 semantic), and guidance sections. Supports
+        GET (deprecated) and POST. Critical startup path — optimized for speed.
+      parameters:
+      - description: Project name (required)
+        in: query
+        name: project
+        type: string
+      - description: Agent ID (acts as project scope if project empty)
+        in: query
+        name: agent_id
+        type: string
+      - description: 'Response format: ''compact'' for minimal payload'
+        in: query
+        name: format
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: project required
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Inject context for session start
+      tags:
+      - Context
+  /api/context/search:
+    get:
+      consumes:
+      - application/json
+      description: Searches observations relevant to a user prompt using hybrid vector
+        + FTS search with query expansion, cross-encoder reranking, and clustering.
+        Supports both GET (query params) and POST (JSON body) to avoid URL length
+        limits.
+      parameters:
+      - description: Project filter
+        in: query
+        name: project
+        type: string
+      - description: Search query
+        in: query
+        name: query
+        type: string
+      - description: Working directory (ignored server-side)
+        in: query
+        name: cwd
+        type: string
+      - description: Agent ID (acts as project scope if project empty)
+        in: query
+        name: agent_id
+        type: string
+      - description: Number of results (default 50, max 200)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: project and query required
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Search observations by prompt
+      tags:
+      - Search
+  /api/decisions/search:
+    post:
+      consumes:
+      - application/json
+      description: Searches observations using decision-optimized semantic search.
+        Thin REST wrapper over the search manager's Decisions method.
+      parameters:
+      - description: 'Search params: query, project (required), limit (optional)'
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: query and project required
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Search decisions
+      tags:
+      - Search
+  /api/events/ingest:
+    post:
+      consumes:
+      - application/json
+      description: Receives raw tool events from Claude Code hooks. Stores in raw_events,
+        runs deterministic Level 0 pipeline, creates an observation, and triggers
+        async embedding.
+      parameters:
+      - description: Tool event data
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.IngestRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Ingest tool event
+      tags:
+      - Events
+  /api/graph/stats:
+    get:
+      description: Returns graph statistics for the dashboard, using relation data
+        to compute knowledge graph metrics.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get graph statistics
+      tags:
+      - Graph
+  /api/graph/sync:
+    post:
+      description: Triggers a manual re-sync of relations from PostgreSQL to FalkorDB.
+        Runs in background.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: graph backend not connected
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Sync graph from relations
+      tags:
+      - Graph
+  /api/health:
+    get:
+      description: Returns 200 OK immediately (even during init) so hooks can connect
+        quickly. Use /api/ready for full readiness check.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Health check
+      tags:
+      - System
+  /api/instincts/import:
+    post:
+      consumes:
+      - application/json
+      description: Imports instinct files from a directory on the server. Validates
+        path against allowed base directory.
+      parameters:
+      - description: 'Optional: {path: ''/path/to/instincts''}'
+        in: body
+        name: body
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid path
+          schema:
+            type: string
+        "404":
+          description: directory not found
+          schema:
+            type: string
+        "500":
+          description: import failed
+          schema:
+            type: string
+        "503":
+          description: observation store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Import instincts
+      tags:
+      - Instincts
+  /api/logs:
+    get:
+      description: Returns log entries as JSON snapshot or SSE stream (follow mode).
+        Supports level filtering and text search.
+      parameters:
+      - description: Number of entries (default 100, max 10000)
+        in: query
+        name: lines
+        type: integer
+      - description: 'Minimum log level: trace, debug, info, warn, error, fatal'
+        in: query
+        name: level
+        type: string
+      - description: Case-insensitive text search
+        in: query
+        name: query
+        type: string
+      - description: If true, switches to SSE streaming mode
+        in: query
+        name: follow
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: object
+            type: array
+        "503":
+          description: log buffer not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get log entries
+      tags:
+      - System
+  /api/models:
+    get:
+      description: Returns available embedding models with default and current model
+        info. Cacheable for 1 hour.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: List embedding models
+      tags:
+      - Observations
+  /api/observations:
+    get:
+      description: Returns recent observations with optional semantic search via vector
+        store. Supports pagination.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      - description: Semantic search query
+        in: query
+        name: query
+        type: string
+      - description: Number of results (default 100)
+        in: query
+        name: limit
+        type: integer
+      - description: Pagination offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List observations
+      tags:
+      - Observations
+  /api/observations/{id}:
+    get:
+      description: Returns a single observation by its ID.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Observation'
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "404":
+          description: observation not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get observation by ID
+      tags:
+      - Observations
+    put:
+      consumes:
+      - application/json
+      description: Updates an existing observation's fields. Only provided fields
+        are updated.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Fields to update
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.UpdateObservationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "404":
+          description: observation not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update an observation
+      tags:
+      - Observations
+  /api/observations/{id}/feedback:
+    post:
+      consumes:
+      - application/json
+      description: Records user feedback (thumbs up/down) for an observation and recalculates
+        its importance score.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Feedback value (-1, 0, or 1)
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.FeedbackRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Submit observation feedback
+      tags:
+      - Scoring
+  /api/observations/{id}/graph:
+    get:
+      description: Returns the relation graph for an observation up to the specified
+        depth.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Graph traversal depth (default 2, max 5)
+        in: query
+        name: depth
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid observation id
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get relation graph
+      tags:
+      - Relations
+  /api/observations/{id}/related:
+    get:
+      description: Returns observations related to a given one, filtered by minimum
+        confidence.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Minimum confidence threshold (default 0.4, range 0-1)
+        in: query
+        name: min_confidence
+        type: number
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Observation'
+            type: array
+        "400":
+          description: invalid observation id
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get related observations
+      tags:
+      - Relations
+  /api/observations/{id}/relations:
+    get:
+      description: Returns all relations for a specific observation with full details.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.RelationWithDetails'
+            type: array
+        "400":
+          description: invalid observation id
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get observation relations
+      tags:
+      - Relations
+  /api/observations/{id}/score:
+    get:
+      description: Returns a breakdown of how an observation's importance score was
+        calculated, including all scoring components.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid observation id
+          schema:
+            type: string
+        "404":
+          description: observation not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Explain observation score
+      tags:
+      - Scoring
+  /api/observations/{id}/unarchive:
+    post:
+      description: Restores an archived observation to active status.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid observation id
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Unarchive observation
+      tags:
+      - Import/Export
+  /api/observations/{id}/utility:
+    post:
+      consumes:
+      - application/json
+      description: Records a utility signal (used, corrected, ignored) for an observation,
+        updating its utility score via EMA.
+      parameters:
+      - description: Observation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Utility signal
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.UtilityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Record utility signal
+      tags:
+      - Scoring
+  /api/observations/archival-stats:
+    get:
+      description: Returns archival statistics including counts and trends.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get archival statistics
+      tags:
+      - Import/Export
+  /api/observations/archive:
+    post:
+      consumes:
+      - application/json
+      description: Archives observations by ID list or by age criteria. Supports batch
+        archival with parallel processing and per-observation error tracking.
+      parameters:
+      - description: 'Archive criteria: ids, project, max_age_days, reason'
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.ArchiveRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Archive observations
+      tags:
+      - Import/Export
+  /api/observations/archived:
+    get:
+      description: Returns archived observations, optionally filtered by project.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      - description: Number of results (default 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Observation'
+            type: array
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List archived observations
+      tags:
+      - Import/Export
+  /api/observations/bulk-import:
+    post:
+      consumes:
+      - application/json
+      description: 'Imports multiple observations in a single request. Supports deduplication
+        within the batch. Max batch size: 100.'
+      parameters:
+      - description: Observations to import
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.BulkImportRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.BulkImportResponse'
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Bulk import observations
+      tags:
+      - Import/Export
+  /api/observations/bulk-status:
+    post:
+      consumes:
+      - application/json
+      description: 'Updates status for multiple observations in one request. Actions:
+        supersede, archive, set_feedback. Max 500 IDs.'
+      parameters:
+      - description: Bulk action request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.BulkStatusRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Bulk status update
+      tags:
+      - Import/Export
+  /api/observations/duplicates:
+    get:
+      description: Finds potential duplicate observations using Jaccard similarity
+        clustering. Returns groups of similar observations.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      - description: Similarity threshold (default 0.6, range 0-1)
+        in: query
+        name: threshold
+        type: number
+      - description: Number of observations to check (default 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Find duplicate observations
+      tags:
+      - Import/Export
+  /api/observations/export:
+    get:
+      description: Exports observations in JSON or CSV format. Supports filtering
+        by project, scope, and type. Returns file as download attachment.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      - description: 'Export format: json or csv (default json)'
+        in: query
+        name: format
+        type: string
+      - description: 'Filter by scope: project, global'
+        in: query
+        name: scope
+        type: string
+      - description: Filter by observation type
+        in: query
+        name: type
+        type: string
+      - description: Number of results (default 1000, max 5000)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Export observations
+      tags:
+      - Import/Export
+  /api/observations/mark-injected:
+    post:
+      consumes:
+      - application/json
+      description: Records that observations were injected into Claude Code context
+        by incrementing injection counts.
+      parameters:
+      - description: 'IDs to mark: {ids: [1,2,3]}'
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid request body
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Mark observations as injected
+      tags:
+      - Scoring
+  /api/observations/most-retrieved:
+    get:
+      description: Returns the most frequently retrieved observations by retrieval
+        count.
+      parameters:
+      - description: Number of results (default 10)
+        in: query
+        name: limit
+        type: integer
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Observation'
+            type: array
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get most retrieved observations
+      tags:
+      - Scoring
+  /api/observations/recently-injected:
+    get:
+      description: Returns observations that have been recently injected into Claude
+        Code context.
+      parameters:
+      - description: Number of results (default 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get recently injected observations
+      tags:
+      - Scoring
+  /api/observations/top:
+    get:
+      description: Returns the highest-scoring observations by importance score.
+      parameters:
+      - description: Number of results (default 10)
+        in: query
+        name: limit
+        type: integer
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Observation'
+            type: array
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get top-scoring observations
+      tags:
+      - Scoring
+  /api/patterns:
+    get:
+      description: Returns all active patterns, optionally filtered by type or project.
+      parameters:
+      - description: Filter by pattern type
+        in: query
+        name: type
+        type: string
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      - description: Number of results (default 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Pattern'
+            type: array
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List patterns
+      tags:
+      - Patterns
+  /api/patterns/{id}:
+    delete:
+      description: Deletes a pattern by its ID.
+      parameters:
+      - description: Pattern ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid pattern ID
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete pattern
+      tags:
+      - Patterns
+    get:
+      description: Returns a single pattern by its ID.
+      parameters:
+      - description: Pattern ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Pattern'
+        "400":
+          description: invalid pattern ID
+          schema:
+            type: string
+        "404":
+          description: pattern not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get pattern by ID
+      tags:
+      - Patterns
+  /api/patterns/{id}/deprecate:
+    post:
+      description: Marks a pattern as deprecated.
+      parameters:
+      - description: Pattern ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid pattern ID
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Deprecate pattern
+      tags:
+      - Patterns
+  /api/patterns/{id}/insight:
+    get:
+      description: Returns a formatted insight string for a pattern, generated by
+        the pattern detector.
+      parameters:
+      - description: Pattern ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid pattern ID
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern detector not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get pattern insight
+      tags:
+      - Patterns
+  /api/patterns/by-name:
+    get:
+      description: Returns a pattern by its unique name.
+      parameters:
+      - description: Pattern name
+        in: query
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Pattern'
+        "400":
+          description: query parameter 'name' is required
+          schema:
+            type: string
+        "404":
+          description: pattern not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get pattern by name
+      tags:
+      - Patterns
+  /api/patterns/merge:
+    post:
+      consumes:
+      - application/json
+      description: Merges a source pattern into a target pattern. Source pattern is
+        consumed.
+      parameters:
+      - description: Source and target pattern IDs
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.MergePatternsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Merge patterns
+      tags:
+      - Patterns
+  /api/patterns/search:
+    get:
+      description: Performs full-text search on patterns.
+      parameters:
+      - description: Search query
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Number of results (default 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Pattern'
+            type: array
+        "400":
+          description: query parameter 'q' is required
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Search patterns
+      tags:
+      - Patterns
+  /api/patterns/stats:
+    get:
+      description: Returns aggregate statistics about patterns including counts by
+        type and status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: pattern store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get pattern statistics
+      tags:
+      - Patterns
+  /api/projects:
+    get:
+      description: Returns all known projects. Response is cacheable for 5 minutes.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: object
+            type: array
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List projects
+      tags:
+      - Observations
+  /api/prompts:
+    get:
+      description: Returns recent user prompts with optional semantic search via vector
+        store.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      - description: Semantic search query
+        in: query
+        name: query
+        type: string
+      - description: Number of results (default 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.UserPromptWithSession'
+            type: array
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List user prompts
+      tags:
+      - Observations
+  /api/ready:
+    get:
+      description: Returns 200 only when fully initialized, 503 otherwise.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: init error
+          schema:
+            type: string
+        "503":
+          description: service initializing
+          schema:
+            type: string
+      summary: Readiness check
+      tags:
+      - System
+  /api/rebuild-status:
+    get:
+      description: Returns the current status of vector rebuild operations, providing
+        visibility into long-running rebuild operations.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get vector rebuild status
+      tags:
+      - Vectors
+  /api/relations/stats:
+    get:
+      description: Returns statistics about relations including total count, high
+        confidence count, and breakdown by type.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get relation statistics
+      tags:
+      - Relations
+  /api/relations/type/{type}:
+    get:
+      description: Returns all relations of a specific type (e.g., supersedes, contradicts,
+        extends).
+      parameters:
+      - description: Relation type
+        in: path
+        name: type
+        required: true
+        type: string
+      - description: Number of results (default 50, max 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.ObservationRelation'
+            type: array
+        "400":
+          description: invalid relation type
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get relations by type
+      tags:
+      - Relations
+  /api/restart:
+    post:
+      description: Restarts the worker process (general restart, not tied to update).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Restart worker
+      tags:
+      - System
+  /api/scoring/concepts:
+    get:
+      description: Returns all concept weights used in scoring calculations.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get concept weights
+      tags:
+      - Scoring
+  /api/scoring/concepts/{concept}:
+    put:
+      consumes:
+      - application/json
+      description: Updates the weight for a specific concept used in scoring calculations.
+      parameters:
+      - description: Concept name
+        in: path
+        name: concept
+        required: true
+        type: string
+      - description: 'Weight: {weight: 0.5}'
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update concept weight
+      tags:
+      - Scoring
+  /api/scoring/recalculate:
+    post:
+      description: Triggers an immediate background recalculation of all observation
+        importance scores.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: recalculator not available
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Trigger score recalculation
+      tags:
+      - Scoring
+  /api/scoring/stats:
+    get:
+      description: Returns scoring statistics including feedback distribution and
+        recalculator stats.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get scoring statistics
+      tags:
+      - Scoring
+  /api/search/analytics:
+    get:
+      description: Returns comprehensive search analytics including vector search
+        rate, zero result rate, top keywords, and query type distribution.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get search analytics
+      tags:
+      - Analytics
+  /api/search/recent:
+    get:
+      description: Returns recent search queries for analytics purposes.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      - description: Number of results (default 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get recent search queries
+      tags:
+      - Analytics
+  /api/selfcheck:
+    get:
+      description: Returns the health status of all system components (PostgreSQL,
+        Vector DB, SDK Processor, SSE, Reranker).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.SelfCheckResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Self-check all components
+      tags:
+      - System
+  /api/sessions:
+    get:
+      description: Looks up a session by its Claude session ID.
+      parameters:
+      - description: Claude session ID
+        in: query
+        name: claudeSessionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: claudeSessionId required
+          schema:
+            type: string
+        "404":
+          description: session not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get session by Claude session ID
+      tags:
+      - Sessions
+  /api/sessions/{id}/extract-learnings:
+    post:
+      consumes:
+      - application/json
+      description: Runs LLM-based extraction of behavioral patterns from a session
+        transcript and stores resulting guidance observations.
+      parameters:
+      - description: Session database ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Session messages and project
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.ExtractLearningsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid request body
+          schema:
+            type: string
+        "500":
+          description: extraction failed
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Extract learnings from session
+      tags:
+      - Sessions
+  /api/sessions/{sessionId}/injected-observations:
+    get:
+      description: Returns observations that were injected into a specific session's
+        context.
+      parameters:
+      - description: Session database ID
+        in: path
+        name: sessionId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid session id
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get observations injected into session
+      tags:
+      - Scoring
+  /api/sessions/{sessionId}/mark-injected:
+    post:
+      consumes:
+      - application/json
+      description: Records which observations were injected into a specific session.
+        Dual-writes to per-session table and global injection_count counter.
+      parameters:
+      - description: Session database ID
+        in: path
+        name: sessionId
+        required: true
+        type: integer
+      - description: 'IDs to mark: {ids: [1,2,3]}'
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Mark observations injected for session
+      tags:
+      - Scoring
+  /api/sessions/check:
+    post:
+      consumes:
+      - application/json
+      description: Returns which session IDs from the request are NOT yet indexed.
+      parameters:
+      - description: Session IDs to check
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.CheckSessionsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid request body
+          schema:
+            type: string
+        "500":
+          description: database error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Check which sessions are indexed
+      tags:
+      - Sessions
+  /api/sessions/index:
+    post:
+      consumes:
+      - application/json
+      description: Accepts a raw JSONL session transcript and indexes it. Supports
+        gzip-compressed bodies.
+      parameters:
+      - description: Workstation ID
+        in: query
+        name: workstation_id
+        required: true
+        type: string
+      - description: Override session ID
+        in: query
+        name: session_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service not ready
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Index session transcript
+      tags:
+      - Sessions
+  /api/sessions/init:
+    post:
+      consumes:
+      - application/json
+      description: Handles session initialization from user-prompt hook. Idempotent
+        — duplicate requests within a short time window return existing prompt data.
+      parameters:
+      - description: Session init params
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.SessionInitRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.SessionInitResponse'
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Initialize session from user-prompt hook
+      tags:
+      - Sessions
+  /api/sessions/observations:
+    post:
+      consumes:
+      - application/json
+      description: Handles observation posting from post-tool-use hook. Creates session
+        on-the-fly if not found.
+      parameters:
+      - description: Observation data
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.ObservationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Post observation from hook
+      tags:
+      - Sessions
+  /api/sessions/subagent-complete:
+    post:
+      consumes:
+      - application/json
+      description: Handles subagent/Task completion notifications. Triggers immediate
+        processing of any queued observations from the subagent.
+      parameters:
+      - description: Subagent completion data
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.SubagentCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: bad request
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Notify subagent completion
+      tags:
+      - Sessions
+  /api/stats:
+    get:
+      description: Returns comprehensive worker statistics including uptime, memory,
+        database health, vector cache, graph, and rate limiter stats.
+      parameters:
+      - description: Filter stats by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: bad request
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get worker statistics
+      tags:
+      - Analytics
+  /api/stats/retrieval:
+    get:
+      description: Returns detailed retrieval statistics including hit rates and latency.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get retrieval statistics
+      tags:
+      - Analytics
+  /api/summaries:
+    get:
+      description: Returns recent session summaries with optional semantic search
+        via vector store.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      - description: Semantic search query
+        in: query
+        name: query
+        type: string
+      - description: Number of results (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.SessionSummary'
+            type: array
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List summaries
+      tags:
+      - Observations
+  /api/telemetry/similarity:
+    get:
+      description: Returns the latest similarity telemetry data. Optionally filter
+        by project to get a single snapshot.
+      parameters:
+      - description: Filter by project
+        in: query
+        name: project
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get similarity telemetry
+      tags:
+      - Analytics
+  /api/types:
+    get:
+      description: Returns the canonical list of observation and concept types. Cacheable
+        for 24 hours.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: List observation and concept types
+      tags:
+      - Observations
+  /api/update/apply:
+    post:
+      description: Downloads and applies an available update in the background.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Apply update
+      tags:
+      - Update
+  /api/update/check:
+    get:
+      description: Checks for available updates from the release server. Returns current
+        version and availability info. Handles rate limiting gracefully.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Check for updates
+      tags:
+      - Update
+  /api/update/restart:
+    post:
+      description: Restarts the worker with the new binary after an update has been
+        applied. Requires update state to be 'done'.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: no update has been applied
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Restart after update
+      tags:
+      - Update
+  /api/update/status:
+    get:
+      description: Returns the current update status (idle, downloading, done, error).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get update status
+      tags:
+      - Update
+  /api/vector/metrics:
+    get:
+      description: 'Returns vector database metrics for the dashboard including queries,
+        latency, storage, and cache stats. Returns enabled: false if vector features
+        are not available.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get vector database metrics
+      tags:
+      - Vectors
+  /api/vectors/health:
+    get:
+      description: Returns comprehensive health information about the vector database
+        including health score, warnings, cache hit rate, and rebuild status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: vector client not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get vector database health
+      tags:
+      - Vectors
+  /api/vectors/rebuild:
+    post:
+      description: Rebuilds all vectors from observations, summaries, and prompts.
+        Returns 409 if already in progress, 429 if called too frequently (5 min cooldown).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "409":
+          description: rebuild already in progress
+          schema:
+            type: string
+        "429":
+          description: rebuild requested too recently
+          schema:
+            type: string
+        "503":
+          description: vector sync not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Trigger full vector rebuild
+      tags:
+      - Vectors
+  /api/version:
+    get:
+      description: Returns the worker version string for version checking.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get worker version
+      tags:
+      - System
+  /sessions/{id}/init:
+    post:
+      consumes:
+      - application/json
+      description: Initializes an SDK agent session in the session manager. Observations
+        are processed asynchronously.
+      parameters:
+      - description: Session database ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Session start params
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.SessionStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: invalid session id
+          schema:
+            type: string
+        "404":
+          description: session not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Start SDK agent session
+      tags:
+      - Sessions
+  /sessions/{id}/summarize:
+    post:
+      consumes:
+      - application/json
+      description: Handles summarize requests from the stop hook. Queues a summarization
+        request for background processing.
+      parameters:
+      - description: Session database ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Last messages for summarization
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.SummarizeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: invalid session id
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Summarize session
+      tags:
+      - Sessions
+  /v1/models:
+    get:
+      description: Returns available embedding models in OpenAI-compatible format.
+        Compatible with LiteLLM proxy model listing.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List embedding models (OpenAI-compatible)
+      tags:
+      - System
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: X-Auth-Token
+    type: apiKey
+swagger: "2.0"
