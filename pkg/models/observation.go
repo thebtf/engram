@@ -199,6 +199,7 @@ type Observation struct {
 	FilesRead       JSONStringArray  `db:"files_read" json:"files_read,omitempty"`
 	FilesModified   JSONStringArray  `db:"files_modified" json:"files_modified,omitempty"`
 	Facts           JSONStringArray  `db:"facts" json:"facts,omitempty"`
+	Rejected        JSONStringArray  `db:"rejected" json:"rejected,omitempty"`
 	PromptNumber    sql.NullInt64    `db:"prompt_number" json:"prompt_number,omitempty"`
 	LastRetrievedAt sql.NullInt64    `db:"last_retrieved_at_epoch" json:"last_retrieved_at_epoch,omitempty"`
 	ScoreUpdatedAt  sql.NullInt64    `db:"score_updated_at_epoch" json:"score_updated_at_epoch,omitempty"`
@@ -232,7 +233,8 @@ type ParsedObservation struct {
 	Concepts                 []string
 	FilesRead                []string
 	FilesModified            []string
-	EncryptedSecret          []byte // set for credential observations
+	Rejected                 []string // Alternatives that were considered and dismissed (for decisions)
+	EncryptedSecret          []byte   // set for credential observations
 	EncryptionKeyFingerprint string // SHA-256(key)[:16] hex
 }
 
@@ -246,6 +248,7 @@ func (p *ParsedObservation) ToStoredObservation() *Observation {
 		Title:         sql.NullString{String: p.Title, Valid: p.Title != ""},
 		Subtitle:      sql.NullString{String: p.Subtitle, Valid: p.Subtitle != ""},
 		Facts:         p.Facts,
+		Rejected:      p.Rejected,
 		Narrative:     sql.NullString{String: p.Narrative, Valid: p.Narrative != ""},
 		Concepts:      p.Concepts,
 		FilesRead:     p.FilesRead,
@@ -310,6 +313,7 @@ type ObservationJSON struct {
 	Project         string           `json:"project"`
 	Concepts        []string         `json:"concepts,omitempty"`
 	Facts           []string         `json:"facts,omitempty"`
+	Rejected        []string         `json:"rejected,omitempty"`
 	FilesRead       []string         `json:"files_read,omitempty"`
 	FilesModified   []string         `json:"files_modified,omitempty"`
 	CreatedAtEpoch  int64            `json:"created_at_epoch"`
@@ -340,6 +344,7 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		MemoryType:      string(o.MemoryType),
 		SourceType:      string(o.SourceType),
 		Facts:           o.Facts,
+		Rejected:        o.Rejected,
 		Concepts:        o.Concepts,
 		FilesRead:       o.FilesRead,
 		FilesModified:   o.FilesModified,
@@ -399,6 +404,7 @@ func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, pro
 		Title:           sql.NullString{String: parsed.Title, Valid: parsed.Title != ""},
 		Subtitle:        sql.NullString{String: parsed.Subtitle, Valid: parsed.Subtitle != ""},
 		Facts:           parsed.Facts,
+		Rejected:        parsed.Rejected,
 		Narrative:       sql.NullString{String: parsed.Narrative, Valid: parsed.Narrative != ""},
 		Concepts:        parsed.Concepts,
 		FilesRead:       parsed.FilesRead,

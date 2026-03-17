@@ -59,6 +59,7 @@ type Observation struct {
 	SourceType      models.SourceType       `gorm:"type:text;index:idx_observations_source_type"`
 	CreatedAt       string                  `gorm:"not null"`
 	Facts           models.JSONStringArray  `gorm:"type:text"`
+	Rejected        models.JSONStringArray  `gorm:"type:jsonb;default:'[]'"`
 	Narrative       sql.NullString          `gorm:"type:text"`
 	Concepts        models.JSONStringArray  `gorm:"type:text"`
 	FilesRead       models.JSONStringArray  `gorm:"type:text"`

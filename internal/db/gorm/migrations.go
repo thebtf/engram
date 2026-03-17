@@ -1167,6 +1167,18 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`DROP TABLE IF EXISTS search_misses`).Error
 		},
 	},
+	// Migration 034: Add rejected[] JSONB column to observations for structured decision schema.
+	// Stores alternatives that were considered and dismissed, enabling reliable contradiction detection
+	// without fragile narrative-text parsing.
+	{
+		ID: "034_decision_rejected_field",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS rejected JSONB DEFAULT '[]'`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS rejected`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

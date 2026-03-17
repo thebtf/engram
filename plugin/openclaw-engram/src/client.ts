@@ -127,7 +127,7 @@ export class EngramRestClient {
     query: string;
     project: string;
     limit?: number;
-  }): Promise<{ observations: Array<{ title?: string; narrative?: string; concepts?: string[] }> } | null> {
+  }): Promise<{ observations: Array<{ title?: string; narrative?: string; concepts?: string[]; rejected?: string[] }> } | null> {
     return this.post('/api/decisions/search', body);
   }
 

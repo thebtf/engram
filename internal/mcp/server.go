@@ -1147,6 +1147,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"content":    map[string]any{"type": "string", "description": "The content/knowledge to remember"},
 						"title":      map[string]any{"type": "string", "description": "Short title for the memory"},
 						"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
+						"rejected":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
 						"type":       map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
 						"importance": map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
 						"scope":      map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Visibility scope"},

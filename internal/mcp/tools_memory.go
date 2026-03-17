@@ -30,6 +30,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 
 	var params struct {
 		Tags       []string
+		Rejected   []string
 		Content    string
 		Title      string
 		Type       string
@@ -38,6 +39,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		Importance *float64
 	}
 	params.Tags = coerceStringSlice(m["tags"])
+	params.Rejected = coerceStringSlice(m["rejected"])
 	params.Content = coerceString(m["content"], "")
 	params.Title = coerceString(m["title"], "")
 	params.Type = coerceString(m["type"], "")
@@ -157,6 +159,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		Title:      title,
 		Narrative:  params.Content,
 		Concepts:   concepts,
+		Rejected:   params.Rejected,
 		Scope:      scope,
 	}
 

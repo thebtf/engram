@@ -1231,6 +1231,7 @@ func (m *Manager) observationToResult(obs *models.Observation, format string) Se
                         "scope":            string(obs.Scope),
                         "memory_type":      string(obs.MemoryType),
                         "facts":            obs.Facts,
+                        "rejected":         obs.Rejected,
                         "importance_score": obs.ImportanceScore,
                 },
         }
