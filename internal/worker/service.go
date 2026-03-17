@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -509,6 +510,17 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	// Setup middleware and routes (health endpoint works immediately)
 	svc.setupMiddleware()
 	svc.setupRoutes()
+
+	// Auth startup gate (ADR-0001): validate before starting heavy initialization.
+	// Fail fast here so initializeAsync never runs without a token unless explicitly disabled.
+	{
+		token := config.GetWorkerToken()
+		authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
+		if token == "" && !authDisabled {
+			cancel()
+			return nil, fmt.Errorf("ENGRAM_API_TOKEN is not set — set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production)")
+		}
+	}
 
 	// Start async initialization
 	go svc.initializeAsync()
@@ -1954,6 +1966,33 @@ func (s *Service) invalidateAllObsCountCache() {
 func (s *Service) Start() error {
 	port := config.GetWorkerPort()
 
+	// Auth startup gate (ADR-0001): refuse to start without token unless explicitly disabled
+	token := config.GetWorkerToken()
+	authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
+
+	if token == "" && !authDisabled {
+		log.Fatal().Msg("ENGRAM_API_TOKEN is not set. Set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production).")
+	}
+
+	if authDisabled {
+		log.Warn().Msg("auth: authentication is explicitly disabled via ENGRAM_AUTH_DISABLED=true — all endpoints are unauthenticated")
+		// Start periodic warning goroutine tracked by WaitGroup for graceful shutdown.
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-s.ctx.Done():
+					return
+				case <-ticker.C:
+					log.Warn().Msg("auth: reminder — authentication is disabled, all endpoints are unauthenticated")
+				}
+			}
+		}()
+	}
+
 	host := config.GetWorkerHost()
 	s.server = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", host, port),
@@ -2002,11 +2041,6 @@ func (s *Service) Start() error {
 		Int("pid", getPID()).
 		Bool("restart_mode", isRestart).
 		Msg("Worker HTTP server started (initialization in progress)")
-
-	// Warn if auth is disabled and server is reachable beyond loopback
-	if !s.tokenAuth.IsEnabled() && host != "127.0.0.1" && host != "localhost" {
-		log.Warn().Str("bind", fmt.Sprintf("%s:%d", host, port)).Msg("auth: server listening without authentication on non-loopback address — set ENGRAM_API_TOKEN to secure")
-	}
 
 	return nil
 }

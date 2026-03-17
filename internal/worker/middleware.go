@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -102,20 +103,24 @@ type TokenAuth struct {
 }
 
 // NewTokenAuth creates a new TokenAuth using a provided token.
-// If token is empty, authentication is skipped (useful for development).
+// If token is empty and ENGRAM_AUTH_DISABLED is set, authentication is skipped.
+// Otherwise, authentication will be enforced at startup (see Service.Start).
 func NewTokenAuth(token string) (*TokenAuth, error) {
+	authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
+
 	ta := &TokenAuth{
-		enabled: token != "",
+		enabled: token != "" && !authDisabled,
 		token:   token,
 		ExemptPaths: map[string]bool{
-			"/health":     true,
-			"/api/health": true,
-			"/api/ready":  true,
+			"/health":      true,
+			"/api/health":  true,
+			"/api/ready":   true,
+			"/api/version": true,
 		},
 	}
 
-	if token == "" {
-		log.Warn().Msg("auth: ENGRAM_API_TOKEN not set — all endpoints are unauthenticated")
+	if token == "" && !authDisabled {
+		log.Warn().Msg("auth: ENGRAM_API_TOKEN not set and ENGRAM_AUTH_DISABLED not set — authentication will be enforced at startup")
 	}
 
 	return ta, nil
