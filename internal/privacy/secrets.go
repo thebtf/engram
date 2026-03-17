@@ -55,6 +55,18 @@ type DetectedSecret struct {
 	Value string // the raw secret value
 }
 
+// deriveHashPrefix computes the 8-character SHA-256 hex prefix for a secret value.
+// Both ExtractSecrets and RedactSecrets use the same derivation so that hash
+// prefixes are consistent and allow cross-referencing between the two outputs.
+func deriveHashPrefix(match string) string {
+	value := extractSecretValue(match)
+	if value == "" {
+		value = match
+	}
+	hash := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(hash[:])[:8]
+}
+
 // ExtractSecrets scans text for secret patterns and returns all unique matches.
 // Each secret gets a deterministic name based on the SHA-256 hash of its value,
 // ensuring idempotent vault storage (same secret = same name = one entry).
@@ -69,19 +81,19 @@ func ExtractSecrets(text string) []DetectedSecret {
 	for _, pattern := range secretPatterns {
 		matches := pattern.FindAllString(text, -1)
 		for _, match := range matches {
-			// Extract just the secret value (strip key name prefix).
-			value := extractSecretValue(match)
-			if value == "" {
-				value = match
-			}
-
-			hash := sha256.Sum256([]byte(value))
-			name := "auto:" + hex.EncodeToString(hash[:])
+			hashPrefix := deriveHashPrefix(match)
+			name := "auto:" + hashPrefix
 
 			if _, ok := seen[name]; ok {
 				continue
 			}
 			seen[name] = struct{}{}
+
+			// Extract just the secret value (strip key name prefix) for vault storage.
+			value := extractSecretValue(match)
+			if value == "" {
+				value = match
+			}
 			results = append(results, DetectedSecret{Name: name, Value: value})
 		}
 	}
@@ -119,8 +131,10 @@ func ContainsSecrets(text string) bool {
 	return false
 }
 
-// RedactSecrets replaces detected secrets with a redaction marker.
-// This allows the text to be stored while protecting sensitive data.
+// RedactSecrets replaces detected secrets with a redaction marker that includes
+// a SHA-256 hash prefix for cross-referencing with ExtractSecrets output.
+// The hash allows correlating redacted values with their vault entries without
+// exposing the secret itself.
 func RedactSecrets(text string) string {
 	if text == "" {
 		return text
@@ -129,18 +143,34 @@ func RedactSecrets(text string) string {
 	result := text
 	for _, pattern := range secretPatterns {
 		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
-			// Preserve the key name, redact only the value
-			if idx := strings.Index(match, "="); idx != -1 {
-				return match[:idx+1] + "[REDACTED]"
+			hashPrefix := deriveHashPrefix(match)
+			redacted := "[REDACTED:" + hashPrefix + "]"
+
+			// Preserve the key name by cutting at the earliest key/value separator.
+			// Checking "=" before ":" is wrong when the value itself contains "=" (e.g.
+			// password: "a=b"), which would expose part of the secret. Instead, pick the
+			// separator that appears first in the string.
+			idxEq := strings.Index(match, "=")
+			idxColon := strings.Index(match, ":")
+			var sepIdx int
+			switch {
+			case idxEq == -1:
+				sepIdx = idxColon
+			case idxColon == -1:
+				sepIdx = idxEq
+			case idxEq < idxColon:
+				sepIdx = idxEq
+			default:
+				sepIdx = idxColon
 			}
-			if idx := strings.Index(match, ":"); idx != -1 {
-				return match[:idx+1] + "[REDACTED]"
+			if sepIdx != -1 {
+				return match[:sepIdx+1] + redacted
 			}
-			// For standalone secrets, show just the prefix
+			// For standalone secrets (like sk-xxx, ghp_xxx), show prefix + hash
 			if len(match) > 8 {
-				return match[:4] + "...[REDACTED]"
+				return match[:4] + "..." + redacted
 			}
-			return "[REDACTED]"
+			return redacted
 		})
 	}
 	return result

@@ -125,14 +125,14 @@ func TestRedactSecrets(t *testing.T) {
 			expected: "This is safe text",
 		},
 		{
-			name:     "API key gets redacted",
+			name:     "API key gets redacted with hash",
 			input:    "api_key=abc123def456ghi789jkl012mno345pqr678",
-			expected: "api_key=[REDACTED]",
+			expected: "api_key=[REDACTED:586f23e7]",
 		},
 		{
-			name:     "OpenAI key gets redacted",
+			name:     "OpenAI key gets redacted with hash",
 			input:    "The key is sk-abc123def456ghi789jkl012mno345pqr678",
-			expected: "The key is sk-a...[REDACTED]",
+			expected: "The key is sk-a...[REDACTED:c99e03e4]",
 		},
 	}
 
@@ -146,6 +146,40 @@ func TestRedactSecrets(t *testing.T) {
 	}
 }
 
+
+func TestRedactSecretsHashMatchesExtract(t *testing.T) {
+	inputs := []string{
+		"api_key=abc123def456ghi789jkl012mno345pqr678",
+		"sk-abc123def456ghi789jkl012mno345pqr678",
+		"ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+		`password="super_secret_password_123"`,
+		`secret_key="my_super_secret_token_here_now"`,
+	}
+
+	for _, input := range inputs {
+		name := input
+		if len(name) > 20 {
+			name = name[:20]
+		}
+		t.Run(name, func(t *testing.T) {
+			extracted := ExtractSecrets(input)
+			if len(extracted) == 0 {
+				t.Fatalf("ExtractSecrets(%q) returned no secrets", input)
+			}
+			redacted := RedactSecrets(input)
+
+			// The hash in [REDACTED:{hash}] must match the auto:{hash} name from ExtractSecrets
+			for _, secret := range extracted {
+				hashFromName := strings.TrimPrefix(secret.Name, "auto:")
+				marker := "[REDACTED:" + hashFromName + "]"
+				if !strings.Contains(redacted, marker) {
+					t.Errorf("redacted output %q does not contain expected marker %q (from ExtractSecrets name %q)",
+						redacted, marker, secret.Name)
+				}
+			}
+		})
+	}
+}
 
 func TestExtractSecrets(t *testing.T) {
 	tests := []struct {
