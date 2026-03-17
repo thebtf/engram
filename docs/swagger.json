@@ -1,0 +1,19 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Persistent shared memory infrastructure for AI agents. Stores observations in PostgreSQL + pgvector, exposes MCP tools via HTTP/SSE.",
+        "title": "Engram API",
+        "contact": {},
+        "version": "1.0.0"
+    },
+    "host": "localhost:37777",
+    "basePath": "/",
+    "paths": {},
+    "securityDefinitions": {
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "name": "X-Auth-Token",
+            "in": "header"
+        }
+    }
+}

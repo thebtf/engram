@@ -42,6 +42,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // Service configuration constants
@@ -1564,6 +1565,10 @@ func (s *Service) setupRoutes() {
 
 	// Readiness check - returns 200 only when fully initialized
 	s.router.Get("/api/ready", s.handleReady)
+
+	// OpenAPI docs (public, no auth — read-only spec)
+	s.router.Get("/api/docs", http.RedirectHandler("/api/docs/index.html", http.StatusMovedPermanently).ServeHTTP)
+	s.router.Get("/api/docs/*", httpSwagger.WrapHandler)
 
 	// Admin/management routes — authentication applied globally via setupMiddleware.
 	// Grouped for logical organization; no additional middleware needed.

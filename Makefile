@@ -39,6 +39,7 @@ dashboard:
 worker:
 	@echo "Building worker..."
 	@mkdir -p $(BUILD_DIR)
+	swag init -g cmd/worker/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
 	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/worker
 
 # Build MCP server

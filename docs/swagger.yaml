@@ -1,0 +1,15 @@
+basePath: /
+host: localhost:37777
+info:
+  contact: {}
+  description: Persistent shared memory infrastructure for AI agents. Stores observations
+    in PostgreSQL + pgvector, exposes MCP tools via HTTP/SSE.
+  title: Engram API
+  version: 1.0.0
+paths: {}
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: X-Auth-Token
+    type: apiKey
+swagger: "2.0"

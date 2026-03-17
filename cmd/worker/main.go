@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/thebtf/engram/docs"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/worker"
@@ -17,6 +18,14 @@ import (
 
 var Version = "dev"
 
+// @title Engram API
+// @version 1.0.0
+// @description Persistent shared memory infrastructure for AI agents. Stores observations in PostgreSQL + pgvector, exposes MCP tools via HTTP/SSE.
+// @host localhost:37777
+// @BasePath /
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name X-Auth-Token
 func main() {
 	// Setup logging with ring buffer for /api/logs endpoint
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
