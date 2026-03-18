@@ -757,6 +757,9 @@ func (s *Service) initializeAsync() {
 		s.tokenAuth.SetTokenStore(tokenStore)
 	}
 
+	// Start buffered token stats flusher (batches DB writes every 5s)
+	s.startTokenStatsFlusher(s.ctx)
+
 	// Initialize similarity telemetry (optional — requires vector client)
 	if vectorClient != nil && store != nil && observationStore != nil {
 		simTelemetry := telemetry.NewSimilarityTelemetry(store, observationStore, vectorClient, log.Logger)
