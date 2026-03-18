@@ -359,3 +359,21 @@ type Project struct {
 }
 
 func (Project) TableName() string { return "projects" }
+
+// APIToken represents a client API token for agent authentication.
+// Tokens are stored as bcrypt hashes with a prefix for fast lookup.
+type APIToken struct {
+	ID           string     `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	Name         string     `gorm:"type:text;not null;uniqueIndex"`
+	TokenHash    string     `gorm:"type:text;not null"`
+	TokenPrefix  string     `gorm:"type:text;not null;index"`
+	Scope        string     `gorm:"type:text;not null;default:read-write"`
+	CreatedAt    time.Time  `gorm:"not null;default:now()"`
+	LastUsedAt   *time.Time `gorm:"column:last_used_at"`
+	RequestCount int64      `gorm:"not null;default:0"`
+	ErrorCount   int64      `gorm:"not null;default:0"`
+	Revoked      bool       `gorm:"not null;default:false"`
+	RevokedAt    *time.Time `gorm:"column:revoked_at"`
+}
+
+func (APIToken) TableName() string { return "api_tokens" }
