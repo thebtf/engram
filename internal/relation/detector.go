@@ -8,7 +8,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -42,25 +41,23 @@ type detectRequest struct {
 
 // Detector performs async relation and conflict detection after observation creation.
 type Detector struct {
-	embedSvc         *embedding.Service
 	vectorClient     vector.Client
 	relationStore    *gorm.RelationStore
 	conflictStore    *gorm.ConflictStore
 	observationStore *gorm.ObservationStore
+	parentCtx        context.Context
 	queue            chan detectRequest
 }
 
 // NewDetector creates a new relation detector.
 // All parameters are required; passing nil for any will cause panics at detection time.
 func NewDetector(
-	embedSvc *embedding.Service,
 	vectorClient vector.Client,
 	relationStore *gorm.RelationStore,
 	conflictStore *gorm.ConflictStore,
 	observationStore *gorm.ObservationStore,
 ) *Detector {
 	return &Detector{
-		embedSvc:         embedSvc,
 		vectorClient:     vectorClient,
 		relationStore:    relationStore,
 		conflictStore:    conflictStore,
@@ -72,6 +69,7 @@ func NewDetector(
 // Start launches the background goroutine that processes detection requests.
 // It blocks until ctx is cancelled; callers should run this in a goroutine.
 func (d *Detector) Start(ctx context.Context) {
+	d.parentCtx = ctx
 	log.Info().Msg("Relation detector started")
 	for {
 		select {
@@ -108,7 +106,7 @@ func (d *Detector) Enqueue(obsID int64, project string) {
 
 // processRequest runs detection for a single request with a timeout.
 func (d *Detector) processRequest(req detectRequest) {
-	ctx, cancel := context.WithTimeout(context.Background(), detectionTimeout)
+	ctx, cancel := context.WithTimeout(d.parentCtx, detectionTimeout)
 	defer cancel()
 
 	if err := d.Detect(ctx, req.ObsID, req.Project); err != nil {
@@ -312,7 +310,7 @@ func classifyRelation(newObs, candidate *models.Observation, similarity float64)
 	// contradicts: decisions with different conclusions on same topic
 	if newObs.Type == models.ObsTypeDecision && candidate.Type == models.ObsTypeDecision && similarity > contradictSimilarityThreshold {
 		// Different titles suggest different conclusions on same topic
-		if newObs.Title.String != candidate.Title.String {
+		if newObs.Title.Valid && candidate.Title.Valid && newObs.Title.String != candidate.Title.String {
 			return models.RelationContradicts, similarity * 0.8
 		}
 	}
