@@ -40,6 +40,9 @@ type Client interface {
 	// Backends without a local cache return a zero-value CacheStatsSnapshot.
 	GetCacheStats() CacheStatsSnapshot
 
+	// GetMetrics returns real query instrumentation metrics (count, latency percentiles, doc count).
+	GetMetrics(ctx context.Context) VectorMetricsSnapshot
+
 	// DeleteByObservationID removes all vectors associated with an observation ID.
 	DeleteByObservationID(ctx context.Context, obsID int64) error
 }

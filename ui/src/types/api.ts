@@ -84,37 +84,12 @@ export interface GraphStats {
 
 export interface VectorMetrics {
   enabled: boolean
-  queries: {
-    total: number
-    hubOnly: number
-    hybrid: number
-    onDemand: number
-    graph: number
-  }
-  latency: {
-    avg: string
-    p50: string
-    p95: string
-    p99: string
-    avgHub: string
-    avgRecompute: string
-  }
-  storage: {
-    totalDocuments: number
-    hubDocuments: number
-    storedEmbeddings: number
-    savingsPercent: number
-    recomputedTotal: number
-  }
-  cache: {
-    hits: number
-    misses: number
-    hitRate: number
-  }
-  graph: {
-    traversals: number
-    avgDepth: number
-  }
+  query_count: number
+  avg_latency_ms: number
+  p50_latency_ms: number
+  p95_latency_ms: number
+  p99_latency_ms: number
+  total_documents: number
   uptime: string
   message?: string
 }
