@@ -110,7 +110,7 @@ var readOnlyAllowedPosts = map[string]bool{
 // TokenAuth provides token-based authentication for the worker HTTP API.
 // Supports three auth methods:
 //  1. Master token (ENGRAM_API_TOKEN env var) via X-Auth-Token or Authorization: Bearer header -> admin
-//  2. Client API tokens (eng_* prefix, bcrypt-hashed in DB) via same headers -> scoped access
+//  2. Client API tokens (engram_* prefix, bcrypt-hashed in DB) via same headers -> scoped access
 //  3. HMAC-signed session cookie (engram_session) -> admin (dashboard)
 type TokenAuth struct {
 	ExemptPaths map[string]bool
@@ -236,7 +236,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			}
 
 			// 1b. Check if it's a client token (eng_* prefix)
-			if strings.HasPrefix(providedToken, "eng_") && store != nil {
+			if strings.HasPrefix(providedToken, "engram_") && store != nil {
 				if ta.authenticateClientToken(w, r, next, providedToken, store) {
 					return
 				}
@@ -271,12 +271,12 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 // authenticateClientToken validates a client API token and enforces scope.
 // Returns true if the request was handled (either forwarded or rejected).
 func (ta *TokenAuth) authenticateClientToken(w http.ResponseWriter, r *http.Request, next http.Handler, rawToken string, store *gormdb.TokenStore) bool {
-	// Extract prefix: chars 4-12 (first 8 hex chars after "eng_")
-	if len(rawToken) < 12 {
+	// Extract prefix: chars 7-15 (first 8 hex chars after "engram_")
+	if len(rawToken) < 15 {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return true
 	}
-	prefix := rawToken[4:12]
+	prefix := rawToken[7:15]
 
 	candidates, err := store.FindByPrefix(r.Context(), prefix)
 	if err != nil {
