@@ -1,4 +1,4 @@
-import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics } from '@/types'
+import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics, ContextSearchResponse, DecisionSearchResponse } from '@/types'
 
 const API_BASE = '/api'
 const DEFAULT_TIMEOUT = 10000 // 10 seconds
@@ -296,4 +296,138 @@ export async function fetchGraphStats(signal?: AbortSignal): Promise<GraphStats>
 
 export async function fetchVectorMetrics(signal?: AbortSignal): Promise<VectorMetrics> {
   return fetchWithRetry<VectorMetrics>(`${API_BASE}/vector/metrics`, { signal })
+}
+
+// POST JSON helper with retry logic
+async function postJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
+  const { timeout = DEFAULT_TIMEOUT, signal, retries = MAX_RETRIES } = options
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const timeoutController = new AbortController()
+    const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+    const combinedSignal = signal
+      ? combineAbortSignals(signal, timeoutController.signal)
+      : timeoutController.signal
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: combinedSignal,
+      })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      return response.json()
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+      if (lastError.name === 'AbortError') {
+        if (signal?.aborted) throw lastError
+        throw new Error('Request timed out')
+      }
+      if (lastError.message.includes('HTTP 4')) throw lastError
+      if (attempt < retries - 1) {
+        const delay = Math.min(RETRY_DELAY * Math.pow(2, attempt), 5000)
+        await new Promise(r => setTimeout(r, delay))
+      }
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+  throw lastError!
+}
+
+// PUT JSON helper (single attempt, no retry for mutations)
+async function putJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
+  const { timeout = DEFAULT_TIMEOUT, signal } = options
+  const timeoutController = new AbortController()
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+  const combinedSignal = signal
+    ? combineAbortSignals(signal, timeoutController.signal)
+    : timeoutController.signal
+
+  try {
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: combinedSignal,
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+    return response.json()
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      if (signal?.aborted) throw err
+      throw new Error('Request timed out')
+    }
+    throw err
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+// Observation CRUD
+export async function fetchObservationById(id: number, signal?: AbortSignal): Promise<Observation> {
+  return fetchWithRetry<Observation>(`${API_BASE}/observations/${id}`, { signal })
+}
+
+export async function fetchObservationsPaginated(
+  params: { limit?: number; offset?: number; project?: string },
+  signal?: AbortSignal
+): Promise<ObservationsResponse> {
+  const searchParams = new URLSearchParams()
+  if (params.limit) searchParams.append('limit', String(params.limit))
+  if (params.offset) searchParams.append('offset', String(params.offset))
+  if (params.project) searchParams.append('project', params.project)
+  return fetchWithRetry<ObservationsResponse>(`${API_BASE}/observations?${searchParams}`, { signal })
+}
+
+export async function updateObservation(
+  id: number,
+  updates: {
+    title?: string
+    subtitle?: string
+    narrative?: string
+    scope?: string
+    facts?: string[]
+    concepts?: string[]
+  },
+  signal?: AbortSignal
+): Promise<{ observation: Observation; message: string }> {
+  return putJson(`${API_BASE}/observations/${id}`, updates, { signal })
+}
+
+export async function archiveObservations(
+  ids: number[],
+  reason?: string,
+  signal?: AbortSignal
+): Promise<{ archived: number[]; failed: number[]; errors?: string[] }> {
+  return postJson(`${API_BASE}/observations/archive`, { ids, reason }, { signal })
+}
+
+export async function submitObservationFeedback(
+  id: number,
+  feedback: number,
+  signal?: AbortSignal
+): Promise<{ score?: number }> {
+  return postJson(`${API_BASE}/observations/${id}/feedback`, { feedback }, { signal })
+}
+
+// Search
+export async function searchObservations(
+  params: { query: string; project: string; limit?: number },
+  signal?: AbortSignal
+): Promise<ContextSearchResponse> {
+  return postJson(`${API_BASE}/context/search`, params, { signal })
+}
+
+export async function searchDecisions(
+  params: { query: string; project: string; limit?: number },
+  signal?: AbortSignal
+): Promise<DecisionSearchResponse> {
+  return postJson(`${API_BASE}/decisions/search`, params, { signal })
 }

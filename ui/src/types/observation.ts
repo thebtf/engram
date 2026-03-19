@@ -36,6 +36,7 @@ export interface Observation {
   retrieval_count: number
   last_retrieved_at_epoch?: number
   score_updated_at_epoch?: number
+  rejected?: string[]
 }
 
 export const OBSERVATION_TYPES: ObservationType[] = ['bugfix', 'feature', 'refactor', 'discovery', 'decision', 'change']
