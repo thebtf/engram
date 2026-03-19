@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { useStats, useTimeline, useHealth } from '@/composables'
+import { useStats, useTimeline, useHealth, useSSE } from '@/composables'
 import StatsCards from '@/components/StatsCards.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import FilterTabs from '@/components/FilterTabs.vue'
 import Timeline from '@/components/Timeline.vue'
-import { useSSE } from '@/composables'
 
 const { queueDepth } = useSSE()
 const { health } = useHealth()

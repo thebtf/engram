@@ -431,3 +431,247 @@ export async function searchDecisions(
 ): Promise<DecisionSearchResponse> {
   return postJson(`${API_BASE}/decisions/search`, params, { signal })
 }
+
+// DELETE helper (single attempt, no retry for mutations)
+async function deleteJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
+  const { timeout = DEFAULT_TIMEOUT, signal } = options
+  const timeoutController = new AbortController()
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+  const combinedSignal = signal
+    ? combineAbortSignals(signal, timeoutController.signal)
+    : timeoutController.signal
+
+  try {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      signal: combinedSignal,
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+    const text = await response.text()
+    return text ? JSON.parse(text) : ({} as T)
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      if (signal?.aborted) throw err
+      throw new Error('Request timed out')
+    }
+    throw err
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+// ============================================================
+// Vault API
+// ============================================================
+
+export interface VaultCredential {
+  name: string
+  scope: string
+  created_at: string
+  updated_at?: string
+}
+
+export interface VaultStatus {
+  encrypted: boolean
+  key_fingerprint?: string
+  credential_count: number
+}
+
+export async function fetchVaultStatus(signal?: AbortSignal): Promise<VaultStatus> {
+  return fetchWithRetry<VaultStatus>(`${API_BASE}/vault/status`, { signal })
+}
+
+export async function fetchCredentials(signal?: AbortSignal): Promise<VaultCredential[]> {
+  return fetchWithRetry<VaultCredential[]>(`${API_BASE}/vault/credentials`, { signal })
+}
+
+export async function fetchCredential(name: string, signal?: AbortSignal): Promise<{ name: string; value: string }> {
+  return fetchWithRetry<{ name: string; value: string }>(`${API_BASE}/vault/credentials/${encodeURIComponent(name)}`, { signal })
+}
+
+export async function deleteCredential(name: string, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/vault/credentials/${encodeURIComponent(name)}`, { signal })
+}
+
+// ============================================================
+// Tokens API
+// ============================================================
+
+export interface ApiToken {
+  id: string
+  name: string
+  token_prefix: string
+  scope: string
+  created_at: string
+  last_used_at?: string
+  request_count: number
+  error_count?: number
+  revoked: boolean
+  revoked_at?: string
+}
+
+export interface CreateTokenResponse {
+  token: string
+  name: string
+  prefix: string
+}
+
+export async function fetchTokens(signal?: AbortSignal): Promise<ApiToken[]> {
+  const response = await fetchWithRetry<{ tokens: ApiToken[] }>(`${API_BASE}/auth/tokens`, { signal })
+  return response.tokens
+}
+
+export async function createToken(
+  params: { name: string; scope: string },
+  signal?: AbortSignal
+): Promise<CreateTokenResponse> {
+  return postJson<CreateTokenResponse>(`${API_BASE}/auth/tokens`, params, { signal })
+}
+
+export async function revokeToken(id: string, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/auth/tokens/${encodeURIComponent(id)}`, { signal })
+}
+
+// ============================================================
+// Analytics API
+// ============================================================
+
+export interface SearchMiss {
+  query: string
+  project?: string
+  frequency: number
+  last_seen: string
+}
+
+export async function fetchSearchMisses(signal?: AbortSignal): Promise<SearchMiss[]> {
+  return postJson<SearchMiss[]>(`${API_BASE}/analytics/search-misses`, {}, { signal })
+}
+
+export interface RetrievalStatsResponse {
+  total_requests: number
+  observations_served: number
+  search_requests: number
+  context_injections: number
+}
+
+export async function fetchRetrievalStats(project?: string, signal?: AbortSignal): Promise<RetrievalStatsResponse> {
+  const params = new URLSearchParams()
+  if (project) params.append('project', project)
+  const query = params.toString()
+  return fetchWithRetry<RetrievalStatsResponse>(`${API_BASE}/stats/retrieval${query ? '?' + query : ''}`, { signal })
+}
+
+// ============================================================
+// Patterns API
+// ============================================================
+
+export interface Pattern {
+  id: number
+  name: string
+  type: string
+  occurrences: number
+  confidence: number
+  created_at: string
+}
+
+export interface PatternInsight {
+  id: number
+  insight: string
+  examples?: string[]
+}
+
+export async function fetchPatterns(signal?: AbortSignal): Promise<Pattern[]> {
+  return fetchWithRetry<Pattern[]>(`${API_BASE}/patterns`, { signal })
+}
+
+export async function fetchPatternInsight(id: number, signal?: AbortSignal): Promise<PatternInsight> {
+  return fetchWithRetry<PatternInsight>(`${API_BASE}/patterns/${id}/insight`, { signal })
+}
+
+export async function deprecatePattern(id: number, signal?: AbortSignal): Promise<void> {
+  await postJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}/deprecate`, {}, { signal })
+}
+
+export async function deletePattern(id: number, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}`, { signal })
+}
+
+export async function mergePatterns(ids: number[], signal?: AbortSignal): Promise<void> {
+  await postJson<Record<string, unknown>>(`${API_BASE}/patterns/merge`, { ids }, { signal })
+}
+
+// ============================================================
+// Sessions Index API
+// ============================================================
+
+export interface IndexedSession {
+  id: string
+  workstation: string
+  project: string
+  date: string
+  message_count: number
+  created_at: string
+}
+
+export async function fetchIndexedSessions(
+  params?: { project?: string; from?: string; to?: string },
+  signal?: AbortSignal
+): Promise<IndexedSession[]> {
+  const searchParams = new URLSearchParams()
+  if (params?.project) searchParams.append('project', params.project)
+  if (params?.from) searchParams.append('from', params.from)
+  if (params?.to) searchParams.append('to', params.to)
+  const query = searchParams.toString()
+  return fetchWithRetry<IndexedSession[]>(`${API_BASE}/sessions-index${query ? '?' + query : ''}`, { signal })
+}
+
+export async function searchIndexedSessions(
+  query: string,
+  signal?: AbortSignal
+): Promise<IndexedSession[]> {
+  return fetchWithRetry<IndexedSession[]>(`${API_BASE}/sessions-index/search?query=${encodeURIComponent(query)}`, { signal })
+}
+
+// ============================================================
+// System / Maintenance API
+// ============================================================
+
+export async function triggerConsolidation(signal?: AbortSignal): Promise<{ message: string }> {
+  return postJson<{ message: string }>(`${API_BASE}/maintenance/consolidate`, {}, { signal })
+}
+
+export async function triggerMaintenance(signal?: AbortSignal): Promise<{ message: string }> {
+  return postJson<{ message: string }>(`${API_BASE}/maintenance/run`, {}, { signal })
+}
+
+export interface MaintenanceStats {
+  last_consolidation?: string
+  last_maintenance?: string
+  observations_consolidated?: number
+  stale_removed?: number
+}
+
+export async function fetchMaintenanceStats(signal?: AbortSignal): Promise<MaintenanceStats> {
+  return fetchWithRetry<MaintenanceStats>(`${API_BASE}/maintenance/stats`, { signal })
+}
+
+export async function checkForUpdate(signal?: AbortSignal): Promise<{
+  available: boolean
+  current_version: string
+  latest_version: string
+  release_notes?: string
+}> {
+  return fetchWithRetry(`${API_BASE}/update/check`, { signal })
+}
+
+// Observation tag management
+export async function updateObservationTags(
+  id: number,
+  action: 'add' | 'remove',
+  tag: string,
+  signal?: AbortSignal
+): Promise<{ concepts: string[] }> {
+  return postJson<{ concepts: string[] }>(`${API_BASE}/observations/${id}/tags`, { action, tags: [tag] }, { signal })
+}

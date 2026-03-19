@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
 import type { SearchResultObservation, ObservationType } from '@/types'
 import { TYPE_CONFIG } from '@/types/observation'
 import { CONCEPT_CONFIG, type ConceptType } from '@/types/observation'
@@ -14,12 +13,6 @@ defineProps<{
   decisionMode?: boolean
   intent?: string
 }>()
-
-const router = useRouter()
-
-function navigateToDetail(id: number) {
-  router.push({ name: 'observation-detail', params: { id } })
-}
 
 function getTypeConfig(type: string) {
   return TYPE_CONFIG[type as ObservationType] || TYPE_CONFIG.change
@@ -72,11 +65,11 @@ function formatSimilarity(score?: number): string {
     </p>
 
     <!-- Result cards -->
-    <div
+    <RouterLink
       v-for="obs in results"
       :key="obs.id"
-      @click="navigateToDetail(obs.id)"
-      class="group p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50 hover:border-claude-500/30 cursor-pointer transition-all"
+      :to="{ name: 'observation-detail', params: { id: obs.id } }"
+      class="group block p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50 hover:border-claude-500/30 cursor-pointer transition-all"
     >
       <div class="flex items-start gap-3">
         <!-- Type icon -->
@@ -158,6 +151,6 @@ function formatSimilarity(score?: number): string {
           </div>
         </div>
       </div>
-    </div>
+    </RouterLink>
   </div>
 </template>

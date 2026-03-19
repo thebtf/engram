@@ -2,6 +2,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -85,7 +86,9 @@ func (s *Service) handleRunMaintenance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.maintenanceService.RunNow(r.Context())
+	// Use background context: the request context is cancelled after the
+	// response is sent, which would prematurely abort the background job.
+	s.maintenanceService.RunNow(context.Background())
 
 	writeJSON(w, map[string]any{
 		"status":  "triggered",

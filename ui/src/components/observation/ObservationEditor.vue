@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import type { Observation, ObservationType, ObservationScope } from '@/types'
-import { TYPE_CONFIG, OBSERVATION_TYPES } from '@/types/observation'
+import type { Observation, ObservationScope } from '@/types'
 
 const props = defineProps<{
   observation: Observation
@@ -44,7 +43,7 @@ const hasChanges = computed(() => {
     subtitle.value !== (props.observation.subtitle || '') ||
     narrative.value !== (props.observation.narrative || '') ||
     scope.value !== (props.observation.scope || 'project') ||
-    JSON.stringify(concepts.value.sort()) !== JSON.stringify([...(props.observation.concepts || [])].sort())
+    JSON.stringify([...concepts.value].sort()) !== JSON.stringify([...(props.observation.concepts || [])].sort())
 })
 
 function handleSave() {
@@ -53,7 +52,7 @@ function handleSave() {
   if (subtitle.value !== (props.observation.subtitle || '')) updates.subtitle = subtitle.value
   if (narrative.value !== (props.observation.narrative || '')) updates.narrative = narrative.value
   if (scope.value !== (props.observation.scope || 'project')) updates.scope = scope.value
-  if (JSON.stringify(concepts.value.sort()) !== JSON.stringify([...(props.observation.concepts || [])].sort())) {
+  if (JSON.stringify([...concepts.value].sort()) !== JSON.stringify([...(props.observation.concepts || [])].sort())) {
     updates.concepts = concepts.value
   }
   emit('save', updates)

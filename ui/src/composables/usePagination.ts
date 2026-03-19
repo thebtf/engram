@@ -56,7 +56,9 @@ export function usePagination<T>(options: UsePaginationOptions<T>) {
   }
 
   function setOffset(newOffset: number) {
-    offset.value = newOffset
+    // Clamp to valid range: [0, max reachable offset].
+    const maxOffset = total.value > 0 ? Math.max(0, total.value - pageSize) : 0
+    offset.value = Math.min(Math.max(0, newOffset), maxOffset)
     fetchPage()
   }
 

@@ -35,26 +35,27 @@ func (s *Service) startTokenStatsFlusher(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				// Final flush on shutdown
-				s.flushTokenStats(pending)
+				// Final flush on shutdown: use a bounded timeout so the goroutine
+				// does not block indefinitely after cancellation.
+				flushCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				s.flushTokenStats(flushCtx, pending)
+				cancel()
 				return
 
 			case tokenID := <-ch:
 				pending[tokenID]++
 
 			case <-ticker.C:
-				s.flushTokenStats(pending)
-				// Reset the map
-				for k := range pending {
-					delete(pending, k)
-				}
+				s.flushTokenStats(ctx, pending)
+				// Reset map by allocating a fresh one (cheaper than deleting in a loop).
+				pending = make(map[string]int)
 			}
 		}
 	}()
 }
 
 // flushTokenStats writes accumulated token usage counts to the database.
-func (s *Service) flushTokenStats(counts map[string]int) {
+func (s *Service) flushTokenStats(ctx context.Context, counts map[string]int) {
 	if len(counts) == 0 {
 		return
 	}
@@ -67,7 +68,7 @@ func (s *Service) flushTokenStats(counts map[string]int) {
 		return
 	}
 
-	if err := store.BatchIncrementStats(context.Background(), counts); err != nil {
+	if err := store.BatchIncrementStats(ctx, counts); err != nil {
 		log.Warn().Err(err).Int("tokens", len(counts)).Msg("auth: failed to flush token stats")
 	}
 }

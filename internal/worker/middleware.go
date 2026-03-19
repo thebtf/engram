@@ -276,19 +276,26 @@ func (ta *TokenAuth) authenticateClientToken(w http.ResponseWriter, r *http.Requ
 	}
 	prefix := rawToken[4:12]
 
-	token, err := store.FindByPrefix(r.Context(), prefix)
+	candidates, err := store.FindByPrefix(r.Context(), prefix)
 	if err != nil {
 		log.Error().Err(err).Msg("auth: token store lookup failed")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return true
 	}
-	if token == nil {
+	if len(candidates) == 0 {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return true
 	}
 
-	// Verify bcrypt hash
-	if err := bcrypt.CompareHashAndPassword([]byte(token.TokenHash), []byte(rawToken)); err != nil {
+	// Find the matching token by bcrypt comparison (handles prefix collisions).
+	var token *gormdb.APIToken
+	for i := range candidates {
+		if bcrypt.CompareHashAndPassword([]byte(candidates[i].TokenHash), []byte(rawToken)) == nil {
+			token = &candidates[i]
+			break
+		}
+	}
+	if token == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return true
 	}
