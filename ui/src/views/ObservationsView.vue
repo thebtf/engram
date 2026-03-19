@@ -3,11 +3,12 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import type { Observation, ObservationType } from '@/types'
 import { TYPE_CONFIG, OBSERVATION_TYPES } from '@/types/observation'
-import { fetchObservationsPaginated, fetchProjects } from '@/utils/api'
+import { fetchObservationsPaginated, fetchProjects, archiveObservations } from '@/utils/api'
 import { formatRelativeTime } from '@/utils/formatters'
 import Pagination from '@/components/layout/Pagination.vue'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import Badge from '@/components/Badge.vue'
+import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
 
 const router = useRouter()
 
@@ -24,6 +25,59 @@ const currentProject = ref<string | null>(null)
 const currentType = ref<ObservationType | null>(null)
 const currentConcept = ref('')
 const projects = ref<string[]>([])
+
+// Bulk selection state
+const selectedIds = ref<Set<number>>(new Set())
+const showBatchConfirm = ref(false)
+const batchAction = ref<'archive' | 'delete' | null>(null)
+const batchProcessing = ref(false)
+
+const allSelected = computed(() =>
+  filteredObservations.value.length > 0 &&
+  filteredObservations.value.every(o => selectedIds.value.has(o.id))
+)
+
+function toggleSelect(id: number, event: Event) {
+  event.stopPropagation()
+  const updated = new Set(selectedIds.value)
+  if (updated.has(id)) {
+    updated.delete(id)
+  } else {
+    updated.add(id)
+  }
+  selectedIds.value = updated
+}
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedIds.value = new Set()
+  } else {
+    selectedIds.value = new Set(filteredObservations.value.map(o => o.id))
+  }
+}
+
+function startBatchAction(action: 'archive' | 'delete') {
+  batchAction.value = action
+  showBatchConfirm.value = true
+}
+
+async function executeBatchAction() {
+  showBatchConfirm.value = false
+  if (!batchAction.value || selectedIds.value.size === 0) return
+
+  batchProcessing.value = true
+  try {
+    const ids = Array.from(selectedIds.value)
+    await archiveObservations(ids, `Batch ${batchAction.value} from dashboard`)
+    selectedIds.value = new Set()
+    await fetchPage()
+  } catch {
+    // Error will show in page reload
+  } finally {
+    batchProcessing.value = false
+    batchAction.value = null
+  }
+}
 
 // Unique concepts from current page for quick filter
 const availableConcepts = computed(() => {
@@ -190,6 +244,39 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- Batch Actions Toolbar -->
+    <div
+      v-if="selectedIds.size > 0"
+      class="flex items-center gap-3 mb-4 p-3 rounded-lg bg-claude-500/10 border border-claude-500/30"
+    >
+      <span class="text-sm text-claude-300">
+        <i class="fas fa-check-square mr-1" />
+        {{ selectedIds.size }} selected
+      </span>
+      <button
+        @click="startBatchAction('archive')"
+        :disabled="batchProcessing"
+        class="px-3 py-1 rounded-lg text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+      >
+        <i class="fas fa-archive mr-1" />
+        Archive
+      </button>
+      <button
+        @click="startBatchAction('delete')"
+        :disabled="batchProcessing"
+        class="px-3 py-1 rounded-lg text-xs bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+      >
+        <i class="fas fa-trash mr-1" />
+        Delete
+      </button>
+      <button
+        @click="selectedIds = new Set()"
+        class="ml-auto text-xs text-slate-400 hover:text-white transition-colors"
+      >
+        Clear selection
+      </button>
+    </div>
+
     <!-- Loading State -->
     <div v-if="loading && observations.length === 0" class="flex items-center justify-center py-20">
       <i class="fas fa-circle-notch fa-spin text-claude-400 text-2xl" />
@@ -219,12 +306,36 @@ onUnmounted(() => {
 
     <!-- Observations List -->
     <div v-else class="space-y-2">
+      <!-- Select all header -->
+      <div class="flex items-center gap-2 px-4 py-1">
+        <input
+          type="checkbox"
+          :checked="allSelected"
+          @change="toggleSelectAll()"
+          class="w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-claude-500 focus:ring-claude-500/50 cursor-pointer"
+        />
+        <span class="text-[10px] text-slate-600 uppercase tracking-wide">Select all</span>
+      </div>
+
       <div
         v-for="obs in filteredObservations"
         :key="obs.id"
         @click="navigateToDetail(obs.id)"
-        class="group flex items-center gap-4 p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50 hover:border-claude-500/30 hover:from-slate-800/70 hover:to-slate-900/70 cursor-pointer transition-all"
+        :class="[
+          'group flex items-center gap-4 p-4 rounded-xl border-2 bg-gradient-to-br cursor-pointer transition-all',
+          selectedIds.has(obs.id)
+            ? 'border-claude-500/40 from-claude-500/5 to-slate-900/50'
+            : 'border-slate-700/50 from-slate-800/50 to-slate-900/50 hover:border-claude-500/30 hover:from-slate-800/70 hover:to-slate-900/70'
+        ]"
       >
+        <!-- Checkbox -->
+        <input
+          type="checkbox"
+          :checked="selectedIds.has(obs.id)"
+          @click="toggleSelect(obs.id, $event)"
+          class="w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-claude-500 focus:ring-claude-500/50 cursor-pointer flex-shrink-0"
+        />
+
         <!-- Type icon -->
         <div
           class="w-10 h-10 flex items-center justify-center rounded-lg bg-gradient-to-br flex-shrink-0"
@@ -290,5 +401,16 @@ onUnmounted(() => {
         @update:offset="handleOffsetUpdate"
       />
     </div>
+
+    <!-- Batch Action Confirmation -->
+    <ConfirmDialog
+      :show="showBatchConfirm"
+      :title="`${batchAction === 'archive' ? 'Archive' : 'Delete'} ${selectedIds.size} Observations`"
+      :message="`Are you sure you want to ${batchAction} ${selectedIds.size} observation(s)? ${batchAction === 'delete' ? 'This action cannot be undone.' : 'Archived observations can be restored.'}`"
+      :confirm-label="batchAction === 'archive' ? 'Archive' : 'Delete'"
+      :danger="true"
+      @confirm="executeBatchAction"
+      @cancel="showBatchConfirm = false"
+    />
   </div>
 </template>
