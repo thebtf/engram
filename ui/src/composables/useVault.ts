@@ -7,6 +7,7 @@ export function useVault() {
   const vaultStatus = ref<VaultStatus | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const actionError = ref<string | null>(null)
 
   // Track revealed credentials: name -> { value, expiresAt }
   const revealedValues = ref<Record<string, { value: string; expiresAt: number }>>({})
@@ -37,6 +38,7 @@ export function useVault() {
   }
 
   async function revealCredential(name: string) {
+    actionError.value = null
     try {
       const result = await fetchCredential(name)
       const expiresAt = Date.now() + 30000
@@ -54,7 +56,7 @@ export function useVault() {
       }, 30000)
       revealTimers.set(name, timer)
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to reveal credential'
+      actionError.value = err instanceof Error ? err.message : 'Failed to reveal credential'
     }
   }
 
@@ -69,6 +71,7 @@ export function useVault() {
   }
 
   async function removeCredential(name: string) {
+    actionError.value = null
     try {
       await deleteCredential(name)
       hideCredential(name)
@@ -80,7 +83,7 @@ export function useVault() {
         }
       }
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to delete credential'
+      actionError.value = err instanceof Error ? err.message : 'Failed to delete credential'
       throw err
     }
   }
@@ -102,6 +105,7 @@ export function useVault() {
     vaultStatus,
     loading,
     error,
+    actionError,
     revealedValues,
     loadCredentials,
     revealCredential,

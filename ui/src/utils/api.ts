@@ -634,6 +634,29 @@ export interface IndexedSession {
   created_at: string
 }
 
+// Raw shape returned by the Go handler
+interface RawIndexedSession {
+  id: string
+  workstation_id: string
+  project_id: string
+  project_path?: string
+  exchange_count: number
+  git_branch?: string
+  last_msg_at?: string
+}
+
+function mapRawSession(raw: RawIndexedSession): IndexedSession {
+  const lastMsg = raw.last_msg_at ? new Date(raw.last_msg_at) : null
+  return {
+    id: raw.id,
+    workstation: raw.workstation_id,
+    project: raw.project_path || raw.project_id,
+    date: lastMsg ? lastMsg.toISOString().slice(0, 10) : '',
+    message_count: raw.exchange_count,
+    created_at: raw.last_msg_at || '',
+  }
+}
+
 export async function fetchIndexedSessions(
   params?: { project?: string; from?: string; to?: string },
   signal?: AbortSignal
@@ -643,14 +666,33 @@ export async function fetchIndexedSessions(
   if (params?.from) searchParams.append('from', params.from)
   if (params?.to) searchParams.append('to', params.to)
   const query = searchParams.toString()
-  return fetchWithRetry<IndexedSession[]>(`${API_BASE}/sessions-index${query ? '?' + query : ''}`, { signal })
+  const raw = await fetchWithRetry<RawIndexedSession[]>(`${API_BASE}/sessions-index${query ? '?' + query : ''}`, { signal })
+  return (raw || []).map(mapRawSession)
+}
+
+// Raw shape for search results (slightly different from list — includes rank/snippet)
+interface RawSessionSearchResult {
+  id: string
+  workstation_id: string
+  project_path?: string
+  exchange_count: number
+  rank: number
+  snippet?: string
 }
 
 export async function searchIndexedSessions(
   query: string,
   signal?: AbortSignal
 ): Promise<IndexedSession[]> {
-  return fetchWithRetry<IndexedSession[]>(`${API_BASE}/sessions-index/search?query=${encodeURIComponent(query)}`, { signal })
+  const raw = await fetchWithRetry<RawSessionSearchResult[]>(`${API_BASE}/sessions-index/search?query=${encodeURIComponent(query)}`, { signal })
+  return (raw || []).map(r => ({
+    id: r.id,
+    workstation: r.workstation_id,
+    project: r.project_path || '',
+    date: '',
+    message_count: r.exchange_count,
+    created_at: '',
+  }))
 }
 
 // ============================================================

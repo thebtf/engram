@@ -33,9 +33,9 @@ const sessionCookieName = "engram_session"
 const sessionMaxAge = 30 * 24 * 3600
 
 // tokenRawPrefix is the prefix for generated client API tokens.
-const tokenRawPrefix = "eng_"
+const tokenRawPrefix = "engram_"
 
-// tokenPrefixLen is the number of hex chars after "eng_" used for prefix lookup.
+// tokenPrefixLen is the number of hex chars after "engram_" used for prefix lookup.
 const tokenPrefixLen = 8
 
 // loginRequest is the JSON body for POST /api/auth/login.
