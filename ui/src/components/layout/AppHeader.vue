@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSSE, useUpdate } from '@/composables'
+import SearchBar from '@/components/search/SearchBar.vue'
 
 const router = useRouter()
 const { isConnected, isProcessing } = useSSE()
@@ -11,9 +12,9 @@ const showUpdateModal = ref(false)
 const isRestarting = ref(false)
 const searchQuery = ref('')
 
-function handleSearch() {
-  if (searchQuery.value.trim()) {
-    router.push({ name: 'search', query: { q: searchQuery.value.trim() } })
+function handleSearch(q: string) {
+  if (q.trim()) {
+    router.push({ name: 'search', query: { q: q.trim() } })
     searchQuery.value = ''
   }
 }
@@ -53,17 +54,12 @@ const waitForWorker = async (maxAttempts = 30, delayMs = 500): Promise<void> => 
 <template>
   <header class="flex items-center justify-between gap-4 mb-6">
     <!-- Search bar -->
-    <form class="flex-1 max-w-lg" @submit.prevent="handleSearch">
-      <div class="relative">
-        <i class="fas fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm" />
-        <input
-          v-model="searchQuery"
-          type="text"
-          placeholder="Search observations...  /"
-          class="w-full pl-9 pr-4 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-claude-500/50 focus:border-claude-500 transition-colors"
-        />
-      </div>
-    </form>
+    <SearchBar
+      v-model="searchQuery"
+      :compact="true"
+      class="flex-1"
+      @submit="handleSearch"
+    />
 
     <!-- Right actions -->
     <div class="flex items-center gap-3">
