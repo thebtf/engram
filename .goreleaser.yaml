@@ -117,12 +117,12 @@ archives:
       - src: plugin/engram/hooks/hooks.json
         dst: hooks
         strip_parent: true
-      - src: plugin/commands/*
+      - src: plugin/engram/commands/*
         dst: commands
         strip_parent: true
-      - src: plugin/skills/*/*.md
+      - src: plugin/engram/skills/*/*.md
         dst: skills
-      - src: plugin/.mcp.json
+      - src: plugin/engram/.mcp.json
         dst: .
         strip_parent: true
     format_overrides:
