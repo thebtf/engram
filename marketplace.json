@@ -13,7 +13,7 @@
     {
       "name": "engram",
       "description": "Persistent memory with PostgreSQL+pgvector, hybrid search, and MCP tools",
-      "version": "1.0.2",
+      "version": "1.1.0",
       "author": {
         "name": "thebtf",
         "url": "https://github.com/thebtf"
@@ -23,25 +23,25 @@
       "license": "MIT",
       "homepage": "https://github.com/thebtf/engram",
       "releases": {
-        "latest": "1.0.2",
+        "latest": "1.1.0",
         "versions": {
-          "1.0.2": {
+          "1.1.0": {
             "releaseDate": "2026-03-19",
             "downloads": {
               "darwin-arm64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v1.0.2/engram_1.0.2_darwin_arm64.tar.gz",
+                "url": "https://github.com/thebtf/engram/releases/download/v1.1.0/engram_1.1.0_darwin_arm64.tar.gz",
                 "format": "tar.gz",
-                "sha256": "171e57b10331dee6b32a97747394868a2606133e3816cb1cf7a319401771bb47"
+                "sha256": "acbceb91de8c6e45422228685761e98a1b416f23212f8847cf1de55204d73e94"
               },
               "linux-amd64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v1.0.2/engram_1.0.2_linux_amd64.tar.gz",
+                "url": "https://github.com/thebtf/engram/releases/download/v1.1.0/engram_1.1.0_linux_amd64.tar.gz",
                 "format": "tar.gz",
-                "sha256": "5bd800c7f6fa63077e05ba3f66e7e6157d53b218eec66f4d6b28a13780a6a38c"
+                "sha256": "fc80c26072eb89c4b14715cf8fc3366e0285eaa949d8b51983a33b2321bf1155"
               },
               "windows-amd64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v1.0.2/engram_1.0.2_windows_amd64.zip",
+                "url": "https://github.com/thebtf/engram/releases/download/v1.1.0/engram_1.1.0_windows_amd64.zip",
                 "format": "zip",
-                "sha256": "0c8aefe92351eb7d14f2c5f9798f88e3b5d48e6fd9e5183b0f3f219815e3f6b7"
+                "sha256": "9da39e1fe3a76b352996163c3a813c158517a285040ed94f02b0c2ab99b04b06"
               }
             }
           }
