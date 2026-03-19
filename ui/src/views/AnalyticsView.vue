@@ -10,7 +10,7 @@ import {
   type SearchMiss,
   type RetrievalStatsResponse,
 } from '@/utils/api'
-import { formatRelativeTime } from '@/utils/formatters'
+import { safeDateFormat } from '@/utils/formatters'
 
 const analytics = ref<SearchAnalytics | null>(null)
 const recentQueries = ref<RecentQuery[]>([])
@@ -185,7 +185,7 @@ onUnmounted(() => {
               </div>
               <div class="flex items-center gap-3 flex-shrink-0">
                 <span class="text-[10px] text-slate-500">{{ miss.frequency }}x</span>
-                <span class="text-[10px] text-slate-600">{{ formatRelativeTime(miss.last_seen) }}</span>
+                <span class="text-[10px] text-slate-600">{{ safeDateFormat(miss.last_seen) }}</span>
               </div>
             </div>
           </div>
@@ -212,7 +212,7 @@ onUnmounted(() => {
               </div>
               <div class="flex items-center gap-3 flex-shrink-0">
                 <span class="text-[10px] text-slate-500">{{ q.count }}x</span>
-                <span class="text-[10px] text-slate-600">{{ formatRelativeTime(q.last_used) }}</span>
+                <span class="text-[10px] text-slate-600">{{ safeDateFormat(q.last_used) }}</span>
               </div>
             </div>
           </div>
