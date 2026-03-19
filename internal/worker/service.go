@@ -1756,6 +1756,29 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/auth/tokens", s.handleListTokens)
 		r.Post("/api/auth/tokens", s.handleCreateToken)
 		r.Delete("/api/auth/tokens/{id}", s.handleRevokeToken)
+
+		// Vault routes
+		r.Get("/api/vault/credentials", s.handleListCredentials)
+		r.Get("/api/vault/credentials/{name}", s.handleGetCredential)
+		r.Post("/api/vault/credentials", s.handleStoreCredential)
+		r.Delete("/api/vault/credentials/{name}", s.handleDeleteCredential)
+		r.Get("/api/vault/status", s.handleVaultStatus)
+
+		// Tag routes
+		r.Post("/api/observations/{id}/tags", s.handleTagObservation)
+		r.Get("/api/observations/by-tag/{tag}", s.handleGetObservationsByTag)
+
+		// Indexed session routes (separate from live session management)
+		r.Get("/api/sessions-index", s.handleListIndexedSessions)
+		r.Get("/api/sessions-index/search", s.handleSearchIndexedSessions)
+
+		// Maintenance routes
+		r.Post("/api/maintenance/consolidation", s.handleTriggerConsolidation)
+		r.Post("/api/maintenance/run", s.handleRunMaintenance)
+		r.Get("/api/maintenance/stats", s.handleGetMaintenanceStats)
+
+		// Analytics routes
+		r.Get("/api/analytics/trends", s.handleGetTrends)
 	})
 }
 
