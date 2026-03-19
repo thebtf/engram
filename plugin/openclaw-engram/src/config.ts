@@ -53,6 +53,12 @@ export const PluginConfigSchema = z.object({
    */
   workspaceDir: z.string().optional(),
 
+  /** Heartbeat / keep-alive event settings. */
+  heartbeat: z.object({
+    /** Send heartbeat events to engram for ingestion. */
+    ingest: z.boolean().default(false),
+  }).default({ ingest: false }),
+
   /** Log verbosity level. */
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('warn'),
 });
@@ -86,6 +92,12 @@ export function getJsonSchema(): Record<string, unknown> {
       timeoutMs: { type: 'number', description: 'Per-request timeout (ms)', default: 5000 },
       autoExtract: { type: 'boolean', description: 'Auto-extract on compaction/session-end', default: true },
       workspaceDir: { type: 'string', description: 'Workspace dir for /migrate (default: ~/.openclaw/workspace/)' },
+      heartbeat: {
+        type: 'object',
+        properties: {
+          ingest: { type: 'boolean', description: 'Send heartbeat events to engram for ingestion', default: false },
+        },
+      },
       logLevel: { type: 'string', enum: ['debug', 'info', 'warn', 'error'], default: 'warn' },
     },
     required: ['url', 'token'],

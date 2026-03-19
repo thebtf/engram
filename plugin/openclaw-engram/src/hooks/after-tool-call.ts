@@ -15,6 +15,24 @@ const TOOL_INPUT_MAX_CHARS = 500;
 const TOOL_RESULT_MAX_CHARS = 500;
 
 /**
+ * Tool names that are considered heartbeat / keep-alive events.
+ * These are low-value, high-frequency events that create noise in the
+ * observation store. Ingestion is skipped unless config.heartbeat.ingest is true.
+ */
+const HEARTBEAT_TOOLS = new Set([
+  'heartbeat',
+  'keepalive',
+  'keep_alive',
+  'keep-alive',
+  'ping',
+  'health_check',
+  'health-check',
+  'status',
+  'noop',
+  'no-op',
+]);
+
+/**
  * Handle the after_tool_call hook.
  *
  * @param event  - The after_tool_call event from OpenClaw.
@@ -31,6 +49,12 @@ export function handleAfterToolCall(
 ): void {
   if (!client.isAvailable()) return;
   if (!config.autoExtract) return;
+
+  // Skip heartbeat / keep-alive tool events unless explicitly opted in
+  const toolNameLower = (event.toolName ?? '').toLowerCase();
+  if (HEARTBEAT_TOOLS.has(toolNameLower) && !config.heartbeat?.ingest) {
+    return;
+  }
 
   const agentId = ctx.agentId ?? '';
   const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;

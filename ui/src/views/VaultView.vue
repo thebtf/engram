@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useVault } from '@/composables/useVault'
-import { formatRelativeTime } from '@/utils/formatters'
+import { safeAbsoluteDate } from '@/utils/formatters'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
 
@@ -114,6 +114,11 @@ async function handleDelete() {
             <i :class="['fas mr-1', vaultStatus.encrypted ? 'fa-lock' : 'fa-lock-open']" />
             {{ vaultStatus.encrypted ? 'Enabled' : 'Disabled' }}
           </span>
+          <div v-if="!vaultStatus.encrypted" class="mt-2 text-sm text-amber-400">
+            <i class="fas fa-info-circle mr-1" />
+            To enable encryption: <code class="bg-slate-700 px-1 rounded">openssl rand -hex 32</code>
+            → set as <code class="bg-slate-700 px-1 rounded">ENGRAM_VAULT_KEY</code> env var
+          </div>
         </div>
         <div>
           <span class="text-xs text-slate-500 block">Key Fingerprint</span>
@@ -164,7 +169,7 @@ async function handleDelete() {
                 {{ cred.scope }}
               </span>
             </div>
-            <span class="text-xs text-slate-500">Created {{ formatRelativeTime(cred.created_at) }}</span>
+            <span class="text-xs text-slate-500">Created {{ safeAbsoluteDate(cred.created_at) }}</span>
           </div>
 
           <div class="flex items-center gap-2 flex-shrink-0">

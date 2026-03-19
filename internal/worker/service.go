@@ -28,6 +28,7 @@ import (
 	"github.com/thebtf/engram/internal/maintenance"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/pattern"
+	"github.com/thebtf/engram/internal/relation"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
@@ -95,16 +96,16 @@ func retryWithBackoff(ctx context.Context, maxRetries int, initialBackoff time.D
 
 // RetrievalStats tracks observation retrieval metrics.
 type RetrievalStats struct {
-	TotalRequests      int64 // Total retrieval requests (inject + search)
-	ObservationsServed int64 // Observations returned to clients
-	VerifiedStale      int64 // Stale observations that passed verification
-	DeletedInvalid     int64 // Invalid observations deleted
-	SearchRequests     int64 // Semantic search requests
-	ContextInjections  int64 // Session-start context injections
-	StaleExcluded      int64 // Observations excluded due to staleness check
-	FreshCount         int64 // Observations that passed staleness check
-	DuplicatesRemoved  int64 // Observations removed by clustering
-	LastUpdated        int64 // Unix timestamp of last update (atomic)
+	TotalRequests      int64 `json:"total_requests"`      // Total retrieval requests (inject + search)
+	ObservationsServed int64 `json:"observations_served"` // Observations returned to clients
+	VerifiedStale      int64 `json:"verified_stale"`      // Stale observations that passed verification
+	DeletedInvalid     int64 `json:"deleted_invalid"`     // Invalid observations deleted
+	SearchRequests     int64 `json:"search_requests"`     // Semantic search requests
+	ContextInjections  int64 `json:"context_injections"`  // Session-start context injections
+	StaleExcluded      int64 `json:"stale_excluded"`      // Observations excluded due to staleness check
+	FreshCount         int64 `json:"fresh_count"`         // Observations that passed staleness check
+	DuplicatesRemoved  int64 `json:"duplicates_removed"`  // Observations removed by clustering
+	LastUpdated        int64 `json:"last_updated"`        // Unix timestamp of last update (atomic)
 }
 
 // maxRetrievalStatsProjects limits the number of projects tracked to prevent unbounded memory growth.
@@ -520,7 +521,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
 		if token == "" && !authDisabled {
 			cancel()
-			return nil, fmt.Errorf("ENGRAM_API_TOKEN is not set — set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production)")
+			return nil, fmt.Errorf("ENGRAM_AUTH_ADMIN_TOKEN (or ENGRAM_API_TOKEN) is not set — set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production)")
 		}
 	}
 
@@ -771,6 +772,18 @@ func (s *Service) initializeAsync() {
 	// Background sync: populate FalkorDB from existing PostgreSQL relations.
 	if _, ok := gs.(*graphpkg.NoopGraphStore); !ok && gs != nil {
 		go s.syncGraphFromRelations()
+	}
+
+	// Initialize async relation detector (requires embedding + vector search)
+	if embedSvc != nil && vectorClient != nil {
+		detector := relation.NewDetector(vectorClient, relationStore, conflictStore, observationStore)
+		observationStore.SetRelationDetector(detector)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			detector.Start(s.ctx)
+		}()
+		log.Info().Msg("Async relation detector enabled")
 	}
 
 	// Initialize pattern detector
@@ -2022,7 +2035,12 @@ func (s *Service) Start() error {
 	authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
 
 	if token == "" && !authDisabled {
-		log.Fatal().Msg("ENGRAM_API_TOKEN is not set. Set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production).")
+		log.Fatal().Msg("ENGRAM_AUTH_ADMIN_TOKEN (or ENGRAM_API_TOKEN) is not set. Set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production).")
+	}
+
+	// Deprecation warning for old env var name
+	if os.Getenv("ENGRAM_API_TOKEN") != "" && os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN") == "" {
+		log.Warn().Msg("auth: ENGRAM_API_TOKEN is deprecated — rename to ENGRAM_AUTH_ADMIN_TOKEN (old name will be removed in v1.3)")
 	}
 
 	if authDisabled {

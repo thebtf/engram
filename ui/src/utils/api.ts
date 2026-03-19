@@ -267,8 +267,27 @@ export async function fetchSearchAnalytics(signal?: AbortSignal): Promise<Search
   return fetchWithRetry<SearchAnalytics>(`${API_BASE}/search/analytics`, { signal })
 }
 
+interface RecentSearchResponse {
+  queries: Array<{
+    timestamp: string
+    query: string
+    project?: string
+    type?: string
+    results: number
+    used_vector: boolean
+  }>
+  count: number
+}
+
 export async function fetchRecentSearches(limit: number = 20, signal?: AbortSignal): Promise<RecentQuery[]> {
-  return fetchWithRetry<RecentQuery[]>(`${API_BASE}/search/recent?limit=${limit}`, { signal })
+  const response = await fetchWithRetry<RecentSearchResponse>(`${API_BASE}/search/recent?limit=${limit}`, { signal })
+  return (response.queries || []).map(q => ({
+    query: q.query,
+    project: q.project,
+    type: q.type,
+    count: q.results,
+    last_used: q.timestamp,
+  }))
 }
 
 // System health API

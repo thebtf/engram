@@ -40,18 +40,25 @@ var commonWords = map[string]struct{}{
 // Receives the IDs of deleted observations for downstream cleanup (e.g., vector DB).
 type CleanupFunc func(ctx context.Context, deletedIDs []int64)
 
+// RelationDetector is the interface for async relation detection.
+// Implemented by relation.Detector; defined here to avoid circular imports.
+type RelationDetector interface {
+	Enqueue(obsID int64, project string)
+}
+
 // ObservationStore provides observation-related database operations using GORM.
 type ObservationStore struct {
-	conflictStore  any
-	relationStore  any
-	db             *gorm.DB
-	rawDB          *sql.DB
-	cleanupFunc    CleanupFunc
-	cleanupQueue   chan string
-	stopCleanup    chan struct{}
-	cleanupWg      sync.WaitGroup
-	cleanupOnce    sync.Once
-	cleanupStarted atomic.Bool
+	conflictStore    any
+	relationStore    any
+	relationDetector RelationDetector
+	db               *gorm.DB
+	rawDB            *sql.DB
+	cleanupFunc      CleanupFunc
+	cleanupQueue     chan string
+	stopCleanup      chan struct{}
+	cleanupWg        sync.WaitGroup
+	cleanupOnce      sync.Once
+	cleanupStarted   atomic.Bool
 }
 
 // NewObservationStore creates a new observation store.
@@ -134,6 +141,11 @@ func (s *ObservationStore) SetCleanupFunc(fn CleanupFunc) {
 	s.cleanupFunc = fn
 }
 
+// SetRelationDetector sets the async relation detector for post-creation detection.
+func (s *ObservationStore) SetRelationDetector(d RelationDetector) {
+	s.relationDetector = d
+}
+
 // StoreObservation stores a new observation.
 func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, project string, obs *models.ParsedObservation, promptNumber int, discoveryTokens int64) (int64, int64, error) {
 	now := time.Now()
@@ -190,8 +202,10 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 		}
 	}
 
-	// Note: Conflict and relation detection intentionally omitted for now
-	// Will be added in Phase 4 when ConflictStore and RelationStore are implemented
+	// Queue async relation detection (non-blocking)
+	if s.relationDetector != nil {
+		s.relationDetector.Enqueue(dbObs.ID, project)
+	}
 
 	return dbObs.ID, nowEpoch, nil
 }
