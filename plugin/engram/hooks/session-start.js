@@ -52,7 +52,11 @@ async function handleSessionStart(ctx, input) {
     return '';
   }
 
-  const observations = Array.isArray(result.observations) ? result.observations : [];
+  const observations = Array.isArray(result.results)
+    ? result.results
+    : Array.isArray(result.observations)
+      ? result.observations
+      : [];
   let fullCount = 25;
   const fullCountCandidate = Number(result.full_count);
   if (Number.isFinite(fullCountCandidate) && fullCountCandidate > 0) {

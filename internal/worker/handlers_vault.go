@@ -47,10 +47,11 @@ func (s *Service) handleListCredentials(w http.ResponseWriter, r *http.Request) 
 	}
 
 	type credItem struct {
-		Concepts []string `json:"concepts,omitempty"`
-		Name     string   `json:"name"`
-		Scope    string   `json:"scope"`
-		ID       int64    `json:"id"`
+		Concepts  []string `json:"concepts,omitempty"`
+		Name      string   `json:"name"`
+		Scope     string   `json:"scope"`
+		CreatedAt string   `json:"created_at"`
+		ID        int64    `json:"id"`
 	}
 	items := make([]credItem, 0, len(creds))
 	for _, c := range creds {
@@ -61,10 +62,11 @@ func (s *Service) handleListCredentials(w http.ResponseWriter, r *http.Request) 
 			name = c.Narrative.String
 		}
 		items = append(items, credItem{
-			ID:       c.ID,
-			Name:     name,
-			Scope:    string(c.Scope),
-			Concepts: []string(c.Concepts),
+			ID:        c.ID,
+			Name:      name,
+			Scope:     string(c.Scope),
+			CreatedAt: c.CreatedAt,
+			Concepts:  []string(c.Concepts),
 		})
 	}
 

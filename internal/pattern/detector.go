@@ -31,8 +31,8 @@ type DetectorConfig struct {
 // DefaultConfig returns the default detector configuration.
 func DefaultConfig() DetectorConfig {
 	return DetectorConfig{
-		MinMatchScore:          0.3, // 30% similarity threshold
-		MinFrequencyForPattern: 2,   // At least 2 occurrences to form a pattern
+		MinMatchScore:          0.5, // 50% similarity threshold
+		MinFrequencyForPattern: 5,   // At least 5 occurrences to form a pattern
 		AnalysisInterval:       5 * time.Minute,
 		MaxPatternsToTrack:     1000,
 		MaxCandidates:          500, // Prevent unbounded growth

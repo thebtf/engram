@@ -44,6 +44,16 @@ func (s *Service) handleGetPatterns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	// sort param is accepted for future use; current queries use default ordering.
+	_ = r.URL.Query().Get("sort")
+
 	patternType := r.URL.Query().Get("type")
 	project := r.URL.Query().Get("project")
 
@@ -57,13 +67,24 @@ func (s *Service) handleGetPatterns(w http.ResponseWriter, r *http.Request) {
 		// Filter by project
 		patterns, err = store.GetPatternsByProject(r.Context(), project, limit)
 	} else {
-		// Get all active patterns
-		patterns, err = store.GetActivePatterns(r.Context(), limit)
+		// Get all active patterns with offset support
+		patterns, err = store.GetActivePatterns(r.Context(), limit+offset)
 	}
 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Apply offset (manual slice since GORM query uses Limit only)
+	if offset > 0 && offset < len(patterns) {
+		patterns = patterns[offset:]
+	} else if offset >= len(patterns) {
+		patterns = nil
+	}
+	// Re-apply limit after offset
+	if len(patterns) > limit {
+		patterns = patterns[:limit]
 	}
 
 	writeJSON(w, patterns)

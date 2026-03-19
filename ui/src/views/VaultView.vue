@@ -2,6 +2,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useVault } from '@/composables/useVault'
 import { safeAbsoluteDate } from '@/utils/formatters'
+import { copyToClipboard } from '@/utils/clipboard'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
 
@@ -59,13 +60,11 @@ function remainingSeconds(name: string): number {
   return Math.max(0, Math.ceil((entry.expiresAt - now.value) / 1000))
 }
 
-async function copyToClipboard(value: string, name: string) {
-  try {
-    await navigator.clipboard.writeText(value)
+async function copyValue(value: string, name: string) {
+  const ok = await copyToClipboard(value)
+  if (ok) {
     copyFeedback.value = name
     setTimeout(() => { copyFeedback.value = null }, 2000)
-  } catch {
-    // Fallback ignored
   }
 }
 
@@ -188,7 +187,7 @@ async function handleDelete() {
                 Hides in {{ remainingSeconds(cred.name) }}s
               </span>
               <button
-                @click="copyToClipboard(revealedValues[cred.name].value, cred.name)"
+                @click="copyValue(revealedValues[cred.name].value, cred.name)"
                 class="px-2 py-1 rounded text-xs text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors"
                 :title="copyFeedback === cred.name ? 'Copied!' : 'Copy'"
               >

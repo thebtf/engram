@@ -499,7 +499,12 @@ export interface VaultStatus {
 }
 
 export async function fetchVaultStatus(signal?: AbortSignal): Promise<VaultStatus> {
-  return fetchWithRetry<VaultStatus>(`${API_BASE}/vault/status`, { signal })
+  const raw = await fetchWithRetry<any>(`${API_BASE}/vault/status`, { signal })
+  return {
+    encrypted: raw.key_configured ?? false,
+    key_fingerprint: raw.fingerprint ?? raw.key_fingerprint,
+    credential_count: raw.credential_count ?? 0,
+  }
 }
 
 export async function fetchCredentials(signal?: AbortSignal): Promise<VaultCredential[]> {

@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/pattern"
 	"github.com/thebtf/engram/internal/telemetry"
 )
 
@@ -25,11 +26,13 @@ type Service struct {
 	doneCh              chan struct{}
 	observationStore    *gorm.ObservationStore
 	similarityTelemetry *telemetry.SimilarityTelemetry
+	patternStore        *gorm.PatternStore
 	smartGC             *SmartGC
 	lastRunDuration     time.Duration
 	totalSmartGCArchived int64
 	totalCleanedObs     int64
 	totalOptimizeRun    int64
+	totalPatternDecay   int64
 	mu                  sync.Mutex
 	running             bool
 }
@@ -44,6 +47,7 @@ func NewService(
 	cfg *config.Config,
 	similarityTelemetry *telemetry.SimilarityTelemetry,
 	smartGC *SmartGC,
+	patternStore *gorm.PatternStore,
 	log zerolog.Logger,
 ) *Service {
 	return &Service{
@@ -55,6 +59,7 @@ func NewService(
 		config:              cfg,
 		similarityTelemetry: similarityTelemetry,
 		smartGC:             smartGC,
+		patternStore:        patternStore,
 		log:                 log.With().Str("component", "maintenance").Logger(),
 		stopCh:              make(chan struct{}),
 		doneCh:              make(chan struct{}),
@@ -190,6 +195,17 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
+	// Task 7: Pattern quality decay — deprecate low-quality patterns
+	if s.patternStore != nil {
+		deprecated, err := pattern.RunDecay(ctx, s.patternStore)
+		if err != nil {
+			s.log.Error().Err(err).Msg("Failed to run pattern decay")
+		} else if deprecated > 0 {
+			s.totalPatternDecay += int64(deprecated)
+			s.log.Info().Int("deprecated", deprecated).Msg("Pattern decay deprecation complete")
+		}
+	}
+
 	// Update metrics
 	s.mu.Lock()
 	s.lastRunTime = time.Now()
@@ -309,6 +325,7 @@ func (s *Service) Stats() map[string]any {
 		"telemetry_enabled":      s.config.TelemetryEnabled,
 		"smart_gc_enabled":       s.config.SmartGCEnabled,
 		"smart_gc_total_archived": s.totalSmartGCArchived,
+		"pattern_decay_total":     s.totalPatternDecay,
 	}
 }
 

@@ -43,6 +43,16 @@ type HealthStats struct {
 	RebuildReason string `json:"rebuild_reason"`
 }
 
+// VectorMetricsSnapshot contains real query instrumentation data.
+type VectorMetricsSnapshot struct {
+	QueryCount   int64   `json:"query_count"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	P50LatencyMs float64 `json:"p50_latency_ms"`
+	P95LatencyMs float64 `json:"p95_latency_ms"`
+	P99LatencyMs float64 `json:"p99_latency_ms"`
+	TotalDocs    int64   `json:"total_documents"`
+}
+
 // CacheStatsSnapshot is an exported snapshot of cache performance metrics.
 // For backends without a local cache (e.g. pgvector), all counters are zero.
 type CacheStatsSnapshot struct {

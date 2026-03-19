@@ -223,43 +223,34 @@ onUnmounted(() => {
         <h2 class="text-xs text-slate-500 uppercase tracking-wide mb-3">Vector Metrics</h2>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
-            <span class="text-slate-600 text-xs block">Query Latency (avg)</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.latency.avg }}</span>
+            <span class="text-slate-600 text-xs block">Total Queries</span>
+            <span class="text-slate-300 font-mono">{{ vectorMetrics.query_count }}</span>
           </div>
           <div>
-            <span class="text-slate-600 text-xs block">Cache Hit Rate</span>
-            <span :class="[
-              'font-mono',
-              vectorMetrics.cache.hitRate > 0.5 ? 'text-green-400' : 'text-amber-400'
-            ]">
-              {{ (vectorMetrics.cache.hitRate * 100).toFixed(1) }}%
-            </span>
+            <span class="text-slate-600 text-xs block">Avg Latency</span>
+            <span class="text-slate-300 font-mono">{{ vectorMetrics.avg_latency_ms.toFixed(1) }}ms</span>
           </div>
           <div>
             <span class="text-slate-600 text-xs block">Total Documents</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.storage.totalDocuments }}</span>
+            <span class="text-slate-300 font-mono">{{ vectorMetrics.total_documents }}</span>
           </div>
           <div>
-            <span class="text-slate-600 text-xs block">Storage Savings</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.storage.savingsPercent.toFixed(1) }}%</span>
+            <span class="text-slate-600 text-xs block">Uptime</span>
+            <span class="text-slate-300 font-mono">{{ vectorMetrics.uptime }}</span>
           </div>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mt-3">
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mt-3">
           <div>
             <span class="text-slate-600 text-xs block">P50 Latency</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.latency.p50 }}</span>
+            <span class="text-slate-300 font-mono">{{ vectorMetrics.p50_latency_ms.toFixed(1) }}ms</span>
           </div>
           <div>
             <span class="text-slate-600 text-xs block">P95 Latency</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.latency.p95 }}</span>
+            <span class="text-slate-300 font-mono">{{ vectorMetrics.p95_latency_ms.toFixed(1) }}ms</span>
           </div>
           <div>
             <span class="text-slate-600 text-xs block">P99 Latency</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.latency.p99 }}</span>
-          </div>
-          <div>
-            <span class="text-slate-600 text-xs block">Total Queries</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.queries.total }}</span>
+            <span class="text-slate-300 font-mono">{{ vectorMetrics.p99_latency_ms.toFixed(1) }}ms</span>
           </div>
         </div>
       </div>

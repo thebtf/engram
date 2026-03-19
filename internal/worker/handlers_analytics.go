@@ -58,12 +58,9 @@ func (s *Service) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get observations for analysis. The multiplier of 50 is a heuristic: we
-	// assume at most ~50 observations are created per day on average. For
-	// deployments with higher throughput the analytics may be slightly
-	// incomplete; a future improvement would be to filter by created_at >= cutoff
-	// at the DB level rather than applying a fetch limit here.
-	obs, err := s.observationStore.GetRecentObservations(r.Context(), project, days*50)
+	// Fetch observations created within the analysis window using a time cutoff.
+	cutoffEpoch := time.Now().AddDate(0, 0, -days).UnixMilli()
+	obs, err := s.observationStore.GetObservationsSinceEpoch(r.Context(), project, cutoffEpoch)
 	if err != nil {
 		log.Error().Err(err).Msg("get observations for trends failed")
 		http.Error(w, "get observations: "+err.Error(), http.StatusInternalServerError)
@@ -73,18 +70,14 @@ func (s *Service) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 	// Calculate time range
 	now := time.Now()
 	startTime := now.AddDate(0, 0, -days)
-	startEpoch := startTime.UnixMilli()
 
-	// Group observations by time bucket
+	// Group observations by time bucket (already filtered to window by DB query)
 	buckets := make(map[string]int)
 	typeDistribution := make(map[string]int)
 	conceptCounts := make(map[string]int)
 	totalInRange := 0
 
 	for _, o := range obs {
-		if o.CreatedAtEpoch < startEpoch {
-			continue
-		}
 		totalInRange++
 
 		created := time.UnixMilli(o.CreatedAtEpoch)

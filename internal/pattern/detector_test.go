@@ -16,7 +16,7 @@ func TestNewDetector(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 
 	detector := NewDetector(patternStore, observationStore, config)
@@ -35,7 +35,7 @@ func TestDetector_StartStop(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 	config.AnalysisInterval = 100 * time.Millisecond // Short interval for testing
 
@@ -59,7 +59,7 @@ func TestDetector_AnalyzeObservation_NewCandidate(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 	config.MinFrequencyForPattern = 2
 
@@ -89,7 +89,7 @@ func TestDetector_AnalyzeObservation_PromoteToPattern(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 	config.MinFrequencyForPattern = 2
 
@@ -128,7 +128,7 @@ func TestDetector_AnalyzeObservation_MatchExisting(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 
 	detector := NewDetector(patternStore, observationStore, config)
@@ -176,7 +176,7 @@ func TestDetector_AnalyzeObservation_NoMatch(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 	config.MinMatchScore = 0.5 // Higher threshold
 
@@ -219,7 +219,7 @@ func TestDetector_CandidateCleanup(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 	config.MinFrequencyForPattern = 3 // Higher threshold
 
@@ -266,7 +266,7 @@ func TestDetector_GetPatternInsight(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 
 	detector := NewDetector(patternStore, observationStore, config)
@@ -554,7 +554,7 @@ func TestDetector_SetSyncFunc(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 
 	detector := NewDetector(patternStore, observationStore, config)
@@ -586,7 +586,7 @@ func TestDetector_CandidateCount(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 
 	detector := NewDetector(patternStore, observationStore, config)
@@ -610,7 +610,7 @@ func TestDetector_AnalyzeRecentObservations(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 
 	detector := NewDetector(patternStore, observationStore, config)
@@ -790,7 +790,7 @@ func TestDetector_AnalyzeObservation_EmptySignature(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 
 	detector := NewDetector(patternStore, observationStore, config)
@@ -822,7 +822,7 @@ func TestDetector_AnalyzeObservation_CandidateEviction(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 	config.MaxCandidates = 2           // Very small for testing
 	config.MinFrequencyForPattern = 10 // High so nothing gets promoted
@@ -853,7 +853,7 @@ func TestDetector_PromoteCandidateWithSyncFunc(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 	config.MinFrequencyForPattern = 2
 
@@ -892,7 +892,7 @@ func TestDetector_AnalyzeObservation_UpdateExistingCandidate(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 	config.MinFrequencyForPattern = 5 // High enough that we don't promote
 
@@ -936,7 +936,7 @@ func TestDetector_GetPatternInsight_NotFound(t *testing.T) {
 	defer store.Close()
 
 	patternStore := gorm.NewPatternStore(store)
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	config := DefaultConfig()
 
 	detector := NewDetector(patternStore, observationStore, config)

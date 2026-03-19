@@ -40,7 +40,7 @@ func testObservationStore(t *testing.T) (*ObservationStore, *Store, func()) {
 		t.Fatalf("NewStore failed: %v", err)
 	}
 
-	observationStore := NewObservationStore(store, nil, nil, nil)
+	observationStore := NewObservationStore(store, nil)
 
 	cleanup := func() {
 		store.Close()

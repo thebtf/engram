@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useTokens } from '@/composables/useTokens'
 import { formatRelativeTime } from '@/utils/formatters'
+import { copyToClipboard } from '@/utils/clipboard'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
 
@@ -17,6 +18,13 @@ const createError = ref<string | null>(null)
 // Newly created token (show once)
 const createdToken = ref<string | null>(null)
 const copyFeedback = ref(false)
+
+// Sorted tokens: active first, revoked at bottom
+const sortedTokens = computed(() => {
+  const active = tokens.value.filter(t => !t.revoked)
+  const revoked = tokens.value.filter(t => t.revoked)
+  return [...active, ...revoked]
+})
 
 // Revoke confirmation
 const revokeTarget = ref<string | null>(null)
@@ -55,12 +63,10 @@ function closeCreateModal() {
 
 async function copyToken() {
   if (!createdToken.value) return
-  try {
-    await navigator.clipboard.writeText(createdToken.value)
+  const ok = await copyToClipboard(createdToken.value)
+  if (ok) {
     copyFeedback.value = true
     setTimeout(() => { copyFeedback.value = false }, 2000)
-  } catch {
-    // Ignored
   }
 }
 
@@ -134,9 +140,12 @@ async function handleRevoke() {
     <!-- Tokens List -->
     <div v-else class="space-y-2">
       <div
-        v-for="token in tokens"
+        v-for="token in sortedTokens"
         :key="token.id"
-        class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50"
+        :class="[
+          'p-4 rounded-xl border-2 bg-gradient-to-br from-slate-800/50 to-slate-900/50',
+          token.revoked ? 'border-slate-700/30 opacity-50' : 'border-slate-700/50'
+        ]"
       >
         <div class="flex items-center justify-between">
           <div class="flex-1 min-w-0">
@@ -153,10 +162,17 @@ async function handleRevoke() {
               ]">
                 {{ token.scope }}
               </span>
+              <span v-if="token.revoked" class="px-2 py-0.5 text-[10px] font-medium rounded-full border bg-red-500/20 text-red-300 border-red-500/30">
+                Revoked
+              </span>
             </div>
             <div class="flex items-center gap-3 text-xs text-slate-500">
               <span>Created {{ formatRelativeTime(token.created_at) }}</span>
-              <span v-if="token.last_used_at">
+              <span v-if="token.revoked_at">
+                <i class="fas fa-ban text-red-600 mr-0.5" />
+                Revoked {{ formatRelativeTime(token.revoked_at) }}
+              </span>
+              <span v-else-if="token.last_used_at">
                 <i class="fas fa-clock text-slate-600 mr-0.5" />
                 Last used {{ formatRelativeTime(token.last_used_at) }}
               </span>
@@ -172,6 +188,7 @@ async function handleRevoke() {
           </div>
 
           <button
+            v-if="!token.revoked"
             @click="confirmRevoke(token.id)"
             class="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-red-400 hover:bg-red-500/10 border border-slate-700/50 hover:border-red-500/30 transition-colors flex-shrink-0"
           >

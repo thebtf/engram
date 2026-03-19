@@ -61,7 +61,7 @@ func TestConflictStore_StoreConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create test observations
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	obs1 := &models.ParsedObservation{
 		Type:  models.ObsTypeDiscovery,
 		Title: "Newer observation",
@@ -110,7 +110,7 @@ func TestConflictStore_MarkObservationSuperseded(t *testing.T) {
 	sessionID, err := sessionStore.CreateSDKSession(ctx, "claude-1", "test-project", "")
 	require.NoError(t, err)
 
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	obs := &models.ParsedObservation{
 		Type:  models.ObsTypeDiscovery,
 		Title: "Test observation",
@@ -149,7 +149,7 @@ func TestConflictStore_MarkObservationsSuperseded(t *testing.T) {
 			setup: func() []int64 {
 				sessionStore := NewSessionStore(store)
 				sessionID, _ := sessionStore.CreateSDKSession(ctx, "claude-1", "test-project", "")
-				obsStore := NewObservationStore(store, nil, nil, nil)
+				obsStore := NewObservationStore(store, nil)
 				obs := &models.ParsedObservation{
 					Type:  models.ObsTypeDiscovery,
 					Title: "Test",
@@ -163,7 +163,7 @@ func TestConflictStore_MarkObservationsSuperseded(t *testing.T) {
 			setup: func() []int64 {
 				sessionStore := NewSessionStore(store)
 				sessionID, _ := sessionStore.CreateSDKSession(ctx, "claude-1", "test-project", "")
-				obsStore := NewObservationStore(store, nil, nil, nil)
+				obsStore := NewObservationStore(store, nil)
 				var ids []int64
 				for i := 0; i < 3; i++ {
 					obs := &models.ParsedObservation{
@@ -207,7 +207,7 @@ func TestConflictStore_GetConflictsByObservationID(t *testing.T) {
 	sessionID, err := sessionStore.CreateSDKSession(ctx, "claude-1", "test-project", "")
 	require.NoError(t, err)
 
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	var obsIDs []int64
 	for i := 0; i < 3; i++ {
 		obs := &models.ParsedObservation{
@@ -262,7 +262,7 @@ func TestConflictStore_GetUnresolvedConflicts(t *testing.T) {
 	sessionID, err := sessionStore.CreateSDKSession(ctx, "claude-1", "test-project", "")
 	require.NoError(t, err)
 
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	obs1 := &models.ParsedObservation{
 		Type:  models.ObsTypeDiscovery,
 		Title: "Test1",
@@ -332,7 +332,7 @@ func TestConflictStore_GetSupersededObservationIDs(t *testing.T) {
 	sessionID, err := sessionStore.CreateSDKSession(ctx, "claude-1", "test-project", "")
 	require.NoError(t, err)
 
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 
 	// Create newer observations
 	newer1 := &models.ParsedObservation{
@@ -499,7 +499,7 @@ func TestConflictStore_CleanupSupersededObservations(t *testing.T) {
 	sessionID, err := sessionStore.CreateSDKSession(ctx, "claude-1", "test-project", "")
 	require.NoError(t, err)
 
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 
 	// Create newer observations
 	newer1 := &models.ParsedObservation{
@@ -592,7 +592,7 @@ func TestConflictStore_GetConflictsWithDetails(t *testing.T) {
 	sessionID, err := sessionStore.CreateSDKSession(ctx, "claude-1", "test-project", "")
 	require.NoError(t, err)
 
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 
 	newer := &models.ParsedObservation{
 		Type:  models.ObsTypeDiscovery,

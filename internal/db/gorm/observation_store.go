@@ -48,8 +48,6 @@ type RelationDetector interface {
 
 // ObservationStore provides observation-related database operations using GORM.
 type ObservationStore struct {
-	conflictStore    any
-	relationStore    any
 	relationDetector RelationDetector
 	db               *gorm.DB
 	rawDB            *sql.DB
@@ -62,16 +60,13 @@ type ObservationStore struct {
 }
 
 // NewObservationStore creates a new observation store.
-// The conflictStore and relationStore parameters are optional (can be nil) and will be used in Phase 4.
-func NewObservationStore(store *Store, cleanupFunc CleanupFunc, conflictStore, relationStore any) *ObservationStore {
+func NewObservationStore(store *Store, cleanupFunc CleanupFunc) *ObservationStore {
 	s := &ObservationStore{
-		db:            store.DB,
-		rawDB:         store.GetRawDB(),
-		cleanupFunc:   cleanupFunc,
-		conflictStore: conflictStore,
-		relationStore: relationStore,
-		cleanupQueue:  make(chan string, cleanupQueueSize),
-		stopCleanup:   make(chan struct{}),
+		db:           store.DB,
+		rawDB:        store.GetRawDB(),
+		cleanupFunc:  cleanupFunc,
+		cleanupQueue: make(chan string, cleanupQueueSize),
+		stopCleanup:  make(chan struct{}),
 	}
 	// Start the cleanup worker
 	s.startCleanupWorker()
@@ -576,6 +571,23 @@ func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.C
 	}
 
 	return toModelObservations(dbObservations), total, nil
+}
+
+// GetObservationsSinceEpoch retrieves observations created at or after the given epoch (ms).
+// Includes project-scoped observations for the specified project AND global observations.
+// Results are ordered by created_at_epoch DESC.
+func (s *ObservationStore) GetObservationsSinceEpoch(ctx context.Context, project string, sinceEpochMs int64) ([]*models.Observation, error) {
+	var dbObservations []Observation
+	err := s.db.WithContext(ctx).
+		Where("created_at_epoch >= ?", sinceEpochMs).
+		Scopes(projectScopeFilter(project), importanceOrdering()).
+		Find(&dbObservations).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelObservations(dbObservations), nil
 }
 
 // GetAllObservations retrieves all observations (for vector rebuild).

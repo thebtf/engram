@@ -666,8 +666,8 @@ func (s *Service) initializeAsync() {
 		}
 	}
 
-	// Create observation store with conflict and relation stores for automatic detection
-	observationStore := gorm.NewObservationStore(store, nil, conflictStore, relationStore)
+	// Create observation store
+	observationStore := gorm.NewObservationStore(store, nil)
 
 	// Create session manager
 	sessionManager := session.NewManager(sessionStore)
@@ -870,7 +870,7 @@ func (s *Service) initializeAsync() {
 	}
 	maintenanceSvc := maintenance.NewService(
 		store, observationStore, summaryStore, promptStore,
-		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, log.Logger,
+		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore, log.Logger,
 	)
 	s.initMu.Lock()
 	s.maintenanceService = maintenanceSvc
@@ -1068,8 +1068,8 @@ func (s *Service) reinitializeDatabase() {
 		relationStore.SetCallback(s.graphWriter.Enqueue)
 	}
 
-	// Create observation store with conflict and relation stores for automatic detection
-	observationStore := gorm.NewObservationStore(store, nil, conflictStore, relationStore)
+	// Create observation store
+	observationStore := gorm.NewObservationStore(store, nil)
 
 	// Create new session manager
 	sessionManager := session.NewManager(sessionStore)
@@ -1792,6 +1792,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/maintenance/run", s.handleRunMaintenance)
 		r.Get("/api/maintenance/stats", s.handleGetMaintenanceStats)
 		r.Post("/api/maintenance/backfill-relations", s.handleBackfillRelations)
+		r.Post("/api/maintenance/purge-patterns", s.handlePurgePatterns)
 
 		// Analytics routes
 		r.Get("/api/analytics/trends", s.handleGetTrends)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/pattern"
 )
 
 // consolidationRequest is the JSON body for POST /api/maintenance/consolidation.
@@ -161,5 +162,84 @@ func (s *Service) handleBackfillRelations(w http.ResponseWriter, r *http.Request
 		"message":    "Relation backfill started in background",
 		"project":    project,
 		"batch_size": batchSize,
+	})
+}
+
+// handlePurgePatterns godoc
+// @Summary Bulk deprecate low-quality patterns
+// @Description Runs pattern quality decay and deprecates patterns with dynamic quality below 0.10. Optionally preview with dry_run.
+// @Tags Maintenance
+// @Produce json
+// @Security ApiKeyAuth
+// @Param dry_run query bool false "Preview without deprecating"
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {string} string "pattern store not initialized"
+// @Failure 500 {string} string "internal error"
+// @Router /api/maintenance/purge-patterns [post]
+func (s *Service) handlePurgePatterns(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	store := s.patternStore
+	s.initMu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "pattern store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	dryRun := r.URL.Query().Get("dry_run") == "true"
+
+	if dryRun {
+		// Preview mode: compute quality scores without deprecating.
+		const maxPatterns = 10000
+		patterns, err := store.GetActivePatterns(r.Context(), maxPatterns)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		maxFreq := 1
+		for _, p := range patterns {
+			if p.Frequency > maxFreq {
+				maxFreq = p.Frequency
+			}
+		}
+
+		wouldDeprecate := 0
+		for _, p := range patterns {
+			baseQuality := pattern.QualityScore(p.Frequency, p.Confidence, len(p.Projects), maxFreq)
+
+			var lastSeen time.Time
+			if p.LastSeenAt != "" {
+				lastSeen, _ = time.Parse(time.RFC3339, p.LastSeenAt)
+			}
+			if lastSeen.IsZero() && p.CreatedAt != "" {
+				lastSeen, _ = time.Parse(time.RFC3339, p.CreatedAt)
+			}
+
+			decayMultiplier := pattern.HybridDecay(lastSeen)
+			dynamicQuality := baseQuality * decayMultiplier
+
+			if dynamicQuality < 0.10 {
+				wouldDeprecate++
+			}
+		}
+
+		writeJSON(w, map[string]any{
+			"dry_run":          true,
+			"total_active":     len(patterns),
+			"would_deprecate":  wouldDeprecate,
+		})
+		return
+	}
+
+	deprecated, err := pattern.RunDecay(r.Context(), store)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"status":     "completed",
+		"deprecated": deprecated,
 	})
 }

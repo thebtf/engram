@@ -762,12 +762,10 @@ func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get unique observation IDs involved in relations (approximate node count)
-	// For now, use edge count as a proxy - each edge has 2 nodes
-	nodeCount := 0
-	if edgeCount > 0 {
-		// Rough estimate: unique nodes ≈ edges * 1.5 (since nodes can have multiple edges)
-		nodeCount = int(float64(edgeCount) * 1.5)
+	// Get unique observation IDs involved in relations (real node count)
+	nodeCount, err := s.relationStore.GetDistinctNodeCount(r.Context())
+	if err != nil {
+		nodeCount = 0
 	}
 
 	// Calculate average degree
@@ -814,51 +812,17 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get cache stats from vector client
-	cacheStats := s.vectorClient.GetCacheStats()
-	count, _ := s.vectorClient.Count(r.Context())
-
-	uptime := time.Since(s.startTime).Round(time.Second).String()
-
-	// Calculate total queries from cache hits/misses
-	totalQueries := cacheStats.EmbeddingHits + cacheStats.EmbeddingMisses + cacheStats.ResultHits + cacheStats.ResultMisses
-	totalHits := cacheStats.EmbeddingHits + cacheStats.ResultHits
-	totalMisses := cacheStats.EmbeddingMisses + cacheStats.ResultMisses
+	metrics := s.vectorClient.GetMetrics(r.Context())
 
 	writeJSON(w, map[string]any{
-		"enabled": true,
-		"queries": map[string]any{
-			"total":    totalQueries,
-			"hubOnly":  0,
-			"hybrid":   0,
-			"onDemand": 0,
-			"graph":    0,
-		},
-		"latency": map[string]any{
-			"avg":          "0ms",
-			"p50":          "0ms",
-			"p95":          "0ms",
-			"p99":          "0ms",
-			"avgHub":       "0ms",
-			"avgRecompute": "0ms",
-		},
-		"storage": map[string]any{
-			"totalDocuments":   count,
-			"hubDocuments":     0,
-			"storedEmbeddings": count,
-			"savingsPercent":   0.0,
-			"recomputedTotal":  0,
-		},
-		"cache": map[string]any{
-			"hits":    totalHits,
-			"misses":  totalMisses,
-			"hitRate": cacheStats.HitRate(),
-		},
-		"graph": map[string]any{
-			"traversals": 0,
-			"avgDepth":   0.0,
-		},
-		"uptime": uptime,
+		"enabled":         true,
+		"query_count":     metrics.QueryCount,
+		"avg_latency_ms":  metrics.AvgLatencyMs,
+		"p50_latency_ms":  metrics.P50LatencyMs,
+		"p95_latency_ms":  metrics.P95LatencyMs,
+		"p99_latency_ms":  metrics.P99LatencyMs,
+		"total_documents": metrics.TotalDocs,
+		"uptime":          time.Since(s.startTime).Round(time.Second).String(),
 	})
 }
 
