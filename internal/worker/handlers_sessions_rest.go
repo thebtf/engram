@@ -10,6 +10,10 @@ import (
 	"github.com/thebtf/engram/internal/sessions"
 )
 
+const (
+	maxSessionsLimit = 200 // Server-side cap to prevent huge response payloads.
+)
+
 // handleListIndexedSessions godoc
 // @Summary List indexed sessions
 // @Description Returns indexed Claude Code sessions with optional project and workstation filters.
@@ -18,7 +22,7 @@ import (
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project ID"
 // @Param workstation query string false "Filter by workstation ID"
-// @Param limit query int false "Number of results (default 20)"
+// @Param limit query int false "Number of results (default 20, max 200)"
 // @Param offset query int false "Pagination offset"
 // @Success 200 {array} object
 // @Failure 500 {string} string "internal error"
@@ -32,7 +36,7 @@ func (s *Service) handleListIndexedSessions(w http.ResponseWriter, r *http.Reque
 	limit := 20
 	if val := r.URL.Query().Get("limit"); val != "" {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
-			limit = parsed
+			limit = min(parsed, maxSessionsLimit)
 		}
 	}
 	offset := 0
@@ -52,7 +56,7 @@ func (s *Service) handleListIndexedSessions(w http.ResponseWriter, r *http.Reque
 	list, err := s.sessionIdxStore.ListSessions(r.Context(), opts)
 	if err != nil {
 		log.Error().Err(err).Msg("list indexed sessions failed")
-		http.Error(w, "list sessions: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -117,14 +121,14 @@ func (s *Service) handleSearchIndexedSessions(w http.ResponseWriter, r *http.Req
 	limit := 10
 	if val := r.URL.Query().Get("limit"); val != "" {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
-			limit = parsed
+			limit = min(parsed, maxSessionsLimit)
 		}
 	}
 
 	results, err := s.sessionIdxStore.SearchSessions(r.Context(), query, limit)
 	if err != nil {
 		log.Error().Err(err).Str("query", query).Msg("search indexed sessions failed")
-		http.Error(w, "search sessions: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 

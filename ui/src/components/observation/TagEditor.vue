@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { CONCEPT_CONFIG, type ConceptType } from '@/types/observation'
 import { updateObservationTags } from '@/utils/api'
 import Badge from '@/components/Badge.vue'
@@ -20,6 +20,11 @@ const error = ref<string | null>(null)
 function getConceptConfig(concept: string) {
   return CONCEPT_CONFIG[concept as ConceptType] || { icon: 'fa-tag', colorClass: 'text-slate-300', bgClass: 'bg-slate-500/20', borderClass: 'border-slate-500/40' }
 }
+
+// Pre-compute concept configs to avoid repeated calls per render cycle.
+const conceptConfigs = computed(() =>
+  Object.fromEntries(props.concepts.map(c => [c, getConceptConfig(c)]))
+)
 
 async function addTag() {
   const tag = newTag.value.trim().toLowerCase()
@@ -69,10 +74,10 @@ async function removeTag(tag: string) {
         class="inline-flex items-center gap-1 group"
       >
         <Badge
-          :icon="getConceptConfig(concept).icon"
-          :color-class="getConceptConfig(concept).colorClass"
-          :bg-class="getConceptConfig(concept).bgClass"
-          :border-class="getConceptConfig(concept).borderClass"
+          :icon="conceptConfigs[concept].icon"
+          :color-class="conceptConfigs[concept].colorClass"
+          :bg-class="conceptConfigs[concept].bgClass"
+          :border-class="conceptConfigs[concept].borderClass"
         >
           {{ concept }}
           <button

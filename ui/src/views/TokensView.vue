@@ -64,8 +64,8 @@ async function copyToken() {
   }
 }
 
-function confirmRevoke(name: string) {
-  revokeTarget.value = name
+function confirmRevoke(id: string) {
+  revokeTarget.value = id
   showRevokeConfirm.value = true
 }
 
@@ -135,7 +135,7 @@ async function handleRevoke() {
     <div v-else class="space-y-2">
       <div
         v-for="token in tokens"
-        :key="token.name"
+        :key="token.id"
         class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50"
       >
         <div class="flex items-center justify-between">
@@ -143,7 +143,7 @@ async function handleRevoke() {
             <div class="flex items-center gap-2 mb-1">
               <h3 class="text-sm font-medium text-white">{{ token.name }}</h3>
               <code class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-slate-900 border border-slate-700 text-slate-400">
-                {{ token.prefix }}...
+                {{ token.token_prefix }}...
               </code>
               <span :class="[
                 'px-2 py-0.5 text-[10px] font-medium rounded-full border',
@@ -156,9 +156,9 @@ async function handleRevoke() {
             </div>
             <div class="flex items-center gap-3 text-xs text-slate-500">
               <span>Created {{ formatRelativeTime(token.created_at) }}</span>
-              <span v-if="token.last_used">
+              <span v-if="token.last_used_at">
                 <i class="fas fa-clock text-slate-600 mr-0.5" />
-                Last used {{ formatRelativeTime(token.last_used) }}
+                Last used {{ formatRelativeTime(token.last_used_at) }}
               </span>
               <span>
                 <i class="fas fa-arrow-right-arrow-left text-slate-600 mr-0.5" />
@@ -172,7 +172,7 @@ async function handleRevoke() {
           </div>
 
           <button
-            @click="confirmRevoke(token.name)"
+            @click="confirmRevoke(token.id)"
             class="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-red-400 hover:bg-red-500/10 border border-slate-700/50 hover:border-red-500/30 transition-colors flex-shrink-0"
           >
             <i class="fas fa-ban mr-1" />

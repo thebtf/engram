@@ -46,7 +46,11 @@ watch(hasRevealed, (val) => {
   else stopTick()
 })
 
-onUnmounted(() => stopTick())
+let isMounted = true
+onUnmounted(() => {
+  isMounted = false
+  stopTick()
+})
 
 function remainingSeconds(name: string): number {
   const entry = revealedValues.value[name]
@@ -77,7 +81,9 @@ async function handleDelete() {
   } catch {
     // Error handled by composable
   }
-  deleteTarget.value = null
+  if (isMounted) {
+    deleteTarget.value = null
+  }
 }
 </script>
 

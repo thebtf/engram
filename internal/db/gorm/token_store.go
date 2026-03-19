@@ -45,19 +45,19 @@ func (s *TokenStore) List(ctx context.Context) ([]APIToken, error) {
 	return tokens, err
 }
 
-// FindByPrefix looks up a non-revoked token by its prefix for auth middleware.
-func (s *TokenStore) FindByPrefix(ctx context.Context, prefix string) (*APIToken, error) {
-	var token APIToken
+// FindByPrefix looks up all non-revoked tokens matching the given prefix.
+// Multiple tokens may share a prefix in the non-unique index, so callers
+// must iterate over the returned slice and compare bcrypt hashes to find the
+// matching token.
+func (s *TokenStore) FindByPrefix(ctx context.Context, prefix string) ([]APIToken, error) {
+	var tokens []APIToken
 	err := s.db.WithContext(ctx).
 		Where("token_prefix = ? AND NOT revoked", prefix).
-		First(&token).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
+		Find(&tokens).Error
 	if err != nil {
 		return nil, err
 	}
-	return &token, nil
+	return tokens, nil
 }
 
 // Revoke marks a token as revoked.

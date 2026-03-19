@@ -1,5 +1,7 @@
 <script setup lang="ts">
-defineProps<{
+import { ref, watch } from 'vue'
+
+const props = defineProps<{
   show: boolean
   title: string
   message: string
@@ -12,6 +14,22 @@ const emit = defineEmits<{
   confirm: []
   cancel: []
 }>()
+
+const cancelButtonRef = ref<HTMLButtonElement | null>(null)
+
+// Focus the cancel button when the dialog opens for keyboard accessibility.
+watch(() => props.show, (visible) => {
+  if (visible) {
+    // Defer to next tick so the DOM is rendered.
+    setTimeout(() => cancelButtonRef.value?.focus(), 0)
+  }
+})
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    emit('cancel')
+  }
+}
 </script>
 
 <template>
@@ -22,12 +40,19 @@ const emit = defineEmits<{
         <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @click="emit('cancel')" />
 
         <!-- Dialog -->
-        <div class="relative glass border border-white/10 rounded-xl p-6 max-w-sm w-full shadow-2xl">
-          <h3 class="text-lg font-semibold text-white mb-2">{{ title }}</h3>
+        <div
+          role="dialog"
+          aria-modal="true"
+          :aria-labelledby="'confirm-dialog-title'"
+          class="relative glass border border-white/10 rounded-xl p-6 max-w-sm w-full shadow-2xl"
+          @keydown="handleKeydown"
+        >
+          <h3 id="confirm-dialog-title" class="text-lg font-semibold text-white mb-2">{{ title }}</h3>
           <p class="text-sm text-slate-400 mb-6">{{ message }}</p>
 
           <div class="flex items-center justify-end gap-3">
             <button
+              ref="cancelButtonRef"
               class="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
               @click="emit('cancel')"
             >

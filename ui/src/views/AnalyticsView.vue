@@ -102,7 +102,7 @@ onUnmounted(() => {
         </div>
         <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50">
           <span class="text-xs text-slate-500 block mb-1">Avg Latency</span>
-          <span class="text-2xl font-bold text-white font-mono">{{ analytics.avg_latency_ms.toFixed(1) }}<span class="text-sm text-slate-500">ms</span></span>
+          <span class="text-2xl font-bold text-white font-mono">{{ (analytics.avg_latency_ms ?? 0).toFixed(1) }}<span class="text-sm text-slate-500">ms</span></span>
         </div>
         <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50">
           <span class="text-xs text-slate-500 block mb-1">Cache Hits</span>
@@ -125,20 +125,20 @@ onUnmounted(() => {
             <div class="flex-1 bg-slate-900/50 rounded-full h-4 overflow-hidden">
               <div
                 class="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full"
-                :style="{ width: barWidth(analytics.avg_vector_latency_ms, analytics.avg_latency_ms * 1.2) }"
+                :style="{ width: barWidth(analytics.avg_vector_latency_ms ?? 0, (analytics.avg_latency_ms ?? 0) * 1.2) }"
               />
             </div>
-            <span class="text-xs font-mono text-slate-300 w-16 text-right">{{ analytics.avg_vector_latency_ms.toFixed(1) }}ms</span>
+            <span class="text-xs font-mono text-slate-300 w-16 text-right">{{ (analytics.avg_vector_latency_ms ?? 0).toFixed(1) }}ms</span>
           </div>
           <div class="flex items-center gap-3">
             <span class="text-xs text-slate-400 w-24">Filter</span>
             <div class="flex-1 bg-slate-900/50 rounded-full h-4 overflow-hidden">
               <div
                 class="h-full bg-gradient-to-r from-purple-500 to-purple-400 rounded-full"
-                :style="{ width: barWidth(analytics.avg_filter_latency_ms, analytics.avg_latency_ms * 1.2) }"
+                :style="{ width: barWidth(analytics.avg_filter_latency_ms ?? 0, (analytics.avg_latency_ms ?? 0) * 1.2) }"
               />
             </div>
-            <span class="text-xs font-mono text-slate-300 w-16 text-right">{{ analytics.avg_filter_latency_ms.toFixed(1) }}ms</span>
+            <span class="text-xs font-mono text-slate-300 w-16 text-right">{{ (analytics.avg_filter_latency_ms ?? 0).toFixed(1) }}ms</span>
           </div>
         </div>
       </div>

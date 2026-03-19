@@ -22,6 +22,8 @@ export function useLogs() {
   const searchText = ref('')
 
   let eventSource: EventSource | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let allowAutoReconnect = true
   // Buffer entries while paused
   let pauseBuffer: LogEntry[] = []
 
@@ -73,6 +75,7 @@ export function useLogs() {
 
   function connect() {
     if (eventSource) return
+    allowAutoReconnect = true
 
     eventSource = new EventSource('/api/logs?follow=true')
 
@@ -92,14 +95,22 @@ export function useLogs() {
       eventSource?.close()
       eventSource = null
 
-      // Reconnect after delay
-      setTimeout(() => {
-        if (!eventSource) connect()
-      }, 3000)
+      // Reconnect after delay, only if not explicitly disconnected/unmounted.
+      if (allowAutoReconnect) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null
+          if (allowAutoReconnect && !eventSource) connect()
+        }, 3000)
+      }
     }
   }
 
   function disconnect() {
+    allowAutoReconnect = false
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
     if (eventSource) {
       eventSource.close()
       eventSource = null

@@ -76,7 +76,7 @@ export function useVault() {
       if (vaultStatus.value) {
         vaultStatus.value = {
           ...vaultStatus.value,
-          credential_count: vaultStatus.value.credential_count - 1,
+          credential_count: Math.max(0, vaultStatus.value.credential_count - 1),
         }
       }
     } catch (err) {

@@ -4,6 +4,7 @@ package worker
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -57,7 +58,11 @@ func (s *Service) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get observations for analysis (rough estimate of limit)
+	// Get observations for analysis. The multiplier of 50 is a heuristic: we
+	// assume at most ~50 observations are created per day on average. For
+	// deployments with higher throughput the analytics may be slightly
+	// incomplete; a future improvement would be to filter by created_at >= cutoff
+	// at the DB level rather than applying a fetch limit here.
 	obs, err := s.observationStore.GetRecentObservations(r.Context(), project, days*50)
 	if err != nil {
 		log.Error().Err(err).Msg("get observations for trends failed")
@@ -119,17 +124,13 @@ func (s *Service) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 		name  string
 		count int
 	}
-	var topConcepts []conceptEntry
+	topConcepts := make([]conceptEntry, 0, len(conceptCounts))
 	for name, count := range conceptCounts {
 		topConcepts = append(topConcepts, conceptEntry{name, count})
 	}
-	for i := 0; i < len(topConcepts) && i < 10; i++ {
-		for j := i + 1; j < len(topConcepts); j++ {
-			if topConcepts[j].count > topConcepts[i].count {
-				topConcepts[i], topConcepts[j] = topConcepts[j], topConcepts[i]
-			}
-		}
-	}
+	slices.SortFunc(topConcepts, func(a, b conceptEntry) int {
+		return b.count - a.count // descending by count
+	})
 	if len(topConcepts) > 10 {
 		topConcepts = topConcepts[:10]
 	}

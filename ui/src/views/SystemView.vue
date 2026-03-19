@@ -37,20 +37,37 @@ async function loadAll() {
   loading.value = true
   error.value = null
 
+  const signal = abortController.signal
+
   try {
-    const [h, v, g] = await Promise.all([
-      fetchSystemHealth(abortController.signal).catch(() => null),
-      fetchVectorMetrics(abortController.signal).catch(() => null),
-      fetchGraphStats(abortController.signal).catch(() => null),
+    const [h, v, g] = await Promise.allSettled([
+      fetchSystemHealth(signal),
+      fetchVectorMetrics(signal),
+      fetchGraphStats(signal),
     ])
-    health.value = h
-    vectorMetrics.value = v
-    graphStats.value = g
+
+    // Bail out if this request was superseded by a newer one.
+    if (signal.aborted) return
+
+    health.value = h.status === 'fulfilled' ? h.value : null
+    vectorMetrics.value = v.status === 'fulfilled' ? v.value : null
+    graphStats.value = g.status === 'fulfilled' ? g.value : null
+
+    // Surface real errors (not AbortErrors for the current signal).
+    const failures = [h, v, g]
+      .filter(r => r.status === 'rejected')
+      .map(r => (r as PromiseRejectedResult).reason)
+      .filter(e => !(e instanceof Error && e.name === 'AbortError'))
+    if (failures.length > 0) {
+      error.value = failures.map((e: unknown) => e instanceof Error ? e.message : String(e)).join('; ')
+    }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
     error.value = err instanceof Error ? err.message : 'Failed to load system info'
   } finally {
-    loading.value = false
+    if (!signal.aborted) {
+      loading.value = false
+    }
   }
 }
 

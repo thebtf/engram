@@ -27,7 +27,7 @@ function handleSearch() {
 
 function setProject(project: string) {
   filterProject.value = project
-  loadSessions()
+  search()
 }
 </script>
 

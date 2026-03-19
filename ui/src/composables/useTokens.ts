@@ -29,20 +29,21 @@ export function useTokens() {
   async function create(name: string, scope: string): Promise<CreateTokenResponse> {
     error.value = null
     try {
-      const result = await createToken({ name, scope })
+      const result = await createToken({ name, scope }, abortController?.signal)
       await loadTokens()
       return result
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err
       error.value = err instanceof Error ? err.message : 'Failed to create token'
       throw err
     }
   }
 
-  async function revoke(name: string) {
+  async function revoke(id: string) {
     error.value = null
     try {
-      await revokeToken(name)
-      tokens.value = tokens.value.filter(t => t.name !== name)
+      await revokeToken(id)
+      tokens.value = tokens.value.filter(t => t.id !== id)
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Failed to revoke token'
       throw err

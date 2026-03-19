@@ -7,7 +7,7 @@ import SearchBar from '@/components/search/SearchBar.vue'
 import SearchResults from '@/components/search/SearchResults.vue'
 
 const route = useRoute()
-const { query, project, results, totalCount, loading, error, decisionMode, intent, search, clear } = useSearch()
+const { query, project, results, totalCount, loading, error, decisionMode, intent, search } = useSearch()
 
 const projects = ref<string[]>([])
 

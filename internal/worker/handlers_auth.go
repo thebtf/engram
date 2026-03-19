@@ -9,11 +9,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -98,6 +101,7 @@ func (s *Service) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   sessionMaxAge,
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 	})
 
@@ -317,7 +321,11 @@ func (s *Service) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 
 	if err := tokenStore.Revoke(r.Context(), id); err != nil {
 		log.Error().Err(err).Str("token_id", id).Msg("auth: failed to revoke token")
-		http.Error(w, "not found", http.StatusNotFound)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -358,12 +366,8 @@ func isDuplicateKeyError(err error) bool {
 // containsDuplicateKey checks error message for duplicate key indicators.
 func containsDuplicateKey(msg string) bool {
 	for _, s := range []string{"duplicate key", "23505", "UNIQUE constraint"} {
-		if len(msg) >= len(s) {
-			for i := 0; i <= len(msg)-len(s); i++ {
-				if msg[i:i+len(s)] == s {
-					return true
-				}
-			}
+		if strings.Contains(msg, s) {
+			return true
 		}
 	}
 	return false

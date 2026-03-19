@@ -29,7 +29,7 @@ const projects = ref<string[]>([])
 // Bulk selection state
 const selectedIds = ref<Set<number>>(new Set())
 const showBatchConfirm = ref(false)
-const batchAction = ref<'archive' | 'delete' | null>(null)
+const batchAction = ref<'archive' | null>(null)
 const batchProcessing = ref(false)
 
 const allSelected = computed(() =>
@@ -56,7 +56,7 @@ function toggleSelectAll() {
   }
 }
 
-function startBatchAction(action: 'archive' | 'delete') {
+function startBatchAction(action: 'archive') {
   batchAction.value = action
   showBatchConfirm.value = true
 }
@@ -68,7 +68,7 @@ async function executeBatchAction() {
   batchProcessing.value = true
   try {
     const ids = Array.from(selectedIds.value)
-    await archiveObservations(ids, `Batch ${batchAction.value} from dashboard`)
+    await archiveObservations(ids, 'Batch archive from dashboard')
     selectedIds.value = new Set()
     await fetchPage()
   } catch {
@@ -155,10 +155,14 @@ function setProject(project: string | null) {
 
 function setType(type: ObservationType | null) {
   currentType.value = currentType.value === type ? null : type
+  offset.value = 0
+  fetchPage()
 }
 
 function setConcept(concept: string) {
   currentConcept.value = currentConcept.value === concept ? '' : concept
+  offset.value = 0
+  fetchPage()
 }
 
 function navigateToDetail(id: number) {
@@ -260,14 +264,6 @@ onUnmounted(() => {
       >
         <i class="fas fa-archive mr-1" />
         Archive
-      </button>
-      <button
-        @click="startBatchAction('delete')"
-        :disabled="batchProcessing"
-        class="px-3 py-1 rounded-lg text-xs bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors disabled:opacity-50"
-      >
-        <i class="fas fa-trash mr-1" />
-        Delete
       </button>
       <button
         @click="selectedIds = new Set()"
@@ -405,9 +401,9 @@ onUnmounted(() => {
     <!-- Batch Action Confirmation -->
     <ConfirmDialog
       :show="showBatchConfirm"
-      :title="`${batchAction === 'archive' ? 'Archive' : 'Delete'} ${selectedIds.size} Observations`"
-      :message="`Are you sure you want to ${batchAction} ${selectedIds.size} observation(s)? ${batchAction === 'delete' ? 'This action cannot be undone.' : 'Archived observations can be restored.'}`"
-      :confirm-label="batchAction === 'archive' ? 'Archive' : 'Delete'"
+      :title="`Archive ${selectedIds.size} Observations`"
+      :message="`Are you sure you want to archive ${selectedIds.size} observation(s)? Archived observations can be restored.`"
+      confirm-label="Archive"
       :danger="true"
       @confirm="executeBatchAction"
       @cancel="showBatchConfirm = false"

@@ -8,7 +8,7 @@ export function useAuth() {
   async function checkAuth(): Promise<void> {
     loading.value = true
     try {
-      const res = await fetch('/api/auth/me')
+      const res = await fetch('/api/auth/me', { credentials: 'include' })
       authenticated.value = res.ok
     } catch {
       authenticated.value = false
@@ -18,18 +18,24 @@ export function useAuth() {
   }
 
   async function login(token: string): Promise<boolean> {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    })
-    authenticated.value = res.ok
-    return res.ok
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+        credentials: 'include',
+      })
+      authenticated.value = res.ok
+      return res.ok
+    } catch {
+      authenticated.value = false
+      return false
+    }
   }
 
   async function logout(): Promise<void> {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' })
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
     } finally {
       authenticated.value = false
     }

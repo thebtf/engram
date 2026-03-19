@@ -500,13 +500,16 @@ export async function deleteCredential(name: string, signal?: AbortSignal): Prom
 // ============================================================
 
 export interface ApiToken {
+  id: string
   name: string
-  prefix: string
+  token_prefix: string
   scope: string
   created_at: string
-  last_used?: string
+  last_used_at?: string
   request_count: number
   error_count?: number
+  revoked: boolean
+  revoked_at?: string
 }
 
 export interface CreateTokenResponse {
@@ -516,7 +519,8 @@ export interface CreateTokenResponse {
 }
 
 export async function fetchTokens(signal?: AbortSignal): Promise<ApiToken[]> {
-  return fetchWithRetry<ApiToken[]>(`${API_BASE}/auth/tokens`, { signal })
+  const response = await fetchWithRetry<{ tokens: ApiToken[] }>(`${API_BASE}/auth/tokens`, { signal })
+  return response.tokens
 }
 
 export async function createToken(
@@ -526,8 +530,8 @@ export async function createToken(
   return postJson<CreateTokenResponse>(`${API_BASE}/auth/tokens`, params, { signal })
 }
 
-export async function revokeToken(name: string, signal?: AbortSignal): Promise<void> {
-  await deleteJson<Record<string, unknown>>(`${API_BASE}/auth/tokens/${encodeURIComponent(name)}`, { signal })
+export async function revokeToken(id: string, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/auth/tokens/${encodeURIComponent(id)}`, { signal })
 }
 
 // ============================================================
@@ -669,5 +673,5 @@ export async function updateObservationTags(
   tag: string,
   signal?: AbortSignal
 ): Promise<{ concepts: string[] }> {
-  return postJson<{ concepts: string[] }>(`${API_BASE}/observations/${id}/tags`, { action, tag }, { signal })
+  return postJson<{ concepts: string[] }>(`${API_BASE}/observations/${id}/tags`, { action, tags: [tag] }, { signal })
 }

@@ -43,12 +43,15 @@ function isActive(item: NavItem): boolean {
   if (item.path === '/') {
     return route.path === '/'
   }
-  return route.path.startsWith(item.path)
+  return route.path === item.path || route.path.startsWith(item.path + '/')
 }
 
 async function handleLogout() {
-  await logout()
-  router.push({ name: 'login' })
+  try {
+    await logout()
+  } finally {
+    router.push({ name: 'login' })
+  }
 }
 </script>
 
