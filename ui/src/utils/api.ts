@@ -263,8 +263,11 @@ export interface SearchAnalytics {
   avg_filter_latency_ms: number
 }
 
-export async function fetchSearchAnalytics(signal?: AbortSignal): Promise<SearchAnalytics> {
-  return fetchWithRetry<SearchAnalytics>(`${API_BASE}/search/analytics`, { signal })
+export async function fetchSearchAnalytics(since?: string, signal?: AbortSignal): Promise<SearchAnalytics> {
+  const params = new URLSearchParams()
+  if (since) params.append('since', since)
+  const query = params.toString()
+  return fetchWithRetry<SearchAnalytics>(`${API_BASE}/search/analytics${query ? '?' + query : ''}`, { signal })
 }
 
 interface RecentSearchResponse {
@@ -279,8 +282,10 @@ interface RecentSearchResponse {
   count: number
 }
 
-export async function fetchRecentSearches(limit: number = 20, signal?: AbortSignal): Promise<RecentQuery[]> {
-  const response = await fetchWithRetry<RecentSearchResponse>(`${API_BASE}/search/recent?limit=${limit}`, { signal })
+export async function fetchRecentSearches(limit: number = 20, since?: string, signal?: AbortSignal): Promise<RecentQuery[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (since) params.append('since', since)
+  const response = await fetchWithRetry<RecentSearchResponse>(`${API_BASE}/search/recent?${params}`, { signal })
   return (response.queries || []).map(q => ({
     query: q.query,
     project: q.project,
@@ -580,9 +585,10 @@ export interface RetrievalStatsResponse {
   context_injections: number
 }
 
-export async function fetchRetrievalStats(project?: string, signal?: AbortSignal): Promise<RetrievalStatsResponse> {
+export async function fetchRetrievalStats(project?: string, since?: string, signal?: AbortSignal): Promise<RetrievalStatsResponse> {
   const params = new URLSearchParams()
   if (project) params.append('project', project)
+  if (since) params.append('since', since)
   const query = params.toString()
   return fetchWithRetry<RetrievalStatsResponse>(`${API_BASE}/stats/retrieval${query ? '?' + query : ''}`, { signal })
 }
