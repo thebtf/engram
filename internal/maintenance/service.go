@@ -206,6 +206,21 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
+	// Task 8: Monitor expired verified facts (log-only, no mutations)
+	if s.store != nil {
+		var expiredCount int64
+		err := s.store.GetDB().WithContext(ctx).
+			Table("observations").
+			Where("expires_at IS NOT NULL AND expires_at < NOW()").
+			Where("concepts::text LIKE '%verified%'").
+			Count(&expiredCount).Error
+		if err != nil {
+			s.log.Warn().Err(err).Msg("Failed to count expired verified facts")
+		} else if expiredCount > 0 {
+			s.log.Info().Int64("expired_verified_facts", expiredCount).Msg("Expired verified facts detected (monitoring only)")
+		}
+	}
+
 	// Update metrics
 	s.mu.Lock()
 	s.lastRunTime = time.Now()
