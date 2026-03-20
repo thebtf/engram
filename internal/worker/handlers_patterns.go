@@ -68,13 +68,18 @@ func (s *Service) handleGetPatterns(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if patternType != "" {
-		// Filter by type — no server-side pagination support for type/project filters yet
+		// Filter by type — returns up to limit results, no offset pagination.
+		// Total reflects the returned set (type/project filters are not paginated).
 		patterns, err = store.GetPatternsByType(r.Context(), models.PatternType(patternType), limit)
-		total = int64(len(patterns))
+		if err == nil {
+			total = int64(len(patterns))
+		}
 	} else if project != "" {
-		// Filter by project
+		// Filter by project — same: up to limit, no offset pagination.
 		patterns, err = store.GetPatternsByProject(r.Context(), project, limit)
-		total = int64(len(patterns))
+		if err == nil {
+			total = int64(len(patterns))
+		}
 	} else {
 		// Count total for pagination metadata
 		total, err = store.CountActivePatterns(r.Context())

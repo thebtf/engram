@@ -148,12 +148,12 @@ func (s *PatternStore) GetPatternByName(ctx context.Context, name string) (*mode
 func (s *PatternStore) GetActivePatterns(ctx context.Context, limit, offset int, sort string) ([]*models.Pattern, error) {
 	var patterns []Pattern
 
-	orderClause := "frequency DESC, confidence DESC"
+	orderClause := "frequency DESC, confidence DESC, id DESC"
 	switch sort {
 	case "confidence":
-		orderClause = "confidence DESC, frequency DESC"
+		orderClause = "confidence DESC, frequency DESC, id DESC"
 	case "last_seen":
-		orderClause = "last_seen_at_epoch DESC, frequency DESC"
+		orderClause = "last_seen_at_epoch DESC, frequency DESC, id DESC"
 	}
 
 	err := s.db.WithContext(ctx).
