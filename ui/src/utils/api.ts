@@ -583,6 +583,9 @@ export interface RetrievalStatsResponse {
   observations_served: number
   search_requests: number
   context_injections: number
+  stale_excluded: number
+  fresh_count: number
+  duplicates_removed: number
 }
 
 export async function fetchRetrievalStats(project?: string, since?: string, signal?: AbortSignal): Promise<RetrievalStatsResponse> {

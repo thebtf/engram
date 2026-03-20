@@ -172,7 +172,8 @@ type Service struct {
 	expensiveOpLimiter     *ExpensiveOperationLimiter
 	logBuffer              *logbuf.RingBuffer
 	backfillTracker        *backfillTracker
-	searchQueryLogStore    *gorm.SearchQueryLogStore
+	searchQueryLogStore     *gorm.SearchQueryLogStore
+	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
 	version                string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
 	wg                     sync.WaitGroup
@@ -896,6 +897,9 @@ func (s *Service) initializeAsync() {
 	// Initialize search query log store for persistent analytics
 	searchQueryLogStore := gorm.NewSearchQueryLogStore(store.GetDB())
 
+	// Initialize retrieval stats log store with batched flush
+	retrievalStatsLogStore := gorm.NewRetrievalStatsLogStore(store.GetDB())
+
 	// Initialize search manager for MCP tools
 	searchMgr := search.NewManager(observationStore, summaryStore, promptStore, vectorClient)
 
@@ -948,6 +952,7 @@ func (s *Service) initializeAsync() {
 	s.collectionRegistry = collectionRegistry
 	s.sessionIdxStore = sessionIdxStore
 	s.searchQueryLogStore = searchQueryLogStore
+	s.retrievalStatsLogStore = retrievalStatsLogStore
 	s.mcpSSEHandler = mcpSSEHandler
 	s.mcpStreamableHandler = mcpStreamableHandler
 	s.initMu.Unlock()
@@ -1150,6 +1155,10 @@ func (s *Service) reinitializeDatabase() {
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
 	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
+	if s.retrievalStatsLogStore != nil {
+		s.retrievalStatsLogStore.Close()
+	}
+	s.retrievalStatsLogStore = gorm.NewRetrievalStatsLogStore(store.GetDB())
 	s.observationStore = observationStore
 	s.summaryStore = summaryStore
 	s.promptStore = promptStore
@@ -1861,6 +1870,30 @@ func (s *Service) recordRetrievalStatsExtended(project string, served, verified,
 		atomic.AddInt64(&stats.SearchRequests, 1)
 	} else {
 		atomic.AddInt64(&stats.ContextInjections, 1)
+	}
+
+	// Persist to DB via batched flusher (non-blocking).
+	s.initMu.RLock()
+	logStore := s.retrievalStatsLogStore
+	s.initMu.RUnlock()
+	if logStore != nil {
+		if isSearch {
+			logStore.LogEvent(project, "search_request", 1)
+		} else {
+			logStore.LogEvent(project, "context_injection", 1)
+		}
+		if served > 0 {
+			logStore.LogEvent(project, "observations_served", int(served))
+		}
+		if staleExcluded > 0 {
+			logStore.LogEvent(project, "stale_excluded", int(staleExcluded))
+		}
+		if freshCount > 0 {
+			logStore.LogEvent(project, "fresh_count", int(freshCount))
+		}
+		if duplicatesRemoved > 0 {
+			logStore.LogEvent(project, "duplicates_removed", int(duplicatesRemoved))
+		}
 	}
 }
 

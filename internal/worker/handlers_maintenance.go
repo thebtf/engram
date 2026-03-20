@@ -110,6 +110,23 @@ func (s *Service) handleRunMaintenance(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Clean up old retrieval stats logs (90-day retention) in the background.
+	go func() {
+		s.initMu.RLock()
+		rsStore := s.retrievalStatsLogStore
+		s.initMu.RUnlock()
+
+		if rsStore == nil {
+			return
+		}
+		deleted, err := rsStore.Cleanup(context.Background(), 90*24*time.Hour)
+		if err != nil {
+			log.Warn().Err(err).Msg("retrieval stats log cleanup failed")
+		} else if deleted > 0 {
+			log.Info().Int64("deleted", deleted).Msg("cleaned up old retrieval stats log entries")
+		}
+	}()
+
 	writeJSON(w, map[string]any{
 		"status":  "triggered",
 		"message": "Maintenance run started in background",

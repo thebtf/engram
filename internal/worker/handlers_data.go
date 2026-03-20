@@ -423,10 +423,33 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project"
+// @Param since query string false "ISO8601 timestamp for time range filter"
 // @Success 200 {object} map[string]interface{}
 // @Router /api/stats/retrieval [get]
 func (s *Service) handleGetRetrievalStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
+
+	// Try persistent DB stats first, fall back to in-memory.
+	s.initMu.RLock()
+	logStore := s.retrievalStatsLogStore
+	s.initMu.RUnlock()
+
+	if logStore != nil {
+		var since time.Time
+		if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+			if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+				since = t
+			}
+		}
+		dbStats, err := logStore.GetStats(r.Context(), project, since)
+		if err == nil {
+			writeJSON(w, dbStats)
+			return
+		}
+		log.Warn().Err(err).Msg("failed to get retrieval stats from DB, falling back to in-memory")
+	}
+
+	// Fallback to in-memory stats (no time range support).
 	stats := s.GetRetrievalStats(project)
 	writeJSON(w, stats)
 }
