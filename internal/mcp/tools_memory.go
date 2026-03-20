@@ -187,9 +187,12 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 
 	// Apply TTL for verified facts.
 	ttlDays := computeTTLDays(params.TtlDays, concepts)
+	ttlApplied := false
 	if ttlDays > 0 {
 		if err := s.observationStore.SetObservationTTL(ctx, id, ttlDays); err != nil {
 			log.Warn().Err(err).Int64("id", id).Int("ttl_days", ttlDays).Msg("failed to set observation TTL")
+		} else {
+			ttlApplied = true
 		}
 	}
 
@@ -200,7 +203,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"scope":   string(scope),
 		"message": "Memory stored successfully",
 	}
-	if ttlDays > 0 {
+	if ttlApplied {
 		result["ttl_days"] = ttlDays
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
@@ -230,17 +233,21 @@ func computeTTLDays(explicit *int, concepts []string) int {
 		return 0
 	}
 
-	// 3. Auto-TTL by concept tags (exact match)
+	// 3. Auto-TTL by concept tags (exact match) — use minimum TTL from all matching tags
 	autoTTL := map[string]int{
 		"api": 7, "endpoint": 7,
 		"library": 30, "framework": 30,
 		"language-feature": 90,
 		"architecture": 180, "pattern": 180,
 	}
+	minTTL := 0
 	for _, c := range concepts {
-		if days, ok := autoTTL[c]; ok {
-			return days
+		if days, ok := autoTTL[c]; ok && (minTTL == 0 || days < minTTL) {
+			minTTL = days
 		}
+	}
+	if minTTL > 0 {
+		return minTTL
 	}
 
 	// 4. Default for verified facts with no matching tag

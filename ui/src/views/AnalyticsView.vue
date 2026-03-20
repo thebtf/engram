@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onUnmounted, watch } from 'vue'
 import {
   fetchSearchAnalytics,
   fetchRecentSearches,
@@ -56,11 +56,7 @@ function barWidth(value: number, max: number): string {
 
 watch(since, () => {
   loadAll()
-})
-
-onMounted(() => {
-  loadAll()
-})
+}, { immediate: true })
 
 onUnmounted(() => {
   abortController?.abort()

@@ -212,7 +212,7 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		err := s.store.GetDB().WithContext(ctx).
 			Table("observations").
 			Where("expires_at IS NOT NULL AND expires_at < NOW()").
-			Where("concepts::text LIKE '%verified%'").
+			Where("concepts @> ?", `["verified"]`).
 			Count(&expiredCount).Error
 		if err != nil {
 			s.log.Warn().Err(err).Msg("Failed to count expired verified facts")

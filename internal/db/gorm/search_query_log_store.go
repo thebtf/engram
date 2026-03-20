@@ -48,7 +48,7 @@ func (s *SearchQueryLogStore) LogQuery(project, query, searchType string, result
 			CreatedAt:  time.Now(),
 		}
 		if err := s.db.Create(&entry).Error; err != nil {
-			log.Warn().Err(err).Str("query", query).Msg("failed to log search query")
+			log.Warn().Err(err).Int("query_len", len(query)).Str("search_type", searchType).Msg("failed to log search query")
 		}
 	}()
 }
@@ -89,18 +89,22 @@ func (s *SearchQueryLogStore) GetAnalytics(ctx context.Context, since time.Time)
 
 	// Searches today (UTC)
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour)
-	s.db.WithContext(ctx).Table("search_query_log").
+	if err := s.db.WithContext(ctx).Table("search_query_log").
 		Where("created_at >= ?", todayStart).
-		Count(&analytics.SearchesToday)
+		Count(&analytics.SearchesToday).Error; err != nil {
+		return nil, err
+	}
 
-	// Avg latency
+	// Avg latency (only where latency_ms > 0, i.e. actually measured)
 	baseQ := s.db.WithContext(ctx).Table("search_query_log")
 	if !since.IsZero() {
 		baseQ = baseQ.Where("created_at >= ?", since)
 	}
-	baseQ.Where("latency_ms IS NOT NULL").
+	if err := baseQ.Where("latency_ms > 0").
 		Select("COALESCE(AVG(latency_ms), 0)").
-		Row().Scan(&analytics.AvgLatencyMs)
+		Row().Scan(&analytics.AvgLatencyMs); err != nil {
+		return nil, err
+	}
 
 	// Zero result rate
 	var zeroCount int64
@@ -108,7 +112,9 @@ func (s *SearchQueryLogStore) GetAnalytics(ctx context.Context, since time.Time)
 	if !since.IsZero() {
 		zeroQ = zeroQ.Where("created_at >= ?", since)
 	}
-	zeroQ.Where("results = 0").Count(&zeroCount)
+	if err := zeroQ.Where("results = 0").Count(&zeroCount).Error; err != nil {
+		return nil, err
+	}
 	if analytics.TotalSearches > 0 {
 		analytics.ZeroResultRate = float64(zeroCount) / float64(analytics.TotalSearches)
 	}
@@ -118,7 +124,9 @@ func (s *SearchQueryLogStore) GetAnalytics(ctx context.Context, since time.Time)
 	if !since.IsZero() {
 		vectorQ = vectorQ.Where("created_at >= ?", since)
 	}
-	vectorQ.Where("used_vector = true").Count(&analytics.VectorSearches)
+	if err := vectorQ.Where("used_vector = true").Count(&analytics.VectorSearches).Error; err != nil {
+		return nil, err
+	}
 	analytics.FilterSearches = analytics.TotalSearches - analytics.VectorSearches
 
 	return &analytics, nil

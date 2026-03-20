@@ -44,6 +44,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	var total int64
 	var err error
 	var usedVector bool
+	searchStart := time.Now()
 
 	// Use vector search if query is provided and vector client is available
 	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
@@ -84,7 +85,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 
 	// Track search if query was provided
 	if query != "" {
-		s.trackSearchQuery(query, project, "observations", len(observations), usedVector)
+		s.trackSearchQuery(query, project, "observations", len(observations), usedVector, float32(time.Since(searchStart).Milliseconds()))
 	}
 
 	// Return paginated response

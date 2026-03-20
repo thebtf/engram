@@ -1149,6 +1149,7 @@ func (s *Service) reinitializeDatabase() {
 	s.store = store
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
+	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
 	s.observationStore = observationStore
 	s.summaryStore = summaryStore
 	s.promptStore = promptStore
@@ -1918,13 +1919,13 @@ func (s *Service) GetRetrievalStats(project string) RetrievalStats {
 // trackSearchQuery records a search query for analytics.
 // Writes to the persistent DB store (fire-and-forget) and the in-memory ring buffer.
 // O(1) insertion for the ring buffer - no memory allocation or copying on each insert.
-func (s *Service) trackSearchQuery(query, project, queryType string, results int, usedVector bool) {
+func (s *Service) trackSearchQuery(query, project, queryType string, results int, usedVector bool, latencyMs float32) {
 	// Persist to DB asynchronously (fire-and-forget, never blocks caller).
 	s.initMu.RLock()
 	sqlStore := s.searchQueryLogStore
 	s.initMu.RUnlock()
 	if sqlStore != nil {
-		sqlStore.LogQuery(project, query, queryType, results, usedVector, 0)
+		sqlStore.LogQuery(project, query, queryType, results, usedVector, latencyMs)
 	}
 
 	// Also maintain the in-memory ring buffer for low-latency in-process access.

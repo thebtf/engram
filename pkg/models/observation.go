@@ -332,6 +332,9 @@ type ObservationJSON struct {
 	ScoreUpdatedAt  int64            `json:"score_updated_at_epoch,omitempty"`
 	IsStale         bool             `json:"is_stale,omitempty"`
 	IsSuperseded    bool             `json:"is_superseded,omitempty"`
+	ExpiresAt       *time.Time       `json:"expires_at,omitempty"`
+	TtlDays         *int32           `json:"ttl_days,omitempty"`
+	IsExpired       bool             `json:"is_expired,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler for Observation.
@@ -364,6 +367,16 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		InjectionCount:  o.InjectionCount,
 		// Conflict detection fields
 		IsSuperseded: o.IsSuperseded,
+		// TTL fields
+		IsExpired: o.IsExpired,
+	}
+	if o.ExpiresAt.Valid {
+		t := o.ExpiresAt.Time.UTC()
+		j.ExpiresAt = &t
+	}
+	if o.TtlDays.Valid {
+		d := o.TtlDays.Int32
+		j.TtlDays = &d
 	}
 	if o.Title.Valid {
 		j.Title = o.Title.String

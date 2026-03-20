@@ -95,6 +95,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit := gorm.ParseLimitParamWithMax(r, DefaultSearchLimit, 200)
+	searchStart := time.Now()
 
 	var observations []*models.Observation
 	var err error
@@ -366,7 +367,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Track this search for analytics
-	s.trackSearchQuery(query, project, "observations", len(clusteredObservations), usedVector)
+	s.trackSearchQuery(query, project, "observations", len(clusteredObservations), usedVector, float32(time.Since(searchStart).Milliseconds()))
 
 	writeJSON(w, map[string]any{
 		"project":      project,

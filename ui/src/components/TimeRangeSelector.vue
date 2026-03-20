@@ -24,7 +24,7 @@ function computeSince(preset: Preset): string | undefined {
   const now = new Date()
   switch (preset) {
     case 'today': {
-      // Start of today in user's local timezone, serialized as ISO8601 with offset
+      // Start of today in user's local timezone, serialized as UTC ISO8601
       const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
       return start.toISOString()
     }
