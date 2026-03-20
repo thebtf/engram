@@ -1364,6 +1364,18 @@ func toModelObservations(observations []Observation) []*models.Observation {
 	return result
 }
 
+// SetObservationTTL sets the TTL (expires_at and ttl_days) on an observation.
+func (s *ObservationStore) SetObservationTTL(ctx context.Context, id int64, ttlDays int) error {
+	expiresAt := time.Now().AddDate(0, 0, ttlDays)
+	return s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"ttl_days":   ttlDays,
+			"expires_at": expiresAt,
+		}).Error
+}
+
 // nullInt64 converts an int to sql.NullInt64.
 func nullInt64(val int) sql.NullInt64 {
 	if val == 0 {
