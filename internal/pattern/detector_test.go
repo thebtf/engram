@@ -331,11 +331,11 @@ func TestDefaultConfig(t *testing.T) {
 func TestDefaultConfig_AllFieldsValid(t *testing.T) {
 	config := DefaultConfig()
 
-	if config.MinMatchScore != 0.3 {
-		t.Errorf("MinMatchScore = %f, want 0.3", config.MinMatchScore)
+	if config.MinMatchScore != 0.5 {
+		t.Errorf("MinMatchScore = %f, want 0.5", config.MinMatchScore)
 	}
-	if config.MinFrequencyForPattern != 2 {
-		t.Errorf("MinFrequencyForPattern = %d, want 2", config.MinFrequencyForPattern)
+	if config.MinFrequencyForPattern != 5 {
+		t.Errorf("MinFrequencyForPattern = %d, want 5", config.MinFrequencyForPattern)
 	}
 	if config.AnalysisInterval != 5*time.Minute {
 		t.Errorf("AnalysisInterval = %v, want 5m", config.AnalysisInterval)

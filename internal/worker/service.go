@@ -1808,6 +1808,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/maintenance/stats", s.handleGetMaintenanceStats)
 		r.Post("/api/maintenance/backfill-relations", s.handleBackfillRelations)
 		r.Post("/api/maintenance/purge-patterns", s.handlePurgePatterns)
+		r.Post("/api/maintenance/pattern-cleanup", s.handlePatternCleanup)
 
 		// Analytics routes
 		r.Get("/api/analytics/trends", s.handleGetTrends)

@@ -256,6 +256,21 @@ func (s *PatternStore) MarkPatternDeprecated(ctx context.Context, id int64) erro
 	return result.Error
 }
 
+// GetDeprecatedPatterns retrieves all deprecated patterns.
+func (s *PatternStore) GetDeprecatedPatterns(ctx context.Context) ([]*models.Pattern, error) {
+	var patterns []Pattern
+
+	err := s.db.WithContext(ctx).
+		Where("status = ?", models.PatternStatusDeprecated).
+		Order("id ASC").
+		Find(&patterns).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelPatterns(patterns), nil
+}
+
 // MergePatterns merges a source pattern into a target pattern.
 func (s *PatternStore) MergePatterns(ctx context.Context, sourceID, targetID int64) error {
 	// Get both patterns

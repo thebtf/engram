@@ -250,10 +250,11 @@ func (s *Service) handlePurgePatterns(w http.ResponseWriter, r *http.Request) {
 				lastSeen, _ = time.Parse(time.RFC3339, p.CreatedAt)
 			}
 
-			decayMultiplier := pattern.HybridDecay(lastSeen)
+			daysSince := time.Since(lastSeen).Hours() / 24
+			decayMultiplier := pattern.TemporalDecay(daysSince)
 			dynamicQuality := baseQuality * decayMultiplier
 
-			if dynamicQuality < 0.10 {
+			if dynamicQuality < pattern.DeprecateThreshold {
 				wouldDeprecate++
 			}
 		}
@@ -275,5 +276,70 @@ func (s *Service) handlePurgePatterns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"status":     "completed",
 		"deprecated": deprecated,
+	})
+}
+
+// handlePatternCleanup godoc
+// @Summary Delete zero-quality deprecated patterns
+// @Description Deletes deprecated patterns whose dynamic quality has reached 0 (past 90-day terminal phase).
+// @Tags Maintenance
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {string} string "pattern store not initialized"
+// @Failure 500 {string} string "internal error"
+// @Router /api/maintenance/pattern-cleanup [post]
+func (s *Service) handlePatternCleanup(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	store := s.patternStore
+	s.initMu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "pattern store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get all deprecated patterns.
+	deprecated, err := store.GetDeprecatedPatterns(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Find max frequency across deprecated patterns for quality normalization.
+	maxFreq := 1
+	for _, p := range deprecated {
+		if p.Frequency > maxFreq {
+			maxFreq = p.Frequency
+		}
+	}
+
+	// Delete only patterns whose dynamic quality has reached exactly 0 (past 90-day terminal phase).
+	deleted := 0
+	for _, p := range deprecated {
+		var lastSeen time.Time
+		if p.LastSeenAt != "" {
+			lastSeen, _ = time.Parse(time.RFC3339, p.LastSeenAt)
+		}
+		if lastSeen.IsZero() && p.CreatedAt != "" {
+			lastSeen, _ = time.Parse(time.RFC3339, p.CreatedAt)
+		}
+
+		daysSince := time.Since(lastSeen).Hours() / 24
+		dynamicQuality := pattern.DynamicQuality(p.Frequency, p.Confidence, len(p.Projects), maxFreq, daysSince)
+
+		if dynamicQuality == pattern.DeleteThreshold {
+			if err := store.DeletePattern(r.Context(), p.ID); err != nil {
+				log.Warn().Err(err).Int64("pattern_id", p.ID).Msg("Failed to delete zero-quality pattern")
+				continue
+			}
+			deleted++
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"status":             "completed",
+		"deprecated_checked": len(deprecated),
+		"deleted":            deleted,
 	})
 }
