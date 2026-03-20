@@ -56,7 +56,12 @@ export function useVault() {
       }, 30000)
       revealTimers.set(name, timer)
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : 'Failed to reveal credential'
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.includes('409') || msg.includes('key mismatch') || msg.includes('encryption') || msg.includes('decrypt')) {
+        actionError.value = 'Cannot decrypt: this credential was encrypted with a different vault key. Set the original ENGRAM_VAULT_KEY to reveal it.'
+      } else {
+        actionError.value = msg || 'Failed to reveal credential'
+      }
     }
   }
 

@@ -239,7 +239,8 @@ onUnmounted(() => {
             <span class="text-slate-300 font-mono">{{ vectorMetrics.uptime }}</span>
           </div>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mt-3">
+        <div class="text-[10px] text-slate-500 uppercase mt-3 mb-1">Latency Percentiles</div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
             <span class="text-slate-600 text-xs block">P50 Latency</span>
             <span class="text-slate-300 font-mono">{{ vectorMetrics.p50_latency_ms.toFixed(1) }}ms</span>
@@ -293,10 +294,12 @@ onUnmounted(() => {
       <!-- Maintenance Controls -->
       <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-slate-800/30 mb-6">
         <h2 class="text-xs text-slate-500 uppercase tracking-wide mb-3">Maintenance</h2>
+        <p class="text-xs text-slate-500 mb-3">Background processes to optimize storage and knowledge quality.</p>
         <div class="flex flex-wrap items-center gap-3">
           <button
             @click="handleConsolidate"
             :disabled="consolidating"
+            title="Runs decay scoring, association discovery, and forgetting cycles to consolidate knowledge"
             class="px-4 py-2 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors disabled:opacity-50"
           >
             <i :class="['fas mr-1.5', consolidating ? 'fa-circle-notch fa-spin' : 'fa-compress']" />
@@ -305,6 +308,7 @@ onUnmounted(() => {
           <button
             @click="handleMaintenance"
             :disabled="maintaining"
+            title="Runs cleanup of old observations, database optimization, prompt pruning, and pattern decay"
             class="px-4 py-2 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors disabled:opacity-50"
           >
             <i :class="['fas mr-1.5', maintaining ? 'fa-circle-notch fa-spin' : 'fa-wrench']" />

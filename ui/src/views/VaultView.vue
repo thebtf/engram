@@ -156,9 +156,9 @@ async function handleDelete() {
     <!-- Credentials List -->
     <div v-else class="space-y-2">
       <!-- Inline action error (reveal/delete failures) -->
-      <div v-if="actionError" class="bg-red-500/20 border border-red-500/30 rounded-lg p-3">
-        <i class="fas fa-exclamation-triangle text-red-400 mr-2" />
-        <span class="text-red-300">{{ actionError }}</span>
+      <div v-if="actionError" class="bg-red-500/20 border border-red-500/30 rounded-lg p-3 flex items-start gap-2">
+        <i class="fas fa-exclamation-triangle text-red-400 mt-0.5 flex-shrink-0" />
+        <span class="text-red-300 text-sm">{{ actionError }}</span>
       </div>
       <div
         v-for="cred in credentials"

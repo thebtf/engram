@@ -411,6 +411,7 @@ onUnmounted(() => {
 
         <!-- Graph container -->
         <div
+          v-show="hasGraph && !loading && !error"
           ref="graphContainer"
           class="w-full h-full rounded-xl border-2 border-slate-700/50 bg-slate-950/50 min-h-[500px]"
         />

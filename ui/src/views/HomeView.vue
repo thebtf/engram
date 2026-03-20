@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { useStats, useTimeline, useHealth, useSSE } from '@/composables'
+import { useStats, useTimeline, useHealth } from '@/composables'
 import StatsCards from '@/components/StatsCards.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import FilterTabs from '@/components/FilterTabs.vue'
 import Timeline from '@/components/Timeline.vue'
 
-const { queueDepth } = useSSE()
 const { health } = useHealth()
 
 const {
@@ -30,7 +29,7 @@ const { stats } = useStats(currentProject)
 <template>
   <div>
     <!-- Stats Cards -->
-    <StatsCards :stats="stats" :queue-depth="queueDepth" />
+    <StatsCards :stats="stats" :observation-count="observationCount" />
 
     <!-- Two Column Layout -->
     <div class="flex gap-6">

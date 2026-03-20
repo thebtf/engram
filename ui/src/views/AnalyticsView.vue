@@ -100,7 +100,7 @@ onUnmounted(() => {
 
     <template v-else>
       <!-- Search Performance Stats -->
-      <div v-if="analytics" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div v-if="analytics" class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
         <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50">
           <span class="text-xs text-slate-500 block mb-1">Total Searches</span>
           <span class="text-2xl font-bold text-white font-mono">{{ analytics.total_searches }}</span>
@@ -108,10 +108,6 @@ onUnmounted(() => {
         <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50">
           <span class="text-xs text-slate-500 block mb-1">Avg Latency</span>
           <span class="text-2xl font-bold text-white font-mono">{{ (analytics.avg_latency_ms ?? 0).toFixed(1) }}<span class="text-sm text-slate-500">ms</span></span>
-        </div>
-        <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50">
-          <span class="text-xs text-slate-500 block mb-1">Cache Hits</span>
-          <span class="text-2xl font-bold text-green-400 font-mono">{{ analytics.cache_hits }}</span>
         </div>
         <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50">
           <span class="text-xs text-slate-500 block mb-1">Errors</span>
@@ -125,33 +121,6 @@ onUnmounted(() => {
       <div v-else class="text-center py-12 mb-6">
         <i class="fas fa-chart-bar text-slate-600 text-3xl mb-3 block" />
         <p class="text-slate-500">No search data for selected time range</p>
-      </div>
-
-      <!-- Latency Breakdown -->
-      <div v-if="analytics" class="p-4 rounded-xl border-2 border-slate-700/50 bg-slate-800/30 mb-6">
-        <h2 class="text-xs text-slate-500 uppercase tracking-wide mb-3">Latency Breakdown</h2>
-        <div class="space-y-2">
-          <div class="flex items-center gap-3">
-            <span class="text-xs text-slate-400 w-24">Vector</span>
-            <div class="flex-1 bg-slate-900/50 rounded-full h-4 overflow-hidden">
-              <div
-                class="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full"
-                :style="{ width: barWidth(analytics.avg_vector_latency_ms ?? 0, (analytics.avg_latency_ms ?? 0) * 1.2) }"
-              />
-            </div>
-            <span class="text-xs font-mono text-slate-300 w-16 text-right">{{ (analytics.avg_vector_latency_ms ?? 0).toFixed(1) }}ms</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <span class="text-xs text-slate-400 w-24">Filter</span>
-            <div class="flex-1 bg-slate-900/50 rounded-full h-4 overflow-hidden">
-              <div
-                class="h-full bg-gradient-to-r from-purple-500 to-purple-400 rounded-full"
-                :style="{ width: barWidth(analytics.avg_filter_latency_ms ?? 0, (analytics.avg_latency_ms ?? 0) * 1.2) }"
-              />
-            </div>
-            <span class="text-xs font-mono text-slate-300 w-16 text-right">{{ (analytics.avg_filter_latency_ms ?? 0).toFixed(1) }}ms</span>
-          </div>
-        </div>
       </div>
 
       <!-- Retrieval Stats -->
@@ -185,7 +154,7 @@ onUnmounted(() => {
         <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-slate-800/30">
           <h2 class="text-xs text-slate-500 uppercase tracking-wide mb-3">Search Misses</h2>
           <div v-if="searchMisses.length === 0" class="text-xs text-slate-600 py-4 text-center">
-            No search misses recorded
+            No zero-result searches recorded
           </div>
           <div v-else class="space-y-2 max-h-80 overflow-y-auto">
             <div

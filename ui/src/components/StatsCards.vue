@@ -5,7 +5,7 @@ import { computed } from 'vue'
 
 const props = defineProps<{
   stats: Stats | null
-  queueDepth: number
+  observationCount: number
 }>()
 
 const uptime = computed(() => {
@@ -15,7 +15,7 @@ const uptime = computed(() => {
 
 const status = computed(() => {
   if (!props.stats) return 'Loading'
-  if (props.queueDepth > 0) return 'Processing'
+  if (props.stats.isProcessing) return 'Processing'
   if (props.stats.activeSessions > 0) return 'Active'
   return 'Idle'
 })
@@ -55,15 +55,15 @@ const statusColor = computed(() => {
       </div>
     </div>
 
-    <!-- Queue Depth -->
+    <!-- Observations -->
     <div class="glass rounded-xl p-4 border border-white/10">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-xs text-slate-400 uppercase tracking-wide">Queue Depth</p>
-          <p class="text-2xl font-bold text-purple-400">{{ queueDepth }}</p>
+          <p class="text-xs text-slate-400 uppercase tracking-wide">Observations</p>
+          <p class="text-2xl font-bold text-purple-400">{{ observationCount }}</p>
         </div>
         <div class="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-          <i class="fas fa-layer-group text-purple-400" />
+          <i class="fas fa-database text-purple-400" />
         </div>
       </div>
     </div>
