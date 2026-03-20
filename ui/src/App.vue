@@ -24,7 +24,7 @@ onMounted(() => {
     <router-view v-else-if="!authenticated" />
 
     <!-- Authenticated layout -->
-    <div v-else class="flex min-h-screen">
+    <div v-else class="flex h-screen">
       <AppSidebar />
 
       <div class="flex-1 min-w-0 flex flex-col">

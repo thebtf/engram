@@ -27,7 +27,7 @@ import (
 type requestIDKey struct{}
 
 // projectNamePattern validates project names to prevent path traversal.
-var projectNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_./-]+$`)
+var projectNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_.\\/:-]+$`)
 
 // allowedOrigins is the whitelist of origins allowed for CORS.
 // Uses exact matching to prevent bypass attacks like "evil-localhost.com".
