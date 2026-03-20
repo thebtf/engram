@@ -83,6 +83,8 @@ type Observation struct {
 	IsArchived                  int            `gorm:"default:0;index:idx_observations_archived;index:idx_observations_active,priority:1"`
 	EncryptedSecret             []byte         `gorm:"type:bytea"`
 	EncryptionKeyFingerprint    sql.NullString `gorm:"type:text"`
+	ExpiresAt                   sql.NullTime   `gorm:"type:timestamptz"`
+	TtlDays                     sql.NullInt32
 }
 
 func (Observation) TableName() string { return "observations" }

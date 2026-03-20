@@ -1152,6 +1152,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"importance": map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
 						"scope":      map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Visibility scope"},
 						"project":    map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
+						"ttl_days":   map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
 					},
 				},
 			},

@@ -2,6 +2,14 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import type { IndexedSession } from '@/utils/api'
 import { fetchIndexedSessions, searchIndexedSessions, fetchProjects } from '@/utils/api'
 
+function resolveSessionError(err: unknown, fallback: string): string {
+  if (!(err instanceof Error)) return fallback
+  if (err.message.startsWith('HTTP 503')) {
+    return 'Session indexing is not configured on the server. Sessions will appear once transcript indexing is enabled.'
+  }
+  return err.message || fallback
+}
+
 export function useSessions() {
   const sessions = ref<IndexedSession[]>([])
   const projects = ref<string[]>([])
@@ -32,7 +40,7 @@ export function useSessions() {
       ) || []
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return
-      error.value = err instanceof Error ? err.message : 'Failed to load sessions'
+      error.value = resolveSessionError(err, 'Failed to load sessions')
     } finally {
       loading.value = false
     }
@@ -57,7 +65,7 @@ export function useSessions() {
       ) || []
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return
-      error.value = err instanceof Error ? err.message : 'Failed to search sessions'
+      error.value = resolveSessionError(err, 'Failed to search sessions')
     } finally {
       loading.value = false
     }

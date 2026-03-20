@@ -121,7 +121,7 @@ The plugin registers the MCP server automatically. Set two environment variables
 # Set environment variables (read by Claude Code at runtime)
 # Linux/macOS: add to shell profile; Windows: set as System Environment Variables
 ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_API_TOKEN=your-api-token
+ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token   # or ENGRAM_API_TOKEN (deprecated)
 ```
 
 ```
@@ -152,7 +152,7 @@ Add to `~/.claude/settings.json` (user scope) or `.claude/settings.json` (projec
       "type": "url",
       "url": "http://your-server:37777/mcp",
       "headers": {
-        "Authorization": "Bearer ${ENGRAM_API_TOKEN}"
+        "Authorization": "Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"
       }
     }
   }
@@ -164,7 +164,7 @@ Claude Code expands `${VAR}` references from your environment at runtime. You ca
 **CLI shortcut:**
 
 ```bash
-claude mcp add-json engram '{"type":"http","url":"http://your-server:37777/mcp","headers":{"Authorization":"Bearer ${ENGRAM_API_TOKEN}"}}' -s user
+claude mcp add-json engram '{"type":"http","url":"http://your-server:37777/mcp","headers":{"Authorization":"Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"}}' -s user
 ```
 
 #### SSE Transport
@@ -178,7 +178,7 @@ Use `http://your-server:37777/sse` as the URL:
       "type": "url",
       "url": "http://your-server:37777/sse",
       "headers": {
-        "Authorization": "Bearer ${ENGRAM_API_TOKEN}"
+        "Authorization": "Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"
       }
     }
   }
@@ -251,7 +251,7 @@ These variables are used by the client-side hooks, **not** for MCP transport con
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENGRAM_URL` | — | Full MCP endpoint URL for plugin |
-| `ENGRAM_API_TOKEN` | — | API token for plugin |
+| `ENGRAM_AUTH_ADMIN_TOKEN` | — | API token for plugin (also accepts `ENGRAM_API_TOKEN`) |
 | `ENGRAM_WORKER_HOST` | `127.0.0.1` | Worker address for hooks |
 | `ENGRAM_WORKER_PORT` | `37777` | Worker port for hooks |
 | `ENGRAM_SESSIONS_DIR` | `~/.claude/projects/` | Session JSONL directory |

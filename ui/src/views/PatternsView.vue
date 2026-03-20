@@ -57,13 +57,13 @@ const filteredPatterns = computed(() => {
   // Sort
   switch (sortBy.value) {
     case 'frequency':
-      result.sort((a, b) => b.occurrences - a.occurrences)
+      result.sort((a, b) => b.frequency - a.frequency)
       break
     case 'confidence':
       result.sort((a, b) => b.confidence - a.confidence)
       break
     case 'last_seen':
-      result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      result.sort((a, b) => b.last_seen_at_epoch - a.last_seen_at_epoch)
       break
   }
 
@@ -244,7 +244,7 @@ function confidencePercent(c: number): string {
               </Badge>
             </div>
             <div class="flex items-center gap-3 text-xs text-slate-500">
-              <span>{{ pattern.occurrences }} occurrences</span>
+              <span>{{ pattern.frequency }} occurrences</span>
               <span class="flex items-center gap-1">
                 <span class="text-slate-600">Confidence:</span>
                 <span class="inline-flex items-center">

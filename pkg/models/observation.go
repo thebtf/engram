@@ -216,6 +216,9 @@ type Observation struct {
 	EnrichmentLevel int              `db:"enrichment_level" json:"enrichment_level"`
 	SourceEventIDs  JSONInt64Array   `db:"source_event_ids" json:"source_event_ids,omitempty"`
 	RawContent      sql.NullString   `db:"raw_content" json:"raw_content,omitempty"`
+	ExpiresAt       sql.NullTime     `db:"expires_at" json:"expires_at,omitempty"`
+	TtlDays         sql.NullInt32    `db:"ttl_days" json:"ttl_days,omitempty"`
+	IsExpired       bool             `db:"-" json:"is_expired,omitempty"`
 }
 
 // ParsedObservation represents an observation parsed from SDK response XML.
@@ -329,6 +332,9 @@ type ObservationJSON struct {
 	ScoreUpdatedAt  int64            `json:"score_updated_at_epoch,omitempty"`
 	IsStale         bool             `json:"is_stale,omitempty"`
 	IsSuperseded    bool             `json:"is_superseded,omitempty"`
+	ExpiresAt       *time.Time       `json:"expires_at,omitempty"`
+	TtlDays         *int32           `json:"ttl_days,omitempty"`
+	IsExpired       bool             `json:"is_expired,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler for Observation.
@@ -361,6 +367,16 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		InjectionCount:  o.InjectionCount,
 		// Conflict detection fields
 		IsSuperseded: o.IsSuperseded,
+		// TTL fields
+		IsExpired: o.IsExpired,
+	}
+	if o.ExpiresAt.Valid {
+		t := o.ExpiresAt.Time.UTC()
+		j.ExpiresAt = &t
+	}
+	if o.TtlDays.Valid {
+		d := o.TtlDays.Int32
+		j.TtlDays = &d
 	}
 	if o.Title.Valid {
 		j.Title = o.Title.String

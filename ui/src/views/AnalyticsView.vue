@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onUnmounted, watch } from 'vue'
 import {
   fetchSearchAnalytics,
   fetchRecentSearches,
@@ -11,6 +11,7 @@ import {
   type RetrievalStatsResponse,
 } from '@/utils/api'
 import { safeDateFormat } from '@/utils/formatters'
+import TimeRangeSelector from '@/components/TimeRangeSelector.vue'
 
 const analytics = ref<SearchAnalytics | null>(null)
 const recentQueries = ref<RecentQuery[]>([])
@@ -18,6 +19,7 @@ const searchMisses = ref<SearchMiss[]>([])
 const retrievalStats = ref<RetrievalStatsResponse | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+const since = ref<string | undefined>(undefined)
 
 let abortController: AbortController | null = null
 
@@ -30,10 +32,10 @@ async function loadAll() {
 
   try {
     const [analyticsData, recent, misses, retrieval] = await Promise.all([
-      fetchSearchAnalytics(abortController.signal).catch(() => null),
-      fetchRecentSearches(20, abortController.signal).catch(() => []),
+      fetchSearchAnalytics(since.value, abortController.signal).catch(() => null),
+      fetchRecentSearches(20, since.value, abortController.signal).catch(() => []),
       fetchSearchMisses(abortController.signal).catch(() => []),
-      fetchRetrievalStats(undefined, abortController.signal).catch(() => null),
+      fetchRetrievalStats(undefined, since.value, abortController.signal).catch(() => null),
     ])
     analytics.value = analyticsData
     recentQueries.value = recent || []
@@ -52,9 +54,9 @@ function barWidth(value: number, max: number): string {
   return `${Math.max(2, (value / max) * 100)}%`
 }
 
-onMounted(() => {
+watch(since, () => {
   loadAll()
-})
+}, { immediate: true })
 
 onUnmounted(() => {
   abortController?.abort()
@@ -69,14 +71,17 @@ onUnmounted(() => {
         <i class="fas fa-chart-line text-claude-400 text-xl" />
         <h1 class="text-2xl font-bold text-white">Analytics</h1>
       </div>
-      <button
-        @click="loadAll()"
-        :disabled="loading"
-        class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors disabled:opacity-50"
-      >
-        <i :class="['fas fa-sync-alt mr-1.5', loading && 'fa-spin']" />
-        Refresh
-      </button>
+      <div class="flex items-center gap-3">
+        <TimeRangeSelector v-model="since" />
+        <button
+          @click="loadAll()"
+          :disabled="loading"
+          class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors disabled:opacity-50"
+        >
+          <i :class="['fas fa-sync-alt mr-1.5', loading && 'fa-spin']" />
+          Refresh
+        </button>
+      </div>
     </div>
 
     <!-- Loading -->
@@ -116,6 +121,12 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- No data state -->
+      <div v-else class="text-center py-12 mb-6">
+        <i class="fas fa-chart-bar text-slate-600 text-3xl mb-3 block" />
+        <p class="text-slate-500">No search data for selected time range</p>
+      </div>
+
       <!-- Latency Breakdown -->
       <div v-if="analytics" class="p-4 rounded-xl border-2 border-slate-700/50 bg-slate-800/30 mb-6">
         <h2 class="text-xs text-slate-500 uppercase tracking-wide mb-3">Latency Breakdown</h2>
@@ -144,9 +155,9 @@ onUnmounted(() => {
       </div>
 
       <!-- Retrieval Stats -->
-      <div v-if="retrievalStats" class="p-4 rounded-xl border-2 border-slate-700/50 bg-slate-800/30 mb-6">
+      <div class="p-4 rounded-xl border-2 border-slate-700/50 bg-slate-800/30 mb-6">
         <h2 class="text-xs text-slate-500 uppercase tracking-wide mb-3">Retrieval Stats</h2>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <div v-if="retrievalStats" class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
             <span class="text-slate-600 text-xs block">Total Requests</span>
             <span class="text-slate-300 font-mono">{{ retrievalStats.total_requests }}</span>
@@ -163,6 +174,9 @@ onUnmounted(() => {
             <span class="text-slate-600 text-xs block">Context Injections</span>
             <span class="text-slate-300 font-mono">{{ retrievalStats.context_injections }}</span>
           </div>
+        </div>
+        <div v-else class="text-xs text-slate-600 py-4 text-center">
+          No retrieval data for selected time range
         </div>
       </div>
 

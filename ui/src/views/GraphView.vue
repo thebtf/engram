@@ -139,11 +139,16 @@ async function loadGraph() {
     nodeCount.value = nodeMap.size
     edgeCount.value = uniqueRelations.length
 
+    // Set loading false BEFORE rendering so the container gets its final dimensions
+    loading.value = false
+    await nextTick()
+
+    // Double nextTick: first tick updates DOM (loading overlay removed),
+    // second tick ensures layout is fully computed before vis-network measures container
     await nextTick()
     renderGraph(nodeMap, uniqueRelations)
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load graph'
-  } finally {
     loading.value = false
   }
 }
@@ -153,6 +158,14 @@ function renderGraph(
   relations: RelationWithDetails[]
 ) {
   if (!graphContainer.value) return
+
+  // Ensure container has dimensions — vis-network needs non-zero size
+  const rect = graphContainer.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    console.warn('[GraphView] Container has zero dimensions, forcing min size', rect)
+    graphContainer.value.style.minHeight = '500px'
+    graphContainer.value.style.minWidth = '400px'
+  }
 
   const nodes = new DataSet(
     Array.from(nodeMap.values()).map(n => {

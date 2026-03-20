@@ -93,6 +93,23 @@ func (s *Service) handleRunMaintenance(w http.ResponseWriter, r *http.Request) {
 	// response is sent, which would prematurely abort the background job.
 	s.maintenanceService.RunNow(context.Background())
 
+	// Clean up old search query logs (90-day retention) in the background.
+	go func() {
+		s.initMu.RLock()
+		sqlStore := s.searchQueryLogStore
+		s.initMu.RUnlock()
+
+		if sqlStore == nil {
+			return
+		}
+		deleted, err := sqlStore.Cleanup(context.Background(), 90*24*time.Hour)
+		if err != nil {
+			log.Warn().Err(err).Msg("search query log cleanup failed")
+		} else if deleted > 0 {
+			log.Info().Int64("deleted", deleted).Msg("cleaned up old search query log entries")
+		}
+	}()
+
 	writeJSON(w, map[string]any{
 		"status":  "triggered",
 		"message": "Maintenance run started in background",

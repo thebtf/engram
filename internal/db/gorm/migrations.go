@@ -1240,6 +1240,91 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec("DROP TABLE IF EXISTS api_tokens").Error
 		},
 	},
+	// Migration 037: Persistent search query log for analytics that survive server restarts.
+	{
+		ID: "037_search_query_log",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE TABLE IF NOT EXISTS search_query_log (
+					id BIGSERIAL PRIMARY KEY,
+					project TEXT,
+					query TEXT NOT NULL,
+					search_type TEXT NOT NULL,
+					results INT NOT NULL DEFAULT 0,
+					used_vector BOOL NOT NULL DEFAULT false,
+					latency_ms REAL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_search_query_log_created ON search_query_log (created_at DESC)`,
+				`CREATE INDEX IF NOT EXISTS idx_search_query_log_project ON search_query_log (project, created_at DESC)`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 037: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS search_query_log`).Error
+		},
+	},
+	// Migration 038: Persistent retrieval stats log for analytics that survive server restarts.
+	{
+		ID: "038_retrieval_stats_log",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE TABLE IF NOT EXISTS retrieval_stats_log (
+					id BIGSERIAL PRIMARY KEY,
+					project TEXT NOT NULL,
+					event_type TEXT NOT NULL,
+					count INT NOT NULL DEFAULT 1,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_retrieval_stats_project_type_created ON retrieval_stats_log (project, event_type, created_at DESC)`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 038: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS retrieval_stats_log`).Error
+		},
+	},
+	// Migration 039: Add TTL support for verified facts on observations.
+	// NULL = no expiration (backwards-compatible). TTL only applies to verified-tagged observations.
+	{
+		ID: "039_observations_verified_ttl",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`ALTER TABLE observations ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL`,
+				`ALTER TABLE observations ADD COLUMN IF NOT EXISTS ttl_days INT NULL`,
+				`CREATE INDEX IF NOT EXISTS idx_observations_expires ON observations (expires_at) WHERE expires_at IS NOT NULL`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 039: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			sqls := []string{
+				`DROP INDEX IF EXISTS idx_observations_expires`,
+				`ALTER TABLE observations DROP COLUMN IF EXISTS ttl_days`,
+				`ALTER TABLE observations DROP COLUMN IF EXISTS expires_at`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					log.Warn().Err(err).Str("sql", s).Msg("migration 039 rollback step failed")
+				}
+			}
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

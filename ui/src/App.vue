@@ -42,7 +42,7 @@ onMounted(() => {
         </Transition>
 
         <!-- Main content area -->
-        <main class="flex-1 p-6">
+        <main class="flex-1 p-6 min-h-0 overflow-auto">
           <AppHeader />
           <router-view />
         </main>

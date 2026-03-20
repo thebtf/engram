@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -45,6 +44,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	var total int64
 	var err error
 	var usedVector bool
+	searchStart := time.Now()
 
 	// Use vector search if query is provided and vector client is available
 	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
@@ -85,7 +85,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 
 	// Track search if query was provided
 	if query != "" {
-		s.trackSearchQuery(query, project, "observations", len(observations), usedVector)
+		s.trackSearchQuery(query, project, "observations", len(observations), usedVector, float32(time.Since(searchStart).Milliseconds()))
 	}
 
 	// Return paginated response
@@ -442,10 +442,23 @@ func (s *Service) handleGetRetrievalStats(w http.ResponseWriter, r *http.Request
 // @Success 200 {object} map[string]interface{}
 // @Router /api/search/recent [get]
 func (s *Service) handleGetRecentQueries(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	store := s.searchQueryLogStore
+	s.initMu.RUnlock()
+
 	project := r.URL.Query().Get("project")
 	limit := gorm.ParseLimitParam(r, 20)
 
-	queries := s.getRecentSearchQueries(project, limit)
+	if store == nil {
+		writeJSON(w, map[string]any{"queries": []any{}, "count": 0, "project": project})
+		return
+	}
+
+	queries, err := store.GetRecent(r.Context(), project, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, map[string]any{
 		"queries": queries,
@@ -456,80 +469,51 @@ func (s *Service) handleGetRecentQueries(w http.ResponseWriter, r *http.Request)
 
 // handleGetSearchAnalytics godoc
 // @Summary Get search analytics
-// @Description Returns comprehensive search analytics including vector search rate, zero result rate, top keywords, and query type distribution.
+// @Description Returns aggregated search analytics from the persistent search query log, including vector search counts, latency, and zero-result rate. Supports optional time-range filtering via the 'since' parameter.
 // @Tags Analytics
 // @Produce json
 // @Security ApiKeyAuth
-// @Param project query string false "Filter by project"
+// @Param since query string false "ISO8601 timestamp to filter results (e.g. 2024-01-01T00:00:00Z)"
 // @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid 'since' parameter"
+// @Failure 500 {string} string "internal error"
 // @Router /api/search/analytics [get]
 func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
+	s.initMu.RLock()
+	store := s.searchQueryLogStore
+	s.initMu.RUnlock()
 
-	// Get all recent queries for analysis
-	queries := s.getRecentSearchQueries(project, maxRecentQueries)
+	if store == nil {
+		writeJSON(w, map[string]any{
+			"total_searches":   0,
+			"searches_today":   0,
+			"avg_latency_ms":   0,
+			"zero_result_rate": 0,
+			"vector_searches":  0,
+			"filter_searches":  0,
+			"cache_hits":       0,
+			"search_errors":    0,
+		})
+		return
+	}
 
-	// Calculate analytics
-	totalQueries := len(queries)
-	vectorSearches := 0
-	totalResults := 0
-	zeroResultQueries := 0
-	queryTypes := make(map[string]int)
-	topKeywords := make(map[string]int)
-
-	for _, q := range queries {
-		if q.UsedVector {
-			vectorSearches++
-		}
-		totalResults += q.Results
-		if q.Results == 0 {
-			zeroResultQueries++
-		}
-		queryTypes[q.Type]++
-
-		// Extract keywords (simple word tokenization using iterator)
-		for word := range strings.FieldsSeq(strings.ToLower(q.Query)) {
-			if len(word) > 3 { // Skip short words
-				topKeywords[word]++
-			}
+	var since time.Time
+	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+		var err error
+		since, err = time.Parse(time.RFC3339, sinceStr)
+		if err != nil {
+			http.Error(w, "invalid 'since' parameter: "+err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 
-	// Sort keywords by frequency
-	type keywordCount struct {
-		Keyword string `json:"keyword"`
-		Count   int    `json:"count"`
-	}
-	sortedKeywords := make([]keywordCount, 0, len(topKeywords))
-	for kw, count := range topKeywords {
-		sortedKeywords = append(sortedKeywords, keywordCount{Keyword: kw, Count: count})
-	}
-	sort.Slice(sortedKeywords, func(i, j int) bool {
-		return sortedKeywords[i].Count > sortedKeywords[j].Count
-	})
-	if len(sortedKeywords) > 10 {
-		sortedKeywords = sortedKeywords[:10]
+	analytics, err := store.GetAnalytics(r.Context(), since)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	// Calculate averages
-	avgResults := float64(0)
-	vectorSearchRate := float64(0)
-	zeroResultRate := float64(0)
-	if totalQueries > 0 {
-		avgResults = float64(totalResults) / float64(totalQueries)
-		vectorSearchRate = float64(vectorSearches) / float64(totalQueries) * 100
-		zeroResultRate = float64(zeroResultQueries) / float64(totalQueries) * 100
-	}
-
-	writeJSON(w, map[string]any{
-		"total_queries":      totalQueries,
-		"vector_search_rate": vectorSearchRate,
-		"avg_results":        avgResults,
-		"zero_result_rate":   zeroResultRate,
-		"query_types":        queryTypes,
-		"top_keywords":       sortedKeywords,
-		"project":            project,
-	})
+	writeJSON(w, analytics)
 }
 
 // handleVectorHealth godoc

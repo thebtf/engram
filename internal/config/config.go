@@ -371,7 +371,10 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_WORKER_HOST")); v != "" {
 		cfg.WorkerHost = v
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN")); v != "" {
+	// Auth admin token: new name takes priority, old name is deprecated alias
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); v != "" {
+		cfg.WorkerToken = v
+	} else if v := strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN")); v != "" {
 		cfg.WorkerToken = v
 	}
 	if v := envFirstOf("ENGRAM_EMBEDDING_PROVIDER", "EMBEDDING_PROVIDER"); v != "" {
@@ -582,7 +585,12 @@ func GetWorkerHost() string {
 }
 
 // GetWorkerToken returns the worker authentication token.
+// GetWorkerToken returns the admin authentication token.
+// Checks ENGRAM_AUTH_ADMIN_TOKEN first (preferred), falls back to ENGRAM_API_TOKEN (deprecated).
 func GetWorkerToken() string {
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); v != "" {
+		return v
+	}
 	return strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN"))
 }
 

@@ -677,7 +677,8 @@ func (s *ObservationStore) SearchObservationsFTS(ctx context.Context, query, pro
 		       COALESCE(o.user_feedback, 0) as user_feedback,
 		       COALESCE(o.retrieval_count, 0) as retrieval_count,
 		       o.last_retrieved_at_epoch, o.score_updated_at_epoch,
-		       COALESCE(o.is_superseded, 0) as is_superseded
+		       COALESCE(o.is_superseded, 0) as is_superseded,
+		       o.expires_at, o.ttl_days
 		FROM observations o
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
 		  AND (o.project = $2 OR o.scope = 'global')
@@ -731,7 +732,8 @@ func (s *ObservationStore) SearchObservationsFTSFiltered(ctx context.Context, qu
 		       COALESCE(o.user_feedback, 0) as user_feedback,
 		       COALESCE(o.retrieval_count, 0) as retrieval_count,
 		       o.last_retrieved_at_epoch, o.score_updated_at_epoch,
-		       COALESCE(o.is_superseded, 0) as is_superseded
+		       COALESCE(o.is_superseded, 0) as is_superseded,
+		       o.expires_at, o.ttl_days
 		FROM observations o
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
 		  AND (o.scope = 'global' OR (o.scope = 'project' AND o.project = $2) OR (o.scope = 'agent' AND o.agent_id = $3))
@@ -782,6 +784,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 		       COALESCE(o.retrieval_count, 0) as retrieval_count,
 		       o.last_retrieved_at_epoch, o.score_updated_at_epoch,
 		       COALESCE(o.is_superseded, 0) as is_superseded,
+		       o.expires_at, o.ttl_days,
 		       ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) AS rank_score
 		FROM observations o
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
@@ -810,6 +813,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 			&obs.PromptNumber, &obs.DiscoveryTokens, &obs.CreatedAt, &obs.CreatedAtEpoch,
 			&obs.ImportanceScore, &obs.UserFeedback, &obs.RetrievalCount,
 			&obs.LastRetrievedAt, &obs.ScoreUpdatedAt, &isSuperseded,
+			&obs.ExpiresAt, &obs.TtlDays,
 			&rankScore,
 		); err != nil {
 			return nil, fmt.Errorf("scan fts scored row: %w", err)
@@ -831,6 +835,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 			_ = json.Unmarshal(fileMtimesJSON, &obs.FileMtimes)
 		}
 		obs.IsSuperseded = isSuperseded != 0
+		obs.IsExpired = obs.ExpiresAt.Valid && obs.ExpiresAt.Time.Before(time.Now())
 
 		results = append(results, ScoredObservation{Observation: &obs, Score: rankScore})
 	}
@@ -1290,6 +1295,7 @@ func scanObservation(scanner interface{ Scan(...any) error }) (*models.Observati
 		&obs.PromptNumber, &obs.DiscoveryTokens, &obs.CreatedAt, &obs.CreatedAtEpoch,
 		&obs.ImportanceScore, &obs.UserFeedback, &obs.RetrievalCount,
 		&obs.LastRetrievedAt, &obs.ScoreUpdatedAt, &isSuperseded,
+		&obs.ExpiresAt, &obs.TtlDays,
 	)
 	if err != nil {
 		return nil, err
@@ -1314,6 +1320,8 @@ func scanObservation(scanner interface{ Scan(...any) error }) (*models.Observati
 
 	// Convert int to bool for IsSuperseded
 	obs.IsSuperseded = isSuperseded != 0
+	// Compute IsExpired from ExpiresAt
+	obs.IsExpired = obs.ExpiresAt.Valid && obs.ExpiresAt.Time.Before(time.Now())
 
 	return &obs, nil
 }
@@ -1349,6 +1357,9 @@ func toModelObservation(o *Observation) *models.Observation {
 		LastRetrievedAt: o.LastRetrievedAt,
 		ScoreUpdatedAt:  o.ScoreUpdatedAt,
 		IsSuperseded:    o.IsSuperseded != 0, // Convert int to bool
+		ExpiresAt:       o.ExpiresAt,
+		TtlDays:         o.TtlDays,
+		IsExpired:       o.ExpiresAt.Valid && o.ExpiresAt.Time.Before(time.Now()),
 	}
 }
 
@@ -1359,6 +1370,18 @@ func toModelObservations(observations []Observation) []*models.Observation {
 		result[i] = toModelObservation(&observations[i])
 	}
 	return result
+}
+
+// SetObservationTTL sets the TTL (expires_at and ttl_days) on an observation.
+func (s *ObservationStore) SetObservationTTL(ctx context.Context, id int64, ttlDays int) error {
+	expiresAt := time.Now().AddDate(0, 0, ttlDays)
+	return s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"ttl_days":   ttlDays,
+			"expires_at": expiresAt,
+		}).Error
 }
 
 // nullInt64 converts an int to sql.NullInt64.
@@ -1473,18 +1496,21 @@ func (s *ObservationStore) RecordSearchMiss(ctx context.Context, project, query 
 }
 
 // GetSearchMissStats returns analytics about search misses grouped by query.
+// When project is empty, results are aggregated across all projects.
 func (s *ObservationStore) GetSearchMissStats(ctx context.Context, project string, limit int) ([]SearchMissStat, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	var stats []SearchMissStat
-	err := s.db.WithContext(ctx).Raw(`
-		SELECT query, COUNT(*) as miss_count, MAX(created_at) as last_seen
-		FROM search_misses
-		WHERE project = ?
-		GROUP BY query
-		ORDER BY miss_count DESC
-		LIMIT ?
-	`, project, limit).Scan(&stats).Error
+	q := s.db.WithContext(ctx).
+		Table("search_misses").
+		Select("query, COUNT(*) as miss_count, MAX(created_at) as last_seen").
+		Group("query").
+		Order("miss_count DESC").
+		Limit(limit)
+	if project != "" {
+		q = q.Where("project = ?", project)
+	}
+	err := q.Scan(&stats).Error
 	return stats, err
 }
