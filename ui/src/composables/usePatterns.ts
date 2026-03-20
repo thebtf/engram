@@ -4,6 +4,7 @@ import { fetchPatterns, fetchPatternInsight, deprecatePattern, deletePattern } f
 
 export function usePatterns() {
   const patterns = ref<Pattern[]>([])
+  const total = ref(0)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -13,7 +14,7 @@ export function usePatterns() {
 
   let abortController: AbortController | null = null
 
-  async function loadPatterns() {
+  async function loadPatterns(params?: { limit?: number; offset?: number; sort?: string }) {
     abortController?.abort()
     abortController = new AbortController()
 
@@ -21,7 +22,9 @@ export function usePatterns() {
     error.value = null
 
     try {
-      patterns.value = await fetchPatterns(abortController.signal) || []
+      const response = await fetchPatterns(params, abortController.signal)
+      patterns.value = response.patterns || []
+      total.value = response.total ?? 0
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return
       error.value = err instanceof Error ? err.message : 'Failed to load patterns'
@@ -48,6 +51,7 @@ export function usePatterns() {
     try {
       await deprecatePattern(id)
       patterns.value = patterns.value.filter(p => p.id !== id)
+      total.value = Math.max(0, total.value - 1)
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Failed to deprecate pattern'
       throw err
@@ -58,6 +62,7 @@ export function usePatterns() {
     try {
       await deletePattern(id)
       patterns.value = patterns.value.filter(p => p.id !== id)
+      total.value = Math.max(0, total.value - 1)
       const { [id]: _, ...rest } = insights.value
       insights.value = rest
     } catch (err) {
@@ -76,6 +81,7 @@ export function usePatterns() {
 
   return {
     patterns,
+    total,
     loading,
     error,
     insights,

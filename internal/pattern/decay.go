@@ -46,7 +46,7 @@ func HybridDecay(lastSeenAt time.Time) float64 {
 func RunDecay(ctx context.Context, patternStore *gorm.PatternStore) (int, error) {
 	// Retrieve all active patterns (use a high limit to get them all).
 	const maxPatterns = 10000
-	patterns, err := patternStore.GetActivePatterns(ctx, maxPatterns)
+	patterns, err := patternStore.GetActivePatterns(ctx, maxPatterns, 0, "")
 	if err != nil {
 		return 0, err
 	}

@@ -1929,7 +1929,7 @@ func (s *Server) handleGetPatterns(ctx context.Context, args json.RawMessage) (s
 		patterns, err = s.patternStore.GetPatternsByProject(ctx, params.Project, params.Limit)
 	} else {
 		// Get all active patterns
-		patterns, err = s.patternStore.GetActivePatterns(ctx, params.Limit)
+		patterns, err = s.patternStore.GetActivePatterns(ctx, params.Limit, 0, "")
 	}
 
 	if err != nil {
@@ -3648,7 +3648,7 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 		Metrics: make(map[string]any),
 	}
 	if s.patternStore != nil {
-		patterns, err := s.patternStore.GetActivePatterns(ctx, 100)
+		patterns, err := s.patternStore.GetActivePatterns(ctx, 100, 0, "")
 		if err != nil {
 			patternHealth.Status = "degraded"
 			patternHealth.Message = "Could not query patterns: " + err.Error()

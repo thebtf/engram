@@ -9,6 +9,7 @@ import Pagination from '@/components/layout/Pagination.vue'
 
 const {
   patterns,
+  total,
   loading,
   error,
   insights,
@@ -25,10 +26,11 @@ const showDeleteConfirm = ref(false)
 const deprecateTarget = ref<number | null>(null)
 const showDeprecateConfirm = ref(false)
 
-// Pagination and filter state
+// Server-side pagination and sort state
 const itemsPerPage = ref(20)
 const currentOffset = ref(0)
 const sortBy = ref<'frequency' | 'confidence' | 'last_seen'>('frequency')
+// Client-side search filter (filters within the loaded page)
 const searchQuery = ref('')
 
 const PATTERN_TYPE_CONFIG: Record<string, { colorClass: string; bgClass: string; borderClass: string; icon: string }> = {
@@ -44,43 +46,27 @@ function getPatternTypeConfig(type: string) {
   return PATTERN_TYPE_CONFIG[type] || { colorClass: 'text-slate-300', bgClass: 'bg-slate-500/20', borderClass: 'border-slate-500/30', icon: 'fa-puzzle-piece' }
 }
 
-// Client-side filtering by name
-const filteredPatterns = computed(() => {
-  let result = [...patterns.value]
-
-  // Search filter
-  if (searchQuery.value.trim()) {
-    const query = searchQuery.value.toLowerCase()
-    result = result.filter(p => p.name.toLowerCase().includes(query))
-  }
-
-  // Sort
-  switch (sortBy.value) {
-    case 'frequency':
-      result.sort((a, b) => b.frequency - a.frequency)
-      break
-    case 'confidence':
-      result.sort((a, b) => b.confidence - a.confidence)
-      break
-    case 'last_seen':
-      result.sort((a, b) => b.last_seen_at_epoch - a.last_seen_at_epoch)
-      break
-  }
-
-  return result
+// Client-side name filter applied to the currently loaded page
+const visiblePatterns = computed(() => {
+  if (!searchQuery.value.trim()) return patterns.value
+  const query = searchQuery.value.toLowerCase()
+  return patterns.value.filter(p => p.name.toLowerCase().includes(query))
 })
 
-const totalFiltered = computed(() => filteredPatterns.value.length)
+// Fetch from server whenever sort, page size, or offset changes
+function fetchCurrentPage() {
+  loadPatterns({ limit: itemsPerPage.value, offset: currentOffset.value, sort: sortBy.value })
+}
 
-const paginatedPatterns = computed(() => {
-  const start = currentOffset.value
-  const end = start + itemsPerPage.value
-  return filteredPatterns.value.slice(start, end)
-})
-
-// Reset offset when filters change
-watch([searchQuery, sortBy, itemsPerPage], () => {
+// Reset to first page and reload when sort or page size changes
+watch([sortBy, itemsPerPage], () => {
   currentOffset.value = 0
+  fetchCurrentPage()
+})
+
+// Reload when offset changes (user clicked a pagination page)
+watch(currentOffset, () => {
+  fetchCurrentPage()
 })
 
 function toggleExpand(id: number) {
@@ -127,6 +113,10 @@ async function handleDelete() {
 function confidencePercent(c: number): string {
   return (c * 100).toFixed(0)
 }
+
+function handleRefresh() {
+  loadPatterns({ limit: itemsPerPage.value, offset: currentOffset.value, sort: sortBy.value })
+}
 </script>
 
 <template>
@@ -136,10 +126,10 @@ function confidencePercent(c: number): string {
       <div class="flex items-center gap-3">
         <i class="fas fa-puzzle-piece text-claude-400 text-xl" />
         <h1 class="text-2xl font-bold text-white">Patterns</h1>
-        <span v-if="totalFiltered > 0" class="text-sm text-slate-500">({{ totalFiltered }})</span>
+        <span v-if="total > 0" class="text-sm text-slate-500">({{ total }})</span>
       </div>
       <button
-        @click="loadPatterns()"
+        @click="handleRefresh()"
         :disabled="loading"
         class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors disabled:opacity-50"
       >
@@ -196,7 +186,7 @@ function confidencePercent(c: number): string {
     <div v-else-if="error" class="text-center py-16">
       <i class="fas fa-exclamation-triangle text-red-400 text-3xl mb-3 block" />
       <p class="text-red-400 mb-2">{{ error }}</p>
-      <button @click="loadPatterns()" class="text-sm text-slate-400 hover:text-white transition-colors">
+      <button @click="handleRefresh()" class="text-sm text-slate-400 hover:text-white transition-colors">
         Try again
       </button>
     </div>
@@ -210,7 +200,7 @@ function confidencePercent(c: number): string {
     />
 
     <!-- No search results -->
-    <div v-else-if="filteredPatterns.length === 0 && searchQuery.trim()" class="text-center py-12">
+    <div v-else-if="visiblePatterns.length === 0 && searchQuery.trim()" class="text-center py-12">
       <i class="fas fa-search text-slate-600 text-2xl mb-3 block" />
       <p class="text-slate-400">No patterns match "{{ searchQuery }}"</p>
     </div>
@@ -218,7 +208,7 @@ function confidencePercent(c: number): string {
     <!-- Patterns List -->
     <div v-else class="space-y-2">
       <div
-        v-for="pattern in paginatedPatterns"
+        v-for="pattern in visiblePatterns"
         :key="pattern.id"
         class="rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50 overflow-hidden"
       >
@@ -313,7 +303,7 @@ function confidencePercent(c: number): string {
       <!-- Pagination -->
       <div class="mt-4">
         <Pagination
-          :total="totalFiltered"
+          :total="total"
           :limit="itemsPerPage"
           :offset="currentOffset"
           @update:offset="currentOffset = $event"

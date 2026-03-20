@@ -41,6 +41,12 @@ export async function handleBeforePromptBuild(
     if (!client.isAvailable()) return;
     if (!event.prompt || event.prompt.trim() === '') return;
 
+    // Skip HEARTBEAT prompts — they are workspace health checks, not real user queries
+    const promptLower = event.prompt.toLowerCase();
+    if (promptLower.includes('heartbeat.md') || promptLower.includes('heartbeat_ok')) {
+      return;
+    }
+
     const tier: TierResult = turnTracker.classify(event.prompt ?? '', event.messages);
     logger?.debug(`[engram] before-prompt-build: tier=${tier.tier} budget=${tier.tokenBudget} reason=${tier.reason}`);
 

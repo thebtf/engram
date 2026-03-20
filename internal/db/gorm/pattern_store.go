@@ -143,14 +143,24 @@ func (s *PatternStore) GetPatternByName(ctx context.Context, name string) (*mode
 	return toModelPattern(&dbPattern), nil
 }
 
-// GetActivePatterns retrieves all active patterns.
-func (s *PatternStore) GetActivePatterns(ctx context.Context, limit int) ([]*models.Pattern, error) {
+// GetActivePatterns retrieves active patterns with pagination and sorting.
+// sort accepts "frequency", "confidence", or "last_seen"; anything else defaults to frequency DESC.
+func (s *PatternStore) GetActivePatterns(ctx context.Context, limit, offset int, sort string) ([]*models.Pattern, error) {
 	var patterns []Pattern
+
+	orderClause := "frequency DESC, confidence DESC, id DESC"
+	switch sort {
+	case "confidence":
+		orderClause = "confidence DESC, frequency DESC, id DESC"
+	case "last_seen":
+		orderClause = "last_seen_at_epoch DESC, frequency DESC, id DESC"
+	}
 
 	err := s.db.WithContext(ctx).
 		Where("status = ?", models.PatternStatusActive).
-		Order("frequency DESC, confidence DESC").
+		Order(orderClause).
 		Limit(limit).
+		Offset(offset).
 		Find(&patterns).Error
 
 	if err != nil {
@@ -158,6 +168,16 @@ func (s *PatternStore) GetActivePatterns(ctx context.Context, limit int) ([]*mod
 	}
 
 	return toModelPatterns(patterns), nil
+}
+
+// CountActivePatterns returns the total count of active patterns.
+func (s *PatternStore) CountActivePatterns(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&Pattern{}).
+		Where("status = ?", models.PatternStatusActive).
+		Count(&count).Error
+	return count, err
 }
 
 // GetPatternsByType retrieves patterns of a specific type.
@@ -208,8 +228,8 @@ func (s *PatternStore) GetPatternsByProject(ctx context.Context, project string,
 // FindMatchingPatterns searches for patterns that match a given signature.
 // Pattern matching is done in Go code for simplicity.
 func (s *PatternStore) FindMatchingPatterns(ctx context.Context, signature []string, minScore float64) ([]*models.Pattern, error) {
-	// Get all active patterns
-	patterns, err := s.GetActivePatterns(ctx, 100)
+	// Get all active patterns (no offset, default sort)
+	patterns, err := s.GetActivePatterns(ctx, 100, 0, "")
 	if err != nil {
 		return nil, err
 	}

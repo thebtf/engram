@@ -11,18 +11,26 @@ import (
 )
 
 // DefaultPatternsLimit is the default number of patterns to return.
-const DefaultPatternsLimit = 100
+const DefaultPatternsLimit = 500
+
+// PatternsListResponse is the envelope returned by GET /api/patterns.
+type PatternsListResponse struct {
+	Patterns []*models.Pattern `json:"patterns"`
+	Total    int64             `json:"total"`
+}
 
 // handleGetPatterns godoc
 // @Summary List patterns
-// @Description Returns all active patterns, optionally filtered by type or project.
+// @Description Returns active patterns with server-side pagination and sorting.
 // @Tags Patterns
 // @Produce json
 // @Security ApiKeyAuth
 // @Param type query string false "Filter by pattern type"
 // @Param project query string false "Filter by project"
-// @Param limit query int false "Number of results (default 100)"
-// @Success 200 {array} models.Pattern
+// @Param limit query int false "Number of results (default 500)"
+// @Param offset query int false "Pagination offset (default 0)"
+// @Param sort query string false "Sort order: frequency (default), confidence, last_seen"
+// @Success 200 {object} PatternsListResponse
 // @Failure 500 {string} string "internal error"
 // @Failure 503 {string} string "pattern store not initialized"
 // @Router /api/patterns [get]
@@ -51,24 +59,35 @@ func (s *Service) handleGetPatterns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// sort param is accepted for future use; current queries use default ordering.
-	_ = r.URL.Query().Get("sort")
-
+	sort := r.URL.Query().Get("sort") // "frequency", "confidence", "last_seen"
 	patternType := r.URL.Query().Get("type")
 	project := r.URL.Query().Get("project")
 
 	var patterns []*models.Pattern
+	var total int64
 	var err error
 
 	if patternType != "" {
-		// Filter by type
+		// Filter by type — returns up to limit results, no offset pagination.
+		// Total reflects the returned set (type/project filters are not paginated).
 		patterns, err = store.GetPatternsByType(r.Context(), models.PatternType(patternType), limit)
+		if err == nil {
+			total = int64(len(patterns))
+		}
 	} else if project != "" {
-		// Filter by project
+		// Filter by project — same: up to limit, no offset pagination.
 		patterns, err = store.GetPatternsByProject(r.Context(), project, limit)
+		if err == nil {
+			total = int64(len(patterns))
+		}
 	} else {
-		// Get all active patterns with offset support
-		patterns, err = store.GetActivePatterns(r.Context(), limit+offset)
+		// Count total for pagination metadata
+		total, err = store.CountActivePatterns(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		patterns, err = store.GetActivePatterns(r.Context(), limit, offset, sort)
 	}
 
 	if err != nil {
@@ -76,18 +95,10 @@ func (s *Service) handleGetPatterns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply offset (manual slice since GORM query uses Limit only)
-	if offset > 0 && offset < len(patterns) {
-		patterns = patterns[offset:]
-	} else if offset >= len(patterns) {
-		patterns = nil
-	}
-	// Re-apply limit after offset
-	if len(patterns) > limit {
-		patterns = patterns[:limit]
-	}
-
-	writeJSON(w, patterns)
+	writeJSON(w, PatternsListResponse{
+		Patterns: patterns,
+		Total:    total,
+	})
 }
 
 // handleGetPatternStats godoc

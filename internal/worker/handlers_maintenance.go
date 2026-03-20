@@ -225,7 +225,7 @@ func (s *Service) handlePurgePatterns(w http.ResponseWriter, r *http.Request) {
 	if dryRun {
 		// Preview mode: compute quality scores without deprecating.
 		const maxPatterns = 10000
-		patterns, err := store.GetActivePatterns(r.Context(), maxPatterns)
+		patterns, err := store.GetActivePatterns(r.Context(), maxPatterns, 0, "")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

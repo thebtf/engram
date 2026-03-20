@@ -617,8 +617,21 @@ export interface PatternInsight {
   examples?: string[]
 }
 
-export async function fetchPatterns(signal?: AbortSignal): Promise<Pattern[]> {
-  return fetchWithRetry<Pattern[]>(`${API_BASE}/patterns`, { signal })
+export interface PatternsResponse {
+  patterns: Pattern[]
+  total: number
+}
+
+export async function fetchPatterns(
+  params?: { limit?: number; offset?: number; sort?: string },
+  signal?: AbortSignal
+): Promise<PatternsResponse> {
+  const searchParams = new URLSearchParams()
+  if (params?.limit !== undefined) searchParams.append('limit', String(params.limit))
+  if (params?.offset !== undefined) searchParams.append('offset', String(params.offset))
+  if (params?.sort) searchParams.append('sort', params.sort)
+  const query = searchParams.toString()
+  return fetchWithRetry<PatternsResponse>(`${API_BASE}/patterns${query ? '?' + query : ''}`, { signal })
 }
 
 export async function fetchPatternInsight(id: number, signal?: AbortSignal): Promise<PatternInsight> {
