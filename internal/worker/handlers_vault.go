@@ -3,6 +3,7 @@ package worker
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -313,11 +314,24 @@ func (s *Service) handleVaultStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, map[string]any{
+	// Check for fingerprint mismatch: credentials encrypted with a different key.
+	mismatchCount := 0
+	if fingerprint != "" && s.observationStore != nil {
+		if n, err := s.observationStore.CountCredentialsWithDifferentFingerprint(r.Context(), fingerprint); err == nil {
+			mismatchCount = int(n)
+		}
+	}
+
+	resp := map[string]any{
 		"key_configured":   keyConfigured,
 		"key_source":       keySource,
 		"fingerprint":      fingerprint,
 		"credential_count": count,
-		"backup_reminder":  "Back up vault.key (or set ENGRAM_ENCRYPTION_KEY) — losing this key makes stored credentials unrecoverable",
-	})
+		"backup_reminder":  "Back up vault.key (or set ENGRAM_VAULT_KEY) — losing this key makes stored credentials unrecoverable",
+	}
+	if mismatchCount > 0 {
+		resp["mismatch_warning"] = fmt.Sprintf("%d credential(s) encrypted with a different key — they cannot be decrypted with the current key", mismatchCount)
+		resp["mismatch_count"] = mismatchCount
+	}
+	writeJSON(w, resp)
 }
