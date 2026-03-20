@@ -121,7 +121,7 @@ The plugin registers the MCP server automatically. Set two environment variables
 # Set environment variables (read by Claude Code at runtime)
 # Linux/macOS: add to shell profile; Windows: set as System Environment Variables
 ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_API_TOKEN=your-api-token
+ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token   # or ENGRAM_API_TOKEN (deprecated)
 ```
 
 ```
