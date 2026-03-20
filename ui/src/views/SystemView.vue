@@ -221,39 +221,45 @@ onUnmounted(() => {
       <!-- Vector Metrics -->
       <div v-if="vectorMetrics" class="p-4 rounded-xl border-2 border-slate-700/50 bg-slate-800/30 mb-6">
         <h2 class="text-xs text-slate-500 uppercase tracking-wide mb-3">Vector Metrics</h2>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-          <div>
-            <span class="text-slate-600 text-xs block">Total Queries</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.query_count }}</span>
-          </div>
-          <div>
-            <span class="text-slate-600 text-xs block">Avg Latency</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.avg_latency_ms.toFixed(1) }}ms</span>
-          </div>
-          <div>
-            <span class="text-slate-600 text-xs block">Total Documents</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.total_documents }}</span>
-          </div>
-          <div>
-            <span class="text-slate-600 text-xs block">Uptime</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.uptime }}</span>
-          </div>
+        <div v-if="!vectorMetrics.enabled" class="text-xs text-slate-500">
+          <i class="fas fa-circle-xmark mr-1 text-slate-600" />
+          {{ vectorMetrics.message || 'Vector database not available' }}
         </div>
-        <div class="text-[10px] text-slate-500 uppercase mt-3 mb-1">Latency Percentiles</div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-          <div>
-            <span class="text-slate-600 text-xs block">P50 Latency</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.p50_latency_ms.toFixed(1) }}ms</span>
+        <template v-else>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <span class="text-slate-600 text-xs block">Total Queries</span>
+              <span class="text-slate-300 font-mono">{{ vectorMetrics.query_count }}</span>
+            </div>
+            <div>
+              <span class="text-slate-600 text-xs block">Avg Latency</span>
+              <span class="text-slate-300 font-mono">{{ vectorMetrics.avg_latency_ms.toFixed(1) }}ms</span>
+            </div>
+            <div>
+              <span class="text-slate-600 text-xs block">Total Documents</span>
+              <span class="text-slate-300 font-mono">{{ vectorMetrics.total_documents }}</span>
+            </div>
+            <div>
+              <span class="text-slate-600 text-xs block">Uptime</span>
+              <span class="text-slate-300 font-mono">{{ vectorMetrics.uptime }}</span>
+            </div>
           </div>
-          <div>
-            <span class="text-slate-600 text-xs block">P95 Latency</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.p95_latency_ms.toFixed(1) }}ms</span>
+          <div class="text-[10px] text-slate-500 uppercase mt-3 mb-1">Latency Percentiles</div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <span class="text-slate-600 text-xs block">P50 Latency</span>
+              <span class="text-slate-300 font-mono">{{ vectorMetrics.p50_latency_ms.toFixed(1) }}ms</span>
+            </div>
+            <div>
+              <span class="text-slate-600 text-xs block">P95 Latency</span>
+              <span class="text-slate-300 font-mono">{{ vectorMetrics.p95_latency_ms.toFixed(1) }}ms</span>
+            </div>
+            <div>
+              <span class="text-slate-600 text-xs block">P99 Latency</span>
+              <span class="text-slate-300 font-mono">{{ vectorMetrics.p99_latency_ms.toFixed(1) }}ms</span>
+            </div>
           </div>
-          <div>
-            <span class="text-slate-600 text-xs block">P99 Latency</span>
-            <span class="text-slate-300 font-mono">{{ vectorMetrics.p99_latency_ms.toFixed(1) }}ms</span>
-          </div>
-        </div>
+        </template>
       </div>
 
       <!-- Graph Stats -->
