@@ -1484,6 +1484,23 @@ func (s *ObservationStore) CountCredentials(ctx context.Context) (int64, error) 
 	return count, nil
 }
 
+// CountCredentialsWithDifferentFingerprint counts credentials whose encryption_key_fingerprint
+// differs from the given fingerprint — indicating they cannot be decrypted with the current key.
+func (s *ObservationStore) CountCredentialsWithDifferentFingerprint(ctx context.Context, currentFingerprint string) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Where("type = ?", "credential").
+		Where("COALESCE(is_archived, 0) = 0").
+		Where("encryption_key_fingerprint IS NOT NULL AND encryption_key_fingerprint != ''").
+		Where("encryption_key_fingerprint != ?", currentFingerprint).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("count mismatched credentials: %w", err)
+	}
+	return count, nil
+}
+
 // SearchMissStat holds aggregated analytics for a search query that returned zero results.
 type SearchMissStat struct {
 	Query     string    `json:"query"`
