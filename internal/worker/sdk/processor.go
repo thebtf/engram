@@ -719,72 +719,54 @@ func shouldSkipTool(toolName string) bool {
 // shouldSkipTrivialOperation performs local pre-filtering to skip trivial operations
 // without making a Haiku API call. Returns true if the operation is too trivial to process.
 func shouldSkipTrivialOperation(toolName, inputStr, outputStr string) bool {
-	// Skip if output is too small to be meaningful (less than 50 chars)
-	// Reduced from 100 to capture more meaningful small operations
+	// Skip if output is too small to be meaningful
 	if len(outputStr) < 50 {
 		return true
 	}
 
-	// Pre-compute lowercase strings once to avoid repeated allocations
-	lowerOutput := strings.ToLower(outputStr)
+	// WHITELIST approach: only process tool outputs that are likely to contain
+	// meaningful insights. Skip everything else. This inverted logic prevents
+	// garbage observations (PowerShell errors, auth failures, etc.) from
+	// polluting the knowledge base and degrading agent performance.
 	lowerInput := strings.ToLower(inputStr)
 
-	// Skip if output indicates an error or empty result
-	trivialOutputs := []string{
-		"no matches found",
-		"file not found",
-		"directory not found",
-		"permission denied",
-		"command not found",
-		"no such file",
-		"is a directory",
-		"[]", // Empty array result
-		"{}", // Empty object result
-	}
-	for _, trivial := range trivialOutputs {
-		if strings.Contains(lowerOutput, trivial) || outputStr == trivial {
-			return true
-		}
-	}
-
-	// Tool-specific pre-filtering
 	switch toolName {
-	case "Read":
-		// Skip reading config files that rarely contain project-specific insights
-		boringFiles := []string{
-			"package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-			"go.sum", "cargo.lock", "gemfile.lock", "poetry.lock",
-			".gitignore", ".dockerignore", ".eslintignore",
-			"tsconfig.json", "jsconfig.json", "vite.config",
-			"tailwind.config", "postcss.config",
-		}
-		for _, boring := range boringFiles {
-			if strings.Contains(lowerInput, boring) {
-				return true
-			}
-		}
-
-	case "Grep":
-		// Skip grep results with too many matches (likely generic search)
-		if strings.Count(outputStr, "\n") > 50 {
-			return true
-		}
+	case "Edit", "Write":
+		// Code modifications — always interesting (architecture, decisions)
+		return false
 
 	case "Bash":
-		// Skip simple status commands (use pre-computed lowerInput)
-		boringCommands := []string{
-			"git status", "git diff", "git log", "git branch",
-			"ls ", "pwd", "echo ", "cat ", "which ", "type ",
-			"npm list", "npm outdated", "npm audit",
+		// Only process build/test results — they reveal project state
+		interestingCommands := []string{
+			// Go
+			"go build", "go test", "go vet",
+			// Node/JS
+			"npm run build", "npm test", "npx tsc",
+			// Rust
+			"cargo build", "cargo test", "cargo clippy",
+			// .NET
+			"dotnet build", "dotnet test", "dotnet publish",
+			// Make/Docker
+			"make ", "docker build", "docker compose",
+			// Python
+			"pytest", "python -m pytest",
+			// JS test runners
+			"jest", "vitest",
 		}
-		for _, boring := range boringCommands {
-			if strings.Contains(lowerInput, boring) {
-				return true
+		for _, cmd := range interestingCommands {
+			if strings.Contains(lowerInput, cmd) {
+				return false
 			}
 		}
-	}
+		// All other Bash outputs: skip (git, ls, curl, echo, etc.)
+		return true
 
-	return false
+	default:
+		// All other tools (Read, Grep, Agent, WebFetch, etc.): skip
+		// These produce high-volume, low-insight observations.
+		// Valuable knowledge should be saved explicitly via store_memory.
+		return true
+	}
 }
 
 // toJSONString converts an interface to a JSON string.
