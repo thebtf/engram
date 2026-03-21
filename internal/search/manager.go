@@ -119,6 +119,55 @@ func (m *SearchMetrics) GetStats() map[string]any {
 	}
 }
 
+// ApplyCompositeScoring re-ranks observations using multi-signal scoring.
+// Formula: score = similarity × recencyDecay × typeWeight × max(importance, 0.3)
+// This ensures that recent, high-importance decisions rank above old generic discoveries.
+func ApplyCompositeScoring(observations []*models.Observation, similarityScores map[int64]float64) {
+	now := time.Now()
+
+	// Type weights: decisions and patterns have higher behavioral impact
+	typeWeights := map[models.ObservationType]float64{
+		"decision":  1.4,
+		"bugfix":    1.3,
+		"feature":   1.2,
+		"pattern":   1.2,
+		"discovery": 0.8,
+		"change":    0.7,
+		"refactor":  0.9,
+	}
+
+	for _, obs := range observations {
+		sim := similarityScores[obs.ID]
+		if sim == 0 {
+			sim = 0.5 // default if no similarity score
+		}
+
+		// Recency decay: half-life of 7 days
+		ageDays := now.Sub(time.Unix(obs.CreatedAtEpoch/1000, 0)).Hours() / 24.0
+		recency := math.Pow(0.5, ageDays/7.0)
+		// Floor at 0.05 so old but very important observations don't disappear
+		if recency < 0.05 {
+			recency = 0.05
+		}
+
+		// Type weight
+		tw := 1.0
+		if w, ok := typeWeights[obs.Type]; ok {
+			tw = w
+		}
+
+		// Importance (floor at 0.3 so unscored observations aren't penalized to zero)
+		imp := obs.ImportanceScore
+		if imp < 0.3 {
+			imp = 0.3
+		}
+
+		// Composite score replaces raw similarity
+		compositeScore := sim * recency * tw * imp
+		similarityScores[obs.ID] = compositeScore
+	}
+}
+
 // Manager provides unified search across PostgreSQL and pgvector.
 type Manager struct {
 	ctx              context.Context

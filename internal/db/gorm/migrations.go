@@ -1433,6 +1433,98 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil
 		},
 	},
+	// Migration 043: Radical cleanup of garbage SDK-extracted observations.
+	// These observations were created by the SDK tool output extraction pipeline before v1.3.4
+	// (whitelist mode). They are trivially discoverable facts, tool errors, status transitions,
+	// and cross-project noise that pollute semantic search and degrade agent performance.
+	{
+		ID: "043_radical_observation_cleanup",
+		Migrate: func(tx *gorm.DB) error {
+			garbagePatterns := []string{
+				// Tool mechanics (trivially discoverable at runtime)
+				"Tool%Query Pattern%",
+				"Tool%Search%Pattern%",
+				"Tool%Naming Convention%",
+				"Tool%Selection%Pattern%",
+				"Tool Search%Found%",
+				"Tool%Match%Found%",
+				"Memory Store Tool%",
+				"Deferred Tool%",
+				"Exact Tool Match%",
+
+				// Task status transitions (repeated 20+ times, zero value)
+				"Task Status%Transition%",
+				"Task%Completion%Confirmed%",
+				"Status Transition%",
+				"Status%Discrepancy%",
+				"No Work Available%",
+
+				// Job tracking noise
+				"Job Status%",
+				"Job-Session ID%",
+
+				// Process output artifacts
+				"Process Output%",
+				"Stderr%Handling%",
+
+				// System prompt meta-observations
+				"Claude Anti-Sycophancy%",
+				"User Interaction Guidelines%",
+				"User Communication Guidelines%",
+				"Strict Verification Guidelines%",
+				"Copyright Enforcement%",
+				"Critical Reminders%",
+				"Search Scaling by%",
+				"Past Conversation Search%",
+				"System Prompt Access%",
+				"Anti-Sycophancy%",
+				"Keyword Extraction Guidelines%",
+				"Tone Consistency%",
+				"Zero-confirmation Rule%",
+				"Plugin Configuration Warnings%",
+				"Prioritize Internal Tools%",
+
+				// Generic discoveries with no behavioral impact
+				"Brace%Discrepancy%",
+				"Brace%Detection%",
+				"Content Structure Pattern%",
+				"Severity Classification%",
+				"Pre-commit Check%",
+				"Commit Message%Convention%",
+				"Commit Message Structure%",
+				"File Size Monitoring%",
+
+				// iSCSI debug noise (from nvmdfs project)
+				"iSCSI%",
+
+				// Timestamp-based titles from subtitle parser
+				"00:%",
+
+				// Test observations
+				"type test",
+
+				// Robocopy/npm transient noise
+				"Robocopy%",
+				"npm install completion%",
+			}
+
+			var totalDeleted int64
+			for _, pattern := range garbagePatterns {
+				result := tx.Exec("DELETE FROM observations WHERE title LIKE ?", pattern)
+				if result.Error != nil {
+					log.Warn().Err(result.Error).Str("pattern", pattern).Msg("migration 043: delete failed")
+					continue
+				}
+				totalDeleted += result.RowsAffected
+			}
+
+			log.Info().Int64("total_deleted", totalDeleted).Msg("migration 043: radical observation cleanup complete")
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

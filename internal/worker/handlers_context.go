@@ -234,7 +234,6 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply cross-encoder reranking if available
-	var reranked bool
 	if s.reranker != nil && len(freshObservations) > 0 && usedVector {
 		// Build candidates from observations with their bi-encoder scores
 		candidates := make([]reranking.Candidate, len(freshObservations))
@@ -291,7 +290,6 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			freshObservations = reorderedObs
-			reranked = true
 
 			log.Debug().
 				Int("candidates", len(candidates)).
@@ -304,8 +302,14 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	clusteredObservations := clusterObservations(freshObservations, s.config.ClusteringThreshold)
 	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
 
-	// Sort by similarity score (highest first) if we have scores and didn't rerank
-	if len(similarityScores) > 0 && len(clusteredObservations) > 0 && !reranked {
+	// Apply composite scoring (recency × type × importance) as a post-processing step.
+	// This re-weights scores already computed by vector search or cross-encoder reranking.
+	if len(clusteredObservations) > 0 {
+		search.ApplyCompositeScoring(clusteredObservations, similarityScores)
+	}
+
+	// Sort by composite score (highest first)
+	if len(similarityScores) > 0 && len(clusteredObservations) > 0 {
 		sort.Slice(clusteredObservations, func(i, j int) bool {
 			scoreI := similarityScores[clusteredObservations[i].ID]
 			scoreJ := similarityScores[clusteredObservations[j].ID]
