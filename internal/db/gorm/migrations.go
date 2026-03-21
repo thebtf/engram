@@ -1399,6 +1399,40 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil
 		},
 	},
+	// Migration 041: Purge orphan vectors — correct table name (vectors, not observation_vectors).
+	{
+		ID: "041_purge_orphan_vectors",
+		Migrate: func(tx *gorm.DB) error {
+			result := tx.Exec(`DELETE FROM vectors WHERE sqlite_id NOT IN (SELECT id FROM observations)`)
+			if result.Error != nil {
+				log.Warn().Err(result.Error).Msg("migration 041: orphan vector purge failed (non-fatal)")
+				return nil
+			}
+			log.Info().Int64("orphan_vectors_deleted", result.RowsAffected).Msg("migration 041: orphan vector purge complete")
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
+	// Migration 042: Purge low-quality patterns (frequency < 5).
+	// With 111K+ patterns accumulated from garbage SDK extraction, most are noise.
+	// MinFrequency threshold was raised to 5 in T019 — patterns below this are worthless.
+	{
+		ID: "042_purge_low_quality_patterns",
+		Migrate: func(tx *gorm.DB) error {
+			result := tx.Exec(`DELETE FROM patterns WHERE frequency < 5`)
+			if result.Error != nil {
+				log.Warn().Err(result.Error).Msg("migration 042: pattern purge failed (non-fatal)")
+				return nil
+			}
+			log.Info().Int64("patterns_deleted", result.RowsAffected).Msg("migration 042: low-quality pattern purge complete")
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
