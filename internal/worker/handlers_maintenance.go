@@ -343,3 +343,4 @@ func (s *Service) handlePatternCleanup(w http.ResponseWriter, r *http.Request) {
 		"deleted":            deleted,
 	})
 }
+

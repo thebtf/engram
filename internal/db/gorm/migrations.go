@@ -1415,6 +1415,24 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil
 		},
 	},
+	// Migration 042: Purge low-quality patterns (frequency < 5).
+	// With 111K+ patterns accumulated from garbage SDK extraction, most are noise.
+	// MinFrequency threshold was raised to 5 in T019 — patterns below this are worthless.
+	{
+		ID: "042_purge_low_quality_patterns",
+		Migrate: func(tx *gorm.DB) error {
+			result := tx.Exec(`DELETE FROM patterns WHERE frequency < 5`)
+			if result.Error != nil {
+				log.Warn().Err(result.Error).Msg("migration 042: pattern purge failed (non-fatal)")
+				return nil
+			}
+			log.Info().Int64("patterns_deleted", result.RowsAffected).Msg("migration 042: low-quality pattern purge complete")
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
