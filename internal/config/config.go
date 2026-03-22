@@ -116,6 +116,14 @@ type Config struct {
 	StoreMemorySummarize        bool     `json:"store_memory_summarize"`        // Use LLM to summarize long content (default: false)
 	EncryptionKeyFile      string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
 	EncryptionKey          string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
+	LLMFilterEnabled       bool   `json:"llm_filter_enabled"`    // ENGRAM_LLM_FILTER_ENABLED (default: false)
+	LLMFilterModel         string `json:"llm_filter_model"`      // ENGRAM_LLM_FILTER_MODEL (default: same as ENGRAM_LLM_MODEL)
+	LLMFilterTimeoutMS     int    `json:"llm_filter_timeout_ms"` // ENGRAM_LLM_FILTER_TIMEOUT_MS (default: 3000)
+	LLMFilterCandidates    int    `json:"llm_filter_candidates"` // ENGRAM_LLM_FILTER_CANDIDATES (default: 15)
+	ConsolidationEnabled   bool    `json:"consolidation_enabled"`    // ENGRAM_CONSOLIDATION_ENABLED (default: false)
+	SupersessionEnabled    bool    `json:"supersession_enabled"`     // ENGRAM_SUPERSESSION_ENABLED (default: true)
+	SupersessionThreshold  float64 `json:"supersession_threshold"`   // ENGRAM_SUPERSESSION_THRESHOLD (default: 0.9)
+	ConsolidationThreshold float64 `json:"consolidation_threshold"`  // ENGRAM_CONSOLIDATION_THRESHOLD (default: 0.95)
 }
 
 var (
@@ -247,6 +255,13 @@ func Default() *Config {
 		StoreMemorySoftLimit:        1000,
 		StoreMemorySummarize:        false,
 		StoreMemoryDedupThreshold:   0.92,
+		LLMFilterEnabled:            false, // Opt-in: requires LLM configuration
+		LLMFilterTimeoutMS:          3000,  // 3s timeout for LLM filter
+		LLMFilterCandidates:         15,    // Evaluate top 15 candidates
+		ConsolidationEnabled:        false, // Opt-in: near-duplicate merging during maintenance
+		SupersessionEnabled:         true,  // Enabled: mark old decisions superseded on new write
+		SupersessionThreshold:       0.9,   // 90% similarity triggers write-time supersession
+		ConsolidationThreshold:      0.95,  // 95% similarity triggers maintenance-time merge
 	}
 }
 
@@ -521,6 +536,38 @@ func Load() (*Config, error) {
 		cfg.EncryptionKey = v
 	} else if v := strings.TrimSpace(os.Getenv("ENGRAM_ENCRYPTION_KEY")); v != "" {
 		cfg.EncryptionKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_ENABLED")); v == "true" || v == "1" {
+		cfg.LLMFilterEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_MODEL")); v != "" {
+		cfg.LLMFilterModel = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_TIMEOUT_MS")); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			cfg.LLMFilterTimeoutMS = ms
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_CANDIDATES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.LLMFilterCandidates = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONSOLIDATION_ENABLED")); v == "true" || v == "1" {
+		cfg.ConsolidationEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_SUPERSESSION_ENABLED")); v == "false" || v == "0" {
+		cfg.SupersessionEnabled = false
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_SUPERSESSION_THRESHOLD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1.0 {
+			cfg.SupersessionThreshold = f
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONSOLIDATION_THRESHOLD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1.0 {
+			cfg.ConsolidationThreshold = f
+		}
 	}
 	return cfg, nil
 }

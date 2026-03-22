@@ -25,6 +25,7 @@ import (
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/maintenance"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/pattern"
@@ -174,6 +175,7 @@ type Service struct {
 	backfillTracker        *backfillTracker
 	searchQueryLogStore     *gorm.SearchQueryLogStore
 	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
+	llmFilter              *search.LLMFilter
 	version                string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
 	wg                     sync.WaitGroup
@@ -872,7 +874,7 @@ func (s *Service) initializeAsync() {
 	}
 	maintenanceSvc := maintenance.NewService(
 		store, observationStore, summaryStore, promptStore,
-		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore, log.Logger,
+		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore, vectorClient, log.Logger,
 	)
 	s.initMu.Lock()
 	s.maintenanceService = maintenanceSvc
@@ -899,6 +901,28 @@ func (s *Service) initializeAsync() {
 
 	// Initialize retrieval stats log store with batched flush
 	retrievalStatsLogStore := gorm.NewRetrievalStatsLogStore(store.GetDB())
+
+	// Initialize LLM filter if enabled
+	if cfg.LLMFilterEnabled {
+		llmCfg := learning.DefaultOpenAIConfig()
+		if cfg.LLMFilterModel != "" {
+			llmCfg.Model = cfg.LLMFilterModel
+		}
+		llmClient := learning.NewOpenAIClient(llmCfg)
+		if llmClient.IsConfigured() {
+			filterTimeout := time.Duration(cfg.LLMFilterTimeoutMS) * time.Millisecond
+			s.initMu.Lock()
+			s.llmFilter = search.NewLLMFilter(llmClient, filterTimeout)
+			s.initMu.Unlock()
+			log.Info().
+				Str("model", llmCfg.Model).
+				Int("timeout_ms", cfg.LLMFilterTimeoutMS).
+				Int("candidates", cfg.LLMFilterCandidates).
+				Msg("LLM behavioral relevance filter enabled")
+		} else {
+			log.Warn().Msg("LLM filter enabled but LLM not configured (set ENGRAM_LLM_URL + ENGRAM_LLM_API_KEY)")
+		}
+	}
 
 	// Initialize search manager for MCP tools
 	searchMgr := search.NewManager(observationStore, summaryStore, promptStore, vectorClient)

@@ -185,6 +185,34 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
+	// Write-time supersession: if storing a decision and a very similar decision exists,
+	// mark the old one as superseded (new decision replaces old).
+	if s.vectorClient != nil && s.vectorClient.IsConnected() && obsType == models.ObsTypeDecision && config.Get().SupersessionEnabled {
+		threshold := config.Get().SupersessionThreshold
+		if threshold <= 0 {
+			threshold = 0.9
+		}
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, false)
+		similar, err := s.vectorClient.Query(ctx, params.Content, 3, where)
+		if err == nil {
+			for _, result := range similar {
+				if result.Similarity >= threshold {
+					oldID := vector.ExtractRowID(result.Metadata)
+					if oldID > 0 && oldID != id {
+						oldObs, err := s.observationStore.GetObservationByID(ctx, oldID)
+						if err == nil && oldObs != nil && oldObs.Type == models.ObsTypeDecision && oldObs.Project == params.Project {
+							if err := s.observationStore.MarkAsSuperseded(ctx, oldID); err != nil {
+								log.Warn().Err(err).Int64("old_id", oldID).Int64("new_id", id).Msg("supersession: failed to mark old decision")
+							} else {
+								log.Info().Int64("old_id", oldID).Int64("new_id", id).Float64("similarity", result.Similarity).Msg("supersession: old decision marked superseded")
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Apply TTL for verified facts.
 	ttlDays := computeTTLDays(params.TtlDays, concepts)
 	ttlApplied := false

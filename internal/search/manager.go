@@ -205,6 +205,36 @@ func ApplyCompositeScoring(observations []*models.Observation, similarityScores 
 	}
 }
 
+// ApplyDiversityPenalty adjusts scores based on injection diversity.
+// High diversity (observation injected across many projects) = generic = penalty.
+// Scope=global observations are exempt (they are intentionally cross-project).
+// Only scope=project observations with diversity > 0.5 are penalized.
+// Penalty formula: score *= 1.0 - (diversity - 0.5) * 0.4, floored at multiplier 0.8.
+func ApplyDiversityPenalty(observations []*models.Observation, scores map[int64]float64, diversityScores map[int64]float64) {
+	if len(diversityScores) == 0 {
+		return
+	}
+	for _, obs := range observations {
+		// Exempt global-scope observations
+		if obs.Scope == models.ScopeGlobal {
+			continue
+		}
+		diversity, ok := diversityScores[obs.ID]
+		if !ok || diversity <= 0.5 {
+			continue
+		}
+		// Apply penalty: the more generic (high diversity), the lower the score.
+		// Cap multiplier floor at 0.8 to avoid over-penalizing.
+		multiplier := 1.0 - (diversity-0.5)*0.4
+		if multiplier < 0.8 {
+			multiplier = 0.8
+		}
+		if current, exists := scores[obs.ID]; exists {
+			scores[obs.ID] = current * multiplier
+		}
+	}
+}
+
 // Manager provides unified search across PostgreSQL and pgvector.
 type Manager struct {
 	ctx              context.Context

@@ -1545,6 +1545,28 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS is_suppressed`).Error
 		},
 	},
+	// Migration 046: Create injection_log table for tracking context injections.
+	{
+		ID: "046_injection_log",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`
+				CREATE TABLE IF NOT EXISTS injection_log (
+					id BIGSERIAL PRIMARY KEY,
+					observation_id BIGINT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+					project TEXT NOT NULL DEFAULT '',
+					task_context TEXT NOT NULL DEFAULT '',
+					session_id TEXT NOT NULL DEFAULT '',
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+				CREATE INDEX IF NOT EXISTS idx_injection_log_observation_id ON injection_log(observation_id);
+				CREATE INDEX IF NOT EXISTS idx_injection_log_project ON injection_log(project);
+				CREATE INDEX IF NOT EXISTS idx_injection_log_created_at ON injection_log(created_at);
+			`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS injection_log`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

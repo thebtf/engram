@@ -11,30 +11,33 @@ import (
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/pattern"
 	"github.com/thebtf/engram/internal/telemetry"
+	"github.com/thebtf/engram/internal/vector"
 )
 
 // Service handles scheduled maintenance tasks.
 type Service struct {
-	log                 zerolog.Logger
-	lastRunTime         time.Time
-	promptStore         *gorm.PromptStore
-	store               *gorm.Store
-	vectorCleanupFn     func(ctx context.Context, deletedIDs []int64)
-	config              *config.Config
-	summaryStore        *gorm.SummaryStore
-	stopCh              chan struct{}
-	doneCh              chan struct{}
-	observationStore    *gorm.ObservationStore
-	similarityTelemetry *telemetry.SimilarityTelemetry
-	patternStore        *gorm.PatternStore
-	smartGC             *SmartGC
-	lastRunDuration     time.Duration
+	log                  zerolog.Logger
+	lastRunTime          time.Time
+	promptStore          *gorm.PromptStore
+	store                *gorm.Store
+	vectorCleanupFn      func(ctx context.Context, deletedIDs []int64)
+	config               *config.Config
+	summaryStore         *gorm.SummaryStore
+	stopCh               chan struct{}
+	doneCh               chan struct{}
+	observationStore     *gorm.ObservationStore
+	similarityTelemetry  *telemetry.SimilarityTelemetry
+	patternStore         *gorm.PatternStore
+	smartGC              *SmartGC
+	nearDedupFinder      *NearDuplicateFinder
+	lastRunDuration      time.Duration
 	totalSmartGCArchived int64
-	totalCleanedObs     int64
-	totalOptimizeRun    int64
-	totalPatternDecay   int64
-	mu                  sync.Mutex
-	running             bool
+	totalCleanedObs      int64
+	totalOptimizeRun     int64
+	totalPatternDecay    int64
+	totalNearDedupMerged int64
+	mu                   sync.Mutex
+	running              bool
 }
 
 // NewService creates a new maintenance service.
@@ -48,8 +51,16 @@ func NewService(
 	similarityTelemetry *telemetry.SimilarityTelemetry,
 	smartGC *SmartGC,
 	patternStore *gorm.PatternStore,
+	vectorClient vector.Client,
 	log zerolog.Logger,
 ) *Service {
+	svcLog := log.With().Str("component", "maintenance").Logger()
+
+	var nearDedupFinder *NearDuplicateFinder
+	if cfg.ConsolidationEnabled && observationStore != nil && vectorClient != nil {
+		nearDedupFinder = NewNearDuplicateFinder(observationStore, vectorClient, cfg.ConsolidationThreshold, svcLog)
+	}
+
 	return &Service{
 		store:               store,
 		observationStore:    observationStore,
@@ -60,7 +71,8 @@ func NewService(
 		similarityTelemetry: similarityTelemetry,
 		smartGC:             smartGC,
 		patternStore:        patternStore,
-		log:                 log.With().Str("component", "maintenance").Logger(),
+		nearDedupFinder:     nearDedupFinder,
+		log:                 svcLog,
 		stopCh:              make(chan struct{}),
 		doneCh:              make(chan struct{}),
 	}
@@ -206,7 +218,20 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
-	// Task 8: Monitor expired verified facts (log-only, no mutations)
+	// Task 8: Near-duplicate consolidation — merge near-identical observations
+	if s.config.ConsolidationEnabled && s.nearDedupFinder != nil {
+		merged, err := s.nearDedupFinder.FindAndMerge(ctx)
+		if err != nil {
+			s.log.Error().Err(err).Msg("Failed to run near-duplicate consolidation")
+		} else if merged > 0 {
+			s.mu.Lock()
+			s.totalNearDedupMerged += int64(merged)
+			s.mu.Unlock()
+			s.log.Info().Int("merged", merged).Msg("Near-duplicate consolidation complete")
+		}
+	}
+
+	// Task 9: Monitor expired verified facts (log-only, no mutations)
 	if s.store != nil {
 		var expiredCount int64
 		err := s.store.GetDB().WithContext(ctx).
@@ -337,10 +362,12 @@ func (s *Service) Stats() map[string]any {
 		"total_cleaned_obs":  s.totalCleanedObs,
 		"total_optimizes":    s.totalOptimizeRun,
 		"running":            s.running,
-		"telemetry_enabled":      s.config.TelemetryEnabled,
-		"smart_gc_enabled":       s.config.SmartGCEnabled,
+		"telemetry_enabled":       s.config.TelemetryEnabled,
+		"smart_gc_enabled":        s.config.SmartGCEnabled,
 		"smart_gc_total_archived": s.totalSmartGCArchived,
 		"pattern_decay_total":     s.totalPatternDecay,
+		"consolidation_enabled":   s.config.ConsolidationEnabled,
+		"near_dedup_merged_total": s.totalNearDedupMerged,
 	}
 }
 
