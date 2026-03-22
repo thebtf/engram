@@ -1549,19 +1549,23 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 	{
 		ID: "046_injection_log",
 		Migrate: func(tx *gorm.DB) error {
-			return tx.Exec(`
-				CREATE TABLE IF NOT EXISTS injection_log (
-					id BIGSERIAL PRIMARY KEY,
-					observation_id BIGINT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
-					project TEXT NOT NULL DEFAULT '',
-					task_context TEXT NOT NULL DEFAULT '',
-					session_id TEXT NOT NULL DEFAULT '',
-					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-				);
-				CREATE INDEX IF NOT EXISTS idx_injection_log_observation_id ON injection_log(observation_id);
-				CREATE INDEX IF NOT EXISTS idx_injection_log_project ON injection_log(project);
-				CREATE INDEX IF NOT EXISTS idx_injection_log_created_at ON injection_log(created_at);
-			`).Error
+			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS injection_log (
+				id BIGSERIAL PRIMARY KEY,
+				observation_id BIGINT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+				project TEXT NOT NULL DEFAULT '',
+				task_context TEXT NOT NULL DEFAULT '',
+				session_id TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_injection_log_observation_id ON injection_log(observation_id)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_injection_log_project ON injection_log(project)`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_injection_log_created_at ON injection_log(created_at)`).Error
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Exec(`DROP TABLE IF EXISTS injection_log`).Error
