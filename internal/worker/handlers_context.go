@@ -306,6 +306,17 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	// This re-weights scores already computed by vector search or cross-encoder reranking.
 	if len(clusteredObservations) > 0 {
 		search.ApplyCompositeScoring(clusteredObservations, similarityScores)
+
+		// Apply injection diversity penalty: observations injected across many projects = generic = penalize
+		if s.observationStore != nil {
+			ids := make([]int64, 0, len(clusteredObservations))
+			for _, obs := range clusteredObservations {
+				ids = append(ids, obs.ID)
+			}
+			if diversityScores, err := s.observationStore.GetDiversityScores(r.Context(), ids); err == nil && len(diversityScores) > 0 {
+				search.ApplyDiversityPenalty(clusteredObservations, similarityScores, diversityScores)
+			}
+		}
 	}
 
 	// Sort by composite score (highest first)
@@ -361,7 +372,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			logCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			if err := s.observationStore.LogInjections(logCtx, resultIDs, project, query, ""); err != nil {
+			if err := s.observationStore.LogInjections(logCtx, resultIDs, project, "", ""); err != nil {
 				log.Debug().Err(err).Msg("Failed to log injections")
 			}
 		}()

@@ -24,7 +24,6 @@ const llmFilterNarrativeTruncate = 200
 type LLMFilter struct {
 	client  learning.LLMClient
 	timeout time.Duration
-	model   string // if different from default
 }
 
 // NewLLMFilter creates a new LLM-based relevance filter.
@@ -68,17 +67,27 @@ func (f *LLMFilter) FilterByRelevance(ctx context.Context, candidates []*models.
 	relevantIDs, err := parseLLMFilterResponse(response)
 	if err != nil {
 		log.Warn().Err(err).
-			Str("response", strutil.Truncate(response, 200)).
+			Int("response_len", len(response)).
 			Msg("LLM filter response parse failed, returning all candidates")
 		return allIDs
 	}
 
 	if len(relevantIDs) == 0 {
-		log.Warn().
+		// Empty set from LLM = "none relevant". Fall back to composite scoring top-5
+		// per FR-7: "If LLM returns empty set → fallback to composite scoring top-5."
+		log.Debug().
 			Str("project", project).
-			Str("response", strutil.Truncate(response, 200)).
-			Msg("LLM filter returned empty set, returning all candidates as fallback")
-		return allIDs
+			Int("total", len(candidates)).
+			Msg("LLM filter returned no relevant candidates, falling back to top-5")
+		limit := 5
+		if limit > len(candidates) {
+			limit = len(candidates)
+		}
+		fallbackIDs := make([]int64, limit)
+		for i := 0; i < limit; i++ {
+			fallbackIDs[i] = candidates[i].ID
+		}
+		return fallbackIDs
 	}
 
 	log.Debug().
