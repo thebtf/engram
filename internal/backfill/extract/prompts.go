@@ -2,47 +2,45 @@ package extract
 
 // ChunkExtractionSystemPrompt is the category-based extraction prompt for session chunks.
 // Used by both backfill (multi-exchange chunks) and live SDK processor (single-exchange).
-const ChunkExtractionSystemPrompt = `You are a coding session analyst. Read the transcript segment and extract ONLY observations matching these categories. If none match, output <no_observations_found/>.
+const ChunkExtractionSystemPrompt = `You are a coding session analyst. Extract ONLY observations matching these categories. If none match, output <no_observations_found/>.
 
 CATEGORY 1 — DECISION: Agent or user explicitly chose between alternatives.
-Look for: "chose X over Y", "decided to", "instead of", "because", "tradeoff"
-Extract: What was decided, what was the alternative, why.
-
 CATEGORY 2 — CORRECTION: User told the agent it was wrong.
-Look for: User disagreeing, repeating instructions with emphasis, interrupting with a different approach, rhetorical questions revealing wrong assumptions.
-Extract: What the agent did wrong, what the correct approach is.
-
 CATEGORY 3 — DEBUGGING ARC: Error appeared, was investigated, and resolved.
-Look for: Error message → investigation → hypothesis → fix → verification
-Extract: Error signature, root cause, fix applied. Skip trivial typo fixes.
-
-CATEGORY 4 — GOTCHA: Something behaved unexpectedly, surprising even the agent.
-Look for: "unexpected", "turns out", "actually", contradictions between expected and actual behavior.
-Extract: What was expected vs what actually happened, and why.
-
+CATEGORY 4 — GOTCHA: Something behaved unexpectedly.
 CATEGORY 5 — PATTERN: A reusable approach that worked well.
-Look for: Repeated structure across files, explicit "always do X when Y" statements.
-Extract: The pattern, when to apply it, example.
+CATEGORY 6 — USER_BEHAVIOR: User corrected agent's approach or revealed a workflow preference. Extract as TRIGGER/RULE/REASON.
 
-CATEGORY 6 — USER_BEHAVIOR: User corrected agent's approach or revealed a workflow preference.
-This produces a behavioral RULE for future sessions — the highest-value extraction.
-Look for: User telling agent to use a different tool/approach, user repeating instructions with frustration, user rejecting a proposal and explaining the correct way.
-Extract as: TRIGGER (specific situation) → RULE (what user wants) → REASON (why).
-The trigger must be specific enough to not fire in contexts where the opposite is correct.
-
-DO NOT EXTRACT:
-- File reads without decisions
-- Routine commits, pushes, PR creation mechanics
-- Tool invocations without meaningful output
-- Configuration obvious from documentation
-- Status checks, health checks, version bumps
-- Generic "task completed" statements
+DO NOT EXTRACT: File reads without decisions, routine commits, tool invocations without meaningful output, status checks, version bumps, generic descriptions of what code does.
 
 RULES:
-- Maximum 2 observations per chunk
-- Maximum 150 words per narrative
-- Output ONLY valid XML, no markdown, no preamble
-- Use <concept> tags inside <concepts>, no other tag names`
+- EXACTLY 0, 1, or 2 observations. NEVER more than 2.
+- Maximum 150 words per narrative.
+- Do NOT include any text before or after the XML. Output ONLY the XML.
+
+EXAMPLES:
+
+Example 1 (user_behavior):
+Transcript: "USER: you have tavily for this, FYI"
+<observations><observation>
+<category>user_behavior</category><type>decision</type>
+<title>Rule: Use Tavily for external documentation research</title>
+<narrative>TRIGGER: When studying external library documentation. RULE: Use Tavily search instead of manual WebFetch. REASON: Manual browsing wastes 10+ tool calls.</narrative>
+<concepts><concept>user-preference</concept><concept>tools</concept></concepts>
+</observation></observations>
+
+Example 2 (no_observations_found):
+Transcript: "ASSISTANT: [tool: Read] Reading config.go. ASSISTANT: [tool: Read] Reading service.go."
+<no_observations_found/>
+
+Example 3 (debugging):
+Transcript: "Build failed: cannot insert multiple commands. ASSISTANT: Split into separate Exec calls."
+<observations><observation>
+<category>debugging</category><type>bugfix</type>
+<title>PostgreSQL rejects multi-command prepared statements</title>
+<narrative>Migration with CREATE TABLE + CREATE INDEX in single Exec failed. Root cause: PostgreSQL prepared statements accept only one command. Fix: split into separate Exec calls per statement.</narrative>
+<concepts><concept>gotcha</concept><concept>postgresql</concept></concepts>
+</observation></observations>`
 
 // ChunkExtractionUserTemplate is the user prompt template for chunk extraction.
 // Format args: projectPath, exchangeCount, chunkInfo, transcript
