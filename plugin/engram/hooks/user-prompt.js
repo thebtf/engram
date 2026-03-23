@@ -25,9 +25,38 @@ async function handleUserPrompt(ctx, input) {
   }
 
   let contextToInject = '';
+  let behaviorRulesBlock = '';
   let observationCount = 0;
   let matchedCount = 0;
   const searchIds = [];
+
+  // Fetch user behavior rules (type=guidance, scope=global) — injected BEFORE technical context.
+  // These are active steering rules extracted from previous user corrections.
+  // Not subject to diversity penalty or LLM filter — always injected if matched.
+  try {
+    const rulesResult = await lib.requestPost('/api/context/search', {
+      project,
+      query: prompt,
+      cwd,
+      obs_type: 'guidance',
+    });
+    const rules = Array.isArray(rulesResult.observations)
+      ? rulesResult.observations.filter(obs => asString(obs.scope) === 'global' || asString(obs.project) === project)
+      : [];
+    if (rules.length > 0) {
+      behaviorRulesBlock = '<user-behavior-rules>\n';
+      behaviorRulesBlock += '# Behavioral Rules From User Corrections\n';
+      behaviorRulesBlock += 'These rules reflect how the user prefers to work. Follow them.\n\n';
+      for (const rule of rules.slice(0, 10)) {
+        const title = escapeXmlTags(rule.title);
+        const narrative = escapeXmlTags(rule.narrative);
+        behaviorRulesBlock += `## ${title}\n${narrative}\n\n`;
+      }
+      behaviorRulesBlock += '</user-behavior-rules>\n';
+    }
+  } catch (error) {
+    console.error(`[engram] behavior rules fetch failed: ${error.message}`);
+  }
 
   try {
     const searchResult = await lib.requestPost('/api/context/search', {
@@ -270,9 +299,11 @@ async function handleUserPrompt(ctx, input) {
       console.error(`[user-prompt] Failed to notify session start: ${error.message}`);
     });
 
-  if (observationCount > 0) {
-    console.error(`[engram] Found ${observationCount} relevant memories for this prompt`);
-    return contextToInject;
+  // Assemble final output: behavior rules FIRST (higher priority), then technical context.
+  const output = behaviorRulesBlock + contextToInject;
+  if (output) {
+    console.error(`[engram] Injecting: ${behaviorRulesBlock ? 'behavior rules + ' : ''}${observationCount} observations`);
+    return output;
   }
 
   return '';

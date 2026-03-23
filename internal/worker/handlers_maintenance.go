@@ -358,6 +358,95 @@ func (s *Service) handlePatternCleanup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handlePurgeRebuild godoc
+// @Summary Selective purge and rebuild
+// @Description Truncates derived tables and deletes auto-extracted observations,
+// preserving manual observations and credentials. After purge, run backfill to
+// rebuild from session history with improved extraction quality.
+// @Tags Maintenance
+// @Produce json
+// @Security ApiKeyAuth
+// @Param dry_run query bool false "Preview what would be purged without executing"
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {string} string "store not ready"
+// @Failure 500 {string} string "internal error"
+// @Router /api/maintenance/purge-rebuild [post]
+func (s *Service) handlePurgeRebuild(w http.ResponseWriter, r *http.Request) {
+	dryRun := r.URL.Query().Get("dry_run") == "true"
+
+	s.initMu.RLock()
+	store := s.store
+	s.initMu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "store not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	db := store.GetDB()
+
+	if dryRun {
+		var autoExtracted int64
+		db.Raw("SELECT COUNT(*) FROM observations WHERE source_type != 'manual' AND type != 'credential'").Scan(&autoExtracted)
+
+		var vectorCount int64
+		db.Raw("SELECT COUNT(*) FROM vectors").Scan(&vectorCount)
+
+		var patternCount int64
+		db.Raw("SELECT COUNT(*) FROM patterns").Scan(&patternCount)
+
+		var relationsCount int64
+		db.Raw("SELECT COUNT(*) FROM observation_relations").Scan(&relationsCount)
+
+		writeJSON(w, map[string]any{
+			"dry_run":            true,
+			"auto_extracted_obs": autoExtracted,
+			"vectors":            vectorCount,
+			"patterns":           patternCount,
+			"relations":          relationsCount,
+			"preserved":          "source_type='manual' OR type='credential'",
+		})
+		return
+	}
+
+	results := map[string]int64{}
+
+	// Truncate derived tables that will be rebuilt by backfill.
+	derivedTables := []string{
+		"vectors",
+		"patterns",
+		"observation_relations",
+		"session_summaries",
+		"user_prompts",
+		"injection_log",
+	}
+	for _, table := range derivedTables {
+		if err := db.Exec("TRUNCATE " + table + " RESTART IDENTITY CASCADE").Error; err != nil {
+			log.Warn().Err(err).Str("table", table).Msg("purge-rebuild: truncate failed")
+		} else {
+			results[table+"_truncated"] = 1
+		}
+	}
+
+	// Delete auto-extracted observations; preserve manual entries and credentials.
+	del := db.Exec("DELETE FROM observations WHERE source_type != 'manual' AND type != 'credential'")
+	if del.Error != nil {
+		http.Error(w, "failed to purge observations: "+del.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+	results["observations_deleted"] = del.RowsAffected
+
+	log.Info().
+		Int64("observations_deleted", del.RowsAffected).
+		Msg("purge-rebuild: completed")
+
+	writeJSON(w, map[string]any{
+		"status":  "purged",
+		"results": results,
+		"next":    "Run backfill to rebuild from session history",
+	})
+}
+
 // cleanupInjectionLog removes injection log entries older than 90 days.
 func cleanupInjectionLog(ctx context.Context, obsStore interface {
 	CleanupInjectionLog(ctx context.Context, retentionDays int) (int64, error)

@@ -1835,6 +1835,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/maintenance/backfill-relations", s.handleBackfillRelations)
 		r.Post("/api/maintenance/purge-patterns", s.handlePurgePatterns)
 		r.Post("/api/maintenance/pattern-cleanup", s.handlePatternCleanup)
+		r.Post("/api/maintenance/purge-rebuild", s.handlePurgeRebuild)
 
 		// Analytics routes
 		r.Get("/api/analytics/trends", s.handleGetTrends)

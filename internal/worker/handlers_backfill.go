@@ -323,12 +323,6 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		MetricsReport:         result.Metrics.Report(),
 	}
 
-	if len(result.Observations) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
 	// Store observations with semantic dedup (same logic as handleBackfillIngest).
 	s.initMu.RLock()
 	obsStore := s.observationStore
@@ -337,6 +331,37 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 
 	if obsStore == nil {
 		http.Error(w, "Observation store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	sdkSessionID := fmt.Sprintf("backfill-%s-%s", req.RunID, req.SessionID)
+
+	// T017: Create SDK session record so backfilled sessions appear in Sessions page.
+	if s.sessionStore != nil {
+		sessionDBID, err := s.sessionStore.CreateSDKSession(r.Context(), sdkSessionID, project, "backfill")
+		if err != nil {
+			log.Warn().Err(err).Str("session_id", req.SessionID).Msg("backfill: failed to create SDK session")
+		}
+		_ = sessionDBID
+	}
+
+	// T016: Store session summary if the retrospective produced one.
+	if result.Summary != nil && result.Summary.Summary.Request != "" && s.summaryStore != nil {
+		summary := &models.ParsedSummary{
+			Request:   result.Summary.Summary.Request,
+			Completed: result.Summary.Summary.Completed,
+			Learned:   result.Summary.Summary.Learned,
+			NextSteps: result.Summary.Summary.NextSteps,
+		}
+		_, _, err := s.summaryStore.StoreSummary(r.Context(), sdkSessionID, project, summary, 0, 0)
+		if err != nil {
+			log.Warn().Err(err).Msg("backfill: failed to store summary")
+		}
+	}
+
+	if len(result.Observations) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -362,13 +387,12 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		// Add backfill metadata.
 		obs.Scope = models.ScopeProject
 
-		project := sess.ProjectPath
+		obsProject := project
 		if eo.Project != "" {
-			project = eo.Project
+			obsProject = eo.Project
 		}
 
-		sdkSessionID := fmt.Sprintf("backfill-%s-%s", req.RunID, req.SessionID)
-		_, _, storeErr := obsStore.StoreObservation(r.Context(), sdkSessionID, project, obs, 0, 0)
+		_, _, storeErr := obsStore.StoreObservation(r.Context(), sdkSessionID, obsProject, obs, 0, 0)
 		if storeErr != nil {
 			log.Error().Err(storeErr).Str("title", obs.Title).Msg("backfill-session: failed to store observation")
 			resp.Errors++
