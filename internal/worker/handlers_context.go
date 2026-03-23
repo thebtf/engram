@@ -46,12 +46,14 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	agentID := r.URL.Query().Get("agent_id")
 
 	// For POST requests, allow JSON body to override query params.
+	var obsTypeFilter string
 	if r.Method == http.MethodPost && r.Body != nil {
 		var body struct {
 			Project string `json:"project"`
 			Query   string `json:"query"`
 			Cwd     string `json:"cwd"`
 			AgentID string `json:"agent_id"`
+			ObsType string `json:"obs_type"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			if body.Project != "" {
@@ -65,6 +67,9 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 			}
 			if body.AgentID != "" {
 				agentID = body.AgentID
+			}
+			if body.ObsType != "" {
+				obsTypeFilter = body.ObsType
 			}
 			// agent_id acts as project scope for OpenClaw agents without filesystem context
 			if project == "" && agentID != "" {
@@ -209,6 +214,17 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Filter by observation type if requested (e.g., obs_type=guidance for behavioral rules)
+	if obsTypeFilter != "" {
+		filtered := make([]*models.Observation, 0, len(observations))
+		for _, obs := range observations {
+			if string(obs.Type) == obsTypeFilter {
+				filtered = append(filtered, obs)
+			}
+		}
+		observations = filtered
+	}
+
 	// Fast staleness filter - NO verification (that's too slow for interactive use)
 	// Just check mtimes and exclude obviously stale observations
 	var staleCount int
@@ -328,8 +344,10 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Capture total before applying max results cap so callers can tell whether results were truncated.
-	totalResults := len(clusteredObservations)
+	// Capture total from raw search results (before staleness filter, clustering, and cap).
+	// This tells callers how many observations genuinely matched the query.
+	// len(observations) = raw DB results; len(clusteredObservations) = after dedup; final response may be further capped.
+	totalResults := len(observations)
 
 	// Apply max results cap if configured
 	if maxResults > 0 && len(clusteredObservations) > maxResults {
