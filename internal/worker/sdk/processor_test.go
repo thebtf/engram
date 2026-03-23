@@ -869,9 +869,9 @@ func TestToJSONString_ComplexTypes(t *testing.T) {
 // TestSystemPrompt tests that the system prompt is defined.
 func TestSystemPrompt(t *testing.T) {
 	assert.NotEmpty(t, systemPrompt)
-	assert.Contains(t, systemPrompt, "memory extraction agent")
 	assert.Contains(t, systemPrompt, "observation")
-	assert.Contains(t, systemPrompt, "GUIDELINES")
+	assert.Contains(t, systemPrompt, "CATEGORY")
+	assert.Contains(t, systemPrompt, "user_behavior")
 }
 
 // TestProcessorSemaphore tests the semaphore behavior.

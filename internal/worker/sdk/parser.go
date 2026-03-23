@@ -25,6 +25,18 @@ var (
 		"change":    true,
 		"discovery": true,
 		"decision":  true,
+		"guidance":  true,
+	}
+
+	// categoryTypeMap maps extraction category names to observation types.
+	// Categories from the category-based extraction prompt (both live and backfill).
+	categoryTypeMap = map[string]models.ObservationType{
+		"decision":      models.ObsTypeDecision,
+		"correction":    models.ObsTypeDiscovery,  // corrections reveal user preferences
+		"debugging":     models.ObsTypeBugfix,
+		"gotcha":        models.ObsTypeDiscovery,
+		"pattern":       models.ObsTypeDiscovery,
+		"user_behavior": models.ObsTypeGuidance,
 	}
 
 	// Valid concepts - expanded list matching GlobalizableConcepts and common use cases
@@ -73,6 +85,7 @@ func ParseObservations(text string, correlationID string) []*models.ParsedObserv
 		obsContent := match[1]
 
 		// Extract fields
+		category := extractField(obsContent, "category")
 		obsType := extractField(obsContent, "type")
 		title := extractField(obsContent, "title")
 		subtitle := extractField(obsContent, "subtitle")
@@ -82,21 +95,32 @@ func ParseObservations(text string, correlationID string) []*models.ParsedObserv
 		filesRead := extractArrayElements(obsContent, "files_read", "file")
 		filesModified := extractArrayElements(obsContent, "files_modified", "file")
 
-		// Determine final type (default to "change" if invalid)
-		finalType := models.ObsTypeChange
-		if obsType != "" {
-			if validObsTypes[obsType] {
-				finalType = models.ObservationType(obsType)
+		// Determine final type: category mapping takes precedence over <type> field.
+		// This ensures category-based extraction produces the correct observation type.
+		var finalType models.ObservationType
+		var finalSourceType models.SourceType
+		if mappedType, ok := categoryTypeMap[category]; ok {
+			finalType = mappedType
+			if category == "user_behavior" {
+				finalSourceType = models.SourceLLMDerived
+			}
+		} else {
+			// No category or unknown category: fall back to <type> field
+			finalType = models.ObsTypeChange
+			if obsType != "" {
+				if validObsTypes[obsType] {
+					finalType = models.ObservationType(obsType)
+				} else {
+					log.Warn().
+						Str("correlationId", correlationID).
+						Str("invalidType", obsType).
+						Msg("Invalid observation type, using 'change'")
+				}
 			} else {
 				log.Warn().
 					Str("correlationId", correlationID).
-					Str("invalidType", obsType).
-					Msg("Invalid observation type, using 'change'")
+					Msg("Observation missing type and category fields, using 'change'")
 			}
-		} else {
-			log.Warn().
-				Str("correlationId", correlationID).
-				Msg("Observation missing type field, using 'change'")
 		}
 
 		// Filter concepts: only keep valid ones from the strict list
@@ -122,6 +146,7 @@ func ParseObservations(text string, correlationID string) []*models.ParsedObserv
 
 		observations = append(observations, &models.ParsedObservation{
 			Type:          finalType,
+			SourceType:    finalSourceType,
 			Title:         title,
 			Subtitle:      subtitle,
 			Facts:         facts,
