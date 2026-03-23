@@ -116,6 +116,7 @@ type Config struct {
 	StoreMemorySummarize        bool     `json:"store_memory_summarize"`        // Use LLM to summarize long content (default: false)
 	EncryptionKeyFile      string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
 	EncryptionKey          string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
+	LLMMaxTokens           int    `json:"llm_max_tokens"`        // ENGRAM_LLM_MAX_TOKENS (default: 4096)
 	LLMFilterEnabled       bool   `json:"llm_filter_enabled"`    // ENGRAM_LLM_FILTER_ENABLED (default: false)
 	LLMFilterModel         string `json:"llm_filter_model"`      // ENGRAM_LLM_FILTER_MODEL (default: same as ENGRAM_LLM_MODEL)
 	LLMFilterTimeoutMS     int    `json:"llm_filter_timeout_ms"` // ENGRAM_LLM_FILTER_TIMEOUT_MS (default: 3000)
@@ -255,6 +256,7 @@ func Default() *Config {
 		StoreMemorySoftLimit:        1000,
 		StoreMemorySummarize:        false,
 		StoreMemoryDedupThreshold:   0.92,
+		LLMMaxTokens:                4096,  // Enough for thinking models (reasoning + content)
 		LLMFilterEnabled:            false, // Opt-in: requires LLM configuration
 		LLMFilterTimeoutMS:          3000,  // 3s timeout for LLM filter
 		LLMFilterCandidates:         15,    // Evaluate top 15 candidates
@@ -536,6 +538,11 @@ func Load() (*Config, error) {
 		cfg.EncryptionKey = v
 	} else if v := strings.TrimSpace(os.Getenv("ENGRAM_ENCRYPTION_KEY")); v != "" {
 		cfg.EncryptionKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_MAX_TOKENS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.LLMMaxTokens = n
+		}
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_ENABLED")); v == "true" || v == "1" {
 		cfg.LLMFilterEnabled = true

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,18 +21,20 @@ type LLMClient interface {
 
 // OpenAIClient implements LLMClient using an OpenAI-compatible API.
 type OpenAIClient struct {
-	baseURL string
-	apiKey  string
-	model   string
-	client  *http.Client
+	baseURL   string
+	apiKey    string
+	model     string
+	maxTokens int
+	client    *http.Client
 }
 
 // OpenAIConfig holds configuration for the OpenAI-compatible client.
 type OpenAIConfig struct {
-	BaseURL string        // ENGRAM_LLM_URL (default: reuse ENGRAM_EMBEDDING_URL base)
-	APIKey  string        // ENGRAM_LLM_API_KEY
-	Model   string        // ENGRAM_LLM_MODEL (default: gpt-4o-mini)
-	Timeout time.Duration // HTTP client timeout (default: 120s)
+	BaseURL   string        // ENGRAM_LLM_URL (default: reuse ENGRAM_EMBEDDING_URL base)
+	APIKey    string        // ENGRAM_LLM_API_KEY
+	Model     string        // ENGRAM_LLM_MODEL (default: gpt-4o-mini)
+	MaxTokens int           // ENGRAM_LLM_MAX_TOKENS (default: 4096)
+	Timeout   time.Duration // HTTP client timeout (default: 120s)
 }
 
 // DefaultOpenAIConfig returns config from environment variables.
@@ -53,6 +56,12 @@ func DefaultOpenAIConfig() OpenAIConfig {
 		cfg.Model = "gpt-4o-mini"
 	}
 
+	if v := os.Getenv("ENGRAM_LLM_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxTokens = n
+		}
+	}
+
 	return cfg
 }
 
@@ -62,11 +71,16 @@ func NewOpenAIClient(cfg OpenAIConfig) *OpenAIClient {
 	if cfg.Timeout > 0 {
 		timeout = cfg.Timeout
 	}
+	maxTokens := cfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096 // Sensible default for thinking models
+	}
 	return &OpenAIClient{
-		baseURL: cfg.BaseURL,
-		apiKey:  cfg.APIKey,
-		model:   cfg.Model,
-		client:  &http.Client{Timeout: timeout},
+		baseURL:   cfg.BaseURL,
+		apiKey:    cfg.APIKey,
+		model:     cfg.Model,
+		maxTokens: maxTokens,
+		client:    &http.Client{Timeout: timeout},
 	}
 }
 
@@ -108,7 +122,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, systemPrompt, userPrompt st
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		MaxTokens: 4096, // Enough for reasoning + content in thinking models
+		MaxTokens: c.maxTokens,
 		Timeout:   300,  // Override LiteLLM proxy→backend timeout for slow local models
 	}
 
