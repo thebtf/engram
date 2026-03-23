@@ -3,11 +3,15 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 import { useSSE } from '@/composables/useSSE'
+import { useStats } from '@/composables/useStats'
+import { useHealth } from '@/composables/useHealth'
 
 const route = useRoute()
 const router = useRouter()
 const { logout } = useAuth()
 const { isConnected } = useSSE()
+const { stats } = useStats()
+const { health } = useHealth()
 
 const collapsed = ref(localStorage.getItem('nav-sidebar-collapsed') === 'true')
 
@@ -92,6 +96,49 @@ async function handleLogout() {
         <span v-if="!collapsed" class="truncate">{{ item.label }}</span>
       </router-link>
     </nav>
+
+    <!-- Stats Panel (only when expanded) -->
+    <div v-if="!collapsed" class="border-t border-slate-800 px-3 py-2 space-y-3 overflow-y-auto max-h-[40vh]">
+      <!-- System Health -->
+      <div v-if="health && health.components && health.components.length" class="space-y-1">
+        <div class="text-[10px] text-slate-500 uppercase tracking-wider font-medium">System Health</div>
+        <div v-for="comp in health.components" :key="comp.name" class="flex items-center justify-between text-xs">
+          <span class="text-slate-400 truncate">{{ comp.name }}</span>
+          <span
+            :class="[
+              'font-medium capitalize',
+              comp.status === 'healthy' ? 'text-green-400' : comp.status === 'degraded' ? 'text-yellow-400' : 'text-red-400',
+            ]"
+          >{{ comp.status }}</span>
+        </div>
+      </div>
+
+      <!-- Memory Contents -->
+      <div class="space-y-1">
+        <div class="text-[10px] text-slate-500 uppercase tracking-wider font-medium">Memory</div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-slate-400">Observations</span>
+          <span class="text-white font-medium">{{ stats?.observationCount ?? '—' }}</span>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-slate-400">Sessions Today</span>
+          <span class="text-white font-medium">{{ stats?.sessionsToday ?? 0 }}</span>
+        </div>
+      </div>
+
+      <!-- Retrieval Stats -->
+      <div v-if="stats?.retrieval" class="space-y-1">
+        <div class="text-[10px] text-slate-500 uppercase tracking-wider font-medium">Retrieval</div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-slate-400">Requests</span>
+          <span class="text-white font-medium">{{ stats.retrieval.TotalRequests ?? 0 }}</span>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-slate-400">Injections</span>
+          <span class="text-white font-medium">{{ stats.retrieval.ContextInjections ?? 0 }}</span>
+        </div>
+      </div>
+    </div>
 
     <!-- Bottom section -->
     <div class="border-t border-slate-800 px-2 py-2 space-y-1">

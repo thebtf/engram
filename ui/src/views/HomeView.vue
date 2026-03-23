@@ -1,24 +1,19 @@
 <script setup lang="ts">
-import { useStats, useTimeline, useHealth } from '@/composables'
+import { useStats, useTimeline } from '@/composables'
 import StatsCards from '@/components/StatsCards.vue'
-import Sidebar from '@/components/Sidebar.vue'
 import FilterTabs from '@/components/FilterTabs.vue'
 import Timeline from '@/components/Timeline.vue'
-
-const { health } = useHealth()
 
 const {
   filteredItems,
   loading,
   observationCount,
   promptCount,
-  summaryCount,
   currentFilter,
   currentProject,
   currentTypeFilter,
   currentConceptFilter,
   setFilter,
-  setProject,
   setTypeFilter,
   setConceptFilter,
 } = useTimeline()
@@ -31,39 +26,25 @@ const { stats } = useStats(currentProject)
     <!-- Stats Cards -->
     <StatsCards :stats="stats" :observation-count="observationCount" />
 
-    <!-- Two Column Layout -->
-    <div class="flex gap-6">
-      <!-- Info Sidebar -->
-      <Sidebar
-        :stats="stats"
+    <!-- Activity Timeline Section -->
+    <section>
+      <div class="flex items-center gap-3 mb-4">
+        <i class="fas fa-list text-claude-400" />
+        <h2 class="text-lg font-semibold text-white">Activity Timeline</h2>
+      </div>
+
+      <FilterTabs
+        :current-filter="currentFilter"
+        :current-type-filter="currentTypeFilter"
+        :current-concept-filter="currentConceptFilter"
         :observation-count="observationCount"
         :prompt-count="promptCount"
-        :summary-count="summaryCount"
-        :current-project="currentProject"
-        :health="health"
-        @update:project="setProject"
+        @update:filter="setFilter"
+        @update:type-filter="setTypeFilter"
+        @update:concept-filter="setConceptFilter"
       />
 
-      <!-- Activity Timeline Section -->
-      <section class="flex-1 min-w-0">
-        <div class="flex items-center gap-3 mb-4">
-          <i class="fas fa-list text-claude-400" />
-          <h2 class="text-lg font-semibold text-white">Activity Timeline</h2>
-        </div>
-
-        <FilterTabs
-          :current-filter="currentFilter"
-          :current-type-filter="currentTypeFilter"
-          :current-concept-filter="currentConceptFilter"
-          :observation-count="observationCount"
-          :prompt-count="promptCount"
-          @update:filter="setFilter"
-          @update:type-filter="setTypeFilter"
-          @update:concept-filter="setConceptFilter"
-        />
-
-        <Timeline :items="filteredItems" :loading="loading" />
-      </section>
-    </div>
+      <Timeline :items="filteredItems" :loading="loading" />
+    </section>
   </div>
 </template>

@@ -1712,6 +1712,7 @@ func (s *Service) setupRoutes() {
 
 		// Session routes
 		r.Post("/api/sessions/init", s.handleSessionInit)
+		r.Get("/api/sessions/list", s.handleListSessions)
 		r.Get("/api/sessions", s.handleGetSessionByClaudeID)
 		r.Post("/api/sessions/{id}/init", s.handleSessionStart)
 		r.Post("/api/sessions/observations", s.handleObservation)

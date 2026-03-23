@@ -1,6 +1,6 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { IndexedSession } from '@/utils/api'
-import { fetchIndexedSessions, searchIndexedSessions, fetchProjects } from '@/utils/api'
+import { fetchSDKSessions, searchIndexedSessions, fetchProjects } from '@/utils/api'
 
 function resolveSessionError(err: unknown, fallback: string): string {
   if (!(err instanceof Error)) return fallback
@@ -25,19 +25,29 @@ export function useSessions() {
   async function loadSessions() {
     abortController?.abort()
     abortController = new AbortController()
-
     loading.value = true
     error.value = null
-
     try {
-      sessions.value = await fetchIndexedSessions(
+      const result = await fetchSDKSessions(
         {
           project: filterProject.value || undefined,
-          from: filterFrom.value || undefined,
-          to: filterTo.value || undefined,
+          limit: 50,
+          offset: 0,
         },
         abortController.signal,
-      ) || []
+      )
+      sessions.value = (result.sessions || []).map(s => ({
+        id: s.claude_session_id,
+        workstation: '',
+        project: s.project,
+        date: s.started_at ? s.started_at.slice(0, 10) : '',
+        message_count: s.prompt_counter,
+        created_at: s.started_at,
+        // Extra SDK fields exposed as-is for SessionsView compatibility
+        status: s.status,
+        user_prompt: s.user_prompt,
+        completed_at: s.completed_at,
+      } as any))
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return
       error.value = resolveSessionError(err, 'Failed to load sessions')

@@ -21,6 +21,24 @@ export interface SummaryFeedItem extends SessionSummary {
 
 export type FeedItem = ObservationFeedItem | PromptFeedItem | SummaryFeedItem
 
+export interface SDKSessionItem {
+  id: number
+  claude_session_id: string
+  project: string
+  status: string
+  started_at: string
+  completed_at: string | null
+  prompt_counter: number
+  user_prompt: string
+}
+
+export interface SDKSessionListResponse {
+  sessions: SDKSessionItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface RetrievalStats {
   TotalRequests: number
   ObservationsServed: number
