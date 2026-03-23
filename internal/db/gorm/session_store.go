@@ -215,7 +215,7 @@ func (s *SessionStore) ListSDKSessions(ctx context.Context, project string, limi
 		return nil, 0, err
 	}
 
-	if err := q.Order("started_at_epoch DESC").
+	if err := q.Order("started_at_epoch DESC, id DESC").
 		Limit(limit).
 		Offset(offset).
 		Find(&sessions).Error; err != nil {

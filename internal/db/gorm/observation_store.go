@@ -1529,6 +1529,7 @@ func (s *ObservationStore) DeleteOrphanedCredentials(ctx context.Context, curren
 		return 0, fmt.Errorf("current fingerprint is required")
 	}
 	result := s.db.WithContext(ctx).
+		Where("type = ?", "credential").
 		Where("encrypted_secret IS NOT NULL").
 		Where("encryption_key_fingerprint IS NOT NULL AND encryption_key_fingerprint != ''").
 		Where("encryption_key_fingerprint != ?", currentFingerprint).
