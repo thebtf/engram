@@ -58,6 +58,21 @@
 **Fix plan:** Add `status` column to observations (active/resolved), filter resolved from injection, allow reopen via MCP tool.
 **Context:** Discussed 2026-03-23 re: Codex Account Blocker observation (ID 56553)
 
+## 2026-03-24: Pre-Commit Quality Guardrails (Future FR)
+**What:** Agent committed hardcoded `max_tokens: 4096` that should have been configurable. No automated check caught it before commit.
+**Two scopes:**
+1. **Static guardrails (linter)** — magic numbers, hardcoded URLs, missing error checks, TODO without issue. Classic pre-commit hook territory (golangci-lint custom rules). Not engram — fixed rules, no LLM needed.
+2. **Context-aware guardrails (engram)** — "this pattern caused issues before", "user prefers config over hardcode". Already partially solved by `<user-behavior-rules>` injection. Gap: injection happens at prompt time, not at commit time. A PostToolUse hook on Write/Edit could check diff against known anti-patterns from engram observations.
+**Impact:** Agent ignores rules it already knows. Pre-commit check would catch before it reaches PR.
+**Decision needed:** Is this a linter task (golangci-lint) or an engram task (context-aware), or both?
+**Context:** Hardcoded 4096 in `internal/learning/llm.go`, caught by user not by system. Fixed in PR #49.
+
+## 2026-03-24: Re-benchmark All 12 Models with max_tokens: 4096
+**What:** Benchmark Rounds 1-2 used max_tokens: 1024 (hardcoded in benchmark script). Thinking models were unfairly penalized — reasoning consumed token budget. With production max_tokens: 4096, results may differ significantly.
+**Impact:** Current winner (huihui-qwen3.5-9b-abliterated) may not be the best choice. Thinking models that scored poorly (qwen3.5-9b 5.0, ernie 5.5) could improve dramatically.
+**Action:** Update run_benchmark_v2.py to use 4096, re-run all 12 models with B_fewshot. Compare with current results.
+**Context:** `.agent/benchmark/run_benchmark_v2.py:44`, `.agent/benchmark/benchmark-v2-design.md`
+
 ## 2026-03-19: MCP Resources/Prompts Stubs
 What: MCP server returns empty lists for resources/list, prompts/list, completion/complete
 Why deferred: MCP spec allows graceful empty responses for unsupported capabilities
