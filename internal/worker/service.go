@@ -1712,6 +1712,7 @@ func (s *Service) setupRoutes() {
 
 		// Session routes
 		r.Post("/api/sessions/init", s.handleSessionInit)
+		r.Get("/api/sessions/list", s.handleListSessions)
 		r.Get("/api/sessions", s.handleGetSessionByClaudeID)
 		r.Post("/api/sessions/{id}/init", s.handleSessionStart)
 		r.Post("/api/sessions/observations", s.handleObservation)
@@ -1817,6 +1818,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/vault/credentials", s.handleStoreCredential)
 		r.Delete("/api/vault/credentials/{name}", s.handleDeleteCredential)
 		r.Get("/api/vault/status", s.handleVaultStatus)
+		r.Delete("/api/vault/orphaned-credentials", s.handleDeleteOrphanedCredentials)
 
 		// Tag routes
 		r.Post("/api/observations/{id}/tags", s.handleTagObservation)

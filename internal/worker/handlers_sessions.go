@@ -402,6 +402,50 @@ func (s *Service) handleSubagentComplete(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
+// handleListSessions godoc
+// @Summary List SDK sessions
+// @Description Returns a paginated list of SDK sessions, optionally filtered by project.
+// @Tags Sessions
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project path"
+// @Param limit query int false "Page size (default 50)"
+// @Param offset query int false "Offset (default 0)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Router /api/sessions/list [get]
+func (s *Service) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	limit := 50
+	offset := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	sessions, total, err := s.sessionStore.ListSDKSessions(r.Context(), project, limit, offset)
+	if err != nil {
+		http.Error(w, "failed to list sessions", http.StatusInternalServerError)
+		return
+	}
+	if sessions == nil {
+		sessions = []*models.SDKSession{}
+	}
+
+	writeJSON(w, map[string]any{
+		"sessions": sessions,
+		"total":    total,
+		"limit":    limit,
+		"offset":   offset,
+	})
+}
+
 // handleGetSessionByClaudeID godoc
 // @Summary Get session by Claude session ID
 // @Description Looks up a session by its Claude session ID.

@@ -282,6 +282,46 @@ func (s *Service) handleDeleteCredential(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// handleDeleteOrphanedCredentials godoc
+// @Summary Delete orphaned credentials
+// @Description Removes credentials encrypted with a key that no longer matches the current vault key fingerprint.
+// @Tags Vault
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "vault not configured"
+// @Router /api/vault/orphaned-credentials [delete]
+func (s *Service) handleDeleteOrphanedCredentials(w http.ResponseWriter, r *http.Request) {
+	v, err := s.getVault()
+	if err != nil || v == nil {
+		http.Error(w, "vault not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	fingerprint := v.Fingerprint()
+	if fingerprint == "" {
+		http.Error(w, "vault key fingerprint not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	if s.observationStore == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	deleted, err := s.observationStore.DeleteOrphanedCredentials(r.Context(), fingerprint)
+	if err != nil {
+		http.Error(w, "failed to delete orphaned credentials", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"status":  "ok",
+		"deleted": deleted,
+	})
+}
+
 // handleVaultStatus godoc
 // @Summary Get vault encryption status
 // @Description Returns vault key configuration status, fingerprint, and credential count.

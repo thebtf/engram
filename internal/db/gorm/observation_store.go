@@ -272,9 +272,6 @@ func (s *ObservationStore) UpdateObservation(ctx context.Context, id int64, upda
 		updates["scope"] = sql.NullString{String: *update.Scope, Valid: true}
 	}
 
-	// Add updated_at timestamp
-	updates["updated_at_epoch"] = sql.NullInt64{Int64: time.Now().Unix(), Valid: true}
-
 	if len(updates) == 0 {
 		// Nothing to update, just return existing observation
 		return toModelObservation(&dbObs), nil
@@ -1523,6 +1520,21 @@ func (s *ObservationStore) CountCredentialsWithDifferentFingerprint(ctx context.
 		return 0, fmt.Errorf("count mismatched credentials: %w", err)
 	}
 	return count, nil
+}
+
+// DeleteOrphanedCredentials removes credentials encrypted with a key that doesn't match
+// the current fingerprint. These credentials cannot be decrypted and are irrecoverable.
+func (s *ObservationStore) DeleteOrphanedCredentials(ctx context.Context, currentFingerprint string) (int64, error) {
+	if currentFingerprint == "" {
+		return 0, fmt.Errorf("current fingerprint is required")
+	}
+	result := s.db.WithContext(ctx).
+		Where("type = ?", "credential").
+		Where("encrypted_secret IS NOT NULL").
+		Where("encryption_key_fingerprint IS NOT NULL AND encryption_key_fingerprint != ''").
+		Where("encryption_key_fingerprint != ?", currentFingerprint).
+		Delete(&Observation{})
+	return result.RowsAffected, result.Error
 }
 
 // SearchMissStat holds aggregated analytics for a search query that returned zero results.

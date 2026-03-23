@@ -1,4 +1,4 @@
-import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics, ContextSearchResponse, DecisionSearchResponse } from '@/types'
+import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics, ContextSearchResponse, DecisionSearchResponse, SDKSessionListResponse } from '@/types'
 
 const API_BASE = '/api'
 const DEFAULT_TIMEOUT = 10000 // 10 seconds
@@ -722,6 +722,19 @@ export async function searchIndexedSessions(
     message_count: r.exchange_count,
     created_at: '',
   }))
+}
+
+export async function fetchSDKSessions(
+  params?: { project?: string; limit?: number; offset?: number },
+  signal?: AbortSignal
+): Promise<SDKSessionListResponse> {
+  const query = new URLSearchParams()
+  if (params?.project) query.set('project', params.project)
+  if (params?.limit) query.set('limit', String(params.limit))
+  if (params?.offset) query.set('offset', String(params.offset))
+
+  const url = `${API_BASE}/sessions/list${query.toString() ? '?' + query.toString() : ''}`
+  return fetchWithRetry<SDKSessionListResponse>(url, { signal })
 }
 
 // ============================================================

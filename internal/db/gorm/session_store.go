@@ -200,6 +200,35 @@ func (s *SessionStore) GetAllProjects(ctx context.Context) ([]string, error) {
 	return projects, err
 }
 
+// ListSDKSessions returns a paginated list of SDK sessions, optionally filtered by project.
+// Results are ordered by started_at DESC (newest first). Returns sessions and total count.
+func (s *SessionStore) ListSDKSessions(ctx context.Context, project string, limit, offset int) ([]*models.SDKSession, int64, error) {
+	var sessions []SDKSession
+	var total int64
+
+	q := s.db.WithContext(ctx).Model(&SDKSession{})
+	if project != "" {
+		q = q.Where("project = ?", project)
+	}
+
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if err := q.Order("started_at_epoch DESC, id DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&sessions).Error; err != nil {
+		return nil, 0, err
+	}
+
+	result := make([]*models.SDKSession, len(sessions))
+	for i := range sessions {
+		result[i] = toModelSDKSession(&sessions[i])
+	}
+	return result, total, nil
+}
+
 // toModelSDKSession converts a GORM SDKSession to pkg/models.SDKSession.
 func toModelSDKSession(sess *SDKSession) *models.SDKSession {
 	return &models.SDKSession{
