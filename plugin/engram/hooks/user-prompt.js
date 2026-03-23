@@ -30,34 +30,6 @@ async function handleUserPrompt(ctx, input) {
   let matchedCount = 0;
   const searchIds = [];
 
-  // Fetch user behavior rules (type=guidance, scope=global) — injected BEFORE technical context.
-  // These are active steering rules extracted from previous user corrections.
-  // Not subject to diversity penalty or LLM filter — always injected if matched.
-  try {
-    const rulesResult = await lib.requestPost('/api/context/search', {
-      project,
-      query: prompt,
-      cwd,
-      obs_type: 'guidance',
-    });
-    const rules = Array.isArray(rulesResult.observations)
-      ? rulesResult.observations.filter(obs => asString(obs.scope) === 'global' || asString(obs.project) === project)
-      : [];
-    if (rules.length > 0) {
-      behaviorRulesBlock = '<user-behavior-rules>\n';
-      behaviorRulesBlock += '# Behavioral Rules From User Corrections\n';
-      behaviorRulesBlock += 'These rules reflect how the user prefers to work. Follow them.\n\n';
-      for (const rule of rules.slice(0, 10)) {
-        const title = escapeXmlTags(rule.title);
-        const narrative = escapeXmlTags(rule.narrative);
-        behaviorRulesBlock += `## ${title}\n${narrative}\n\n`;
-      }
-      behaviorRulesBlock += '</user-behavior-rules>\n';
-    }
-  } catch (error) {
-    console.error(`[engram] behavior rules fetch failed: ${error.message}`);
-  }
-
   try {
     const searchResult = await lib.requestPost('/api/context/search', {
       project,
@@ -85,13 +57,38 @@ async function handleUserPrompt(ctx, input) {
       return t !== 'credential';
     });
 
-    if (safeObservations.length > 0) {
+    // Split: behavioral rules (concept: user-preference) vs technical observations.
+    // Rules are injected as <user-behavior-rules> BEFORE <relevant-memory>.
+    const behaviorRules = [];
+    const technicalObs = [];
+    for (const obs of safeObservations) {
+      const concepts = Array.isArray(obs.concepts) ? obs.concepts : [];
+      if (concepts.includes('user-preference')) {
+        behaviorRules.push(obs);
+      } else {
+        technicalObs.push(obs);
+      }
+    }
+
+    if (behaviorRules.length > 0) {
+      behaviorRulesBlock = '<user-behavior-rules>\n';
+      behaviorRulesBlock += '# Behavioral Rules From User Corrections\n';
+      behaviorRulesBlock += 'These rules reflect how the user prefers to work. Follow them.\n\n';
+      for (const rule of behaviorRules.slice(0, 10)) {
+        const title = escapeXmlTags(rule.title);
+        const narrative = escapeXmlTags(rule.narrative);
+        behaviorRulesBlock += `## ${title}\n${narrative}\n\n`;
+      }
+      behaviorRulesBlock += '</user-behavior-rules>\n';
+    }
+
+    if (technicalObs.length > 0) {
       // Sort by similarity score (highest first)
-      safeObservations.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+      technicalObs.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
 
       // Dedup by title word overlap (>80% Jaccard = near-duplicate)
       const dedupedObs = [];
-      for (const obs of safeObservations) {
+      for (const obs of technicalObs) {
         const title = asString(obs.title).toLowerCase();
         const words = new Set(title.split(/\s+/).filter(w => w.length > 2));
         let isDup = false;
@@ -193,7 +190,7 @@ async function handleUserPrompt(ctx, input) {
       // observationCount tracks injected (post-trim) count for deciding whether
       // to return context. matchedCount is the true total matched count from the
       // server (pre-max_results-cap), so the badge shows meaningful signal.
-      matchedCount = totalResults - (observations.length - safeObservations.length);
+      matchedCount = totalResults - (observations.length - technicalObs.length);
       observationCount = budgetObs.length;
       let contextBuilder = '<relevant-memory>\n';
       contextBuilder += '# Relevant Knowledge From Previous Sessions\n';
