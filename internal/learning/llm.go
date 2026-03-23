@@ -72,9 +72,10 @@ func NewOpenAIClient(cfg OpenAIConfig) *OpenAIClient {
 
 // chatRequest is the OpenAI chat completion request format.
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Timeout  int           `json:"timeout,omitempty"` // LiteLLM: override proxy→backend timeout (seconds)
+	Model     string        `json:"model"`
+	Messages  []chatMessage `json:"messages"`
+	MaxTokens int           `json:"max_tokens,omitempty"` // Max output tokens (reasoning + content). Default 4096 for thinking models.
+	Timeout   int           `json:"timeout,omitempty"`    // LiteLLM: override proxy→backend timeout (seconds)
 }
 
 // chatMessage is a single message in the chat completion request.
@@ -107,7 +108,8 @@ func (c *OpenAIClient) Complete(ctx context.Context, systemPrompt, userPrompt st
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Timeout: 300, // Override LiteLLM proxy→backend timeout for slow local models
+		MaxTokens: 4096, // Enough for reasoning + content in thinking models
+		Timeout:   300,  // Override LiteLLM proxy→backend timeout for slow local models
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
