@@ -4,6 +4,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -380,8 +381,35 @@ func (s *Service) handleExplainScore(w http.ResponseWriter, r *http.Request) {
 	// Calculate score components
 	components := scoreCalculator.CalculateComponents(obs, time.Now())
 
+	// Build response matching frontend ScoreBreakdown.vue expectations
+	title := ""
+	if obs.Title.Valid {
+		title = obs.Title.String
+	}
+
 	writeJSON(w, map[string]interface{}{
 		"id":         id,
+		"observation": map[string]interface{}{
+			"title": title,
+			"type":  string(obs.Type),
+		},
+		"scoring": map[string]interface{}{
+			"final_score":      components.FinalScore,
+			"type_weight":      components.TypeWeight,
+			"recency_decay":    components.RecencyDecay,
+			"core_score":       components.CoreScore,
+			"feedback_contrib": components.FeedbackContrib,
+			"concept_contrib":  components.ConceptContrib,
+			"retrieval_contrib": components.RetrievalContrib,
+			"age_days":         components.AgeDays,
+		},
+		"explanation": map[string]interface{}{
+			"type_impact":      fmt.Sprintf("Type '%s' has base weight %.2f", obs.Type, components.TypeWeight),
+			"recency_impact":   fmt.Sprintf("%.1f days old, decay factor %.2f", components.AgeDays, components.RecencyDecay),
+			"feedback_impact":  fmt.Sprintf("User feedback %+d, contribution %+.3f", obs.UserFeedback, components.FeedbackContrib),
+			"concept_impact":   fmt.Sprintf("Concept boost %+.3f from %d concepts", components.ConceptContrib, len(obs.Concepts)),
+			"retrieval_impact": fmt.Sprintf("Retrieved %d times, contribution %+.3f", obs.RetrievalCount, components.RetrievalContrib),
+		},
 		"components": components,
 		"config":     scoreCalculator.GetConfig(),
 	})
