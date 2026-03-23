@@ -1571,6 +1571,17 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`DROP TABLE IF EXISTS injection_log`).Error
 		},
 	},
+	// Migration 047: Drop unused memory_blocks table (created by migration 024, never populated).
+	{
+		ID: "047_drop_memory_blocks",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS memory_blocks`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			// Table was unused — no rollback needed
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

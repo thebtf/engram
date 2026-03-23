@@ -1525,6 +1525,20 @@ func (s *ObservationStore) CountCredentialsWithDifferentFingerprint(ctx context.
 	return count, nil
 }
 
+// DeleteOrphanedCredentials removes credentials encrypted with a key that doesn't match
+// the current fingerprint. These credentials cannot be decrypted and are irrecoverable.
+func (s *ObservationStore) DeleteOrphanedCredentials(ctx context.Context, currentFingerprint string) (int64, error) {
+	if currentFingerprint == "" {
+		return 0, fmt.Errorf("current fingerprint is required")
+	}
+	result := s.db.WithContext(ctx).
+		Where("encrypted_secret IS NOT NULL").
+		Where("encryption_key_fingerprint IS NOT NULL AND encryption_key_fingerprint != ''").
+		Where("encryption_key_fingerprint != ?", currentFingerprint).
+		Delete(&Observation{})
+	return result.RowsAffected, result.Error
+}
+
 // SearchMissStat holds aggregated analytics for a search query that returned zero results.
 type SearchMissStat struct {
 	Query     string    `json:"query"`
