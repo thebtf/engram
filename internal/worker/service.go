@@ -1826,6 +1826,15 @@ func (s *Service) setupRoutes() {
 		// Tag routes
 		r.Post("/api/observations/{id}/tags", s.handleTagObservation)
 		r.Get("/api/observations/by-tag/{tag}", s.handleGetObservationsByTag)
+		r.Post("/api/observations/batch-tag", s.handleBatchTagObservations)
+		r.Get("/api/observations/tag-cloud", s.handleTagCloud)
+
+		// Bulk observation operations
+		r.Delete("/api/observations/bulk", s.handleBulkDeleteREST)
+		r.Patch("/api/observations/bulk-scope", s.handleBulkScopeChange)
+
+		// Token stats
+		r.Get("/api/auth/tokens/{id}/stats", s.handleGetTokenStats)
 
 		// Indexed session routes (separate from live session management)
 		r.Get("/api/sessions-index", s.handleListIndexedSessions)

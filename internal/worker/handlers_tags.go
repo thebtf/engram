@@ -12,6 +12,182 @@ import (
 	"github.com/thebtf/engram/internal/search"
 )
 
+// batchTagRequest is the JSON body for POST /api/observations/batch-tag.
+type batchTagRequest struct {
+	IDs    []int64 `json:"ids"`
+	Tag    string  `json:"tag"`
+	Action string  `json:"action"` // "add" or "remove"
+}
+
+// handleBatchTagObservations godoc
+// @Summary Batch add or remove a tag on multiple observations
+// @Description Adds or removes a single tag across a list of observation IDs.
+// @Tags Tags
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body batchTagRequest true "Batch tag operation"
+// @Success 200 {object} object
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/batch-tag [post]
+func (s *Service) handleBatchTagObservations(w http.ResponseWriter, r *http.Request) {
+	if s.observationStore == nil {
+		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req batchTagRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids is required and must not be empty", http.StatusBadRequest)
+		return
+	}
+	if req.Tag == "" {
+		http.Error(w, "tag is required", http.StatusBadRequest)
+		return
+	}
+	switch req.Action {
+	case "add", "remove":
+		// valid
+	default:
+		http.Error(w, "action must be 'add' or 'remove'", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	var updated int64
+
+	for _, id := range req.IDs {
+		obs, err := s.observationStore.GetObservationByID(ctx, id)
+		if err != nil {
+			log.Error().Err(err).Int64("id", id).Msg("batch-tag: get observation failed")
+			continue
+		}
+		if obs == nil {
+			continue
+		}
+
+		var newTags []string
+		switch req.Action {
+		case "add":
+			tagSet := make(map[string]bool)
+			for _, t := range obs.Concepts {
+				tagSet[t] = true
+				newTags = append(newTags, t)
+			}
+			if !tagSet[req.Tag] {
+				newTags = append(newTags, req.Tag)
+			}
+		case "remove":
+			for _, t := range obs.Concepts {
+				if t != req.Tag {
+					newTags = append(newTags, t)
+				}
+			}
+		}
+
+		update := &gorm.ObservationUpdate{Concepts: &newTags}
+		if _, err := s.observationStore.UpdateObservation(ctx, id, update); err != nil {
+			log.Error().Err(err).Int64("id", id).Msg("batch-tag: update observation failed")
+			continue
+		}
+		updated++
+	}
+
+	writeJSON(w, map[string]any{
+		"updated": updated,
+		"tag":     req.Tag,
+		"action":  req.Action,
+	})
+}
+
+// tagCloudEntry is a single tag with its occurrence count.
+type tagCloudEntry struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
+}
+
+// handleTagCloud godoc
+// @Summary Get tag cloud from observation concepts
+// @Description Returns aggregated concept tags with occurrence counts.
+// @Tags Tags
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param limit query int false "Max tags to return (default 20)"
+// @Success 200 {array} tagCloudEntry
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/tag-cloud [get]
+func (s *Service) handleTagCloud(w http.ResponseWriter, r *http.Request) {
+	if s.observationStore == nil {
+		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	project := r.URL.Query().Get("project")
+	if err := ValidateProjectName(project); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	limit := 20
+	if val := r.URL.Query().Get("limit"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+
+	db := s.observationStore.GetDB()
+
+	var query string
+	var args []any
+
+	if project != "" {
+		query = `
+			SELECT tag, COUNT(*) AS count
+			FROM observations, jsonb_array_elements_text(concepts) AS tag
+			WHERE COALESCE(is_superseded, false) = false
+			  AND project = ?
+			GROUP BY tag
+			ORDER BY count DESC
+			LIMIT ?`
+		args = []any{project, limit}
+	} else {
+		query = `
+			SELECT tag, COUNT(*) AS count
+			FROM observations, jsonb_array_elements_text(concepts) AS tag
+			WHERE COALESCE(is_superseded, false) = false
+			GROUP BY tag
+			ORDER BY count DESC
+			LIMIT ?`
+		args = []any{limit}
+	}
+
+	type row struct {
+		Tag   string `gorm:"column:tag"`
+		Count int    `gorm:"column:count"`
+	}
+
+	var rows []row
+	if err := db.WithContext(r.Context()).Raw(query, args...).Scan(&rows).Error; err != nil {
+		log.Error().Err(err).Msg("tag-cloud: query failed")
+		http.Error(w, "query failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	entries := make([]tagCloudEntry, len(rows))
+	for i, row := range rows {
+		entries[i] = tagCloudEntry{Tag: row.Tag, Count: row.Count}
+	}
+
+	writeJSON(w, entries)
+}
+
 // tagObservationRequest is the JSON body for POST /api/observations/{id}/tags.
 type tagObservationRequest struct {
 	Action string   `json:"action"` // "add", "remove", or "set"

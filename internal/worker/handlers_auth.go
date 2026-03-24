@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -19,6 +20,12 @@ import (
 	"gorm.io/gorm"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// isAuthDisabled returns true when ENGRAM_AUTH_DISABLED env var is "true" or "1".
+func isAuthDisabled() bool {
+	v := os.Getenv("ENGRAM_AUTH_DISABLED")
+	return v == "true" || v == "1"
+}
 
 // sessionPayload is the data stored inside the signed session cookie.
 type sessionPayload struct {
@@ -145,11 +152,14 @@ func (s *Service) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	// This endpoint is exempt from auth middleware so the SPA can check auth status.
 	// We manually verify auth here and return the result.
+	authDisabled := isAuthDisabled()
+
 	role := getAuthRole(r)
 	if role != "" {
 		writeJSON(w, map[string]any{
 			"authenticated": true,
 			"role":          role,
+			"auth_disabled": authDisabled,
 		})
 		return
 	}
@@ -170,6 +180,7 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 					writeJSON(w, map[string]any{
 						"authenticated": true,
 						"role":          "admin",
+						"auth_disabled": authDisabled,
 					})
 					return
 				}
@@ -181,6 +192,7 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusUnauthorized)
 	writeJSON(w, map[string]any{
 		"authenticated": false,
+		"auth_disabled": authDisabled,
 	})
 }
 
@@ -363,6 +375,50 @@ func (s *Service) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, map[string]any{
 		"revoked": true,
+	})
+}
+
+// handleGetTokenStats godoc
+// @Summary Get API token usage stats
+// @Description Returns request count and last-used timestamp for a specific token.
+// @Tags Auth
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Token ID (UUID)"
+// @Success 200 {object} object
+// @Failure 404 {string} string "not found"
+// @Failure 500 {string} string "internal error"
+// @Router /api/auth/tokens/{id}/stats [get]
+func (s *Service) handleGetTokenStats(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	tokenStore := s.tokenStore
+	s.initMu.RUnlock()
+
+	if tokenStore == nil {
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		http.Error(w, "token id required", http.StatusBadRequest)
+		return
+	}
+
+	token, err := tokenStore.GetByID(r.Context(), id)
+	if err != nil {
+		log.Error().Err(err).Str("token_id", id).Msg("auth: failed to get token stats")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if token == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"request_count": token.RequestCount,
+		"last_used_at":  token.LastUsedAt,
 	})
 }
 
