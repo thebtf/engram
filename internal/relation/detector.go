@@ -371,11 +371,17 @@ func classifyRelation(newObs, candidate *models.Observation, similarity float64)
 		}
 	}
 
-	// contradicts: decisions with different conclusions on same topic
+	// contradicts: decisions with different conclusions on same topic.
+	// Exclude guidance/behavioral rules — they don't contradict each other,
+	// they are independent user preferences on different topics.
 	if newObs.Type == models.ObsTypeDecision && candidate.Type == models.ObsTypeDecision && similarity > contradictSimilarityThreshold {
-		// Different titles suggest different conclusions on same topic
-		if newObs.Title.Valid && candidate.Title.Valid && newObs.Title.String != candidate.Title.String {
-			return models.RelationContradicts, similarity * 0.8
+		isGuidanceNew := hasGuidanceConcept(newObs)
+		isGuidanceCandidate := hasGuidanceConcept(candidate)
+		if !isGuidanceNew && !isGuidanceCandidate {
+			// Different titles suggest different conclusions on same topic
+			if newObs.Title.Valid && candidate.Title.Valid && newObs.Title.String != candidate.Title.String {
+				return models.RelationContradicts, similarity * 0.8
+			}
 		}
 	}
 
@@ -385,6 +391,24 @@ func classifyRelation(newObs, candidate *models.Observation, similarity float64)
 	}
 
 	return "", 0 // no relation detected
+}
+
+// hasGuidanceConcept checks if an observation is a behavioral rule (user preference).
+// These should not be classified as contradictions with each other.
+func hasGuidanceConcept(obs *models.Observation) bool {
+	if obs.Type == models.ObsTypeGuidance {
+		return true
+	}
+	for _, c := range obs.Concepts {
+		if c == "user-preference" {
+			return true
+		}
+	}
+	// Title heuristic: imported rules start with "Rule: "
+	if obs.Title.Valid && len(obs.Title.String) > 6 && obs.Title.String[:6] == "Rule: " {
+		return true
+	}
+	return false
 }
 
 // conceptOverlap calculates the Jaccard similarity of concept tags between two observations.
