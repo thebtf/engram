@@ -344,10 +344,16 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Capture total from raw search results (before staleness filter, clustering, and cap).
-	// This tells callers how many observations genuinely matched the query.
-	// len(observations) = raw DB results; len(clusteredObservations) = after dedup; final response may be further capped.
-	totalResults := len(observations)
+	// Count observations with meaningful composite scores (above noise floor).
+	// Raw len(observations) is misleading — in high-dim embedding spaces,
+	// nearly all observations pass the vector threshold. Only observations
+	// with composite score > 0.05 are genuinely matched.
+	totalResults := 0
+	for _, obs := range clusteredObservations {
+		if score, ok := similarityScores[obs.ID]; ok && score > 0.05 {
+			totalResults++
+		}
+	}
 
 	// Apply max results cap if configured
 	if maxResults > 0 && len(clusteredObservations) > maxResults {
