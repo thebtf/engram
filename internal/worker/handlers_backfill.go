@@ -524,6 +524,9 @@ func (s *Service) handleImportFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Constitution P9: RedactSecrets on LLM output before parsing
+	response = privacy.RedactSecrets(response)
+
 	// Parse single observation from LLM XML output.
 	obs := extract.ParseSingleObservation(response)
 	if obs == nil {
