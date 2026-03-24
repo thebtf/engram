@@ -19,8 +19,15 @@ async function handleUserPrompt(ctx, input) {
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
   const cwd = typeof ctx.CWD === 'string' ? ctx.CWD : '';
 
-  // Skip system-generated task notifications — they are not user prompts
-  if (prompt && (prompt.includes('<task-notification>') || prompt.includes('<command-name>'))) {
+  // Skip system-generated messages and non-Claude-Code prompts
+  if (prompt && (
+    prompt.includes('<task-notification>') ||
+    prompt.includes('<command-name>') ||
+    prompt.includes('HEARTBEAT.md') ||
+    prompt.startsWith('Read HEARTBEAT') ||
+    prompt.includes('Conversation info (untrusted metadata)') ||
+    prompt.includes('Sender (untrusted metadata)')
+  )) {
     return '';
   }
 
