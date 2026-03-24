@@ -21,6 +21,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/maintenance"
+	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/sessions"
@@ -1406,7 +1407,13 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 	result, err := s.callTool(ctx, params.Name, params.Arguments)
 	if err != nil {
-		log.Error().Err(err).Str("tool", params.Name).Msg("Tool call failed")
+		// Truncated args for debugging (first 200 chars)
+		argsStr := string(params.Arguments)
+		if len(argsStr) > 200 {
+			argsStr = argsStr[:200] + "..."
+		}
+		argsStr = privacy.RedactSecrets(argsStr)
+		log.Error().Err(err).Str("tool", params.Name).Str("args", argsStr).Msg("Tool call failed")
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,

@@ -58,8 +58,9 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		// Restrict referrer information
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 
-		// Content Security Policy - restrict to self
-		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		// Content Security Policy - granular directives
+		// TODO: Remove 'unsafe-inline' from style-src and migrate inline styles to nonce/hash-based CSP.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'")
 
 		// Permissions Policy - disable unnecessary features
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")

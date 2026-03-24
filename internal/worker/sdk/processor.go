@@ -18,6 +18,7 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/learning"
+	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/similarity"
 	"github.com/rs/zerolog/log"
@@ -645,7 +646,8 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 			response, err := p.llmClient.Complete(llmCtx, systemPrompt, prompt)
 			cancel()
 			if err == nil {
-				return response, nil
+				// Constitution P9: RedactSecrets on LLM output before returning
+				return privacy.RedactSecrets(response), nil
 			}
 			lastErr = err
 			errStr := err.Error()
@@ -674,7 +676,7 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 	if lastErr != nil {
 		return "", fmt.Errorf("LLM call failed after retries: %w", lastErr)
 	}
-	return "", fmt.Errorf("no LLM backend available")
+	return "", fmt.Errorf("no LLM backend available (llmClient=%v)", p.llmClient != nil)
 }
 
 // shouldSkipTool returns true for tools that aren't worth processing.
