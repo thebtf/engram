@@ -107,7 +107,7 @@ type Config struct {
 	SmartGCMinAgeDays           int      `json:"smart_gc_min_age_days"`
 	LogBufferSize               int      `json:"log_buffer_size"`               // Ring buffer capacity for /api/logs (default: 10000)
 	QueryExpansionTimeoutMS     int      `json:"query_expansion_timeout_ms"`    // Timeout for query expansion (default: 3000ms)
-	DedupSimilarityThreshold    float64  `json:"dedup_similarity_threshold"`    // Cosine similarity threshold for dedup clustering (default: 0.55)
+	DedupSimilarityThreshold    float64  `json:"dedup_similarity_threshold"`    // Cosine similarity threshold for dedup clustering (default: 0.7)
 	DedupWindowSize             int      `json:"dedup_window_size"`             // Max observations considered for dedup (default: 200)
 	ClusteringThreshold         float64  `json:"clustering_threshold"`          // Similarity threshold for result clustering (default: 0.55)
 	StoreMemoryHardLimit        int      `json:"store_memory_hard_limit"`       // Max chars for store_memory content (default: 10000)
@@ -127,6 +127,8 @@ type Config struct {
 	ConsolidationThreshold float64 `json:"consolidation_threshold"`  // ENGRAM_CONSOLIDATION_THRESHOLD (default: 0.95)
 	AlwaysInjectLimit      int     `json:"always_inject_limit"`       // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
 	ProjectInjectLimit     int     `json:"project_inject_limit"`      // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
+	InjectionFloor         int     `json:"injection_floor"`           // ENGRAM_INJECTION_FLOOR (default: 3)
+	SessionBoost           float64 `json:"session_boost"`             // ENGRAM_SESSION_BOOST (default: 1.3)
 }
 
 var (
@@ -251,7 +253,7 @@ func Default() *Config {
 		SmartGCThreshold:            0.05,  // FinalScore below this = candidate for archival
 		SmartGCMinAgeDays:           14,    // Only consider observations older than 14 days
 		QueryExpansionTimeoutMS:     3000,  // 3s cap for HyDE + synonym expansion
-		DedupSimilarityThreshold:    0.55,  // 55% similarity threshold for deduplication
+		DedupSimilarityThreshold:    0.7,   // 70% similarity threshold for deduplication (raised from 0.55 after pre-test T029)
 		DedupWindowSize:             200,   // Examine up to 200 candidates for dedup
 		ClusteringThreshold:         0.55,  // 55% similarity threshold for result clustering
 		StoreMemoryHardLimit:        10000,
@@ -268,6 +270,8 @@ func Default() *Config {
 		ConsolidationThreshold:      0.95,  // 95% similarity triggers maintenance-time merge
 		AlwaysInjectLimit:           20,    // Inject up to 20 always-inject observations per session
 		ProjectInjectLimit:          15,    // Inject up to 15 project-scoped observations per session
+		InjectionFloor:              3,     // Always inject at least 3 observations regardless of threshold
+		SessionBoost:                1.3,   // Boost factor for observations from recently active sessions
 	}
 }
 
@@ -588,6 +592,16 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_PROJECT_INJECT_LIMIT")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.ProjectInjectLimit = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECTION_FLOOR")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.InjectionFloor = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_SESSION_BOOST")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			cfg.SessionBoost = f
 		}
 	}
 	return cfg, nil

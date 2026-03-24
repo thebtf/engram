@@ -7,6 +7,15 @@
 
 set -e
 
+# Install mode: --client-only (default) skips server binary, --full installs everything
+INSTALL_MODE="client-only"
+for arg in "$@"; do
+    case "$arg" in
+        --full) INSTALL_MODE="full" ;;
+        --client-only) INSTALL_MODE="client-only" ;;
+    esac
+done
+
 # Configuration
 GITHUB_REPO="thebtf/engram"
 INSTALL_DIR="$HOME/.claude/plugins/marketplaces/engram"
@@ -164,8 +173,10 @@ download_release() {
     mkdir -p "$INSTALL_DIR/.claude-plugin"
     mkdir -p "$INSTALL_DIR/commands"
 
-    # Copy binaries
-    cp "$tmp_dir/engram-server" "$INSTALL_DIR/" 2>/dev/null || true
+    # Copy binaries (--client-only skips server binary)
+    if [[ "$INSTALL_MODE" == "full" ]]; then
+        cp "$tmp_dir/engram-server" "$INSTALL_DIR/" 2>/dev/null || true
+    fi
     cp "$tmp_dir/engram-mcp" "$INSTALL_DIR/" 2>/dev/null || true
     cp "$tmp_dir/engram-mcp-stdio-proxy" "$INSTALL_DIR/" 2>/dev/null || true
 
@@ -197,7 +208,9 @@ download_release() {
     fi
 
     # Make binaries executable
-    chmod +x "$INSTALL_DIR/engram-server" 2>/dev/null || true
+    if [[ "$INSTALL_MODE" == "full" ]]; then
+        chmod +x "$INSTALL_DIR/engram-server" 2>/dev/null || true
+    fi
     chmod +x "$INSTALL_DIR/engram-mcp" 2>/dev/null || true
     chmod +x "$INSTALL_DIR/engram-mcp-stdio-proxy" 2>/dev/null || true
 

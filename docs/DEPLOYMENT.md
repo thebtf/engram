@@ -91,17 +91,17 @@ docker run -d --name cmplus-postgres \
   pgvector/pgvector:pg17
 
 # 2. Build the server image
-docker build --target server -t cmplus-server .
+docker build --target server -t engram-server .
 
 # 3. Start server (worker + MCP SSE on single port)
-docker run -d --name cmplus-server \
+docker run -d --name engram-server \
   -e DATABASE_DSN="postgres://engram:change-me@host.docker.internal:5432/engram?sslmode=disable" \
   -e ENGRAM_API_TOKEN="your-secret-token" \
   -e ENGRAM_EMBEDDING_PROVIDER=openai \
   -e ENGRAM_EMBEDDING_BASE_URL=http://host.docker.internal:4000/v1 \
   -e ENGRAM_EMBEDDING_DIMENSIONS=4096 \
   -p 37777:37777 \
-  cmplus-server
+  engram-server
 ```
 
 ---
