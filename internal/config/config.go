@@ -125,6 +125,8 @@ type Config struct {
 	SupersessionEnabled    bool    `json:"supersession_enabled"`     // ENGRAM_SUPERSESSION_ENABLED (default: true)
 	SupersessionThreshold  float64 `json:"supersession_threshold"`   // ENGRAM_SUPERSESSION_THRESHOLD (default: 0.9)
 	ConsolidationThreshold float64 `json:"consolidation_threshold"`  // ENGRAM_CONSOLIDATION_THRESHOLD (default: 0.95)
+	AlwaysInjectLimit      int     `json:"always_inject_limit"`       // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
+	ProjectInjectLimit     int     `json:"project_inject_limit"`      // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
 }
 
 var (
@@ -264,6 +266,8 @@ func Default() *Config {
 		SupersessionEnabled:         true,  // Enabled: mark old decisions superseded on new write
 		SupersessionThreshold:       0.9,   // 90% similarity triggers write-time supersession
 		ConsolidationThreshold:      0.95,  // 95% similarity triggers maintenance-time merge
+		AlwaysInjectLimit:           20,    // Inject up to 20 always-inject observations per session
+		ProjectInjectLimit:          15,    // Inject up to 15 project-scoped observations per session
 	}
 }
 
@@ -574,6 +578,16 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONSOLIDATION_THRESHOLD")); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1.0 {
 			cfg.ConsolidationThreshold = f
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_ALWAYS_INJECT_LIMIT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.AlwaysInjectLimit = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_PROJECT_INJECT_LIMIT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ProjectInjectLimit = n
 		}
 	}
 	return cfg, nil

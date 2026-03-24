@@ -456,12 +456,23 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	// Track this search for analytics
 	s.trackSearchQuery(query, project, "observations", len(clusteredObservations), usedVector, float32(time.Since(searchStart).Milliseconds()))
 
+	// Always-inject tier: fetch observations tagged "always-inject" regardless of query (FR-1, FR-6)
+	alwaysInjectLimit := s.config.AlwaysInjectLimit
+	if alwaysInjectLimit <= 0 {
+		alwaysInjectLimit = 20
+	}
+	alwaysInjectObs, aiErr := s.observationStore.GetAlwaysInjectObservations(r.Context(), alwaysInjectLimit)
+	if aiErr != nil {
+		log.Debug().Err(aiErr).Msg("Failed to fetch always-inject observations for search")
+	}
+
 	writeJSON(w, map[string]any{
 		"project":       project,
 		"query":         query,
 		"intent":        detectedIntent,
 		"expansions":    expansionInfo,
 		"observations":  obsWithScores,
+		"always_inject": alwaysInjectObs,
 		"threshold":     threshold,
 		"max_results":   maxResults,
 		"total_results": totalResults,
@@ -1052,6 +1063,25 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		recentIDs[obs.ID] = struct{}{}
 	}
 
+	// --- Always-inject section: observations tagged with "always-inject" concept (FR-1, FR-6) ---
+	var alwaysInjectObservations []*models.Observation
+	alwaysInjectLimit := s.config.AlwaysInjectLimit
+	if alwaysInjectLimit <= 0 {
+		alwaysInjectLimit = 20
+	}
+	alwaysInjectRaw, aiErr := s.observationStore.GetAlwaysInjectObservations(ctx, alwaysInjectLimit)
+	if aiErr != nil {
+		log.Debug().Err(aiErr).Msg("Failed to fetch always-inject observations")
+	} else {
+		for _, obs := range alwaysInjectRaw {
+			// Deduplicate against guidance and recent sections
+			if _, already := recentIDs[obs.ID]; !already {
+				alwaysInjectObservations = append(alwaysInjectObservations, obs)
+				recentIDs[obs.ID] = struct{}{}
+			}
+		}
+	}
+
 	// --- Backward-compat observations field: full recent list + relevant deduped union ---
 	// Get the full recent list (up to configured limit) for the legacy field
 	allRecentRaw, err := s.observationStore.GetRecentObservationsFiltered(ctx, scopeFilter, limit)
@@ -1166,6 +1196,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"recent":             compactObservations(recentFresh),
 			"relevant":           compactObservations(relevantObservations),
 			"guidance":           compactObservations(guidanceObservations),
+			"always_inject":      compactObservations(alwaysInjectObservations),
 			"full_count":         fullCount,
 			"stale_excluded":     staleCount,
 			"duplicates_removed": duplicatesRemoved,
@@ -1179,6 +1210,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"recent":             recentFresh,
 			"relevant":           relevantObservations,
 			"guidance":           guidanceObservations,
+			"always_inject":      alwaysInjectObservations,
 			"full_count":         fullCount,
 			"stale_excluded":     staleCount,
 			"duplicates_removed": duplicatesRemoved,

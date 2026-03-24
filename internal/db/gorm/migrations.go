@@ -1582,6 +1582,29 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil
 		},
 	},
+	// Migration 048: GIN indexes for concept-tag queries (always-inject) and file-context lookup.
+	{
+		ID: "048_gin_indexes_concepts_files",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_concepts_gin ON observations USING GIN (concepts)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_files_modified_gin ON observations USING GIN (files_modified)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_files_read_gin ON observations USING GIN (files_read)`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_session_prompt ON observations (sdk_session_id, prompt_number DESC) WHERE COALESCE(is_superseded, 0) = 0`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_concepts_gin`)
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_files_modified_gin`)
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_files_read_gin`)
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_session_prompt`)
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

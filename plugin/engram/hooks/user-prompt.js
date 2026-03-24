@@ -64,6 +64,12 @@ async function handleUserPrompt(ctx, input) {
       return t !== 'credential';
     });
 
+    // Always-inject tier: unconditional rules from server (FR-1, FR-6).
+    // These are separate from similarity-matched results — tagged with concept "always-inject".
+    const alwaysInjectRules = Array.isArray(searchResult.always_inject)
+      ? searchResult.always_inject
+      : [];
+
     // Split: behavioral rules (concept: user-preference) vs technical observations.
     // Rules are injected as <user-behavior-rules> BEFORE <relevant-memory>.
     const behaviorRules = [];
@@ -77,16 +83,31 @@ async function handleUserPrompt(ctx, input) {
       }
     }
 
-    if (behaviorRules.length > 0) {
+    // Merge always-inject + similarity-matched behavioral rules into one block
+    const allBehaviorRules = [...alwaysInjectRules, ...behaviorRules];
+    // Deduplicate by ID (always-inject may overlap with similarity results)
+    const seenRuleIds = new Set();
+    const uniqueRules = [];
+    for (const rule of allBehaviorRules) {
+      const ruleId = rule && typeof rule.id === 'number' ? rule.id : null;
+      if (ruleId !== null && seenRuleIds.has(ruleId)) continue;
+      if (ruleId !== null) seenRuleIds.add(ruleId);
+      uniqueRules.push(rule);
+    }
+
+    if (uniqueRules.length > 0) {
       behaviorRulesBlock = '<user-behavior-rules>\n';
-      behaviorRulesBlock += '# Behavioral Rules From User Corrections\n';
-      behaviorRulesBlock += 'These rules reflect how the user prefers to work. Follow them.\n\n';
-      for (const rule of behaviorRules.slice(0, 10)) {
-        const title = escapeXmlTags(rule.title);
-        const narrative = escapeXmlTags(rule.narrative);
+      behaviorRulesBlock += '# Behavioral Rules (Always Active)\n';
+      behaviorRulesBlock += 'These rules are injected unconditionally. Follow them.\n\n';
+      for (const rule of uniqueRules.slice(0, 20)) {
+        const title = escapeXmlTags(asString(rule.title));
+        const narrative = escapeXmlTags(asString(rule.narrative));
         behaviorRulesBlock += `## ${title}\n${narrative}\n\n`;
       }
       behaviorRulesBlock += '</user-behavior-rules>\n';
+      if (alwaysInjectRules.length > 0) {
+        console.error(`[engram] Injected ${alwaysInjectRules.length} always-inject + ${behaviorRules.length} similarity-matched behavioral rules`);
+      }
     }
 
     if (technicalObs.length > 0) {

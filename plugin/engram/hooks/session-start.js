@@ -69,7 +69,29 @@ async function handleSessionStart(ctx, input) {
     `[engram] Injecting ${observations.length} observations from project memory (${detailedCount} detailed, ${condensedCount} condensed)`
   );
 
-  let contextBuilder = '<engram-context>\n';
+  // Always-inject tier: unconditional behavioral rules (FR-1, FR-6)
+  const alwaysInject = Array.isArray(result.always_inject) ? result.always_inject : [];
+  let contextBuilder = '';
+  if (alwaysInject.length > 0) {
+    contextBuilder += '<user-behavior-rules>\n';
+    contextBuilder += '# Behavioral Rules (Always Active)\n';
+    contextBuilder += 'These rules are injected unconditionally. Follow them in every session.\n\n';
+    for (const rule of alwaysInject) {
+      if (!rule || typeof rule !== 'object') continue;
+      const rTitle = escapeXmlTags(getString(rule.title));
+      const rNarrative = escapeXmlTags(getString(rule.narrative));
+      contextBuilder += `## ${rTitle}\n`;
+      if (rNarrative !== '') {
+        contextBuilder += `${rNarrative}\n`;
+      }
+      contextBuilder += formatFactsLine(rule.facts);
+      contextBuilder += '\n';
+    }
+    contextBuilder += '</user-behavior-rules>\n';
+    console.error(`[engram] Injected ${alwaysInject.length} always-inject behavioral rules`);
+  }
+
+  contextBuilder += '<engram-context>\n';
   contextBuilder += `# Project Memory (${observations.length} observations)\n`;
   contextBuilder +=
     'Use this knowledge to answer questions without re-exploring the codebase.\n\n';
