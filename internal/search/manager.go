@@ -126,19 +126,22 @@ func (m *SearchMetrics) GetStats() map[string]any {
 func ApplyCompositeScoring(observations []*models.Observation, similarityScores map[int64]float64) {
 	now := time.Now()
 
-	// Type weights: decisions and patterns have higher behavioral impact
+	// Type weights: behavioral rules and decisions have highest impact.
 	typeWeights := map[models.ObservationType]float64{
+		"guidance":  1.8, // Behavioral rules — highest value (user corrections, workflow preferences)
 		"decision":  1.4,
 		"bugfix":    1.3,
 		"feature":   1.2,
 		"pattern":   1.2,
+		"refactor":  0.9,
 		"discovery": 0.8,
 		"change":    0.7,
-		"refactor":  0.9,
 	}
 
 	// Per-type half-life in days. Longer = slower decay = more persistent.
+	// Guidance rules are near-permanent — they represent user preferences that rarely change.
 	typeHalfLife := map[models.ObservationType]float64{
+		"guidance":  365, // Behavioral rules — near-permanent (user preferences evolve slowly)
 		"decision":  30,
 		"pattern":   30,
 		"bugfix":    14,
@@ -184,10 +187,14 @@ func ApplyCompositeScoring(observations []*models.Observation, similarityScores 
 			imp = 0.3
 		}
 
-		// Source type boost: explicit saves (store_memory) are higher value
+		// Source type boost: explicit saves and behavioral rules are higher value
 		sourceBoost := 1.0
 		if obs.SourceType == models.SourceManual {
 			sourceBoost = 1.5
+		}
+		// Guidance observations from LLM extraction also get a boost
+		if obs.Type == "guidance" && sourceBoost < 1.3 {
+			sourceBoost = 1.3
 		}
 
 		// User feedback boost: +1 = useful, -1 = not useful
