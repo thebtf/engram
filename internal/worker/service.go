@@ -935,6 +935,9 @@ func (s *Service) initializeAsync() {
 	// Create chunking manager for document ingestion
 	chunkManager := s.createChunkManager()
 
+	// Create versioned document store for collaborative document MCP tools (migration 051).
+	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
+
 	mcpServer := mcp.NewServer(
 		searchMgr,
 		s.version,
@@ -963,6 +966,11 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetBackfillStatusFunc(func() (any, error) {
 		return s.backfillTracker.snapshot(), nil
 	})
+
+	// Wire versioned document store into MCP server for collaborative document tools.
+	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
+	// TODO: Document embedding will be triggered on doc_create/doc_update via vectorSync.SyncDocument()
+	// when the full embedding pipeline integration is implemented.
 
 	// Wire document store into search manager for unified document search.
 	if documentStore != nil && embedSvc != nil {

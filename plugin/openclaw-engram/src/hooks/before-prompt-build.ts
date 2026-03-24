@@ -9,9 +9,10 @@
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import { formatContext } from '../context/formatter.js';
+import { formatContext, formatAlwaysInject } from '../context/formatter.js';
 import { TurnTracker } from '../context/tiers.js';
 import type { TierResult } from '../context/tiers.js';
+import { classifyMessage } from './message-classifier.js';
 import type {
   BeforePromptBuildEvent,
   PromptBuildResult,
@@ -41,11 +42,9 @@ export async function handleBeforePromptBuild(
     if (!client.isAvailable()) return;
     if (!event.prompt || event.prompt.trim() === '') return;
 
-    // Skip HEARTBEAT prompts — they are workspace health checks, not real user queries
-    const promptLower = event.prompt.toLowerCase();
-    if (promptLower.includes('heartbeat.md') || promptLower.includes('heartbeat_ok')) {
-      return;
-    }
+    // Skip non-user messages — heartbeats and SDK metadata are not real queries
+    const category = classifyMessage(event.prompt);
+    if (category !== 'user_prompt') return;
 
     const tier: TierResult = turnTracker.classify(event.prompt ?? '', event.messages);
     logger?.debug(`[engram] before-prompt-build: tier=${tier.tier} budget=${tier.tokenBudget} reason=${tier.reason}`);
@@ -63,6 +62,7 @@ export async function handleBeforePromptBuild(
         query: event.prompt,
         cwd: ctx.workspaceDir,
         agent_id: agentId,
+        source: 'openclaw',
       });
     } catch (err) {
       (logger ?? console).warn('[engram] before-prompt-build: searchContext failed', err);
@@ -91,10 +91,19 @@ export async function handleBeforePromptBuild(
       );
     }
 
-    if (!context) return;
+    // Render always_inject behavioral rules (appended before the main context block).
+    // These are observations marked always_inject=true on the server — they contain
+    // behavioral guidance that must be present in every turn regardless of query match.
+    const alwaysInjectObs = Array.isArray(response.always_inject) ? response.always_inject : [];
+    const alwaysInjectBlock = alwaysInjectObs.length > 0
+      ? formatAlwaysInject(alwaysInjectObs)
+      : '';
 
+    if (!context && !alwaysInjectBlock) return;
+
+    const totalInjected = injectedIds.length + alwaysInjectObs.length;
     (logger ?? console).warn(
-      `[engram] before-prompt-build: injecting ${injectedIds.length} observations for project ${project}`,
+      `[engram] before-prompt-build: injecting ${injectedIds.length} observations + ${alwaysInjectObs.length} always_inject rules for project ${project}`,
     );
 
     // Mark injected observations (fire-and-forget)
@@ -114,7 +123,10 @@ export async function handleBeforePromptBuild(
       }
     }
 
-    return { prependContext: context };
+    // Combine: always_inject rules first (highest priority), then query-matched context
+    const combined = [alwaysInjectBlock, context].filter(Boolean).join('\n');
+    void totalInjected; // used only in log message above
+    return { prependContext: combined };
   } catch (err) {
     (logger ?? console).error('[engram] hook error:', err);
   }

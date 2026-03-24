@@ -9,17 +9,17 @@
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
+import { classifyMessage } from './message-classifier.js';
 import type { AfterToolCallEvent, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
 const TOOL_INPUT_MAX_CHARS = 500;
 const TOOL_RESULT_MAX_CHARS = 500;
 
 /**
- * Tool names that are considered heartbeat / keep-alive events.
- * These are low-value, high-frequency events that create noise in the
- * observation store. Ingestion is skipped unless config.heartbeat.ingest is true.
+ * Tool names whose name alone identifies them as heartbeat / keep-alive events
+ * regardless of input content. These supplement the content-based classifier.
  */
-const HEARTBEAT_TOOLS = new Set([
+const HEARTBEAT_TOOL_NAMES = new Set([
   'heartbeat',
   'keepalive',
   'keep_alive',
@@ -50,10 +50,22 @@ export function handleAfterToolCall(
   if (!client.isAvailable()) return;
   if (!config.autoExtract) return;
 
-  // Skip heartbeat / keep-alive tool events unless explicitly opted in
+  // Skip heartbeat / keep-alive tool events unless explicitly opted in.
+  // Two-layer check:
+  //   1. Tool name allowlist — fast path for well-known heartbeat tool names.
+  //   2. Content-based classifier — catches heartbeat file reads/writes by input content.
   const toolNameLower = (event.toolName ?? '').toLowerCase();
-  if (HEARTBEAT_TOOLS.has(toolNameLower) && !config.heartbeat?.ingest) {
-    return;
+  if (!config.heartbeat?.ingest) {
+    if (HEARTBEAT_TOOL_NAMES.has(toolNameLower)) return;
+    // Build a probe string from tool name + serialized input for content classification
+    let inputProbe: string;
+    try {
+      inputProbe = JSON.stringify(event.toolInput ?? '');
+    } catch {
+      inputProbe = '';
+    }
+    const category = classifyMessage(`${event.toolName ?? ''} ${inputProbe}`, event.toolName);
+    if (category === 'heartbeat' || category === 'system') return;
   }
 
   const agentId = ctx.agentId ?? '';
@@ -79,6 +91,7 @@ export function handleAfterToolCall(
     tool_name: event.toolName ?? 'unknown',
     tool_input: toolInput,
     tool_result: toolResult,
+    source: 'openclaw',
   }).catch(() => { /* swallow — fire-and-forget */ });
 
   // Contradiction detection: check Write/Edit results against stored decisions

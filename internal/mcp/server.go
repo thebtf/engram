@@ -48,6 +48,7 @@ type Server struct {
 	sessionIdxStore        *sessions.Store
 	consolidationScheduler *consolidation.Scheduler
 	documentStore          *gorm.DocumentStore
+	versionedDocumentStore *gorm.VersionedDocumentStore
 	embedSvc               *embedding.Service
 	chunkManager           *chunking.Manager
 	graphStore             graphpkg.GraphStore
@@ -107,6 +108,11 @@ func (s *Server) SetGraphStore(gs graphpkg.GraphStore) {
 // SetBackfillStatusFunc sets the function to retrieve backfill run status.
 func (s *Server) SetBackfillStatusFunc(fn func() (any, error)) {
 	s.backfillStatusFunc = fn
+}
+
+// SetVersionedDocumentStore sets the versioned document store for document MCP tools.
+func (s *Server) SetVersionedDocumentStore(vds *gorm.VersionedDocumentStore) {
+	s.versionedDocumentStore = vds
 }
 
 // Request represents a JSON-RPC request.
@@ -1366,6 +1372,105 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
+	// Versioned document tools — only advertise when versioned document store is available
+	if s.versionedDocumentStore != nil {
+		tools = append(tools,
+			Tool{
+				Name:        "doc_create",
+				Description: "[Versioned Docs] Create a new versioned document or a new version of an existing document. Each call increments the version atomically.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"path", "project", "content"},
+					"properties": map[string]any{
+						"path":     map[string]any{"type": "string", "description": "Document path identifier (e.g. 'docs/architecture.md')"},
+						"project":  map[string]any{"type": "string", "description": "Project name"},
+						"content":  map[string]any{"type": "string", "description": "Full document content"},
+						"doc_type": map[string]any{"type": "string", "default": "markdown", "description": "Document type (e.g. markdown, text, json)"},
+						"metadata": map[string]any{"type": "string", "default": "{}", "description": "JSON metadata string"},
+						"author":   map[string]any{"type": "string", "default": "agent", "description": "Author identifier"},
+					},
+				},
+			},
+			Tool{
+				Name:        "doc_read",
+				Description: "[Versioned Docs] Read the latest or a specific version of a versioned document.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"path", "project"},
+					"properties": map[string]any{
+						"path":    map[string]any{"type": "string", "description": "Document path identifier"},
+						"project": map[string]any{"type": "string", "description": "Project name"},
+						"version": map[string]any{"type": "number", "description": "Specific version to read (omit for latest)"},
+					},
+				},
+			},
+			Tool{
+				Name:        "doc_update",
+				Description: "[Versioned Docs] Create a new version of an existing document (semantic alias for doc_create). Increments the version number.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"path", "project", "content"},
+					"properties": map[string]any{
+						"path":     map[string]any{"type": "string", "description": "Document path identifier"},
+						"project":  map[string]any{"type": "string", "description": "Project name"},
+						"content":  map[string]any{"type": "string", "description": "New document content"},
+						"doc_type": map[string]any{"type": "string", "default": "markdown", "description": "Document type"},
+						"metadata": map[string]any{"type": "string", "default": "{}", "description": "JSON metadata string"},
+						"author":   map[string]any{"type": "string", "default": "agent", "description": "Author identifier"},
+					},
+				},
+			},
+			Tool{
+				Name:        "doc_list",
+				Description: "[Versioned Docs] List the latest version of each document path in a project. Supports filtering by doc_type and path prefix.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"project"},
+					"properties": map[string]any{
+						"project":     map[string]any{"type": "string", "description": "Project name"},
+						"doc_type":    map[string]any{"type": "string", "description": "Filter by document type (optional)"},
+						"path_prefix": map[string]any{"type": "string", "description": "Filter by path prefix (optional)"},
+						"limit":       map[string]any{"type": "number", "default": 50, "minimum": 1, "maximum": 500, "description": "Maximum documents to return"},
+					},
+				},
+			},
+			Tool{
+				Name:        "doc_history",
+				Description: "[Versioned Docs] Get the full version history of a document. Returns all versions ordered newest first.",
+				tier:        tierAdmin,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"path", "project"},
+					"properties": map[string]any{
+						"path":    map[string]any{"type": "string", "description": "Document path identifier"},
+						"project": map[string]any{"type": "string", "description": "Project name"},
+						"limit":   map[string]any{"type": "number", "default": 0, "minimum": 0, "description": "Maximum versions to return (0 = no limit)"},
+					},
+				},
+			},
+			Tool{
+				Name:        "doc_comment",
+				Description: "[Versioned Docs] Add a comment to a specific document version. Optionally anchored to a line range.",
+				tier:        tierAdmin,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"document_id", "content"},
+					"properties": map[string]any{
+						"document_id": map[string]any{"type": "number", "description": "Document ID (from doc_create or doc_read response)"},
+						"content":     map[string]any{"type": "string", "description": "Comment text"},
+						"author":      map[string]any{"type": "string", "default": "agent", "description": "Author identifier"},
+						"line_start":  map[string]any{"type": "number", "description": "Starting line number for line-anchored comment (optional)"},
+						"line_end":    map[string]any{"type": "number", "description": "Ending line number for line-anchored comment (optional)"},
+					},
+				},
+			},
+		)
+	}
+
 	// Tool tiering: parse optional cursor and include_all from request params.
 	// No cursor / empty → return T1+T2 tools only + nextCursor: "all"
 	// cursor: "all" OR include_all: true → return ALL tools
@@ -1560,6 +1665,19 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleSearchCollection(ctx, args)
 	case "doc_remove":
 		return s.handleRemoveDocument(ctx, args)
+	// Versioned document tools
+	case "doc_create":
+		return s.handleDocCreate(ctx, args)
+	case "doc_read":
+		return s.handleDocRead(ctx, args)
+	case "doc_update":
+		return s.handleDocUpdate(ctx, args)
+	case "doc_list":
+		return s.handleDocList(ctx, args)
+	case "doc_history":
+		return s.handleDocHistory(ctx, args)
+	case "doc_comment":
+		return s.handleDocComment(ctx, args)
 	case "import_instincts":
 		return s.handleImportInstincts(ctx, args)
 	case "backfill_status":

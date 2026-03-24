@@ -31,6 +31,12 @@ export interface ContextInjectResponse {
 
 export interface ContextSearchResponse {
   observations: Observation[];
+  /**
+   * Observations flagged always_inject=true in the server config.
+   * These are behavioral rules that must be rendered in every context injection
+   * regardless of query relevance.
+   */
+  always_inject?: Observation[];
 }
 
 export interface SessionInitResponse {
@@ -128,6 +134,8 @@ export class EngramRestClient {
     query: string;
     cwd?: string;
     agent_id?: string;
+    /** Source identifier passed through to the server for analytics/routing. */
+    source?: string;
   }): Promise<ContextSearchResponse | null> {
     return this.post<ContextSearchResponse>('/api/context/search', body);
   }
@@ -165,6 +173,8 @@ export class EngramRestClient {
     tool_name: string;
     tool_input: string;
     tool_result: string;
+    /** Source identifier passed through to the server for analytics/routing. */
+    source?: string;
   }): Promise<void> {
     void this.post('/api/events/ingest', body, 3000);
   }
