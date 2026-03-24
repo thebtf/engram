@@ -870,6 +870,117 @@ func (s *Service) handleGraphSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"status": "sync started in background"})
 }
 
+// bulkDeleteRequest is the JSON body for DELETE /api/observations/bulk.
+type bulkDeleteRequest struct {
+	IDs []int64 `json:"ids"`
+}
+
+// handleBulkDeleteREST godoc
+// @Summary Bulk delete observations
+// @Description Deletes multiple observations by ID. Maximum 100 per request.
+// @Tags Observations
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body bulkDeleteRequest true "Observation IDs to delete"
+// @Success 200 {object} object
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/bulk [delete]
+func (s *Service) handleBulkDeleteREST(w http.ResponseWriter, r *http.Request) {
+	if s.observationStore == nil {
+		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req bulkDeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids is required and must not be empty", http.StatusBadRequest)
+		return
+	}
+	if len(req.IDs) > 100 {
+		http.Error(w, "ids must not exceed 100 entries per request", http.StatusBadRequest)
+		return
+	}
+
+	deleted, err := s.observationStore.DeleteObservations(r.Context(), req.IDs)
+	if err != nil {
+		log.Error().Err(err).Int("count", len(req.IDs)).Msg("bulk-delete: delete observations failed")
+		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"deleted": deleted,
+	})
+}
+
+// bulkScopeChangeRequest is the JSON body for PATCH /api/observations/bulk-scope.
+type bulkScopeChangeRequest struct {
+	IDs   []int64 `json:"ids"`
+	Scope string  `json:"scope"` // "global" or "project"
+}
+
+// handleBulkScopeChange godoc
+// @Summary Bulk update observation scope
+// @Description Changes the scope of multiple observations to either "global" or "project".
+// @Tags Observations
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body bulkScopeChangeRequest true "IDs and new scope"
+// @Success 200 {object} object
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/bulk-scope [patch]
+func (s *Service) handleBulkScopeChange(w http.ResponseWriter, r *http.Request) {
+	if s.observationStore == nil {
+		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req bulkScopeChangeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids is required and must not be empty", http.StatusBadRequest)
+		return
+	}
+	switch req.Scope {
+	case "global", "project":
+		// valid
+	default:
+		http.Error(w, "scope must be 'global' or 'project'", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	var updated int64
+
+	scope := req.Scope
+	update := &gorm.ObservationUpdate{Scope: &scope}
+
+	for _, id := range req.IDs {
+		if _, err := s.observationStore.UpdateObservation(ctx, id, update); err != nil {
+			log.Error().Err(err).Int64("id", id).Msg("bulk-scope: update observation failed")
+			continue
+		}
+		updated++
+	}
+
+	writeJSON(w, map[string]any{
+		"updated": updated,
+	})
+}
+
 // handleGetSimilarityTelemetry godoc
 // @Summary Get similarity telemetry
 // @Description Returns the latest similarity telemetry data. Optionally filter by project to get a single snapshot.

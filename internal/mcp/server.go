@@ -593,6 +593,19 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		},
 		{
+			Name:        "find_by_file_context",
+			Description: "Retrieve observations directly associated with a specific file path, ordered by importance score. Faster and more precise than find_by_file for direct file lookups.",
+			tier:        tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"file_path"},
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string", "description": "Absolute or relative file path to look up"},
+					"limit":     map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 100, "description": "Maximum number of observations to return"},
+				},
+			},
+		},
+		{
 			Name:        "find_by_type",
 			Description: "Find observations of specific types.",
 			tier:        tierUseful,
@@ -1353,17 +1366,18 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
-	// Tool tiering: parse optional cursor from request params.
+	// Tool tiering: parse optional cursor and include_all from request params.
 	// No cursor / empty → return T1+T2 tools only + nextCursor: "all"
-	// cursor: "all" → return ALL tools
+	// cursor: "all" OR include_all: true → return ALL tools
 	var listParams struct {
-		Cursor string `json:"cursor"`
+		Cursor     string `json:"cursor"`
+		IncludeAll bool   `json:"include_all"`
 	}
 	if req.Params != nil {
 		_ = json.Unmarshal(req.Params, &listParams)
 	}
 
-	if listParams.Cursor != "all" {
+	if listParams.Cursor != "all" && !listParams.IncludeAll {
 		// Filter to primary tools (T1 + T2)
 		primary := make([]Tool, 0, len(tools))
 		for _, t := range tools {
@@ -1533,6 +1547,19 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleSearchCollection(ctx, args)
 	case "remove_document":
 		return s.handleRemoveDocument(ctx, args)
+	// Document tool aliases
+	case "doc_list_collections":
+		return s.handleListCollections(ctx)
+	case "doc_list_documents":
+		return s.handleListDocuments(ctx, args)
+	case "doc_get":
+		return s.handleGetDocument(ctx, args)
+	case "doc_ingest":
+		return s.handleIngestDocument(ctx, args)
+	case "doc_search":
+		return s.handleSearchCollection(ctx, args)
+	case "doc_remove":
+		return s.handleRemoveDocument(ctx, args)
 	case "import_instincts":
 		return s.handleImportInstincts(ctx, args)
 	case "backfill_status":
@@ -1547,6 +1574,17 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleDeleteCredential(ctx, args)
 	case "vault_status":
 		return s.handleVaultStatus(ctx, args)
+	// Vault tool aliases
+	case "vault_store":
+		return s.handleStoreCredential(ctx, args)
+	case "vault_get":
+		return s.handleGetCredential(ctx, args)
+	case "vault_list":
+		return s.handleListCredentials(ctx, args)
+	case "vault_delete":
+		return s.handleDeleteCredential(ctx, args)
+	case "find_by_file_context":
+		return s.handleFindByFileContext(ctx, args)
 	case "store_memory":
 		return s.handleStoreMemory(ctx, args)
 	case "recall_memory":
@@ -4459,4 +4497,58 @@ func (s *Server) handleGetGraphStats(ctx context.Context) (string, error) {
 	}
 	b, _ := json.MarshalIndent(result, "", "  ")
 	return string(b), nil
+}
+
+// handleFindByFileContext retrieves observations directly associated with a specific file path,
+// ordered by importance score DESC. Uses the JSONB file-index for precise, fast lookups.
+func (s *Server) handleFindByFileContext(ctx context.Context, args json.RawMessage) (string, error) {
+	if s.observationStore == nil {
+		return "", fmt.Errorf("observation store not available")
+	}
+
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
+	var params struct {
+		FilePath string
+		Limit    int
+	}
+	params.FilePath = coerceString(m["file_path"], "")
+	params.Limit = coerceInt(m["limit"], 10)
+
+	if params.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+	if params.Limit < 1 || params.Limit > 100 {
+		params.Limit = 10
+	}
+
+	observations, err := s.observationStore.GetObservationsByFile(ctx, params.FilePath, params.Limit)
+	if err != nil {
+		return "", fmt.Errorf("get observations by file: %w", err)
+	}
+
+	type fileContextResult struct {
+		FilePath     string               `json:"file_path"`
+		Count        int                  `json:"count"`
+		Observations []*models.Observation `json:"observations"`
+	}
+
+	out := fileContextResult{
+		FilePath:     params.FilePath,
+		Count:        len(observations),
+		Observations: observations,
+	}
+	if out.Observations == nil {
+		out.Observations = []*models.Observation{}
+	}
+
+	output, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal result: %w", err)
+	}
+
+	return string(output), nil
 }
