@@ -781,7 +781,7 @@ func (s *Service) initializeAsync() {
 
 	// Initialize async relation detector (requires embedding + vector search)
 	if embedSvc != nil && vectorClient != nil {
-		detector := relation.NewDetector(vectorClient, relationStore, conflictStore, observationStore)
+		detector := relation.NewDetector(vectorClient, relationStore, conflictStore, observationStore, promptStore)
 		observationStore.SetRelationDetector(detector)
 		s.relationDetector = detector
 		s.wg.Add(1)

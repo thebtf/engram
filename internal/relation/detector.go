@@ -45,6 +45,7 @@ type Detector struct {
 	relationStore    *gorm.RelationStore
 	conflictStore    *gorm.ConflictStore
 	observationStore *gorm.ObservationStore
+	promptStore      *gorm.PromptStore
 	parentCtx        context.Context
 	queue            chan detectRequest
 }
@@ -56,12 +57,14 @@ func NewDetector(
 	relationStore *gorm.RelationStore,
 	conflictStore *gorm.ConflictStore,
 	observationStore *gorm.ObservationStore,
+	promptStore *gorm.PromptStore,
 ) *Detector {
 	return &Detector{
 		vectorClient:     vectorClient,
 		relationStore:    relationStore,
 		conflictStore:    conflictStore,
 		observationStore: observationStore,
+		promptStore:      promptStore,
 		queue:            make(chan detectRequest, queueSize),
 	}
 }
@@ -190,6 +193,44 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 	}
 	if obs == nil {
 		return fmt.Errorf("observation %d not found", obsID)
+	}
+
+	// 1a. Temporal chain linking: create "follows" relation to previous observation in same session (FR-4)
+	if obs.SDKSessionID != "" && obs.PromptNumber.Valid && obs.PromptNumber.Int64 > 0 {
+		promptNum := int(obs.PromptNumber.Int64)
+		prevObs, prevErr := d.observationStore.GetPreviousObservationInSession(ctx, obs.SDKSessionID, promptNum)
+		if prevErr != nil {
+			log.Debug().Err(prevErr).Int64("obs_id", obsID).Msg("Temporal chain lookup failed")
+		} else if prevObs != nil {
+			rel := &models.ObservationRelation{
+				SourceID:     prevObs.ID,
+				TargetID:     obsID,
+				RelationType: "follows",
+				Confidence:   1.0,
+			}
+			if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
+				log.Debug().Err(storeErr).Int64("from", prevObs.ID).Int64("to", obsID).Msg("Failed to store follows relation")
+			}
+		}
+	}
+
+	// 1b. Prompt-observation linking: create "prompted_by" relation to triggering user prompt (FR-5)
+	if obs.SDKSessionID != "" && obs.PromptNumber.Valid && obs.PromptNumber.Int64 > 0 && d.promptStore != nil {
+		promptNum := int(obs.PromptNumber.Int64)
+		promptID, promptErr := d.promptStore.GetPromptForObservation(ctx, obs.SDKSessionID, promptNum)
+		if promptErr != nil {
+			log.Debug().Err(promptErr).Int64("obs_id", obsID).Msg("Prompt-observation linking failed")
+		} else if promptID > 0 {
+			rel := &models.ObservationRelation{
+				SourceID:     promptID,
+				TargetID:     obsID,
+				RelationType: "prompted_by",
+				Confidence:   1.0,
+			}
+			if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
+				log.Debug().Err(storeErr).Int64("prompt_id", promptID).Int64("obs_id", obsID).Msg("Failed to store prompted_by relation")
+			}
+		}
 	}
 
 	// 2. Build embedding text from title and narrative

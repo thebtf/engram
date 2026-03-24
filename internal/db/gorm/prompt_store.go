@@ -336,3 +336,23 @@ func toModelUserPromptsWithSession(results []struct {
 	}
 	return prompts
 }
+
+// GetPromptForObservation finds the user prompt that triggered a given observation.
+// Matches: same sdk_session_id (via sessions join), prompt_number <= observation's prompt_number.
+// Returns the closest preceding prompt. Used for causal chain linking (FR-5).
+func (s *PromptStore) GetPromptForObservation(ctx context.Context, sdkSessionID string, promptNumber int) (int64, error) {
+	var promptID int64
+	err := s.db.WithContext(ctx).
+		Table("user_prompts up").
+		Select("up.id").
+		Joins("JOIN sdk_sessions s ON up.claude_session_id = s.claude_session_id").
+		Where("s.sdk_session_id = ? AND up.prompt_number <= ?", sdkSessionID, promptNumber).
+		Order("up.prompt_number DESC").
+		Limit(1).
+		Scan(&promptID).Error
+
+	if err != nil {
+		return 0, err
+	}
+	return promptID, nil
+}
