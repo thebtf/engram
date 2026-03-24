@@ -96,10 +96,10 @@ function truncate(value: string, maxChars: number): string {
 // Contradiction detection helpers
 // ---------------------------------------------------------------------------
 
-const WRITE_TOOLS = new Set(['write', 'edit', 'Write', 'Edit']);
+const WRITE_TOOLS = new Set(['write', 'edit']);
 
 function isWriteOrEdit(toolName?: string): boolean {
-  return toolName != null && WRITE_TOOLS.has(toolName);
+  return typeof toolName === 'string' && WRITE_TOOLS.has(toolName.toLowerCase());
 }
 
 async function checkContradictions(

@@ -7,11 +7,11 @@
 
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
+import { normalizeEngramContent } from './content.js';
 import { resolveIdentity } from '../identity.js';
 import type { SessionEndEvent, ConversationMessage, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
 const MAX_MESSAGES = 20;
-const CONTENT_MAX_CHARS = 6000;
 
 /**
  * Handle the session_end hook.
@@ -46,10 +46,7 @@ export function handleSessionEnd(
 
     if (!content) return;
 
-    const stripped = stripEngramContext(content);
-    const truncated = stripped.length > CONTENT_MAX_CHARS
-      ? stripped.slice(0, CONTENT_MAX_CHARS)
-      : stripped;
+    const truncated = normalizeEngramContent(content);
 
     const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
     if (!sessionId?.trim()) return;
@@ -70,10 +67,3 @@ export function handleSessionEnd(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function stripEngramContext(text: string): string {
-  return text.replace(/<engram-context>[\s\S]*?<\/engram-context>/g, '');
-}

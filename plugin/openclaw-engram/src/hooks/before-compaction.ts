@@ -8,13 +8,12 @@
 
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
+import { normalizeEngramContent } from './content.js';
 import { resolveIdentity } from '../identity.js';
 import type { BeforeCompactionEvent, ConversationMessage, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
 /** Maximum recent messages to include in the backfill payload. */
 const MAX_MESSAGES = 20;
-/** Soft character limit for the content field (server hard limit: 10,000). */
-const CONTENT_MAX_CHARS = 6000;
 
 /**
  * Handle the before_compaction hook.
@@ -46,10 +45,7 @@ export function handleBeforeCompaction(
     const content = serializeMessages(recent);
     if (!content) return;
 
-    const stripped = stripEngramContext(content);
-    const truncated = stripped.length > CONTENT_MAX_CHARS
-      ? stripped.slice(0, CONTENT_MAX_CHARS)
-      : stripped;
+    const truncated = normalizeEngramContent(content);
 
     // Fire-and-forget — do not await
     void client.backfillSession({
@@ -76,6 +72,3 @@ function serializeMessages(messages: ConversationMessage[]): string {
     .join('\n\n');
 }
 
-function stripEngramContext(text: string): string {
-  return text.replace(/<engram-context>[\s\S]*?<\/engram-context>/g, '');
-}
