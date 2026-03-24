@@ -19,23 +19,31 @@ import (
 // to the MCP server, and returns JSON-RPC responses synchronously.
 type StreamableHandler struct {
 	server *Server
+	health *MCPHealth
 }
 
 // NewStreamableHandler creates a new Streamable HTTP handler.
-func NewStreamableHandler(server *Server) *StreamableHandler {
-	return &StreamableHandler{server: server}
+func NewStreamableHandler(server *Server, health *MCPHealth) *StreamableHandler {
+	return &StreamableHandler{server: server, health: health}
 }
 
 // ServeHTTP handles POST requests with JSON-RPC MCP messages.
 func (h *StreamableHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// CORS preflight
+	// CORS preflight — not counted as a request.
 	if r.Method == http.MethodOptions {
 		h.writeCORS(w)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
+	if h.health != nil {
+		h.health.RecordRequest()
+	}
+
 	if r.Method != http.MethodPost {
+		if h.health != nil {
+			h.health.RecordError()
+		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -45,6 +53,9 @@ func (h *StreamableHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Error().Err(err).Msg("Failed to decode Streamable HTTP MCP request")
+		if h.health != nil {
+			h.health.RecordError()
+		}
 		writeJSONError(w, nil, -32700, "Parse error")
 		return
 	}
@@ -82,6 +93,11 @@ func (h *StreamableHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if response == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+
+	// Count JSON-RPC error responses as errors.
+	if response.Error != nil && h.health != nil {
+		h.health.RecordError()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

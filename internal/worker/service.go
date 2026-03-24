@@ -149,6 +149,7 @@ type Service struct {
 	consolidationScheduler *consolidation.Scheduler
 	mcpSSEHandler          *mcp.SSEHandler
 	mcpStreamableHandler   *mcp.StreamableHandler
+	mcpHealth              *mcp.MCPHealth
 	searchMgr              *search.Manager
 	collectionRegistry     *collections.Registry
 	sessionIdxStore        *sessions.Store
@@ -248,16 +249,12 @@ func (s *Service) asyncVectorSync(fn func()) {
 
 // asyncVectorSyncWithID executes a vector sync with an observation ID for reconciliation.
 func (s *Service) asyncVectorSyncWithID(fn func(), obsID int64) {
-	s.wg.Add(1)
 	if s.vectorSyncSem == nil {
-		// Fallback if semaphore not initialized
-		go func() {
-			defer s.wg.Done()
-			fn()
-		}()
+		log.Warn().Int64("obs_id", obsID).Msg("vector sync dropped: semaphore not initialized")
 		return
 	}
 
+	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		select {
@@ -513,6 +510,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		vectorSyncSem:      make(chan struct{}, 10), // Limit to 10 concurrent vector syncs
 		pendingVectorSyncs: make(chan int64, 1000),  // Buffer for dropped syncs awaiting reconciliation
 		ingestDedup:        newDeduplicationCache(5 * time.Minute),
+		mcpHealth:          mcp.NewMCPHealth(),
 	}
 
 	// Setup middleware and routes (health endpoint works immediately)
@@ -969,7 +967,7 @@ func (s *Service) initializeAsync() {
 	}
 
 	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
-	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer)
+	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer, s.mcpHealth)
 
 	s.initMu.Lock()
 	s.searchMgr = searchMgr
@@ -1648,6 +1646,9 @@ func (s *Service) setupRoutes() {
 
 	// Readiness check - returns 200 only when fully initialized
 	s.router.Get("/api/ready", s.handleReady)
+
+	// MCP health counters (public — no auth required, lightweight)
+	s.router.Get("/api/mcp/health", s.mcpHealth.HandleHealth)
 
 	// OpenAPI docs (read-only spec; protected by global auth middleware if ENGRAM_API_TOKEN is set)
 	s.router.Get("/api/docs", http.RedirectHandler("/api/docs/index.html", http.StatusMovedPermanently).ServeHTTP)

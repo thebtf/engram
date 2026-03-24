@@ -300,7 +300,14 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		project = req.Project
 	}
 	if privacy.ContainsSecrets(req.Content) {
-		vaultStoreDetectedSecrets(r.Context(), s, req.Content, project)
+		// Fire-and-forget vault storage (Constitution P3: Non-Blocking)
+		capturedContent := req.Content
+		capturedProject := project
+		go func() {
+			vaultCtx, vaultCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer vaultCancel()
+			vaultStoreDetectedSecrets(vaultCtx, s, capturedContent, capturedProject)
+		}()
 	}
 	for i := range sess.Exchanges {
 		sess.Exchanges[i].UserText = privacy.RedactSecrets(sess.Exchanges[i].UserText)
