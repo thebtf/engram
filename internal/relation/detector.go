@@ -4,6 +4,8 @@ package relation
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -11,6 +13,19 @@ import (
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+// intentionalLinkPattern matches [[obs:1234]] syntax in observation narratives.
+var intentionalLinkPattern = regexp.MustCompile(`\[\[obs:(\d+)\]\]`)
+
+// hashString returns a stable int64 hash of a string (for file path → node ID mapping).
+func hashString(s string) int64 {
+	var h uint64 = 14695981039346656037 // FNV-1a offset basis
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211 // FNV-1a prime
+	}
+	return int64(h >> 1) // Ensure positive by right-shifting
+}
 
 // queueSize is the buffer size for the detection queue.
 const queueSize = 256
@@ -230,6 +245,73 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 			if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
 				log.Debug().Err(storeErr).Int64("prompt_id", promptID).Int64("obs_id", obsID).Msg("Failed to store prompted_by relation")
 			}
+		}
+	}
+
+	// 1c. Intentional link parsing: [[obs:1234]] syntax in narrative → references/referenced_by edges (FR-36)
+	if obs.Narrative.Valid && obs.Narrative.String != "" {
+		refsFound := intentionalLinkPattern.FindAllStringSubmatch(obs.Narrative.String, -1)
+		for _, match := range refsFound {
+			if len(match) < 2 {
+				continue
+			}
+			refID, parseErr := strconv.ParseInt(match[1], 10, 64)
+			if parseErr != nil || refID == obsID {
+				continue
+			}
+			// Create bidirectional edges: current → referenced, referenced → current
+			refRel := &models.ObservationRelation{
+				SourceID:     obsID,
+				TargetID:     refID,
+				RelationType: "references",
+				Confidence:   1.0,
+			}
+			if _, storeErr := d.relationStore.StoreRelation(ctx, refRel); storeErr != nil {
+				log.Debug().Err(storeErr).Int64("from", obsID).Int64("to", refID).Msg("Failed to store references relation")
+			}
+			backRel := &models.ObservationRelation{
+				SourceID:     refID,
+				TargetID:     obsID,
+				RelationType: "referenced_by",
+				Confidence:   1.0,
+			}
+			if _, storeErr := d.relationStore.StoreRelation(ctx, backRel); storeErr != nil {
+				log.Debug().Err(storeErr).Int64("from", refID).Int64("to", obsID).Msg("Failed to store referenced_by relation")
+			}
+		}
+	}
+
+	// 1d. File→observation graph edges: files_modified/files_read → modifies/reads edges (FR-37)
+	// These create graph edges for "what observations touch this file?" traversal
+	for _, filePath := range obs.FilesModified {
+		if filePath == "" {
+			continue
+		}
+		// Use file path hash as a pseudo node ID (negative to avoid collision with observation IDs)
+		fileNodeID := int64(hashString(filePath))
+		rel := &models.ObservationRelation{
+			SourceID:     obsID,
+			TargetID:     fileNodeID,
+			RelationType: "modifies",
+			Confidence:   1.0,
+		}
+		if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
+			log.Debug().Err(storeErr).Str("file", filePath).Int64("obs_id", obsID).Msg("Failed to store modifies relation")
+		}
+	}
+	for _, filePath := range obs.FilesRead {
+		if filePath == "" {
+			continue
+		}
+		fileNodeID := int64(hashString(filePath))
+		rel := &models.ObservationRelation{
+			SourceID:     obsID,
+			TargetID:     fileNodeID,
+			RelationType: "reads",
+			Confidence:   1.0,
+		}
+		if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
+			log.Debug().Err(storeErr).Str("file", filePath).Int64("obs_id", obsID).Msg("Failed to store reads relation")
 		}
 	}
 
