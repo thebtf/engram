@@ -4,6 +4,8 @@ package relation
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -11,6 +13,19 @@ import (
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+// intentionalLinkPattern matches [[obs:1234]] syntax in observation narratives.
+var intentionalLinkPattern = regexp.MustCompile(`\[\[obs:(\d+)\]\]`)
+
+// hashString returns a stable int64 hash of a string (for file path → node ID mapping).
+func hashString(s string) int64 {
+	var h uint64 = 14695981039346656037 // FNV-1a offset basis
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211 // FNV-1a prime
+	}
+	return int64(h >> 1) // Ensure positive by right-shifting
+}
 
 // queueSize is the buffer size for the detection queue.
 const queueSize = 256
@@ -41,13 +56,14 @@ type detectRequest struct {
 
 // Detector performs async relation and conflict detection after observation creation.
 type Detector struct {
-	vectorClient     vector.Client
-	relationStore    *gorm.RelationStore
-	conflictStore    *gorm.ConflictStore
-	observationStore *gorm.ObservationStore
-	promptStore      *gorm.PromptStore
-	parentCtx        context.Context
-	queue            chan detectRequest
+	vectorClient      vector.Client
+	relationStore     *gorm.RelationStore
+	conflictStore     *gorm.ConflictStore
+	observationStore  *gorm.ObservationStore
+	promptStore       *gorm.PromptStore
+	causalClassifier  *CausalClassifier
+	parentCtx         context.Context
+	queue             chan detectRequest
 }
 
 // NewDetector creates a new relation detector.
@@ -67,6 +83,11 @@ func NewDetector(
 		promptStore:      promptStore,
 		queue:            make(chan detectRequest, queueSize),
 	}
+}
+
+// SetCausalClassifier sets the LLM-based causal classifier for FR-44/FR-45.
+func (d *Detector) SetCausalClassifier(c *CausalClassifier) {
+	d.causalClassifier = c
 }
 
 // Start launches the background goroutine that processes detection requests.
@@ -233,6 +254,73 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 		}
 	}
 
+	// 1c. Intentional link parsing: [[obs:1234]] syntax in narrative → references/referenced_by edges (FR-36)
+	if obs.Narrative.Valid && obs.Narrative.String != "" {
+		refsFound := intentionalLinkPattern.FindAllStringSubmatch(obs.Narrative.String, -1)
+		for _, match := range refsFound {
+			if len(match) < 2 {
+				continue
+			}
+			refID, parseErr := strconv.ParseInt(match[1], 10, 64)
+			if parseErr != nil || refID == obsID {
+				continue
+			}
+			// Create bidirectional edges: current → referenced, referenced → current
+			refRel := &models.ObservationRelation{
+				SourceID:     obsID,
+				TargetID:     refID,
+				RelationType: "references",
+				Confidence:   1.0,
+			}
+			if _, storeErr := d.relationStore.StoreRelation(ctx, refRel); storeErr != nil {
+				log.Debug().Err(storeErr).Int64("from", obsID).Int64("to", refID).Msg("Failed to store references relation")
+			}
+			backRel := &models.ObservationRelation{
+				SourceID:     refID,
+				TargetID:     obsID,
+				RelationType: "referenced_by",
+				Confidence:   1.0,
+			}
+			if _, storeErr := d.relationStore.StoreRelation(ctx, backRel); storeErr != nil {
+				log.Debug().Err(storeErr).Int64("from", refID).Int64("to", obsID).Msg("Failed to store referenced_by relation")
+			}
+		}
+	}
+
+	// 1d. File→observation graph edges: files_modified/files_read → modifies/reads edges (FR-37)
+	// These create graph edges for "what observations touch this file?" traversal
+	for _, filePath := range obs.FilesModified {
+		if filePath == "" {
+			continue
+		}
+		// Use file path hash as a pseudo node ID (negative to avoid collision with observation IDs)
+		fileNodeID := -int64(hashString(filePath))
+		rel := &models.ObservationRelation{
+			SourceID:     obsID,
+			TargetID:     fileNodeID,
+			RelationType: "modifies",
+			Confidence:   1.0,
+		}
+		if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
+			log.Debug().Err(storeErr).Str("file", filePath).Int64("obs_id", obsID).Msg("Failed to store modifies relation")
+		}
+	}
+	for _, filePath := range obs.FilesRead {
+		if filePath == "" {
+			continue
+		}
+		fileNodeID := -int64(hashString(filePath))
+		rel := &models.ObservationRelation{
+			SourceID:     obsID,
+			TargetID:     fileNodeID,
+			RelationType: "reads",
+			Confidence:   1.0,
+		}
+		if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
+			log.Debug().Err(storeErr).Str("file", filePath).Int64("obs_id", obsID).Msg("Failed to store reads relation")
+		}
+	}
+
 	// 2. Build embedding text from title and narrative
 	embedText := buildEmbedText(obs)
 	if embedText == "" {
@@ -343,6 +431,39 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 			Int("relations", relationsStored).
 			Int("conflicts", conflictsStored).
 			Msg("Relation detection completed")
+	}
+
+	// 8. Causal classification via LLM for bugfix/guidance observations (FR-44/FR-45)
+	if d.causalClassifier != nil && ShouldClassify(obs) && len(candidates) > 0 {
+		// Classify top-3 similarity candidates only (limit LLM calls)
+		maxCausal := 3
+		if len(candidates) < maxCausal {
+			maxCausal = len(candidates)
+		}
+		for _, candidate := range candidates[:maxCausal] {
+			// candidate = A (the original problem/observation), obs = B (the fix/rule).
+			// ClassifyPair(A, B) returns "fixed_by" when A is the bug fixed by B,
+			// or "corrects" when B is a rule correcting A.
+			label, classErr := d.causalClassifier.ClassifyPair(ctx, candidate, obs)
+			if classErr != nil {
+				log.Debug().Err(classErr).Int64("obs_a", candidate.ID).Int64("obs_b", obs.ID).Msg("Causal classification failed")
+				continue
+			}
+			if label == "unrelated" {
+				continue
+			}
+			causalRel := &models.ObservationRelation{
+				SourceID:     candidate.ID,
+				TargetID:     obs.ID,
+				RelationType: models.RelationType(label),
+				Confidence:   0.8,
+			}
+			if _, storeErr := d.relationStore.StoreRelation(ctx, causalRel); storeErr != nil {
+				log.Debug().Err(storeErr).Str("type", label).Int64("from", candidate.ID).Int64("to", obs.ID).Msg("Failed to store causal relation")
+			} else {
+				relationsStored++
+			}
+		}
 	}
 
 	return nil

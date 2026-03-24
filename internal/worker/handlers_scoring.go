@@ -209,6 +209,29 @@ func (s *Service) handleObservationUtility(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Adaptive threshold: adjust per-project threshold based on utility signal.
+	// "used" lowers threshold (more results), "ignored" raises threshold (fewer results).
+	s.initMu.RLock()
+	projectSettingsStore := s.projectSettingsStore
+	s.initMu.RUnlock()
+	if projectSettingsStore != nil {
+		var delta float64
+		switch req.Signal {
+		case "used":
+			delta = -0.01
+		case "ignored":
+			delta = +0.01
+		}
+		if delta != 0 {
+			obs, obsErr := observationStore.GetObservationByID(r.Context(), id)
+			if obsErr == nil && obs != nil && obs.Project != "" {
+				if adjErr := projectSettingsStore.AdjustThreshold(r.Context(), obs.Project, delta); adjErr != nil {
+					log.Debug().Err(adjErr).Str("project", obs.Project).Float64("delta", delta).Msg("Failed to adjust adaptive threshold")
+				}
+			}
+		}
+	}
+
 	writeJSON(w, map[string]any{
 		"status": "ok",
 		"id":     id,

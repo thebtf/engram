@@ -353,6 +353,52 @@ func (s *FalkorDBGraphStore) SyncFromRelations(_ context.Context, relations []*m
 	return nil
 }
 
+// GetCluster returns observation IDs in the same cluster as the given node using BFS traversal.
+func (s *FalkorDBGraphStore) GetCluster(_ context.Context, nodeID int64, maxNodes int) ([]int64, error) {
+	g, conn, err := s.getGraph()
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if maxNodes < 1 {
+		maxNodes = 50
+	}
+
+	// BFS: find all connected nodes up to 3 hops, limited by maxNodes.
+	// nodeID is passed as a parameter to avoid injection risk; LIMIT does not
+	// support parameters in Cypher so maxNodes (an int) is interpolated safely.
+	query := fmt.Sprintf(
+		"MATCH (a:Observation {id: $nodeID})-[:REL*1..3]-(b:Observation) "+
+			"WHERE b.id <> $nodeID "+
+			"RETURN DISTINCT b.id "+
+			"LIMIT %d",
+		maxNodes,
+	)
+	params := map[string]interface{}{
+		"nodeID": nodeID,
+	}
+
+	result, err := g.ParameterizedQuery(query, params)
+	if err != nil {
+		return nil, fmt.Errorf("cluster query: %w", err)
+	}
+
+	var ids []int64
+	for result.Next() {
+		record := result.Record()
+		if id, ok := record.Get("b.id"); ok {
+			switch v := id.(type) {
+			case int64:
+				ids = append(ids, v)
+			case float64:
+				ids = append(ids, int64(v))
+			}
+		}
+	}
+	return ids, nil
+}
+
 // Stats returns graph statistics.
 func (s *FalkorDBGraphStore) Stats(_ context.Context) (graph.GraphStoreStats, error) {
 	g, conn, err := s.getGraph()

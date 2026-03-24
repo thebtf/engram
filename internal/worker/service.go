@@ -175,9 +175,10 @@ type Service struct {
 	logBuffer              *logbuf.RingBuffer
 	backfillTracker        *backfillTracker
 	searchQueryLogStore     *gorm.SearchQueryLogStore
-	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
-	llmFilter              *search.LLMFilter
-	version                string
+	retrievalStatsLogStore  *gorm.RetrievalStatsLogStore
+	llmFilter               *search.LLMFilter
+	projectSettingsStore    *gorm.ProjectSettingsStore
+	version                 string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
 	wg                     sync.WaitGroup
 	recentQueriesLen       int
@@ -872,7 +873,9 @@ func (s *Service) initializeAsync() {
 	}
 	maintenanceSvc := maintenance.NewService(
 		store, observationStore, summaryStore, promptStore,
-		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore, vectorClient, log.Logger,
+		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore,
+		vectorClient, vectorSync, relationStore, gs,
+		log.Logger,
 	)
 	s.initMu.Lock()
 	s.maintenanceService = maintenanceSvc
@@ -965,6 +968,11 @@ func (s *Service) initializeAsync() {
 	if documentStore != nil && embedSvc != nil {
 		searchMgr.SetDocumentStore(documentStore, embedSvc)
 	}
+
+	// Wire project settings store for adaptive per-project thresholds.
+	projectSettingsStore := gorm.NewProjectSettingsStore(store.DB)
+	searchMgr.SetProjectSettingsStore(projectSettingsStore)
+	s.projectSettingsStore = projectSettingsStore
 
 	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
 	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer, s.mcpHealth)

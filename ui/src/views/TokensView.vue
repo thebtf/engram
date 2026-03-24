@@ -6,7 +6,34 @@ import { copyToClipboard } from '@/utils/clipboard'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
 
+interface TokenStats {
+  request_count: number
+  last_used_at?: string
+}
+
 const { tokens, loading, error, loadTokens, create, revoke } = useTokens()
+
+// Per-token stats: keyed by token id
+const tokenStats = ref<Record<string, TokenStats>>({})
+const statsLoading = ref<Record<string, boolean>>({})
+
+async function loadTokenStats(tokenId: string) {
+  if (tokenStats.value[tokenId] !== undefined || statsLoading.value[tokenId]) return
+  statsLoading.value = { ...statsLoading.value, [tokenId]: true }
+  try {
+    const res = await fetch(`/api/auth/tokens/${encodeURIComponent(tokenId)}/stats`)
+    if (res.ok) {
+      const data: TokenStats = await res.json()
+      tokenStats.value = { ...tokenStats.value, [tokenId]: data }
+    }
+  } catch {
+    // Non-critical — stats are supplemental
+  } finally {
+    const updated = { ...statsLoading.value }
+    delete updated[tokenId]
+    statsLoading.value = updated
+  }
+}
 
 // Create token modal
 const showCreateModal = ref(false)
@@ -183,6 +210,29 @@ async function handleRevoke() {
               <span v-if="token.error_count" class="text-red-400/70">
                 <i class="fas fa-exclamation-circle mr-0.5" />
                 {{ token.error_count }} errors
+              </span>
+            </div>
+            <!-- Per-token stats (lazy loaded) -->
+            <div class="mt-1">
+              <button
+                v-if="tokenStats[token.id] === undefined && !statsLoading[token.id]"
+                @click="loadTokenStats(token.id)"
+                class="text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
+              >
+                <i class="fas fa-chart-bar mr-0.5" />
+                Load stats
+              </button>
+              <span v-else-if="statsLoading[token.id]" class="text-[10px] text-slate-600">
+                <i class="fas fa-circle-notch fa-spin mr-0.5" />
+                Loading stats...
+              </span>
+              <span v-else-if="tokenStats[token.id]" class="text-[10px] text-slate-500">
+                <i class="fas fa-chart-bar mr-0.5 text-slate-600" />
+                {{ tokenStats[token.id].request_count }} requests
+                <span v-if="tokenStats[token.id].last_used_at">
+                  · Last used: {{ formatRelativeTime(tokenStats[token.id].last_used_at!) }}
+                </span>
+                <span v-else> · Never used</span>
               </span>
             </div>
           </div>

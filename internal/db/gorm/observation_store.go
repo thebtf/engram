@@ -1638,3 +1638,31 @@ func (s *ObservationStore) GetSearchMissStats(ctx context.Context, project strin
 	err := q.Scan(&stats).Error
 	return stats, err
 }
+
+// GetRecentSessionIDs returns a set of sdk_session_id values that have observations
+// created on or after the given time, within the specified project.
+// Used by the composite scoring pipeline to apply a session activity boost.
+func (s *ObservationStore) GetRecentSessionIDs(ctx context.Context, project string, since time.Time) (map[string]bool, error) {
+	var sessionIDs []string
+	err := s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Distinct("sdk_session_id").
+		Where("project = ? AND created_at_epoch >= ? AND sdk_session_id IS NOT NULL AND sdk_session_id != ''",
+			project, since.UnixMilli()).
+		Pluck("sdk_session_id", &sessionIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]bool, len(sessionIDs))
+	for _, id := range sessionIDs {
+		result[id] = true
+	}
+	return result, nil
+}
+
+// GetTopImportanceObservations retrieves observations for a project ordered by importance DESC.
+// Used to fill the injection floor when the main result set falls below the minimum.
+// Delegates to GetActiveObservations which applies the same filter/ordering.
+func (s *ObservationStore) GetTopImportanceObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
+	return s.GetActiveObservations(ctx, project, limit)
+}

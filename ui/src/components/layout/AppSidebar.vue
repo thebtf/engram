@@ -8,7 +8,7 @@ import { useHealth } from '@/composables/useHealth'
 
 const route = useRoute()
 const router = useRouter()
-const { logout } = useAuth()
+const { logout, authDisabled } = useAuth()
 const { isConnected } = useSSE()
 const { stats } = useStats()
 const { health } = useHealth()
@@ -22,7 +22,7 @@ interface NavItem {
   path: string
 }
 
-const navItems: NavItem[] = [
+const allNavItems: NavItem[] = [
   { name: 'home', label: 'Home', icon: 'fa-house', path: '/' },
   { name: 'observations', label: 'Observations', icon: 'fa-brain', path: '/observations' },
   { name: 'search', label: 'Search', icon: 'fa-magnifying-glass', path: '/search' },
@@ -35,6 +35,10 @@ const navItems: NavItem[] = [
   { name: 'system', label: 'System', icon: 'fa-server', path: '/system' },
   { name: 'tokens', label: 'Tokens', icon: 'fa-key', path: '/tokens' },
 ]
+
+const navItems = computed(() =>
+  authDisabled.value ? allNavItems.filter(item => item.name !== 'tokens') : allNavItems
+)
 
 const sidebarWidth = computed(() => (collapsed.value ? 'w-14' : 'w-60'))
 
@@ -76,6 +80,19 @@ async function handleLogout() {
       <span v-if="!collapsed" class="text-sm font-bold text-white truncate">
         <span class="text-claude-400">Engram</span>
       </span>
+    </div>
+
+    <!-- Auth-disabled warning badge -->
+    <div
+      v-if="authDisabled"
+      :class="[
+        'flex items-center gap-2 px-3 py-1.5 bg-yellow-500/10 border-b border-yellow-500/30',
+        collapsed ? 'justify-center' : '',
+      ]"
+      title="Authentication is disabled — all requests are allowed without a token"
+    >
+      <span class="text-yellow-400 flex-shrink-0">⚠</span>
+      <span v-if="!collapsed" class="text-[10px] text-yellow-400 font-medium truncate">Auth Disabled</span>
     </div>
 
     <!-- Navigation -->

@@ -10,6 +10,11 @@ import EmptyState from '@/components/layout/EmptyState.vue'
 import Badge from '@/components/Badge.vue'
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
 
+interface TagCloudItem {
+  tag: string
+  count: number
+}
+
 const router = useRouter()
 
 // Pagination state
@@ -29,8 +34,16 @@ const projects = ref<string[]>([])
 // Bulk selection state
 const selectedIds = ref<Set<number>>(new Set())
 const showBatchConfirm = ref(false)
-const batchAction = ref<'archive' | null>(null)
+const batchAction = ref<'archive' | 'delete' | 'scope' | 'tag' | null>(null)
 const batchProcessing = ref(false)
+const batchScopeInput = ref('')
+const batchTagInput = ref('')
+const showScopeInput = ref(false)
+const showTagInput = ref(false)
+
+// Tag cloud state
+const tagCloud = ref<TagCloudItem[]>([])
+const currentTagFilter = ref<string | null>(null)
 
 const allSelected = computed(() =>
   filteredObservations.value.length > 0 &&
@@ -56,27 +69,83 @@ function toggleSelectAll() {
   }
 }
 
-function startBatchAction(action: 'archive') {
+function startBatchAction(action: 'archive' | 'delete' | 'scope' | 'tag') {
   batchAction.value = action
-  showBatchConfirm.value = true
+  if (action === 'scope') {
+    showScopeInput.value = true
+  } else if (action === 'tag') {
+    showTagInput.value = true
+  } else {
+    showBatchConfirm.value = true
+  }
 }
 
 async function executeBatchAction() {
   showBatchConfirm.value = false
+  showScopeInput.value = false
+  showTagInput.value = false
   if (!batchAction.value || selectedIds.value.size === 0) return
 
   batchProcessing.value = true
+  const ids = Array.from(selectedIds.value)
   try {
-    const ids = Array.from(selectedIds.value)
-    await archiveObservations(ids, 'Batch archive from dashboard')
+    if (batchAction.value === 'archive') {
+      await archiveObservations(ids, 'Batch archive from dashboard')
+    } else if (batchAction.value === 'delete') {
+      await fetch('/api/observations/bulk', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      })
+    } else if (batchAction.value === 'scope') {
+      await fetch('/api/observations/bulk-scope', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, scope: batchScopeInput.value }),
+      })
+      batchScopeInput.value = ''
+    } else if (batchAction.value === 'tag') {
+      await fetch('/api/observations/batch-tag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, tag: batchTagInput.value, action: 'add' }),
+      })
+      batchTagInput.value = ''
+    }
     selectedIds.value = new Set()
     await fetchPage()
+    loadTagCloud()
   } catch {
     // Error will show in page reload
   } finally {
     batchProcessing.value = false
     batchAction.value = null
   }
+}
+
+async function loadTagCloud() {
+  try {
+    const params = new URLSearchParams({ limit: '20' })
+    if (currentProject.value) {
+      params.set('project', currentProject.value)
+    }
+    const response = await fetch(`/api/observations/tag-cloud?${params}`)
+    if (response.ok) {
+      tagCloud.value = await response.json()
+    }
+  } catch {
+    // Non-critical, ignore
+  }
+}
+
+function filterByTag(tag: string) {
+  if (currentTagFilter.value === tag) {
+    currentTagFilter.value = null
+  } else {
+    currentTagFilter.value = tag
+  }
+  offset.value = 0
+  fetchPage()
 }
 
 // Unique concepts from current page for quick filter
@@ -151,6 +220,7 @@ function setProject(project: string | null) {
   currentProject.value = project
   offset.value = 0
   fetchPage()
+  loadTagCloud()
 }
 
 function setType(type: ObservationType | null) {
@@ -182,6 +252,7 @@ function shortProject(project: string): string {
 onMounted(() => {
   fetchPage()
   loadProjects()
+  loadTagCloud()
 })
 
 onUnmounted(() => {
@@ -190,7 +261,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div>
+  <div class="flex gap-6">
+    <!-- Main content -->
+    <div class="flex-1 min-w-0">
     <!-- Header -->
     <div class="flex items-center justify-between mb-6">
       <div class="flex items-center gap-3">
@@ -251,26 +324,100 @@ onUnmounted(() => {
     <!-- Batch Actions Toolbar -->
     <div
       v-if="selectedIds.size > 0"
-      class="flex items-center gap-3 mb-4 p-3 rounded-lg bg-claude-500/10 border border-claude-500/30"
+      class="mb-4 p-3 rounded-lg bg-claude-500/10 border border-claude-500/30"
     >
-      <span class="text-sm text-claude-300">
-        <i class="fas fa-check-square mr-1" />
-        {{ selectedIds.size }} selected
-      </span>
-      <button
-        @click="startBatchAction('archive')"
-        :disabled="batchProcessing"
-        class="px-3 py-1 rounded-lg text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
-      >
-        <i class="fas fa-archive mr-1" />
-        Archive
-      </button>
-      <button
-        @click="selectedIds = new Set()"
-        class="ml-auto text-xs text-slate-400 hover:text-white transition-colors"
-      >
-        Clear selection
-      </button>
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-claude-300">
+          <i class="fas fa-check-square mr-1" />
+          {{ selectedIds.size }} selected
+        </span>
+        <button
+          @click="startBatchAction('archive')"
+          :disabled="batchProcessing"
+          class="px-3 py-1 rounded-lg text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+        >
+          <i class="fas fa-archive mr-1" />
+          Archive
+        </button>
+        <button
+          @click="startBatchAction('delete')"
+          :disabled="batchProcessing"
+          class="px-3 py-1 rounded-lg text-xs bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+        >
+          <i class="fas fa-trash mr-1" />
+          Delete
+        </button>
+        <button
+          @click="startBatchAction('scope')"
+          :disabled="batchProcessing"
+          class="px-3 py-1 rounded-lg text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+        >
+          <i class="fas fa-layer-group mr-1" />
+          Change Scope
+        </button>
+        <button
+          @click="startBatchAction('tag')"
+          :disabled="batchProcessing"
+          class="px-3 py-1 rounded-lg text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 transition-colors disabled:opacity-50"
+        >
+          <i class="fas fa-tag mr-1" />
+          Add Tag
+        </button>
+        <button
+          @click="selectedIds = new Set()"
+          class="ml-auto text-xs text-slate-400 hover:text-white transition-colors"
+        >
+          Clear selection
+        </button>
+      </div>
+
+      <!-- Scope input inline form -->
+      <div v-if="showScopeInput" class="flex items-center gap-2 mt-2">
+        <input
+          v-model="batchScopeInput"
+          type="text"
+          placeholder="Enter new scope..."
+          class="flex-1 px-2 py-1 rounded bg-slate-900/50 border border-slate-700/50 text-xs text-white placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-claude-500/50"
+          @keydown.enter="executeBatchAction"
+        />
+        <button
+          @click="executeBatchAction"
+          :disabled="!batchScopeInput.trim()"
+          class="px-3 py-1 rounded text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+        >
+          Apply
+        </button>
+        <button
+          @click="showScopeInput = false; batchAction = null"
+          class="px-2 py-1 rounded text-xs text-slate-400 hover:text-white transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <!-- Tag input inline form -->
+      <div v-if="showTagInput" class="flex items-center gap-2 mt-2">
+        <input
+          v-model="batchTagInput"
+          type="text"
+          placeholder="Enter tag to add..."
+          class="flex-1 px-2 py-1 rounded bg-slate-900/50 border border-slate-700/50 text-xs text-white placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-claude-500/50"
+          @keydown.enter="executeBatchAction"
+        />
+        <button
+          @click="executeBatchAction"
+          :disabled="!batchTagInput.trim()"
+          class="px-3 py-1 rounded text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 transition-colors disabled:opacity-50"
+        >
+          Apply
+        </button>
+        <button
+          @click="showTagInput = false; batchAction = null"
+          class="px-2 py-1 rounded text-xs text-slate-400 hover:text-white transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
 
     <!-- Loading State -->
@@ -401,12 +548,48 @@ onUnmounted(() => {
     <!-- Batch Action Confirmation -->
     <ConfirmDialog
       :show="showBatchConfirm"
-      :title="`Archive ${selectedIds.size} Observations`"
-      :message="`Are you sure you want to archive ${selectedIds.size} observation(s)? Archived observations can be restored.`"
-      confirm-label="Archive"
+      :title="batchAction === 'delete' ? `Delete ${selectedIds.size} Observations` : `Archive ${selectedIds.size} Observations`"
+      :message="batchAction === 'delete'
+        ? `Are you sure you want to permanently delete ${selectedIds.size} observation(s)? This cannot be undone.`
+        : `Are you sure you want to archive ${selectedIds.size} observation(s)? Archived observations can be restored.`"
+      :confirm-label="batchAction === 'delete' ? 'Delete' : 'Archive'"
       :danger="true"
       @confirm="executeBatchAction"
-      @cancel="showBatchConfirm = false"
+      @cancel="showBatchConfirm = false; batchAction = null"
     />
+    </div><!-- end main content -->
+
+    <!-- Tag Cloud Sidebar -->
+    <div v-if="tagCloud.length > 0" class="w-52 flex-shrink-0">
+      <div class="p-3 rounded-xl border border-slate-700/50 bg-slate-800/30 sticky top-4">
+        <div class="text-[10px] text-slate-500 uppercase tracking-wider font-medium mb-2">
+          <i class="fas fa-tags mr-1" />
+          Top Tags
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <span
+            v-for="item in tagCloud"
+            :key="item.tag"
+            @click="filterByTag(item.tag)"
+            :class="[
+              'cursor-pointer px-2 py-0.5 rounded-full text-[10px] border transition-colors',
+              currentTagFilter === item.tag
+                ? 'bg-claude-500/20 text-claude-300 border-claude-500/30'
+                : 'bg-slate-700/30 text-slate-400 border-slate-600/50 hover:text-slate-200 hover:border-slate-500',
+            ]"
+          >
+            {{ item.tag }} ({{ item.count }})
+          </span>
+        </div>
+        <button
+          v-if="currentTagFilter"
+          @click="filterByTag(currentTagFilter)"
+          class="mt-2 text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <i class="fas fa-times mr-0.5" />
+          Clear filter
+        </button>
+      </div>
+    </div>
   </div>
 </template>

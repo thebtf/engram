@@ -353,6 +353,42 @@ async function handleStop(ctx, input) {
     console.error(`[stop] Warning: utility signal detection failed: ${error.message}`);
   }
 
+  // Detect manual search feedback: if agent used engram search tools during session,
+  // it means injected context was insufficient for those queries (FR-20).
+  try {
+    if (messages.length > 0) {
+      const searchToolPatterns = [
+        'engram__search', 'engram__decisions', 'engram__find_by_file',
+        'engram__find_by_concept', 'engram__how_it_works', 'engram__recall_memory',
+      ];
+      const assistantFullText = messages
+        .filter((m) => m.role === 'assistant')
+        .map((m) => m.text)
+        .join('\n')
+        .toLowerCase();
+
+      const manualSearchDetected = searchToolPatterns.some(
+        (pattern) => assistantFullText.includes(pattern)
+      );
+
+      if (manualSearchDetected) {
+        const project = typeof ctx.Project === 'string' ? ctx.Project : '';
+        lib
+          .requestPost('/api/observations/feedback/insufficient-injection', {
+            session_id: sessionID,
+            project: project,
+            signal: 'insufficient_injection',
+          }, 3000)
+          .catch((err) => {
+            console.error(`[stop] insufficient_injection signal failed: ${err.message}`);
+          });
+        console.error('[stop] Detected manual engram search — sent insufficient_injection signal');
+      }
+    }
+  } catch (error) {
+    console.error(`[stop] Warning: manual search detection failed: ${error.message}`);
+  }
+
   return '';
 }
 

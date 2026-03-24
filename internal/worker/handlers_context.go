@@ -107,8 +107,8 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	var usedVector bool
 	similarityScores := make(map[int64]float64) // Track similarity per observation
 
-	// Get threshold settings from config
-	threshold := s.config.ContextRelevanceThreshold
+	// Get threshold settings: prefer per-project adaptive threshold, fall back to global config.
+	threshold := s.searchMgr.GetProjectThreshold(r.Context(), project, s.config.ContextRelevanceThreshold)
 	maxResults := s.config.ContextMaxPromptResults
 
 	// Generate expanded queries if query expander is available
@@ -335,6 +335,15 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Apply cross-session priming boost: observations from recently active sessions score higher.
+	// Fetch once per search call and check membership to avoid per-observation queries.
+	if s.config.SessionBoost > 1.0 && len(clusteredObservations) > 0 {
+		twoHoursAgo := time.Now().Add(-2 * time.Hour)
+		if recentSessions, sessErr := s.observationStore.GetRecentSessionIDs(r.Context(), project, twoHoursAgo); sessErr == nil {
+			search.ApplySessionBoost(clusteredObservations, similarityScores, recentSessions, s.config.SessionBoost)
+		}
+	}
+
 	// Sort by composite score (highest first)
 	if len(similarityScores) > 0 && len(clusteredObservations) > 0 {
 		sort.Slice(clusteredObservations, func(i, j int) bool {
@@ -342,6 +351,34 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 			scoreJ := similarityScores[clusteredObservations[j].ID]
 			return scoreI > scoreJ
 		})
+	}
+
+	// Injection floor: ensure at least N observations are returned regardless of threshold.
+	// Fetch top-importance observations to fill the gap if the result set is too small.
+	injectionFloor := s.config.InjectionFloor
+	if injectionFloor <= 0 {
+		injectionFloor = 3
+	}
+	if len(clusteredObservations) < injectionFloor && s.observationStore != nil {
+		needed := injectionFloor - len(clusteredObservations)
+		// Build set of already-included IDs for deduplication.
+		includedIDs := make(map[int64]struct{}, len(clusteredObservations))
+		for _, obs := range clusteredObservations {
+			includedIDs[obs.ID] = struct{}{}
+		}
+		fillObs, fillErr := s.observationStore.GetTopImportanceObservations(r.Context(), project, needed+len(clusteredObservations))
+		if fillErr == nil {
+			for _, obs := range fillObs {
+				if _, already := includedIDs[obs.ID]; !already {
+					clusteredObservations = append(clusteredObservations, obs)
+					includedIDs[obs.ID] = struct{}{}
+					needed--
+					if needed == 0 {
+						break
+					}
+				}
+			}
+		}
 	}
 
 	// Count observations with meaningful composite scores (above noise floor).
@@ -1078,6 +1115,30 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			if _, already := recentIDs[obs.ID]; !already {
 				alwaysInjectObservations = append(alwaysInjectObservations, obs)
 				recentIDs[obs.ID] = struct{}{}
+			}
+		}
+	}
+
+	// --- Injection floor: ensure minimum observations across all sections ---
+	// Count total distinct observations already collected.
+	injectionFloor := s.config.InjectionFloor
+	if injectionFloor <= 0 {
+		injectionFloor = 3
+	}
+	totalInjected := len(recentFresh) + len(relevantObservations) + len(guidanceObservations) + len(alwaysInjectObservations)
+	if totalInjected < injectionFloor && s.observationStore != nil {
+		needed := injectionFloor - totalInjected
+		fillObs, fillErr := s.observationStore.GetTopImportanceObservations(ctx, project, needed+totalInjected)
+		if fillErr == nil {
+			for _, obs := range fillObs {
+				if _, already := recentIDs[obs.ID]; !already {
+					recentFresh = append(recentFresh, obs)
+					recentIDs[obs.ID] = struct{}{}
+					needed--
+					if needed == 0 {
+						break
+					}
+				}
 			}
 		}
 	}

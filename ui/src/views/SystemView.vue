@@ -4,18 +4,25 @@ import {
   fetchSystemHealth,
   fetchVectorMetrics,
   fetchGraphStats,
+  fetchVaultStatus,
   triggerConsolidation,
   triggerMaintenance,
   checkForUpdate,
   type SystemHealth,
 } from '@/utils/api'
 import type { VectorMetrics, GraphStats } from '@/types'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const health = ref<SystemHealth | null>(null)
 const vectorMetrics = ref<VectorMetrics | null>(null)
 const graphStats = ref<GraphStats | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// Vault setup helper
+const vaultKeyConfigured = ref<boolean | null>(null)
+const vaultCopyFeedback = ref(false)
+const vaultCopyError = ref(false)
 
 // Maintenance
 const consolidating = ref(false)
@@ -38,10 +45,11 @@ async function loadAll() {
   const signal = abortController.signal
 
   try {
-    const [h, v, g] = await Promise.allSettled([
+    const [h, v, g, vaultResult] = await Promise.allSettled([
       fetchSystemHealth(signal),
       fetchVectorMetrics(signal),
       fetchGraphStats(signal),
+      fetchVaultStatus(signal),
     ])
 
     // Bail out if this request was superseded by a newer one.
@@ -50,9 +58,12 @@ async function loadAll() {
     health.value = h.status === 'fulfilled' ? h.value : null
     vectorMetrics.value = v.status === 'fulfilled' ? v.value : null
     graphStats.value = g.status === 'fulfilled' ? g.value : null
+    if (vaultResult.status === 'fulfilled') {
+      vaultKeyConfigured.value = vaultResult.value.encrypted
+    }
 
     // Surface real errors (not AbortErrors for the current signal).
-    const failures = [h, v, g]
+    const failures = [h, v, g, vaultResult]
       .filter(r => r.status === 'rejected')
       .map(r => (r as PromiseRejectedResult).reason)
       .filter(e => !(e instanceof Error && e.name === 'AbortError'))
@@ -66,6 +77,18 @@ async function loadAll() {
     if (!signal.aborted) {
       loading.value = false
     }
+  }
+}
+
+async function copyVaultSetupCommand() {
+  const ok = await copyToClipboard('openssl rand -hex 32 > vault.key')
+  if (ok) {
+    vaultCopyFeedback.value = true
+    setTimeout(() => { vaultCopyFeedback.value = false }, 2000)
+  } else {
+    console.warn('Failed to copy vault setup command to clipboard')
+    vaultCopyError.value = true
+    setTimeout(() => { vaultCopyError.value = false }, 2000)
   }
 }
 
@@ -295,6 +318,42 @@ onUnmounted(() => {
             </span>
           </div>
         </div>
+      </div>
+
+      <!-- Vault Encryption Setup (shown when key is not configured) -->
+      <div
+        v-if="vaultKeyConfigured === false"
+        class="p-4 rounded-xl border-2 border-yellow-500/30 bg-yellow-500/5 mb-6"
+      >
+        <h2 class="text-xs text-yellow-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+          <i class="fas fa-triangle-exclamation" />
+          Vault Encryption Setup
+        </h2>
+        <p class="text-xs text-slate-400 mb-3">
+          Vault encryption is not configured. Credentials are stored unencrypted.
+          Set up a master key to enable AES-256-GCM encryption.
+        </p>
+        <div class="space-y-2 mb-3">
+          <div>
+            <span class="text-[10px] text-slate-500 uppercase tracking-wide block mb-1">1. Generate a key</span>
+            <code class="block px-3 py-1.5 rounded bg-slate-900/70 border border-slate-700/50 text-xs font-mono text-green-400 select-all">
+              openssl rand -hex 32 &gt; vault.key
+            </code>
+          </div>
+          <div>
+            <span class="text-[10px] text-slate-500 uppercase tracking-wide block mb-1">2. Set environment variable</span>
+            <code class="block px-3 py-1.5 rounded bg-slate-900/70 border border-slate-700/50 text-xs font-mono text-slate-300 select-all">
+              ENGRAM_ENCRYPTION_KEY_FILE=/path/to/vault.key
+            </code>
+          </div>
+        </div>
+        <button
+          @click="copyVaultSetupCommand"
+          class="px-3 py-1.5 rounded-lg text-xs bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-yellow-500/50 transition-colors"
+        >
+          <i :class="['fas mr-1.5', vaultCopyFeedback ? 'fa-check text-green-400' : vaultCopyError ? 'fa-times text-red-400' : 'fa-copy']" />
+          {{ vaultCopyFeedback ? 'Copied!' : vaultCopyError ? 'Copy failed' : 'Copy command' }}
+        </button>
       </div>
 
       <!-- Maintenance Controls -->

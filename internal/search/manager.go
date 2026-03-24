@@ -212,6 +212,22 @@ func ApplyCompositeScoring(observations []*models.Observation, similarityScores 
 	}
 }
 
+// ApplySessionBoost multiplies composite scores for observations that belong to recently active sessions.
+// recentSessionIDs is a map[sdk_session_id]bool built once per search call (see ObservationStore.GetRecentSessionIDs).
+// boostFactor should be > 1.0 (e.g. 1.3).
+func ApplySessionBoost(observations []*models.Observation, scores map[int64]float64, recentSessionIDs map[string]bool, boostFactor float64) {
+	if len(recentSessionIDs) == 0 || boostFactor <= 1.0 {
+		return
+	}
+	for _, obs := range observations {
+		if obs.SDKSessionID != "" && recentSessionIDs[obs.SDKSessionID] {
+			if current, exists := scores[obs.ID]; exists {
+				scores[obs.ID] = current * boostFactor
+			}
+		}
+	}
+}
+
 // ApplyDiversityPenalty adjusts scores based on injection diversity.
 // High diversity (observation injected across many projects) = generic = penalty.
 // Scope=global observations are exempt (they are intentionally cross-project).
@@ -244,23 +260,24 @@ func ApplyDiversityPenalty(observations []*models.Observation, scores map[int64]
 
 // Manager provides unified search across PostgreSQL and pgvector.
 type Manager struct {
-	ctx              context.Context
-	searchGroup      singleflight.Group
-	cancel           context.CancelFunc
-	vectorClient     vector.Client
-	metrics          *SearchMetrics
-	promptStore      *gorm.PromptStore
-	observationStore *gorm.ObservationStore
-	summaryStore     *gorm.SummaryStore
-	graphStore       graphpkg.GraphStore
-	documentStore    *gorm.DocumentStore
-	embedSvc         *embedding.Service
-	resultCache      map[string]*cachedResult
-	queryFrequency   map[string]*queryFrequencyInfo
-	cacheTTL         time.Duration
-	cacheMaxSize     int
-	resultCacheMu    sync.RWMutex
-	queryFrequencyMu sync.RWMutex
+	ctx                  context.Context
+	searchGroup          singleflight.Group
+	cancel               context.CancelFunc
+	vectorClient         vector.Client
+	metrics              *SearchMetrics
+	promptStore          *gorm.PromptStore
+	observationStore     *gorm.ObservationStore
+	summaryStore         *gorm.SummaryStore
+	graphStore           graphpkg.GraphStore
+	documentStore        *gorm.DocumentStore
+	embedSvc             *embedding.Service
+	projectSettingsStore *gorm.ProjectSettingsStore
+	resultCache          map[string]*cachedResult
+	queryFrequency       map[string]*queryFrequencyInfo
+	cacheTTL             time.Duration
+	cacheMaxSize         int
+	resultCacheMu        sync.RWMutex
+	queryFrequencyMu     sync.RWMutex
 }
 
 // queryFrequencyInfo tracks how often a query is used.
@@ -314,6 +331,29 @@ func (m *Manager) SetGraphStore(gs graphpkg.GraphStore) {
 func (m *Manager) SetDocumentStore(ds *gorm.DocumentStore, es *embedding.Service) {
 	m.documentStore = ds
 	m.embedSvc = es
+}
+
+// SetProjectSettingsStore sets the project settings store for per-project adaptive thresholds.
+func (m *Manager) SetProjectSettingsStore(ps *gorm.ProjectSettingsStore) {
+	m.projectSettingsStore = ps
+}
+
+// GetProjectThreshold returns the per-project relevance threshold.
+// Falls back to globalDefault if no project-specific setting exists.
+func (m *Manager) GetProjectThreshold(ctx context.Context, project string, globalDefault float64) float64 {
+	if m.projectSettingsStore == nil {
+		return globalDefault
+	}
+	threshold, err := m.projectSettingsStore.GetThreshold(ctx, project)
+	if err != nil {
+		return globalDefault
+	}
+	// If the stored threshold equals the default (0.3), honor globalDefault
+	// in case the operator configured a higher global threshold.
+	if threshold == 0.3 {
+		return globalDefault
+	}
+	return threshold
 }
 
 // Close stops background goroutines and cleans up resources.

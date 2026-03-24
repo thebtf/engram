@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 // Singleton state shared across all useAuth() calls
 const authenticated = ref(false)
 const loading = ref(true)
+const authDisabled = ref(false)
 
 export function useAuth() {
   async function checkAuth(): Promise<void> {
@@ -10,6 +11,10 @@ export function useAuth() {
     try {
       const res = await fetch('/api/auth/me', { credentials: 'include' })
       authenticated.value = res.ok
+      if (res.ok) {
+        const data = await res.json()
+        authDisabled.value = data?.auth_disabled === true
+      }
     } catch {
       authenticated.value = false
     } finally {
@@ -44,6 +49,7 @@ export function useAuth() {
   return {
     authenticated: computed(() => authenticated.value),
     loading: computed(() => loading.value),
+    authDisabled: computed(() => authDisabled.value),
     checkAuth,
     login,
     logout,
