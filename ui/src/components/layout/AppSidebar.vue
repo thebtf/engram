@@ -148,11 +148,11 @@ async function handleLogout() {
         <div class="text-[10px] text-slate-500 uppercase tracking-wider font-medium">Retrieval</div>
         <div class="flex items-center justify-between text-xs">
           <span class="text-slate-400">Requests</span>
-          <span class="text-white font-medium">{{ stats.retrieval.TotalRequests ?? 0 }}</span>
+          <span class="text-white font-medium">{{ stats.retrieval.total_requests ?? 0 }}</span>
         </div>
         <div class="flex items-center justify-between text-xs">
           <span class="text-slate-400">Injections</span>
-          <span class="text-white font-medium">{{ stats.retrieval.ContextInjections ?? 0 }}</span>
+          <span class="text-white font-medium">{{ stats.retrieval.context_injections ?? 0 }}</span>
         </div>
       </div>
     </div>

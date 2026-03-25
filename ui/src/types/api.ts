@@ -40,12 +40,12 @@ export interface SDKSessionListResponse {
 }
 
 export interface RetrievalStats {
-  TotalRequests: number
-  ObservationsServed: number
-  VerifiedStale: number
-  DeletedInvalid: number
-  SearchRequests: number
-  ContextInjections: number
+  total_requests: number
+  observations_served: number
+  verified_stale: number
+  deleted_invalid: number
+  search_requests: number
+  context_injections: number
 }
 
 export interface Stats {
