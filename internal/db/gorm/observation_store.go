@@ -601,17 +601,24 @@ func (s *ObservationStore) GetAllRecentObservations(ctx context.Context, limit i
 }
 
 // GetAllRecentObservationsPaginated retrieves recent observations with pagination.
-func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass obsType="" to return all types.
+func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, obsType string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
-	// Get total count
-	if err := s.db.WithContext(ctx).Model(&Observation{}).Count(&total).Error; err != nil {
+	countQuery := s.db.WithContext(ctx).Model(&Observation{})
+	if obsType != "" {
+		countQuery = countQuery.Where("type = ?", obsType)
+	}
+	if err := countQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// Get paginated results
-	err := s.db.WithContext(ctx).
+	resultsQuery := s.db.WithContext(ctx).Model(&Observation{})
+	if obsType != "" {
+		resultsQuery = resultsQuery.Where("type = ?", obsType)
+	}
+	err := resultsQuery.
 		Scopes(importanceOrdering()).
 		Limit(limit).
 		Offset(offset).
@@ -625,18 +632,24 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 }
 
 // GetObservationsByProjectStrictPaginated retrieves observations strictly from a project with pagination.
-func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass obsType="" to return all types.
+func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, obsType string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
-	// Get total count for project
-	if err := s.db.WithContext(ctx).Model(&Observation{}).Where("project = ?", project).Count(&total).Error; err != nil {
+	countQuery := s.db.WithContext(ctx).Model(&Observation{}).Where("project = ?", project)
+	if obsType != "" {
+		countQuery = countQuery.Where("type = ?", obsType)
+	}
+	if err := countQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// Get paginated results
-	err := s.db.WithContext(ctx).
-		Where("project = ?", project).
+	resultsQuery := s.db.WithContext(ctx).Where("project = ?", project)
+	if obsType != "" {
+		resultsQuery = resultsQuery.Where("type = ?", obsType)
+	}
+	err := resultsQuery.
 		Scopes(importanceOrdering()).
 		Limit(limit).
 		Offset(offset).

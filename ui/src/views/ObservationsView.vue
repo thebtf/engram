@@ -163,16 +163,13 @@ const availableConcepts = computed(() => {
 
 // Client-side filtering on paginated data
 const filteredObservations = computed(() => {
-  let items = observations.value
-  if (currentType.value) {
-    items = items.filter(o => o.type === currentType.value)
-  }
+  // Type filtering happens server-side; only concept filter remains client-side
   if (currentConcept.value) {
-    items = items.filter(o =>
+    return observations.value.filter(o =>
       Array.isArray(o.concepts) && o.concepts.includes(currentConcept.value)
     )
   }
-  return items
+  return observations.value
 })
 
 let abortController: AbortController | null = null
@@ -190,6 +187,7 @@ async function fetchPage() {
         limit: PAGE_SIZE,
         offset: offset.value,
         project: currentProject.value || undefined,
+        type: currentType.value || undefined,
       },
       abortController.signal
     )

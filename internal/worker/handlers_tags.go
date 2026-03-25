@@ -151,7 +151,7 @@ func (s *Service) handleTagCloud(w http.ResponseWriter, r *http.Request) {
 		query = `
 			SELECT tag, COUNT(*) AS count
 			FROM observations, jsonb_array_elements_text(concepts) AS tag
-			WHERE COALESCE(is_superseded, false) = false
+			WHERE COALESCE(is_superseded, 0) = 0
 			  AND project = ?
 			GROUP BY tag
 			ORDER BY count DESC
@@ -161,7 +161,7 @@ func (s *Service) handleTagCloud(w http.ResponseWriter, r *http.Request) {
 		query = `
 			SELECT tag, COUNT(*) AS count
 			FROM observations, jsonb_array_elements_text(concepts) AS tag
-			WHERE COALESCE(is_superseded, false) = false
+			WHERE COALESCE(is_superseded, 0) = 0
 			GROUP BY tag
 			ORDER BY count DESC
 			LIMIT ?`

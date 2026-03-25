@@ -1,4 +1,4 @@
-export type ObservationType = 'bugfix' | 'feature' | 'refactor' | 'discovery' | 'decision' | 'change'
+export type ObservationType = 'bugfix' | 'feature' | 'refactor' | 'discovery' | 'decision' | 'change' | 'guidance'
 export type ObservationScope = 'project' | 'global'
 export type ConceptType =
   // Semantic concepts
@@ -39,7 +39,7 @@ export interface Observation {
   rejected?: string[]
 }
 
-export const OBSERVATION_TYPES: ObservationType[] = ['bugfix', 'feature', 'refactor', 'discovery', 'decision', 'change']
+export const OBSERVATION_TYPES: ObservationType[] = ['bugfix', 'feature', 'refactor', 'discovery', 'decision', 'change', 'guidance']
 
 export const CONCEPT_TYPES: ConceptType[] = [
   // Semantic concepts
@@ -79,6 +79,7 @@ export const TYPE_CONFIG: Record<ObservationType, { icon: string; colorClass: st
   change: { icon: 'fa-pen', colorClass: 'text-slate-300', bgClass: 'bg-slate-500/20', borderClass: 'border-slate-500/30', gradient: 'from-slate-500 to-slate-700' },
   discovery: { icon: 'fa-magnifying-glass', colorClass: 'text-cyan-300', bgClass: 'bg-cyan-500/20', borderClass: 'border-cyan-500/30', gradient: 'from-cyan-500 to-cyan-700' },
   decision: { icon: 'fa-scale-balanced', colorClass: 'text-yellow-300', bgClass: 'bg-yellow-500/20', borderClass: 'border-yellow-500/30', gradient: 'from-yellow-500 to-yellow-700' },
+  guidance: { icon: 'fa-clipboard-list', colorClass: 'text-orange-400', bgClass: 'bg-orange-500/20', borderClass: 'border-orange-500/30', gradient: 'from-orange-500/20 to-orange-600/10' },
 }
 
 // Default config for unknown concepts

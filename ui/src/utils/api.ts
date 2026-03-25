@@ -400,13 +400,14 @@ export async function fetchObservationById(id: number, signal?: AbortSignal): Pr
 }
 
 export async function fetchObservationsPaginated(
-  params: { limit?: number; offset?: number; project?: string },
+  params: { limit?: number; offset?: number; project?: string; type?: string },
   signal?: AbortSignal
 ): Promise<ObservationsResponse> {
   const searchParams = new URLSearchParams()
   if (params.limit) searchParams.append('limit', String(params.limit))
   if (params.offset) searchParams.append('offset', String(params.offset))
   if (params.project) searchParams.append('project', params.project)
+  if (params.type) searchParams.append('type', params.type)
   return fetchWithRetry<ObservationsResponse>(`${API_BASE}/observations?${searchParams}`, { signal })
 }
 
