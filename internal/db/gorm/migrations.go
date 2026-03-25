@@ -1704,6 +1704,16 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`DROP TABLE IF EXISTS versioned_documents`).Error
 		},
 	},
+	{
+		// Migration 052: Delete phantom bulk-import sessions created before PR #65 fix.
+		ID: "052_cleanup_phantom_bulk_import_sessions",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`DELETE FROM sdk_sessions WHERE claude_session_id LIKE 'bulk-import-%' AND prompt_counter = 0`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil // Cannot restore deleted sessions
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
