@@ -1,5 +1,17 @@
 # Technical Debt
 
+## 2026-03-25: Bulk Import Creates Phantom Sessions (403 openclaw sessions)
+**What:** `handleBulkImport` in `handlers_import_export.go:94` creates a new synthetic session (`bulk-import-{timestamp}`) for EVERY bulk import call. OpenClaw engram plugin calls `bulkImport` for each `store_memory`, `remember`, file-watcher change, and migration batch — resulting in 403+ empty sessions for project "openclaw" alone.
+**Root cause:** `BulkImportRequest` has no `session_id` field. The handler always creates a new session instead of reusing the one created by `session_start` hook.
+**Impact:** Sessions page flooded with empty `bulk-import-*` entries. 403 of 3667 total sessions (11%) are phantom.
+**Fix plan:**
+1. Add optional `session_id` to `BulkImportRequest`
+2. If provided: lookup existing session, attach observations to it
+3. If not provided: create synthetic session (backward compatible)
+4. Update openclaw-engram `client.ts` `bulkImport()` to pass `ctx.sessionId` when available
+5. Cleanup: migration or maintenance task to delete/archive existing `bulk-import-*` sessions
+**Context:** `internal/worker/handlers_import_export.go:63-98`, `plugin/openclaw-engram/src/client.ts:241-261`, `plugin/openclaw-engram/src/hooks/session-start.ts`
+
 ## ~~2026-03-23: Sessions View Shows Indexed Transcripts, Not SDK Sessions~~ RESOLVED v1.5.2 (PR #42)
 **What:** Dashboard "Sessions" page queries `sessions-index` API (indexed transcripts via `POST /api/sessions/index`) but users expect to see their actual Claude Code sessions (stored in `sdk_sessions` table via session-start hook).
 **Why deferred:** Requires new REST endpoint to list SDK sessions with pagination/project filter, plus frontend refactor of SessionsView to use the new endpoint instead of `fetchIndexedSessions`. The `sync-sessions.js` hook (added in v1.5.0) indexes new sessions automatically, but historical sessions remain unindexed.

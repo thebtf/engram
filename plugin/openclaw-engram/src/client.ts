@@ -235,11 +235,15 @@ export class EngramRestClient {
    * Bulk-import observations.
    * POST /api/observations/bulk-import
    *
-   * Server expects: { project, observations: [{ type, title, narrative, scope, concepts }] }
+   * Server expects: { project, session_id?, observations: [{ type, title, narrative, scope, concepts }] }
    * Client uses:    { content → narrative, tags → concepts }
+   *
+   * Passing sessionId reuses the caller's existing session instead of creating a new
+   * synthetic one per call, preventing phantom session proliferation.
    */
   async bulkImport(
     observations: BulkObservationInput[],
+    sessionId?: string,
   ): Promise<BulkImportResponse | null> {
     if (observations.length === 0) return { imported: 0, skipped_duplicates: 0 };
 
@@ -256,6 +260,7 @@ export class EngramRestClient {
 
     return this.post<BulkImportResponse>('/api/observations/bulk-import', {
       project,
+      ...(sessionId ? { session_id: sessionId } : {}),
       observations: mapped,
     });
   }

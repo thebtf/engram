@@ -24,6 +24,7 @@ import (
 // BulkImportRequest is the request body for bulk observation import.
 type BulkImportRequest struct {
 	Project      string                 `json:"project"`
+	SessionID    string                 `json:"session_id,omitempty"`
 	Observations []BulkObservationInput `json:"observations"`
 }
 
@@ -90,8 +91,14 @@ func (s *Service) handleBulkImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a synthetic session for bulk import
-	sessionID, err := s.sessionStore.CreateSDKSession(r.Context(), fmt.Sprintf("bulk-import-%d", time.Now().UnixMilli()), req.Project, "bulk import")
+	// Reuse existing session if provided; otherwise create a synthetic one.
+	// CreateSDKSession is idempotent: calling it with the same claude_session_id
+	// returns the existing session ID without creating a duplicate row.
+	claudeSessionKey := req.SessionID
+	if claudeSessionKey == "" {
+		claudeSessionKey = fmt.Sprintf("bulk-import-%d", time.Now().UnixMilli())
+	}
+	sessionID, err := s.sessionStore.CreateSDKSession(r.Context(), claudeSessionKey, req.Project, "bulk import")
 	if err != nil {
 		http.Error(w, "failed to create import session: "+err.Error(), http.StatusInternalServerError)
 		return
