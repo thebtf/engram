@@ -228,7 +228,11 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			}
 		}
 		if providedToken == "" {
-			providedToken = r.URL.Query().Get("token")
+			// Only allow token in query param for SSE endpoints (EventSource can't set headers)
+			path := r.URL.Path
+			if path == "/api/events" || path == "/sse" || strings.HasPrefix(path, "/api/logs") {
+				providedToken = r.URL.Query().Get("token")
+			}
 		}
 
 		if providedToken != "" {

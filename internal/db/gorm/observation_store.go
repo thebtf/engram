@@ -606,19 +606,16 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 	var dbObservations []Observation
 	var total int64
 
-	countQuery := s.db.WithContext(ctx).Model(&Observation{})
+	baseQuery := s.db.WithContext(ctx).Model(&Observation{})
 	if obsType != "" {
-		countQuery = countQuery.Where("type = ?", obsType)
+		baseQuery = baseQuery.Where("type = ?", obsType)
 	}
-	if err := countQuery.Count(&total).Error; err != nil {
+
+	if err := baseQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	resultsQuery := s.db.WithContext(ctx).Model(&Observation{})
-	if obsType != "" {
-		resultsQuery = resultsQuery.Where("type = ?", obsType)
-	}
-	err := resultsQuery.
+	err := baseQuery.
 		Scopes(importanceOrdering()).
 		Limit(limit).
 		Offset(offset).
@@ -637,19 +634,16 @@ func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.C
 	var dbObservations []Observation
 	var total int64
 
-	countQuery := s.db.WithContext(ctx).Model(&Observation{}).Where("project = ?", project)
+	baseQuery := s.db.WithContext(ctx).Model(&Observation{}).Where("project = ?", project)
 	if obsType != "" {
-		countQuery = countQuery.Where("type = ?", obsType)
+		baseQuery = baseQuery.Where("type = ?", obsType)
 	}
-	if err := countQuery.Count(&total).Error; err != nil {
+
+	if err := baseQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	resultsQuery := s.db.WithContext(ctx).Where("project = ?", project)
-	if obsType != "" {
-		resultsQuery = resultsQuery.Where("type = ?", obsType)
-	}
-	err := resultsQuery.
+	err := baseQuery.
 		Scopes(importanceOrdering()).
 		Limit(limit).
 		Offset(offset).
