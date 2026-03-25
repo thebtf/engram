@@ -87,7 +87,11 @@ async function storeObservation(
     tags,
   };
 
-  const response = await client.bulkImport([observation]);
+  // Pass the agent's session ID so the server reuses the existing session
+  // instead of creating a new synthetic one for every store call.
+  const sessionId = ctx.sessionId ?? ctx.sessionKey;
+
+  const response = await client.bulkImport([observation], sessionId);
   if (!response) {
     return 'engram store failed — server returned no response';
   }
