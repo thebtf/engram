@@ -80,6 +80,33 @@ Impact: No functional impact — clients handle empty lists
 
 ## ~~2026-03-19: Memory Blocks Table Unpopulated~~ RESOLVED v1.5.2 — dropped via migration 047
 
+## 2026-03-25: Dashboard Type Filter — Client-Side Instead of Server-Side
+**What:** Observation type filter buttons (bugfix, feature, refactor, discovery, decision, change) filter client-side on the 20 records returned per page instead of sending `type` param to API. Result: "Showing 1-20 of 662" with 0-5 visible items, pagination counts wrong.
+**Root cause:** `handleGetObservations` in `handlers_data.go` doesn't accept `type` query param. `fetchObservationsPaginated` in `api.ts` doesn't send it. `filteredObservations` computed in `ObservationsView.vue:165` filters locally after fetch.
+**Impact:** Type filters unusable — show wrong counts and missing data.
+**Fix plan:**
+1. Add `type` param to `handleGetObservations` and `GetAllRecentObservationsPaginated`
+2. Add `type` param to `fetchObservationsPaginated` in `api.ts`
+3. Pass `currentType` to `fetchPage()` in ObservationsView
+4. Remove client-side `filteredObservations` filter (server does it)
+**Context:** `internal/worker/handlers_data.go:32`, `ui/src/utils/api.ts:402`, `ui/src/views/ObservationsView.vue:165`
+
+## 2026-03-25: SDK Extraction Produces Only guidance/bugfix Types
+**What:** Over 2 days of active use (657→662 observations), all new observations are type `guidance` or `bugfix`. Zero `feature`, `refactor`, `discovery`, `decision`, `change` observations created. LLM extraction prompt in stop hook may be biased toward these two types.
+**Impact:** Type filters in dashboard are empty for most types. Knowledge base lacks diversity.
+**Fix plan:** Review LLM extraction prompt in server-side extract-learnings endpoint — verify all observation types are in the prompt and equally reachable.
+**Context:** `plugin/engram/hooks/stop.js` (calls `/api/sessions/{id}/extract-learnings`), server-side extraction prompt
+
+## 2026-03-25: Dashboard Memories View — Browse store_memory Records
+**What:** Dashboard has no dedicated view or filter for `store_memory` records. Users create memories via MCP tool but can only find them mixed into the general observations list with no memory_type filter.
+**Why deferred:** Not in v1.7.0 roadmap. User explicitly requested.
+**Impact:** No way to browse/manage explicitly stored memories from UI. Must use MCP tools (recall_memory, search) only.
+**Fix plan:**
+1. Add memory_type filter to ObservationsView (minimal) OR dedicated MemoriesView page
+2. Show tags, scope, importance for each memory
+3. Allow edit/delete from UI
+**Context:** `ui/src/views/ObservationsView.vue`, `internal/worker/handlers_data.go`
+
 ## 2026-03-19: Config Reload via os.Exit(0)
 What: reloadConfig calls os.Exit(0) instead of hot-reload
 Why deferred: Hot-reload requires significant refactoring of service initialization
