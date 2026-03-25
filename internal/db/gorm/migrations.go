@@ -1714,6 +1714,20 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil // Cannot restore deleted sessions
 		},
 	},
+	{
+		// Migration 053: Delete all vault credentials encrypted with lost key.
+		// All 15 existing credentials were encrypted with an auto-generated key stored
+		// in Docker ephemeral filesystem. Container recreated = key lost = data unrecoverable.
+		// Current vault key (ENGRAM_VAULT_KEY env) is different. No valid credentials exist.
+		// Safe to delete all — users will re-create with the current key.
+		ID: "053_cleanup_dead_vault_credentials",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`DELETE FROM observations WHERE type = 'credential'`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil // Cannot restore encrypted data with lost key
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
