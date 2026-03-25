@@ -145,8 +145,9 @@ async function handlePreCompact(ctx, input) {
     transcript_path: input.transcript_path || input.TranscriptPath || null,
   };
 
-  // Write discovery report to file for agent inspection
-  const logDir = path.join(__dirname, '..', '..', '..', '.agent');
+  // Write discovery report to project dir for agent inspection
+  const projectDir = ctx.CWD || process.cwd();
+  const logDir = path.join(projectDir, '.agent');
   try {
     fs.mkdirSync(logDir, { recursive: true });
     fs.writeFileSync(
