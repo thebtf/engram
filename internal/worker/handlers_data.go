@@ -34,6 +34,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	project := r.URL.Query().Get("project")
 	query := r.URL.Query().Get("query")
 	obsType := r.URL.Query().Get("type")
+	status := r.URL.Query().Get("status")
 
 	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
@@ -67,10 +68,10 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	if !usedVector {
 		if project != "" {
 			// Strict project filtering for dashboard - only observations from this project
-			observations, total, err = s.observationStore.GetObservationsByProjectStrictPaginated(r.Context(), project, obsType, pagination.Limit, pagination.Offset)
+			observations, total, err = s.observationStore.GetObservationsByProjectStrictPaginated(r.Context(), project, obsType, status, pagination.Limit, pagination.Offset)
 		} else {
 			// All projects
-			observations, total, err = s.observationStore.GetAllRecentObservationsPaginated(r.Context(), obsType, pagination.Limit, pagination.Offset)
+			observations, total, err = s.observationStore.GetAllRecentObservationsPaginated(r.Context(), obsType, status, pagination.Limit, pagination.Offset)
 		}
 	}
 

@@ -37,6 +37,8 @@ export interface Observation {
   last_retrieved_at_epoch?: number
   score_updated_at_epoch?: number
   rejected?: string[]
+  status: 'active' | 'resolved'
+  status_reason?: string
 }
 
 export const OBSERVATION_TYPES: ObservationType[] = ['bugfix', 'feature', 'refactor', 'discovery', 'decision', 'change', 'guidance']

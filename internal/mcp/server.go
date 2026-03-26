@@ -856,6 +856,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"files_read":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "New files read list (optional)"},
 					"files_modified": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "New files modified list (optional)"},
 					"scope":          map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "New scope (optional)"},
+					"status":         map[string]any{"type": "string", "description": "Observation status: active or resolved", "enum": []string{"active", "resolved"}},
+					"status_reason":  map[string]any{"type": "string", "description": "Reason for status change"},
 				},
 			},
 		},
@@ -2547,6 +2549,8 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 		Subtitle      *string
 		Narrative     *string
 		Scope         *string
+		Status        *string
+		StatusReason  *string
 		Facts         []string
 		Concepts      []string
 		FilesRead     []string
@@ -2570,6 +2574,14 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 		s := coerceString(v, "")
 		params.Scope = &s
 	}
+	if v, ok := m["status"]; ok && v != nil {
+		s := coerceString(v, "")
+		params.Status = &s
+	}
+	if v, ok := m["status_reason"]; ok && v != nil {
+		s := coerceString(v, "")
+		params.StatusReason = &s
+	}
 	params.Facts = coerceStringSlice(m["facts"])
 	params.Concepts = coerceStringSlice(m["concepts"])
 	params.FilesRead = coerceStringSlice(m["files_read"])
@@ -2582,6 +2594,11 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 	// Validate scope if provided
 	if params.Scope != nil && *params.Scope != "project" && *params.Scope != "global" {
 		return "", fmt.Errorf("scope must be 'project' or 'global'")
+	}
+
+	// Validate status if provided
+	if params.Status != nil && *params.Status != "active" && *params.Status != "resolved" {
+		return "", fmt.Errorf("status must be 'active' or 'resolved'")
 	}
 
 	// Build update struct
@@ -2609,6 +2626,12 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 	}
 	if params.Scope != nil {
 		update.Scope = params.Scope
+	}
+	if params.Status != nil {
+		update.Status = params.Status
+	}
+	if params.StatusReason != nil {
+		update.StatusReason = params.StatusReason
 	}
 
 	// Update the observation

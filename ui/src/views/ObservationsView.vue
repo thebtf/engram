@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import type { Observation, ObservationType } from '@/types'
 import { TYPE_CONFIG, OBSERVATION_TYPES } from '@/types/observation'
-import { fetchObservationsPaginated, fetchProjects, archiveObservations } from '@/utils/api'
+import { fetchObservationsPaginated, fetchProjects, archiveObservations, updateObservationStatus } from '@/utils/api'
 import { formatRelativeTime } from '@/utils/formatters'
 import Pagination from '@/components/layout/Pagination.vue'
 import EmptyState from '@/components/layout/EmptyState.vue'
@@ -29,12 +29,24 @@ const PAGE_SIZE = 20
 const currentProject = ref<string | null>(null)
 const currentType = ref<ObservationType | null>(null)
 const currentConcept = ref('')
+const currentStatus = ref<'active' | 'resolved' | null>(null)
 const projects = ref<string[]>([])
+
+// Resolve/reopen modal state
+const showResolveModal = ref(false)
+const resolveTargetId = ref<number | null>(null)
+const resolveReason = ref('')
+const resolveProcessing = ref(false)
+
+// Bulk resolve state
+const showBulkResolveModal = ref(false)
+const bulkResolveReason = ref('')
+const bulkResolveProcessing = ref(false)
 
 // Bulk selection state
 const selectedIds = ref<Set<number>>(new Set())
 const showBatchConfirm = ref(false)
-const batchAction = ref<'archive' | 'delete' | 'scope' | 'tag' | null>(null)
+const batchAction = ref<'archive' | 'delete' | 'scope' | 'tag' | 'resolve' | null>(null)
 const batchProcessing = ref(false)
 const batchScopeInput = ref('')
 const batchTagInput = ref('')
@@ -69,15 +81,68 @@ function toggleSelectAll() {
   }
 }
 
-function startBatchAction(action: 'archive' | 'delete' | 'scope' | 'tag') {
+function startBatchAction(action: 'archive' | 'delete' | 'scope' | 'tag' | 'resolve') {
   batchAction.value = action
   if (action === 'scope') {
     showScopeInput.value = true
   } else if (action === 'tag') {
     showTagInput.value = true
+  } else if (action === 'resolve') {
+    showBulkResolveModal.value = true
   } else {
     showBatchConfirm.value = true
   }
+}
+
+async function executeBulkResolve() {
+  if (selectedIds.value.size === 0) return
+  bulkResolveProcessing.value = true
+  const ids = Array.from(selectedIds.value)
+  try {
+    await Promise.all(ids.map(id => updateObservationStatus(id, 'resolved', bulkResolveReason.value || undefined)))
+    selectedIds.value = new Set()
+    await fetchPage()
+  } catch {
+    // errors are non-critical per-item; page reload will show state
+  } finally {
+    bulkResolveProcessing.value = false
+    showBulkResolveModal.value = false
+    bulkResolveReason.value = ''
+    batchAction.value = null
+  }
+}
+
+function openResolveModal(id: number, event: Event) {
+  event.stopPropagation()
+  resolveTargetId.value = id
+  resolveReason.value = ''
+  showResolveModal.value = true
+}
+
+async function confirmResolve() {
+  if (resolveTargetId.value === null) return
+  resolveProcessing.value = true
+  try {
+    await updateObservationStatus(resolveTargetId.value, 'resolved', resolveReason.value || undefined)
+    await fetchPage()
+  } finally {
+    resolveProcessing.value = false
+    showResolveModal.value = false
+    resolveTargetId.value = null
+    resolveReason.value = ''
+  }
+}
+
+async function reopenObservation(id: number, event: Event) {
+  event.stopPropagation()
+  await updateObservationStatus(id, 'active')
+  await fetchPage()
+}
+
+function setStatus(status: 'active' | 'resolved' | null) {
+  currentStatus.value = status
+  offset.value = 0
+  fetchPage()
 }
 
 async function executeBatchAction() {
@@ -188,6 +253,7 @@ async function fetchPage() {
         offset: offset.value,
         project: currentProject.value || undefined,
         type: currentType.value || undefined,
+        status: currentStatus.value || undefined,
       },
       abortController.signal
     )
@@ -305,6 +371,45 @@ onUnmounted(() => {
         </button>
       </div>
 
+      <!-- Status filter pills -->
+      <div class="flex items-center gap-1.5">
+        <button
+          @click="setStatus(null)"
+          :class="[
+            'px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
+            currentStatus === null
+              ? 'bg-slate-500/20 text-slate-200 border-slate-500/40'
+              : 'bg-slate-800/30 text-slate-500 border-slate-700/50 hover:text-slate-300 hover:border-slate-600',
+          ]"
+        >
+          All
+        </button>
+        <button
+          @click="setStatus('active')"
+          :class="[
+            'px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
+            currentStatus === 'active'
+              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+              : 'bg-slate-800/30 text-slate-500 border-slate-700/50 hover:text-slate-300 hover:border-slate-600',
+          ]"
+        >
+          <i class="fas fa-circle-check mr-1" />
+          Active
+        </button>
+        <button
+          @click="setStatus('resolved')"
+          :class="[
+            'px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
+            currentStatus === 'resolved'
+              ? 'bg-slate-500/20 text-slate-400 border-slate-500/40'
+              : 'bg-slate-800/30 text-slate-500 border-slate-700/50 hover:text-slate-300 hover:border-slate-600',
+          ]"
+        >
+          <i class="fas fa-check-double mr-1" />
+          Resolved
+        </button>
+      </div>
+
       <!-- Concept filter (if concepts exist on current page) -->
       <div v-if="availableConcepts.length > 0" class="flex items-center gap-1.5 ml-auto">
         <span class="text-xs text-slate-600">Concept:</span>
@@ -360,6 +465,14 @@ onUnmounted(() => {
         >
           <i class="fas fa-tag mr-1" />
           Add Tag
+        </button>
+        <button
+          @click="startBatchAction('resolve')"
+          :disabled="batchProcessing"
+          class="px-3 py-1 rounded-lg text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors disabled:opacity-50"
+        >
+          <i class="fas fa-check-circle mr-1" />
+          Resolve Selected
         </button>
         <button
           @click="selectedIds = new Set()"
@@ -464,9 +577,11 @@ onUnmounted(() => {
         @click="navigateToDetail(obs.id)"
         :class="[
           'group flex items-center gap-4 p-4 rounded-xl border-2 bg-gradient-to-br cursor-pointer transition-all',
-          selectedIds.has(obs.id)
-            ? 'border-claude-500/40 from-claude-500/5 to-slate-900/50'
-            : 'border-slate-700/50 from-slate-800/50 to-slate-900/50 hover:border-claude-500/30 hover:from-slate-800/70 hover:to-slate-900/70'
+          obs.status === 'resolved'
+            ? 'border-slate-700/30 from-slate-800/30 to-slate-900/30 opacity-50 hover:opacity-75'
+            : selectedIds.has(obs.id)
+              ? 'border-claude-500/40 from-claude-500/5 to-slate-900/50'
+              : 'border-slate-700/50 from-slate-800/50 to-slate-900/50 hover:border-claude-500/30 hover:from-slate-800/70 hover:to-slate-900/70'
         ]"
       >
         <!-- Checkbox -->
@@ -488,9 +603,23 @@ onUnmounted(() => {
         <!-- Content -->
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2 mb-0.5">
-            <h3 class="text-sm font-medium text-white truncate group-hover:text-claude-300 transition-colors">
+            <h3
+              :class="[
+                'text-sm font-medium text-white truncate group-hover:text-claude-300 transition-colors',
+                obs.status === 'resolved' ? 'line-through text-slate-400' : '',
+              ]"
+            >
               {{ obs.title || 'Untitled' }}
             </h3>
+            <!-- Resolved badge with optional tooltip -->
+            <span
+              v-if="obs.status === 'resolved'"
+              :title="obs.status_reason || 'Resolved'"
+              class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-slate-600/30 text-slate-400 border border-slate-600/30 cursor-default"
+            >
+              <i class="fas fa-check-double mr-0.5" />
+              resolved
+            </span>
           </div>
           <div class="flex items-center gap-2 text-xs text-slate-500">
             <Badge
@@ -521,6 +650,26 @@ onUnmounted(() => {
             <i class="fas fa-chart-bar text-purple-500/60 mr-0.5" />
             {{ (obs.importance_score || 0).toFixed(2) }}
           </span>
+        </div>
+
+        <!-- Resolve / Reopen button -->
+        <div class="flex-shrink-0" @click.stop>
+          <button
+            v-if="obs.status !== 'resolved'"
+            @click="openResolveModal(obs.id, $event)"
+            class="opacity-0 group-hover:opacity-100 px-2 py-1 rounded-lg text-xs bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/30 transition-all cursor-pointer"
+            title="Resolve this observation"
+          >
+            <i class="fas fa-check-circle" />
+          </button>
+          <button
+            v-else
+            @click="reopenObservation(obs.id, $event)"
+            class="opacity-0 group-hover:opacity-100 px-2 py-1 rounded-lg text-xs bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-green-500/20 hover:text-green-300 hover:border-green-500/30 transition-all cursor-pointer"
+            title="Reopen this observation"
+          >
+            <i class="fas fa-rotate-left" />
+          </button>
         </div>
 
         <!-- Arrow -->
@@ -555,6 +704,88 @@ onUnmounted(() => {
       @confirm="executeBatchAction"
       @cancel="showBatchConfirm = false; batchAction = null"
     />
+
+    <!-- Resolve observation modal -->
+    <Teleport to="body">
+      <div
+        v-if="showResolveModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        @click.self="showResolveModal = false"
+      >
+        <div class="w-full max-w-md rounded-xl bg-slate-900 border border-slate-700/60 p-6 shadow-2xl">
+          <h2 class="text-base font-semibold text-white mb-1">
+            <i class="fas fa-check-circle text-emerald-400 mr-2" />
+            Resolve Observation
+          </h2>
+          <p class="text-xs text-slate-400 mb-4">Optionally explain why this observation is resolved.</p>
+          <input
+            v-model="resolveReason"
+            type="text"
+            placeholder="Reason (optional)..."
+            class="w-full px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/50 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500/50 mb-4 transition-colors"
+            @keydown.enter="confirmResolve"
+            @keydown.esc="showResolveModal = false"
+          />
+          <div class="flex justify-end gap-2">
+            <button
+              @click="showResolveModal = false"
+              class="px-4 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white border border-slate-700/50 hover:border-slate-600 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              @click="confirmResolve"
+              :disabled="resolveProcessing"
+              class="px-4 py-1.5 rounded-lg text-sm bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              <i v-if="resolveProcessing" class="fas fa-circle-notch fa-spin mr-1" />
+              Resolve
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Bulk resolve modal -->
+    <Teleport to="body">
+      <div
+        v-if="showBulkResolveModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        @click.self="showBulkResolveModal = false; batchAction = null"
+      >
+        <div class="w-full max-w-md rounded-xl bg-slate-900 border border-slate-700/60 p-6 shadow-2xl">
+          <h2 class="text-base font-semibold text-white mb-1">
+            <i class="fas fa-check-circle text-emerald-400 mr-2" />
+            Resolve {{ selectedIds.size }} Observation{{ selectedIds.size === 1 ? '' : 's' }}
+          </h2>
+          <p class="text-xs text-slate-400 mb-4">Optionally explain why these observations are resolved.</p>
+          <input
+            v-model="bulkResolveReason"
+            type="text"
+            placeholder="Reason (optional)..."
+            class="w-full px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/50 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500/50 mb-4 transition-colors"
+            @keydown.enter="executeBulkResolve"
+            @keydown.esc="showBulkResolveModal = false; batchAction = null"
+          />
+          <div class="flex justify-end gap-2">
+            <button
+              @click="showBulkResolveModal = false; batchAction = null"
+              class="px-4 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white border border-slate-700/50 hover:border-slate-600 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              @click="executeBulkResolve"
+              :disabled="bulkResolveProcessing"
+              class="px-4 py-1.5 rounded-lg text-sm bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              <i v-if="bulkResolveProcessing" class="fas fa-circle-notch fa-spin mr-1" />
+              Resolve All
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
     </div><!-- end main content -->
 
     <!-- Tag Cloud Sidebar -->

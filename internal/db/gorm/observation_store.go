@@ -221,6 +221,8 @@ type ObservationUpdate struct {
 	FilesRead     *[]string // New files read (replaces existing)
 	FilesModified *[]string // New files modified (replaces existing)
 	Scope         *string   // New scope (project or global)
+	Status        *string   // New status (active or resolved)
+	StatusReason  *string   // Reason for status change
 }
 
 // UpdateObservation updates an existing observation with the provided fields.
@@ -270,6 +272,12 @@ func (s *ObservationStore) UpdateObservation(ctx context.Context, id int64, upda
 	}
 	if update.Scope != nil {
 		updates["scope"] = sql.NullString{String: *update.Scope, Valid: true}
+	}
+	if update.Status != nil {
+		updates["status"] = *update.Status
+	}
+	if update.StatusReason != nil {
+		updates["status_reason"] = *update.StatusReason
 	}
 
 	if len(updates) == 0 {
@@ -396,11 +404,13 @@ func (s *ObservationStore) BatchGetObservationsWithScores(ctx context.Context, i
 
 // GetRecentObservations retrieves recent observations for a project.
 // This includes project-scoped observations for the specified project AND global observations.
+// Excludes resolved observations (status != 'active') to avoid injecting stale context.
 // Results are ordered by importance_score DESC, then created_at_epoch DESC.
 func (s *ObservationStore) GetRecentObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
 	var dbObservations []Observation
 	err := s.db.WithContext(ctx).
 		Scopes(projectScopeFilter(project), importanceOrdering()).
+		Where("COALESCE(status, 'active') = 'active'").
 		Limit(limit).
 		Find(&dbObservations).Error
 
@@ -413,6 +423,7 @@ func (s *ObservationStore) GetRecentObservations(ctx context.Context, project st
 
 // GetRecentObservationsFiltered retrieves recent observations using a ScopeFilter.
 // When f.AgentID is set, also includes scope="agent" observations for that agent.
+// Excludes resolved observations (status != 'active') to avoid injecting stale context.
 // Results are ordered by importance_score DESC, then created_at_epoch DESC.
 func (s *ObservationStore) GetRecentObservationsFiltered(ctx context.Context, f ScopeFilter, limit int) ([]*models.Observation, error) {
 	if f.AgentID == "" {
@@ -422,6 +433,7 @@ func (s *ObservationStore) GetRecentObservationsFiltered(ctx context.Context, f 
 	var dbObservations []Observation
 	err := s.db.WithContext(ctx).
 		Scopes(agentScopeFilter(f), importanceOrdering()).
+		Where("COALESCE(status, 'active') = 'active'").
 		Limit(limit).
 		Find(&dbObservations).Error
 
@@ -601,14 +613,17 @@ func (s *ObservationStore) GetAllRecentObservations(ctx context.Context, limit i
 }
 
 // GetAllRecentObservationsPaginated retrieves recent observations with pagination.
-// Pass obsType="" to return all types.
-func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, obsType string, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass obsType="" to return all types. Pass status="" to return all statuses.
+func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, obsType string, status string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
 	baseQuery := s.db.WithContext(ctx).Model(&Observation{})
 	if obsType != "" {
 		baseQuery = baseQuery.Where("type = ?", obsType)
+	}
+	if status != "" {
+		baseQuery = baseQuery.Where("status = ?", status)
 	}
 
 	if err := baseQuery.Count(&total).Error; err != nil {
@@ -629,14 +644,17 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 }
 
 // GetObservationsByProjectStrictPaginated retrieves observations strictly from a project with pagination.
-// Pass obsType="" to return all types.
-func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, obsType string, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass obsType="" to return all types. Pass status="" to return all statuses.
+func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, obsType string, status string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
 	baseQuery := s.db.WithContext(ctx).Model(&Observation{}).Where("project = ?", project)
 	if obsType != "" {
 		baseQuery = baseQuery.Where("type = ?", obsType)
+	}
+	if status != "" {
+		baseQuery = baseQuery.Where("status = ?", status)
 	}
 
 	if err := baseQuery.Count(&total).Error; err != nil {
@@ -766,6 +784,7 @@ func (s *ObservationStore) SearchObservationsFTS(ctx context.Context, query, pro
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
 		  AND (o.project = $2 OR o.scope = 'global')
 		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
+		  AND COALESCE(o.status, 'active') = 'active'
 		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) DESC,
 		         COALESCE(o.importance_score, 1.0) DESC
 		LIMIT $3
@@ -822,6 +841,7 @@ func (s *ObservationStore) SearchObservationsFTSFiltered(ctx context.Context, qu
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
 		  AND (o.scope = 'global' OR (o.scope = 'project' AND o.project = $2) OR (o.scope = 'agent' AND o.agent_id = $3))
 		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
+		  AND COALESCE(o.status, 'active') = 'active'
 		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) DESC,
 		         COALESCE(o.importance_score, 1.0) DESC
 		LIMIT $4
@@ -875,6 +895,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
 		  AND (o.project = $2 OR o.scope = 'global')
 		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
+		  AND COALESCE(o.status, 'active') = 'active'
 		ORDER BY rank_score DESC
 		LIMIT $3
 	`
@@ -958,7 +979,7 @@ func (s *ObservationStore) searchObservationsLike(ctx context.Context, keywords 
 
 	// Build WHERE clause
 	whereClause := strings.Join(conditions, " OR ")
-	fullWhere := "(" + whereClause + ") AND (project = ? OR scope = 'global') AND COALESCE(is_suppressed, FALSE) = FALSE"
+	fullWhere := "(" + whereClause + ") AND (project = ? OR scope = 'global') AND COALESCE(is_suppressed, FALSE) = FALSE AND COALESCE(status, 'active') = 'active'"
 	args = append(args, project)
 
 	var dbObservations []Observation
@@ -997,7 +1018,7 @@ func (s *ObservationStore) searchObservationsLikeFiltered(ctx context.Context, k
 	}
 
 	whereClause := strings.Join(conditions, " OR ")
-	fullWhere := "(" + whereClause + ") AND (scope = 'global' OR (scope = 'project' AND project = ?) OR (scope = 'agent' AND agent_id = ?)) AND COALESCE(is_suppressed, FALSE) = FALSE"
+	fullWhere := "(" + whereClause + ") AND (scope = 'global' OR (scope = 'project' AND project = ?) OR (scope = 'agent' AND agent_id = ?)) AND COALESCE(is_suppressed, FALSE) = FALSE AND COALESCE(status, 'active') = 'active'"
 	args = append(args, f.Project, f.AgentID)
 
 	var dbObservations []Observation
@@ -1327,12 +1348,11 @@ func agentScopeFilter(f ScopeFilter) func(*gorm.DB) *gorm.DB {
 	}
 }
 
-// activeObservationFilter filters for active (non-archived, non-superseded) observations.
-// This is more efficient than chaining notSupersededFilter + notArchivedFilter
-// as it produces a single WHERE clause for the query optimizer.
+// activeObservationFilter filters for active (non-archived, non-superseded, status='active') observations.
+// This is more efficient than chaining individual filters as it produces a single WHERE clause.
 func activeObservationFilter() func(*gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
-		return db.Where("COALESCE(is_archived, 0) = 0 AND COALESCE(is_superseded, 0) = 0")
+		return db.Where("COALESCE(is_archived, 0) = 0 AND COALESCE(is_superseded, 0) = 0 AND COALESCE(status, 'active') = 'active'")
 	}
 }
 
@@ -1459,6 +1479,8 @@ func toModelObservation(o *Observation) *models.Observation {
 		ExpiresAt:       o.ExpiresAt,
 		TtlDays:         o.TtlDays,
 		IsExpired:       o.ExpiresAt.Valid && o.ExpiresAt.Time.Before(time.Now()),
+		Status:          o.Status,
+		StatusReason:    o.StatusReason,
 	}
 }
 

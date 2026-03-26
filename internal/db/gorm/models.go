@@ -86,6 +86,8 @@ type Observation struct {
 	EncryptionKeyFingerprint    sql.NullString `gorm:"type:text"`
 	ExpiresAt                   sql.NullTime   `gorm:"type:timestamptz"`
 	TtlDays                     sql.NullInt32
+	Status                      string         `gorm:"column:status;default:active"`
+	StatusReason                sql.NullString `gorm:"column:status_reason"`
 }
 
 func (Observation) TableName() string { return "observations" }
