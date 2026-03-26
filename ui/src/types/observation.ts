@@ -17,6 +17,7 @@ export interface Observation {
   project: string
   scope: ObservationScope
   type: ObservationType
+  memory_type?: string
   title: string
   subtitle: string
   narrative: string
