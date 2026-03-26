@@ -52,6 +52,13 @@ func DefaultOpenAIConfig() OpenAIConfig {
 		}
 	}
 
+	if cfg.APIKey == "" {
+		// Fall back to embedding API key if LLM-specific key not set
+		if embKey := os.Getenv("ENGRAM_EMBEDDING_API_KEY"); embKey != "" {
+			cfg.APIKey = embKey
+		}
+	}
+
 	if cfg.Model == "" {
 		cfg.Model = "gpt-4o-mini"
 	}
