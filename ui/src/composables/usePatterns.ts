@@ -1,6 +1,6 @@
 import { ref, onMounted, onUnmounted } from 'vue'
-import type { Pattern, PatternInsight, PatternInsightResult } from '@/utils/api'
-import { fetchPatterns, fetchPatternInsight, generatePatternInsight, deprecatePattern, deletePattern } from '@/utils/api'
+import type { Pattern, PatternInsightResult } from '@/utils/api'
+import { fetchPatterns, generatePatternInsight, deprecatePattern, deletePattern } from '@/utils/api'
 
 export function usePatterns() {
   const patterns = ref<Pattern[]>([])
@@ -12,8 +12,7 @@ export function usePatterns() {
   const insights = ref<Record<number, PatternInsightResult>>({})
   const insightLoading = ref<Record<number, boolean>>({})
 
-  // Legacy PatternInsight still needed by old GET /insight consumers
-  const legacyInsights = ref<Record<number, PatternInsight>>({})
+  // Legacy PatternInsight removed — now uses PatternInsightResult exclusively
 
   let abortController: AbortController | null = null
 
