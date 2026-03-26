@@ -40,22 +40,24 @@
 **Impact:** `vault_status` shows credentials exist but `get_credential` fails for old entries. Fixed in v1.4.0: auto-generate now writes to `/data/` (persistent volume).
 **Context:** `internal/crypto/vault.go`, migration history
 
-## 2026-03-23: Patterns System — 16k+ Low-Value Patterns
-**What:** Patterns page shows 16,264 patterns. Most are noise from pre-v1.3.4 SDK extraction (before whitelist mode). "Insight" button shows generic text ("I've encountered this pattern N times across M projects") with zero actionable information.
-**Root cause analysis:**
-1. **Confidence = 0.5 for 99% of patterns** — `NewPattern()` sets `Confidence: 0.5` (hardcoded initial). `updateConfidence()` only runs during `AddOccurrence()`, but most patterns were created during bulk backfill/extraction where AddOccurrence was never called. Formula: `freqConfidence = 0.3 + 0.5*(min(freq,10)/10)` + project bonus. But this runs per-occurrence, not on creation.
-2. **No confidence recalculation** — there is no batch recalculation path. Patterns created at 0.5 confidence stay at 0.5 forever unless new observations match them. Migration 042 purged `frequency < 5` but didn't recalculate confidence.
-3. **Description is generic** — `promoteCandidate()` sets description to "Automatically detected pattern from recurring observations" for all patterns. No LLM summarization, no source evidence.
-4. **Insight text is template** — Dashboard shows `{frequency} times across {projects} projects` — no examples, no observation links, no recommendations.
-5. **No purge for garbage patterns** — 16k patterns with frequency ≥ 5 but 0.5 confidence indicates they were mass-created from garbage observations (since cleaned up in migrations 040-043) but the patterns themselves were never cleaned.
-**Impact:** Patterns page unusable. 16k entries with no way to evaluate quality. Agents can't use patterns for decision-making.
-**Fix plan (future sprint):**
-1. Batch recalculate confidence for all patterns using `updateConfidence()` logic
-2. Purge patterns whose source observations no longer exist (orphan patterns)
-3. Add LLM-generated description when confidence > 0.7 (replace generic text)
-4. Show source observations in "Insight" view (links to observation detail)
-5. Add "archive all with confidence < 0.6" bulk action
-**Context:** `pkg/models/pattern.go:165` (hardcoded 0.5), `internal/pattern/detector.go:257` (generic description), `internal/pattern/quality.go` (scoring formula), `ui/src/views/PatternsView.vue`
+## ~~2026-03-26: Patterns System — 345 Patterns with Useless Insights~~ RESOLVED v1.8.0 (PRs #71, #72)
+**What:** 345 patterns (down from 16k after migration cleanup). Insight button shows "I've encountered this pattern 1816 times. This is a recognized pattern in the codebase." — zero actionable content. User confirmed: "результат insight все еще бесполезен".
+**Why it's broken (3 independent problems):**
+1. **Generic description** — `promoteCandidate()` hardcodes "Automatically detected pattern from recurring observations" for ALL patterns. No LLM summary, no evidence from source observations.
+2. **Template insight** — Frontend renders `{frequency} times across {projects} projects`. No examples, no observation titles, no links to source observations. The user sees a count but has no idea WHAT the pattern actually IS.
+3. **Stale confidence** — Most patterns stuck at 0.5-0.65 from creation. `updateConfidence()` only runs on new occurrences, not on existing patterns. No batch recalculation.
+**Impact:** Entire Patterns page is decoration — looks populated but provides no value to user or agent.
+**Fix plan (2 phases):**
+Phase A (Insight redesign — combined LLM summary + source observations):
+1. Add API endpoint `GET /api/patterns/{id}/observations` — returns observations that constitute this pattern (from `observation_ids` field)
+2. On Insight click: send source observation titles + narratives to LLM → generate 2-3 sentence summary explaining WHAT this pattern is, WHY it matters, and WHEN to apply it
+3. Frontend: show LLM-generated summary at top, followed by collapsible list of source observations (title, type badge, link to detail view)
+4. Cache LLM summary in pattern `description` field — regenerate only if source observations change
+Phase B (quality improvement):
+5. Batch recalculate confidence for all 345 patterns
+6. Purge orphan patterns (source observations deleted by migrations 040-043)
+7. Add bulk action "archive all confidence < 0.6"
+**Context:** `pkg/models/pattern.go:165`, `internal/pattern/detector.go:257`, `ui/src/views/PatternsView.vue`
 
 ## ~~2026-03-23: ScoreBreakdown Modal — API Response Mismatch~~ RESOLVED v1.6.1 (PR #44)
 **What:** Clicking score badge (e.g., "1.31") in ObservationCard triggers ScoreBreakdown modal but shows blank/error. API returns `{id, components, config}` but Vue component expects `{observation: {title, type}, scoring: {final_score, type_weight, recency_decay, ...}, explanation: {...}}`.
@@ -64,7 +66,7 @@
 **Fix plan:** Either reshape API response to match frontend, or update frontend to match API.
 **Context:** `internal/worker/handlers_scoring.go:383`, `ui/src/components/ScoreBreakdown.vue:106-196`, `ui/src/utils/api.ts:205`
 
-## 2026-03-23: Observation Status Lifecycle (Future FR)
+## ~~2026-03-23: Observation Status Lifecycle (Future FR)~~ RESOLVED v1.8.0 (PR #69)
 **What:** Observations lack a `status` field (active/resolved/conditional). Temporary facts (e.g., "Codex account blocked") can only be suppressed (hidden forever) or downvoted (soft penalty). Neither supports "resolved but re-openable if condition recurs".
 **Impact:** Stale observations continue to inject into context. Users must manually suppress and re-create when conditions change.
 **Fix plan:** Add `status` column to observations (active/resolved), filter resolved from injection, allow reopen via MCP tool.
@@ -109,7 +111,7 @@ Impact: No functional impact — clients handle empty lists
 **Fix plan:** Review LLM extraction prompt in server-side extract-learnings endpoint — verify all observation types are in the prompt and equally reachable.
 **Context:** `plugin/engram/hooks/stop.js` (calls `/api/sessions/{id}/extract-learnings`), server-side extraction prompt
 
-## 2026-03-25: Dashboard Memories View — Browse store_memory Records
+## ~~2026-03-25: Dashboard Memories View — Browse store_memory Records~~ RESOLVED v1.8.0 (PR #70)
 **What:** Dashboard has no dedicated view or filter for `store_memory` records. Users create memories via MCP tool but can only find them mixed into the general observations list with no memory_type filter.
 **Why deferred:** Not in v1.7.0 roadmap. User explicitly requested.
 **Impact:** No way to browse/manage explicitly stored memories from UI. Must use MCP tools (recall_memory, search) only.
