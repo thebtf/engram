@@ -531,11 +531,11 @@ func (s *Service) handlePostPatternInsight(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Generate summary — failures are non-fatal: return source observations with empty summary.
-	// Apply 5-second timeout per NFR-1 (pattern insight LLM call < 5s).
+	// 120s timeout: Ollama cold start for 9B models takes 30-60s (model loading from disk).
 	var summary string
 	var llmErr error
 	if llm != nil {
-		insightCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		insightCtx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 		defer cancel()
 		summary, llmErr = learning.GeneratePatternInsight(insightCtx, llm, observations)
 	}
