@@ -219,6 +219,8 @@ type Observation struct {
 	ExpiresAt       sql.NullTime     `db:"expires_at" json:"expires_at,omitempty"`
 	TtlDays         sql.NullInt32    `db:"ttl_days" json:"ttl_days,omitempty"`
 	IsExpired       bool             `db:"-" json:"is_expired,omitempty"`
+	Status          string           `db:"status" json:"status,omitempty"`
+	StatusReason    sql.NullString   `db:"status_reason" json:"status_reason,omitempty"`
 }
 
 // ParsedObservation represents an observation parsed from SDK response XML.

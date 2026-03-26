@@ -1728,6 +1728,25 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil // Cannot restore encrypted data with lost key
 		},
 	},
+	{
+		// Migration 054: Add status lifecycle columns to observations.
+		// Introduces status (active/resolved) and status_reason for explicit lifecycle management.
+		ID: "054_observation_status_lifecycle",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS status_reason TEXT`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_status ON observations (status)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_status`)
+			tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS status_reason`)
+			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS status`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
