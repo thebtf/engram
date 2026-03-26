@@ -1748,10 +1748,22 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 		},
 	},
 	{
-		// Migration 055: Backfill memory_type for existing store_memory observations.
+		// Migration 055: Backfill NULL status to 'active' for all existing observations.
+		// ADD COLUMN ... DEFAULT only applies to new rows. Existing rows have NULL.
+		// Dashboard status filter uses WHERE status = 'active' which misses NULLs.
+		ID: "055_backfill_null_status",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`UPDATE observations SET status = 'active' WHERE status IS NULL`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
+	{
+		// Migration 056: Backfill memory_type for existing store_memory observations.
 		// store_memory creates observations with source_type='manual' but never set memory_type.
 		// Classify based on type column and concepts JSONB content, mirroring ClassifyMemoryType() logic.
-		ID: "055_backfill_memory_type",
+		ID: "056_backfill_memory_type",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				UPDATE observations SET memory_type = CASE

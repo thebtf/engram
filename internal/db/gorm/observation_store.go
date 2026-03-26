@@ -627,7 +627,7 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 		baseQuery = baseQuery.Where("type = ?", obsType)
 	}
 	if status != "" {
-		baseQuery = baseQuery.Where("status = ?", status)
+		baseQuery = baseQuery.Where("COALESCE(status, 'active') = ?", status)
 	}
 	if memoryType == "any" {
 		baseQuery = baseQuery.Where("memory_type IS NOT NULL AND memory_type != ''")
@@ -666,7 +666,7 @@ func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.C
 		baseQuery = baseQuery.Where("type = ?", obsType)
 	}
 	if status != "" {
-		baseQuery = baseQuery.Where("status = ?", status)
+		baseQuery = baseQuery.Where("COALESCE(status, 'active') = ?", status)
 	}
 	if memoryType == "any" {
 		baseQuery = baseQuery.Where("memory_type IS NOT NULL AND memory_type != ''")
