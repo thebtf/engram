@@ -614,7 +614,10 @@ func (s *ObservationStore) GetAllRecentObservations(ctx context.Context, limit i
 
 // GetAllRecentObservationsPaginated retrieves recent observations with pagination.
 // Pass obsType="" to return all types. Pass status="" to return all statuses.
-func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, obsType string, status string, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass memoryType="any" to filter observations that have any non-empty memory_type.
+// Pass memoryType="<value>" to filter by a specific memory_type value.
+// Pass memoryType="" for no memory_type filter (current behavior).
+func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, obsType string, status string, memoryType string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
@@ -624,6 +627,11 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 	}
 	if status != "" {
 		baseQuery = baseQuery.Where("status = ?", status)
+	}
+	if memoryType == "any" {
+		baseQuery = baseQuery.Where("memory_type IS NOT NULL AND memory_type != ''")
+	} else if memoryType != "" {
+		baseQuery = baseQuery.Where("memory_type = ?", memoryType)
 	}
 
 	if err := baseQuery.Count(&total).Error; err != nil {
@@ -645,7 +653,10 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 
 // GetObservationsByProjectStrictPaginated retrieves observations strictly from a project with pagination.
 // Pass obsType="" to return all types. Pass status="" to return all statuses.
-func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, obsType string, status string, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass memoryType="any" to filter observations that have any non-empty memory_type.
+// Pass memoryType="<value>" to filter by a specific memory_type value.
+// Pass memoryType="" for no memory_type filter (current behavior).
+func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, obsType string, status string, memoryType string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
@@ -655,6 +666,11 @@ func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.C
 	}
 	if status != "" {
 		baseQuery = baseQuery.Where("status = ?", status)
+	}
+	if memoryType == "any" {
+		baseQuery = baseQuery.Where("memory_type IS NOT NULL AND memory_type != ''")
+	} else if memoryType != "" {
+		baseQuery = baseQuery.Where("memory_type = ?", memoryType)
 	}
 
 	if err := baseQuery.Count(&total).Error; err != nil {

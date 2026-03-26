@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import type { Observation, ObservationType } from '@/types'
 import { TYPE_CONFIG, OBSERVATION_TYPES } from '@/types/observation'
-import { fetchObservationsPaginated, fetchProjects, archiveObservations, updateObservationStatus } from '@/utils/api'
+import { fetchObservationsPaginated, fetchProjects, archiveObservations, updateObservationStatus, updateObservation } from '@/utils/api'
 import { formatRelativeTime } from '@/utils/formatters'
 import Pagination from '@/components/layout/Pagination.vue'
 import EmptyState from '@/components/layout/EmptyState.vue'
@@ -56,6 +56,21 @@ const showTagInput = ref(false)
 // Tag cloud state
 const tagCloud = ref<TagCloudItem[]>([])
 const currentTagFilter = ref<string | null>(null)
+
+// Memories view mode: 'all' shows regular observations, 'memories' filters by memory_type='any'
+const viewMode = ref<'all' | 'memories'>('all')
+
+// Inline edit state for memory cards
+const editingTitleId = ref<number | null>(null)
+const editingNarrativeId = ref<number | null>(null)
+const editTitleValue = ref('')
+const editNarrativeValue = ref('')
+const editSaving = ref(false)
+
+// Delete confirmation state for individual memory cards
+const showDeleteMemoryDialog = ref(false)
+const deleteMemoryTargetId = ref<number | null>(null)
+const deleteMemoryProcessing = ref(false)
 
 const allSelected = computed(() =>
   filteredObservations.value.length > 0 &&
@@ -254,6 +269,7 @@ async function fetchPage() {
         project: currentProject.value || undefined,
         type: currentType.value || undefined,
         status: currentStatus.value || undefined,
+        memory_type: viewMode.value === 'memories' ? 'any' : undefined,
       },
       abortController.signal
     )
@@ -311,6 +327,81 @@ function getTypeConfig(type: string) {
 function shortProject(project: string): string {
   const parts = project.split('/')
   return parts[parts.length - 1] || project
+}
+
+function setViewMode(mode: 'all' | 'memories') {
+  viewMode.value = mode
+  offset.value = 0
+  fetchPage()
+}
+
+function startEditTitle(obs: Observation, event: Event) {
+  event.stopPropagation()
+  editingTitleId.value = obs.id
+  editTitleValue.value = obs.title || ''
+}
+
+async function saveTitle(obs: Observation) {
+  if (editSaving.value) return
+  const newTitle = editTitleValue.value.trim()
+  if (!newTitle || newTitle === obs.title) {
+    editingTitleId.value = null
+    return
+  }
+  editSaving.value = true
+  try {
+    await updateObservation(obs.id, { title: newTitle })
+    await fetchPage()
+  } finally {
+    editSaving.value = false
+    editingTitleId.value = null
+  }
+}
+
+function startEditNarrative(obs: Observation, event: Event) {
+  event.stopPropagation()
+  editingNarrativeId.value = obs.id
+  editNarrativeValue.value = obs.narrative || ''
+}
+
+async function saveNarrative(obs: Observation) {
+  if (editSaving.value) return
+  const newNarrative = editNarrativeValue.value.trim()
+  if (newNarrative === (obs.narrative || '')) {
+    editingNarrativeId.value = null
+    return
+  }
+  editSaving.value = true
+  try {
+    await updateObservation(obs.id, { narrative: newNarrative })
+    await fetchPage()
+  } finally {
+    editSaving.value = false
+    editingNarrativeId.value = null
+  }
+}
+
+function openDeleteMemoryDialog(id: number, event: Event) {
+  event.stopPropagation()
+  deleteMemoryTargetId.value = id
+  showDeleteMemoryDialog.value = true
+}
+
+async function confirmDeleteMemory() {
+  if (deleteMemoryTargetId.value === null) return
+  deleteMemoryProcessing.value = true
+  try {
+    await fetch(`/api/observations/bulk`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [deleteMemoryTargetId.value] }),
+    })
+    await fetchPage()
+  } finally {
+    deleteMemoryProcessing.value = false
+    showDeleteMemoryDialog.value = false
+    deleteMemoryTargetId.value = null
+  }
 }
 
 onMounted(() => {
@@ -407,6 +498,34 @@ onUnmounted(() => {
         >
           <i class="fas fa-check-double mr-1" />
           Resolved
+        </button>
+      </div>
+
+      <!-- View mode toggle: All | Memories -->
+      <div class="flex items-center gap-1 ml-2 p-0.5 rounded-lg bg-slate-800/50 border border-slate-700/50">
+        <button
+          @click="setViewMode('all')"
+          :class="[
+            'px-3 py-1 rounded-md text-xs font-medium transition-colors',
+            viewMode === 'all'
+              ? 'bg-slate-700 text-white shadow'
+              : 'text-slate-400 hover:text-slate-200',
+          ]"
+        >
+          <i class="fas fa-list mr-1" />
+          All
+        </button>
+        <button
+          @click="setViewMode('memories')"
+          :class="[
+            'px-3 py-1 rounded-md text-xs font-medium transition-colors',
+            viewMode === 'memories'
+              ? 'bg-purple-600/40 text-purple-200 shadow'
+              : 'text-slate-400 hover:text-slate-200',
+          ]"
+        >
+          <i class="fas fa-brain mr-1" />
+          Memories
         </button>
       </div>
 
@@ -571,9 +690,164 @@ onUnmounted(() => {
         <span class="text-[10px] text-slate-600 uppercase tracking-wide">Select all</span>
       </div>
 
+      <!-- Per-observation: memory card or regular card -->
+      <template v-for="obs in filteredObservations" :key="obs.id">
+
+      <!-- Memory card (observations with memory_type set) -->
       <div
-        v-for="obs in filteredObservations"
-        :key="obs.id"
+        v-if="obs.memory_type"
+        :class="[
+          'group p-4 rounded-xl border-2 bg-gradient-to-br transition-all',
+          obs.status === 'resolved'
+            ? 'border-purple-500/10 from-slate-800/20 to-slate-900/20 opacity-50'
+            : selectedIds.has(obs.id)
+              ? 'border-purple-500/50 from-purple-500/10 to-slate-900/50'
+              : 'border-purple-500/30 from-slate-800/50 to-slate-900/50 hover:border-purple-500/50 hover:from-slate-800/70 hover:to-slate-900/70',
+        ]"
+      >
+        <!-- Memory card header row -->
+        <div class="flex items-start gap-3">
+          <!-- Checkbox -->
+          <input
+            type="checkbox"
+            :checked="selectedIds.has(obs.id)"
+            @click="toggleSelect(obs.id, $event)"
+            class="mt-0.5 w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-claude-500 focus:ring-claude-500/50 cursor-pointer flex-shrink-0"
+          />
+
+          <!-- Memory brain icon -->
+          <div class="w-9 h-9 flex items-center justify-center rounded-lg bg-gradient-to-br from-purple-600/40 to-purple-800/30 border border-purple-500/30 flex-shrink-0">
+            <i class="fas fa-brain text-purple-300 text-sm" />
+          </div>
+
+          <!-- Title (inline editable) -->
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1">
+              <input
+                v-if="editingTitleId === obs.id"
+                :value="editTitleValue"
+                @input="editTitleValue = ($event.target as HTMLInputElement).value"
+                @blur="saveTitle(obs)"
+                @keydown.enter="saveTitle(obs)"
+                @keydown.esc="editingTitleId = null"
+                @click.stop
+                class="flex-1 px-2 py-0.5 rounded bg-slate-900/70 border border-purple-500/40 text-sm text-white focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+                autofocus
+              />
+              <h3
+                v-else
+                @click="startEditTitle(obs, $event)"
+                :class="[
+                  'text-sm font-medium text-white truncate cursor-text hover:text-purple-200 transition-colors',
+                  obs.status === 'resolved' ? 'line-through text-slate-400' : '',
+                ]"
+                title="Click to edit"
+              >
+                {{ obs.title || 'Untitled' }}
+              </h3>
+
+              <!-- Memory type badge -->
+              <span class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 font-mono">
+                {{ obs.memory_type }}
+              </span>
+
+              <!-- Scope badge -->
+              <span
+                v-if="obs.scope === 'global'"
+                class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-green-500/20 text-green-400 border border-green-500/30"
+              >
+                global
+              </span>
+              <span
+                v-else
+                class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30"
+              >
+                project
+              </span>
+
+              <!-- Resolved badge -->
+              <span
+                v-if="obs.status === 'resolved'"
+                :title="obs.status_reason || 'Resolved'"
+                class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-slate-600/30 text-slate-400 border border-slate-600/30 cursor-default"
+              >
+                <i class="fas fa-check-double mr-0.5" />
+                resolved
+              </span>
+            </div>
+
+            <div class="flex items-center gap-2 text-xs text-slate-500">
+              <Badge
+                :icon="getTypeConfig(obs.type).icon"
+                :color-class="getTypeConfig(obs.type).colorClass"
+                :bg-class="getTypeConfig(obs.type).bgClass"
+                :border-class="getTypeConfig(obs.type).borderClass"
+              >
+                {{ obs.type }}
+              </Badge>
+              <span>{{ formatRelativeTime(obs.created_at) }}</span>
+              <span v-if="obs.project" class="flex items-center gap-1">
+                <span class="text-slate-600">|</span>
+                <i class="fas fa-folder text-slate-600 text-[10px]" />
+                <span class="text-amber-600/80 font-mono">{{ shortProject(obs.project) }}</span>
+              </span>
+            </div>
+          </div>
+
+          <!-- Action buttons (delete + navigate) -->
+          <div class="flex items-center gap-1 flex-shrink-0" @click.stop>
+            <button
+              @click="openDeleteMemoryDialog(obs.id, $event)"
+              class="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-xs bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/30 transition-all cursor-pointer"
+              title="Delete this memory"
+            >
+              <i class="fas fa-trash text-[11px]" />
+            </button>
+            <button
+              @click="navigateToDetail(obs.id)"
+              class="p-1.5 rounded-lg text-xs bg-slate-700/50 text-slate-500 border border-slate-600/30 hover:bg-slate-600/50 hover:text-slate-200 transition-all cursor-pointer"
+              title="View details"
+            >
+              <i class="fas fa-arrow-right text-[11px]" />
+            </button>
+          </div>
+        </div>
+
+        <!-- Narrative (inline editable) -->
+        <div class="mt-2 ml-12 pl-0.5">
+          <textarea
+            v-if="editingNarrativeId === obs.id"
+            :value="editNarrativeValue"
+            @input="editNarrativeValue = ($event.target as HTMLTextAreaElement).value"
+            @blur="saveNarrative(obs)"
+            @keydown.enter.ctrl="saveNarrative(obs)"
+            @keydown.esc="editingNarrativeId = null"
+            @click.stop
+            rows="3"
+            class="w-full px-2 py-1.5 rounded bg-slate-900/70 border border-purple-500/40 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500/50 resize-y"
+            autofocus
+          />
+          <p
+            v-else-if="obs.narrative"
+            @click="startEditNarrative(obs, $event)"
+            class="text-xs text-slate-400 cursor-text hover:text-slate-300 transition-colors line-clamp-2"
+            title="Click to edit"
+          >
+            {{ obs.narrative }}
+          </p>
+          <p
+            v-else
+            @click="startEditNarrative(obs, $event)"
+            class="text-xs text-slate-600 italic cursor-text hover:text-slate-500 transition-colors"
+          >
+            Click to add narrative...
+          </p>
+        </div>
+      </div>
+
+      <!-- Regular observation card -->
+      <div
+        v-else
         @click="navigateToDetail(obs.id)"
         :class="[
           'group flex items-center gap-4 p-4 rounded-xl border-2 bg-gradient-to-br cursor-pointer transition-all',
@@ -675,6 +949,8 @@ onUnmounted(() => {
         <!-- Arrow -->
         <i class="fas fa-chevron-right text-slate-600 group-hover:text-claude-400 transition-colors flex-shrink-0" />
       </div>
+
+      </template><!-- end per-observation template -->
     </div>
 
     <!-- Loading overlay for subsequent pages -->
@@ -786,6 +1062,16 @@ onUnmounted(() => {
         </div>
       </div>
     </Teleport>
+    <!-- Delete Memory Confirmation Dialog -->
+    <ConfirmDialog
+      :show="showDeleteMemoryDialog"
+      title="Delete Memory"
+      message="Are you sure you want to permanently delete this memory? This cannot be undone."
+      confirm-label="Delete"
+      :danger="true"
+      @confirm="confirmDeleteMemory"
+      @cancel="showDeleteMemoryDialog = false; deleteMemoryTargetId = null"
+    />
     </div><!-- end main content -->
 
     <!-- Tag Cloud Sidebar -->
