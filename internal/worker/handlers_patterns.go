@@ -2,11 +2,13 @@
 package worker
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -376,6 +378,170 @@ func (s *Service) handleGetPatternByName(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, pattern)
+}
+
+// PatternObservationsResponse is the envelope for GET /api/patterns/{id}/observations.
+type PatternObservationsResponse struct {
+	Observations []*models.Observation `json:"observations"`
+	Total        int                   `json:"total"`
+}
+
+// PatternInsightResponse is the envelope for POST /api/patterns/{id}/insight.
+type PatternInsightResponse struct {
+	Summary            string                `json:"summary"`
+	SourceObservations []*models.Observation `json:"source_observations"`
+	Cached             bool                  `json:"cached"`
+}
+
+// handleGetPatternObservations godoc
+// @Summary Get source observations for a pattern
+// @Description Returns the observations that contributed to this pattern.
+// @Tags Patterns
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Pattern ID"
+// @Success 200 {object} PatternObservationsResponse
+// @Failure 400 {string} string "invalid pattern ID"
+// @Failure 404 {string} string "pattern not found"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "stores not initialized"
+// @Router /api/patterns/{id}/observations [get]
+func (s *Service) handleGetPatternObservations(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	patStore := s.patternStore
+	obsStore := s.observationStore
+	s.initMu.RUnlock()
+
+	if patStore == nil || obsStore == nil {
+		http.Error(w, "stores not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid pattern ID", http.StatusBadRequest)
+		return
+	}
+
+	pattern, err := patStore.GetPatternByID(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if pattern == nil {
+		http.Error(w, "pattern not found", http.StatusNotFound)
+		return
+	}
+
+	ids := []int64(pattern.ObservationIDs)
+	var observations []*models.Observation
+	if len(ids) > 0 {
+		observations, err = obsStore.GetObservationsByIDs(r.Context(), ids, "date_desc", 0)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if observations == nil {
+		observations = []*models.Observation{}
+	}
+
+	writeJSON(w, PatternObservationsResponse{
+		Observations: observations,
+		Total:        len(observations),
+	})
+}
+
+// handlePostPatternInsight godoc
+// @Summary Generate or retrieve LLM-based insight for a pattern
+// @Description Generates a 2-3 sentence LLM summary from source observations.
+// Returns cached description when it is already a non-generic summary.
+// @Tags Patterns
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Pattern ID"
+// @Success 200 {object} PatternInsightResponse
+// @Failure 400 {string} string "invalid pattern ID"
+// @Failure 404 {string} string "pattern not found"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "stores not initialized"
+// @Router /api/patterns/{id}/insight [post]
+func (s *Service) handlePostPatternInsight(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	patStore := s.patternStore
+	obsStore := s.observationStore
+	llm := s.llmClient
+	s.initMu.RUnlock()
+
+	if patStore == nil || obsStore == nil {
+		http.Error(w, "stores not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid pattern ID", http.StatusBadRequest)
+		return
+	}
+
+	pattern, err := patStore.GetPatternByID(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if pattern == nil {
+		http.Error(w, "pattern not found", http.StatusNotFound)
+		return
+	}
+
+	// Return cached summary when it is already a real (non-generic) description.
+	if pattern.Description.Valid && !learning.IsGenericDescription(pattern.Description.String) {
+		ids := []int64(pattern.ObservationIDs)
+		var observations []*models.Observation
+		if len(ids) > 0 {
+			observations, _ = obsStore.GetObservationsByIDs(r.Context(), ids, "date_desc", 0)
+		}
+		if observations == nil {
+			observations = []*models.Observation{}
+		}
+		writeJSON(w, PatternInsightResponse{
+			Summary:            pattern.Description.String,
+			SourceObservations: observations,
+			Cached:             true,
+		})
+		return
+	}
+
+	// Fetch source observations for LLM input.
+	ids := []int64(pattern.ObservationIDs)
+	var observations []*models.Observation
+	if len(ids) > 0 {
+		observations, err = obsStore.GetObservationsByIDs(r.Context(), ids, "date_desc", 0)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if observations == nil {
+		observations = []*models.Observation{}
+	}
+
+	// Generate summary — failures are non-fatal: return source observations with empty summary.
+	summary, llmErr := learning.GeneratePatternInsight(r.Context(), llm, observations)
+	if llmErr == nil && summary != "" {
+		// Persist generated summary so subsequent calls return cached.
+		updated := *pattern
+		updated.Description = sql.NullString{String: summary, Valid: true}
+		_ = patStore.UpdatePattern(r.Context(), &updated)
+	}
+
+	writeJSON(w, PatternInsightResponse{
+		Summary:            summary,
+		SourceObservations: observations,
+		Cached:             false,
+	})
 }
 
 // handleMergePatterns godoc

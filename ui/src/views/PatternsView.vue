@@ -16,6 +16,7 @@ const {
   insightLoading,
   loadPatterns,
   loadInsight,
+  refreshInsight,
   deprecate,
   remove,
 } = usePatterns()
@@ -276,24 +277,82 @@ function handleRefresh() {
 
         <!-- Expanded insight panel -->
         <div v-if="expandedId === pattern.id" class="px-4 pb-4 border-t border-slate-700/30">
-          <div v-if="insightLoading[pattern.id]" class="py-4 text-center">
-            <i class="fas fa-circle-notch fa-spin text-claude-400" />
+          <!-- Loading skeleton -->
+          <div v-if="insightLoading[pattern.id]" class="pt-3 space-y-2 animate-pulse">
+            <div class="h-3 bg-slate-700/60 rounded w-full" />
+            <div class="h-3 bg-slate-700/60 rounded w-5/6" />
+            <div class="h-3 bg-slate-700/60 rounded w-4/6" />
           </div>
+
+          <!-- Loaded state -->
           <div v-else-if="insights[pattern.id]" class="pt-3">
-            <p class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed mb-3">
-              {{ insights[pattern.id].insight }}
-            </p>
-            <div v-if="insights[pattern.id].examples?.length" class="space-y-1">
-              <span class="text-[10px] text-slate-600 uppercase">Examples:</span>
-              <div
-                v-for="(ex, idx) in insights[pattern.id].examples"
-                :key="idx"
-                class="text-xs text-slate-400 pl-3 border-l-2 border-slate-700"
+            <!-- LLM summary -->
+            <div v-if="insights[pattern.id].summary" class="mb-3">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="text-[10px] text-slate-600 uppercase tracking-wide">AI Summary</span>
+                <span
+                  class="text-[10px] px-1.5 py-0.5 rounded"
+                  :class="insights[pattern.id].cached
+                    ? 'bg-slate-700/50 text-slate-500'
+                    : 'bg-claude-500/20 text-claude-400'"
+                >
+                  {{ insights[pattern.id].cached ? 'Cached' : 'Generated just now' }}
+                </span>
+                <button
+                  @click="refreshInsight(pattern.id)"
+                  class="ml-auto text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
+                  title="Refresh summary"
+                >
+                  <i class="fas fa-rotate-right" />
+                </button>
+              </div>
+              <p class="text-sm text-slate-300 leading-relaxed">
+                {{ insights[pattern.id].summary }}
+              </p>
+            </div>
+
+            <!-- Unavailable state -->
+            <div v-else class="mb-3 flex items-center gap-2 text-xs text-slate-500">
+              <i class="fas fa-info-circle text-slate-600" />
+              <span>Summary unavailable — LLM not configured or returned empty.</span>
+              <button
+                @click="refreshInsight(pattern.id)"
+                class="ml-1 text-slate-400 hover:text-white transition-colors underline"
               >
-                {{ ex }}
+                Retry
+              </button>
+            </div>
+
+            <!-- Source observations -->
+            <div v-if="insights[pattern.id].source_observations?.length" class="space-y-1">
+              <span class="text-[10px] text-slate-600 uppercase tracking-wide">
+                Source Observations ({{ insights[pattern.id].source_observations.length }})
+              </span>
+              <div
+                v-for="obs in insights[pattern.id].source_observations"
+                :key="obs.id"
+                class="flex items-center gap-2 py-1 border-l-2 border-slate-700 pl-3"
+              >
+                <a
+                  :href="`/#/observations/${obs.id}`"
+                  class="text-xs text-slate-300 hover:text-white transition-colors truncate flex-1"
+                  :title="obs.title"
+                >
+                  {{ obs.title }}
+                </a>
+                <span class="text-[10px] text-slate-600 flex-shrink-0">{{ obs.type }}</span>
+                <span class="text-[10px] text-slate-600 flex-shrink-0">
+                  {{ formatRelativeTime(obs.created_at) }}
+                </span>
               </div>
             </div>
+
+            <div v-else class="text-xs text-slate-600">
+              No source observations linked.
+            </div>
           </div>
+
+          <!-- Initial empty state (should not appear normally) -->
           <div v-else class="py-4 text-xs text-slate-600 text-center">
             No insight available
           </div>
