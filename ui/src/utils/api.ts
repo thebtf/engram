@@ -651,6 +651,25 @@ export async function fetchPatternInsight(id: number, signal?: AbortSignal): Pro
   return fetchWithRetry<PatternInsight>(`${API_BASE}/patterns/${id}/insight`, { signal })
 }
 
+export interface PatternObservationsResponse {
+  observations: import('@/types').Observation[]
+  total: number
+}
+
+export interface PatternInsightResult {
+  summary: string
+  source_observations: import('@/types').Observation[]
+  cached: boolean
+}
+
+export async function fetchPatternObservations(id: number, signal?: AbortSignal): Promise<PatternObservationsResponse> {
+  return fetchWithRetry<PatternObservationsResponse>(`${API_BASE}/patterns/${id}/observations`, { signal })
+}
+
+export async function generatePatternInsight(id: number, signal?: AbortSignal): Promise<PatternInsightResult> {
+  return postJson<PatternInsightResult>(`${API_BASE}/patterns/${id}/insight`, {}, { signal })
+}
+
 export async function deprecatePattern(id: number, signal?: AbortSignal): Promise<void> {
   await postJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}/deprecate`, {}, { signal })
 }

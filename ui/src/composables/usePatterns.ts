@@ -1,6 +1,6 @@
 import { ref, onMounted, onUnmounted } from 'vue'
-import type { Pattern, PatternInsight } from '@/utils/api'
-import { fetchPatterns, fetchPatternInsight, deprecatePattern, deletePattern } from '@/utils/api'
+import type { Pattern, PatternInsight, PatternInsightResult } from '@/utils/api'
+import { fetchPatterns, fetchPatternInsight, generatePatternInsight, deprecatePattern, deletePattern } from '@/utils/api'
 
 export function usePatterns() {
   const patterns = ref<Pattern[]>([])
@@ -8,9 +8,12 @@ export function usePatterns() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  // Track loaded insights by pattern id
-  const insights = ref<Record<number, PatternInsight>>({})
+  // Track loaded insights by pattern id — now uses the richer PatternInsightResult
+  const insights = ref<Record<number, PatternInsightResult>>({})
   const insightLoading = ref<Record<number, boolean>>({})
+
+  // Legacy PatternInsight still needed by old GET /insight consumers
+  const legacyInsights = ref<Record<number, PatternInsight>>({})
 
   let abortController: AbortController | null = null
 
@@ -33,15 +36,29 @@ export function usePatterns() {
     }
   }
 
+  // loadInsight: triggers LLM generation via POST, caches result
   async function loadInsight(id: number) {
     if (insights.value[id]) return // Already loaded
 
     insightLoading.value = { ...insightLoading.value, [id]: true }
     try {
-      const insight = await fetchPatternInsight(id)
-      insights.value = { ...insights.value, [id]: insight }
+      const result = await generatePatternInsight(id)
+      insights.value = { ...insights.value, [id]: result }
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Failed to load insight'
+    } finally {
+      insightLoading.value = { ...insightLoading.value, [id]: false }
+    }
+  }
+
+  // refreshInsight: forces re-generation even if already cached in frontend
+  async function refreshInsight(id: number) {
+    insightLoading.value = { ...insightLoading.value, [id]: true }
+    try {
+      const result = await generatePatternInsight(id)
+      insights.value = { ...insights.value, [id]: result }
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Failed to refresh insight'
     } finally {
       insightLoading.value = { ...insightLoading.value, [id]: false }
     }
@@ -88,6 +105,7 @@ export function usePatterns() {
     insightLoading,
     loadPatterns,
     loadInsight,
+    refreshInsight,
     deprecate,
     remove,
   }

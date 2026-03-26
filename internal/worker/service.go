@@ -177,6 +177,7 @@ type Service struct {
 	searchQueryLogStore     *gorm.SearchQueryLogStore
 	retrievalStatsLogStore  *gorm.RetrievalStatsLogStore
 	llmFilter               *search.LLMFilter
+	llmClient               learning.LLMClient
 	projectSettingsStore    *gorm.ProjectSettingsStore
 	version                 string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
@@ -902,6 +903,18 @@ func (s *Service) initializeAsync() {
 
 	// Initialize retrieval stats log store with batched flush
 	retrievalStatsLogStore := gorm.NewRetrievalStatsLogStore(store.GetDB())
+
+	// Initialize shared LLM client (used for pattern insights and LLM filter)
+	{
+		llmCfg := learning.DefaultOpenAIConfig()
+		sharedLLM := learning.NewOpenAIClient(llmCfg)
+		if sharedLLM.IsConfigured() {
+			s.initMu.Lock()
+			s.llmClient = sharedLLM
+			s.initMu.Unlock()
+			log.Info().Str("model", llmCfg.Model).Msg("LLM client initialized for pattern insights")
+		}
+	}
 
 	// Initialize LLM filter if enabled
 	if cfg.LLMFilterEnabled {
@@ -1792,6 +1805,8 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/patterns/by-name", s.handleGetPatternByName)
 		r.Get("/api/patterns/{id}", s.handleGetPatternByID)
 		r.Get("/api/patterns/{id}/insight", s.handleGetPatternInsight)
+		r.Get("/api/patterns/{id}/observations", s.handleGetPatternObservations)
+		r.Post("/api/patterns/{id}/insight", s.handlePostPatternInsight)
 		r.Delete("/api/patterns/{id}", s.handleDeletePattern)
 		r.Post("/api/patterns/{id}/deprecate", s.handleDeprecatePattern)
 		r.Post("/api/patterns/merge", s.handleMergePatterns)
