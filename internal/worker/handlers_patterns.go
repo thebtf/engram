@@ -544,6 +544,103 @@ func (s *Service) handlePostPatternInsight(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// PatternCleanupRequest is the JSON body for POST /api/maintenance/patterns/cleanup.
+type PatternCleanupRequest struct {
+	ConfidenceThreshold float64 `json:"confidence_threshold"`
+	DryRun              bool    `json:"dry_run"`
+}
+
+// PatternCleanupResponse is returned by POST /api/maintenance/patterns/cleanup.
+type PatternCleanupResponse struct {
+	OrphansFound           int `json:"orphans_found"`
+	OrphansArchived        int `json:"orphans_archived"`
+	LowConfidenceFound     int `json:"low_confidence_found"`
+	LowConfidenceArchived  int `json:"low_confidence_archived"`
+	ConfidenceRecalculated int `json:"confidence_recalculated"`
+}
+
+// handlePatternCleanupAdvanced godoc
+// @Summary Advanced pattern cleanup
+// @Description Detects orphan patterns, recalculates confidence, and archives low-confidence patterns.
+// @Tags Patterns
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body PatternCleanupRequest false "Cleanup options"
+// @Success 200 {object} PatternCleanupResponse
+// @Failure 400 {string} string "bad request"
+// @Failure 503 {string} string "stores not initialized"
+// @Failure 500 {string} string "internal error"
+// @Router /api/maintenance/patterns/cleanup [post]
+func (s *Service) handlePatternCleanupAdvanced(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	store := s.patternStore
+	detector := s.patternDetector
+	maintSvc := s.maintenanceService
+	s.initMu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "pattern store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req PatternCleanupRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	// Default confidence threshold.
+	if req.ConfidenceThreshold == 0 {
+		req.ConfidenceThreshold = 0.6
+	}
+
+	resp := PatternCleanupResponse{}
+
+	// Step 1: Orphan detection (and pruning if not dry run).
+	if maintSvc != nil {
+		orphanResult, err := maintSvc.CleanupOrphanPatterns(r.Context(), req.DryRun)
+		if err != nil {
+			http.Error(w, "orphan cleanup failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp.OrphansFound = orphanResult.OrphansFound
+		resp.OrphansArchived = orphanResult.OrphansArchived
+	}
+
+	// Step 2: Batch confidence recalculation (skip in dry-run — no mutations).
+	if !req.DryRun && detector != nil {
+		recalculated, err := detector.BatchRecalculateConfidence(r.Context())
+		if err != nil {
+			http.Error(w, "confidence recalculation failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp.ConfidenceRecalculated = recalculated
+	}
+
+	// Step 3: Low-confidence pattern detection (and archiving if not dry run).
+	const maxPatterns = 10000
+	patterns, err := store.GetActivePatterns(r.Context(), maxPatterns, 0, "")
+	if err != nil {
+		http.Error(w, "fetch active patterns failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	for _, p := range patterns {
+		if p.Confidence < req.ConfidenceThreshold {
+			resp.LowConfidenceFound++
+			if !req.DryRun {
+				if err := store.MarkPatternDeprecated(r.Context(), p.ID); err == nil {
+					resp.LowConfidenceArchived++
+				}
+			}
+		}
+	}
+
+	writeJSON(w, resp)
+}
+
 // handleMergePatterns godoc
 // @Summary Merge patterns
 // @Description Merges a source pattern into a target pattern. Source pattern is consumed.

@@ -371,6 +371,52 @@ func (d *Detector) CandidateCount() int {
 	return len(d.candidates)
 }
 
+// BatchRecalculateConfidence recomputes confidence for all active patterns using the model formula
+// (frequency + cross-project bonus) and persists updated values.
+// Returns the number of patterns recalculated.
+func (d *Detector) BatchRecalculateConfidence(ctx context.Context) (int, error) {
+	const maxPatterns = 10000
+	patterns, err := d.patternStore.GetActivePatterns(ctx, maxPatterns, 0, "")
+	if err != nil {
+		return 0, fmt.Errorf("fetch active patterns: %w", err)
+	}
+
+	recalculated := 0
+	for _, p := range patterns {
+		prevConfidence := p.Confidence
+
+		// Replicate the formula from models.Pattern.updateConfidence.
+		freqConfidence := 0.3 + (0.5 * (float64(min(p.Frequency, 10)) / 10.0))
+
+		projectBonus := 0.0
+		if len(p.Projects) >= 2 {
+			projectBonus = 0.1
+		}
+		if len(p.Projects) >= 5 {
+			projectBonus = 0.2
+		}
+
+		newConfidence := freqConfidence + projectBonus
+		if newConfidence > 1.0 {
+			newConfidence = 1.0
+		}
+
+		if newConfidence == prevConfidence {
+			continue // No change needed.
+		}
+
+		updated := *p
+		updated.Confidence = newConfidence
+		if err := d.patternStore.UpdatePattern(ctx, &updated); err != nil {
+			log.Warn().Err(err).Int64("pattern_id", p.ID).Msg("Failed to update pattern confidence")
+			continue
+		}
+		recalculated++
+	}
+
+	return recalculated, nil
+}
+
 // GetPatternInsight returns a formatted insight string for a pattern.
 // GetPatternInsight returns a formatted insight string for a pattern.
 func (d *Detector) GetPatternInsight(ctx context.Context, patternID int64) (string, error) {

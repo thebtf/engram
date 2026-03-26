@@ -761,3 +761,106 @@ func (s *Service) IsEmbeddingModelChanged() bool {
 	return s.embeddingModelChanged
 }
 
+// OrphanPatternResult holds the results of an orphan pattern cleanup pass.
+type OrphanPatternResult struct {
+	// OrphansFound is the total number of patterns that had at least one orphan observation reference.
+	OrphansFound int
+	// OrphansArchived is the number of patterns that were deprecated because ALL their observation IDs were orphaned.
+	OrphansArchived int
+}
+
+// CleanupOrphanPatterns detects patterns whose observation_ids reference non-existent observations.
+// Patterns where all referenced observations are gone are deprecated.
+// Patterns where only some references are gone have those references pruned.
+// dryRun=true only counts without modifying.
+func (s *Service) CleanupOrphanPatterns(ctx context.Context, dryRun bool) (OrphanPatternResult, error) {
+	if s.patternStore == nil || s.observationStore == nil {
+		return OrphanPatternResult{}, nil
+	}
+
+	const maxPatterns = 10000
+	patterns, err := s.patternStore.GetActivePatterns(ctx, maxPatterns, 0, "")
+	if err != nil {
+		return OrphanPatternResult{}, fmt.Errorf("fetch active patterns: %w", err)
+	}
+
+	if len(patterns) == 0 {
+		return OrphanPatternResult{}, nil
+	}
+
+	// Collect all unique observation IDs referenced across all patterns.
+	allObsIDSet := make(map[int64]struct{})
+	for _, p := range patterns {
+		for _, id := range p.ObservationIDs {
+			allObsIDSet[id] = struct{}{}
+		}
+	}
+
+	if len(allObsIDSet) == 0 {
+		return OrphanPatternResult{}, nil
+	}
+
+	uniqueIDs := make([]int64, 0, len(allObsIDSet))
+	for id := range allObsIDSet {
+		uniqueIDs = append(uniqueIDs, id)
+	}
+
+	// Verify which IDs actually exist.
+	existing, err := s.observationStore.GetObservationsByIDs(ctx, uniqueIDs, "default", 0)
+	if err != nil {
+		return OrphanPatternResult{}, fmt.Errorf("verify observation IDs: %w", err)
+	}
+
+	existingSet := make(map[int64]struct{}, len(existing))
+	for _, obs := range existing {
+		existingSet[obs.ID] = struct{}{}
+	}
+
+	result := OrphanPatternResult{}
+
+	for _, p := range patterns {
+		if len(p.ObservationIDs) == 0 {
+			continue
+		}
+
+		var liveIDs []int64
+		for _, id := range p.ObservationIDs {
+			if _, ok := existingSet[id]; ok {
+				liveIDs = append(liveIDs, id)
+			}
+		}
+
+		orphanCount := len(p.ObservationIDs) - len(liveIDs)
+		if orphanCount == 0 {
+			continue
+		}
+
+		result.OrphansFound++
+
+		if dryRun {
+			if len(liveIDs) == 0 {
+				result.OrphansArchived++
+			}
+			continue
+		}
+
+		if len(liveIDs) == 0 {
+			// All references are orphaned: deprecate the pattern.
+			if err := s.patternStore.MarkPatternDeprecated(ctx, p.ID); err != nil {
+				s.log.Warn().Err(err).Int64("pattern_id", p.ID).Msg("Failed to deprecate fully-orphaned pattern")
+				continue
+			}
+			result.OrphansArchived++
+		} else {
+			// Partial orphans: prune dead IDs and persist.
+			updated := *p
+			updated.ObservationIDs = liveIDs
+			if err := s.patternStore.UpdatePattern(ctx, &updated); err != nil {
+				s.log.Warn().Err(err).Int64("pattern_id", p.ID).Msg("Failed to prune orphan observation IDs from pattern")
+			}
+		}
+	}
+
+	return result, nil
+}
+

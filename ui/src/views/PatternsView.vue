@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { usePatterns } from '@/composables/usePatterns'
 import { formatRelativeTime } from '@/utils/formatters'
+import { cleanupPatterns, type PatternCleanupResult } from '@/utils/api'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
 import Badge from '@/components/Badge.vue'
@@ -20,6 +21,44 @@ const {
   deprecate,
   remove,
 } = usePatterns()
+
+// ── Cleanup state ────────────────────────────────────────────
+const cleanupThreshold = ref(0.6)
+const cleanupRunning = ref(false)
+const cleanupError = ref<string | null>(null)
+const cleanupPreview = ref<PatternCleanupResult | null>(null)
+const cleanupResult = ref<PatternCleanupResult | null>(null)
+const showCleanupConfirm = ref(false)
+
+async function runCleanupPreview() {
+  cleanupError.value = null
+  cleanupPreview.value = null
+  cleanupResult.value = null
+  cleanupRunning.value = true
+  try {
+    cleanupPreview.value = await cleanupPatterns(cleanupThreshold.value, true)
+  } catch (e) {
+    cleanupError.value = e instanceof Error ? e.message : 'Preview failed'
+  } finally {
+    cleanupRunning.value = false
+  }
+}
+
+async function runCleanupConfirmed() {
+  showCleanupConfirm.value = false
+  cleanupError.value = null
+  cleanupRunning.value = true
+  try {
+    cleanupResult.value = await cleanupPatterns(cleanupThreshold.value, false)
+    cleanupPreview.value = null
+    // Reload patterns to reflect changes.
+    loadPatterns({ limit: itemsPerPage.value, offset: currentOffset.value, sort: sortBy.value })
+  } catch (e) {
+    cleanupError.value = e instanceof Error ? e.message : 'Cleanup failed'
+  } finally {
+    cleanupRunning.value = false
+  }
+}
 
 const expandedId = ref<number | null>(null)
 const deleteTarget = ref<number | null>(null)
@@ -176,6 +215,85 @@ function handleRefresh() {
         <option :value="50">50 / page</option>
         <option :value="100">100 / page</option>
       </select>
+    </div>
+
+    <!-- Clean Up Section -->
+    <div class="mb-5 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
+      <div class="flex items-center gap-2 mb-3">
+        <i class="fas fa-broom text-amber-400 text-sm" />
+        <span class="text-sm font-medium text-white">Clean Up Patterns</span>
+      </div>
+
+      <!-- Threshold control -->
+      <div class="flex items-center gap-3 mb-3 flex-wrap">
+        <label class="text-xs text-slate-400 whitespace-nowrap">
+          Confidence threshold:
+        </label>
+        <input
+          v-model.number="cleanupThreshold"
+          type="number"
+          min="0"
+          max="1"
+          step="0.05"
+          class="w-24 px-2 py-1 rounded-lg bg-slate-900/50 border border-slate-700/50 text-sm text-white focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+        />
+        <span class="text-xs text-slate-500">Patterns below this confidence will be archived</span>
+      </div>
+
+      <!-- Preview button -->
+      <button
+        @click="runCleanupPreview"
+        :disabled="cleanupRunning"
+        class="px-3 py-1.5 rounded-lg text-sm bg-amber-500/20 border border-amber-500/30 text-amber-300 hover:text-white hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+      >
+        <i :class="['fas mr-1.5', cleanupRunning ? 'fa-circle-notch fa-spin' : 'fa-search']" />
+        Clean Up Patterns
+      </button>
+
+      <!-- Error -->
+      <p v-if="cleanupError" class="mt-2 text-xs text-red-400">
+        <i class="fas fa-exclamation-circle mr-1" />{{ cleanupError }}
+      </p>
+
+      <!-- Preview results -->
+      <div v-if="cleanupPreview" class="mt-3 rounded-lg bg-slate-900/50 border border-slate-700/30 p-3 text-sm">
+        <p class="text-slate-300 font-medium mb-2">Preview (no changes applied)</p>
+        <ul class="space-y-1 text-xs text-slate-400">
+          <li>
+            <i class="fas fa-ghost text-orange-400 mr-1.5" />
+            Orphan patterns found: <span class="text-white font-medium">{{ cleanupPreview.orphans_found }}</span>
+            ({{ cleanupPreview.orphans_archived }} would be archived)
+          </li>
+          <li>
+            <i class="fas fa-chart-line text-blue-400 mr-1.5" />
+            Low-confidence patterns: <span class="text-white font-medium">{{ cleanupPreview.low_confidence_found }}</span>
+            (confidence &lt; {{ cleanupThreshold }})
+          </li>
+        </ul>
+        <button
+          v-if="cleanupPreview.orphans_archived > 0 || cleanupPreview.low_confidence_found > 0"
+          @click="showCleanupConfirm = true"
+          :disabled="cleanupRunning"
+          class="mt-3 px-3 py-1.5 rounded-lg text-sm bg-red-500/20 border border-red-500/30 text-red-300 hover:text-white hover:bg-red-500/30 transition-colors disabled:opacity-50"
+        >
+          <i class="fas fa-check mr-1.5" />Confirm Cleanup
+        </button>
+        <p v-else class="mt-2 text-xs text-emerald-400">
+          <i class="fas fa-check-circle mr-1" />Nothing to clean up.
+        </p>
+      </div>
+
+      <!-- Final results -->
+      <div v-if="cleanupResult" class="mt-3 rounded-lg bg-emerald-900/20 border border-emerald-700/30 p-3 text-sm">
+        <p class="text-emerald-300 font-medium mb-2">
+          <i class="fas fa-check-circle mr-1.5" />Cleanup complete
+        </p>
+        <ul class="space-y-1 text-xs text-slate-400">
+          <li>Orphans archived: <span class="text-white font-medium">{{ cleanupResult.orphans_archived }}</span></li>
+          <li>Low-confidence archived: <span class="text-white font-medium">{{ cleanupResult.low_confidence_archived }}</span></li>
+          <li>Confidence recalculated: <span class="text-white font-medium">{{ cleanupResult.confidence_recalculated }}</span></li>
+        </ul>
+      </div>
     </div>
 
     <!-- Loading -->
@@ -390,6 +508,17 @@ function handleRefresh() {
       :danger="true"
       @confirm="handleDelete"
       @cancel="showDeleteConfirm = false"
+    />
+
+    <!-- Cleanup Confirmation -->
+    <ConfirmDialog
+      :show="showCleanupConfirm"
+      title="Confirm Pattern Cleanup"
+      :message="`This will archive ${cleanupPreview?.orphans_archived ?? 0} fully-orphaned pattern(s) and ${cleanupPreview?.low_confidence_found ?? 0} low-confidence pattern(s). This action cannot be undone.`"
+      confirm-label="Run Cleanup"
+      :danger="true"
+      @confirm="runCleanupConfirmed"
+      @cancel="showCleanupConfirm = false"
     />
   </div>
 </template>

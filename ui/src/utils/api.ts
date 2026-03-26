@@ -577,6 +577,30 @@ export async function revokeToken(id: string, signal?: AbortSignal): Promise<voi
 }
 
 // ============================================================
+// Pattern Cleanup API
+// ============================================================
+
+export interface PatternCleanupResult {
+  orphans_found: number
+  orphans_archived: number
+  low_confidence_found: number
+  low_confidence_archived: number
+  confidence_recalculated: number
+}
+
+export async function cleanupPatterns(
+  threshold: number,
+  dryRun: boolean,
+  signal?: AbortSignal
+): Promise<PatternCleanupResult> {
+  return postJson<PatternCleanupResult>(
+    `${API_BASE}/maintenance/patterns/cleanup`,
+    { confidence_threshold: threshold, dry_run: dryRun },
+    { signal }
+  )
+}
+
+// ============================================================
 // Analytics API
 // ============================================================
 
