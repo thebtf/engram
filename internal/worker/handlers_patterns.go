@@ -535,7 +535,7 @@ func (s *Service) handlePostPatternInsight(w http.ResponseWriter, r *http.Reques
 	var summary string
 	var llmErr error
 	if llm != nil {
-		insightCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		insightCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		summary, llmErr = learning.GeneratePatternInsight(insightCtx, llm, observations)
 	}
