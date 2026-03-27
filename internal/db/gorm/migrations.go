@@ -1812,17 +1812,19 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 	{
 		ID: "058_observation_injections_table",
 		Migrate: func(tx *gorm.DB) error {
-			return tx.Exec(`
-				CREATE TABLE IF NOT EXISTS observation_injections (
-					id BIGSERIAL PRIMARY KEY,
-					observation_id BIGINT NOT NULL,
-					session_id TEXT NOT NULL,
-					injection_section TEXT NOT NULL,
-					injected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-				);
-				CREATE INDEX IF NOT EXISTS idx_obs_injections_session ON observation_injections (session_id);
-				CREATE INDEX IF NOT EXISTS idx_obs_injections_obs ON observation_injections (observation_id);
-			`).Error
+			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS observation_injections (
+				id BIGSERIAL PRIMARY KEY,
+				observation_id BIGINT NOT NULL,
+				session_id TEXT NOT NULL,
+				injection_section TEXT NOT NULL,
+				injected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_injections_session ON observation_injections (session_id)`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_injections_obs ON observation_injections (observation_id)`).Error
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Exec(`DROP TABLE IF EXISTS observation_injections`).Error
@@ -1872,18 +1874,18 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 	{
 		ID: "061_observation_versions",
 		Migrate: func(tx *gorm.DB) error {
-			return tx.Exec(`
-				CREATE TABLE IF NOT EXISTS observation_versions (
-					id BIGSERIAL PRIMARY KEY,
-					observation_id BIGINT NOT NULL,
-					version INT NOT NULL DEFAULT 1,
-					narrative TEXT NOT NULL,
-					is_active BOOLEAN NOT NULL DEFAULT TRUE,
-					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-					source TEXT NOT NULL DEFAULT 'original'
-				);
-				CREATE INDEX IF NOT EXISTS idx_obs_versions_obs ON observation_versions (observation_id);
-			`).Error
+			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS observation_versions (
+				id BIGSERIAL PRIMARY KEY,
+				observation_id BIGINT NOT NULL,
+				version INT NOT NULL DEFAULT 1,
+				narrative TEXT NOT NULL,
+				is_active BOOLEAN NOT NULL DEFAULT TRUE,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				source TEXT NOT NULL DEFAULT 'original'
+			)`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_versions_obs ON observation_versions (observation_id)`).Error
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Exec(`DROP TABLE IF EXISTS observation_versions`).Error
