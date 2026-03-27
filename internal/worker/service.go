@@ -893,6 +893,7 @@ func (s *Service) initializeAsync() {
 		store, observationStore, injectionStore, summaryStore, promptStore,
 		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore,
 		vectorClient, vectorSync, relationStore, gs,
+		sessionStore, agentStatsStore,
 		log.Logger,
 	)
 	s.initMu.Lock()

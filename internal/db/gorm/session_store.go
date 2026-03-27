@@ -340,6 +340,48 @@ func (s *SessionStore) GetLearningCurve(ctx context.Context, days int, project s
 	return out, nil
 }
 
+// PendingOutcomeSession holds the session ID and project for outcome recording.
+type PendingOutcomeSession struct {
+	ClaudeSessionID string
+	Project         string
+}
+
+// GetSessionsWithPendingOutcome returns sessions that have injection records but no outcome yet,
+// where the most recent injection is older than 10 minutes (to avoid processing active sessions).
+func (s *SessionStore) GetSessionsWithPendingOutcome(ctx context.Context) ([]PendingOutcomeSession, error) {
+	var rows []struct {
+		ClaudeSessionID string `gorm:"column:claude_session_id"`
+		Project         string `gorm:"column:project"`
+	}
+
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT s.claude_session_id, s.project
+		FROM sdk_sessions s
+		WHERE s.outcome IS NULL
+		AND EXISTS (
+			SELECT 1 FROM observation_injections oi
+			WHERE oi.session_id = s.claude_session_id
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM observation_injections oi
+			WHERE oi.session_id = s.claude_session_id
+			AND oi.injected_at > NOW() - INTERVAL '10 minutes'
+		)
+	`).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]PendingOutcomeSession, len(rows))
+	for i, r := range rows {
+		result[i] = PendingOutcomeSession{
+			ClaudeSessionID: r.ClaudeSessionID,
+			Project:         r.Project,
+		}
+	}
+	return result, nil
+}
+
 // UpdateInjectionStrategy records the injection strategy used for a session.
 // Identified by the Claude session ID. Errors are silently dropped by callers (fire-and-forget).
 func (s *SessionStore) UpdateInjectionStrategy(ctx context.Context, claudeSessionID, strategy string) error {

@@ -137,6 +137,11 @@ type Config struct {
 
 	// Signal weights for reward computation (closed-loop learning FR-7)
 	SignalWeights map[string]float64 `json:"signal_weights"`
+
+	// OutcomeRecorderIntervalMinutes controls how often the periodic outcome recorder runs.
+	// It records outcomes for sessions that have injection records but no outcome yet.
+	// Env: ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES (default: 15)
+	OutcomeRecorderIntervalMinutes int `json:"outcome_recorder_interval_minutes"`
 }
 
 var (
@@ -280,9 +285,10 @@ func Default() *Config {
 		ProjectInjectLimit:          15,    // Inject up to 15 project-scoped observations per session
 		InjectionFloor:              3,     // Always inject at least 3 observations regardless of threshold
 		SessionBoost:                1.3,   // Boost factor for observations from recently active sessions
-		InjectionStrategies:         []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
-		InjectionStrategyMode:       "round-robin",
-		DefaultStrategy:             "baseline",
+		InjectionStrategies:           []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
+		InjectionStrategyMode:         "round-robin",
+		DefaultStrategy:               "baseline",
+		OutcomeRecorderIntervalMinutes: 15,
 		SignalWeights: map[string]float64{
 			"git_commit":   1.0,
 			"pr_created":   2.0,
@@ -627,6 +633,11 @@ func Load() (*Config, error) {
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_DEFAULT_STRATEGY")); v != "" {
 		cfg.DefaultStrategy = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.OutcomeRecorderIntervalMinutes = n
+		}
 	}
 	return cfg, nil
 }

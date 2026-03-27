@@ -11,6 +11,7 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/pattern"
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/vector"
@@ -30,6 +31,8 @@ type Service struct {
 	doneCh                     chan struct{}
 	observationStore           *gorm.ObservationStore
 	injectionStore             *gorm.InjectionStore
+	sessionStore               *gorm.SessionStore
+	agentStatsStore            *gorm.AgentStatsStore
 	similarityTelemetry        *telemetry.SimilarityTelemetry
 	patternStore               *gorm.PatternStore
 	smartGC                    *SmartGC
@@ -67,6 +70,8 @@ func NewService(
 	vectorSync *pgvector.Sync,
 	relationStore *gorm.RelationStore,
 	graphStore graph.GraphStore,
+	sessionStore *gorm.SessionStore,
+	agentStatsStore *gorm.AgentStatsStore,
 	log zerolog.Logger,
 ) *Service {
 	svcLog := log.With().Str("component", "maintenance").Logger()
@@ -92,6 +97,8 @@ func NewService(
 		vectorSync:          vectorSync,
 		relationStore:       relationStore,
 		graphStore:          graphStore,
+		sessionStore:        sessionStore,
+		agentStatsStore:     agentStatsStore,
 		log:                 svcLog,
 		stopCh:              make(chan struct{}),
 		doneCh:              make(chan struct{}),
@@ -127,6 +134,10 @@ func (s *Service) Start(ctx context.Context) {
 		Int("retention_days", s.config.ObservationRetentionDays).
 		Bool("cleanup_stale", s.config.CleanupStaleObservations).
 		Msg("Starting maintenance scheduler")
+
+	// Launch periodic outcome recorder as a separate lightweight goroutine.
+	// It runs independently of the main maintenance interval (which may be hours).
+	go s.runOutcomeRecorder(ctx)
 
 	// Initial run after 5 minutes (allow system to stabilize)
 	time.Sleep(5 * time.Minute)
@@ -164,6 +175,91 @@ func (s *Service) Stop() {
 // Wait waits for the maintenance service to finish.
 func (s *Service) Wait() {
 	<-s.doneCh
+}
+
+// runOutcomeRecorder is a lightweight goroutine that periodically records outcomes
+// for sessions that have injection records but no outcome yet. It runs independently
+// of the main maintenance scheduler, which may have an interval of several hours.
+func (s *Service) runOutcomeRecorder(ctx context.Context) {
+	if s.sessionStore == nil || s.observationStore == nil || s.injectionStore == nil {
+		s.log.Debug().Msg("Outcome recorder: required stores not available, skipping")
+		return
+	}
+
+	intervalMin := s.config.OutcomeRecorderIntervalMinutes
+	if intervalMin <= 0 {
+		intervalMin = 15
+	}
+	interval := time.Duration(intervalMin) * time.Minute
+
+	s.log.Info().
+		Dur("interval", interval).
+		Msg("Periodic outcome recorder started")
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.recordPendingOutcomes(ctx)
+		}
+	}
+}
+
+// recordPendingOutcomes queries for sessions with injections but no outcome,
+// determines their outcome heuristically, and propagates it.
+func (s *Service) recordPendingOutcomes(ctx context.Context) {
+	sessions, err := s.sessionStore.GetSessionsWithPendingOutcome(ctx)
+	if err != nil {
+		s.log.Error().Err(err).Msg("[maintenance] Failed to query sessions with pending outcome")
+		return
+	}
+
+	if len(sessions) == 0 {
+		return
+	}
+
+	s.log.Info().Int("count", len(sessions)).Msg("[maintenance] Recording outcomes for sessions with pending outcomes")
+
+	for _, sess := range sessions {
+		sessionID := sess.ClaudeSessionID
+		agentID := sess.Project
+
+		outcome, reason := learning.DetermineSessionOutcome(ctx, s.observationStore, sessionID)
+
+		if err := s.sessionStore.UpdateSessionOutcome(ctx, sessionID, string(outcome), reason); err != nil {
+			s.log.Warn().Err(err).Str("session", sessionID).Msg("[maintenance] Failed to record periodic outcome")
+			continue
+		}
+
+		s.log.Info().
+			Str("session", sessionID).
+			Str("outcome", string(outcome)).
+			Msg("[maintenance] Recorded periodic outcome for session")
+
+		// Fire-and-forget propagation per session.
+		capturedSessionID := sessionID
+		capturedOutcome := outcome
+		capturedAgentID := agentID
+		go func() {
+			bgCtx := context.Background()
+
+			if _, err := learning.PropagateOutcome(bgCtx, s.injectionStore, s.observationStore, capturedSessionID, capturedOutcome); err != nil {
+				s.log.Warn().Err(err).Str("session", capturedSessionID).Msg("[maintenance] Outcome propagation failed")
+			}
+
+			if s.agentStatsStore != nil && capturedAgentID != "" {
+				if _, err := learning.PropagateAgentStats(bgCtx, s.injectionStore, s.agentStatsStore, capturedSessionID, capturedAgentID, capturedOutcome); err != nil {
+					s.log.Warn().Err(err).Str("session", capturedSessionID).Str("agent_id", capturedAgentID).Msg("[maintenance] Agent stats propagation failed")
+				}
+			}
+		}()
+	}
 }
 
 // runMaintenance executes all maintenance tasks.
