@@ -858,6 +858,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"scope":          map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "New scope (optional)"},
 					"status":         map[string]any{"type": "string", "description": "Observation status: active or resolved", "enum": []string{"active", "resolved"}},
 					"status_reason":  map[string]any{"type": "string", "description": "Reason for status change"},
+					"always_inject":  map[string]any{"type": "boolean", "description": "If true, add always-inject concept (injected into every context). If false, remove it."},
 				},
 			},
 		},
@@ -2622,6 +2623,32 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 	// Validate status if provided
 	if params.Status != nil && *params.Status != "active" && *params.Status != "resolved" {
 		return "", fmt.Errorf("status must be 'active' or 'resolved'")
+	}
+
+	// Handle always_inject: merge "always-inject" concept into existing concepts
+	if v, ok := m["always_inject"]; ok && v != nil {
+		alwaysInject := coerceBool(v, false)
+		// Fetch current observation to get existing concepts
+		existing, fetchErr := s.observationStore.GetObservationByID(ctx, params.ID)
+		if fetchErr == nil && existing != nil {
+			concepts := make([]string, 0, len(existing.Concepts)+1)
+			hasIt := false
+			for _, c := range existing.Concepts {
+				if c == "always-inject" {
+					hasIt = true
+					if !alwaysInject {
+						continue // remove it
+					}
+				}
+				concepts = append(concepts, c)
+			}
+			if alwaysInject && !hasIt {
+				concepts = append(concepts, "always-inject")
+			}
+			if alwaysInject != hasIt { // changed
+				params.Concepts = concepts
+			}
+		}
 	}
 
 	// Build update struct

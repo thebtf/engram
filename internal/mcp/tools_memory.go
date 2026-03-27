@@ -154,13 +154,25 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		similar, err := s.vectorClient.Query(ctx, params.Content, 1, where)
 		if err == nil && len(similar) > 0 && similar[0].Similarity >= dedupThreshold {
 			existingID := vector.ExtractRowID(similar[0].Metadata)
-			result := map[string]any{
-				"id":        existingID,
-				"duplicate": true,
-				"message":   fmt.Sprintf("Similar observation already exists (similarity: %.2f)", similar[0].Similarity),
+			// Don't block on suppressed/archived duplicates — allow re-creation.
+			// Vector index doesn't exclude suppressed observations, so check DB.
+			var isSuppressed bool
+			var checkResult struct{ Count int64 }
+			if checkErr := s.observationStore.GetDB().WithContext(ctx).
+				Raw("SELECT COUNT(*) as count FROM observations WHERE id = ? AND (is_suppressed = TRUE OR COALESCE(is_archived, 0) != 0)", existingID).
+				Scan(&checkResult).Error; checkErr == nil && checkResult.Count > 0 {
+				isSuppressed = true
 			}
-			out, _ := json.MarshalIndent(result, "", "  ")
-			return string(out), nil
+			if !isSuppressed {
+				result := map[string]any{
+					"id":        existingID,
+					"duplicate": true,
+					"message":   fmt.Sprintf("Similar observation already exists (similarity: %.2f)", similar[0].Similarity),
+				}
+				out, _ := json.MarshalIndent(result, "", "  ")
+				return string(out), nil
+			}
+			log.Debug().Int64("existing_id", existingID).Msg("store_memory: skipping dedup — existing observation is suppressed/archived")
 		}
 	}
 
