@@ -176,6 +176,7 @@ type Service struct {
 	backfillTracker        *backfillTracker
 	searchQueryLogStore     *gorm.SearchQueryLogStore
 	retrievalStatsLogStore  *gorm.RetrievalStatsLogStore
+	injectionStore          *gorm.InjectionStore
 	llmFilter               *search.LLMFilter
 	llmClient               learning.LLMClient
 	projectSettingsStore    *gorm.ProjectSettingsStore
@@ -733,11 +734,15 @@ func (s *Service) initializeAsync() {
 	// Create raw event store and ingest deduplication cache
 	rawEventStore := gorm.NewRawEventStore(store)
 
+	// Create injection store for closed-loop learning
+	injectionStore := gorm.NewInjectionStore(store.GetDB())
+
 	// Set all the initialized components
 	s.initMu.Lock()
 	s.store = store
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
+	s.injectionStore = injectionStore
 	s.tokenStore = tokenStore
 	s.observationStore = observationStore
 	s.summaryStore = summaryStore
@@ -1205,6 +1210,7 @@ func (s *Service) reinitializeDatabase() {
 	s.store = store
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
+	s.injectionStore = gorm.NewInjectionStore(store.GetDB())
 	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
 	if s.retrievalStatsLogStore != nil {
 		s.retrievalStatsLogStore.Close()
@@ -1752,6 +1758,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/sessions/{id}/extract-learnings", s.handleExtractLearnings)
 		r.Post("/api/sessions/{sessionId}/mark-injected", s.handleSessionMarkInjected)
 		r.Get("/api/sessions/{sessionId}/injected-observations", s.handleGetSessionInjectedObservations)
+		r.Post("/api/sessions/{sessionId}/outcome", s.handleSetSessionOutcome)
 
 		// Session transcript indexing (client pushes JSONL for FTS)
 		r.Post("/api/sessions/index", s.handleIndexSession)

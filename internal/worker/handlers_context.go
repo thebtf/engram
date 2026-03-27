@@ -902,16 +902,17 @@ func splitCamelCase(s string) string {
 // @Router /api/context/inject [post]
 // @Router /api/context/inject [get]
 func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
-	var project, agentID, cwd, legacyProject, gitRemote, relativePath string
+	var project, agentID, cwd, legacyProject, gitRemote, relativePath, sessionID string
 
 	if r.Method == http.MethodPost {
 		var req struct {
-			Project      string `json:"project"`
-			AgentID      string `json:"agent_id"`
-			Cwd          string `json:"cwd"`
+			Project       string `json:"project"`
+			AgentID       string `json:"agent_id"`
+			Cwd           string `json:"cwd"`
 			LegacyProject string `json:"legacy_project"`
-			GitRemote    string `json:"git_remote"`
-			RelativePath string `json:"relative_path"`
+			GitRemote     string `json:"git_remote"`
+			RelativePath  string `json:"relative_path"`
+			SessionID     string `json:"session_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -923,6 +924,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		legacyProject = req.LegacyProject
 		gitRemote = req.GitRemote
 		relativePath = req.RelativePath
+		sessionID = req.SessionID
 	} else {
 		// GET (deprecated — use POST)
 		project = r.URL.Query().Get("project")
@@ -931,6 +933,12 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		legacyProject = r.URL.Query().Get("legacy_project")
 		gitRemote = r.URL.Query().Get("git_remote")
 		relativePath = r.URL.Query().Get("relative_path")
+		sessionID = r.URL.Query().Get("session_id")
+	}
+
+	// Fall back to agent_id as session proxy when no explicit session_id provided
+	if sessionID == "" {
+		sessionID = agentID
 	}
 
 	// agent_id acts as project scope for OpenClaw agents without filesystem context
@@ -1241,6 +1249,31 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		Int("relevant_section", len(relevantObservations)).
 		Int("guidance_section", len(guidanceObservations)).
 		Msg("Context injection with clustering")
+
+	// Record injection events asynchronously (closed-loop learning Phase 1).
+	// Fire-and-forget: injection tracking is non-critical; errors are silently dropped.
+	if sessionID != "" && s.injectionStore != nil {
+		capturedAlwaysInject := alwaysInjectObservations
+		capturedRecent := recentFresh
+		capturedRelevant := relevantObservations
+		capturedSessionID := sessionID
+		injStore := s.injectionStore
+		go func() {
+			var records []gorm.InjectionRecord
+			for _, obs := range capturedAlwaysInject {
+				records = append(records, gorm.InjectionRecord{ObservationID: obs.ID, SessionID: capturedSessionID, InjectionSection: "always_inject"})
+			}
+			for _, obs := range capturedRecent {
+				records = append(records, gorm.InjectionRecord{ObservationID: obs.ID, SessionID: capturedSessionID, InjectionSection: "recent"})
+			}
+			for _, obs := range capturedRelevant {
+				records = append(records, gorm.InjectionRecord{ObservationID: obs.ID, SessionID: capturedSessionID, InjectionSection: "relevant"})
+			}
+			if len(records) > 0 {
+				_ = injStore.RecordInjections(context.Background(), records)
+			}
+		}()
+	}
 
 	// Check if compact format is requested
 	compact := r.URL.Query().Get("format") == "compact"

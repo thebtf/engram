@@ -1223,6 +1223,26 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
+	// Session outcome tool — only advertise when session store is available
+	if s.sessionStore != nil {
+		tools = append(tools,
+			Tool{
+				Name:        "set_session_outcome",
+				Description: "Record the outcome of the current session (success/partial/failure/abandoned). Use at session end to enable closed-loop learning.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"session_id", "outcome"},
+					"properties": map[string]any{
+						"session_id": map[string]any{"type": "string", "description": "Claude session ID"},
+						"outcome":    map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome"},
+						"reason":     map[string]any{"type": "string", "description": "Optional explanation for the outcome"},
+					},
+				},
+			},
+		)
+	}
+
 	// Credential vault tools — only advertise when observation store is available
 	if s.observationStore != nil {
 		tools = append(tools,
@@ -1713,6 +1733,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":
 		return s.handleSuppressMemory(ctx, args)
+	case "set_session_outcome":
+		return s.handleSetSessionOutcomeMCP(ctx, args)
 	}
 
 	// Search-based tools: use parseArgs + coercion instead of direct unmarshal

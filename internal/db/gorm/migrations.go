@@ -1784,6 +1784,50 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`UPDATE observations SET memory_type = '' WHERE source_type = 'manual'`).Error
 		},
 	},
+	// Migration 057: Session outcome columns — closed-loop learning Phase 1.
+	// Adds outcome tracking to sdk_sessions for self-improvement feedback loop.
+	{
+		ID: "057_session_outcome_columns",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS outcome TEXT`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS outcome_reason TEXT`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS outcome_recorded_at TIMESTAMPTZ`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS injection_strategy TEXT`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS injection_strategy`)
+			tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS outcome_recorded_at`)
+			tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS outcome_reason`)
+			return tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS outcome`).Error
+		},
+	},
+	// Migration 058: observation_injections table — tracks which observations were injected per session.
+	// Foundation for closed-loop learning: correlates injections with session outcomes.
+	{
+		ID: "058_observation_injections_table",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`
+				CREATE TABLE IF NOT EXISTS observation_injections (
+					id BIGSERIAL PRIMARY KEY,
+					observation_id BIGINT NOT NULL,
+					session_id TEXT NOT NULL,
+					injection_section TEXT NOT NULL,
+					injected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+				CREATE INDEX IF NOT EXISTS idx_obs_injections_session ON observation_injections (session_id);
+				CREATE INDEX IF NOT EXISTS idx_obs_injections_obs ON observation_injections (observation_id);
+			`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS observation_injections`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

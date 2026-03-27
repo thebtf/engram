@@ -1712,3 +1712,15 @@ func (s *ObservationStore) GetRecentSessionIDs(ctx context.Context, project stri
 func (s *ObservationStore) GetTopImportanceObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
 	return s.GetActiveObservations(ctx, project, limit)
 }
+
+// GetObservationsBySession returns all observations recorded during the given Claude session.
+// Used by the outcome heuristic to determine session success/partial/abandoned.
+func (s *ObservationStore) GetObservationsBySession(ctx context.Context, sessionID string) ([]*models.Observation, error) {
+	var rows []*models.Observation
+	err := s.db.WithContext(ctx).
+		Table("observations").
+		Select("id, sdk_session_id, project, COALESCE(scope, 'project') as scope, type, memory_type, source_type, title, subtitle, narrative, created_at, created_at_epoch, importance_score, utility_score, user_feedback, retrieval_count, injection_count, COALESCE(is_superseded, 0) as is_superseded, enrichment_level, status").
+		Where("sdk_session_id = ?", sessionID).
+		Scan(&rows).Error
+	return rows, err
+}

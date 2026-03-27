@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
 )
@@ -664,6 +665,33 @@ func (s *Service) handleSessionMarkInjected(w http.ResponseWriter, r *http.Reque
 	if err := observationStore.IncrementInjectionCounts(r.Context(), req.IDs); err != nil {
 		http.Error(w, "failed to increment injection counts", http.StatusInternalServerError)
 		return
+	}
+
+	// Write injection records to the junction table asynchronously (closed-loop learning Phase 1).
+	// Fire-and-forget: resolve the Claude session ID then batch-insert junction rows.
+	s.initMu.RLock()
+	injStore := s.injectionStore
+	sessStore := s.sessionStore
+	s.initMu.RUnlock()
+	if injStore != nil && sessStore != nil {
+		capturedDBSessionID := sessionID
+		capturedObsIDs := append([]int64(nil), req.IDs...)
+		go func() {
+			sess, err := sessStore.GetSessionByID(context.Background(), capturedDBSessionID)
+			if err != nil || sess == nil {
+				return
+			}
+			claudeSessionID := sess.ClaudeSessionID
+			records := make([]gorm.InjectionRecord, 0, len(capturedObsIDs))
+			for _, obsID := range capturedObsIDs {
+				records = append(records, gorm.InjectionRecord{
+					ObservationID:    obsID,
+					SessionID:        claudeSessionID,
+					InjectionSection: "mark_injected",
+				})
+			}
+			_ = injStore.RecordInjections(context.Background(), records)
+		}()
 	}
 
 	writeJSON(w, map[string]any{"status": "ok", "count": len(req.IDs)})

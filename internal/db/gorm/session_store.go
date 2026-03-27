@@ -229,6 +229,27 @@ func (s *SessionStore) ListSDKSessions(ctx context.Context, project string, limi
 	return result, total, nil
 }
 
+// UpdateSessionOutcome records the outcome of a session identified by its Claude session ID.
+// Sets outcome, outcome_reason, and outcome_recorded_at in a single UPDATE.
+func (s *SessionStore) UpdateSessionOutcome(ctx context.Context, claudeSessionID, outcome, reason string) error {
+	now := time.Now()
+	result := s.db.WithContext(ctx).
+		Model(&SDKSession{}).
+		Where("claude_session_id = ?", claudeSessionID).
+		Updates(map[string]interface{}{
+			"outcome":             outcome,
+			"outcome_reason":      reason,
+			"outcome_recorded_at": now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("session not found: %s", claudeSessionID)
+	}
+	return nil
+}
+
 // toModelSDKSession converts a GORM SDKSession to pkg/models.SDKSession.
 func toModelSDKSession(sess *SDKSession) *models.SDKSession {
 	return &models.SDKSession{
