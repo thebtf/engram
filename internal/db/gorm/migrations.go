@@ -1847,6 +1847,26 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS effectiveness_score`).Error
 		},
 	},
+	// Migration 060: agent_observation_stats table — tracks per-agent effectiveness for each observation.
+	// Used by closed-loop learning Phase 4 to personalize injection scoring per agent.
+	{
+		ID: "060_agent_observation_stats",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`
+				CREATE TABLE IF NOT EXISTS agent_observation_stats (
+					agent_id TEXT NOT NULL,
+					observation_id BIGINT NOT NULL,
+					injections INT NOT NULL DEFAULT 0,
+					successes INT NOT NULL DEFAULT 0,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					PRIMARY KEY (agent_id, observation_id)
+				)
+			`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS agent_observation_stats`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

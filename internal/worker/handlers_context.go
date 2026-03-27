@@ -21,20 +21,39 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// agentEffectivenessThreshold is the minimum number of agent-specific injections required
+// to substitute the global effectiveness score with the agent-specific one.
+const agentEffectivenessThreshold = 10
+
 // applyStrategy reorders or filters observations according to the named injection strategy.
+// agentStats is an optional map of observation_id -> AgentObservationStat used by the
+// effectiveness-weighted strategy to personalise scores per agent. Pass nil to use global scores only.
 // It returns a new slice; the original is not mutated.
-func applyStrategy(strategy string, observations []*models.Observation) []*models.Observation {
+func applyStrategy(strategy string, observations []*models.Observation, agentStats map[int64]gorm.AgentObservationStat) []*models.Observation {
 	if len(observations) == 0 {
 		return observations
 	}
 	switch strategy {
 	case "effectiveness-weighted":
-		// Sort by blend of importance_score (0.5) + effectiveness_score (0.5)
+		// Sort by blend of importance_score (0.5) + effectiveness_score (0.5).
+		// When agent-specific stats have >= agentEffectivenessThreshold injections,
+		// substitute the global effectiveness_score with the agent-specific rate.
 		out := make([]*models.Observation, len(observations))
 		copy(out, observations)
+		effectivenessFor := func(obs *models.Observation) float64 {
+			if agentStats != nil {
+				if stat, ok := agentStats[obs.ID]; ok && stat.Injections >= agentEffectivenessThreshold {
+					if stat.Injections > 0 {
+						return float64(stat.Successes) / float64(stat.Injections)
+					}
+					return 0
+				}
+			}
+			return obs.EffectivenessScore
+		}
 		sort.SliceStable(out, func(i, j int) bool {
-			si := out[i].ImportanceScore*0.5 + out[i].EffectivenessScore*0.5
-			sj := out[j].ImportanceScore*0.5 + out[j].EffectivenessScore*0.5
+			si := out[i].ImportanceScore*0.5 + effectivenessFor(out[i])*0.5
+			sj := out[j].ImportanceScore*0.5 + effectivenessFor(out[j])*0.5
 			return si > sj
 		})
 		return out
@@ -1329,13 +1348,28 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		Int("guidance_section", len(guidanceObservations)).
 		Msg("Context injection with clustering")
 
+	// Fetch agent-specific effectiveness stats for relevant observations when agent_id is present.
+	// Used by the effectiveness-weighted strategy to personalise injection ordering per agent.
+	var agentStats map[int64]gorm.AgentObservationStat
+	if agentID != "" && s.agentStatsStore != nil && len(relevantObservations) > 0 {
+		obsIDs := make([]int64, len(relevantObservations))
+		for i, obs := range relevantObservations {
+			obsIDs[i] = obs.ID
+		}
+		if stats, err := s.agentStatsStore.GetAgentStats(ctx, agentID, obsIDs); err == nil {
+			agentStats = stats
+		} else {
+			log.Debug().Err(err).Str("agent_id", agentID).Msg("Failed to fetch agent stats for injection strategy")
+		}
+	}
+
 	// Apply A/B injection strategy (closed-loop learning FR-5).
 	// Strategy is selected per-session and applied to the relevant observations section.
 	// The strategy name is recorded on the session row for later comparison.
 	var selectedStrategy string
 	if s.strategySelector != nil {
 		selectedStrategy = s.strategySelector.SelectStrategy(sessionID)
-		relevantObservations = applyStrategy(selectedStrategy, relevantObservations)
+		relevantObservations = applyStrategy(selectedStrategy, relevantObservations, agentStats)
 		log.Debug().Str("session", sessionID).Str("strategy", selectedStrategy).Msg("Injection strategy applied")
 		// Record strategy on session (fire-and-forget)
 		if sessionID != "" && s.sessionStore != nil {

@@ -177,6 +177,7 @@ type Service struct {
 	searchQueryLogStore     *gorm.SearchQueryLogStore
 	retrievalStatsLogStore  *gorm.RetrievalStatsLogStore
 	injectionStore          *gorm.InjectionStore
+	agentStatsStore         *gorm.AgentStatsStore
 	llmFilter               *search.LLMFilter
 	llmClient               learning.LLMClient
 	projectSettingsStore    *gorm.ProjectSettingsStore
@@ -739,12 +740,16 @@ func (s *Service) initializeAsync() {
 	// Create injection store for closed-loop learning
 	injectionStore := gorm.NewInjectionStore(store.GetDB())
 
+	// Create agent stats store for Phase 4 agent-specific effectiveness tracking
+	agentStatsStore := gorm.NewAgentStatsStore(store.GetDB())
+
 	// Set all the initialized components
 	s.initMu.Lock()
 	s.store = store
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
 	s.injectionStore = injectionStore
+	s.agentStatsStore = agentStatsStore
 	s.tokenStore = tokenStore
 	s.observationStore = observationStore
 	s.summaryStore = summaryStore
@@ -1213,6 +1218,7 @@ func (s *Service) reinitializeDatabase() {
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
 	s.injectionStore = gorm.NewInjectionStore(store.GetDB())
+	s.agentStatsStore = gorm.NewAgentStatsStore(store.GetDB())
 	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
 	if s.retrievalStatsLogStore != nil {
 		s.retrievalStatsLogStore.Close()

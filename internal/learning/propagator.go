@@ -25,6 +25,12 @@ type EffectivenessUpdater interface {
 	UpdateEffectivenessStats(ctx context.Context, id int64, addInjections, addSuccesses int, newUtilityScore float64) error
 }
 
+// AgentStatsUpdater applies per-agent effectiveness stats for an agent-observation pair.
+type AgentStatsUpdater interface {
+	// UpsertAgentStats increments injection count and optionally success count for an agent-observation pair.
+	UpsertAgentStats(ctx context.Context, agentID string, observationID int64, success bool) error
+}
+
 // sectionWeight returns the position weight for an injection section.
 func sectionWeight(section string) float64 {
 	switch section {
@@ -68,6 +74,39 @@ func clamp(v, lo, hi float64) float64 {
 		return hi
 	}
 	return v
+}
+
+// PropagateAgentStats updates agent-specific injection effectiveness stats for all observations
+// injected during a session. It is a no-op for abandoned outcomes (returns 0, nil).
+// agentID identifies the agent whose stats are being updated.
+func PropagateAgentStats(
+	ctx context.Context,
+	injStore InjectionSource,
+	agentStore AgentStatsUpdater,
+	sessionID string,
+	agentID string,
+	outcome Outcome,
+) (int, error) {
+	_, isSuccess, apply := scoreDelta(outcome)
+	if !apply || agentID == "" {
+		return 0, nil
+	}
+
+	records, err := injStore.GetInjectionsBySession(ctx, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("fetch injections for agent stats session %s: %w", sessionID, err)
+	}
+
+	updated := 0
+	for _, rec := range records {
+		if err := agentStore.UpsertAgentStats(ctx, agentID, rec.ObservationID, isSuccess); err != nil {
+			// Skip individual failures — do not abort the whole propagation.
+			continue
+		}
+		updated++
+	}
+
+	return updated, nil
 }
 
 // PropagateOutcome propagates a session outcome to the utility scores of all injected observations.
