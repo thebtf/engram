@@ -29,15 +29,16 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 
 	var params struct {
-		Tags       []string
-		Rejected   []string
-		Content    string
-		Title      string
-		Type       string
-		Scope      string
-		Project    string
-		Importance *float64
-		TtlDays    *int
+		Tags         []string
+		Rejected     []string
+		Content      string
+		Title        string
+		Type         string
+		Scope        string
+		Project      string
+		Importance   *float64
+		TtlDays      *int
+		AlwaysInject bool
 	}
 	params.Tags = coerceStringSlice(m["tags"])
 	params.Rejected = coerceStringSlice(m["rejected"])
@@ -46,6 +47,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	params.Type = coerceString(m["type"], "")
 	params.Scope = coerceString(m["scope"], "")
 	params.Project = coerceString(m["project"], "")
+	params.AlwaysInject = coerceBool(m["always_inject"], false)
 	if v, ok := m["importance"]; ok && v != nil {
 		f := coerceFloat64(v, 0)
 		params.Importance = &f
@@ -122,6 +124,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				concepts = append(concepts, part)
 			}
 		}
+	}
+
+	// Add always-inject concept when requested — observations with this concept
+	// are injected into every agent context regardless of query relevance.
+	if params.AlwaysInject && !seen["always-inject"] {
+		concepts = append(concepts, "always-inject")
+		seen["always-inject"] = true
 	}
 
 	// Determine scope from explicit param or auto-detect from concepts.
