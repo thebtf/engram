@@ -503,7 +503,10 @@ func (s *ObservationStore) GetAlwaysInjectObservations(ctx context.Context, limi
 // Results are ordered by importance_score DESC.
 func (s *ObservationStore) GetObservationsByFile(ctx context.Context, filePath string, limit int) ([]*models.Observation, error) {
 	var dbObservations []Observation
-	fileJSON := fmt.Sprintf(`["%s"]`, filePath)
+	// Use json.Marshal to properly escape backslashes in Windows paths (e.g., D:\Dev\...).
+	// fmt.Sprintf(`["%s"]`, path) produces invalid JSON when path contains backslashes.
+	fileJSONBytes, _ := json.Marshal([]string{filePath})
+	fileJSON := string(fileJSONBytes)
 	err := s.db.WithContext(ctx).
 		Scopes(activeObservationFilter(), importanceOrdering()).
 		Where("files_modified @> ? OR files_read @> ?", fileJSON, fileJSON).
