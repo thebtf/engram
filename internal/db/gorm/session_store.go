@@ -250,6 +250,52 @@ func (s *SessionStore) UpdateSessionOutcome(ctx context.Context, claudeSessionID
 	return nil
 }
 
+// StrategyStatRow holds aggregated stats for a single injection strategy.
+type StrategyStatRow struct {
+	Strategy  string
+	Sessions  int64
+	Successes int64
+}
+
+// GetStrategyStats returns per-strategy session and success counts from sdk_sessions.
+// Only strategies with at least one session are included.
+func (s *SessionStore) GetStrategyStats(ctx context.Context) ([]StrategyStatRow, error) {
+	type rawRow struct {
+		InjectionStrategy string
+		Sessions          int64
+		Successes         int64
+	}
+	var raw []rawRow
+	err := s.db.WithContext(ctx).
+		Model(&SDKSession{}).
+		Select("injection_strategy, COUNT(*) AS sessions, COUNT(CASE WHEN outcome = 'success' THEN 1 END) AS successes").
+		Where("injection_strategy IS NOT NULL AND injection_strategy != ''").
+		Group("injection_strategy").
+		Scan(&raw).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StrategyStatRow, len(raw))
+	for i, r := range raw {
+		out[i] = StrategyStatRow{
+			Strategy:  r.InjectionStrategy,
+			Sessions:  r.Sessions,
+			Successes: r.Successes,
+		}
+	}
+	return out, nil
+}
+
+// UpdateInjectionStrategy records the injection strategy used for a session.
+// Identified by the Claude session ID. Errors are silently dropped by callers (fire-and-forget).
+func (s *SessionStore) UpdateInjectionStrategy(ctx context.Context, claudeSessionID, strategy string) error {
+	result := s.db.WithContext(ctx).
+		Model(&SDKSession{}).
+		Where("claude_session_id = ?", claudeSessionID).
+		Update("injection_strategy", strategy)
+	return result.Error
+}
+
 // toModelSDKSession converts a GORM SDKSession to pkg/models.SDKSession.
 func toModelSDKSession(sess *SDKSession) *models.SDKSession {
 	return &models.SDKSession{

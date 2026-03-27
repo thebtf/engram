@@ -180,6 +180,7 @@ type Service struct {
 	llmFilter               *search.LLMFilter
 	llmClient               learning.LLMClient
 	projectSettingsStore    *gorm.ProjectSettingsStore
+	strategySelector        *learning.StrategySelector
 	version                 string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
 	wg                     sync.WaitGroup
@@ -514,6 +515,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		pendingVectorSyncs: make(chan int64, 1000),  // Buffer for dropped syncs awaiting reconciliation
 		ingestDedup:        newDeduplicationCache(5 * time.Minute),
 		mcpHealth:          mcp.NewMCPHealth(),
+		strategySelector:   learning.NewStrategySelector(cfg.InjectionStrategies, cfg.InjectionStrategyMode, cfg.DefaultStrategy),
 	}
 
 	// Setup middleware and routes (health endpoint works immediately)
@@ -1759,6 +1761,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/sessions/{sessionId}/mark-injected", s.handleSessionMarkInjected)
 		r.Get("/api/sessions/{sessionId}/injected-observations", s.handleGetSessionInjectedObservations)
 		r.Post("/api/sessions/{sessionId}/outcome", s.handleSetSessionOutcome)
+		r.Get("/api/learning/strategies", s.handleGetStrategies)
 
 		// Session transcript indexing (client pushes JSONL for FTS)
 		r.Post("/api/sessions/index", s.handleIndexSession)

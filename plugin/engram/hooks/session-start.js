@@ -68,6 +68,9 @@ async function handleSessionStart(ctx, input) {
   console.error(
     `[engram] Injecting ${observations.length} observations from project memory (${detailedCount} detailed, ${condensedCount} condensed)`
   );
+  if (result && result.strategy) {
+    console.error(`[session-start] Injection strategy: ${result.strategy}`);
+  }
 
   // Always-inject tier: unconditional behavioral rules (FR-1, FR-6)
   const alwaysInject = Array.isArray(result.always_inject) ? result.always_inject : [];

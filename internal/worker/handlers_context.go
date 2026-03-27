@@ -21,6 +21,85 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// applyStrategy reorders or filters observations according to the named injection strategy.
+// It returns a new slice; the original is not mutated.
+func applyStrategy(strategy string, observations []*models.Observation) []*models.Observation {
+	if len(observations) == 0 {
+		return observations
+	}
+	switch strategy {
+	case "effectiveness-weighted":
+		// Sort by blend of importance_score (0.5) + effectiveness_score (0.5)
+		out := make([]*models.Observation, len(observations))
+		copy(out, observations)
+		sort.SliceStable(out, func(i, j int) bool {
+			si := out[i].ImportanceScore*0.5 + out[i].EffectivenessScore*0.5
+			sj := out[j].ImportanceScore*0.5 + out[j].EffectivenessScore*0.5
+			return si > sj
+		})
+		return out
+
+	case "recency-boosted":
+		// Re-sort: observations < 24h old get 2x score multiplier
+		twentyFourHoursAgo := time.Now().UnixMilli() - 24*60*60*1000
+		out := make([]*models.Observation, len(observations))
+		copy(out, observations)
+		type weighted struct {
+			obs   *models.Observation
+			score float64
+		}
+		ws := make([]weighted, len(out))
+		for i, obs := range out {
+			score := obs.ImportanceScore
+			if obs.CreatedAtEpoch > twentyFourHoursAgo {
+				score *= 2.0
+			}
+			ws[i] = weighted{obs: obs, score: score}
+		}
+		sort.SliceStable(ws, func(i, j int) bool {
+			return ws[i].score > ws[j].score
+		})
+		result := make([]*models.Observation, len(ws))
+		for i, w := range ws {
+			result[i] = w.obs
+		}
+		return result
+
+	case "diverse":
+		// Keep max 2 observations per concept (first concept tag), interleaved
+		// Group by first concept
+		grouped := make(map[string][]*models.Observation)
+		order := make([]string, 0)
+		for _, obs := range observations {
+			key := ""
+			if len(obs.Concepts) > 0 {
+				key = string(obs.Concepts[0])
+			}
+			if _, exists := grouped[key]; !exists {
+				order = append(order, key)
+			}
+			if len(grouped[key]) < 2 {
+				grouped[key] = append(grouped[key], obs)
+			}
+		}
+		// Interleave: take one from each group in round-robin until all exhausted
+		out := make([]*models.Observation, 0, len(observations))
+		maxRound := 2
+		for round := 0; round < maxRound; round++ {
+			for _, key := range order {
+				if round < len(grouped[key]) {
+					out = append(out, grouped[key][round])
+				}
+			}
+		}
+		return out
+
+	default:
+		// "baseline": no change
+		return observations
+	}
+}
+
 // handleSearchByPrompt godoc
 // @Summary Search observations by prompt
 // @Description Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. Supports both GET (query params) and POST (JSON body) to avoid URL length limits.
@@ -1250,6 +1329,27 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		Int("guidance_section", len(guidanceObservations)).
 		Msg("Context injection with clustering")
 
+	// Apply A/B injection strategy (closed-loop learning FR-5).
+	// Strategy is selected per-session and applied to the relevant observations section.
+	// The strategy name is recorded on the session row for later comparison.
+	var selectedStrategy string
+	if s.strategySelector != nil {
+		selectedStrategy = s.strategySelector.SelectStrategy(sessionID)
+		relevantObservations = applyStrategy(selectedStrategy, relevantObservations)
+		log.Debug().Str("session", sessionID).Str("strategy", selectedStrategy).Msg("Injection strategy applied")
+		// Record strategy on session (fire-and-forget)
+		if sessionID != "" && s.sessionStore != nil {
+			capturedStrategy := selectedStrategy
+			capturedSID := sessionID
+			sessionStore := s.sessionStore
+			go func() {
+				if err := sessionStore.UpdateInjectionStrategy(context.Background(), capturedSID, capturedStrategy); err != nil {
+					log.Debug().Err(err).Str("session", capturedSID).Msg("Failed to record injection strategy on session")
+				}
+			}()
+		}
+	}
+
 	// Record injection events asynchronously (closed-loop learning Phase 1).
 	// Fire-and-forget: injection tracking is non-critical; errors are silently dropped.
 	if sessionID != "" && s.injectionStore != nil {
@@ -1285,6 +1385,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		compactTokenEstimate := estimateTokensWithLimit(clusteredObservations, fullCount) +
 			estimateTokens(guidanceObservations)
 		writeJSON(w, map[string]any{
+			"strategy": selectedStrategy,
 			"project":            project,
 			"observations":       compactObservationsWithLimit(clusteredObservations, fullCount),
 			"recent":             compactObservations(recentFresh),
@@ -1300,6 +1401,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	} else {
 		writeJSON(w, map[string]any{
 			"project":            project,
+			"strategy":           selectedStrategy,
 			"observations":       clusteredObservations,
 			"recent":             recentFresh,
 			"relevant":           relevantObservations,
