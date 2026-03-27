@@ -119,10 +119,12 @@ export class EngramRestClient {
     agentId: string,
     cwd?: string,
   ): Promise<ContextInjectResponse | null> {
+    // Inject returns large payloads (80KB+) with vector search — needs more than default 5s.
+    // Timeout failures here trigger availability cooldown, blocking ALL engram tools for 60s.
     return this.post<ContextInjectResponse>('/api/context/inject', {
       agent_id: agentId,
       ...(cwd ? { cwd } : {}),
-    });
+    }, 15_000);
   }
 
   /**
@@ -137,7 +139,8 @@ export class EngramRestClient {
     /** Source identifier passed through to the server for analytics/routing. */
     source?: string;
   }): Promise<ContextSearchResponse | null> {
-    return this.post<ContextSearchResponse>('/api/context/search', body);
+    // Context search does vector query (embedding + pgvector) — needs more than default 5s.
+    return this.post<ContextSearchResponse>('/api/context/search', body, 15_000);
   }
 
   /**
