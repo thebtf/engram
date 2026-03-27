@@ -237,6 +237,14 @@ function detectUtilitySignal(obs, assistantTextLower) {
 }
 
 async function handleStop(ctx, input) {
+  // Diagnostic: file-based marker to prove hook was called (HTTP may fail, file won't)
+  const fs = require('fs');
+  const markerPath = require('path').join(require('os').tmpdir(), 'engram-stop-hook-marker.txt');
+  try {
+    const prev = fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf8') : '';
+    fs.writeFileSync(markerPath, prev + `${new Date().toISOString()} session=${ctx.SessionID || 'unknown'}\n`);
+  } catch {}
+
   console.error(`[stop] Raw input: ${String(ctx.RawInput || '')}`);
 
   // Diagnostic: leave a trace in server access log to prove hook was called
