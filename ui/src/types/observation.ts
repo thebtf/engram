@@ -40,6 +40,10 @@ export interface Observation {
   rejected?: string[]
   status: 'active' | 'resolved'
   status_reason?: string
+  // Effectiveness scores from closed-loop learning
+  effectiveness_score?: number
+  effectiveness_injections?: number
+  effectiveness_successes?: number
 }
 
 export const OBSERVATION_TYPES: ObservationType[] = ['bugfix', 'feature', 'refactor', 'discovery', 'decision', 'change', 'guidance']

@@ -1774,6 +1774,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/sessions/{sessionId}/injected-observations", s.handleGetSessionInjectedObservations)
 		r.Post("/api/sessions/{sessionId}/outcome", s.handleSetSessionOutcome)
 		r.Get("/api/learning/strategies", s.handleGetStrategies)
+		r.Get("/api/learning/curve", s.handleGetLearningCurve)
 
 		// Session transcript indexing (client pushes JSONL for FTS)
 		r.Post("/api/sessions/index", s.handleIndexSession)

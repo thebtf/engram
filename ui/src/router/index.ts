@@ -68,6 +68,11 @@ const routes = [
     name: 'tokens',
     component: () => import('@/views/TokensView.vue'),
   },
+  {
+    path: '/learning',
+    name: 'learning',
+    component: () => import('@/views/LearningView.vue'),
+  },
 ]
 
 const router = createRouter({

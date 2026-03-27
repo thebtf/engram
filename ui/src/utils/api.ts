@@ -825,6 +825,57 @@ export async function checkForUpdate(signal?: AbortSignal): Promise<{
   return fetchWithRetry(`${API_BASE}/update/check`, { signal })
 }
 
+// ============================================================
+// Learning API (Closed-Loop Phase 6)
+// ============================================================
+
+export interface LearningCurvePoint {
+  date: string
+  sessions: number
+  successes: number
+  outcome_rate: number
+}
+
+export interface LearningCurveResponse {
+  data_points: LearningCurvePoint[]
+}
+
+export interface StrategyRow {
+  name: string
+  sessions: number
+  successes: number
+  outcome_rate: number
+}
+
+export interface StrategiesResponse {
+  strategies: StrategyRow[]
+}
+
+export interface EffectivenessResult {
+  observation_id: number
+  injections: number
+  successes: number
+  score: number
+  tier: string
+}
+
+export async function fetchLearningCurve(days?: number, project?: string, signal?: AbortSignal): Promise<LearningCurveResponse> {
+  const params = new URLSearchParams()
+  if (days) params.set('days', String(days))
+  if (project) params.set('project', project)
+  const query = params.toString()
+  return fetchWithRetry<LearningCurveResponse>(`${API_BASE}/learning/curve${query ? '?' + query : ''}`, { signal })
+}
+
+export async function fetchStrategies(signal?: AbortSignal): Promise<StrategiesResponse> {
+  return fetchWithRetry<StrategiesResponse>(`${API_BASE}/learning/strategies`, { signal })
+}
+
+export async function fetchEffectiveness(id: number, agentId?: string, signal?: AbortSignal): Promise<EffectivenessResult> {
+  const params = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''
+  return fetchWithRetry<EffectivenessResult>(`${API_BASE}/observations/${id}/effectiveness${params}`, { signal })
+}
+
 // Observation tag management
 export async function updateObservationTags(
   id: number,
