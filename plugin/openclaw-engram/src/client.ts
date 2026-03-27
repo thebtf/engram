@@ -323,6 +323,7 @@ export class EngramRestClient {
     const timeout = timeoutMs ?? this.defaultTimeoutMs;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
+    const startMs = Date.now();
 
     try {
       const headers: Record<string, string> = {
@@ -340,8 +341,10 @@ export class EngramRestClient {
       });
 
       const text = await response.text();
+      const elapsedMs = Date.now() - startMs;
+
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}: ${text}`);
+        throw new Error(`HTTP ${response.status} ${response.statusText} (${elapsedMs}ms): ${text.slice(0, 200)}`);
       }
 
       this.availability.recordSuccess();
@@ -349,9 +352,14 @@ export class EngramRestClient {
       if (!text) return null;
       return JSON.parse(text) as T;
     } catch (err: unknown) {
+      const elapsedMs = Date.now() - startMs;
       this.availability.recordFailure();
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[engram] ${method} ${path} failed: ${msg}`);
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      console.error(
+        `[engram] ${method} ${path} failed after ${elapsedMs}ms` +
+        `${isAbort ? ` (timeout=${timeout}ms)` : ''}: ${msg}`,
+      );
       return null;
     } finally {
       clearTimeout(timer);
