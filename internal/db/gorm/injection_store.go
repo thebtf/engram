@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+
+	"github.com/thebtf/engram/internal/learning"
 )
 
 // InjectionRecord represents a single observation injection event.
@@ -33,13 +35,33 @@ func (s *InjectionStore) RecordInjections(ctx context.Context, records []Injecti
 	return s.db.WithContext(ctx).Table("observation_injections").Create(&records).Error
 }
 
-// GetInjectionsBySession returns all injection records for a session.
-func (s *InjectionStore) GetInjectionsBySession(ctx context.Context, sessionID string) ([]InjectionRecord, error) {
-	var records []InjectionRecord
+// GetInjectionsBySession returns injection records for a session as learning.InjectionRecord values.
+// Implements learning.InjectionSource so InjectionStore can be passed directly to the propagator.
+func (s *InjectionStore) GetInjectionsBySession(ctx context.Context, sessionID string) ([]learning.InjectionRecord, error) {
+	var rows []InjectionRecord
 	err := s.db.WithContext(ctx).Table("observation_injections").
 		Where("session_id = ?", sessionID).
-		Find(&records).Error
-	return records, err
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make([]learning.InjectionRecord, len(rows))
+	for i, r := range rows {
+		result[i] = learning.InjectionRecord{
+			ObservationID:    r.ObservationID,
+			InjectionSection: r.InjectionSection,
+		}
+	}
+	return result, nil
+}
+
+// CountInjectionsBySession returns the number of injection records for a session.
+func (s *InjectionStore) CountInjectionsBySession(ctx context.Context, sessionID string) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Table("observation_injections").
+		Where("session_id = ?", sessionID).
+		Count(&count).Error
+	return count, err
 }
 
 // CleanupOldInjections removes records older than the given time.

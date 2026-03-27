@@ -878,7 +878,7 @@ func (s *Service) initializeAsync() {
 		)
 	}
 	maintenanceSvc := maintenance.NewService(
-		store, observationStore, summaryStore, promptStore,
+		store, observationStore, injectionStore, summaryStore, promptStore,
 		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore,
 		vectorClient, vectorSync, relationStore, gs,
 		log.Logger,
@@ -1784,6 +1784,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/observations/{id}/feedback", s.handleObservationFeedback)
 		r.Post("/api/observations/{id}/utility", s.handleObservationUtility)
 		r.Get("/api/observations/{id}/score", s.handleExplainScore)
+		r.Get("/api/observations/{id}/effectiveness", s.handleGetEffectiveness)
 		r.Post("/api/observations/mark-injected", s.handleMarkInjected)
 		r.Get("/api/observations/top", s.handleGetTopObservations)
 		r.Get("/api/observations/most-retrieved", s.handleGetMostRetrieved)

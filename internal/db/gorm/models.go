@@ -88,6 +88,9 @@ type Observation struct {
 	TtlDays                     sql.NullInt32
 	Status                      string         `gorm:"column:status;default:active"`
 	StatusReason                sql.NullString `gorm:"column:status_reason"`
+	EffectivenessScore          float64        `gorm:"type:real;default:0"`
+	EffectivenessInjections     int            `gorm:"default:0"`
+	EffectivenessSuccesses      int            `gorm:"default:0"`
 }
 
 func (Observation) TableName() string { return "observations" }

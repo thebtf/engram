@@ -19,41 +19,43 @@ import (
 
 // Service handles scheduled maintenance tasks.
 type Service struct {
-	log                       zerolog.Logger
-	lastRunTime               time.Time
-	promptStore               *gorm.PromptStore
-	store                     *gorm.Store
-	vectorCleanupFn           func(ctx context.Context, deletedIDs []int64)
-	config                    *config.Config
-	summaryStore              *gorm.SummaryStore
-	stopCh                    chan struct{}
-	doneCh                    chan struct{}
-	observationStore          *gorm.ObservationStore
-	similarityTelemetry       *telemetry.SimilarityTelemetry
-	patternStore              *gorm.PatternStore
-	smartGC                   *SmartGC
-	nearDedupFinder           *NearDuplicateFinder
-	vectorClient              vector.Client
-	vectorSync                *pgvector.Sync
-	relationStore             *gorm.RelationStore
-	graphStore                graph.GraphStore
-	lastRunDuration           time.Duration
-	totalSmartGCArchived      int64
-	totalCleanedObs           int64
-	totalOptimizeRun          int64
-	totalPatternDecay         int64
-	totalNearDedupMerged      int64
-	totalOrphanVectorsCleaned int64
+	log                        zerolog.Logger
+	lastRunTime                time.Time
+	promptStore                *gorm.PromptStore
+	store                      *gorm.Store
+	vectorCleanupFn            func(ctx context.Context, deletedIDs []int64)
+	config                     *config.Config
+	summaryStore               *gorm.SummaryStore
+	stopCh                     chan struct{}
+	doneCh                     chan struct{}
+	observationStore           *gorm.ObservationStore
+	injectionStore             *gorm.InjectionStore
+	similarityTelemetry        *telemetry.SimilarityTelemetry
+	patternStore               *gorm.PatternStore
+	smartGC                    *SmartGC
+	nearDedupFinder            *NearDuplicateFinder
+	vectorClient               vector.Client
+	vectorSync                 *pgvector.Sync
+	relationStore              *gorm.RelationStore
+	graphStore                 graph.GraphStore
+	lastRunDuration            time.Duration
+	totalSmartGCArchived       int64
+	totalCleanedObs            int64
+	totalOptimizeRun           int64
+	totalPatternDecay          int64
+	totalNearDedupMerged       int64
+	totalOrphanVectorsCleaned  int64
 	totalStaleRelationsCleaned int64
-	embeddingModelChanged     bool
-	mu                        sync.Mutex
-	running                   bool
+	embeddingModelChanged      bool
+	mu                         sync.Mutex
+	running                    bool
 }
 
 // NewService creates a new maintenance service.
 func NewService(
 	store *gorm.Store,
 	observationStore *gorm.ObservationStore,
+	injectionStore *gorm.InjectionStore,
 	summaryStore *gorm.SummaryStore,
 	promptStore *gorm.PromptStore,
 	vectorCleanupFn func(ctx context.Context, deletedIDs []int64),
@@ -77,6 +79,7 @@ func NewService(
 	return &Service{
 		store:               store,
 		observationStore:    observationStore,
+		injectionStore:      injectionStore,
 		summaryStore:        summaryStore,
 		promptStore:         promptStore,
 		vectorCleanupFn:     vectorCleanupFn,
@@ -310,6 +313,24 @@ func (s *Service) runMaintenance(ctx context.Context) {
 	if s.store != nil {
 		if err := s.checkEmbeddingModelChange(ctx); err != nil {
 			s.log.Error().Err(err).Msg("Failed to check embedding model change")
+		}
+	}
+
+	// Task 15: Recalculate effectiveness scores from junction table data
+	if s.injectionStore != nil && s.store != nil {
+		if err := s.recalcEffectivenessScores(ctx); err != nil {
+			s.log.Error().Err(err).Msg("Failed to recalculate effectiveness scores")
+		}
+	}
+
+	// Task 16: TTL cleanup for observation_injections (90-day retention)
+	if s.injectionStore != nil {
+		cutoff := time.Now().AddDate(0, 0, -90)
+		deleted, err := s.injectionStore.CleanupOldInjections(ctx, cutoff)
+		if err != nil {
+			s.log.Error().Err(err).Msg("Failed to cleanup old injection records")
+		} else if deleted > 0 {
+			s.log.Info().Int64("deleted", deleted).Msg("Cleaned old injection records (90-day TTL)")
 		}
 	}
 
@@ -862,5 +883,36 @@ func (s *Service) CleanupOrphanPatterns(ctx context.Context, dryRun bool) (Orpha
 	}
 
 	return result, nil
+}
+
+// recalcEffectivenessScores recomputes effectiveness_score, effectiveness_injections, and
+// effectiveness_successes for all observations from the observation_injections junction table.
+// Joins with sdk_sessions.outcome to count successful injections.
+func (s *Service) recalcEffectivenessScores(ctx context.Context) error {
+	db := s.store.GetDB()
+
+	// Aggregate injection counts and success counts per observation from the junction table.
+	// A "success" is counted when the session outcome is 'success'.
+	return db.WithContext(ctx).Exec(`
+		UPDATE observations o
+		SET
+			effectiveness_injections = agg.total_injections,
+			effectiveness_successes  = agg.success_injections,
+			effectiveness_score      = CASE
+				WHEN agg.total_injections > 0
+				THEN CAST(agg.success_injections AS REAL) / CAST(agg.total_injections AS REAL)
+				ELSE 0
+			END
+		FROM (
+			SELECT
+				oi.observation_id,
+				COUNT(*)                                                         AS total_injections,
+				COUNT(*) FILTER (WHERE ss.outcome = 'success')                   AS success_injections
+			FROM observation_injections oi
+			LEFT JOIN sdk_sessions ss ON ss.claude_session_id = oi.session_id
+			GROUP BY oi.observation_id
+		) agg
+		WHERE o.id = agg.observation_id
+	`).Error
 }
 

@@ -1495,9 +1495,12 @@ func toModelObservation(o *Observation) *models.Observation {
 		IsSuperseded:    o.IsSuperseded != 0, // Convert int to bool
 		ExpiresAt:       o.ExpiresAt,
 		TtlDays:         o.TtlDays,
-		IsExpired:       o.ExpiresAt.Valid && o.ExpiresAt.Time.Before(time.Now()),
-		Status:          o.Status,
-		StatusReason:    o.StatusReason,
+		IsExpired:               o.ExpiresAt.Valid && o.ExpiresAt.Time.Before(time.Now()),
+		Status:                  o.Status,
+		StatusReason:            o.StatusReason,
+		EffectivenessScore:      o.EffectivenessScore,
+		EffectivenessInjections: o.EffectivenessInjections,
+		EffectivenessSuccesses:  o.EffectivenessSuccesses,
 	}
 }
 
