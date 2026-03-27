@@ -490,10 +490,11 @@ func (s *ObservationStore) GetEffectivenessDistribution(ctx context.Context) (Ef
 			COUNT(*) FILTER (WHERE effectiveness_injections >= 10 AND effectiveness_score >= 0.7) AS high,
 			COUNT(*) FILTER (WHERE effectiveness_injections >= 10 AND effectiveness_score >= 0.4 AND effectiveness_score < 0.7) AS medium,
 			COUNT(*) FILTER (WHERE effectiveness_injections >= 10 AND effectiveness_score < 0.4) AS low,
-			COUNT(*) FILTER (WHERE effectiveness_injections < 10 OR effectiveness_injections IS NULL) AS insufficient,
+			COUNT(*) FILTER (WHERE effectiveness_injections > 0 AND effectiveness_injections < 10) AS insufficient,
 			COUNT(*) AS total
 		FROM observations
 		WHERE COALESCE(is_archived, 0) = 0 AND COALESCE(is_suppressed, FALSE) = FALSE
+		AND COALESCE(effectiveness_injections, 0) > 0
 	`).Scan(&result).Error
 	if err != nil {
 		return EffectivenessDistribution{}, fmt.Errorf("failed to query effectiveness distribution: %w", err)
