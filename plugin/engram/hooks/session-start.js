@@ -37,7 +37,11 @@ async function handleSessionStart(ctx, input) {
   const gitRemote = typeof ctx.GitRemote === 'string' ? ctx.GitRemote : '';
   const relativePath = typeof ctx.RelativePath === 'string' ? ctx.RelativePath : '';
 
+  const ccSessionID = typeof ctx.SessionID === 'string' ? ctx.SessionID : '';
   let injectURL = `/api/context/inject?project=${encodeURIComponent(project)}&cwd=${encodeURIComponent(cwd)}`;
+  if (ccSessionID) {
+    injectURL += `&session_id=${encodeURIComponent(ccSessionID)}`;
+  }
   if (legacyProject && legacyProject !== project) {
     injectURL += `&legacy_project=${encodeURIComponent(legacyProject)}`;
     injectURL += `&git_remote=${encodeURIComponent(gitRemote)}`;

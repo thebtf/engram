@@ -19,18 +19,22 @@ import (
 
 // SDKSession represents a Claude Code session.
 type SDKSession struct {
-	ClaudeSessionID  string         `gorm:"uniqueIndex;not null"`
-	Project          string         `gorm:"index;not null"`
-	Status           string         `gorm:"type:text;check:status IN ('active', 'completed', 'failed');default:'active';index"`
-	StartedAt        string         `gorm:"not null"`
-	SDKSessionID     sql.NullString `gorm:"uniqueIndex"`
-	UserPrompt       sql.NullString
-	CompletedAt      sql.NullString
-	WorkerPort       sql.NullInt64
-	CompletedAtEpoch sql.NullInt64
-	ID               int64 `gorm:"primaryKey;autoIncrement"`
-	PromptCounter    int   `gorm:"default:0"`
-	StartedAtEpoch   int64 `gorm:"index:idx_sessions_started,sort:desc;not null"`
+	ClaudeSessionID   string         `gorm:"uniqueIndex;not null"`
+	Project           string         `gorm:"index;not null"`
+	Status            string         `gorm:"type:text;check:status IN ('active', 'completed', 'failed');default:'active';index"`
+	StartedAt         string         `gorm:"not null"`
+	SDKSessionID      sql.NullString `gorm:"uniqueIndex"`
+	UserPrompt        sql.NullString
+	CompletedAt       sql.NullString
+	WorkerPort        sql.NullInt64
+	CompletedAtEpoch  sql.NullInt64
+	Outcome           sql.NullString `gorm:"type:text"`
+	OutcomeReason     sql.NullString `gorm:"type:text"`
+	OutcomeRecordedAt sql.NullString `gorm:"type:timestamptz"`
+	InjectionStrategy sql.NullString `gorm:"type:text"`
+	ID                int64          `gorm:"primaryKey;autoIncrement"`
+	PromptCounter     int            `gorm:"default:0"`
+	StartedAtEpoch    int64          `gorm:"index:idx_sessions_started,sort:desc;not null"`
 }
 
 func (SDKSession) TableName() string { return "sdk_sessions" }

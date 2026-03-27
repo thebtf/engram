@@ -405,7 +405,11 @@ func toModelSDKSession(sess *SDKSession) *models.SDKSession {
 		Status:           models.SessionStatus(sess.Status),
 		StartedAt:        sess.StartedAt,
 		StartedAtEpoch:   sess.StartedAtEpoch,
-		CompletedAt:      sess.CompletedAt,
-		CompletedAtEpoch: sess.CompletedAtEpoch,
+		CompletedAt:       sess.CompletedAt,
+		CompletedAtEpoch:  sess.CompletedAtEpoch,
+		Outcome:           sess.Outcome,
+		OutcomeReason:     sess.OutcomeReason,
+		OutcomeRecordedAt: sess.OutcomeRecordedAt,
+		InjectionStrategy: sess.InjectionStrategy,
 	}
 }
