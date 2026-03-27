@@ -137,3 +137,57 @@ func (s *Service) handleGetEffectiveness(w http.ResponseWriter, r *http.Request)
 	result := scoring.ComputeEffectiveness(obs.ID, obs.EffectivenessInjections, obs.EffectivenessSuccesses)
 	writeJSON(w, result)
 }
+
+// handleGetStrategies godoc
+// @Summary Get injection strategy comparison
+// @Description Returns A/B testing stats for each injection strategy (session count, successes, outcome rate).
+// @Tags Learning
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {string} string "service not ready"
+// @Failure 500 {string} string "internal error"
+// @Router /api/learning/strategies [get]
+func (s *Service) handleGetStrategies(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	sessionStore := s.sessionStore
+	s.initMu.RUnlock()
+
+	if sessionStore == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	type strategyRow struct {
+		Name        string  `json:"name"`
+		Sessions    int64   `json:"sessions"`
+		Successes   int64   `json:"successes"`
+		OutcomeRate float64 `json:"outcome_rate"`
+	}
+
+	rows, err := sessionStore.GetStrategyStats(r.Context())
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to query strategy stats")
+		http.Error(w, "failed to query strategy stats: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	result := make([]strategyRow, 0, len(rows))
+	for _, row := range rows {
+		var rate float64
+		if row.Sessions > 0 {
+			rate = float64(row.Successes) / float64(row.Sessions)
+		}
+		result = append(result, strategyRow{
+			Name:        row.Strategy,
+			Sessions:    row.Sessions,
+			Successes:   row.Successes,
+			OutcomeRate: rate,
+		})
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"strategies": result,
+	})
+}
+

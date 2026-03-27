@@ -129,6 +129,11 @@ type Config struct {
 	ProjectInjectLimit     int     `json:"project_inject_limit"`      // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
 	InjectionFloor         int     `json:"injection_floor"`           // ENGRAM_INJECTION_FLOOR (default: 3)
 	SessionBoost           float64 `json:"session_boost"`             // ENGRAM_SESSION_BOOST (default: 1.3)
+
+	// Injection strategy A/B testing (closed-loop learning FR-5)
+	InjectionStrategies   []string `json:"injection_strategies"`    // Available strategies
+	InjectionStrategyMode string   `json:"injection_strategy_mode"` // "round-robin" or "fixed"
+	DefaultStrategy       string   `json:"default_strategy"`        // Default strategy name
 }
 
 var (
@@ -272,6 +277,9 @@ func Default() *Config {
 		ProjectInjectLimit:          15,    // Inject up to 15 project-scoped observations per session
 		InjectionFloor:              3,     // Always inject at least 3 observations regardless of threshold
 		SessionBoost:                1.3,   // Boost factor for observations from recently active sessions
+		InjectionStrategies:         []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
+		InjectionStrategyMode:       "round-robin",
+		DefaultStrategy:             "baseline",
 	}
 }
 
@@ -603,6 +611,12 @@ func Load() (*Config, error) {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			cfg.SessionBoost = f
 		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECTION_STRATEGY_MODE")); v != "" {
+		cfg.InjectionStrategyMode = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_DEFAULT_STRATEGY")); v != "" {
+		cfg.DefaultStrategy = v
 	}
 	return cfg, nil
 }
