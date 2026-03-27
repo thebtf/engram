@@ -925,12 +925,28 @@ onUnmounted(() => {
           {{ obs.subtitle || obs.narrative }}
         </p>
 
-        <!-- Score -->
+        <!-- Score + Effectiveness badge -->
         <div class="flex flex-col items-center gap-0.5 flex-shrink-0">
           <span class="text-[10px] font-mono text-slate-500">
             <i class="fas fa-chart-bar text-purple-500/60 mr-0.5" />
             {{ (obs.importance_score || 0).toFixed(2) }}
           </span>
+          <!-- Effectiveness dot: green ≥0.7, yellow ≥0.4, red <0.4, gray = insufficient data -->
+          <span
+            :class="[
+              'w-2 h-2 rounded-full flex-shrink-0',
+              (obs.effectiveness_injections ?? 0) < 10
+                ? 'bg-slate-500/60'
+                : (obs.effectiveness_score ?? 0) >= 0.7
+                  ? 'bg-green-500'
+                  : (obs.effectiveness_score ?? 0) >= 0.4
+                    ? 'bg-yellow-500'
+                    : 'bg-red-500',
+            ]"
+            :title="(obs.effectiveness_injections ?? 0) < 10
+              ? 'Insufficient data (< 10 injections)'
+              : `Effectiveness: ${((obs.effectiveness_score ?? 0) * 100).toFixed(0)}% (${obs.effectiveness_injections} injections)`"
+          />
         </div>
 
         <!-- Resolve / Reopen button -->

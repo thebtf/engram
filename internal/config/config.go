@@ -134,6 +134,9 @@ type Config struct {
 	InjectionStrategies   []string `json:"injection_strategies"`    // Available strategies
 	InjectionStrategyMode string   `json:"injection_strategy_mode"` // "round-robin" or "fixed"
 	DefaultStrategy       string   `json:"default_strategy"`        // Default strategy name
+
+	// Signal weights for reward computation (closed-loop learning FR-7)
+	SignalWeights map[string]float64 `json:"signal_weights"`
 }
 
 var (
@@ -280,6 +283,13 @@ func Default() *Config {
 		InjectionStrategies:         []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
 		InjectionStrategyMode:       "round-robin",
 		DefaultStrategy:             "baseline",
+		SignalWeights: map[string]float64{
+			"git_commit":   1.0,
+			"pr_created":   2.0,
+			"pr_merged":    3.0,
+			"test_passed":  0.5,
+			"error_streak": -0.5,
+		},
 	}
 }
 

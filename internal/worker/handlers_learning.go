@@ -231,6 +231,65 @@ func (s *Service) handleGetStrategies(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetLearningCurve godoc
+// @Summary Get daily learning curve
+// @Description Returns daily session outcome rates for the past N days.
+// @Tags Learning
+// @Produce json
+// @Security ApiKeyAuth
+// @Param days  query int    false "Number of days (default 30)"
+// @Param project query string false "Filter by project"
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {string} string "service not ready"
+// @Failure 500 {string} string "internal error"
+// @Router /api/learning/curve [get]
+func (s *Service) handleGetLearningCurve(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	sessionStore := s.sessionStore
+	s.initMu.RUnlock()
+
+	if sessionStore == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	daysStr := r.URL.Query().Get("days")
+	days, _ := strconv.Atoi(daysStr)
+	if days <= 0 {
+		days = 30
+	}
+
+	project := r.URL.Query().Get("project")
+
+	rows, err := sessionStore.GetLearningCurve(r.Context(), days, project)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to query learning curve")
+		http.Error(w, "failed to query learning curve: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	type dataPoint struct {
+		Date        string  `json:"date"`
+		Sessions    int64   `json:"sessions"`
+		Successes   int64   `json:"successes"`
+		OutcomeRate float64 `json:"outcome_rate"`
+	}
+
+	points := make([]dataPoint, 0, len(rows))
+	for _, row := range rows {
+		points = append(points, dataPoint{
+			Date:        row.Date,
+			Sessions:    row.Sessions,
+			Successes:   row.Successes,
+			OutcomeRate: row.OutcomeRate,
+		})
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"data_points": points,
+	})
+}
+
 // handleAPORewrite godoc
 // @Summary APO rewrite — generate an LLM-rewritten guidance observation
 // @Description Generates a rewritten version of a guidance observation narrative using APO-lite.

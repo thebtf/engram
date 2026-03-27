@@ -395,6 +395,16 @@ async function handleStop(ctx, input) {
     let outcome = 'abandoned';
     let reason = 'no observations stored during session';
 
+    // Read signal counters accumulated by post-tool-use hook during this session
+    const signals = lib.getSessionSignals(ctx.SessionID);
+    const commitCount = signals.commits || 0;
+    const prCount = signals.prs || 0;
+    const errorCount = signals.errors || 0;
+
+    console.error(
+      `[stop] Session signals: commits=${commitCount}, errors=${errorCount}, observations=${signals.observations || 0}`
+    );
+
     // Check observations created during this session
     const sessionObs = await lib.requestGet(
       `/api/observations?limit=100&offset=0`
@@ -411,10 +421,18 @@ async function handleStop(ctx, input) {
       if (hasActionableObs) {
         outcome = 'success';
         reason = 'session produced bugfix or feature observations';
+      } else if (commitCount > 0 || prCount > 0) {
+        // Upgrade partial to success when commits/PRs were detected
+        outcome = 'success';
+        reason = `session has commits=${commitCount}, prs=${prCount}`;
       } else {
         outcome = 'partial';
         reason = 'session has observations but no bugfix/feature activity';
       }
+    } else if (commitCount > 0 || prCount > 0) {
+      // No observations but commits were made — still a productive session
+      outcome = 'partial';
+      reason = `session produced commits=${commitCount}, prs=${prCount} but no observations`;
     }
 
     await lib.requestPost(
@@ -426,6 +444,9 @@ async function handleStop(ctx, input) {
   } catch (error) {
     console.error(`[stop] Warning: outcome recording failed: ${error.message}`);
   }
+
+  // Clean up signal file now that the session is complete
+  lib.clearSessionSignals(ctx.SessionID);
 
   return '';
 }

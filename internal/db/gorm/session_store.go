@@ -286,6 +286,60 @@ func (s *SessionStore) GetStrategyStats(ctx context.Context) ([]StrategyStatRow,
 	return out, nil
 }
 
+// LearningCurveRow holds daily session outcome counts for the learning curve endpoint.
+type LearningCurveRow struct {
+	Date        string
+	Sessions    int64
+	Successes   int64
+	OutcomeRate float64
+}
+
+// GetLearningCurve returns daily session outcome rates for the past N days.
+// Optional project filter limits results to sessions matching the project field.
+func (s *SessionStore) GetLearningCurve(ctx context.Context, days int, project string) ([]LearningCurveRow, error) {
+	type rawRow struct {
+		Date      string
+		Sessions  int64
+		Successes int64
+	}
+	if days <= 0 {
+		days = 30
+	}
+
+	// Use fmt.Sprintf for the interval expression: days is a validated integer (> 0), safe to embed directly.
+	intervalExpr := fmt.Sprintf("'%d days'::interval", days)
+	q := s.db.WithContext(ctx).
+		Model(&SDKSession{}).
+		Select("DATE(outcome_recorded_at) AS date, COUNT(*) AS sessions, COUNT(CASE WHEN outcome = 'success' THEN 1 END) AS successes").
+		Where("outcome IS NOT NULL AND outcome_recorded_at >= NOW() - "+intervalExpr).
+		Group("DATE(outcome_recorded_at)").
+		Order("date ASC")
+
+	if project != "" {
+		q = q.Where("project = ?", project)
+	}
+
+	var raw []rawRow
+	if err := q.Scan(&raw).Error; err != nil {
+		return nil, err
+	}
+
+	out := make([]LearningCurveRow, len(raw))
+	for i, r := range raw {
+		var rate float64
+		if r.Sessions > 0 {
+			rate = float64(r.Successes) / float64(r.Sessions)
+		}
+		out[i] = LearningCurveRow{
+			Date:        r.Date,
+			Sessions:    r.Sessions,
+			Successes:   r.Successes,
+			OutcomeRate: rate,
+		}
+	}
+	return out, nil
+}
+
 // UpdateInjectionStrategy records the injection strategy used for a session.
 // Identified by the Claude session ID. Errors are silently dropped by callers (fire-and-forget).
 func (s *SessionStore) UpdateInjectionStrategy(ctx context.Context, claudeSessionID, strategy string) error {
