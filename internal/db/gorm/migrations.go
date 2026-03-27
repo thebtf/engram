@@ -1828,6 +1828,25 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`DROP TABLE IF EXISTS observation_injections`).Error
 		},
 	},
+	// Migration 059: effectiveness columns on observations — tracks injection outcome stats per observation.
+	// Used by closed-loop learning Phase 2 to compute per-observation effectiveness scores.
+	{
+		ID: "059_observation_effectiveness_columns",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS effectiveness_score REAL DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS effectiveness_injections INT DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS effectiveness_successes INT DEFAULT 0`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS effectiveness_successes`)
+			tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS effectiveness_injections`)
+			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS effectiveness_score`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

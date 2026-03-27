@@ -59,6 +59,15 @@ func (s *ObservationStore) IncrementInjectionCounts(ctx context.Context, ids []i
 	return result.Error
 }
 
+// GetUtilityScore returns the current utility_score for the given observation.
+func (s *ObservationStore) GetUtilityScore(ctx context.Context, id int64) (float64, error) {
+	var obs Observation
+	if err := s.db.WithContext(ctx).Select("utility_score").First(&obs, id).Error; err != nil {
+		return 0, err
+	}
+	return obs.UtilityScore, nil
+}
+
 // UpdateUtilityScore updates the utility score for a single observation using EMA.
 // signal: 1.0 = used, 0.0 = corrected/ignored
 // alpha: EMA smoothing factor (default 0.1 for slow adaptation)
@@ -460,4 +469,22 @@ func (s *ObservationStore) IncrementImportanceScores(ctx context.Context, deltas
 		}
 		return nil
 	})
+}
+
+// UpdateEffectivenessStats updates the effectiveness counters and recomputes effectiveness_score
+// for a single observation. Called after outcome propagation for each injected observation.
+func (s *ObservationStore) UpdateEffectivenessStats(ctx context.Context, id int64, addInjections, addSuccesses int, newUtilityScore float64) error {
+	return s.db.WithContext(ctx).Exec(`
+		UPDATE observations
+		SET
+			effectiveness_injections = COALESCE(effectiveness_injections, 0) + ?,
+			effectiveness_successes  = COALESCE(effectiveness_successes, 0) + ?,
+			effectiveness_score      = CASE
+				WHEN (COALESCE(effectiveness_injections, 0) + ?) > 0
+				THEN CAST(COALESCE(effectiveness_successes, 0) + ? AS REAL) / CAST(COALESCE(effectiveness_injections, 0) + ? AS REAL)
+				ELSE 0
+			END,
+			utility_score = ?
+		WHERE id = ?
+	`, addInjections, addSuccesses, addInjections, addSuccesses, addInjections, newUtilityScore, id).Error
 }
