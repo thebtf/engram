@@ -1867,6 +1867,28 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`DROP TABLE IF EXISTS agent_observation_stats`).Error
 		},
 	},
+	// Migration 061: observation_versions table — stores rewritten guidance narratives for A/B testing.
+	// Used by closed-loop learning Phase 5 (APO-lite) to track LLM-rewritten guidance alternatives.
+	{
+		ID: "061_observation_versions",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`
+				CREATE TABLE IF NOT EXISTS observation_versions (
+					id BIGSERIAL PRIMARY KEY,
+					observation_id BIGINT NOT NULL,
+					version INT NOT NULL DEFAULT 1,
+					narrative TEXT NOT NULL,
+					is_active BOOLEAN NOT NULL DEFAULT TRUE,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					source TEXT NOT NULL DEFAULT 'original'
+				);
+				CREATE INDEX IF NOT EXISTS idx_obs_versions_obs ON observation_versions (observation_id);
+			`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS observation_versions`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

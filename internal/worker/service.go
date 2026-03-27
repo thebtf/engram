@@ -178,6 +178,7 @@ type Service struct {
 	retrievalStatsLogStore  *gorm.RetrievalStatsLogStore
 	injectionStore          *gorm.InjectionStore
 	agentStatsStore         *gorm.AgentStatsStore
+	versionStore            *gorm.VersionStore
 	llmFilter               *search.LLMFilter
 	llmClient               learning.LLMClient
 	projectSettingsStore    *gorm.ProjectSettingsStore
@@ -743,6 +744,9 @@ func (s *Service) initializeAsync() {
 	// Create agent stats store for Phase 4 agent-specific effectiveness tracking
 	agentStatsStore := gorm.NewAgentStatsStore(store.GetDB())
 
+	// Create version store for Phase 5 APO-lite observation rewrites
+	versionStore := gorm.NewVersionStore(store.GetDB())
+
 	// Set all the initialized components
 	s.initMu.Lock()
 	s.store = store
@@ -750,6 +754,7 @@ func (s *Service) initializeAsync() {
 	s.rawEventStore = rawEventStore
 	s.injectionStore = injectionStore
 	s.agentStatsStore = agentStatsStore
+	s.versionStore = versionStore
 	s.tokenStore = tokenStore
 	s.observationStore = observationStore
 	s.summaryStore = summaryStore
@@ -1219,6 +1224,7 @@ func (s *Service) reinitializeDatabase() {
 	s.rawEventStore = rawEventStore
 	s.injectionStore = gorm.NewInjectionStore(store.GetDB())
 	s.agentStatsStore = gorm.NewAgentStatsStore(store.GetDB())
+	s.versionStore = gorm.NewVersionStore(store.GetDB())
 	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
 	if s.retrievalStatsLogStore != nil {
 		s.retrievalStatsLogStore.Close()
@@ -1897,6 +1903,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/maintenance/pattern-cleanup", s.handlePatternCleanup)
 		r.Post("/api/maintenance/purge-rebuild", s.handlePurgeRebuild)
 		r.Post("/api/maintenance/patterns/cleanup", s.handlePatternCleanupAdvanced)
+		r.Post("/api/maintenance/apo/rewrite", s.handleAPORewrite)
 
 		// Analytics routes
 		r.Get("/api/analytics/trends", s.handleGetTrends)

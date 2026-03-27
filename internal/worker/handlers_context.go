@@ -983,6 +983,76 @@ func splitCamelCase(s string) string {
 	return result.String()
 }
 
+// applyActiveVersions replaces each observation's narrative with its active ObservationVersion
+// narrative when one exists. Returns a new slice; original observation pointers are not mutated.
+// Errors from the version store are silently logged — the original narrative is used as fallback.
+func applyActiveVersions(ctx context.Context, vs *gorm.VersionStore, observations []*models.Observation) []*models.Observation {
+	if len(observations) == 0 || vs == nil {
+		return observations
+	}
+
+	result := make([]*models.Observation, len(observations))
+	for i, obs := range observations {
+		active, err := vs.GetActiveVersion(ctx, obs.ID)
+		if err != nil {
+			log.Debug().Err(err).Int64("obs_id", obs.ID).Msg("Failed to fetch active observation version; using original narrative")
+			result[i] = obs
+			continue
+		}
+		if active == nil {
+			result[i] = obs
+			continue
+		}
+		// Shallow copy — only swap the narrative field so the original model is not mutated.
+		copy := *obs
+		copy.Narrative.String = active.Narrative
+		copy.Narrative.Valid = true
+		result[i] = &copy
+	}
+
+	return result
+}
+
+// formatBulletOnly formats an observation as a minimal bullet point: "- [TYPE] title: key facts".
+// No narrative is included. Suitable for high-density injection where context space is limited.
+func formatBulletOnly(obs *models.Observation) string {
+	obsType := string(obs.Type)
+	title := ""
+	if obs.Title.Valid {
+		title = obs.Title.String
+	}
+	return "- [" + obsType + "] " + title
+}
+
+// formatConcise formats an observation with its title and the first 100 characters of the narrative.
+// Balances density and readability for medium-priority observations.
+func formatConcise(obs *models.Observation) string {
+	obsType := string(obs.Type)
+	title := ""
+	if obs.Title.Valid {
+		title = obs.Title.String
+	}
+	narrative := ""
+	if obs.Narrative.Valid {
+		n := obs.Narrative.String
+		if len(n) > 100 {
+			n = n[:100] + "..."
+		}
+		narrative = n
+	}
+	return "- [" + obsType + "] " + title + ": " + narrative
+}
+
+// formatStructured formats an observation as a structured XML-like tag.
+// Useful for strategies that want machine-parseable injection format.
+func formatStructured(obs *models.Observation) string {
+	narrative := ""
+	if obs.Narrative.Valid {
+		narrative = obs.Narrative.String
+	}
+	return "<observation type=\"" + string(obs.Type) + "\" id=\"" + strconv.FormatInt(obs.ID, 10) + "\">" + narrative + "</observation>"
+}
+
 // handleContextInject godoc
 // @Summary Inject context for session start
 // @Description Returns context for injection at session start. Response includes recent (last 5), relevant (top 10 semantic), and guidance sections. Supports GET (deprecated) and POST. Critical startup path — optimized for speed.
@@ -1382,6 +1452,18 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				}
 			}()
 		}
+	}
+
+	// Apply active version substitution (APO-lite, Phase 5).
+	// For each observation in guidance and always-inject sections, check whether an active
+	// ObservationVersion exists. When one does, replace the narrative in a shallow copy so
+	// the original model record is not mutated.
+	s.initMu.RLock()
+	versionStore := s.versionStore
+	s.initMu.RUnlock()
+	if versionStore != nil {
+		guidanceObservations = applyActiveVersions(ctx, versionStore, guidanceObservations)
+		alwaysInjectObservations = applyActiveVersions(ctx, versionStore, alwaysInjectObservations)
 	}
 
 	// Record injection events asynchronously (closed-loop learning Phase 1).

@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/scoring"
+	gormstorage "github.com/thebtf/engram/internal/db/gorm"
 )
 
 // handleSetSessionOutcome godoc
@@ -230,3 +231,93 @@ func (s *Service) handleGetStrategies(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleAPORewrite godoc
+// @Summary APO rewrite — generate an LLM-rewritten guidance observation
+// @Description Generates a rewritten version of a guidance observation narrative using APO-lite.
+// In dry_run mode, returns the proposed rewrite without storing it.
+// When dry_run is false, stores the rewrite as a new ObservationVersion and activates it.
+// @Tags Learning
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body object true "Body: {observation_id, dry_run}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 404 {string} string "observation not found"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/maintenance/apo/rewrite [post]
+func (s *Service) handleAPORewrite(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ObservationID int64 `json:"observation_id"`
+		DryRun        bool  `json:"dry_run"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.ObservationID <= 0 {
+		http.Error(w, "observation_id is required", http.StatusBadRequest)
+		return
+	}
+
+	s.initMu.RLock()
+	obsStore := s.observationStore
+	versionStore := s.versionStore
+	llmClient := s.llmClient
+	s.initMu.RUnlock()
+
+	if obsStore == nil || llmClient == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	obs, err := obsStore.GetObservationByID(r.Context(), req.ObservationID)
+	if err != nil {
+		http.Error(w, "observation not found", http.StatusNotFound)
+		return
+	}
+
+	if !obs.Narrative.Valid || obs.Narrative.String == "" {
+		http.Error(w, "observation has no narrative to rewrite", http.StatusBadRequest)
+		return
+	}
+
+	original := obs.Narrative.String
+	effectivenessData := learning.APOEffectivenessData{
+		Injections: obs.EffectivenessInjections,
+		Successes:  obs.EffectivenessSuccesses,
+	}
+
+	rewritten, err := learning.RewriteGuidance(r.Context(), llmClient, original, effectivenessData)
+	if err != nil {
+		log.Warn().Err(err).Int64("observation_id", req.ObservationID).Msg("APO rewrite failed")
+		http.Error(w, "rewrite failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if req.DryRun || versionStore == nil {
+		writeJSON(w, map[string]interface{}{
+			"observation_id": req.ObservationID,
+			"original":       original,
+			"rewrite":        rewritten,
+			"applied":        false,
+		})
+		return
+	}
+
+	versionID, err := versionStore.CreateVersion(r.Context(), req.ObservationID, rewritten, gormstorage.VersionSourceAPORewrite)
+	if err != nil {
+		log.Warn().Err(err).Int64("observation_id", req.ObservationID).Msg("Failed to store APO rewrite version")
+		http.Error(w, "failed to store rewrite: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"observation_id": req.ObservationID,
+		"original":       original,
+		"rewrite":        rewritten,
+		"applied":        true,
+		"version_id":     versionID,
+	})
+}

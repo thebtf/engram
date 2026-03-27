@@ -334,6 +334,11 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
+	// Task 17: APO-lite candidate detection — identify low-effectiveness guidance for rewrite
+	if s.observationStore != nil {
+		s.detectAPOCandidates(ctx)
+	}
+
 	// Update metrics
 	s.mu.Lock()
 	s.lastRunTime = time.Now()
@@ -916,3 +921,57 @@ func (s *Service) recalcEffectivenessScores(ctx context.Context) error {
 	`).Error
 }
 
+// apoCandidate is a low-effectiveness guidance observation identified for APO rewrite.
+type apoCandidate struct {
+	ID                     int64   `gorm:"column:id"`
+	EffectivenessScore     float64 `gorm:"column:effectiveness_score"`
+	EffectivenessInjections int    `gorm:"column:effectiveness_injections"`
+}
+
+// detectAPOCandidates scans for guidance observations that qualify for APO rewrite:
+//   - effectiveness_score < 0.4
+//   - effectiveness_injections >= 15
+//   - No existing "apo_rewrite" version in observation_versions
+//
+// This task only logs candidates. Actual rewrite is triggered manually via POST /api/maintenance/apo/rewrite.
+func (s *Service) detectAPOCandidates(ctx context.Context) {
+	if s.store == nil {
+		return
+	}
+
+	var candidates []apoCandidate
+	err := s.store.GetDB().WithContext(ctx).Raw(`
+		SELECT o.id, o.effectiveness_score, o.effectiveness_injections
+		FROM observations o
+		WHERE o.effectiveness_score < 0.4
+		  AND o.effectiveness_injections >= 15
+		  AND NOT EXISTS (
+			SELECT 1 FROM observation_versions ov
+			WHERE ov.observation_id = o.id
+			  AND ov.source = 'apo_rewrite'
+		  )
+		ORDER BY o.effectiveness_score ASC, o.effectiveness_injections DESC
+		LIMIT 50
+	`).Scan(&candidates).Error
+	if err != nil {
+		s.log.Warn().Err(err).Msg("APO candidate detection failed")
+		return
+	}
+
+	if len(candidates) == 0 {
+		s.log.Debug().Msg("APO candidate detection: no candidates found")
+		return
+	}
+
+	s.log.Info().
+		Int("candidates", len(candidates)).
+		Msg("APO candidate detection: found low-effectiveness guidance observations eligible for rewrite — use POST /api/maintenance/apo/rewrite to apply")
+
+	for _, c := range candidates {
+		s.log.Debug().
+			Int64("observation_id", c.ID).
+			Float64("effectiveness_score", c.EffectivenessScore).
+			Int("injections", c.EffectivenessInjections).
+			Msg("APO candidate")
+	}
+}
