@@ -239,17 +239,23 @@ function detectUtilitySignal(obs, assistantTextLower) {
 async function handleStop(ctx, input) {
   console.error(`[stop] Raw input: ${String(ctx.RawInput || '')}`);
 
+  // Diagnostic: leave a trace in server access log to prove hook was called
+  lib.requestGet('/api/health').catch(() => {});
+  console.error(`[stop] Hook invoked for session=${ctx.SessionID || 'unknown'}`);
+
   let sessionResult;
   try {
     sessionResult = await lib.requestGet(
       `/api/sessions?claudeSessionId=${encodeURIComponent(ctx.SessionID)}`
     );
   } catch (error) {
+    console.error(`[stop] Session lookup failed: ${error.message} (sessionId=${ctx.SessionID})`);
     return '';
   }
 
   const sessionID = Number(sessionResult && sessionResult.id);
   if (!Number.isFinite(sessionID)) {
+    console.error(`[stop] No valid session found for claudeSessionId=${ctx.SessionID} (result=${JSON.stringify(sessionResult)})`);
     return '';
   }
 
