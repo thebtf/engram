@@ -336,8 +336,13 @@ type ObservationJSON struct {
 	LastRetrievedAt int64            `json:"last_retrieved_at_epoch,omitempty"`
 	ScoreUpdatedAt  int64            `json:"score_updated_at_epoch,omitempty"`
 	IsStale         bool             `json:"is_stale,omitempty"`
-	IsSuperseded    bool             `json:"is_superseded,omitempty"`
-	ExpiresAt       *time.Time       `json:"expires_at,omitempty"`
+	IsSuperseded            bool             `json:"is_superseded,omitempty"`
+	Status                  string           `json:"status,omitempty"`
+	StatusReason            string           `json:"status_reason,omitempty"`
+	EffectivenessScore      float64          `json:"effectiveness_score"`
+	EffectivenessInjections int              `json:"effectiveness_injections"`
+	EffectivenessSuccesses  int              `json:"effectiveness_successes"`
+	ExpiresAt               *time.Time       `json:"expires_at,omitempty"`
 	TtlDays         *int32           `json:"ttl_days,omitempty"`
 	IsExpired       bool             `json:"is_expired,omitempty"`
 }
@@ -372,6 +377,11 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		InjectionCount:  o.InjectionCount,
 		// Conflict detection fields
 		IsSuperseded: o.IsSuperseded,
+		// Status lifecycle
+		Status:                  o.Status,
+		EffectivenessScore:      o.EffectivenessScore,
+		EffectivenessInjections: o.EffectivenessInjections,
+		EffectivenessSuccesses:  o.EffectivenessSuccesses,
 		// TTL fields
 		IsExpired: o.IsExpired,
 	}
@@ -397,6 +407,9 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 	}
 	if o.LastRetrievedAt.Valid {
 		j.LastRetrievedAt = o.LastRetrievedAt.Int64
+	}
+	if o.StatusReason.Valid {
+		j.StatusReason = o.StatusReason.String
 	}
 	if o.ScoreUpdatedAt.Valid {
 		j.ScoreUpdatedAt = o.ScoreUpdatedAt.Int64
