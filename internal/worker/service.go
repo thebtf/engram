@@ -1777,6 +1777,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/learning/effectiveness-distribution", s.handleGetEffectivenessDistribution)
 		r.Get("/api/learning/strategies", s.handleGetStrategies)
 		r.Get("/api/learning/curve", s.handleGetLearningCurve)
+		r.Get("/api/sessions/{sessionId}/injections", s.handleGetSessionInjections)
 
 		// Session transcript indexing (client pushes JSONL for FTS)
 		r.Post("/api/sessions/index", s.handleIndexSession)

@@ -64,6 +64,42 @@ func (s *InjectionStore) CountInjectionsBySession(ctx context.Context, sessionID
 	return count, err
 }
 
+// SessionInjectionDetail represents an observation injected into a session with its metadata.
+type SessionInjectionDetail struct {
+	ObservationID       int64   `json:"observation_id"`
+	InjectionSection    string  `json:"injection_section"`
+	Title               string  `json:"title"`
+	Type                string  `json:"type"`
+	EffectivenessScore  float64 `json:"effectiveness_score"`
+	EffectivenessInj    int     `json:"effectiveness_injections"`
+	EffectivenessSuc    int     `json:"effectiveness_successes"`
+	ImportanceScore     float64 `json:"importance_score"`
+	UtilityScore        float64 `json:"utility_score"`
+}
+
+// GetSessionInjectionDetails returns enriched injection records for a session,
+// joining with observations to include title, type, and effectiveness metrics.
+func (s *InjectionStore) GetSessionInjectionDetails(ctx context.Context, sessionID string) ([]SessionInjectionDetail, error) {
+	var results []SessionInjectionDetail
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT DISTINCT ON (oi.observation_id)
+			oi.observation_id,
+			oi.injection_section,
+			COALESCE(o.title, '') AS title,
+			COALESCE(o.type, '') AS type,
+			COALESCE(o.effectiveness_score, 0) AS effectiveness_score,
+			COALESCE(o.effectiveness_injections, 0) AS effectiveness_injections,
+			COALESCE(o.effectiveness_successes, 0) AS effectiveness_successes,
+			COALESCE(o.importance_score, 0) AS importance_score,
+			COALESCE(o.utility_score, 0.5) AS utility_score
+		FROM observation_injections oi
+		LEFT JOIN observations o ON o.id = oi.observation_id
+		WHERE oi.session_id = ?
+		ORDER BY oi.observation_id, oi.injected_at DESC
+	`, sessionID).Scan(&results).Error
+	return results, err
+}
+
 // CleanupOldInjections removes records older than the given time.
 func (s *InjectionStore) CleanupOldInjections(ctx context.Context, olderThan time.Time) (int64, error) {
 	result := s.db.WithContext(ctx).

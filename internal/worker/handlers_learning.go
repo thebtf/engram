@@ -411,3 +411,77 @@ func (s *Service) handleAPORewrite(w http.ResponseWriter, r *http.Request) {
 		"version_id":     versionID,
 	})
 }
+
+// handleGetSessionInjections returns all observations injected into a session
+// with their effectiveness metrics — enables retrospective analysis of what was
+// injected, how useful it was, and what was noise.
+func (s *Service) handleGetSessionInjections(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	injStore := s.injectionStore
+	s.initMu.RUnlock()
+
+	if injStore == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	sessionID := chi.URLParam(r, "sessionId")
+	if sessionID == "" {
+		http.Error(w, "session_id required", http.StatusBadRequest)
+		return
+	}
+
+	details, err := injStore.GetSessionInjectionDetails(r.Context(), sessionID)
+	if err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("Failed to get session injection details")
+		http.Error(w, "failed to query injections: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Compute summary metrics
+	var totalInjections int
+	var highEff, medEff, lowEff, noData int
+	var sumEffectiveness float64
+	for _, d := range details {
+		totalInjections++
+		if d.EffectivenessInj >= 10 {
+			sumEffectiveness += d.EffectivenessScore
+			if d.EffectivenessScore >= 0.7 {
+				highEff++
+			} else if d.EffectivenessScore >= 0.4 {
+				medEff++
+			} else {
+				lowEff++
+			}
+		} else {
+			noData++
+		}
+	}
+
+	var avgEffectiveness float64
+	evaluated := highEff + medEff + lowEff
+	if evaluated > 0 {
+		avgEffectiveness = sumEffectiveness / float64(evaluated)
+	}
+
+	// Group by section
+	sections := map[string]int{}
+	for _, d := range details {
+		sections[d.InjectionSection]++
+	}
+
+	writeJSON(w, map[string]any{
+		"session_id":  sessionID,
+		"injections":  details,
+		"total":       totalInjections,
+		"sections":    sections,
+		"summary": map[string]any{
+			"high_effectiveness":    highEff,
+			"medium_effectiveness":  medEff,
+			"low_effectiveness":     lowEff,
+			"insufficient_data":     noData,
+			"avg_effectiveness":     avgEffectiveness,
+			"evaluated":             evaluated,
+		},
+	})
+}
