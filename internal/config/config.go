@@ -681,6 +681,57 @@ func Get() *Config {
 	return globalConfig
 }
 
+// Reload re-reads configuration from disk and updates the global config atomically.
+// Returns the new config and any fields that changed.
+func Reload() (*Config, []string, error) {
+	newCfg, err := Load()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	configMu.Lock()
+	old := globalConfig
+	globalConfig = newCfg
+	configMu.Unlock()
+
+	// Detect changed fields for logging
+	var changed []string
+	if old != nil {
+		if old.Model != newCfg.Model {
+			changed = append(changed, "model")
+		}
+		if old.EmbeddingBaseURL != newCfg.EmbeddingBaseURL {
+			changed = append(changed, "embedding_base_url")
+		}
+		if old.EmbeddingModelName != newCfg.EmbeddingModelName {
+			changed = append(changed, "embedding_model_name")
+		}
+		if old.ContextMaxTokens != newCfg.ContextMaxTokens {
+			changed = append(changed, "context_max_tokens")
+		}
+		if old.ContextObservations != newCfg.ContextObservations {
+			changed = append(changed, "context_observations")
+		}
+		if old.RerankingEnabled != newCfg.RerankingEnabled {
+			changed = append(changed, "reranking_enabled")
+		}
+		if old.MaintenanceEnabled != newCfg.MaintenanceEnabled {
+			changed = append(changed, "maintenance_enabled")
+		}
+		if old.HyDEEnabled != newCfg.HyDEEnabled {
+			changed = append(changed, "hyde_enabled")
+		}
+		if old.WorkerPort != newCfg.WorkerPort {
+			changed = append(changed, "worker_port (requires restart)")
+		}
+		if old.WorkerToken != newCfg.WorkerToken {
+			changed = append(changed, "worker_token (requires restart)")
+		}
+	}
+
+	return newCfg, changed, nil
+}
+
 // GetWorkerPort returns the worker port from environment or config.
 func GetWorkerPort() int {
 	if port := os.Getenv("ENGRAM_WORKER_PORT"); port != "" {

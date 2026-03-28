@@ -1267,22 +1267,30 @@ func (s *Service) reinitializeDatabase() {
 	})
 }
 
-// reloadConfig reloads configuration from disk.
-// For now, this triggers a graceful restart by exiting (hooks will restart us).
+// reloadConfig hot-reloads configuration from disk without process restart.
+// Uses config.Reload() to atomically swap the global config. Services that
+// call config.Get() per-request will pick up new values automatically.
+// Structural changes (port, token) log a warning — manual restart needed.
 func (s *Service) reloadConfig() {
-	log.Info().Msg("Config changed, triggering graceful restart...")
+	_, changed, err := config.Reload()
+	if err != nil {
+		log.Error().Err(err).Msg("Config reload failed — keeping current config")
+		return
+	}
 
-	// Broadcast notification
+	if len(changed) == 0 {
+		log.Info().Msg("Config file changed but no values differ")
+		return
+	}
+
+	log.Info().Strs("changed", changed).Msg("Config hot-reloaded")
+
+	// Broadcast to dashboard
 	s.sseBroadcaster.Broadcast(map[string]any{
-		"type":    "config_changed",
-		"message": "Configuration changed, restarting worker...",
+		"type":    "config_reloaded",
+		"message": "Configuration reloaded",
+		"changed": changed,
 	})
-
-	// Give SSE clients a moment to receive the message
-	time.Sleep(100 * time.Millisecond)
-
-	// Exit cleanly - hooks will restart us with new config
-	os.Exit(0)
 }
 
 // setInitError records an initialization error.
