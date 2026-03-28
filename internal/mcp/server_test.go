@@ -405,36 +405,28 @@ func TestHandleToolsList(t *testing.T) {
 	require.True(t, ok)
 	assert.NotEmpty(t, tools)
 
-	// Default response (no cursor) should return only T1+T2 tools
+	// Default response (no cursor) should return only primary consolidated tools
 	toolNames := make(map[string]bool)
 	for _, tool := range tools {
 		toolNames[tool.Name] = true
 	}
 
-	// T1 (core) tools must be present
-	t1Tools := []string{
+	// Primary consolidated tools must be present
+	primaryTools := []string{
+		"recall", "store", "feedback", "vault", "docs", "admin", "check_system_health",
+	}
+	for _, name := range primaryTools {
+		assert.True(t, toolNames[name], "expected primary tool %s to be present", name)
+	}
+	assert.Equal(t, len(primaryTools), len(tools), "default tools/list should return exactly %d tools", len(primaryTools))
+
+	// Legacy tools must NOT be present in default listing
+	legacyTools := []string{
 		"search", "decisions", "find_by_file",
-		"how_it_works", "check_system_health",
-	}
-	for _, name := range t1Tools {
-		assert.True(t, toolNames[name], "expected T1 tool %s to be present", name)
-	}
-
-	// T2 (useful) tools must be present
-	t2Tools := []string{
-		"changes", "find_by_type", "find_by_concept",
-		"find_similar_observations", "timeline",
-	}
-	for _, name := range t2Tools {
-		assert.True(t, toolNames[name], "expected T2 tool %s to be present", name)
-	}
-
-	// T3 (admin) tools must NOT be present in default listing
-	t3Tools := []string{
 		"bulk_delete_observations", "trigger_maintenance",
 	}
-	for _, name := range t3Tools {
-		assert.False(t, toolNames[name], "T3 tool %s should not be in default listing", name)
+	for _, name := range legacyTools {
+		assert.False(t, toolNames[name], "legacy tool %s should not be in default listing", name)
 	}
 
 	// Verify nextCursor is returned
@@ -442,7 +434,7 @@ func TestHandleToolsList(t *testing.T) {
 	assert.True(t, ok, "nextCursor should be present")
 	assert.Equal(t, "all", nextCursor)
 
-	// Verify cursor: "all" returns ALL tools
+	// Verify cursor: "all" returns primary + all legacy alias tools
 	reqAll := &Request{
 		JSONRPC: "2.0",
 		ID:      2,
@@ -454,13 +446,17 @@ func TestHandleToolsList(t *testing.T) {
 	allTools, _ := resultAll["tools"].([]Tool)
 	assert.Greater(t, len(allTools), len(tools), "cursor=all should return more tools than default")
 
-	// T3 tools should now be present
+	// Legacy tools should be present in cursor=all
 	allToolNames := make(map[string]bool)
 	for _, tool := range allTools {
 		allToolNames[tool.Name] = true
 	}
-	for _, name := range t3Tools {
-		assert.True(t, allToolNames[name], "T3 tool %s should be present with cursor=all", name)
+	for _, name := range legacyTools {
+		assert.True(t, allToolNames[name], "legacy tool %s should be present with cursor=all", name)
+	}
+	// Primary tools should also be in cursor=all
+	for _, name := range primaryTools {
+		assert.True(t, allToolNames[name], "primary tool %s should be present with cursor=all", name)
 	}
 }
 
@@ -1689,41 +1685,24 @@ func TestCallTool_ToolNameRecognition(t *testing.T) {
 	result := resp.Result.(map[string]any)
 	tools := result["tools"].([]Tool)
 
-	// Verify all expected tools are registered
-	expectedTools := map[string]bool{
-		"search":                            true,
-		"timeline":                          true,
-		"decisions":                         true,
-		"changes":                           true,
-		"how_it_works":                      true,
-		"find_by_concept":                   true,
-		"find_by_file":                      true,
-		"find_by_type":                      true,
-		"find_related_observations":         true,
-		"find_similar_observations":         true,
-		"get_patterns":                      true,
-		"get_memory_stats":                  true,
-		"bulk_delete_observations":          true,
-		"bulk_mark_superseded":              true,
-		"bulk_boost_observations":           true,
-		"trigger_maintenance":               true,
-		"get_maintenance_stats":             true,
-		"merge_observations":                true,
-		"get_observation":                   true,
-		"edit_observation":                  true,
-		"get_observation_quality":           true,
-		"suggest_consolidations":            true,
-		"tag_observation":                   true,
-		"get_observations_by_tag":           true,
-		"get_temporal_trends":               true,
-		"get_data_quality_report":           true,
-		"batch_tag_by_pattern":              true,
-		"explain_search_ranking":            true,
-		"export_observations":               true,
-		"check_system_health":               true,
-		"analyze_search_patterns":           true,
-		"get_observation_scoring_breakdown": true,
-		"analyze_observation_importance":    true,
+	// Verify primary consolidated tools are registered
+	primaryExpected := []string{
+		"recall", "store", "feedback", "vault", "docs", "admin", "check_system_health",
+	}
+	// Verify key legacy alias tools are also registered (cursor=all)
+	// Note: store_memory, rate_memory, credentials, etc. are conditional (need observationStore != nil)
+	// Only check unconditionally registered tools here
+	aliasExpected := []string{
+		"search", "timeline", "decisions", "find_by_file",
+		"bulk_delete_observations", "get_memory_stats",
+		"find_related_observations", "get_patterns",
+	}
+	expectedTools := make(map[string]bool)
+	for _, name := range primaryExpected {
+		expectedTools[name] = true
+	}
+	for _, name := range aliasExpected {
+		expectedTools[name] = true
 	}
 
 	foundTools := make(map[string]bool)
