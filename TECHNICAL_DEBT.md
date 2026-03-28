@@ -131,7 +131,7 @@ What: reloadConfig calls os.Exit(0) instead of hot-reload
 Why deferred: Hot-reload requires significant refactoring of service initialization
 Impact: Docker restart policy handles the restart automatically
 
-## 2026-03-28: Behavioral Rules for MCP Tool Adoption
+## ~~2026-03-28: Behavioral Rules for MCP Tool Adoption~~ RESOLVED v2.1.1
 **What:** Agents use 2 of 68 MCP tools. Need always_inject behavioral rules that trigger tool usage at the right moments: `find_by_file` before Edit/Write, `decisions` before architectural choices, `rate_memory` after session.
 **Why deferred:** Plugin tool consolidation (FR-1 through FR-6) must land first so rules reference stable tool names.
 **Impact:** High — this is the actual adoption fix. Tool consolidation reduces noise, behavioral rules drive usage.
