@@ -461,6 +461,134 @@ Use file-based memory only for static instructions and user preferences.
 - Search BEFORE re-exploring code — someone already documented it.
 - Use specialized tools: ` + "`decisions`" + ` for architecture, ` + "`find_by_file`" + ` for code, ` + "`timeline`" + ` for history.`
 
+// primaryTools returns the 7 consolidated primary tools shown by default.
+func (s *Server) primaryTools() []Tool {
+	return []Tool{
+		{
+			Name:        "recall",
+			Description: "Search and retrieve memories. Actions: search (default), preset (decisions/changes/how_it_works), by_file, by_concept, by_type, similar, timeline, related, patterns, get, sessions, explain.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action":         map[string]any{"type": "string", "enum": []string{"search", "preset", "by_file", "by_concept", "by_type", "similar", "timeline", "related", "patterns", "get", "sessions", "explain"}, "default": "search", "description": "Action to perform"},
+					"query":          map[string]any{"type": "string", "description": "Search query (for search, preset, similar, timeline:query, sessions, explain)"},
+					"preset":         map[string]any{"type": "string", "enum": []string{"decisions", "changes", "how_it_works"}, "description": "Search preset (for action=preset)"},
+					"files":          map[string]any{"type": "string", "description": "File paths (for action=by_file)"},
+					"concept":        map[string]any{"type": "string", "description": "Concept tag (for action=by_concept)"},
+					"type":           map[string]any{"type": "string", "description": "Observation type (for action=by_type)"},
+					"id":             map[string]any{"type": "number", "description": "Observation ID (for action=get, related)"},
+					"project":        map[string]any{"type": "string", "description": "Project name filter"},
+					"limit":          map[string]any{"type": "number", "description": "Max results"},
+					"mode":           map[string]any{"type": "string", "description": "Timeline mode: recent/anchor/query (for action=timeline)"},
+					"min_similarity": map[string]any{"type": "number", "description": "Min similarity 0-1 (for action=similar)"},
+					"min_confidence": map[string]any{"type": "number", "description": "Min confidence 0-1 (for action=related)"},
+					"format":         map[string]any{"type": "string", "description": "Output format: text/items/detailed"},
+				},
+			},
+		},
+		{
+			Name:        "store",
+			Description: "Store, edit, or merge memories. Actions: create (default), edit, merge, import.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action":        map[string]any{"type": "string", "enum": []string{"create", "edit", "merge", "import"}, "default": "create", "description": "Action to perform"},
+					"content":       map[string]any{"type": "string", "description": "Observation content (for create)"},
+					"title":         map[string]any{"type": "string", "description": "Title (for create, edit)"},
+					"id":            map[string]any{"type": "number", "description": "Observation ID (for edit)"},
+					"source_id":     map[string]any{"type": "number", "description": "Source observation ID (for merge)"},
+					"target_id":     map[string]any{"type": "number", "description": "Target observation ID (for merge)"},
+					"type":          map[string]any{"type": "string", "description": "Observation type (for create)"},
+					"tags":          map[string]any{"type": "string", "description": "Comma-separated tags (for create)"},
+					"scope":         map[string]any{"type": "string", "description": "Scope: project/global/agent (for create)"},
+					"always_inject": map[string]any{"type": "boolean", "description": "Always inject in context (for create, edit)"},
+					"narrative":     map[string]any{"type": "string", "description": "Narrative text (for edit)"},
+					"path":          map[string]any{"type": "string", "description": "File path (for import)"},
+					"project":       map[string]any{"type": "string", "description": "Project name"},
+				},
+			},
+		},
+		{
+			Name:        "feedback",
+			Description: "Rate observations, suppress bad ones, or record session outcome. Actions: rate, suppress, outcome. Action required.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":  map[string]any{"type": "string", "enum": []string{"rate", "suppress", "outcome"}, "description": "Action to perform (required)"},
+					"id":      map[string]any{"type": "number", "description": "Observation ID (for rate, suppress)"},
+					"useful":  map[string]any{"type": "boolean", "description": "Was it helpful? (for rate)"},
+					"outcome": map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome (for outcome action)"},
+					"reason":  map[string]any{"type": "string", "description": "Outcome reason (for outcome action)"},
+				},
+			},
+		},
+		{
+			Name:        "vault",
+			Description: "Manage encrypted credentials. Actions: store, get, list, delete, status. Action required.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":  map[string]any{"type": "string", "enum": []string{"store", "get", "list", "delete", "status"}, "description": "Action to perform (required)"},
+					"name":    map[string]any{"type": "string", "description": "Credential name (for store, get, delete)"},
+					"value":   map[string]any{"type": "string", "description": "Credential value (for store)"},
+					"scope":   map[string]any{"type": "string", "description": "Scope: project/global (for store)"},
+					"project": map[string]any{"type": "string", "description": "Project name (for store)"},
+				},
+			},
+		},
+		{
+			Name:        "docs",
+			Description: "Versioned documents and collections. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs. Action required.",
+			tier:        tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":     map[string]any{"type": "string", "enum": []string{"create", "read", "list", "history", "comment", "collections", "documents", "get_doc", "remove", "ingest", "search_docs"}, "description": "Action to perform (required)"},
+					"path":       map[string]any{"type": "string", "description": "Document path (for create, read, list, history, comment)"},
+					"project":    map[string]any{"type": "string", "description": "Project name"},
+					"content":    map[string]any{"type": "string", "description": "Document content (for create, ingest)"},
+					"collection": map[string]any{"type": "string", "description": "Collection name (for documents, get_doc, remove, ingest, search_docs)"},
+					"query":      map[string]any{"type": "string", "description": "Search query (for search_docs)"},
+					"version":    map[string]any{"type": "number", "description": "Version number (for read)"},
+					"comment":    map[string]any{"type": "string", "description": "Comment text (for comment)"},
+					"doc_type":   map[string]any{"type": "string", "description": "Document type (for create, list)"},
+					"id":         map[string]any{"type": "string", "description": "Document ID (for get_doc, remove)"},
+				},
+			},
+		},
+		{
+			Name:        "admin",
+			Description: "Administrative operations: bulk ops, tagging, graph, analytics, maintenance. Actions: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, consolidations, maintenance, maintenance_stats, consolidation, export, backfill_status. Action required.",
+			tier:        tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":  map[string]any{"type": "string", "description": "Action to perform (required). See tool description for valid actions."},
+					"ids":     map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "description": "Observation IDs (for bulk_delete, bulk_supersede, bulk_boost)"},
+					"id":      map[string]any{"type": "number", "description": "Observation ID (for tag, obs_quality, scoring, graph)"},
+					"tag":     map[string]any{"type": "string", "description": "Tag name (for by_tag, batch_tag)"},
+					"project": map[string]any{"type": "string", "description": "Project name (for trends, quality, importance, etc.)"},
+					"format":  map[string]any{"type": "string", "description": "Export format: json/jsonl/markdown (for export)"},
+					"mode":    map[string]any{"type": "string", "description": "Graph mode (for graph action)"},
+					"amount":  map[string]any{"type": "number", "description": "Boost amount (for bulk_boost)"},
+					"add":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to add (for tag)"},
+					"remove":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to remove (for tag)"},
+					"pattern": map[string]any{"type": "string", "description": "Search pattern (for batch_tag)"},
+					"days":    map[string]any{"type": "number", "description": "Days to analyze (for trends)"},
+				},
+			},
+		},
+	}
+}
+
 // handleToolsList returns the list of available tools.
 func (s *Server) handleToolsList(req *Request) *Response {
 	tools := []Tool{
@@ -1387,9 +1515,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
-	// Tool tiering: parse optional cursor and include_all from request params.
-	// No cursor / empty → return T1+T2 tools only + nextCursor: "all"
-	// cursor: "all" OR include_all: true → return ALL tools
+	// Tool tiering: consolidated primary tools by default, all aliases with cursor=all.
 	var listParams struct {
 		Cursor     string `json:"cursor"`
 		IncludeAll bool   `json:"include_all"`
@@ -1398,14 +1524,20 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		_ = json.Unmarshal(req.Params, &listParams)
 	}
 
+	primary := s.primaryTools()
+
+	// Always include check_system_health with primary tools
+	primary = append(primary, Tool{
+		Name:        "check_system_health",
+		Description: "Comprehensive system health check. Returns status of all subsystems (database, vectors, cache, search) with actionable diagnostics.",
+		tier:        tierCore,
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+	})
+
 	if listParams.Cursor != "all" && !listParams.IncludeAll {
-		// Filter to primary tools (T1 + T2)
-		primary := make([]Tool, 0, len(tools))
-		for _, t := range tools {
-			if t.tier <= tierUseful {
-				primary = append(primary, t)
-			}
-		}
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -1416,11 +1548,16 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		}
 	}
 
+	// cursor=all: primary tools first, then all legacy aliases
+	allTools := make([]Tool, 0, len(primary)+len(tools))
+	allTools = append(allTools, primary...)
+	allTools = append(allTools, tools...)
+
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result: map[string]any{
-			"tools": tools,
+			"tools": allTools,
 		},
 	}
 }
@@ -1476,7 +1613,23 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 // callTool dispatches to the appropriate tool handler.
 func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	// Special handlers for non-search tools
+	// Primary consolidated tool handlers
+	switch name {
+	case "recall":
+		return s.handleRecall(ctx, args)
+	case "store":
+		return s.handleStoreConsolidated(ctx, args)
+	case "feedback":
+		return s.handleFeedbackConsolidated(ctx, args)
+	case "vault":
+		return s.handleVaultConsolidated(ctx, args)
+	case "docs":
+		return s.handleDocsConsolidated(ctx, args)
+	case "admin":
+		return s.handleAdmin(ctx, args)
+	}
+
+	// Legacy alias handlers for non-search tools
 	switch name {
 	case "graph_query":
 		// Consolidated graph tool — routes by mode parameter
