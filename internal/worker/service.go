@@ -1910,6 +1910,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/maintenance/consolidation", s.handleTriggerConsolidation)
 		r.Post("/api/maintenance/run", s.handleRunMaintenance)
 		r.Get("/api/maintenance/stats", s.handleGetMaintenanceStats)
+		r.Get("/api/maintenance/consistency", s.handleConsistencyCheck)
 		r.Post("/api/maintenance/backfill-relations", s.handleBackfillRelations)
 		r.Post("/api/maintenance/purge-patterns", s.handlePurgePatterns)
 		r.Post("/api/maintenance/pattern-cleanup", s.handlePatternCleanup)
