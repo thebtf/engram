@@ -598,19 +598,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
-		{
-			Name:        "find_by_file_context",
-			Description: "Retrieve observations directly associated with a specific file path, ordered by importance score. Faster and more precise than find_by_file for direct file lookups.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"file_path"},
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Absolute or relative file path to look up"},
-					"limit":     map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 100, "description": "Maximum number of observations to return"},
-				},
-			},
-		},
+		// find_by_file_context removed from registration (near-duplicate of find_by_file) — dispatch alias retained
 		{
 			Name:        "find_by_type",
 			Description: "Find observations of specific types.",
@@ -632,64 +620,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
-		{
-			Name:        "get_recent_context",
-			Description: "Get recent session context for timeline display.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"project":   map[string]any{"type": "string"},
-					"type":      map[string]any{"type": "string"},
-					"concepts":  map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"limit":     map[string]any{"type": "number", "default": 30, "minimum": 1, "maximum": 100},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		{
-			Name:        "get_context_timeline",
-			Description: "Get timeline of observations around a specific observation ID.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"anchor_id"},
-				"properties": map[string]any{
-					"anchor_id": map[string]any{"type": "number", "description": "Observation ID to use as anchor point"},
-					"before":    map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"after":     map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"project":   map[string]any{"type": "string"},
-					"type":      map[string]any{"type": "string"},
-					"concepts":  map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		{
-			Name:        "get_timeline_by_query",
-			Description: "Combined search + timeline tool. First searches for observations matching the query, then returns timeline around the best match.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"query"},
-				"properties": map[string]any{
-					"query":     map[string]any{"type": "string", "description": "Natural language query to find anchor observation"},
-					"before":    map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"after":     map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"project":   map[string]any{"type": "string"},
-					"type":      map[string]any{"type": "string"},
-					"concepts":  map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
+		// get_recent_context removed from registration (consolidated into timeline) — dispatch alias retained
+		// get_context_timeline removed from registration (consolidated into timeline) — dispatch alias retained
+		// get_timeline_by_query removed from registration (consolidated into timeline) — dispatch alias retained
 		{
 			Name:        "find_related_observations",
 			Description: "Find observations related to a given observation ID filtered by confidence threshold. Returns related observations sorted by confidence score. Useful for discovering relevant context.",
@@ -1007,33 +940,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
-		{
-			Name:        "get_observation_relationships",
-			Description: "Get relationship graph for an observation. Shows how observations relate to each other (depends_on, extends, conflicts_with, supersedes). Useful for understanding dependencies and context.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id"},
-				"properties": map[string]any{
-					"id":        map[string]any{"type": "number", "description": "Observation ID to analyze relationships for"},
-					"max_depth": map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "How many hops to traverse (1=direct, 2=neighbors of neighbors)"},
-				},
-			},
-		},
-		{
-			Name:        "get_graph_neighbors",
-			Description: "Get graph neighbors of an observation via FalkorDB. Returns multi-hop neighbors with relationship types and hop distance. Requires FalkorDB graph backend to be configured.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"observation_id"},
-				"properties": map[string]any{
-					"observation_id": map[string]any{"type": "number", "description": "Observation ID to find graph neighbors for"},
-					"max_hops":       map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "Maximum hop distance (1=direct neighbors, 2=neighbors of neighbors)"},
-					"limit":          map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100, "description": "Maximum number of neighbors to return"},
-				},
-			},
-		},
+		// get_observation_relationships removed from registration (subset of graph_query) — dispatch alias retained
+		// get_graph_neighbors removed from registration (subset of graph_query) — dispatch alias retained
 		{
 			Name:        "get_graph_stats",
 			Description: "Get graph backend statistics. Returns provider, connection status, node count, and edge count.",
@@ -1430,23 +1338,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					},
 				},
 			},
-			Tool{
-				Name:        "doc_update",
-				Description: "[Versioned Docs] Create a new version of an existing document (semantic alias for doc_create). Increments the version number.",
-				tier:        tierUseful,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"path", "project", "content"},
-					"properties": map[string]any{
-						"path":     map[string]any{"type": "string", "description": "Document path identifier"},
-						"project":  map[string]any{"type": "string", "description": "Project name"},
-						"content":  map[string]any{"type": "string", "description": "New document content"},
-						"doc_type": map[string]any{"type": "string", "default": "markdown", "description": "Document type"},
-						"metadata": map[string]any{"type": "string", "default": "{}", "description": "JSON metadata string"},
-						"author":   map[string]any{"type": "string", "default": "agent", "description": "Author identifier"},
-					},
-				},
-			},
+			// doc_update removed from registration (alias of doc_create) — dispatch alias retained in handleCallTool
 			Tool{
 				Name:        "doc_list",
 				Description: "[Versioned Docs] List the latest version of each document path in a project. Supports filtering by doc_type and path prefix.",
