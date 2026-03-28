@@ -33,6 +33,7 @@ import { handleBeforePromptBuild } from './hooks/before-prompt-build.js';
 import { handleAfterToolCall } from './hooks/after-tool-call.js';
 import { handleBeforeCompaction } from './hooks/before-compaction.js';
 import { handleSessionEnd } from './hooks/session-end.js';
+import { handleBeforeToolCall } from './hooks/before-tool-call.js';
 
 import { createEngramSearchTool, createMemorySearchTool } from './tools/engram-search.js';
 import { createEngramRememberTool, createMemoryStoreTool } from './tools/engram-remember.js';
@@ -93,6 +94,10 @@ const plugin: OpenClawPluginDefinition = {
     api.on('before_compaction', (event, ctx: PluginHookContext) => {
       handleBeforeCompaction(event, ctx, client, config, api.logger);
     });
+
+    api.on('before_tool_call', (event, ctx: PluginHookContext) =>
+      handleBeforeToolCall(event, ctx, client, config),
+    );
 
     api.on('session_end', (event, ctx: PluginHookContext) => {
       handleSessionEnd(event, ctx, client, config, api.logger);
