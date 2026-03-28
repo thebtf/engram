@@ -55,7 +55,7 @@ async function handlePreToolUse(ctx, input) {
   // Separate warnings (bugfix, guidance, anti-pattern) from general context
   const warnings = [];
   const contextObs = [];
-  const warningTypes = { bugfix: true, guidance: true };
+  const warningTypes = { bugfix: true };
   const warningConcepts = { 'anti-pattern': true, gotcha: true, 'error-handling': true, security: true };
 
   for (const obs of observations) {
