@@ -355,10 +355,7 @@ const engramInstructions = `# Engram — Persistent Memory for AI Agents
 **Cleanup:** ` + "`admin(action=\"consolidations\")`" + ` → ` + "`store(action=\"merge\")`" + ` → ` + "`admin(action=\"maintenance\")`" + `
 **Secrets:** ` + "`vault(action=\"store\")`" + ` for API keys. ` + "`vault(action=\"status\")`" + ` to verify encryption.
 
-## Backward Compatibility
-
-All legacy tool names (search, store_memory, find_by_file, decisions, etc.) still work.
-Use ` + "`cursor=all`" + ` in tools/list to see all 61 legacy aliases.`
+`
 
 // primaryTools returns the 7 consolidated primary tools shown by default.
 func (s *Server) primaryTools() []Tool {
@@ -1436,27 +1433,13 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 	})
 
-	if listParams.Cursor != "all" && !listParams.IncludeAll {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: map[string]any{
-				"tools":      primary,
-				"nextCursor": "all",
-			},
-		}
-	}
-
-	// cursor=all: primary tools first, then all legacy aliases
-	allTools := make([]Tool, 0, len(primary)+len(tools))
-	allTools = append(allTools, primary...)
-	allTools = append(allTools, tools...)
-
+	// Always return only the 7 primary tools. Legacy aliases are handled
+	// by callTool dispatch only — they don't appear in tools/list.
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result: map[string]any{
-			"tools": allTools,
+			"tools": primary,
 		},
 	}
 }

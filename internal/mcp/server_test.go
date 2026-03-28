@@ -429,35 +429,7 @@ func TestHandleToolsList(t *testing.T) {
 		assert.False(t, toolNames[name], "legacy tool %s should not be in default listing", name)
 	}
 
-	// Verify nextCursor is returned
-	nextCursor, ok := result["nextCursor"].(string)
-	assert.True(t, ok, "nextCursor should be present")
-	assert.Equal(t, "all", nextCursor)
-
-	// Verify cursor: "all" returns primary + all legacy alias tools
-	reqAll := &Request{
-		JSONRPC: "2.0",
-		ID:      2,
-		Method:  "tools/list",
-		Params:  json.RawMessage(`{"cursor":"all"}`),
-	}
-	respAll := server.handleToolsList(reqAll)
-	resultAll, _ := respAll.Result.(map[string]any)
-	allTools, _ := resultAll["tools"].([]Tool)
-	assert.Greater(t, len(allTools), len(tools), "cursor=all should return more tools than default")
-
-	// Legacy tools should be present in cursor=all
-	allToolNames := make(map[string]bool)
-	for _, tool := range allTools {
-		allToolNames[tool.Name] = true
-	}
-	for _, name := range legacyTools {
-		assert.True(t, allToolNames[name], "legacy tool %s should be present with cursor=all", name)
-	}
-	// Primary tools should also be in cursor=all
-	for _, name := range primaryTools {
-		assert.True(t, allToolNames[name], "primary tool %s should be present with cursor=all", name)
-	}
+	// No nextCursor — only primary tools returned, no pagination needed
 }
 
 // TestHandleRequest tests request routing.
@@ -1689,19 +1661,9 @@ func TestCallTool_ToolNameRecognition(t *testing.T) {
 	primaryExpected := []string{
 		"recall", "store", "feedback", "vault", "docs", "admin", "check_system_health",
 	}
-	// Verify key legacy alias tools are also registered (cursor=all)
-	// Note: store_memory, rate_memory, credentials, etc. are conditional (need observationStore != nil)
-	// Only check unconditionally registered tools here
-	aliasExpected := []string{
-		"search", "timeline", "decisions", "find_by_file",
-		"bulk_delete_observations", "get_memory_stats",
-		"find_related_observations", "get_patterns",
-	}
+	// Only primary tools in tools/list — no aliases
 	expectedTools := make(map[string]bool)
 	for _, name := range primaryExpected {
-		expectedTools[name] = true
-	}
-	for _, name := range aliasExpected {
 		expectedTools[name] = true
 	}
 
