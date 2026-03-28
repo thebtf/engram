@@ -5,9 +5,10 @@
 
 - [x] **[idea]** ~~UI: memory notes viewer~~ RESOLVED — ObservationsView already has "Memories" toggle with edit/delete. No separate view needed. _2026-03-24_
 - [x] **[idea]** ~~Memory: tree structure + Obsidian-style graph~~ IMPLEMENTED v2.1.6 (PR #119) — local graph mode, search, visual styling _2026-03-24_
-- [ ] **[bug]** Dashboard: Pattern insight should generate in background during maintenance, not on button click. Currently "Summary unavailable" when LLM is down. _2026-03-28_
-- [ ] **[bug]** Dashboard: Search Misses section shows empty rows (3 items with "x —" but no text). Either data not populated or display bug. _2026-03-28_
-- [ ] **[bug]** Dashboard: Sessions page is useless. 2782 sessions, mostly "0 messages" (manual-*, bulk-imp*). Problems: (1) no filtering of empty sessions, (2) plain list — nothing clickable, (3) no indication what's active NOW, (4) no session detail view (observations created, prompts, outcome, effectiveness), (5) no project/workstation grouping. Needs full redesign as interactive session explorer with drill-down. _2026-03-28_
+- [x] **[bug]** ~~Dashboard: Pattern insight background generation~~ IMPLEMENTED v2.1.7 (PR #121) — maintenance Task 18, 5 per cycle. LLM must be available. _2026-03-28_
+- [x] **[bug]** ~~Dashboard UX: unclear actions~~ FIXED v2.1.8 (PR #122) — tooltips, cursor-pointer, hover transitions, color-coded actions _2026-03-28_
+- [x] **[bug]** ~~Dashboard: Search Misses empty rows~~ FIXED v2.1.7 (PR #121) — envelope unwrap + field mapping _2026-03-28_
+- [x] **[bug]** ~~Dashboard: Sessions page useless~~ FIXED v2.1.7 (PR #121) — min_prompts filter, date filters, clickable detail view _2026-03-28_
 - [x] **[idea]** ~~Memory: consistency checker~~ IMPLEMENTED v2.1.5 (PR #118) — GET /api/maintenance/consistency _2026-03-24_
 - [x] **[idea]** ~~Memory: search indexes~~ RESOLVED — 50+ indexes already exist (FTS tsvector, GIN JSONB, composite covering) _2026-03-24_
 - [x] **[idea]** ~~Plugin: memory_get markdown bridge~~ IMPLEMENTED v2.1.5 (PR #118) — store=true flag imports .md into engram _2026-03-24_
