@@ -4,7 +4,7 @@
 - [~] **[investigate]** Engram + OpenClaw integration architecture — requires OpenClaw SDK source audit (external repo). Message classification design documented but implementation depends on OpenClaw SDK changes. _2026-03-24_
 
 - [x] **[idea]** ~~UI: memory notes viewer~~ RESOLVED — ObservationsView already has "Memories" toggle with edit/delete. No separate view needed. _2026-03-24_
-- [ ] **[idea]** Memory: tree structure + Obsidian-style graph — T2: vis-network + GraphView.vue exist, needs UX polish _2026-03-24_
+- [x] **[idea]** ~~Memory: tree structure + Obsidian-style graph~~ IMPLEMENTED v2.1.6 (PR #119) — local graph mode, search, visual styling _2026-03-24_
 - [x] **[idea]** ~~Memory: consistency checker~~ IMPLEMENTED v2.1.5 (PR #118) — GET /api/maintenance/consistency _2026-03-24_
 - [x] **[idea]** ~~Memory: search indexes~~ RESOLVED — 50+ indexes already exist (FTS tsvector, GIN JSONB, composite covering) _2026-03-24_
 - [x] **[idea]** ~~Plugin: memory_get markdown bridge~~ IMPLEMENTED v2.1.5 (PR #118) — store=true flag imports .md into engram _2026-03-24_
