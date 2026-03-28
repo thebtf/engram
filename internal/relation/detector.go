@@ -165,9 +165,9 @@ func (d *Detector) BackfillRelations(ctx context.Context, project string, batchS
 		var err error
 
 		if project != "" {
-			observations, total, err = d.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", batchSize, offset)
+			observations, total, err = d.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", "", batchSize, offset)
 		} else {
-			observations, total, err = d.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", batchSize, offset)
+			observations, total, err = d.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", "", batchSize, offset)
 		}
 		if err != nil {
 			return totalProcessed, totalRelations, fmt.Errorf("fetch observations batch at offset %d: %w", offset, err)

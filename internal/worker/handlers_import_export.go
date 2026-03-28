@@ -462,9 +462,9 @@ func (s *Service) handleExportObservations(w http.ResponseWriter, r *http.Reques
 	var err error
 
 	if project != "" {
-		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", limit, 0)
+		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", "", limit, 0)
 	} else {
-		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", limit, 0)
+		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", "", limit, 0)
 	}
 
 	if err != nil {
@@ -696,9 +696,9 @@ func (s *Service) handleFindDuplicates(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if project != "" {
-		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", limit, 0)
+		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", "", limit, 0)
 	} else {
-		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", limit, 0)
+		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", "", limit, 0)
 	}
 
 	if err != nil {

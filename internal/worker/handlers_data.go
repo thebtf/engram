@@ -25,6 +25,7 @@ import (
 // @Param query query string false "Semantic search query"
 // @Param limit query int false "Number of results (default 100)"
 // @Param offset query int false "Pagination offset"
+// @Param concept query string false "Filter by concept (LIKE match on concepts JSON column)"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "bad request"
 // @Failure 500 {string} string "internal error"
@@ -36,6 +37,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	obsType := r.URL.Query().Get("type")
 	status := r.URL.Query().Get("status")
 	memoryType := r.URL.Query().Get("memory_type")
+	concept := r.URL.Query().Get("concept")
 
 	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
@@ -69,10 +71,10 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	if !usedVector {
 		if project != "" {
 			// Strict project filtering for dashboard - only observations from this project
-			observations, total, err = s.observationStore.GetObservationsByProjectStrictPaginated(r.Context(), project, obsType, status, memoryType, pagination.Limit, pagination.Offset)
+			observations, total, err = s.observationStore.GetObservationsByProjectStrictPaginated(r.Context(), project, obsType, status, memoryType, concept, pagination.Limit, pagination.Offset)
 		} else {
 			// All projects
-			observations, total, err = s.observationStore.GetAllRecentObservationsPaginated(r.Context(), obsType, status, memoryType, pagination.Limit, pagination.Offset)
+			observations, total, err = s.observationStore.GetAllRecentObservationsPaginated(r.Context(), obsType, status, memoryType, concept, pagination.Limit, pagination.Offset)
 		}
 	}
 

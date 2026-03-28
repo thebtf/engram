@@ -621,7 +621,8 @@ func (s *ObservationStore) GetAllRecentObservations(ctx context.Context, limit i
 // Pass memoryType="any" to filter observations that have any non-empty memory_type.
 // Pass memoryType="<value>" to filter by a specific memory_type value.
 // Pass memoryType="" for no memory_type filter (current behavior).
-func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, obsType string, status string, memoryType string, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass concept="" for no concept filter; non-empty concept uses LIKE match on JSON concepts column.
+func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, obsType string, status string, memoryType string, concept string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
@@ -636,6 +637,9 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 		baseQuery = baseQuery.Where("memory_type IS NOT NULL AND memory_type != ''")
 	} else if memoryType != "" {
 		baseQuery = baseQuery.Where("memory_type = ?", memoryType)
+	}
+	if concept != "" {
+		baseQuery = baseQuery.Where("concepts LIKE ?", "%"+concept+"%")
 	}
 
 	if err := baseQuery.Count(&total).Error; err != nil {
@@ -660,7 +664,8 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 // Pass memoryType="any" to filter observations that have any non-empty memory_type.
 // Pass memoryType="<value>" to filter by a specific memory_type value.
 // Pass memoryType="" for no memory_type filter (current behavior).
-func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, obsType string, status string, memoryType string, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass concept="" for no concept filter; non-empty concept uses LIKE match on JSON concepts column.
+func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, obsType string, status string, memoryType string, concept string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
@@ -675,6 +680,9 @@ func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.C
 		baseQuery = baseQuery.Where("memory_type IS NOT NULL AND memory_type != ''")
 	} else if memoryType != "" {
 		baseQuery = baseQuery.Where("memory_type = ?", memoryType)
+	}
+	if concept != "" {
+		baseQuery = baseQuery.Where("concepts LIKE ?", "%"+concept+"%")
 	}
 
 	if err := baseQuery.Count(&total).Error; err != nil {

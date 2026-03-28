@@ -97,11 +97,27 @@ interface ObservationsResponse {
   hasMore: boolean
 }
 
-export async function fetchObservations(limit: number = 100, project?: string, signal?: AbortSignal): Promise<Observation[]> {
+export interface ObservationsResult {
+  observations: Observation[]
+  total: number
+}
+
+export async function fetchObservations(
+  limit: number = 100,
+  project?: string,
+  signal?: AbortSignal,
+  type?: string,
+  concept?: string
+): Promise<ObservationsResult> {
   const params = new URLSearchParams({ limit: String(limit) })
   if (project) params.append('project', project)
+  if (type) params.append('type', type)
+  if (concept) params.append('concept', concept)
   const response = await fetchWithRetry<ObservationsResponse>(`${API_BASE}/observations?${params}`, { signal })
-  return response.observations || []
+  return {
+    observations: response.observations || [],
+    total: response.total ?? 0
+  }
 }
 
 export async function fetchPrompts(limit: number = 100, project?: string, signal?: AbortSignal): Promise<UserPrompt[]> {
