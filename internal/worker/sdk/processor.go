@@ -561,6 +561,14 @@ func (p *Processor) ProcessSummary(ctx context.Context, sessionDBID int64, sdkSe
 		}
 	}
 
+	// Third fallback: use the session's initial user prompt
+	if !hasMeaningfulContent(lastAssistantMsg) && userPrompt != "" && len(strings.TrimSpace(userPrompt)) >= 50 {
+		lastAssistantMsg = "Session started with user request: " + userPrompt
+		log.Debug().
+			Int64("sessionId", sessionDBID).
+			Msg("Using userPrompt as summary fallback")
+	}
+
 	// Skip summary generation if there's still no meaningful content
 	if !hasMeaningfulContent(lastAssistantMsg) {
 		log.Info().
@@ -1229,7 +1237,7 @@ EXAMPLES:
 
 Example 1 (user_behavior):
 "USER: you have tavily for this, FYI"
-<observation><category>user_behavior</category><type>decision</type><title>Rule: Use Tavily for doc research</title><narrative>TRIGGER: When studying external library docs. RULE: Use Tavily not manual WebFetch. REASON: Manual wastes 10+ calls.</narrative><concepts><concept>user-preference</concept></concepts></observation>
+<observation><category>user_behavior</category><type>decision</type><title>Rule: Use Tavily for doc research</title><narrative>TRIGGER: When studying external library docs. RULE: Use Tavily not manual WebFetch. REASON: Manual wastes 10+ calls.</narrative><concepts><concept>workflow</concept></concepts></observation>
 
 Example 2 (no_observations_found):
 "ASSISTANT: [tool: Read] Reading config.go."
@@ -1254,4 +1262,12 @@ OUTPUT FORMAT:
 <files_modified>
 <file>/path/to/file</file>
 </files_modified>
-</observation>`
+</observation>
+
+Valid concepts (use ONLY these values in <concept> tags):
+how-it-works, why-it-exists, what-changed, problem-solution, gotcha, pattern,
+trade-off, best-practice, anti-pattern, architecture, security, performance,
+testing, debugging, workflow, tooling, refactoring, api, database,
+configuration, error-handling
+
+Do NOT invent new concept names. If no concept fits, omit the <concepts> section.`
