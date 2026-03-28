@@ -149,7 +149,7 @@ Impact: Docker restart policy handles the restart automatically
 **What:** Agents use 2 of 68 MCP tools. Need always_inject behavioral rules that trigger tool usage at the right moments: `find_by_file` before Edit/Write, `decisions` before architectural choices, `rate_memory` after session.
 **Why deferred:** Plugin tool consolidation (FR-1 through FR-6) must land first so rules reference stable tool names.
 **Impact:** High — this is the actual adoption fix. Tool consolidation reduces noise, behavioral rules drive usage.
-**Context:** `.agent/reports/plugin-api-gap-audit-2026-03-28.md`, `plugin-tool-consolidation/spec.md`
+**Context:** `.agent/reports/plugin-api-gap-audit-2026-03-28.md`, `.agent/specs/plugin-tool-consolidation/spec.md`
 
 ## 2026-03-28: MCP Tool Namespace Prefixes (from mcp-tools-refactoring FR7/FR8)
 **What:** Vault tools (store_credential, get_credential, etc.) and Document tools (list_collections, list_documents, etc.) lack a consistent namespace prefix. FR7 proposed `vault_*`, FR8 proposed `doc_*`.

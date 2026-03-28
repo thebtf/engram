@@ -9,10 +9,10 @@
 **Goal:** Remove 7 redundant MCP tools from registration, keep dispatch aliases
 **Independent Test:** `tools/list` returns 61 tools; calling removed tool name still works
 
-- [ ] T001 Remove 7 tool definitions from `allTools` slice in `internal/mcp/server.go`
-- [ ] T002 Verify dispatch aliases remain in `handleCallTool` switch in `internal/mcp/server.go`
-- [ ] T003 Run `go build ./...` and `go test ./internal/mcp/...` to verify no breakage
-- [ ] T003a Verify `tools/list` returns exactly 61 tools (was 68) via MCP call or curl
+- [x] T001 Remove 7 tool definitions from `allTools` slice in `internal/mcp/server.go`
+- [x] T002 Verify dispatch aliases remain in `handleCallTool` switch in `internal/mcp/server.go`
+- [x] T003 Run `go build ./...` and `go test ./internal/mcp/...` to verify no breakage
+- [~] T003a Verify `tools/list` returns exactly 61 tools (was 68) — BLOCKED: needs PR #112 merge + deploy
 
 ---
 
@@ -23,11 +23,11 @@
 **Goal:** Fix decisions endpoint and memory_forget default behavior
 **Independent Test:** `engram_decisions` hits `/api/decisions/search`; `memory_forget` defaults to suppress
 
-- [ ] T004 [US2] Fix `engram_decisions` to use `client.searchDecisions()` in `plugin/openclaw-engram/src/tools/engram-decisions.ts`
-- [ ] T005 [US2] Read suppress handler code in `internal/mcp/tools_memory.go` to verify endpoint path, then add `suppressObservation(id)` method to `plugin/openclaw-engram/src/client.ts`
-- [ ] T006 [US2] Change `memory_forget` default from archive to suppress, add `permanent` param in `plugin/openclaw-engram/src/tools/memory-forget.ts`
-- [ ] T007 Run `npx tsc --noEmit` in `plugin/openclaw-engram/` to verify compilation
-- [ ] T007a Bump openclaw-engram version to 2.0.9 in `plugin/openclaw-engram/package.json`
+- [x] T004 [US2] Fix `engram_decisions` to use `client.searchDecisions()` in `plugin/openclaw-engram/src/tools/engram-decisions.ts`
+- [x] T005 [US2] Read suppress handler code in `internal/mcp/tools_memory.go` to verify endpoint path, then add `suppressObservation(id)` method to `plugin/openclaw-engram/src/client.ts`
+- [x] T006 [US2] Change `memory_forget` default from archive to suppress, add `permanent` param in `plugin/openclaw-engram/src/tools/memory-forget.ts`
+- [x] T007 Run `npx tsc --noEmit` in `plugin/openclaw-engram/` to verify compilation
+- [x] T007a Bump openclaw-engram version to 2.0.9 in `plugin/openclaw-engram/package.json`
 
 ---
 
@@ -38,22 +38,22 @@
 **Goal:** Add 9 new tools to OpenClaw plugin matching primary tool categories
 **Independent Test:** OpenClaw exposes 17 tools; each new tool calls correct server endpoint
 
-- [ ] T008 [P] [US2] Add `rateObservation(id, useful)` method to `plugin/openclaw-engram/src/client.ts`
-- [ ] T009 [P] [US2] Add `setSessionOutcome(sessionId, outcome, reason)` method to `plugin/openclaw-engram/src/client.ts`
-- [ ] T010 [P] [US4] Add `getFileContext(file, project, limit)` method to `plugin/openclaw-engram/src/client.ts`
-- [ ] T011 [P] [US2] Add `getTimeline(mode, params)` method to `plugin/openclaw-engram/src/client.ts`
-- [ ] T012 [P] [US2] Add `storeCredential(name, value, scope)` and `getCredential(name)` methods to `plugin/openclaw-engram/src/client.ts`
-- [ ] T013 [P] [US2] Create `engram_rate` tool in `plugin/openclaw-engram/src/tools/engram-rate.ts`
-- [ ] T014 [P] [US2] Create `engram_suppress` tool in `plugin/openclaw-engram/src/tools/engram-suppress.ts`
-- [ ] T015 [P] [US3] Create `engram_outcome` tool in `plugin/openclaw-engram/src/tools/engram-outcome.ts`
-- [ ] T016 [P] [US4] Create `engram_find_by_file` tool in `plugin/openclaw-engram/src/tools/engram-find-by-file.ts`
-- [ ] T017 [P] [US2] Create `engram_timeline` tool in `plugin/openclaw-engram/src/tools/engram-timeline.ts`
-- [ ] T018 [P] [US2] Create `engram_changes` and `engram_how_it_works` as search preset wrappers in `plugin/openclaw-engram/src/tools/engram-presets.ts`
-- [ ] T019 [P] [US2] Create `engram_vault_store` and `engram_vault_get` in `plugin/openclaw-engram/src/tools/engram-vault.ts`
-- [ ] T020 Register all new tools in `plugin/openclaw-engram/src/index.ts`
-- [ ] T021 Run `npx tsc --noEmit` in `plugin/openclaw-engram/` to verify compilation
-- [ ] T021a Verify all new tool descriptions include WHEN trigger conditions per NFR-3
-- [ ] T021b Bump openclaw-engram version to 2.0.10 in `plugin/openclaw-engram/package.json`
+- [x] T008 [P] [US2] Add `rateObservation(id, useful)` method to `plugin/openclaw-engram/src/client.ts`
+- [x] T009 [P] [US2] Add `setSessionOutcome(sessionId, outcome, reason)` method to `plugin/openclaw-engram/src/client.ts`
+- [x] T010 [P] [US4] Add `getFileContext(file, project, limit)` method to `plugin/openclaw-engram/src/client.ts`
+- [x] T011 [P] [US2] Add `getTimeline(mode, params)` method to `plugin/openclaw-engram/src/client.ts`
+- [x] T012 [P] [US2] Add `storeCredential(name, value, scope)` and `getCredential(name)` methods to `plugin/openclaw-engram/src/client.ts`
+- [x] T013 [P] [US2] Create `engram_rate` tool in `plugin/openclaw-engram/src/tools/engram-rate.ts`
+- [x] T014 [P] [US2] Create `engram_suppress` tool in `plugin/openclaw-engram/src/tools/engram-suppress.ts`
+- [x] T015 [P] [US3] Create `engram_outcome` tool in `plugin/openclaw-engram/src/tools/engram-outcome.ts`
+- [x] T016 [P] [US4] Create `engram_find_by_file` tool in `plugin/openclaw-engram/src/tools/engram-find-by-file.ts`
+- [x] T017 [P] [US2] Create `engram_timeline` tool in `plugin/openclaw-engram/src/tools/engram-timeline.ts`
+- [x] T018 [P] [US2] Create `engram_changes` and `engram_how_it_works` as search preset wrappers in `plugin/openclaw-engram/src/tools/engram-presets.ts`
+- [x] T019 [P] [US2] Create `engram_vault_store` and `engram_vault_get` in `plugin/openclaw-engram/src/tools/engram-vault.ts`
+- [x] T020 Register all new tools in `plugin/openclaw-engram/src/index.ts`
+- [x] T021 Run `npx tsc --noEmit` in `plugin/openclaw-engram/` to verify compilation
+- [x] T021a Verify all new tool descriptions include WHEN trigger conditions per NFR-3
+- [x] T021b Bump openclaw-engram version to 2.0.10 in `plugin/openclaw-engram/package.json`
 
 ---
 
@@ -64,12 +64,12 @@
 **Goal:** Add outcome tracking, utility signals, and pre-edit file context injection
 **Independent Test:** Session end records outcome; file context injected before Write/Edit
 
-- [ ] T022 [US3] Add outcome detection logic to `session_end` handler in `plugin/openclaw-engram/src/hooks/session-end.ts` (handle gracefully when no DB session ID exists)
-- [ ] T023 [US3] Add utility tracking (used/corrected/ignored signals) to `session_end` in `plugin/openclaw-engram/src/hooks/session-end.ts`
-- [ ] T024 [US4] Create `before_tool_call` handler in `plugin/openclaw-engram/src/hooks/before-tool-call.ts`
-- [ ] T025 [US4] Register `before_tool_call` hook in `plugin/openclaw-engram/src/index.ts`
-- [ ] T026 Bump openclaw-engram version to 2.0.11 in `plugin/openclaw-engram/package.json`
-- [ ] T027 Run `npx tsc --noEmit` in `plugin/openclaw-engram/` to verify compilation
+- [x] T022 [US3] Add outcome detection logic to `session_end` handler in `plugin/openclaw-engram/src/hooks/session-end.ts` (handle gracefully when no DB session ID exists)
+- [x] T023 [US3] Add utility tracking (used/corrected/ignored signals) to `session_end` in `plugin/openclaw-engram/src/hooks/session-end.ts`
+- [x] T024 [US4] Create `before_tool_call` handler in `plugin/openclaw-engram/src/hooks/before-tool-call.ts`
+- [x] T025 [US4] Register `before_tool_call` hook in `plugin/openclaw-engram/src/index.ts`
+- [x] T026 Bump openclaw-engram version to 2.0.11 in `plugin/openclaw-engram/package.json`
+- [x] T027 Run `npx tsc --noEmit` in `plugin/openclaw-engram/` to verify compilation
 
 ---
 
@@ -80,10 +80,10 @@
 **Goal:** Stop hook uses retrospective API; statusline shows learning effectiveness
 **Independent Test:** Stop hook makes fewer HTTP calls; statusline shows `eff: X%`
 
-- [ ] T028 [P] [US5] Replace injected-observations + individual utility calls with `/api/sessions/{id}/injections` in `plugin/engram/hooks/stop.js`
-- [ ] T029 [P] [US6] Add learning effectiveness call with 60s cache to `plugin/engram/hooks/statusline.js`
-- [ ] T030 Verify stop hook timing improvement via server log comparison
-- [ ] T031 Verify statusline shows `eff:` metric or graceful `eff: --` fallback
+- [x] T028 [P] [US5] Replace injected-observations + individual utility calls with `/api/sessions/{id}/injections` in `plugin/engram/hooks/stop.js`
+- [x] T029 [P] [US6] Add learning effectiveness call with 60s cache to `plugin/engram/hooks/statusline.js`
+- [~] T030 Verify stop hook timing improvement via server log comparison — BLOCKED: needs PR #112 merge + deploy
+- [~] T031 Verify statusline shows `eff:` metric or graceful `eff: --` fallback — BLOCKED: needs PR #112 merge + deploy
 
 ---
 
@@ -91,9 +91,9 @@
 
 ## Phase 6: Release
 
-- [ ] T032 Update marketplace metadata in marketplace repo
-- [ ] T033 Create git tags per phase (v2.0.9 through v2.0.12) with structured release notes, keeping server + plugin versions aligned per Constitution #15
-- [ ] T034 Verify Docker build succeeds for server image
+- [~] T032 Update marketplace metadata in marketplace repo — BLOCKED: needs PR #112 merge
+- [~] T033 Create git tag v2.0.9 with structured release notes — BLOCKED: needs PR #112 merge
+- [~] T034 Verify Docker build succeeds for server image — BLOCKED: needs PR #112 merge + CI
 
 ## Dependencies
 
