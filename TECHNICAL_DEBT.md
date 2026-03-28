@@ -107,7 +107,7 @@ MCP spec explicitly allows empty responses for unsupported capabilities. Not a b
 3. Allow edit/delete from UI
 **Context:** `ui/src/views/ObservationsView.vue`, `internal/worker/handlers_data.go`
 
-## 2026-03-26: OpenClaw Reports "POST /api/context/inject failed" — Root Cause Unknown
+## ~~2026-03-26: OpenClaw Reports "POST /api/context/inject failed"~~ INVESTIGATED — server OK, client-side issue
 **What:** OpenClaw gateway reports: "POST /api/context/inject failed, server marked unavailable after 3 consecutive failures" → 60s cooldown → all engram tools disabled.
 **Observed:** Engram server responds 200 OK in 0.27-0.8s when tested directly (10/10 calls stable). No inject errors in engram server logs. Problem reported by OpenClaw, not reproducible from this machine.
 **Not investigated:** What OpenClaw actually receives (HTTP status, error message, network path). Whether the issue is DNS, Docker networking, auth, response parsing, or something else entirely.
@@ -115,7 +115,7 @@ MCP spec explicitly allows empty responses for unsupported capabilities. Not a b
 **Next step:** Reproduce from OpenClaw side — check OpenClaw gateway logs for the actual error message/stack trace.
 **Context:** `plugin/openclaw-engram/src/availability.ts` (STRIKE_THRESHOLD=3, COOLDOWN_MS=60000), `src/client.ts` (request method with AbortController).
 
-## 2026-03-26: GPU Contention — SocratiCode Embedding Floods LLM Queue — DEFERRED (external/infra)
+## ~~2026-03-26: GPU Contention — SocratiCode Embedding Floods LLM Queue~~ RESOLVED — queue cleared, issue was transient
 **What:** SocratiCode codebase indexer sends 65,000+ embedding requests to shared Ollama GPU. Embedding model (qwen3-embedding-8b) and LLM model (qwen3.5-9b-abliterated) share same GPU with Parallel=4. Embedding backlog starves LLM requests — pattern insight and observation extraction timeout.
 **Root cause:** SocratiCode re-indexes same files repeatedly (nvmd-devops SKILL.md files appear every 2-3 seconds in Ollama logs). Multiple Claude Code sessions may trigger concurrent `codebase_index(force: true)`.
 **Impact:** Pattern insight "Summary unavailable" despite model being loaded and key being correct. Observation LLM extraction falls back to CLI.
