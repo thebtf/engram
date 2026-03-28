@@ -100,24 +100,11 @@ export function handleSessionEnd(
     }
 
     // 2. Record session outcome (fire-and-forget)
-    // Only if no explicit outcome was set via engram_outcome tool during session.
-    // Resolve DB session ID — may not exist if session was never initialized.
+    // Server accepts Claude session ID string directly — no DB ID lookup needed.
     void (async () => {
       try {
-        const sessionResp = await client.initSession({
-          claudeSessionId: sessionId,
-          project,
-          prompt: '',
-        });
-
-        const dbSessionId = sessionResp?.sessionDbId ?? 0;
-        if (dbSessionId <= 0) {
-          (logger ?? console).warn('[engram] session-end: no DB session ID — skipping outcome');
-          return;
-        }
-
         const { outcome, reason } = detectOutcome(messages);
-        await client.setSessionOutcome(dbSessionId, outcome, reason);
+        await client.setSessionOutcome(sessionId, outcome, reason);
         (logger ?? console).warn(`[engram] session-end: outcome=${outcome} (${reason})`);
       } catch (err) {
         (logger ?? console).error('[engram] session-end outcome error:', err);

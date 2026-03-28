@@ -9,7 +9,6 @@ import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import { resolveIdentity } from '../identity.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const OutcomeParamsSchema = z.object({
@@ -48,24 +47,14 @@ export function createEngramOutcomeTool(
         return 'engram is currently unreachable — outcome recording unavailable';
       }
 
-      const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-      const project = config.project ?? identity.projectId;
-
-      // Resolve session DB ID from session key
-      const sessionResp = await client.initSession({
-        claudeSessionId: ctx.sessionId ?? ctx.sessionKey ?? '',
-        project,
-        prompt: '',
-      });
-
-      const sessionId = sessionResp?.sessionDbId ?? 0;
-
-      if (sessionId <= 0) {
-        return 'Cannot record outcome — session not found in engram';
+      // Server endpoint accepts Claude session ID string directly
+      const claudeSessionId = ctx.sessionId ?? ctx.sessionKey ?? '';
+      if (!claudeSessionId) {
+        return 'Cannot record outcome — no session ID available';
       }
 
       const success = await client.setSessionOutcome(
-        sessionId,
+        claudeSessionId,
         parsed.data.outcome,
         parsed.data.reason,
       );

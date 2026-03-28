@@ -316,14 +316,15 @@ export class EngramRestClient {
   /**
    * Record session outcome for closed-loop learning.
    * POST /api/sessions/{sessionId}/outcome { outcome, reason }
+   * sessionId is the Claude session ID string (not numeric DB ID).
    */
   async setSessionOutcome(
-    sessionId: number,
+    sessionId: string,
     outcome: string,
     reason?: string,
   ): Promise<boolean> {
     const resp = await this.post<{ success: boolean }>(
-      `/api/sessions/${sessionId}/outcome`,
+      `/api/sessions/${encodeURIComponent(sessionId)}/outcome`,
       { outcome, reason: reason ?? '' },
       3000,
     );
