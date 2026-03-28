@@ -200,6 +200,40 @@ async function handleSessionStart(ctx, input) {
     }
   }
 
+  // Trigger summarization of recent unsummarized sessions (fire-and-forget).
+  // Stop hook doesn't fire reliably (CC bug #19225), so we summarize here instead.
+  // Limited to 1 session per start to avoid flooding the LLM.
+  if (dbSessionId) {
+    try {
+      const sessionsResp = await lib.requestGet('/api/sessions/list?limit=5', 3000);
+      const sessions = sessionsResp && Array.isArray(sessionsResp.sessions)
+        ? sessionsResp.sessions
+        : [];
+
+      for (const sess of sessions) {
+        if (!sess || typeof sess.id !== 'number') continue;
+        // Skip current session
+        if (sess.id === dbSessionId) continue;
+        // Skip empty sessions (0 prompts)
+        if (typeof sess.prompt_counter === 'number' && sess.prompt_counter === 0) continue;
+        // Skip sessions that already have a summary
+        if (sess.summary && typeof sess.summary === 'string' && sess.summary.length > 0) continue;
+
+        // Fire-and-forget summarization (5s timeout)
+        lib.requestPost(`/api/sessions/${sess.id}/summarize`, {
+          lastUserMessage: '',
+          lastAssistant: '',
+        }, 5000).catch((err) => {
+          console.error(`[engram] session ${sess.id} summarize failed: ${err.message}`);
+        });
+        console.error(`[engram] Triggered summarization for session ${sess.id}`);
+        break; // Only 1 per session-start
+      }
+    } catch (err) {
+      console.error(`[engram] Unsummarized session check failed: ${err.message}`);
+    }
+  }
+
   return contextBuilder;
 }
 

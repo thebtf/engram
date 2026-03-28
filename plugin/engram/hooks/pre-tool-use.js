@@ -52,37 +52,69 @@ async function handlePreToolUse(ctx, input) {
     return '';
   }
 
-  // Build <file-context> block for systemMessage injection
-  let context = '<file-context>\n';
-  context += `# Known Context for ${escapeXmlTags(filePath)}\n`;
-  context += `Found ${observations.length} relevant observation(s) about this file.\n\n`;
+  // Separate warnings (bugfix, guidance, anti-pattern) from general context
+  const warnings = [];
+  const contextObs = [];
+  const warningTypes = { bugfix: true, guidance: true };
+  const warningConcepts = { 'anti-pattern': true, gotcha: true, 'error-handling': true, security: true };
 
   for (const obs of observations) {
     if (!obs || typeof obs !== 'object') continue;
-    const title = escapeXmlTags(getString(obs.title));
-    const obsType = escapeXmlTags(getString(obs.type)).toUpperCase();
-    const narrative = escapeXmlTags(getString(obs.narrative));
-
-    context += `## [${obsType}] ${title}\n`;
-    if (narrative) {
-      context += `${narrative}\n`;
+    const obsType = getString(obs.type).toLowerCase();
+    const concepts = Array.isArray(obs.concepts) ? obs.concepts : [];
+    const isWarning = warningTypes[obsType] || concepts.some((c) => warningConcepts[c]);
+    if (isWarning) {
+      warnings.push(obs);
+    } else {
+      contextObs.push(obs);
     }
+  }
 
-    const facts = Array.isArray(obs.facts) ? obs.facts : [];
-    if (facts.length > 0) {
-      context += 'Key facts:\n';
+  // Build <file-context> block for systemMessage injection
+  let context = '<file-context>\n';
+  context += `# Known Context for ${escapeXmlTags(filePath)}\n`;
+
+  // Warnings first — guardrails the agent must respect before editing
+  if (warnings.length > 0) {
+    context += `\n## WARNINGS (${warnings.length}) — review before editing\n\n`;
+    for (const obs of warnings) {
+      const title = escapeXmlTags(getString(obs.title));
+      const type = escapeXmlTags(getString(obs.type)).toUpperCase();
+      const narrative = escapeXmlTags(getString(obs.narrative));
+      context += `### [${type}] ${title}\n`;
+      if (narrative) context += `${narrative}\n`;
+      const facts = Array.isArray(obs.facts) ? obs.facts : [];
       for (const fact of facts) {
         if (typeof fact === 'string' && fact !== '') {
           context += `- ${escapeXmlTags(fact)}\n`;
         }
       }
+      context += '\n';
     }
-    context += '\n';
+  }
+
+  // General context observations
+  if (contextObs.length > 0) {
+    context += `\n## Context (${contextObs.length} observations)\n\n`;
+    for (const obs of contextObs) {
+      const title = escapeXmlTags(getString(obs.title));
+      const type = escapeXmlTags(getString(obs.type)).toUpperCase();
+      const narrative = escapeXmlTags(getString(obs.narrative));
+      context += `### [${type}] ${title}\n`;
+      if (narrative) context += `${narrative}\n`;
+      const facts = Array.isArray(obs.facts) ? obs.facts : [];
+      for (const fact of facts) {
+        if (typeof fact === 'string' && fact !== '') {
+          context += `- ${escapeXmlTags(fact)}\n`;
+        }
+      }
+      context += '\n';
+    }
   }
 
   context += '</file-context>';
 
-  console.error(`[pre-tool-use] Injecting ${observations.length} file-context observations for ${filePath}`);
+  console.error(`[pre-tool-use] Injecting ${warnings.length} warnings + ${contextObs.length} context for ${filePath}`);
 
   // Return systemMessage — no decision field needed (approve by default)
   return JSON.stringify({ systemMessage: context });
