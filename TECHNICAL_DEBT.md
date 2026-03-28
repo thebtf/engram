@@ -126,10 +126,8 @@ MCP spec explicitly allows empty responses for unsupported capabilities. Not a b
 4. Separate GPU instances for embedding vs LLM (hardware solution)
 **Context:** Ollama dashboard showed: embedding model 65,702 queued, LLM model 108 GEN + 4 queued. Both on same GPU.
 
-## 2026-03-19: Config Reload via os.Exit(0)
-What: reloadConfig calls os.Exit(0) instead of hot-reload
-Why deferred: Hot-reload requires significant refactoring of service initialization
-Impact: Docker restart policy handles the restart automatically
+## ~~2026-03-19: Config Reload via os.Exit(0)~~ RESOLVED v2.1.4 (PR #117)
+**What:** reloadConfig used os.Exit(0). **Fix:** config.Reload() swaps global atomically. Port/token warn only.
 
 ## ~~2026-03-28: Behavioral Rules for MCP Tool Adoption~~ RESOLVED v2.1.1
 **What:** Agents use 2 of 68 MCP tools. Need always_inject behavioral rules that trigger tool usage at the right moments: `find_by_file` before Edit/Write, `decisions` before architectural choices, `rate_memory` after session.
