@@ -17,11 +17,13 @@ import type { AnyAgentTool, OpenClawPluginToolContext, OpenClawPluginApi } from 
 const GetParamsSchema = z.object({
   path: z.string().optional(),
   query: z.string().optional(),
+  store: z.boolean().optional().default(false),
 }).refine((d) => Boolean(d.path || d.query), { message: 'Either path or query is required' });
 
 const getParameters = Type.Object({
   path: Type.Optional(Type.String({ description: 'Workspace-relative path to a .md file' })),
   query: Type.Optional(Type.String({ description: 'Search query (used if path not provided)' })),
+  store: Type.Optional(Type.Boolean({ description: 'If true, import the file content into engram as an observation' })),
 });
 
 export function createMemoryGetTool(
@@ -43,9 +45,23 @@ export function createMemoryGetTool(
         return `Invalid parameters: ${parsed.error.message}`;
       }
 
-      // Mode 1: Local file read
+      // Mode 1: Local file read (optionally import into engram)
       if (parsed.data.path) {
-        return readLocalFile(parsed.data.path, api);
+        const content = await readLocalFile(parsed.data.path, api);
+        if (parsed.data.store && client.isAvailable() && !content.startsWith('Failed') && !content.startsWith('Refused')) {
+          const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
+          const project = config.project ?? identity.projectId;
+          const title = parsed.data.path.replace(/.*[/\\]/, '').replace(/\.(md|markdown)$/i, '');
+          await client.bulkImport([{
+            title,
+            content: content.slice(0, 4000),
+            type: 'discovery',
+            project,
+            scope: 'project',
+          }], project);
+          return `${content}\n\n---\nImported into engram as "${title}"`;
+        }
+        return content;
       }
 
       // Mode 2: Engram search fallback

@@ -166,6 +166,61 @@ func (s *Service) handleGetMaintenanceStats(w http.ResponseWriter, _ *http.Reque
 	writeJSON(w, stats)
 }
 
+// handleConsistencyCheck returns counts of orphan data across all subsystems.
+// Read-only — does not delete or modify anything.
+// @Router /api/maintenance/consistency [get]
+func (s *Service) handleConsistencyCheck(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	obsStore := s.observationStore
+	s.initMu.RUnlock()
+
+	if obsStore == nil {
+		http.Error(w, "stores not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := r.Context()
+	db := obsStore.GetDB()
+	result := map[string]any{}
+
+	var orphanVectors int64
+	db.WithContext(ctx).Raw(`
+		SELECT COUNT(*) FROM vectors v
+		WHERE v.doc_type = 'observation'
+		AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.id = v.sqlite_id)
+	`).Scan(&orphanVectors)
+	result["orphan_vectors"] = orphanVectors
+
+	var missingVectors int64
+	db.WithContext(ctx).Raw(`
+		SELECT COUNT(*) FROM observations o
+		WHERE (o.status IS NULL OR o.status = 'active') AND o.is_suppressed = false
+		AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.sqlite_id = o.id AND v.doc_type = 'observation')
+	`).Scan(&missingVectors)
+	result["observations_without_vectors"] = missingVectors
+
+	var staleRelations int64
+	db.WithContext(ctx).Raw(`
+		SELECT COUNT(*) FROM observation_relations r
+		WHERE NOT EXISTS (SELECT 1 FROM observations o WHERE o.id = r.source_id)
+		OR NOT EXISTS (SELECT 1 FROM observations o WHERE o.id = r.target_id)
+	`).Scan(&staleRelations)
+	result["stale_relations"] = staleRelations
+
+	var suppressed int64
+	db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM observations WHERE is_suppressed = true`).Scan(&suppressed)
+	result["suppressed_observations"] = suppressed
+
+	var total, active int64
+	db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM observations`).Scan(&total)
+	db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM observations WHERE (status IS NULL OR status = 'active') AND is_suppressed = false`).Scan(&active)
+	result["total_observations"] = total
+	result["active_observations"] = active
+	result["healthy"] = orphanVectors == 0 && missingVectors == 0 && staleRelations == 0
+
+	writeJSON(w, result)
+}
+
 // handleBackfillRelations godoc
 // @Summary Backfill relations for existing observations
 // @Description Triggers relation detection for existing observations that were created before the relation detector was enabled. Runs asynchronously in the background.

@@ -53,8 +53,8 @@ const statusColor = computed(() => {
     <div class="glass rounded-xl p-4 border border-white/10">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-xs text-slate-400 uppercase tracking-wide">Active Sessions</p>
-          <p class="text-2xl font-bold text-blue-400">{{ stats?.activeSessions ?? 0 }}</p>
+          <p class="text-xs text-slate-400 uppercase tracking-wide">Sessions Today</p>
+          <p class="text-2xl font-bold text-blue-400">{{ stats?.sessionsToday ?? stats?.activeSessions ?? 0 }}</p>
         </div>
         <div class="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
           <i class="fas fa-terminal text-blue-400" />
