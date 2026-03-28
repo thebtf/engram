@@ -275,6 +275,18 @@ export class EngramRestClient {
    * The server has no dedicated bulk-delete endpoint. Archiving is the closest
    * equivalent — it removes observations from search results and context injection.
    */
+  /**
+   * Suppress an observation (reversible soft-hide from search results).
+   * POST /api/observations/bulk-status { action: "suppress", ids: [id] }
+   */
+  async suppressObservation(id: number): Promise<boolean> {
+    const resp = await this.post<{ updated: number }>('/api/observations/bulk-status', {
+      action: 'suppress',
+      ids: [id],
+    });
+    return resp != null && resp.updated > 0;
+  }
+
   async bulkDelete(ids: string[]): Promise<BulkDeleteResponse | null> {
     const numericIds = ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
     if (numericIds.length === 0) return { deleted: 0 };

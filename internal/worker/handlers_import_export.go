@@ -627,8 +627,19 @@ func (s *Service) handleBulkStatusUpdate(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
+	case "suppress":
+		for _, id := range req.IDs {
+			if err := s.observationStore.GetDB().WithContext(ctx).
+				Exec("UPDATE observations SET is_suppressed = TRUE WHERE id = ?", id).Error; err != nil {
+				failed++
+				errors = append(errors, fmt.Sprintf("id %d: %v", id, err))
+			} else {
+				updated++
+			}
+		}
+
 	default:
-		http.Error(w, "action must be 'supersede', 'archive', or 'set_feedback'", http.StatusBadRequest)
+		http.Error(w, "action must be 'supersede', 'archive', 'suppress', or 'set_feedback'", http.StatusBadRequest)
 		return
 	}
 
