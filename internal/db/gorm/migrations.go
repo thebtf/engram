@@ -1903,6 +1903,48 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil
 		},
 	},
+	{
+		ID: "063_backfill_observation_concepts",
+		Migrate: func(tx *gorm.DB) error {
+			// Backfill concepts for existing observations based on title/narrative keywords.
+			// Uses JSONB array format: '["concept1","concept2"]'
+			updates := []struct {
+				concept  string
+				keywords []string
+			}{
+				{"architecture", []string{"architecture", "design pattern", "system design", "microservice", "monolith"}},
+				{"security", []string{"security", "authentication", "authorization", "CSRF", "XSS", "injection", "token", "credential"}},
+				{"performance", []string{"performance", "latency", "cache", "timeout", "optimization", "slow"}},
+				{"testing", []string{"test", "coverage", "assertion", "mock", "TDD"}},
+				{"debugging", []string{"debug", "error", "stack trace", "fix", "bug", "regression"}},
+				{"workflow", []string{"workflow", "CI/CD", "pipeline", "deployment", "process", "automation"}},
+				{"api", []string{"API", "endpoint", "REST", "GraphQL", "handler", "route"}},
+				{"database", []string{"database", "SQL", "migration", "schema", "query", "index", "PostgreSQL"}},
+				{"configuration", []string{"config", "environment", "setting", "flag", "parameter"}},
+				{"error-handling", []string{"error handling", "panic", "recover", "retry", "fallback", "circuit breaker"}},
+			}
+
+			for _, u := range updates {
+				for _, kw := range u.keywords {
+					// Only update observations with empty/null concepts
+					tx.Exec(`
+						UPDATE observations
+						SET concepts = CASE
+							WHEN concepts IS NULL OR concepts = '[]' OR concepts = 'null'
+							THEN '["` + u.concept + `"]'::jsonb
+							ELSE concepts || '["` + u.concept + `"]'::jsonb
+						END
+						WHERE (concepts IS NULL OR concepts = '[]' OR concepts = 'null' OR NOT concepts @> '["` + u.concept + `"]'::jsonb)
+						AND (COALESCE(title, '') || ' ' || COALESCE(narrative, '')) ILIKE '%` + kw + `%'
+					`)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil // Cannot undo keyword-based backfill
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
