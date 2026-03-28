@@ -68,7 +68,7 @@ Phase B (quality improvement):
 **Fix plan:** Add `status` column to observations (active/resolved), filter resolved from injection, allow reopen via MCP tool.
 **Context:** Discussed 2026-03-23 re: Codex Account Blocker observation (ID 56553)
 
-## 2026-03-24: Pre-Commit Quality Guardrails (Future FR)
+## ~~2026-03-24: Pre-Commit Quality Guardrails~~ RESOLVED v2.1.3 (PR #116)
 **What:** Agent committed hardcoded `max_tokens: 4096` that should have been configurable. No automated check caught it before commit.
 **Two scopes:**
 1. **Static guardrails (linter)** — magic numbers, hardcoded URLs, missing error checks, TODO without issue. Classic pre-commit hook territory (golangci-lint custom rules). Not engram — fixed rules, no LLM needed.
