@@ -124,7 +124,8 @@ function splitPath(path: string, components = 3) {
     <!-- Back navigation -->
     <button
       @click="router.push({ name: 'observations' })"
-      class="flex items-center gap-2 text-sm text-slate-400 hover:text-white mb-6 transition-colors"
+      class="flex items-center gap-2 text-sm text-slate-400 hover:text-white mb-6 transition-colors duration-200 cursor-pointer"
+      title="Return to observations list"
     >
       <i class="fas fa-arrow-left" />
       Back to Observations
@@ -141,7 +142,7 @@ function splitPath(path: string, components = 3) {
       <p class="text-red-400 mb-2">{{ error }}</p>
       <button
         @click="load(observationId)"
-        class="text-sm text-slate-400 hover:text-white transition-colors"
+        class="text-sm text-slate-400 hover:text-white transition-colors duration-200 cursor-pointer"
       >
         Try again
       </button>
@@ -185,14 +186,16 @@ function splitPath(path: string, components = 3) {
           <button
             v-if="!isEditing"
             @click="isEditing = true"
-            class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors"
+            class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors duration-200 cursor-pointer"
+            title="Edit observation title and content"
           >
             <i class="fas fa-pen mr-1.5" />
             Edit
           </button>
           <button
             @click="showArchiveConfirm = true"
-            class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-400 hover:text-red-400 hover:border-red-500/50 transition-colors"
+            class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-red-400 hover:text-red-300 hover:border-red-500/50 transition-colors duration-200 cursor-pointer"
+            title="Archive permanently — cannot be undone"
           >
             <i class="fas fa-archive mr-1.5" />
             Archive
@@ -344,11 +347,12 @@ function splitPath(path: string, components = 3) {
             @click="handleFeedback(1)"
             :disabled="feedbackSubmitting"
             :class="[
-              'p-2 rounded-lg transition-all',
+              'p-2 rounded-lg transition-all duration-200 cursor-pointer',
               observation.user_feedback === 1
                 ? 'bg-green-500/30 text-green-300'
-                : 'text-slate-500 hover:text-green-400 hover:bg-green-500/10',
+                : 'text-blue-400 hover:text-green-400 hover:bg-green-500/10',
             ]"
+            title="Rate as useful — improves future ranking"
           >
             <i class="fas fa-thumbs-up" />
           </button>
@@ -356,11 +360,12 @@ function splitPath(path: string, components = 3) {
             @click="handleFeedback(-1)"
             :disabled="feedbackSubmitting"
             :class="[
-              'p-2 rounded-lg transition-all',
+              'p-2 rounded-lg transition-all duration-200 cursor-pointer',
               observation.user_feedback === -1
                 ? 'bg-red-500/30 text-red-300'
-                : 'text-slate-500 hover:text-red-400 hover:bg-red-500/10',
+                : 'text-blue-400 hover:text-red-400 hover:bg-red-500/10',
             ]"
+            title="Rate as not useful — lowers future ranking"
           >
             <i class="fas fa-thumbs-down" />
           </button>

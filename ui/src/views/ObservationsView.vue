@@ -563,7 +563,8 @@ onUnmounted(() => {
         <button
           @click="startBatchAction('archive')"
           :disabled="batchProcessing"
-          class="px-3 py-1 rounded-lg text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+          class="px-3 py-1 rounded-lg text-xs bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 hover:text-red-300 transition-colors duration-200 disabled:opacity-50 cursor-pointer"
+          title="Archive selected observations permanently — cannot be undone"
         >
           <i class="fas fa-archive mr-1" />
           Archive
@@ -571,7 +572,8 @@ onUnmounted(() => {
         <button
           @click="startBatchAction('delete')"
           :disabled="batchProcessing"
-          class="px-3 py-1 rounded-lg text-xs bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+          class="px-3 py-1 rounded-lg text-xs bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 hover:text-red-300 transition-colors duration-200 disabled:opacity-50 cursor-pointer"
+          title="Permanently delete selected observations — cannot be undone"
         >
           <i class="fas fa-trash mr-1" />
           Delete
@@ -579,7 +581,8 @@ onUnmounted(() => {
         <button
           @click="startBatchAction('scope')"
           :disabled="batchProcessing"
-          class="px-3 py-1 rounded-lg text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+          class="px-3 py-1 rounded-lg text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors duration-200 disabled:opacity-50 cursor-pointer"
+          title="Change scope of selected observations (global or project)"
         >
           <i class="fas fa-layer-group mr-1" />
           Change Scope
@@ -587,7 +590,8 @@ onUnmounted(() => {
         <button
           @click="startBatchAction('tag')"
           :disabled="batchProcessing"
-          class="px-3 py-1 rounded-lg text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 transition-colors disabled:opacity-50"
+          class="px-3 py-1 rounded-lg text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 transition-colors duration-200 disabled:opacity-50 cursor-pointer"
+          title="Add a tag to selected observations"
         >
           <i class="fas fa-tag mr-1" />
           Add Tag
@@ -595,14 +599,16 @@ onUnmounted(() => {
         <button
           @click="startBatchAction('resolve')"
           :disabled="batchProcessing"
-          class="px-3 py-1 rounded-lg text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors disabled:opacity-50"
+          class="px-3 py-1 rounded-lg text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors duration-200 disabled:opacity-50 cursor-pointer"
+          title="Mark selected as resolved — removes from context injection, reversible"
         >
           <i class="fas fa-check-circle mr-1" />
           Resolve Selected
         </button>
         <button
           @click="selectedIds = new Set()"
-          class="ml-auto text-xs text-slate-400 hover:text-white transition-colors"
+          class="ml-auto text-xs text-slate-400 hover:text-white transition-colors duration-200 cursor-pointer"
+          title="Deselect all observations"
         >
           Clear selection
         </button>
@@ -704,7 +710,7 @@ onUnmounted(() => {
       <div
         v-if="obs.memory_type"
         :class="[
-          'group p-4 rounded-xl border-2 bg-gradient-to-br transition-all',
+          'group p-4 rounded-xl border-2 bg-gradient-to-br transition-all duration-200',
           obs.status === 'resolved'
             ? 'border-purple-500/10 from-slate-800/20 to-slate-900/20 opacity-50'
             : selectedIds.has(obs.id)
@@ -805,15 +811,15 @@ onUnmounted(() => {
           <div class="flex items-center gap-1 flex-shrink-0" @click.stop>
             <button
               @click="openDeleteMemoryDialog(obs.id, $event)"
-              class="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-xs bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/30 transition-all cursor-pointer"
-              title="Delete this memory"
+              class="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-xs bg-slate-700/50 text-red-400 border border-slate-600/30 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/30 transition-all duration-200 cursor-pointer"
+              title="Permanently delete this memory — cannot be undone"
             >
               <i class="fas fa-trash text-[11px]" />
             </button>
             <button
               @click="navigateToDetail(obs.id)"
-              class="p-1.5 rounded-lg text-xs bg-slate-700/50 text-slate-500 border border-slate-600/30 hover:bg-slate-600/50 hover:text-slate-200 transition-all cursor-pointer"
-              title="View details"
+              class="p-1.5 rounded-lg text-xs bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-slate-600/50 hover:text-slate-200 transition-all duration-200 cursor-pointer"
+              title="View full observation details"
             >
               <i class="fas fa-arrow-right text-[11px]" />
             </button>
@@ -857,7 +863,7 @@ onUnmounted(() => {
         v-else
         @click="navigateToDetail(obs.id)"
         :class="[
-          'group flex items-center gap-4 p-4 rounded-xl border-2 bg-gradient-to-br cursor-pointer transition-all',
+          'group flex items-center gap-4 p-4 rounded-xl border-2 bg-gradient-to-br cursor-pointer transition-all duration-200',
           obs.status === 'resolved'
             ? 'border-slate-700/30 from-slate-800/30 to-slate-900/30 opacity-50 hover:opacity-75'
             : selectedIds.has(obs.id)
@@ -954,16 +960,16 @@ onUnmounted(() => {
           <button
             v-if="obs.status !== 'resolved'"
             @click="openResolveModal(obs.id, $event)"
-            class="opacity-0 group-hover:opacity-100 px-2 py-1 rounded-lg text-xs bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/30 transition-all cursor-pointer"
-            title="Resolve this observation"
+            class="opacity-0 group-hover:opacity-100 px-2 py-1 rounded-lg text-xs bg-slate-700/50 text-emerald-400 border border-slate-600/30 hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/30 transition-all duration-200 cursor-pointer"
+            title="Mark as resolved — removes from context injection, reversible"
           >
             <i class="fas fa-check-circle" />
           </button>
           <button
             v-else
             @click="reopenObservation(obs.id, $event)"
-            class="opacity-0 group-hover:opacity-100 px-2 py-1 rounded-lg text-xs bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-green-500/20 hover:text-green-300 hover:border-green-500/30 transition-all cursor-pointer"
-            title="Reopen this observation"
+            class="opacity-0 group-hover:opacity-100 px-2 py-1 rounded-lg text-xs bg-slate-700/50 text-blue-400 border border-slate-600/30 hover:bg-blue-500/20 hover:text-blue-300 hover:border-blue-500/30 transition-all duration-200 cursor-pointer"
+            title="Reopen — restores to active state and context injection"
           >
             <i class="fas fa-rotate-left" />
           </button>
@@ -1110,7 +1116,7 @@ onUnmounted(() => {
             :key="item.tag"
             @click="filterByTag(item.tag)"
             :class="[
-              'cursor-pointer px-2 py-0.5 rounded-full text-[10px] border transition-colors',
+              'cursor-pointer px-2 py-0.5 rounded-full text-[10px] border transition-colors duration-200',
               currentTagFilter === item.tag
                 ? 'bg-claude-500/20 text-claude-300 border-claude-500/30'
                 : 'bg-slate-700/30 text-slate-400 border-slate-600/50 hover:text-slate-200 hover:border-slate-500',
