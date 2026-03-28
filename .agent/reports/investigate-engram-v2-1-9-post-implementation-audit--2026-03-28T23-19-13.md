@@ -1,0 +1,48 @@
+# Investigation Report: Engram v2.1.9 post-implementation audit: hidden bugs, missing features, broken implementations, design gaps
+
+**Generated:** 2026-03-28T23:19:13.184Z
+**Project:** D:\Dev\engram
+**Iterations:** 2
+**Findings:** 13
+**Corrections:** 0
+**Coverage:** 12/12 areas
+
+## Findings
+
+| ID | Severity | Description | Source | Iter | Status |
+|----|----------|-------------|--------|------|--------|
+| F-0-1 | P2 | MCP dispatch: recall/store/feedback/vault/docs/admin all pass raw args (including 'action' field) to underlying handlers. Handlers use parseArgs and ignore unknown fields. No collision risk. HOWEVER: store(action='create') passes args to handleStoreMemory which reads 'content' field — but the consolidated tool schema defines 'content' as optional. If agent calls store() without content, handleStoreMemory may silently create an empty observation. | Read tools_store_consolidated.go + tools_recall.go | 0 | active |
+| F-0-2 | P1 | OpenClaw before_tool_call hook returns { appendSystemContext } but the OpenClaw HookResult type (types/openclaw.ts:217) only defines void | PromptBuildResult | SessionStartResult | BeforeAgentStartResult | undefined. There is NO type for before_tool_call return that includes appendSystemContext. The hook may silently fail to inject context because the SDK doesn't know how to handle this return type for before_tool_call events. | Read before-tool-call.ts:58 + types/openclaw.ts:217 | 0 | active |
+| F-0-3 | P2 | Summary pipeline: session-start.js calls POST /api/sessions/{sess.id}/summarize with sess.id = numeric DB ID. Handler passes to QueueSummarize which resolves sdkSessionID from in-memory session map. BUT: old sessions not in memory (30min cleanup) -> InitializeSession from DB -> gets sdkSessionID from DB. The observation fallback queries WHERE sdk_session_id = sdkSessionID. This SHOULD work for sessions that have observations. However: if circuit breaker was open during the session, 0 observations were stored -> fallback returns 0 rows -> userPrompt fallback fires only if len >= 50 chars. Many sessions start with short prompts like 'fix this' (< 50 chars) -> ALL 3 fallbacks fail -> summary skipped. The 50-char threshold is too high for short prompts. | Read processor.go:523-572 + session-start.js:206-235 | 0 | active |
+| F-0-4 | P3 | Migration 063 concept backfill has a DUPLICATE CONCEPT BUG. When an observation matches multiple keywords for the SAME concept (e.g. title contains both 'debug' and 'bug'), the concepts array gets the same concept added multiple times: ["debugging", "debugging"]. The JSONB || operator appends without dedup. The WHERE clause checks NOT concepts @> but after first append, the concept IS present, so subsequent keywords skip. HOWEVER: if 'debug' keyword runs first and adds 'debugging', then 'bug' keyword check sees concepts already contains 'debugging' and skips. So it's actually safe for same-concept duplicates. BUT: the concepts || '[]'::jsonb on an already-populated array (e.g. from store_memory) may create malformed JSONB if the existing value is already a proper array. Actually, PostgreSQL JSONB || on two arrays concatenates them correctly: ["a"] || ["b"] = ["a","b"]. This is safe. | Read migrations.go:1907-1946 | 0 | active |
+| F-0-5 | P2 | Circuit breaker has NO logging when transitioning from open to half-open or from half-open to closed. When CB opens, it logs 'Circuit breaker opened'. But when resetTimeout passes and it goes to half-open, there's no log. When a half-open request succeeds and it closes, RecordSuccess just resets atomics silently. This makes it hard to diagnose recovery timing from server logs. Users see 'circuit breaker open' but never see 'circuit breaker recovered'. | Read processor.go:51-87 | 0 | active |
+| F-0-6 | P3 | Config hot-reload: Reload() calls Load() which reads config file + env vars. But env vars are read at process startup and don't change at runtime. So 'reloading' env-only fields (DatabaseDSN, EmbeddingAPIKey, WorkerToken, WorkerHost, etc.) will always return the same values — the reload only affects JSON file fields. This is correct behavior but the SSE broadcast says 'Configuration reloaded' which may mislead users into thinking env changes took effect. Not a bug but misleading UX. | Read config.go:686-730 + config.go:400-500 (env loading) | 0 | active |
+| F-0-7 | P1 | Pre-edit guardrails (pre-tool-use.js:58) classifies ALL guidance-type observations as WARNINGS. But most guidance observations are behavioral rules ('Use PR workflow', 'Always check docs'), not file-specific warnings. A file with 3 behavioral rules injected shows '3 WARNINGS — review before editing' which is misleading. Warnings should be only observations that reference the specific file being edited, not all guidance observations from the project. | Read pre-tool-use.js:55-70 — warningTypes = { bugfix: true, guidance: true } | 0 | active |
+| F-0-8 | P2 | Behavioral rules effectiveness is LOW: 20-27% across all rules. This means they're injected 11-15 times but only 'used' (referenced in agent output) 3-4 times. Two interpretations: (1) rules work silently (agent follows without explicitly citing) — not a bug; (2) rules are ignored — adoption problem. The 'used' detection is keyword-based (stop.js detectUtilitySignal matches title in assistant text). Behavioral rules have long titles that rarely appear verbatim in agent output. The effectiveness metric is MISLEADING for always-inject rules — it measures citation, not compliance. | curl /api/observations?type=guidance&concept=always-inject | 0 | active |
+| F-0-9 | P2 | Concept backfill migration partially successful: 15/20 concepts populated. But 5 concepts have ZERO observations: why-it-exists, what-changed, anti-pattern, gotcha, trade-off, problem-solution. These concepts had no matching keywords in the migration. Dashboard dropdown shows them but selecting returns empty. Two issues: (1) migration keyword list incomplete for these 5 concepts, (2) dashboard dropdown shows concepts with 0 observations — should hide or gray out empty ones. | curl /api/observations/tag-cloud | 0 | active |
+| F-0-10 | P1 | Summaries STILL 0 after all fixes (PR #120 observation fallback + PR #123 userPrompt fallback). Root cause: the session-start summarizer (session-start.js:206-235) only fires when a NEW CC session starts. This session has been running continuously — no new session-start event to trigger summarization. The code is correct but untested in production: it requires ending this session and starting a new one to trigger. Also: the session-start hook checks sess.summary field, but the SDKSession JSON may not include this field — need to verify the ListSDKSessions response includes summary. | curl /api/summaries — still 0 | 0 | active |
+| F-0-11 | P1 | CRITICAL: Session-start summarizer checks `sess.summary && typeof sess.summary === 'string' && sess.summary.length > 0` to skip sessions with existing summaries. But the /api/sessions/list response does NOT include a 'summary' field at all! The SDKSession model has no summary field — summaries are in a SEPARATE table (session_summaries). So sess.summary is always undefined, the skip check never triggers, and the summarizer NEVER skips already-summarized sessions. On each session-start, it would re-summarize the same session repeatedly. This is both a bug (duplicate summaries) and a missed optimization. | curl /api/sessions/list — no summary field + session-start.js:220 | 0 | active |
+| F-0-12 | P2 | Pattern insight background generation: Only 1/5 patterns got LLM insight after maintenance trigger. Maintenance Task 18 caps at 5 per cycle. One succeeded (pattern #41 tested manually). The other 4 likely failed due to: (1) LLM timeout — Model reloaded error from LiteLLM, (2) circuit breaker re-opened after first failure. Background insight gen works but is fragile — LLM instability means only 1 per cycle succeeds, requiring many cycles to backfill all patterns. | curl /api/patterns + maintenance logs | 0 | active |
+| F-1-13 | P2 | Dashboard visual verification (Constitution #14): Cannot verify via screenshot from this session. API-level verification confirms: concept filter returns data (15/20 concepts populated), sessions list filters by min_prompts, search misses endpoint returns proper envelope. However: the Vue frontend changes (SessionDetailView, FilterTabs concept wiring, StatsCards sessions today) have not been visually verified. The dashboard may have rendering issues not caught by API testing alone. | API-level testing only, no visual verification | 1 | active |
+
+## Coverage Map
+
+| Area | Status |
+|------|--------|
+| MCP tool consolidation (68→7) — dispatch correctness | ✓ checked |
+| OpenClaw plugin (17 tools + hooks) — integration gaps | ✓ checked |
+| Dashboard fixes (concept filter, sessions, search misses) — visual verification | ✓ checked |
+| Summaries pipeline — end-to-end flow | ✓ checked |
+| Concepts pipeline — extraction + backfill | ✓ checked |
+| Config hot-reload — edge cases | ✓ checked |
+| Pattern insight background generation — LLM dependency | ✓ checked |
+| Behavioral rules injection — effectiveness | ✓ checked |
+| Session-start summarizer — trigger reliability | ✓ checked |
+| Pre-edit guardrails — warning accuracy | ✓ checked |
+| Circuit breaker — recovery behavior | ✓ checked |
+| Migration safety — backfill idempotency | ✓ checked |
+
+## Convergence History
+
+- Iteration 1: 50%
+- Iteration 2: 50%
