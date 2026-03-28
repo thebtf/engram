@@ -423,7 +423,7 @@ func TestHandleToolsList(t *testing.T) {
 	// T2 (useful) tools must be present
 	t2Tools := []string{
 		"changes", "find_by_type", "find_by_concept",
-		"find_similar_observations", "get_recent_context", "timeline",
+		"find_similar_observations", "timeline",
 	}
 	for _, name := range t2Tools {
 		assert.True(t, toolNames[name], "expected T2 tool %s to be present", name)
@@ -431,7 +431,6 @@ func TestHandleToolsList(t *testing.T) {
 
 	// T3 (admin) tools must NOT be present in default listing
 	t3Tools := []string{
-		"get_context_timeline", "get_timeline_by_query",
 		"bulk_delete_observations", "trigger_maintenance",
 	}
 	for _, name := range t3Tools {
@@ -1700,9 +1699,6 @@ func TestCallTool_ToolNameRecognition(t *testing.T) {
 		"find_by_concept":                   true,
 		"find_by_file":                      true,
 		"find_by_type":                      true,
-		"get_recent_context":                true,
-		"get_context_timeline":              true,
-		"get_timeline_by_query":             true,
 		"find_related_observations":         true,
 		"find_similar_observations":         true,
 		"get_patterns":                      true,
@@ -1726,7 +1722,6 @@ func TestCallTool_ToolNameRecognition(t *testing.T) {
 		"export_observations":               true,
 		"check_system_health":               true,
 		"analyze_search_patterns":           true,
-		"get_observation_relationships":     true,
 		"get_observation_scoring_breakdown": true,
 		"analyze_observation_importance":    true,
 	}

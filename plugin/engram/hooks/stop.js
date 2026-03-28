@@ -334,13 +334,13 @@ async function handleStop(ctx, input) {
     console.error(`[stop] session index failed: ${err.message}`);
   }
 
-  // Detect utility signals for injected observations
+  // Detect utility signals using retrospective injection API (single enriched call)
   try {
-    const injectedResult = await lib.requestGet(
-      `/api/sessions/${sessionID}/injected-observations`
+    const injectionsResp = await lib.requestGet(
+      `/api/sessions/${sessionID}/injections`
     );
-    const injectedObs = Array.isArray(injectedResult && injectedResult.observations)
-      ? injectedResult.observations
+    const injectedObs = Array.isArray(injectionsResp && injectionsResp.injections)
+      ? injectionsResp.injections
       : [];
 
     if (injectedObs.length > 0 && messages.length > 0) {
@@ -351,17 +351,19 @@ async function handleStop(ctx, input) {
       const assistantTextLower = assistantText.toLowerCase();
 
       for (const obs of injectedObs) {
-        if (!obs || typeof obs !== 'object' || typeof obs.id !== 'number') continue;
+        if (!obs || typeof obs !== 'object') continue;
+        const obsId = typeof obs.observation_id === 'number' ? obs.observation_id : 0;
+        if (obsId <= 0) continue;
 
         const signal = detectUtilitySignal(obs, assistantTextLower);
         if (signal === 'ignored') continue;
 
-        lib.requestPost(`/api/observations/${obs.id}/utility`, { signal }, 3000).catch((err) => {
-          console.error(`[stop] utility signal failed for obs ${obs.id}: ${err.message}`);
+        lib.requestPost(`/api/observations/${obsId}/utility`, { signal }, 3000).catch((err) => {
+          console.error(`[stop] utility signal failed for obs ${obsId}: ${err.message}`);
         });
       }
 
-      console.error(`[stop] Checked ${injectedObs.length} injected observations for utility signals`);
+      console.error(`[stop] Checked ${injectedObs.length} injected observations for utility signals (retrospective API)`);
     }
   } catch (error) {
     console.error(`[stop] Warning: utility signal detection failed: ${error.message}`);
