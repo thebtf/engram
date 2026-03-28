@@ -1,10 +1,8 @@
 # Technical Debt
 
-## ~~2026-03-25: Bulk Import Creates Phantom Sessions (403 openclaw sessions)~~ PARTIALLY RESOLVED v1.7.2 (PR #65)
+## ~~2026-03-25: Bulk Import Creates Phantom Sessions (403 openclaw sessions)~~ RESOLVED v2.0.3 (PR #65 + PR #99)
 **What:** `handleBulkImport` created a new synthetic session for every call. 403+ phantom `bulk-import-*` sessions.
-**Fix (PR #65):** Steps 1-4 done — `session_id` param added, openclaw tools pass `ctx.sessionId`.
-**Remaining:** Step 5 — cleanup existing 403 phantom sessions via migration or maintenance DELETE.
-**Context:** `internal/worker/handlers_import_export.go`, `internal/db/gorm/migrations.go`
+**Fix:** PR #65 (session_id param) + PR #99 (cleanup migration). Fully resolved.
 
 ## ~~2026-03-25: Cleanup Existing Phantom bulk-import-* Sessions~~ RESOLVED v2.0.3 (PR #99)
 **What:** 403+ sessions with `claude_session_id LIKE 'bulk-import-%'` exist from before PR #65 fix. New phantom sessions no longer created, but old ones pollute Sessions page.
@@ -34,11 +32,9 @@
 **Impact:** No automated verification that composite scoring + diversity penalty actually improve relevance. Currently based on qualitative assessment only.
 **Context:** `.agent/specs/composite-relevance-scoring/tasks.md` T027
 
-## 2026-03-23: Vault Credentials Encrypted with Lost Key
-**What:** 15 credentials in DB encrypted with auto-generated AES-256-GCM key that was stored in Docker ephemeral filesystem (`~/.engram/vault.key`). Container was recreated, key lost.
-**Why deferred:** Credentials cannot be recovered — AES-256-GCM has no backdoor. Users need to re-create credentials with current key.
-**Impact:** `vault_status` shows credentials exist but `get_credential` fails for old entries. Fixed in v1.4.0: auto-generate now writes to `/data/` (persistent volume).
-**Context:** `internal/crypto/vault.go`, migration history
+## ~~2026-03-23: Vault Credentials Encrypted with Lost Key~~ RESOLVED (Migration 053)
+**What:** 15 credentials encrypted with lost key. Migration 053 deleted all dead credentials.
+**Fix:** `053_cleanup_dead_vault_credentials` in `migrations.go`. Key storage fixed in v1.4.0.
 
 ## ~~2026-03-26: Patterns System — 345 Patterns with Useless Insights~~ RESOLVED v1.8.0 (PRs #71, #72)
 **What:** 345 patterns (down from 16k after migration cleanup). Insight button shows "I've encountered this pattern 1816 times. This is a recognized pattern in the codebase." — zero actionable content. User confirmed: "результат insight все еще бесполезен".
@@ -87,10 +83,9 @@ Phase B (quality improvement):
 **Action:** Update run_benchmark_v2.py to use 4096, re-run all 12 models with B_fewshot. Compare with current results.
 **Context:** `.agent/benchmark/run_benchmark_v2.py:44`, `.agent/benchmark/benchmark-v2-design.md`
 
-## 2026-03-19: MCP Resources/Prompts Stubs
-What: MCP server returns empty lists for resources/list, prompts/list, completion/complete
-Why deferred: MCP spec allows graceful empty responses for unsupported capabilities
-Impact: No functional impact — clients handle empty lists
+## ~~2026-03-19: MCP Resources/Prompts Stubs~~ RESOLVED — by design
+What: MCP server returns empty lists for resources/list, prompts/list, completion/complete.
+MCP spec explicitly allows empty responses for unsupported capabilities. Not a bug.
 
 ## ~~2026-03-19: Memory Blocks Table Unpopulated~~ RESOLVED v1.5.2 — dropped via migration 047
 
