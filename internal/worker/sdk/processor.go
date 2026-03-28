@@ -60,6 +60,7 @@ func (cb *CircuitBreaker) Allow() bool {
 		if time.Now().Unix()-lastFail > cb.resetTimeout {
 			// Transition to half-open
 			atomic.CompareAndSwapInt32(&cb.state, circuitOpen, circuitHalfOpen)
+			log.Info().Msg("Circuit breaker entering half-open state — testing with next request")
 			return true
 		}
 		return false
@@ -71,8 +72,12 @@ func (cb *CircuitBreaker) Allow() bool {
 
 // RecordSuccess records a successful call.
 func (cb *CircuitBreaker) RecordSuccess() {
+	prevState := atomic.LoadInt32(&cb.state)
 	atomic.StoreInt64(&cb.failures, 0)
 	atomic.StoreInt32(&cb.state, circuitClosed)
+	if prevState != circuitClosed {
+		log.Info().Msg("Circuit breaker recovered — LLM calls re-enabled")
+	}
 }
 
 // RecordFailure records a failed call.

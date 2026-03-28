@@ -4,6 +4,7 @@ package maintenance
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -448,6 +449,16 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
+	// Task 19: Summarize unsummarized sessions
+	if s.llmClient != nil {
+		summarized, err := s.summarizeUnsummarizedSessions(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("Session summarization failed")
+		} else if summarized > 0 {
+			s.log.Info().Int("summarized", summarized).Msg("Generated session summaries")
+		}
+	}
+
 	// Update metrics
 	s.mu.Lock()
 	s.lastRunTime = time.Now()
@@ -491,6 +502,97 @@ func (s *Service) generatePatternInsights(ctx context.Context) (int, error) {
 		}
 	}
 	return generated, nil
+}
+
+// summarizeUnsummarizedSessions finds sessions with prompts but no summary and generates summaries.
+func (s *Service) summarizeUnsummarizedSessions(ctx context.Context) (int, error) {
+	if s.llmClient == nil {
+		return 0, nil
+	}
+
+	// Find sessions with prompts > 0, no summary, older than 30 minutes
+	type sessionRow struct {
+		ID              int64  `gorm:"column:id"`
+		ClaudeSessionID string `gorm:"column:claude_session_id"`
+		Project         string `gorm:"column:project"`
+		UserPrompt      string `gorm:"column:user_prompt"`
+	}
+
+	cutoff := time.Now().Add(-30 * time.Minute).UnixMilli()
+	var rows []sessionRow
+	err := s.store.GetDB().WithContext(ctx).Raw(`
+		SELECT s.id, s.claude_session_id, COALESCE(s.project, '') as project, COALESCE(s.user_prompt, '') as user_prompt
+		FROM sdk_sessions s
+		WHERE s.prompt_counter > 0
+		AND s.started_at_epoch < ?
+		AND NOT EXISTS (SELECT 1 FROM session_summaries ss WHERE ss.sdk_session_id = s.claude_session_id)
+		ORDER BY s.started_at_epoch DESC
+		LIMIT 3
+	`, cutoff).Scan(&rows).Error
+
+	if err != nil || len(rows) == 0 {
+		return 0, err
+	}
+
+	summarized := 0
+	for _, row := range rows {
+		// Build content from observations
+		type obsRow struct {
+			Type      string `gorm:"column:type"`
+			Title     string `gorm:"column:title"`
+			Narrative string `gorm:"column:narrative"`
+		}
+		var obs []obsRow
+		s.store.GetDB().WithContext(ctx).Raw(`
+			SELECT type, COALESCE(title, '') as title, COALESCE(narrative, '') as narrative
+			FROM observations WHERE sdk_session_id = ?
+			ORDER BY created_at_epoch DESC LIMIT 10
+		`, row.ClaudeSessionID).Scan(&obs)
+
+		if len(obs) == 0 && len(row.UserPrompt) < 50 {
+			continue // No data to summarize
+		}
+
+		// Build content
+		var content string
+		if len(obs) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Session observations:\n")
+			for _, o := range obs {
+				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", o.Type, o.Title, o.Narrative))
+			}
+			content = sb.String()
+		} else {
+			content = "Session started with: " + row.UserPrompt
+		}
+
+		// Call LLM for summary
+		systemPrompt := "You are a coding session analyst. Write a brief progress summary."
+		userPrompt := fmt.Sprintf("Summarize this coding session for project %s:\n\n%s", row.Project, content)
+
+		response, err := s.llmClient.Complete(ctx, systemPrompt, userPrompt)
+		if err != nil {
+			s.log.Debug().Err(err).Int64("sessionId", row.ID).Msg("Summary LLM call failed")
+			continue
+		}
+
+		response = strings.TrimSpace(response)
+		if response == "" {
+			continue
+		}
+
+		// Store in session_summaries table
+		now := time.Now()
+		s.store.GetDB().WithContext(ctx).Exec(`
+			INSERT INTO session_summaries (sdk_session_id, project, completed, created_at, created_at_epoch)
+			VALUES (?, ?, ?, ?, ?)
+		`, row.ClaudeSessionID, row.Project, response, now, now.UnixMilli())
+
+		summarized++
+		s.log.Info().Int64("sessionId", row.ID).Str("project", row.Project).Msg("Generated session summary")
+	}
+
+	return summarized, nil
 }
 
 // cleanupOldObservations deletes observations older than the retention period.
