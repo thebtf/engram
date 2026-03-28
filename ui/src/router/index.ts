@@ -39,7 +39,7 @@ const routes = [
     component: () => import('@/views/LogsView.vue'),
   },
   {
-    path: '/graph',
+    path: '/graph/:observationId?',
     name: 'graph',
     component: () => import('@/views/GraphView.vue'),
   },

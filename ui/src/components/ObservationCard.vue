@@ -10,6 +10,7 @@ import Badge from './Badge.vue'
 import RelationGraph from './RelationGraph.vue'
 import ScoreBreakdown from './ScoreBreakdown.vue'
 import { computed, ref, onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
 
 const props = defineProps<{
   observation: ObservationFeedItem
@@ -272,16 +273,29 @@ const splitPath = (path: string, components = 3) => {
               />
             </button>
 
-            <!-- View Graph button -->
-            <button
-              v-if="hasRelations"
-              @click="openGraph"
-              class="flex items-center gap-1.5 px-2 py-1 text-xs text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 rounded transition-colors"
-              title="View knowledge graph"
-            >
-              <i class="fas fa-project-diagram" />
-              <span>View Graph</span>
-            </button>
+            <div class="flex items-center gap-2">
+              <!-- Local graph link (navigates to /graph/:id) -->
+              <RouterLink
+                v-if="hasRelations"
+                :to="`/graph/${observation.id}`"
+                class="flex items-center gap-1.5 px-2 py-1 text-xs text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 rounded transition-colors"
+                title="Open in full graph view"
+                @click.stop
+              >
+                <i class="fas fa-diagram-project" />
+              </RouterLink>
+
+              <!-- View Graph button (modal) -->
+              <button
+                v-if="hasRelations"
+                @click="openGraph"
+                class="flex items-center gap-1.5 px-2 py-1 text-xs text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 rounded transition-colors"
+                title="View knowledge graph"
+              >
+                <i class="fas fa-project-diagram" />
+                <span>View Graph</span>
+              </button>
+            </div>
           </div>
 
           <!-- Expanded relations list -->
