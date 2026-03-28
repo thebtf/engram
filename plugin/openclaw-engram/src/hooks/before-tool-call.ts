@@ -4,7 +4,7 @@
  * Matches CC PreToolUse behavior: before an agent modifies a file, inject
  * relevant observations so it doesn't repeat past mistakes or miss known patterns.
  *
- * Non-blocking: 200ms timeout, failures swallowed (Constitution Principle 3).
+ * Non-blocking: 500ms timeout, failures swallowed (Constitution Principle 3).
  */
 
 import type { EngramRestClient, Observation } from '../client.js';

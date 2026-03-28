@@ -12,12 +12,12 @@ import type { PluginConfig } from '../config.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const ForgetParamsSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().regex(/^[1-9]\d*$/, 'Must be a positive integer'),
   permanent: z.boolean().optional().default(false),
 });
 
 const forgetParameters = Type.Object({
-  id: Type.String({ description: 'Observation ID to forget' }),
+  id: Type.String({ description: 'Observation ID (positive integer)' }),
   permanent: Type.Optional(
     Type.Boolean({
       description: 'If true, permanently archives the observation. Default: false (reversible suppress).',
@@ -48,13 +48,13 @@ export function createMemoryForgetTool(
         return 'engram is currently unreachable — memory forget unavailable';
       }
 
-      const numericId = Number(parsed.data.id);
-      if (Number.isNaN(numericId) || numericId <= 0) {
+      const numericId = parseInt(parsed.data.id, 10);
+      if (!Number.isSafeInteger(numericId) || numericId <= 0) {
         return `Invalid observation ID: ${parsed.data.id}`;
       }
 
       if (parsed.data.permanent) {
-        const response = await client.bulkDelete([parsed.data.id]);
+        const response = await client.bulkDelete([String(numericId)]);
         if (!response) {
           return 'engram archive failed — server returned no response';
         }

@@ -69,7 +69,7 @@ export function createEngramVaultStoreTool(
 
       return success
         ? `Credential "${parsed.data.name}" stored securely (scope: ${parsed.data.scope})`
-        : `Failed to store credential "${parsed.data.name}"`;
+        : `Failed to store credential "${parsed.data.name}" — server may be unavailable or vault not configured`;
     },
   };
 }
@@ -98,9 +98,11 @@ export function createEngramVaultGetTool(
 
       const cred = await client.getCredential(parsed.data.name);
       if (!cred) {
-        return `Credential "${parsed.data.name}" not found or decryption failed`;
+        return `Credential "${parsed.data.name}" not found — check name and scope`;
       }
 
+      // Note: credential value is in tool output (conversation history).
+      // Ensure session transcripts handle sensitive data appropriately.
       return `${cred.name}: ${cred.value}`;
     },
   };
