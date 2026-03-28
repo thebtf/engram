@@ -528,13 +528,45 @@ func (p *Processor) ProcessSummary(ctx context.Context, sessionDBID int64, sdkSe
 		Str("lastAssistantMsgPreview", truncate(lastAssistantMsg, 200)).
 		Msg("ProcessSummary called")
 
-	// Skip summary generation if there's no meaningful assistant response
-	// This prevents generic "initial session setup" summaries
+	// If no assistant message provided, build content from stored observations for this session
+	if !hasMeaningfulContent(lastAssistantMsg) && p.observationStore != nil {
+		type obsRow struct {
+			Type      string `gorm:"column:type"`
+			Title     string `gorm:"column:title"`
+			Narrative string `gorm:"column:narrative"`
+		}
+		var rows []obsRow
+		if err := p.observationStore.GetDB().WithContext(ctx).
+			Raw(`SELECT type, COALESCE(title, '') as title, COALESCE(narrative, '') as narrative
+				FROM observations WHERE sdk_session_id = ? ORDER BY created_at_epoch DESC LIMIT 10`, sdkSessionID).
+			Scan(&rows).Error; err == nil && len(rows) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Session observations:\n")
+			for _, o := range rows {
+				sb.WriteString("- [")
+				sb.WriteString(o.Type)
+				sb.WriteString("] ")
+				sb.WriteString(o.Title)
+				if o.Narrative != "" {
+					sb.WriteString(": ")
+					sb.WriteString(o.Narrative)
+				}
+				sb.WriteString("\n")
+			}
+			lastAssistantMsg = sb.String()
+			log.Debug().
+				Int64("sessionId", sessionDBID).
+				Int("observations", len(rows)).
+				Msg("Built summary content from session observations")
+		}
+	}
+
+	// Skip summary generation if there's still no meaningful content
 	if !hasMeaningfulContent(lastAssistantMsg) {
 		log.Info().
 			Int64("sessionId", sessionDBID).
 			Int("msgLen", len(lastAssistantMsg)).
-			Msg("Skipping summary - no meaningful assistant response")
+			Msg("Skipping summary - no meaningful content available")
 		return nil
 	}
 
