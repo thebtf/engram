@@ -138,6 +138,8 @@ export class EngramRestClient {
     agent_id?: string;
     /** Source identifier passed through to the server for analytics/routing. */
     source?: string;
+    /** Search preset: decisions, changes, how_it_works. */
+    preset?: string;
   }): Promise<ContextSearchResponse | null> {
     // Context search does vector query (embedding + pgvector) — needs more than default 5s.
     return this.post<ContextSearchResponse>('/api/context/search', body, 15_000);
@@ -297,6 +299,96 @@ export class EngramRestClient {
     );
     if (!resp) return null;
     return { deleted: resp.updated };
+  }
+
+  /**
+   * Rate an observation as useful or not useful.
+   * POST /api/observations/{id}/feedback { feedback: 1 or -1 }
+   */
+  async rateObservation(id: number, useful: boolean): Promise<boolean> {
+    const resp = await this.post<{ success: boolean }>(
+      `/api/observations/${id}/feedback`,
+      { feedback: useful ? 1 : -1 },
+    );
+    return resp != null;
+  }
+
+  /**
+   * Record session outcome for closed-loop learning.
+   * POST /api/sessions/{sessionId}/outcome { outcome, reason }
+   */
+  async setSessionOutcome(
+    sessionId: number,
+    outcome: string,
+    reason?: string,
+  ): Promise<boolean> {
+    const resp = await this.post<{ success: boolean }>(
+      `/api/sessions/${sessionId}/outcome`,
+      { outcome, reason: reason ?? '' },
+      3000,
+    );
+    return resp != null;
+  }
+
+  /**
+   * Get file-context observations for a specific file.
+   * GET /api/context/by-file?path={file}&project={project}&limit={limit}
+   */
+  async getFileContext(
+    file: string,
+    project: string,
+    limit = 5,
+  ): Promise<Observation[]> {
+    const params = new URLSearchParams({ path: file, project, limit: String(limit) });
+    const resp = await this.get<{ observations: Observation[] }>(
+      `/api/context/by-file?${params.toString()}`,
+      3000,
+    );
+    return resp?.observations ?? [];
+  }
+
+  /**
+   * Get timeline of observations.
+   * POST /api/context/search with timeline params.
+   */
+  async getTimeline(
+    project: string,
+    mode: 'recent' | 'anchor' | 'query',
+    params?: { query?: string; anchor_id?: number; limit?: number },
+  ): Promise<Observation[]> {
+    const body: Record<string, unknown> = { project, mode };
+    if (params?.query) body.query = params.query;
+    if (params?.anchor_id) body.anchor_id = params.anchor_id;
+    if (params?.limit) body.limit = params.limit;
+    const resp = await this.post<{ observations: Observation[] }>('/api/context/search', body);
+    return resp?.observations ?? [];
+  }
+
+  /**
+   * Store an encrypted credential in the vault.
+   * POST /api/vault/credentials { name, value, scope, project }
+   */
+  async storeCredential(
+    name: string,
+    value: string,
+    scope: string,
+    project?: string,
+  ): Promise<boolean> {
+    const resp = await this.post<{ success: boolean }>('/api/vault/credentials', {
+      name,
+      value,
+      scope,
+      project: project ?? '',
+    });
+    return resp != null;
+  }
+
+  /**
+   * Retrieve and decrypt a credential from the vault.
+   * GET /api/vault/credentials/{name}
+   */
+  async getCredential(name: string): Promise<{ name: string; value: string } | null> {
+    return this.get<{ name: string; value: string }>(`/api/vault/credentials/${encodeURIComponent(name)}`);
   }
 
   /** Returns true if the server is currently considered reachable. */
