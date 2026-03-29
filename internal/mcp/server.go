@@ -391,12 +391,12 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name:        "store",
-			Description: "Store, edit, or merge memories. Actions: create (default), edit, merge, import.",
+			Description: "Store, edit, merge, or extract memories. Actions: create (default), edit, merge, import, extract.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":        map[string]any{"type": "string", "enum": []string{"create", "edit", "merge", "import"}, "default": "create", "description": "Action to perform"},
+					"action":        map[string]any{"type": "string", "enum": []string{"create", "edit", "merge", "import", "extract"}, "default": "create", "description": "Action to perform"},
 					"content":       map[string]any{"type": "string", "description": "Observation content (for create)"},
 					"title":         map[string]any{"type": "string", "description": "Title (for create, edit)"},
 					"id":            map[string]any{"type": "number", "description": "Observation ID (for edit)"},
