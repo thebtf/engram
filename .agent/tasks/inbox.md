@@ -20,4 +20,19 @@
 - [x] **[bug]** ~~Dashboard: Concept filter shows "No items to display"~~ FIXED v2.1.1 (PR #114) — JSONB @> server-side filter _2026-03-28_
 - [x] **[bug]** ~~Dashboard: "50 obs · 50 prompts" hardcoded~~ FIXED v2.1.1 (PR #114) — real counts from API _2026-03-28_
 - [x] **[bug]** ~~Dashboard Summaries empty~~ MITIGATED v2.1.3 (PR #116) — session-start hook now triggers summarization of previous unsummarized session. Root cause: stop hook doesn't fire (CC #19225). _2026-03-28_
-- [x] **[idea]** ~~Engram CC plugin user commands~~ IMPLEMENTED (PR #115) — retro, stats, cleanup, export: current 3 (setup/doctor/restart) are low-value admin tools. Add user-facing commands: `/engram:retro` (retrospective session analysis — what was injected, what was useful, effectiveness), `/engram:stats` (personal memory stats, learning curve), `/engram:cleanup` (review + suppress low-quality observations), `/engram:export` (export observations as markdown). Consider making existing skills (memory, retrospective-eval) into commands. _2026-03-28_
+- [x] **[idea]** ~~Engram CC plugin user commands~~ IMPLEMENTED (PR #115) — retro, stats, cleanup, export _2026-03-28_
+
+## Investigate Report Findings (2026-03-28)
+
+### P1 — Must Fix
+- [ ] **[P1]** OpenClaw before_tool_call hook returns `{ appendSystemContext }` but HookResult type doesn't include this — file context injection may silently fail. _F-0-2_ _2026-03-28_
+- [ ] **[P1]** Summaries: server-side summarizer (Task 19) deployed but not verified in production — need to trigger maintenance + confirm summaries appear. _F-0-10_ _2026-03-29_
+- [ ] **[P1]** Summary dedup: no check for existing summaries — summarizer may re-summarize same session on every maintenance cycle. Need EXISTS check or add summary flag to sessions. _F-0-11_ _2026-03-29_
+
+### P2 — Should Fix
+- [ ] **[P2]** store(action="create") without content creates empty observation — add validation. _F-0-1_ _2026-03-28_
+- [ ] **[P2]** Summary userPrompt fallback threshold 50 chars too high — short prompts like "fix this" skip all fallbacks. _F-0-3_ _2026-03-28_
+- [ ] **[P2]** Circuit breaker: no logging for recovery transitions (half-open → closed). _F-0-5_ — FIXED in PR #124 _2026-03-28_
+- [ ] **[P2]** Behavioral rules effectiveness metric misleading — measures citation, not compliance. Always-inject rules rarely cited verbatim. _F-0-8_ _2026-03-28_
+- [ ] **[P2]** Concept backfill incomplete: 5/20 concepts still 0 (why-it-exists, what-changed, anti-pattern, gotcha, trade-off). Need more keywords. _F-0-9_ _2026-03-28_
+- [ ] **[P2]** Dashboard not visually verified (Constitution #14). _F-1-13_ _2026-03-28_
