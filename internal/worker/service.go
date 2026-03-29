@@ -139,6 +139,7 @@ type Service struct {
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
 	embedSvc               *embedding.Service
+	resilientEmbedder      *embedding.ResilientEmbedder
 	vectorClient           vector.Client
 	vectorSync             *pgvector.Sync
 	vectorSyncSem          chan struct{}
@@ -693,6 +694,10 @@ func (s *Service) initializeAsync() {
 		log.Warn().Err(err).Msg("Embedding service creation failed - vector search disabled")
 	} else {
 		embedSvc = emb
+
+		// Wrap with resilience layer for circuit breaking and automatic recovery
+		s.resilientEmbedder = embedding.NewResilientEmbedder(embedSvc)
+
 		// Create pgvector client using the GORM DB connection
 		client, err := pgvector.NewClient(pgvector.Config{
 			DB:       store.DB,
@@ -1176,6 +1181,13 @@ func (s *Service) reinitializeDatabase() {
 		log.Warn().Err(err).Msg("Embedding service creation failed after reinit")
 	} else {
 		embedSvc = emb
+
+		// Stop old resilient embedder health-check goroutine before replacing
+		if s.resilientEmbedder != nil {
+			s.resilientEmbedder.Stop()
+		}
+		s.resilientEmbedder = embedding.NewResilientEmbedder(embedSvc)
+
 		client, err := pgvector.NewClient(pgvector.Config{
 			DB:       store.DB,
 			EmbedSvc: embedSvc,
@@ -2502,6 +2514,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	log.Debug().Msg("Phase 6: Closing AI/ML services...")
 	if s.reranker != nil {
 		collectError("reranker", s.reranker.Close())
+	}
+	if s.resilientEmbedder != nil {
+		s.resilientEmbedder.Stop()
 	}
 	if s.embedSvc != nil {
 		collectError("embedding_service", s.embedSvc.Close())
