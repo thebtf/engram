@@ -13,7 +13,7 @@
     {
       "name": "engram",
       "description": "Persistent memory with PostgreSQL+pgvector, hybrid search, and MCP tools",
-      "version": "2.1.9",
+      "version": "2.2.0",
       "author": {
         "name": "thebtf",
         "url": "https://github.com/thebtf"
@@ -23,25 +23,25 @@
       "license": "MIT",
       "homepage": "https://github.com/thebtf/engram",
       "releases": {
-        "latest": "2.1.9",
+        "latest": "2.2.0",
         "versions": {
-          "2.1.9": {
-            "releaseDate": "2026-03-28",
+          "2.2.0": {
+            "releaseDate": "2026-03-29",
             "downloads": {
               "darwin-arm64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v2.1.9/engram_2.1.9_darwin_arm64.tar.gz",
+                "url": "https://github.com/thebtf/engram/releases/download/v2.2.0/engram_2.2.0_darwin_arm64.tar.gz",
                 "format": "tar.gz",
-                "sha256": "4635cc12eaac09d0308131eef4d7a0109279b99a09abc5c0255d7f7960905bcc"
+                "sha256": "54f1f183b274c66673a329be69d4ed16e246028d4331ebadf695045b13852d7d"
               },
               "linux-amd64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v2.1.9/engram_2.1.9_linux_amd64.tar.gz",
+                "url": "https://github.com/thebtf/engram/releases/download/v2.2.0/engram_2.2.0_linux_amd64.tar.gz",
                 "format": "tar.gz",
-                "sha256": "880822ab119cb850660fa5641b3037d00d1633f42b31239216a007abd641547b"
+                "sha256": "477e725eef1227678a5fad48fb78733722d61eee8221f99e95eb061a002ff115"
               },
               "windows-amd64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v2.1.9/engram_2.1.9_windows_amd64.zip",
+                "url": "https://github.com/thebtf/engram/releases/download/v2.2.0/engram_2.2.0_windows_amd64.zip",
                 "format": "zip",
-                "sha256": "082f9cd85bc3f94e096441dd62c3b1c39d3d3554573e6bf89d89b48a591faf60"
+                "sha256": "6df75a69544380979468961cb426f144debd9072e66472fd87c9c60bd9519847"
               }
             }
           }
