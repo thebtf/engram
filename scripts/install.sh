@@ -7,6 +7,24 @@
 
 set -e
 
+# Install mode: --client-only (default) skips server binary, --full installs everything
+INSTALL_MODE="client-only"
+VERSION_ARG=""
+FLAG_REGISTER_ONLY=false
+FLAG_UNINSTALL=false
+FLAG_KEEP_DATA=false
+for arg in "$@"; do
+    case "$arg" in
+        --full) INSTALL_MODE="full" ;;
+        --client-only) INSTALL_MODE="client-only" ;;
+        --register-only) FLAG_REGISTER_ONLY=true ;;
+        --uninstall) FLAG_UNINSTALL=true ;;
+        --keep-data) FLAG_KEEP_DATA=true ;;
+        --*) ;;
+        *) VERSION_ARG="${VERSION_ARG:-$arg}" ;;
+    esac
+done
+
 # Configuration
 GITHUB_REPO="thebtf/engram"
 INSTALL_DIR="$HOME/.claude/plugins/marketplaces/engram"
@@ -164,8 +182,10 @@ download_release() {
     mkdir -p "$INSTALL_DIR/.claude-plugin"
     mkdir -p "$INSTALL_DIR/commands"
 
-    # Copy binaries
-    cp "$tmp_dir/engram-server" "$INSTALL_DIR/" 2>/dev/null || true
+    # Copy binaries (--client-only skips server binary)
+    if [[ "$INSTALL_MODE" == "full" ]]; then
+        cp "$tmp_dir/engram-server" "$INSTALL_DIR/" 2>/dev/null || true
+    fi
     cp "$tmp_dir/engram-mcp" "$INSTALL_DIR/" 2>/dev/null || true
     cp "$tmp_dir/engram-mcp-stdio-proxy" "$INSTALL_DIR/" 2>/dev/null || true
 
@@ -197,7 +217,9 @@ download_release() {
     fi
 
     # Make binaries executable
-    chmod +x "$INSTALL_DIR/engram-server" 2>/dev/null || true
+    if [[ "$INSTALL_MODE" == "full" ]]; then
+        chmod +x "$INSTALL_DIR/engram-server" 2>/dev/null || true
+    fi
     chmod +x "$INSTALL_DIR/engram-mcp" 2>/dev/null || true
     chmod +x "$INSTALL_DIR/engram-mcp-stdio-proxy" 2>/dev/null || true
 
@@ -433,16 +455,16 @@ main() {
 }
 
 # Handle --register-only flag
-if [[ "${1:-}" == "--register-only" ]]; then
+if [[ "$FLAG_REGISTER_ONLY" == "true" ]]; then
     version=$(cat "$INSTALL_DIR/.claude-plugin/plugin.json" 2>/dev/null | grep '"version"' | sed -E 's/.*"([^"]+)".*/\1/' || echo "1.0.0")
     register_plugin "v$version"
     exit 0
 fi
 
 # Handle --uninstall flag
-if [[ "${1:-}" == "--uninstall" ]]; then
+if [[ "$FLAG_UNINSTALL" == "true" ]]; then
     KEEP_DATA=false
-    [[ "${2:-}" == "--keep-data" ]] && KEEP_DATA=true
+    [[ "$FLAG_KEEP_DATA" == "true" ]] && KEEP_DATA=true
 
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
@@ -491,4 +513,4 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     exit 0
 fi
 
-main "$@"
+main "$VERSION_ARG"

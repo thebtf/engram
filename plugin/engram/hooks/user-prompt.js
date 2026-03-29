@@ -19,8 +19,22 @@ async function handleUserPrompt(ctx, input) {
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
   const cwd = typeof ctx.CWD === 'string' ? ctx.CWD : '';
 
+  // Skip system-generated messages and non-Claude-Code prompts
+  if (prompt && (
+    prompt.includes('<task-notification>') ||
+    prompt.includes('<command-name>') ||
+    prompt.includes('HEARTBEAT.md') ||
+    prompt.startsWith('Read HEARTBEAT') ||
+    prompt.includes('Conversation info (untrusted metadata)') ||
+    prompt.includes('Sender (untrusted metadata)')
+  )) {
+    return '';
+  }
+
   let contextToInject = '';
+  let behaviorRulesBlock = '';
   let observationCount = 0;
+  let matchedCount = 0;
   const searchIds = [];
 
   try {
@@ -34,6 +48,15 @@ async function handleUserPrompt(ctx, input) {
       ? searchResult.observations
       : [];
 
+    // total_results reflects how many observations matched before the server-side
+    // max_results cap was applied. When present and larger than the returned array,
+    // it means the server truncated the results. Fall back to the array length only
+    // when total_results is absent (older server versions).
+    const totalResults =
+      typeof searchResult.total_results === 'number'
+        ? searchResult.total_results
+        : observations.length;
+
     // Filter out credentials from context injection (leak prevention).
     // Credentials are only accessible via the dedicated get_credential MCP tool.
     const safeObservations = observations.filter(obs => {
@@ -41,13 +64,59 @@ async function handleUserPrompt(ctx, input) {
       return t !== 'credential';
     });
 
-    if (safeObservations.length > 0) {
+    // Always-inject tier: unconditional rules from server (FR-1, FR-6).
+    // These are separate from similarity-matched results — tagged with concept "always-inject".
+    const alwaysInjectRules = Array.isArray(searchResult.always_inject)
+      ? searchResult.always_inject
+      : [];
+
+    // Split: behavioral rules (concept: user-preference) vs technical observations.
+    // Rules are injected as <user-behavior-rules> BEFORE <relevant-memory>.
+    const behaviorRules = [];
+    const technicalObs = [];
+    for (const obs of safeObservations) {
+      const concepts = Array.isArray(obs.concepts) ? obs.concepts : [];
+      if (concepts.includes('user-preference')) {
+        behaviorRules.push(obs);
+      } else {
+        technicalObs.push(obs);
+      }
+    }
+
+    // Merge always-inject + similarity-matched behavioral rules into one block
+    const allBehaviorRules = [...alwaysInjectRules, ...behaviorRules];
+    // Deduplicate by ID (always-inject may overlap with similarity results)
+    const seenRuleIds = new Set();
+    const uniqueRules = [];
+    for (const rule of allBehaviorRules) {
+      const ruleId = rule && typeof rule.id === 'number' ? rule.id : null;
+      if (ruleId !== null && seenRuleIds.has(ruleId)) continue;
+      if (ruleId !== null) seenRuleIds.add(ruleId);
+      uniqueRules.push(rule);
+    }
+
+    if (uniqueRules.length > 0) {
+      behaviorRulesBlock = '<user-behavior-rules>\n';
+      behaviorRulesBlock += '# Behavioral Rules (Always Active)\n';
+      behaviorRulesBlock += 'These rules are injected unconditionally. Follow them.\n\n';
+      for (const rule of uniqueRules.slice(0, 20)) {
+        const title = escapeXmlTags(asString(rule.title));
+        const narrative = escapeXmlTags(asString(rule.narrative));
+        behaviorRulesBlock += `## ${title}\n${narrative}\n\n`;
+      }
+      behaviorRulesBlock += '</user-behavior-rules>\n';
+      if (alwaysInjectRules.length > 0) {
+        console.error(`[engram] Injected ${alwaysInjectRules.length} always-inject + ${behaviorRules.length} similarity-matched behavioral rules`);
+      }
+    }
+
+    if (technicalObs.length > 0) {
       // Sort by similarity score (highest first)
-      safeObservations.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+      technicalObs.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
 
       // Dedup by title word overlap (>80% Jaccard = near-duplicate)
       const dedupedObs = [];
-      for (const obs of safeObservations) {
+      for (const obs of technicalObs) {
         const title = asString(obs.title).toLowerCase();
         const words = new Set(title.split(/\s+/).filter(w => w.length > 2));
         let isDup = false;
@@ -146,6 +215,10 @@ async function handleUserPrompt(ctx, input) {
         }
       }
 
+      // observationCount tracks injected (post-trim) count for deciding whether
+      // to return context. matchedCount is the true total matched count from the
+      // server (pre-max_results-cap), so the badge shows meaningful signal.
+      matchedCount = totalResults - (observations.length - technicalObs.length);
       observationCount = budgetObs.length;
       let contextBuilder = '<relevant-memory>\n';
       contextBuilder += '# Relevant Knowledge From Previous Sessions\n';
@@ -211,7 +284,7 @@ async function handleUserPrompt(ctx, input) {
       claudeSessionId: ctx.SessionID,
       project: ctx.Project,
       prompt,
-      matchedObservations: observationCount,
+      matchedObservations: matchedCount,
     });
   } catch (error) {
     console.error(`[user-prompt] Failed to initialize session: ${error.message}`);
@@ -251,9 +324,11 @@ async function handleUserPrompt(ctx, input) {
       console.error(`[user-prompt] Failed to notify session start: ${error.message}`);
     });
 
-  if (observationCount > 0) {
-    console.error(`[engram] Found ${observationCount} relevant memories for this prompt`);
-    return contextToInject;
+  // Assemble final output: behavior rules FIRST (higher priority), then technical context.
+  const output = behaviorRulesBlock + contextToInject;
+  if (output) {
+    console.error(`[engram] Injecting: ${behaviorRulesBlock ? 'behavior rules + ' : ''}${observationCount} observations`);
+    return output;
   }
 
   return '';

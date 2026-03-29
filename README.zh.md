@@ -69,10 +69,10 @@ graph TB
 | **记忆整合** | 每日衰减、每日关联、季度遗忘 |
 | **17 种关系类型** | 知识图谱：causes、fixes、supersedes、contradicts、explains、shares_theme... |
 | **会话索引** | JSONL 解析器，支持工作站隔离和增量索引 |
-| **集合** | YAML 配置的知识库，支持智能分块（Markdown、Go、Python、TypeScript，基于 tree-sitter） |
+| **集合** | YAML 配置的知识库，支持智能分块（Markdown、Go） |
 | **MCP 传输** | SSE + Streamable HTTP（`POST /mcp`），单端口 |
-| **嵌入向量** | 本地 ONNX BGE（384 维）或 OpenAI 兼容 REST API |
-| **交叉编码器重排序** | ONNX 重排序器，提升搜索结果质量 |
+| **嵌入向量** | OpenAI 兼容 REST API |
+| **交叉编码器重排序** | API 重排序器，提升搜索结果质量 |
 | **Token 认证** | 所有端点的 Bearer 认证 |
 | **Instinct 导入** | 将 ECC instinct 导入为指导性观察，支持语义去重 |
 | **自学习** | 每会话效用信号检测，实现自适应记忆 |
@@ -234,7 +234,7 @@ Hooks 是 JavaScript 文件，随插件预配置。无需构建。
 | `WORKER_PORT` | `37777` | Worker 端口 |
 | `WORKER_HOST` | `0.0.0.0` | Worker 绑定地址 |
 | `API_TOKEN` | — | Bearer 令牌（远程访问时推荐） |
-| `EMBEDDING_PROVIDER` | `onnx` | `onnx`（本地 BGE）或 `openai`（REST API） |
+| `EMBEDDING_PROVIDER` | `openai` | `openai`（OpenAI 兼容 REST API） |
 | `EMBEDDING_BASE_URL` | — | OpenAI 兼容端点 URL |
 | `EMBEDDING_API_KEY` | — | OpenAI 提供者的 API 密钥 |
 | `EMBEDDING_MODEL_NAME` | — | OpenAI 提供者的模型名称 |
@@ -454,16 +454,16 @@ cmd/
   worker/             HTTP API + MCP SSE + MCP Streamable HTTP + 仪表板
   hooks/              Claude Code 生命周期 hooks（旧版 Go，见 plugin/hooks/）
 internal/
-  chunking/           AST 感知的文档分块（md、Go、Python、TS）
+  chunking/           AST 感知的文档分块（Markdown、Go）
   collections/        YAML 集合配置 + 上下文路由
   instincts/          Instinct 解析器和导入
   config/             配置管理
   consolidation/      衰减、关联、遗忘
   db/gorm/            PostgreSQL 存储 + 自动迁移
-  embedding/          ONNX BGE + OpenAI REST 提供者
+  embedding/          OpenAI 兼容 REST 嵌入提供者
   graph/              内存 CSR 图遍历
   mcp/                MCP 协议（服务器、SSE、Streamable HTTP）
-  reranking/          ONNX 交叉编码器重排序器
+  reranking/          API 交叉编码器重排序器
   scoring/            重要性 + 相关性评分
   search/             混合检索 + RRF 融合
   sessions/           JSONL 解析器 + 索引器

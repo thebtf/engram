@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "engram",
   "version": "1.0.0",
-  "description": "Persistent memory system for Claude Code - stores observations, session summaries, and user prompts with semantic search",
+  "description": "Shared memory infrastructure for Claude Code workstations",
   "owner": {
     "name": "thebtf",
     "email": "thebtf@users.noreply.github.com",
@@ -12,36 +12,36 @@
   "plugins": [
     {
       "name": "engram",
-      "description": "Persistent memory system for Claude Code - Go implementation with SQLite and ChromaDB vector search",
-      "version": "0.11.37",
+      "description": "Persistent memory with PostgreSQL+pgvector, hybrid search, and MCP tools",
+      "version": "2.2.1",
       "author": {
         "name": "thebtf",
         "url": "https://github.com/thebtf"
       },
       "category": "productivity",
-      "tags": ["memory", "persistence", "search", "context"],
+      "tags": ["memory", "persistence", "search", "context", "pgvector"],
       "license": "MIT",
       "homepage": "https://github.com/thebtf/engram",
       "releases": {
-        "latest": "0.11.37",
+        "latest": "2.2.1",
         "versions": {
-          "0.11.37": {
-            "releaseDate": "2026-02-11",
+          "2.2.1": {
+            "releaseDate": "2026-03-29",
             "downloads": {
               "darwin-arm64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v0.11.37/engram_0.11.37_darwin_arm64.tar.gz",
+                "url": "https://github.com/thebtf/engram/releases/download/v2.2.1/engram_2.2.1_darwin_arm64.tar.gz",
                 "format": "tar.gz",
-                "sha256": "4f0fa6e2034a56baea3e506fc0697b43aba9393cf03fa560ab40cb9520ff804f"
+                "sha256": "7389a5df527060a6a0486c1814d40ee522dff27726d60d71fd478358329192d2"
               },
               "linux-amd64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v0.11.37/engram_0.11.37_linux_amd64.tar.gz",
+                "url": "https://github.com/thebtf/engram/releases/download/v2.2.1/engram_2.2.1_linux_amd64.tar.gz",
                 "format": "tar.gz",
-                "sha256": "f1138fba85ccfb49541f1c9b0401abd9028f216729cee6784ec0ad1c8f9dde83"
+                "sha256": "387a6b638ca81775b399798d01a8322fff0aac5ccac9e802ba9804ebb46c2f02"
               },
               "windows-amd64": {
-                "url": "https://github.com/thebtf/engram/releases/download/v0.11.37/engram_0.11.37_windows_amd64.zip",
+                "url": "https://github.com/thebtf/engram/releases/download/v2.2.1/engram_2.2.1_windows_amd64.zip",
                 "format": "zip",
-                "sha256": "e05227844ed0123b874285cdec5a365cd17f1a094537fb0309c00694e9c30289"
+                "sha256": "dd07baf8c2e3242d630008f40e6ba8eabbd242c96c7bf441786de77975251d0f"
               }
             }
           }

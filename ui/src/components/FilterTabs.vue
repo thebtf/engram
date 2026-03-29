@@ -61,7 +61,7 @@ const tabs: { key: FilterType; label: string; icon: string }[] = [
         <div class="flex items-center gap-1">
           <span class="text-xs text-slate-500 mr-1">Type:</span>
           <select
-            class="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-slate-300 focus:outline-none focus:border-claude-500"
+            class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 focus:outline-none focus:border-claude-500"
             :value="currentTypeFilter || ''"
             @change="emit('update:typeFilter', ($event.target as HTMLSelectElement).value as ObservationType || null)"
           >
@@ -76,7 +76,7 @@ const tabs: { key: FilterType; label: string; icon: string }[] = [
         <div class="flex items-center gap-1">
           <span class="text-xs text-slate-500 mr-1">Concept:</span>
           <select
-            class="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-slate-300 focus:outline-none focus:border-claude-500"
+            class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 focus:outline-none focus:border-claude-500"
             :value="currentConceptFilter || ''"
             @change="emit('update:conceptFilter', ($event.target as HTMLSelectElement).value as ConceptType || null)"
           >

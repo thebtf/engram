@@ -10,9 +10,12 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@fontsource/fira-code": "^5.2.5",
+    "@fontsource/fira-sans": "^5.2.5",
     "vis-data": "^7.1.9",
     "vis-network": "^9.1.9",
-    "vue": "^3.5.13"
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@fortawesome/fontawesome-free": "^6.7.2",

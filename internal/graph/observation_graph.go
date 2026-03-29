@@ -379,7 +379,6 @@ func BuildFromObservations(ctx context.Context, observations []*models.Observati
 		graph.AddNode(node)
 	}
 
-	// Detect edges (will be implemented in edge_detector.go)
 	edges, err := DetectEdges(ctx, observations)
 	if err != nil {
 		return nil, fmt.Errorf("detect edges: %w", err)

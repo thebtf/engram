@@ -4,11 +4,13 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
 )
@@ -18,8 +20,20 @@ type FeedbackRequest struct {
 	Feedback int `json:"feedback"` // -1 (thumbs down), 0 (neutral), 1 (thumbs up)
 }
 
-// handleObservationFeedback handles user feedback (thumbs up/down) for an observation.
-// POST /api/observations/{id}/feedback
+// handleObservationFeedback godoc
+// @Summary Submit observation feedback
+// @Description Records user feedback (thumbs up/down) for an observation and recalculates its importance score.
+// @Tags Scoring
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Param body body FeedbackRequest true "Feedback value (-1, 0, or 1)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/observations/{id}/feedback [post]
 func (s *Service) handleObservationFeedback(w http.ResponseWriter, r *http.Request) {
 	// Parse observation ID
 	idStr := chi.URLParam(r, "id")
@@ -90,8 +104,19 @@ func (s *Service) handleObservationFeedback(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleMarkInjected records that observations were injected into Claude Code context.
-// POST /api/observations/mark-injected
+// handleMarkInjected godoc
+// @Summary Mark observations as injected
+// @Description Records that observations were injected into Claude Code context by incrementing injection counts.
+// @Tags Scoring
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body object true "IDs to mark: {ids: [1,2,3]}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid request body"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/observations/mark-injected [post]
 func (s *Service) handleMarkInjected(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IDs []int64 `json:"ids"`
@@ -128,8 +153,20 @@ type UtilityRequest struct {
 	Signal string `json:"signal"` // "used", "corrected", "ignored"
 }
 
-// handleObservationUtility records a utility signal for an observation.
-// POST /api/observations/{id}/utility
+// handleObservationUtility godoc
+// @Summary Record utility signal
+// @Description Records a utility signal (used, corrected, ignored) for an observation, updating its utility score via EMA.
+// @Tags Scoring
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Param body body UtilityRequest true "Utility signal"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/observations/{id}/utility [post]
 func (s *Service) handleObservationUtility(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -173,6 +210,29 @@ func (s *Service) handleObservationUtility(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Adaptive threshold: adjust per-project threshold based on utility signal.
+	// "used" lowers threshold (more results), "ignored" raises threshold (fewer results).
+	s.initMu.RLock()
+	projectSettingsStore := s.projectSettingsStore
+	s.initMu.RUnlock()
+	if projectSettingsStore != nil {
+		var delta float64
+		switch req.Signal {
+		case "used":
+			delta = -0.01
+		case "ignored":
+			delta = +0.01
+		}
+		if delta != 0 {
+			obs, obsErr := observationStore.GetObservationByID(r.Context(), id)
+			if obsErr == nil && obs != nil && obs.Project != "" {
+				if adjErr := projectSettingsStore.AdjustThreshold(r.Context(), obs.Project, delta); adjErr != nil {
+					log.Debug().Err(adjErr).Str("project", obs.Project).Float64("delta", delta).Msg("Failed to adjust adaptive threshold")
+				}
+			}
+		}
+	}
+
 	writeJSON(w, map[string]any{
 		"status": "ok",
 		"id":     id,
@@ -180,8 +240,17 @@ func (s *Service) handleObservationUtility(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// handleGetScoringStats returns scoring statistics and configuration.
-// GET /api/scoring/stats
+// handleGetScoringStats godoc
+// @Summary Get scoring statistics
+// @Description Returns scoring statistics including feedback distribution and recalculator stats.
+// @Tags Scoring
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/scoring/stats [get]
 func (s *Service) handleGetScoringStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 
@@ -214,8 +283,18 @@ func (s *Service) handleGetScoringStats(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, response)
 }
 
-// handleGetTopObservations returns the highest-scoring observations.
-// GET /api/observations/top
+// handleGetTopObservations godoc
+// @Summary Get top-scoring observations
+// @Description Returns the highest-scoring observations by importance score.
+// @Tags Scoring
+// @Produce json
+// @Security ApiKeyAuth
+// @Param limit query int false "Number of results (default 10)"
+// @Param project query string false "Filter by project"
+// @Success 200 {array} models.Observation
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/observations/top [get]
 func (s *Service) handleGetTopObservations(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntParam(r, "limit", 10)
 	project := r.URL.Query().Get("project")
@@ -242,8 +321,18 @@ func (s *Service) handleGetTopObservations(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, observations)
 }
 
-// handleGetMostRetrieved returns the most frequently retrieved observations.
-// GET /api/observations/most-retrieved
+// handleGetMostRetrieved godoc
+// @Summary Get most retrieved observations
+// @Description Returns the most frequently retrieved observations by retrieval count.
+// @Tags Scoring
+// @Produce json
+// @Security ApiKeyAuth
+// @Param limit query int false "Number of results (default 10)"
+// @Param project query string false "Filter by project"
+// @Success 200 {array} models.Observation
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/observations/most-retrieved [get]
 func (s *Service) handleGetMostRetrieved(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntParam(r, "limit", 10)
 	project := r.URL.Query().Get("project")
@@ -270,8 +359,19 @@ func (s *Service) handleGetMostRetrieved(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, observations)
 }
 
-// handleExplainScore returns a breakdown of how an observation's score was calculated.
-// GET /api/observations/{id}/score
+// handleExplainScore godoc
+// @Summary Explain observation score
+// @Description Returns a breakdown of how an observation's importance score was calculated, including all scoring components.
+// @Tags Scoring
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid observation id"
+// @Failure 404 {string} string "observation not found"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/observations/{id}/score [get]
 func (s *Service) handleExplainScore(w http.ResponseWriter, r *http.Request) {
 	// Parse observation ID
 	idStr := chi.URLParam(r, "id")
@@ -305,15 +405,54 @@ func (s *Service) handleExplainScore(w http.ResponseWriter, r *http.Request) {
 	// Calculate score components
 	components := scoreCalculator.CalculateComponents(obs, time.Now())
 
+	// Build response matching frontend ScoreBreakdown.vue expectations
+	title := ""
+	if obs.Title.Valid {
+		title = obs.Title.String
+	}
+
 	writeJSON(w, map[string]interface{}{
 		"id":         id,
+		"observation": map[string]interface{}{
+			"title": title,
+			"type":  string(obs.Type),
+		},
+		"scoring": map[string]interface{}{
+			"final_score":      components.FinalScore,
+			"type_weight":      components.TypeWeight,
+			"recency_decay":    components.RecencyDecay,
+			"core_score":       components.CoreScore,
+			"feedback_contrib": components.FeedbackContrib,
+			"concept_contrib":  components.ConceptContrib,
+			"retrieval_contrib": components.RetrievalContrib,
+			"age_days":         components.AgeDays,
+		},
+		"explanation": map[string]interface{}{
+			"type_impact":      fmt.Sprintf("Type '%s' has base weight %.2f", obs.Type, components.TypeWeight),
+			"recency_impact":   fmt.Sprintf("%.1f days old, decay factor %.2f", components.AgeDays, components.RecencyDecay),
+			"feedback_impact":  fmt.Sprintf("User feedback %+d, contribution %+.3f", obs.UserFeedback, components.FeedbackContrib),
+			"concept_impact":   fmt.Sprintf("Concept boost %+.3f from %d concepts", components.ConceptContrib, len(obs.Concepts)),
+			"retrieval_impact": fmt.Sprintf("Retrieved %d times, contribution %+.3f", obs.RetrievalCount, components.RetrievalContrib),
+		},
 		"components": components,
 		"config":     scoreCalculator.GetConfig(),
 	})
 }
 
-// handleUpdateConceptWeight updates a concept weight.
-// PUT /api/scoring/concepts/{concept}
+// handleUpdateConceptWeight godoc
+// @Summary Update concept weight
+// @Description Updates the weight for a specific concept used in scoring calculations.
+// @Tags Scoring
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param concept path string true "Concept name"
+// @Param body body object true "Weight: {weight: 0.5}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/scoring/concepts/{concept} [put]
 func (s *Service) handleUpdateConceptWeight(w http.ResponseWriter, r *http.Request) {
 	concept := chi.URLParam(r, "concept")
 	if concept == "" {
@@ -366,8 +505,16 @@ func (s *Service) handleUpdateConceptWeight(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleGetConceptWeights returns all concept weights.
-// GET /api/scoring/concepts
+// handleGetConceptWeights godoc
+// @Summary Get concept weights
+// @Description Returns all concept weights used in scoring calculations.
+// @Tags Scoring
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/scoring/concepts [get]
 func (s *Service) handleGetConceptWeights(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	observationStore := s.observationStore
@@ -387,8 +534,18 @@ func (s *Service) handleGetConceptWeights(w http.ResponseWriter, r *http.Request
 	writeJSON(w, weights)
 }
 
-// handleGetRecentlyInjected returns observations that have been injected into context.
-// GET /api/observations/recently-injected
+// handleGetRecentlyInjected godoc
+// @Summary Get recently injected observations
+// @Description Returns observations that have been recently injected into Claude Code context.
+// @Tags Scoring
+// @Produce json
+// @Security ApiKeyAuth
+// @Param limit query int false "Number of results (default 50)"
+// @Param project query string false "Filter by project"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/observations/recently-injected [get]
 func (s *Service) handleGetRecentlyInjected(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntParam(r, "limit", 50)
 	project := r.URL.Query().Get("project")
@@ -417,8 +574,15 @@ func (s *Service) handleGetRecentlyInjected(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleTriggerRecalculation triggers an immediate score recalculation.
-// POST /api/scoring/recalculate
+// handleTriggerRecalculation godoc
+// @Summary Trigger score recalculation
+// @Description Triggers an immediate background recalculation of all observation importance scores.
+// @Tags Scoring
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]string
+// @Failure 503 {string} string "recalculator not available"
+// @Router /api/scoring/recalculate [post]
 func (s *Service) handleTriggerRecalculation(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	recalculator := s.recalculator
@@ -449,9 +613,20 @@ func parseIntParam(r *http.Request, name string, defaultVal int) int {
 	return defaultVal
 }
 
-// handleSessionMarkInjected records which observations were injected into a specific session.
-// POST /api/sessions/{sessionId}/mark-injected
-// Dual-writes: per-session table AND global injection_count counter.
+// handleSessionMarkInjected godoc
+// @Summary Mark observations injected for session
+// @Description Records which observations were injected into a specific session. Dual-writes to per-session table and global injection_count counter.
+// @Tags Scoring
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param sessionId path int true "Session database ID"
+// @Param body body object true "IDs to mark: {ids: [1,2,3]}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/sessions/{sessionId}/mark-injected [post]
 func (s *Service) handleSessionMarkInjected(w http.ResponseWriter, r *http.Request) {
 	sessionIdStr := chi.URLParam(r, "sessionId")
 	sessionID, err := strconv.ParseInt(sessionIdStr, 10, 64)
@@ -492,6 +667,33 @@ func (s *Service) handleSessionMarkInjected(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Write injection records to the junction table asynchronously (closed-loop learning Phase 1).
+	// Fire-and-forget: resolve the Claude session ID then batch-insert junction rows.
+	s.initMu.RLock()
+	injStore := s.injectionStore
+	sessStore := s.sessionStore
+	s.initMu.RUnlock()
+	if injStore != nil && sessStore != nil {
+		capturedDBSessionID := sessionID
+		capturedObsIDs := append([]int64(nil), req.IDs...)
+		go func() {
+			sess, err := sessStore.GetSessionByID(context.Background(), capturedDBSessionID)
+			if err != nil || sess == nil {
+				return
+			}
+			claudeSessionID := sess.ClaudeSessionID
+			records := make([]gorm.InjectionRecord, 0, len(capturedObsIDs))
+			for _, obsID := range capturedObsIDs {
+				records = append(records, gorm.InjectionRecord{
+					ObservationID:    obsID,
+					SessionID:        claudeSessionID,
+					InjectionSection: "mark_injected",
+				})
+			}
+			_ = injStore.RecordInjections(context.Background(), records)
+		}()
+	}
+
 	writeJSON(w, map[string]any{"status": "ok", "count": len(req.IDs)})
 }
 
@@ -503,8 +705,18 @@ type InjectedObservationResponse struct {
 	Facts []string `json:"facts"`
 }
 
-// handleGetSessionInjectedObservations returns observations injected into a specific session.
-// GET /api/sessions/{sessionId}/injected-observations
+// handleGetSessionInjectedObservations godoc
+// @Summary Get observations injected into session
+// @Description Returns observations that were injected into a specific session's context.
+// @Tags Scoring
+// @Produce json
+// @Security ApiKeyAuth
+// @Param sessionId path int true "Session database ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid session id"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/sessions/{sessionId}/injected-observations [get]
 func (s *Service) handleGetSessionInjectedObservations(w http.ResponseWriter, r *http.Request) {
 	sessionIdStr := chi.URLParam(r, "sessionId")
 	sessionID, err := strconv.ParseInt(sessionIdStr, 10, 64)

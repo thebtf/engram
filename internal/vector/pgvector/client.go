@@ -5,8 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/vector"
@@ -36,13 +39,20 @@ type Config struct {
 	EmbedSvc *embedding.Service // Embedding service (required)
 }
 
+// latencyBufSize is the number of query latency samples retained for percentile calculation.
+const latencyBufSize = 1000
+
 // Client provides vector operations via PostgreSQL+pgvector.
 type Client struct {
-	db           *gorm.DB
-	sqlDB        *sql.DB
-	embedSvc     *embedding.Service
-	modelVersion string
-	mu           sync.RWMutex
+	db             *gorm.DB
+	sqlDB          *sql.DB
+	embedSvc       *embedding.Service
+	modelVersion   string
+	mu             sync.RWMutex
+	queryCount     atomic.Int64
+	queryLatencyNs atomic.Int64
+	latencyBuf     [latencyBufSize]int64 // ring buffer for percentile calculation
+	latencyIdx     atomic.Int64
 }
 
 // NewClient creates a new pgvector client.
@@ -130,6 +140,15 @@ func (c *Client) DeleteDocuments(ctx context.Context, ids []string) error {
 
 // Query performs a vector similarity search using cosine distance.
 func (c *Client) Query(ctx context.Context, query string, limit int, where vector.WhereFilter) ([]vector.QueryResult, error) {
+	start := time.Now()
+	defer func() {
+		dur := time.Since(start).Nanoseconds()
+		c.queryCount.Add(1)
+		c.queryLatencyNs.Add(dur)
+		idx := c.latencyIdx.Add(1) - 1
+		c.latencyBuf[idx%latencyBufSize] = dur
+	}()
+
 	if limit <= 0 {
 		limit = 10
 	}
@@ -286,12 +305,9 @@ func (c *Client) GetStaleVectors(ctx context.Context) ([]vector.StaleVectorInfo,
 	infos := make([]vector.StaleVectorInfo, len(records))
 	for i, r := range records {
 		infos[i] = vector.StaleVectorInfo{
-			DocID:     r.DocID,
-			DocType:   r.DocType,
-			FieldType: r.FieldType,
-			Project:   r.Project,
-			Scope:     r.Scope,
-			SQLiteID:  r.SQLiteID,
+			DocID:    r.DocID,
+			DocType:  r.DocType,
+			SQLiteID: r.SQLiteID,
 		}
 	}
 	return infos, nil
@@ -353,6 +369,52 @@ func (c *Client) GetHealthStats(ctx context.Context) (*vector.HealthStats, error
 // pgvector does not maintain a local embedding result cache, so all counters are zero.
 func (c *Client) GetCacheStats() vector.CacheStatsSnapshot {
 	return vector.CacheStatsSnapshot{}
+}
+
+// GetMetrics returns real query instrumentation metrics.
+func (c *Client) GetMetrics(ctx context.Context) vector.VectorMetricsSnapshot {
+	count := c.queryCount.Load()
+	totalNs := c.queryLatencyNs.Load()
+	docCount, _ := c.Count(ctx)
+
+	var avg float64
+	if count > 0 {
+		avg = float64(totalNs) / float64(count) / 1e6 // ns to ms
+	}
+
+	// Calculate percentiles from ring buffer
+	n := count
+	if n > latencyBufSize {
+		n = latencyBufSize
+	}
+
+	var p50, p95, p99 float64
+	if n > 0 {
+		samples := make([]int64, n)
+		// Read the most recent n entries from the ring buffer.
+		// latencyIdx is the next-write position; the most recent n entries end at latencyIdx-1.
+		startIdx := c.latencyIdx.Load() - n
+		for i := int64(0); i < n; i++ {
+			samples[i] = c.latencyBuf[(startIdx+i)%latencyBufSize]
+		}
+		sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+		p50 = float64(samples[n*50/100]) / 1e6
+		p95 = float64(samples[n*95/100]) / 1e6
+		idx99 := n * 99 / 100
+		if idx99 >= n {
+			idx99 = n - 1
+		}
+		p99 = float64(samples[idx99]) / 1e6
+	}
+
+	return vector.VectorMetricsSnapshot{
+		QueryCount:   count,
+		AvgLatencyMs: avg,
+		P50LatencyMs: p50,
+		P95LatencyMs: p95,
+		P99LatencyMs: p99,
+		TotalDocs:    docCount,
+	}
 }
 
 // DeleteByObservationID removes all vectors associated with an observation ID.

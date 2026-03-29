@@ -23,13 +23,15 @@ func (s *ConfigSuite) SetupTest() {
 	s.tempDir, err = os.MkdirTemp("", "config-test-*")
 	s.Require().NoError(err)
 
-	// Save and override HOME
+	// Save and override HOME (+ USERPROFILE for Windows where os.UserHomeDir reads USERPROFILE)
 	s.origHomeDir = os.Getenv("HOME")
 	os.Setenv("HOME", s.tempDir)
+	os.Setenv("USERPROFILE", s.tempDir)
 }
 
 func (s *ConfigSuite) TearDownTest() {
 	os.Setenv("HOME", s.origHomeDir)
+	os.Setenv("USERPROFILE", s.origHomeDir)
 	os.RemoveAll(s.tempDir)
 }
 
@@ -177,6 +179,7 @@ func (s *ConfigSuite) TestLoad_TableDriven() {
 			defer os.RemoveAll(tempDir)
 
 			os.Setenv("HOME", tempDir)
+			os.Setenv("USERPROFILE", tempDir)
 
 			// Create data dir
 			err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
@@ -319,34 +322,6 @@ func TestCriticalConcepts(t *testing.T) {
 	assert.Equal(t, expected, CriticalConcepts)
 }
 
-// TestLoad_ClaudeCodePath tests claude code path loading.
-func TestLoad_ClaudeCodePath(t *testing.T) {
-	// Create temp dir
-	tempDir, err := os.MkdirTemp("", "config-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tempDir)
-	defer os.Setenv("HOME", origHome)
-
-	// Create data dir and settings
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
-	require.NoError(t, err)
-
-	settingsJSON := `{"CLAUDE_CODE_PATH": "/usr/local/bin/claude"}`
-	err = os.WriteFile(
-		filepath.Join(tempDir, ".engram", "settings.json"),
-		[]byte(settingsJSON),
-		0600,
-	)
-	require.NoError(t, err)
-
-	cfg, err := Load()
-	require.NoError(t, err)
-	assert.Equal(t, "/usr/local/bin/claude", cfg.ClaudeCodePath)
-}
-
 // TestGet tests the global config getter.
 func TestGet(t *testing.T) {
 	// Save and restore HOME
@@ -355,9 +330,11 @@ func TestGet(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origHome)
 		os.RemoveAll(tempDir)
 	}()
 	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
 
 	// Create data dir
 	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
@@ -407,8 +384,11 @@ func TestLoad_ContextSettings(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
 	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
 	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("USERPROFILE", origUserProfile)
 
 	// Create data dir and settings
 	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)

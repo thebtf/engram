@@ -61,9 +61,18 @@ func isInternalPrompt(prompt string) bool {
 	return false
 }
 
-// handleSessionInit handles session initialization from user-prompt hook.
-// This handler is idempotent - duplicate requests within a short time window
-// return the existing prompt data without creating duplicates.
+// handleSessionInit godoc
+// @Summary Initialize session from user-prompt hook
+// @Description Handles session initialization from user-prompt hook. Idempotent — duplicate requests within a short time window return existing prompt data.
+// @Tags Sessions
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body SessionInitRequest true "Session init params"
+// @Success 200 {object} SessionInitResponse
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/sessions/init [post]
 func (s *Service) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 	var req SessionInitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -215,7 +224,20 @@ type SessionStartRequest struct {
 	PromptNumber int    `json:"promptNumber"`
 }
 
-// handleSessionStart handles SDK agent session start.
+// handleSessionStart godoc
+// @Summary Start SDK agent session
+// @Description Initializes an SDK agent session in the session manager. Observations are processed asynchronously.
+// @Tags Sessions
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Session database ID"
+// @Param body body SessionStartRequest true "Session start params"
+// @Success 200 "OK"
+// @Failure 400 {string} string "invalid session id"
+// @Failure 404 {string} string "session not found"
+// @Failure 500 {string} string "internal error"
+// @Router /sessions/{id}/init [post]
 func (s *Service) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -262,7 +284,18 @@ type ObservationRequest struct {
 	CWD             string `json:"cwd"`
 }
 
-// handleObservation handles observation posting from post-tool-use hook.
+// handleObservation godoc
+// @Summary Post observation from hook
+// @Description Handles observation posting from post-tool-use hook. Creates session on-the-fly if not found.
+// @Tags Sessions
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body ObservationRequest true "Observation data"
+// @Success 200 "OK"
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/sessions/observations [post]
 func (s *Service) handleObservation(w http.ResponseWriter, r *http.Request) {
 	var req ObservationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -307,8 +340,17 @@ type SubagentCompleteRequest struct {
 	Project         string `json:"project"`
 }
 
-// handleSubagentComplete handles subagent/Task completion notifications.
-// This triggers immediate processing of any queued observations from the subagent.
+// handleSubagentComplete godoc
+// @Summary Notify subagent completion
+// @Description Handles subagent/Task completion notifications. Triggers immediate processing of any queued observations from the subagent.
+// @Tags Sessions
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body SubagentCompleteRequest true "Subagent completion data"
+// @Success 200 "OK"
+// @Failure 400 {string} string "bad request"
+// @Router /api/sessions/subagent-complete [post]
 func (s *Service) handleSubagentComplete(w http.ResponseWriter, r *http.Request) {
 	var req SubagentCompleteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -360,7 +402,75 @@ func (s *Service) handleSubagentComplete(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleGetSessionByClaudeID looks up a session by Claude session ID.
+// handleListSessions godoc
+// @Summary List SDK sessions
+// @Description Returns a paginated list of SDK sessions, optionally filtered by project.
+// @Tags Sessions
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project path"
+// @Param limit query int false "Page size (default 50)"
+// @Param offset query int false "Offset (default 0)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Router /api/sessions/list [get]
+func (s *Service) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	limit := 50
+	offset := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	minPrompts := 0
+	if v := r.URL.Query().Get("min_prompts"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 {
+			minPrompts = parsed
+		}
+	}
+	var from, to int64
+	if v := r.URL.Query().Get("from"); v != "" {
+		from, _ = strconv.ParseInt(v, 10, 64)
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		to, _ = strconv.ParseInt(v, 10, 64)
+	}
+
+	sessions, total, err := s.sessionStore.ListSDKSessions(r.Context(), project, limit, offset, minPrompts, from, to)
+	if err != nil {
+		http.Error(w, "failed to list sessions", http.StatusInternalServerError)
+		return
+	}
+	if sessions == nil {
+		sessions = []*models.SDKSession{}
+	}
+
+	writeJSON(w, map[string]any{
+		"sessions": sessions,
+		"total":    total,
+		"limit":    limit,
+		"offset":   offset,
+	})
+}
+
+// handleGetSessionByClaudeID godoc
+// @Summary Get session by Claude session ID
+// @Description Looks up a session by its Claude session ID.
+// @Tags Sessions
+// @Produce json
+// @Security ApiKeyAuth
+// @Param claudeSessionId query string true "Claude session ID"
+// @Success 200 {object} object
+// @Failure 400 {string} string "claudeSessionId required"
+// @Failure 404 {string} string "session not found"
+// @Failure 500 {string} string "internal error"
+// @Router /api/sessions [get]
 func (s *Service) handleGetSessionByClaudeID(w http.ResponseWriter, r *http.Request) {
 	claudeSessionID := r.URL.Query().Get("claudeSessionId")
 	if claudeSessionID == "" {
@@ -387,7 +497,19 @@ type SummarizeRequest struct {
 	LastAssistantMessage string `json:"lastAssistantMessage"`
 }
 
-// handleSummarize handles summarize requests from stop hook.
+// handleSummarize godoc
+// @Summary Summarize session
+// @Description Handles summarize requests from the stop hook. Queues a summarization request for background processing.
+// @Tags Sessions
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Session database ID"
+// @Param body body SummarizeRequest true "Last messages for summarization"
+// @Success 200 "OK"
+// @Failure 400 {string} string "invalid session id"
+// @Failure 500 {string} string "internal error"
+// @Router /sessions/{id}/summarize [post]
 func (s *Service) handleSummarize(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -418,8 +540,20 @@ type ExtractLearningsRequest struct {
 	Project  string             `json:"project"`
 }
 
-// handleExtractLearnings runs LLM-based extraction of behavioral patterns from a session transcript.
-// POST /api/sessions/{id}/extract-learnings
+// handleExtractLearnings godoc
+// @Summary Extract learnings from session
+// @Description Runs LLM-based extraction of behavioral patterns from a session transcript and stores resulting guidance observations.
+// @Tags Sessions
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Session database ID"
+// @Param body body ExtractLearningsRequest true "Session messages and project"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid request body"
+// @Failure 500 {string} string "extraction failed"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/sessions/{id}/extract-learnings [post]
 func (s *Service) handleExtractLearnings(w http.ResponseWriter, r *http.Request) {
 	if !learning.IsEnabled() {
 		writeJSON(w, map[string]any{"status": "disabled", "count": 0})
@@ -489,8 +623,20 @@ func (s *Service) handleExtractLearnings(w http.ResponseWriter, r *http.Request)
 // maxSessionIndexBody is the per-request body limit for session indexing (5 MB).
 const maxSessionIndexBody = 5 * 1024 * 1024
 
-// handleIndexSession accepts a raw JSONL session transcript and indexes it.
-// POST /api/sessions/index?workstation_id=<wsid>&session_id=<optional>
+// handleIndexSession godoc
+// @Summary Index session transcript
+// @Description Accepts a raw JSONL session transcript and indexes it. Supports gzip-compressed bodies.
+// @Tags Sessions
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param workstation_id query string true "Workstation ID"
+// @Param session_id query string false "Override session ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/sessions/index [post]
 func (s *Service) handleIndexSession(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	store := s.sessionIdxStore
@@ -613,8 +759,19 @@ type CheckSessionsRequest struct {
 	SessionIDs []string `json:"session_ids"`
 }
 
-// handleCheckSessions returns which session IDs from the request are NOT yet indexed.
-// POST /api/sessions/check
+// handleCheckSessions godoc
+// @Summary Check which sessions are indexed
+// @Description Returns which session IDs from the request are NOT yet indexed.
+// @Tags Sessions
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body CheckSessionsRequest true "Session IDs to check"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid request body"
+// @Failure 500 {string} string "database error"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/sessions/check [post]
 func (s *Service) handleCheckSessions(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	store := s.sessionIdxStore

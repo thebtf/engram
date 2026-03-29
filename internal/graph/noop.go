@@ -41,6 +41,10 @@ func (n *NoopGraphStore) SyncFromRelations(_ context.Context, _ []*models.Observ
 	return nil
 }
 
+func (n *NoopGraphStore) GetCluster(_ context.Context, _ int64, _ int) ([]int64, error) {
+	return nil, nil
+}
+
 func (n *NoopGraphStore) Stats(_ context.Context) (GraphStoreStats, error) {
 	return GraphStoreStats{Provider: "none", Connected: false}, nil
 }

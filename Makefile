@@ -10,7 +10,7 @@ PLUGIN_DIR := plugin
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 
-# CGO settings for SQLite FTS5 support
+# CGO settings (required for test build tags)
 export CGO_ENABLED=1
 BUILD_TAGS := -tags "fts5"
 
@@ -18,12 +18,12 @@ BUILD_TAGS := -tags "fts5"
 
 all: build
 
-# Download ONNX runtime libraries (all platforms for local dev, skips if present)
+# Legacy target (ONNX runtime libraries no longer required)
 setup-libs:
-	@./scripts/download-onnx-libs.sh all
+	@echo "ONNX runtime libraries are no longer required. Skipping."
 
 # Build all binaries
-build: setup-libs dashboard worker mcp
+build: dashboard worker mcp
 
 # Build Vue dashboard
 dashboard:
@@ -39,6 +39,7 @@ dashboard:
 worker:
 	@echo "Building worker..."
 	@mkdir -p $(BUILD_DIR)
+	swag init -g cmd/worker/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
 	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/worker
 
 # Build MCP server
@@ -125,11 +126,11 @@ uninstall: stop-worker
 	@echo "Uninstallation complete!"
 
 # Run tests (with FTS5 support)
-test: setup-libs
+test:
 	go test $(BUILD_TAGS) -v -race ./...
 
 # Run tests with coverage (with FTS5 support)
-test-coverage: setup-libs
+test-coverage:
 	go test $(BUILD_TAGS) -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@go tool cover -func=coverage.out | tail -1

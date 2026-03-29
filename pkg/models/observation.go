@@ -199,6 +199,7 @@ type Observation struct {
 	FilesRead       JSONStringArray  `db:"files_read" json:"files_read,omitempty"`
 	FilesModified   JSONStringArray  `db:"files_modified" json:"files_modified,omitempty"`
 	Facts           JSONStringArray  `db:"facts" json:"facts,omitempty"`
+	Rejected        JSONStringArray  `db:"rejected" json:"rejected,omitempty"`
 	PromptNumber    sql.NullInt64    `db:"prompt_number" json:"prompt_number,omitempty"`
 	LastRetrievedAt sql.NullInt64    `db:"last_retrieved_at_epoch" json:"last_retrieved_at_epoch,omitempty"`
 	ScoreUpdatedAt  sql.NullInt64    `db:"score_updated_at_epoch" json:"score_updated_at_epoch,omitempty"`
@@ -215,6 +216,14 @@ type Observation struct {
 	EnrichmentLevel int              `db:"enrichment_level" json:"enrichment_level"`
 	SourceEventIDs  JSONInt64Array   `db:"source_event_ids" json:"source_event_ids,omitempty"`
 	RawContent      sql.NullString   `db:"raw_content" json:"raw_content,omitempty"`
+	ExpiresAt       sql.NullTime     `db:"expires_at" json:"expires_at,omitempty"`
+	TtlDays         sql.NullInt32    `db:"ttl_days" json:"ttl_days,omitempty"`
+	IsExpired       bool             `db:"-" json:"is_expired,omitempty"`
+	Status                  string           `db:"status" json:"status,omitempty"`
+	StatusReason            sql.NullString   `db:"status_reason" json:"status_reason,omitempty"`
+	EffectivenessScore      float64          `db:"effectiveness_score" json:"effectiveness_score"`
+	EffectivenessInjections int              `db:"effectiveness_injections" json:"effectiveness_injections"`
+	EffectivenessSuccesses  int              `db:"effectiveness_successes" json:"effectiveness_successes"`
 }
 
 // ParsedObservation represents an observation parsed from SDK response XML.
@@ -232,7 +241,8 @@ type ParsedObservation struct {
 	Concepts                 []string
 	FilesRead                []string
 	FilesModified            []string
-	EncryptedSecret          []byte // set for credential observations
+	Rejected                 []string // Alternatives that were considered and dismissed (for decisions)
+	EncryptedSecret          []byte   // set for credential observations
 	EncryptionKeyFingerprint string // SHA-256(key)[:16] hex
 }
 
@@ -246,6 +256,7 @@ func (p *ParsedObservation) ToStoredObservation() *Observation {
 		Title:         sql.NullString{String: p.Title, Valid: p.Title != ""},
 		Subtitle:      sql.NullString{String: p.Subtitle, Valid: p.Subtitle != ""},
 		Facts:         p.Facts,
+		Rejected:      p.Rejected,
 		Narrative:     sql.NullString{String: p.Narrative, Valid: p.Narrative != ""},
 		Concepts:      p.Concepts,
 		FilesRead:     p.FilesRead,
@@ -310,6 +321,7 @@ type ObservationJSON struct {
 	Project         string           `json:"project"`
 	Concepts        []string         `json:"concepts,omitempty"`
 	Facts           []string         `json:"facts,omitempty"`
+	Rejected        []string         `json:"rejected,omitempty"`
 	FilesRead       []string         `json:"files_read,omitempty"`
 	FilesModified   []string         `json:"files_modified,omitempty"`
 	CreatedAtEpoch  int64            `json:"created_at_epoch"`
@@ -324,7 +336,15 @@ type ObservationJSON struct {
 	LastRetrievedAt int64            `json:"last_retrieved_at_epoch,omitempty"`
 	ScoreUpdatedAt  int64            `json:"score_updated_at_epoch,omitempty"`
 	IsStale         bool             `json:"is_stale,omitempty"`
-	IsSuperseded    bool             `json:"is_superseded,omitempty"`
+	IsSuperseded            bool             `json:"is_superseded,omitempty"`
+	Status                  string           `json:"status,omitempty"`
+	StatusReason            string           `json:"status_reason,omitempty"`
+	EffectivenessScore      float64          `json:"effectiveness_score"`
+	EffectivenessInjections int              `json:"effectiveness_injections"`
+	EffectivenessSuccesses  int              `json:"effectiveness_successes"`
+	ExpiresAt               *time.Time       `json:"expires_at,omitempty"`
+	TtlDays         *int32           `json:"ttl_days,omitempty"`
+	IsExpired       bool             `json:"is_expired,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler for Observation.
@@ -340,6 +360,7 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		MemoryType:      string(o.MemoryType),
 		SourceType:      string(o.SourceType),
 		Facts:           o.Facts,
+		Rejected:        o.Rejected,
 		Concepts:        o.Concepts,
 		FilesRead:       o.FilesRead,
 		FilesModified:   o.FilesModified,
@@ -356,6 +377,21 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		InjectionCount:  o.InjectionCount,
 		// Conflict detection fields
 		IsSuperseded: o.IsSuperseded,
+		// Status lifecycle
+		Status:                  o.Status,
+		EffectivenessScore:      o.EffectivenessScore,
+		EffectivenessInjections: o.EffectivenessInjections,
+		EffectivenessSuccesses:  o.EffectivenessSuccesses,
+		// TTL fields
+		IsExpired: o.IsExpired,
+	}
+	if o.ExpiresAt.Valid {
+		t := o.ExpiresAt.Time.UTC()
+		j.ExpiresAt = &t
+	}
+	if o.TtlDays.Valid {
+		d := o.TtlDays.Int32
+		j.TtlDays = &d
 	}
 	if o.Title.Valid {
 		j.Title = o.Title.String
@@ -371,6 +407,9 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 	}
 	if o.LastRetrievedAt.Valid {
 		j.LastRetrievedAt = o.LastRetrievedAt.Int64
+	}
+	if o.StatusReason.Valid {
+		j.StatusReason = o.StatusReason.String
 	}
 	if o.ScoreUpdatedAt.Valid {
 		j.ScoreUpdatedAt = o.ScoreUpdatedAt.Int64
@@ -399,6 +438,7 @@ func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, pro
 		Title:           sql.NullString{String: parsed.Title, Valid: parsed.Title != ""},
 		Subtitle:        sql.NullString{String: parsed.Subtitle, Valid: parsed.Subtitle != ""},
 		Facts:           parsed.Facts,
+		Rejected:        parsed.Rejected,
 		Narrative:       sql.NullString{String: parsed.Narrative, Valid: parsed.Narrative != ""},
 		Concepts:        parsed.Concepts,
 		FilesRead:       parsed.FilesRead,

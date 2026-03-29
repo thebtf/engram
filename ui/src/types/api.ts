@@ -21,13 +21,31 @@ export interface SummaryFeedItem extends SessionSummary {
 
 export type FeedItem = ObservationFeedItem | PromptFeedItem | SummaryFeedItem
 
+export interface SDKSessionItem {
+  id: number
+  claude_session_id: string
+  project: string
+  status: string
+  started_at: string
+  completed_at: string | null
+  prompt_counter: number
+  user_prompt: string
+}
+
+export interface SDKSessionListResponse {
+  sessions: SDKSessionItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface RetrievalStats {
-  TotalRequests: number
-  ObservationsServed: number
-  VerifiedStale: number
-  DeletedInvalid: number
-  SearchRequests: number
-  ContextInjections: number
+  total_requests: number
+  observations_served: number
+  verified_stale: number
+  deleted_invalid: number
+  search_requests: number
+  context_injections: number
 }
 
 export interface Stats {
@@ -38,6 +56,7 @@ export interface Stats {
   connectedClients: number
   sessionsToday: number
   retrieval: RetrievalStats
+  observationCount?: number
 }
 
 export interface SSEEvent {
@@ -84,37 +103,12 @@ export interface GraphStats {
 
 export interface VectorMetrics {
   enabled: boolean
-  queries: {
-    total: number
-    hubOnly: number
-    hybrid: number
-    onDemand: number
-    graph: number
-  }
-  latency: {
-    avg: string
-    p50: string
-    p95: string
-    p99: string
-    avgHub: string
-    avgRecompute: string
-  }
-  storage: {
-    totalDocuments: number
-    hubDocuments: number
-    storedEmbeddings: number
-    savingsPercent: number
-    recomputedTotal: number
-  }
-  cache: {
-    hits: number
-    misses: number
-    hitRate: number
-  }
-  graph: {
-    traversals: number
-    avgDepth: number
-  }
+  query_count: number
+  avg_latency_ms: number
+  p50_latency_ms: number
+  p95_latency_ms: number
+  p99_latency_ms: number
+  total_documents: number
   uptime: string
   message?: string
 }

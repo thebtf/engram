@@ -1,4 +1,4 @@
-import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics } from '@/types'
+import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics, ContextSearchResponse, DecisionSearchResponse, SDKSessionListResponse } from '@/types'
 
 const API_BASE = '/api'
 const DEFAULT_TIMEOUT = 10000 // 10 seconds
@@ -97,11 +97,27 @@ interface ObservationsResponse {
   hasMore: boolean
 }
 
-export async function fetchObservations(limit: number = 100, project?: string, signal?: AbortSignal): Promise<Observation[]> {
+export interface ObservationsResult {
+  observations: Observation[]
+  total: number
+}
+
+export async function fetchObservations(
+  limit: number = 100,
+  project?: string,
+  signal?: AbortSignal,
+  type?: string,
+  concept?: string
+): Promise<ObservationsResult> {
   const params = new URLSearchParams({ limit: String(limit) })
   if (project) params.append('project', project)
+  if (type) params.append('type', type)
+  if (concept) params.append('concept', concept)
   const response = await fetchWithRetry<ObservationsResponse>(`${API_BASE}/observations?${params}`, { signal })
-  return response.observations || []
+  return {
+    observations: response.observations || [],
+    total: response.total ?? 0
+  }
 }
 
 export async function fetchPrompts(limit: number = 100, project?: string, signal?: AbortSignal): Promise<UserPrompt[]> {
@@ -263,12 +279,36 @@ export interface SearchAnalytics {
   avg_filter_latency_ms: number
 }
 
-export async function fetchSearchAnalytics(signal?: AbortSignal): Promise<SearchAnalytics> {
-  return fetchWithRetry<SearchAnalytics>(`${API_BASE}/search/analytics`, { signal })
+export async function fetchSearchAnalytics(since?: string, signal?: AbortSignal): Promise<SearchAnalytics> {
+  const params = new URLSearchParams()
+  if (since) params.append('since', since)
+  const query = params.toString()
+  return fetchWithRetry<SearchAnalytics>(`${API_BASE}/search/analytics${query ? '?' + query : ''}`, { signal })
 }
 
-export async function fetchRecentSearches(limit: number = 20, signal?: AbortSignal): Promise<RecentQuery[]> {
-  return fetchWithRetry<RecentQuery[]>(`${API_BASE}/search/recent?limit=${limit}`, { signal })
+interface RecentSearchResponse {
+  queries: Array<{
+    timestamp: string
+    query: string
+    project?: string
+    type?: string
+    results: number
+    used_vector: boolean
+  }>
+  count: number
+}
+
+export async function fetchRecentSearches(limit: number = 20, since?: string, signal?: AbortSignal): Promise<RecentQuery[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (since) params.append('since', since)
+  const response = await fetchWithRetry<RecentSearchResponse>(`${API_BASE}/search/recent?${params}`, { signal })
+  return (response.queries || []).map(q => ({
+    query: q.query,
+    project: q.project,
+    type: q.type,
+    count: q.results,
+    last_used: q.timestamp,
+  }))
 }
 
 // System health API
@@ -296,4 +336,591 @@ export async function fetchGraphStats(signal?: AbortSignal): Promise<GraphStats>
 
 export async function fetchVectorMetrics(signal?: AbortSignal): Promise<VectorMetrics> {
   return fetchWithRetry<VectorMetrics>(`${API_BASE}/vector/metrics`, { signal })
+}
+
+// POST JSON helper with retry logic
+async function postJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
+  const { timeout = DEFAULT_TIMEOUT, signal, retries = MAX_RETRIES } = options
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const timeoutController = new AbortController()
+    const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+    const combinedSignal = signal
+      ? combineAbortSignals(signal, timeoutController.signal)
+      : timeoutController.signal
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: combinedSignal,
+      })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      return response.json()
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+      if (lastError.name === 'AbortError') {
+        if (signal?.aborted) throw lastError
+        throw new Error('Request timed out')
+      }
+      if (lastError.message.includes('HTTP 4')) throw lastError
+      if (attempt < retries - 1) {
+        const delay = Math.min(RETRY_DELAY * Math.pow(2, attempt), 5000)
+        await new Promise(r => setTimeout(r, delay))
+      }
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+  throw lastError!
+}
+
+// PUT JSON helper (single attempt, no retry for mutations)
+async function putJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
+  const { timeout = DEFAULT_TIMEOUT, signal } = options
+  const timeoutController = new AbortController()
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+  const combinedSignal = signal
+    ? combineAbortSignals(signal, timeoutController.signal)
+    : timeoutController.signal
+
+  try {
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: combinedSignal,
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+    return response.json()
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      if (signal?.aborted) throw err
+      throw new Error('Request timed out')
+    }
+    throw err
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+// Observation CRUD
+export async function fetchObservationById(id: number, signal?: AbortSignal): Promise<Observation> {
+  return fetchWithRetry<Observation>(`${API_BASE}/observations/${id}`, { signal })
+}
+
+export async function fetchObservationsPaginated(
+  params: { limit?: number; offset?: number; project?: string; type?: string; status?: string; memory_type?: string },
+  signal?: AbortSignal
+): Promise<ObservationsResponse> {
+  const searchParams = new URLSearchParams()
+  if (params.limit) searchParams.append('limit', String(params.limit))
+  if (params.offset) searchParams.append('offset', String(params.offset))
+  if (params.project) searchParams.append('project', params.project)
+  if (params.type) searchParams.append('type', params.type)
+  if (params.status) searchParams.append('status', params.status)
+  if (params.memory_type) searchParams.append('memory_type', params.memory_type)
+  return fetchWithRetry<ObservationsResponse>(`${API_BASE}/observations?${searchParams}`, { signal })
+}
+
+export async function updateObservationStatus(
+  id: number,
+  status: 'active' | 'resolved',
+  reason?: string
+): Promise<void> {
+  const body: Record<string, string> = { status }
+  if (reason) body.status_reason = reason
+  await putJson(`${API_BASE}/observations/${id}`, body)
+}
+
+export async function updateObservation(
+  id: number,
+  updates: {
+    title?: string
+    subtitle?: string
+    narrative?: string
+    scope?: string
+    facts?: string[]
+    concepts?: string[]
+  },
+  signal?: AbortSignal
+): Promise<{ observation: Observation; message: string }> {
+  return putJson(`${API_BASE}/observations/${id}`, updates, { signal })
+}
+
+export async function archiveObservations(
+  ids: number[],
+  reason?: string,
+  signal?: AbortSignal
+): Promise<{ archived: number[]; failed: number[]; errors?: string[] }> {
+  return postJson(`${API_BASE}/observations/archive`, { ids, reason }, { signal })
+}
+
+export async function submitObservationFeedback(
+  id: number,
+  feedback: number,
+  signal?: AbortSignal
+): Promise<{ score?: number }> {
+  return postJson(`${API_BASE}/observations/${id}/feedback`, { feedback }, { signal })
+}
+
+// Search
+export async function searchObservations(
+  params: { query: string; project: string; limit?: number },
+  signal?: AbortSignal
+): Promise<ContextSearchResponse> {
+  return postJson(`${API_BASE}/context/search`, params, { signal })
+}
+
+export async function searchDecisions(
+  params: { query: string; project: string; limit?: number },
+  signal?: AbortSignal
+): Promise<DecisionSearchResponse> {
+  return postJson(`${API_BASE}/decisions/search`, params, { signal })
+}
+
+// DELETE helper (single attempt, no retry for mutations)
+async function deleteJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
+  const { timeout = DEFAULT_TIMEOUT, signal } = options
+  const timeoutController = new AbortController()
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+  const combinedSignal = signal
+    ? combineAbortSignals(signal, timeoutController.signal)
+    : timeoutController.signal
+
+  try {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      signal: combinedSignal,
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+    const text = await response.text()
+    return text ? JSON.parse(text) : ({} as T)
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      if (signal?.aborted) throw err
+      throw new Error('Request timed out')
+    }
+    throw err
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+// ============================================================
+// Vault API
+// ============================================================
+
+export interface VaultCredential {
+  name: string
+  scope: string
+  created_at: string
+  updated_at?: string
+}
+
+export interface VaultStatus {
+  encrypted: boolean
+  key_fingerprint?: string
+  credential_count: number
+}
+
+export async function fetchVaultStatus(signal?: AbortSignal): Promise<VaultStatus> {
+  const raw = await fetchWithRetry<any>(`${API_BASE}/vault/status`, { signal })
+  return {
+    encrypted: raw.key_configured ?? false,
+    key_fingerprint: raw.fingerprint ?? raw.key_fingerprint,
+    credential_count: raw.credential_count ?? 0,
+  }
+}
+
+export async function fetchCredentials(signal?: AbortSignal): Promise<VaultCredential[]> {
+  return fetchWithRetry<VaultCredential[]>(`${API_BASE}/vault/credentials`, { signal })
+}
+
+export async function fetchCredential(name: string, signal?: AbortSignal): Promise<{ name: string; value: string }> {
+  return fetchWithRetry<{ name: string; value: string }>(`${API_BASE}/vault/credentials/${encodeURIComponent(name)}`, { signal })
+}
+
+export async function deleteCredential(name: string, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/vault/credentials/${encodeURIComponent(name)}`, { signal })
+}
+
+// ============================================================
+// Tokens API
+// ============================================================
+
+export interface ApiToken {
+  id: string
+  name: string
+  token_prefix: string
+  scope: string
+  created_at: string
+  last_used_at?: string
+  request_count: number
+  error_count?: number
+  revoked: boolean
+  revoked_at?: string
+}
+
+export interface CreateTokenResponse {
+  token: string
+  name: string
+  prefix: string
+}
+
+export async function fetchTokens(signal?: AbortSignal): Promise<ApiToken[]> {
+  const response = await fetchWithRetry<{ tokens: ApiToken[] }>(`${API_BASE}/auth/tokens`, { signal })
+  return response.tokens
+}
+
+export async function createToken(
+  params: { name: string; scope: string },
+  signal?: AbortSignal
+): Promise<CreateTokenResponse> {
+  return postJson<CreateTokenResponse>(`${API_BASE}/auth/tokens`, params, { signal })
+}
+
+export async function revokeToken(id: string, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/auth/tokens/${encodeURIComponent(id)}`, { signal })
+}
+
+// ============================================================
+// Pattern Cleanup API
+// ============================================================
+
+export interface PatternCleanupResult {
+  orphans_found: number
+  orphans_archived: number
+  low_confidence_found: number
+  low_confidence_archived: number
+  confidence_recalculated: number
+}
+
+export async function cleanupPatterns(
+  threshold: number,
+  dryRun: boolean,
+  signal?: AbortSignal
+): Promise<PatternCleanupResult> {
+  return postJson<PatternCleanupResult>(
+    `${API_BASE}/maintenance/patterns/cleanup`,
+    { confidence_threshold: threshold, dry_run: dryRun },
+    { signal }
+  )
+}
+
+// ============================================================
+// Analytics API
+// ============================================================
+
+export interface SearchMiss {
+  query: string
+  project?: string
+  frequency: number
+  last_seen: string
+}
+
+export async function fetchSearchMisses(signal?: AbortSignal): Promise<SearchMiss[]> {
+  const result = await postJson<{ miss_stats: Array<{ query: string; miss_count: number; last_seen: string; project?: string }> }>(
+    `${API_BASE}/analytics/search-misses`, {}, { signal }
+  )
+  return (result?.miss_stats || []).map(s => ({
+    query: s.query,
+    project: s.project || '',
+    frequency: s.miss_count,
+    last_seen: s.last_seen,
+  }))
+}
+
+export interface RetrievalStatsResponse {
+  total_requests: number
+  observations_served: number
+  search_requests: number
+  context_injections: number
+  stale_excluded: number
+  fresh_count: number
+  duplicates_removed: number
+}
+
+export async function fetchRetrievalStats(project?: string, since?: string, signal?: AbortSignal): Promise<RetrievalStatsResponse> {
+  const params = new URLSearchParams()
+  if (project) params.append('project', project)
+  if (since) params.append('since', since)
+  const query = params.toString()
+  return fetchWithRetry<RetrievalStatsResponse>(`${API_BASE}/stats/retrieval${query ? '?' + query : ''}`, { signal })
+}
+
+// ============================================================
+// Patterns API
+// ============================================================
+
+export interface Pattern {
+  id: number
+  name: string
+  type: string
+  frequency: number
+  confidence: number
+  created_at: string
+  last_seen_at: string
+  last_seen_at_epoch: number
+}
+
+export interface PatternInsight {
+  id: number
+  insight: string
+  examples?: string[]
+}
+
+export interface PatternsResponse {
+  patterns: Pattern[]
+  total: number
+}
+
+export async function fetchPatterns(
+  params?: { limit?: number; offset?: number; sort?: string },
+  signal?: AbortSignal
+): Promise<PatternsResponse> {
+  const searchParams = new URLSearchParams()
+  if (params?.limit !== undefined) searchParams.append('limit', String(params.limit))
+  if (params?.offset !== undefined) searchParams.append('offset', String(params.offset))
+  if (params?.sort) searchParams.append('sort', params.sort)
+  const query = searchParams.toString()
+  return fetchWithRetry<PatternsResponse>(`${API_BASE}/patterns${query ? '?' + query : ''}`, { signal })
+}
+
+export async function fetchPatternInsight(id: number, signal?: AbortSignal): Promise<PatternInsight> {
+  return fetchWithRetry<PatternInsight>(`${API_BASE}/patterns/${id}/insight`, { signal })
+}
+
+export interface PatternObservationsResponse {
+  observations: import('@/types').Observation[]
+  total: number
+}
+
+export interface PatternInsightResult {
+  summary: string
+  source_observations: import('@/types').Observation[]
+  cached: boolean
+}
+
+export async function fetchPatternObservations(id: number, signal?: AbortSignal): Promise<PatternObservationsResponse> {
+  return fetchWithRetry<PatternObservationsResponse>(`${API_BASE}/patterns/${id}/observations`, { signal })
+}
+
+export async function generatePatternInsight(id: number, signal?: AbortSignal): Promise<PatternInsightResult> {
+  return postJson<PatternInsightResult>(`${API_BASE}/patterns/${id}/insight`, {}, { signal })
+}
+
+export async function deprecatePattern(id: number, signal?: AbortSignal): Promise<void> {
+  await postJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}/deprecate`, {}, { signal })
+}
+
+export async function deletePattern(id: number, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}`, { signal })
+}
+
+export async function mergePatterns(ids: number[], signal?: AbortSignal): Promise<void> {
+  await postJson<Record<string, unknown>>(`${API_BASE}/patterns/merge`, { ids }, { signal })
+}
+
+// ============================================================
+// Sessions Index API
+// ============================================================
+
+export interface IndexedSession {
+  id: string
+  workstation: string
+  project: string
+  date: string
+  message_count: number
+  created_at: string
+}
+
+// Raw shape returned by the Go handler
+interface RawIndexedSession {
+  id: string
+  workstation_id: string
+  project_id: string
+  project_path?: string
+  exchange_count: number
+  git_branch?: string
+  last_msg_at?: string
+}
+
+function mapRawSession(raw: RawIndexedSession): IndexedSession {
+  const lastMsg = raw.last_msg_at ? new Date(raw.last_msg_at) : null
+  return {
+    id: raw.id,
+    workstation: raw.workstation_id,
+    project: raw.project_path || raw.project_id,
+    date: lastMsg ? lastMsg.toISOString().slice(0, 10) : '',
+    message_count: raw.exchange_count,
+    created_at: raw.last_msg_at || '',
+  }
+}
+
+export async function fetchIndexedSessions(
+  params?: { project?: string; from?: string; to?: string },
+  signal?: AbortSignal
+): Promise<IndexedSession[]> {
+  const searchParams = new URLSearchParams()
+  if (params?.project) searchParams.append('project', params.project)
+  if (params?.from) searchParams.append('from', params.from)
+  if (params?.to) searchParams.append('to', params.to)
+  const query = searchParams.toString()
+  const raw = await fetchWithRetry<RawIndexedSession[]>(`${API_BASE}/sessions-index${query ? '?' + query : ''}`, { signal })
+  return (raw || []).map(mapRawSession)
+}
+
+// Raw shape for search results (slightly different from list — includes rank/snippet)
+interface RawSessionSearchResult {
+  id: string
+  workstation_id: string
+  project_path?: string
+  exchange_count: number
+  rank: number
+  snippet?: string
+}
+
+export async function searchIndexedSessions(
+  query: string,
+  signal?: AbortSignal
+): Promise<IndexedSession[]> {
+  const raw = await fetchWithRetry<RawSessionSearchResult[]>(`${API_BASE}/sessions-index/search?query=${encodeURIComponent(query)}`, { signal })
+  return (raw || []).map(r => ({
+    id: r.id,
+    workstation: r.workstation_id,
+    project: r.project_path || '',
+    date: '',
+    message_count: r.exchange_count,
+    created_at: '',
+  }))
+}
+
+export async function fetchSDKSessions(
+  params?: { project?: string; limit?: number; offset?: number; min_prompts?: number; from?: number; to?: number },
+  signal?: AbortSignal
+): Promise<SDKSessionListResponse> {
+  const query = new URLSearchParams()
+  if (params?.project) query.set('project', params.project)
+  if (params?.limit) query.set('limit', String(params.limit))
+  if (params?.offset) query.set('offset', String(params.offset))
+  if (params?.min_prompts) query.set('min_prompts', String(params.min_prompts))
+  if (params?.from) query.set('from', String(params.from))
+  if (params?.to) query.set('to', String(params.to))
+
+  const url = `${API_BASE}/sessions/list${query.toString() ? '?' + query.toString() : ''}`
+  return fetchWithRetry<SDKSessionListResponse>(url, { signal })
+}
+
+// ============================================================
+// System / Maintenance API
+// ============================================================
+
+export async function triggerConsolidation(signal?: AbortSignal): Promise<{ message: string }> {
+  return postJson<{ message: string }>(`${API_BASE}/maintenance/consolidate`, {}, { signal })
+}
+
+export async function triggerMaintenance(signal?: AbortSignal): Promise<{ message: string }> {
+  return postJson<{ message: string }>(`${API_BASE}/maintenance/run`, {}, { signal })
+}
+
+export interface MaintenanceStats {
+  last_consolidation?: string
+  last_maintenance?: string
+  observations_consolidated?: number
+  stale_removed?: number
+}
+
+export async function fetchMaintenanceStats(signal?: AbortSignal): Promise<MaintenanceStats> {
+  return fetchWithRetry<MaintenanceStats>(`${API_BASE}/maintenance/stats`, { signal })
+}
+
+export async function checkForUpdate(signal?: AbortSignal): Promise<{
+  available: boolean
+  current_version: string
+  latest_version: string
+  release_notes?: string
+}> {
+  return fetchWithRetry(`${API_BASE}/update/check`, { signal })
+}
+
+// ============================================================
+// Learning API (Closed-Loop Phase 6)
+// ============================================================
+
+export interface LearningCurvePoint {
+  date: string
+  sessions: number
+  successes: number
+  outcome_rate: number
+}
+
+export interface LearningCurveResponse {
+  data_points: LearningCurvePoint[]
+}
+
+export interface StrategyRow {
+  name: string
+  sessions: number
+  successes: number
+  outcome_rate: number
+}
+
+export interface StrategiesResponse {
+  strategies: StrategyRow[]
+}
+
+export interface EffectivenessResult {
+  observation_id: number
+  injections: number
+  successes: number
+  score: number
+  tier: string
+}
+
+export async function fetchLearningCurve(days?: number, project?: string, signal?: AbortSignal): Promise<LearningCurveResponse> {
+  const params = new URLSearchParams()
+  if (days) params.set('days', String(days))
+  if (project) params.set('project', project)
+  const query = params.toString()
+  return fetchWithRetry<LearningCurveResponse>(`${API_BASE}/learning/curve${query ? '?' + query : ''}`, { signal })
+}
+
+export async function fetchStrategies(signal?: AbortSignal): Promise<StrategiesResponse> {
+  return fetchWithRetry<StrategiesResponse>(`${API_BASE}/learning/strategies`, { signal })
+}
+
+export async function fetchEffectiveness(id: number, agentId?: string, signal?: AbortSignal): Promise<EffectivenessResult> {
+  const params = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''
+  return fetchWithRetry<EffectivenessResult>(`${API_BASE}/observations/${id}/effectiveness${params}`, { signal })
+}
+
+export interface EffectivenessDistribution {
+  high: number
+  medium: number
+  low: number
+  insufficient: number
+  total: number
+}
+
+export async function fetchEffectivenessDistribution(signal?: AbortSignal): Promise<EffectivenessDistribution> {
+  return fetchWithRetry<EffectivenessDistribution>(`${API_BASE}/learning/effectiveness-distribution`, { signal })
+}
+
+// Observation tag management
+export async function updateObservationTags(
+  id: number,
+  action: 'add' | 'remove',
+  tag: string,
+  signal?: AbortSignal
+): Promise<{ concepts: string[] }> {
+  return postJson<{ concepts: string[] }>(`${API_BASE}/observations/${id}/tags`, { action, tags: [tag] }, { signal })
 }

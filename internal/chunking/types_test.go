@@ -207,7 +207,4 @@ func TestChunkType_Values(t *testing.T) {
 func TestLanguage_Values(t *testing.T) {
 	// Ensure all language types have expected values
 	assert.Equal(t, Language("go"), LanguageGo)
-	assert.Equal(t, Language("python"), LanguagePython)
-	assert.Equal(t, Language("typescript"), LanguageTypeScript)
-	assert.Equal(t, Language("javascript"), LanguageJavaScript)
 }

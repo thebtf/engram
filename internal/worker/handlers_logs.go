@@ -9,13 +9,19 @@ import (
 	"github.com/thebtf/engram/internal/logbuf"
 )
 
-// handleGetLogs returns log entries as JSON (snapshot) or SSE stream (follow mode).
-//
-// Query parameters:
-//   - lines: number of entries to return (default 100, max 10000)
-//   - level: minimum log level filter (trace, debug, info, warn, error, fatal)
-//   - query: case-insensitive text search across message and raw fields
-//   - follow: if "true", switches to SSE streaming mode
+// handleGetLogs godoc
+// @Summary Get log entries
+// @Description Returns log entries as JSON snapshot or SSE stream (follow mode). Supports level filtering and text search.
+// @Tags System
+// @Produce json
+// @Security ApiKeyAuth
+// @Param lines query int false "Number of entries (default 100, max 10000)"
+// @Param level query string false "Minimum log level: trace, debug, info, warn, error, fatal"
+// @Param query query string false "Case-insensitive text search"
+// @Param follow query bool false "If true, switches to SSE streaming mode"
+// @Success 200 {array} object
+// @Failure 503 {string} string "log buffer not initialized"
+// @Router /api/logs [get]
 func (s *Service) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	if s.logBuffer == nil {
 		http.Error(w, "log buffer not initialized", http.StatusServiceUnavailable)

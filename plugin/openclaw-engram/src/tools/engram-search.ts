@@ -13,15 +13,11 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.
 const SearchParamsSchema = z.object({
   query: z.string().min(1),
   limit: z.number().int().positive().max(50).optional(),
-  scope: z.enum(['personal', 'shared', 'all']).optional(),
 });
 
 const searchParameters = Type.Object({
   query: Type.String({ description: 'Search query for engram memory' }),
   limit: Type.Optional(Type.Number({ description: 'Maximum number of results (default: 10)' })),
-  scope: Type.Optional(Type.Union([
-    Type.Literal('personal'), Type.Literal('shared'), Type.Literal('all'),
-  ], { description: 'Search scope: personal (agent only), shared (project+global), all (default)' })),
 });
 
 function createSearchTool(
@@ -51,8 +47,6 @@ function createSearchTool(
       const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
       const project = config.project ?? identity.projectId;
 
-      // TODO: Pass scope filter to server when dedicated endpoint supports it.
-      // Currently all searches include agent-scoped results via agent_id.
       const response = await client.searchContext({
         project,
         query: parsed.data.query,

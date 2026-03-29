@@ -25,8 +25,12 @@ type SDKSession struct {
 	UserPrompt       sql.NullString `db:"user_prompt" json:"user_prompt,omitempty"`
 	CompletedAt      sql.NullString `db:"completed_at" json:"completed_at,omitempty"`
 	WorkerPort       sql.NullInt64  `db:"worker_port" json:"worker_port,omitempty"`
-	CompletedAtEpoch sql.NullInt64  `db:"completed_at_epoch" json:"completed_at_epoch,omitempty"`
-	ID               int64          `db:"id" json:"id"`
+	CompletedAtEpoch  sql.NullInt64  `db:"completed_at_epoch" json:"completed_at_epoch,omitempty"`
+	Outcome           sql.NullString `db:"outcome" json:"outcome,omitempty"`
+	OutcomeReason     sql.NullString `db:"outcome_reason" json:"outcome_reason,omitempty"`
+	OutcomeRecordedAt sql.NullString `db:"outcome_recorded_at" json:"outcome_recorded_at,omitempty"`
+	InjectionStrategy sql.NullString `db:"injection_strategy" json:"injection_strategy,omitempty"`
+	ID                int64          `db:"id" json:"id"`
 	PromptCounter    int64          `db:"prompt_counter" json:"prompt_counter"`
 	StartedAtEpoch   int64          `db:"started_at_epoch" json:"started_at_epoch"`
 }

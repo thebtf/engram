@@ -58,6 +58,8 @@ type ExtractedObservation struct {
 type Result struct {
 	// Observations contains all extracted (unique, validated) observations across all sessions.
 	Observations []ExtractedObservation
+	// Summary is the session-level retrospective, if the retrospective pass ran.
+	Summary *extract.SessionRetrospective
 	// Metrics contains quality and progress statistics.
 	Metrics *metrics.Metrics
 }
@@ -103,8 +105,8 @@ func (r *Runner) Run(ctx context.Context, files []string) (*Result, error) {
 // (e.g. from ParseSessionReader) instead of a file path.
 func (r *Runner) ProcessSession(ctx context.Context, sess *sessions.SessionMeta) (*Result, error) {
 	m := &metrics.Metrics{}
-	observations := r.processSession(ctx, sess, "", m)
-	return &Result{Observations: observations, Metrics: m}, nil
+	observations, summary := r.processSession(ctx, sess, "", m)
+	return &Result{Observations: observations, Summary: summary, Metrics: m}, nil
 }
 
 // processFile processes a single session file and returns extracted observations.
@@ -116,11 +118,13 @@ func (r *Runner) processFile(ctx context.Context, file string, m *metrics.Metric
 		return nil
 	}
 
-	return r.processSession(ctx, sess, file, m)
+	observations, _ := r.processSession(ctx, sess, file, m)
+	return observations
 }
 
 // processSession is the shared extraction logic for both file-based and content-based processing.
-func (r *Runner) processSession(ctx context.Context, sess *sessions.SessionMeta, sourceFile string, m *metrics.Metrics) []ExtractedObservation {
+// Returns extracted observations and an optional session-level retrospective.
+func (r *Runner) processSession(ctx context.Context, sess *sessions.SessionMeta, sourceFile string, m *metrics.Metrics) ([]ExtractedObservation, *extract.SessionRetrospective) {
 	m.Add("total_sessions", 1)
 
 	durationMin := 0
@@ -131,7 +135,7 @@ func (r *Runner) processSession(ctx context.Context, sess *sessions.SessionMeta,
 	// Skip tiny sessions.
 	if sess.ExchangeCount < 3 && durationMin < 5 {
 		m.Add("skipped_tiny", 1)
-		return nil
+		return nil, nil
 	}
 
 	m.Add("processed", 1)
@@ -140,7 +144,7 @@ func (r *Runner) processSession(ctx context.Context, sess *sessions.SessionMeta,
 
 	if r.cfg.DryRun {
 		m.Add("total_chunks", len(chunks))
-		return nil
+		return nil, nil
 	}
 
 	seenTitles := make(map[string]bool)
@@ -156,15 +160,13 @@ func (r *Runner) processSession(ctx context.Context, sess *sessions.SessionMeta,
 
 		chunkInfo := fmt.Sprintf("chunk %d of %d (exchanges %d-%d)",
 			ci+1, len(chunks), ch.StartExchange, ch.EndExchange)
-		alreadyExtracted := extract.BuildAlreadyExtracted(extractedTitles)
-		prompt := extract.BuildUserPrompt(
-			sess.ProjectPath, sess.GitBranch,
-			durationMin, sess.ExchangeCount,
-			chunkInfo, alreadyExtracted, ch.Text,
+		prompt := extract.BuildChunkUserPrompt(
+			sess.ProjectPath, sess.ExchangeCount,
+			chunkInfo, ch.Text,
 		)
 
 		start := time.Now()
-		xmlOutput, llmErr := r.llm.Complete(ctx, extract.SystemPrompt, prompt)
+		xmlOutput, llmErr := r.llm.Complete(ctx, extract.ChunkExtractionSystemPrompt, prompt)
 		m.RecordDuration(time.Since(start))
 
 		if llmErr != nil {
@@ -218,5 +220,124 @@ func (r *Runner) processSession(ctx context.Context, sess *sessions.SessionMeta,
 		}
 	}
 
-	return observations
+	// Retrospective pass: run a session-level synthesis after all chunks are processed.
+	retro := r.runRetrospective(ctx, sess, durationMin, extractedTitles, observations)
+
+	// Append any session-level observations from the retrospective to the main list.
+	if retro != nil {
+		for _, xo := range retro.SessionObservations {
+			normTitle := strings.ToLower(strings.TrimSpace(xo.Title))
+			if seenTitles[normTitle] {
+				continue
+			}
+			seenTitles[normTitle] = true
+			obs := extract.ConvertToObservation(xo, sess.ProjectPath)
+			observations = append(observations, ExtractedObservation{
+				SessionFile: sourceFile,
+				Project:     sess.ProjectPath,
+				Outcome:     xo.Outcome,
+				RawXML:      "",
+				Observation: obs,
+			})
+		}
+	}
+
+	return observations, retro
+}
+
+// runRetrospective performs a session-level retrospective LLM call.
+// Returns nil on error or if the context is cancelled — backfill continues regardless.
+func (r *Runner) runRetrospective(ctx context.Context, sess *sessions.SessionMeta, durationMin int, extractedTitles []string, observations []ExtractedObservation) *extract.SessionRetrospective {
+	// Build retrospective inputs.
+	userMessages := 0
+	for _, ex := range sess.Exchanges {
+		if strings.TrimSpace(ex.UserText) != "" {
+			userMessages++
+		}
+	}
+
+	// Count commits (rough estimate — grep "git commit" in assistant text).
+	commits := 0
+	for _, ex := range sess.Exchanges {
+		if strings.Contains(ex.AssistantText, "git commit") {
+			commits++
+		}
+	}
+
+	// Count unique file paths from extracted observations.
+	seenFiles := make(map[string]bool)
+	for _, eo := range observations {
+		if eo.Observation != nil {
+			for _, f := range eo.Observation.FilesRead {
+				seenFiles[f] = true
+			}
+		}
+	}
+	filesModified := len(seenFiles)
+
+	// Format already-extracted observations as text.
+	var alreadyExtractedBuf strings.Builder
+	for _, title := range extractedTitles {
+		alreadyExtractedBuf.WriteString("- " + title + "\n")
+	}
+
+	// Build opening/closing exchange text (first 3 and last 3).
+	sessionOpening := buildExchangeText(sess.Exchanges, 0, 3)
+	closingStart := len(sess.Exchanges) - 3
+	if closingStart < 3 {
+		closingStart = 3
+	}
+	sessionClosing := buildExchangeText(sess.Exchanges, closingStart, len(sess.Exchanges))
+
+	retroPrompt := fmt.Sprintf(extract.RetrospectiveUserTemplate,
+		sess.ProjectPath,
+		durationMin,
+		sess.ExchangeCount,
+		userMessages,
+		commits,
+		filesModified,
+		alreadyExtractedBuf.String(),
+		sessionOpening,
+		sessionClosing,
+	)
+
+	// Use a 30-second timeout for the retrospective call.
+	retroCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	xmlOutput, err := r.llm.Complete(retroCtx, extract.RetrospectiveSystemPrompt, retroPrompt)
+	if err != nil {
+		return nil
+	}
+
+	return extract.ParseRetrospective(xmlOutput)
+}
+
+// buildExchangeText formats a slice of exchanges as plain text for LLM consumption.
+func buildExchangeText(exchanges []sessions.Exchange, start, end int) string {
+	if start >= len(exchanges) {
+		return ""
+	}
+	if end > len(exchanges) {
+		end = len(exchanges)
+	}
+	var buf strings.Builder
+	for i := start; i < end; i++ {
+		ex := exchanges[i]
+		if t := strings.TrimSpace(ex.UserText); t != "" {
+			buf.WriteString("User: ")
+			buf.WriteString(t)
+			buf.WriteString("\n")
+		}
+		if t := strings.TrimSpace(ex.AssistantText); t != "" {
+			buf.WriteString("Assistant: ")
+			// Truncate very long assistant responses to keep prompt size reasonable.
+			if len(t) > 500 {
+				t = t[:500] + "..."
+			}
+			buf.WriteString(t)
+			buf.WriteString("\n")
+		}
+	}
+	return buf.String()
 }

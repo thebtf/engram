@@ -452,8 +452,9 @@ func TestSecurityHeaders_CSP(t *testing.T) {
 	if csp == "" {
 		t.Error("Content-Security-Policy header should be set")
 	}
-	if csp != "default-src 'self'" {
-		t.Errorf("Expected CSP to be \"default-src 'self'\", got %q", csp)
+	expectedCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
+	if csp != expectedCSP {
+		t.Errorf("Expected CSP to be %q, got %q", expectedCSP, csp)
 	}
 
 	// Check Permissions-Policy header

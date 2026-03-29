@@ -310,20 +310,20 @@
             <p class="text-slate-400 text-xs sm:text-sm">Single binary. Fast startup, low memory. Zero runtime dependencies.</p>
           </div>
           <div class="glass rounded-2xl p-6 sm:p-8 hover:border-amber-500/30 transition-colors">
-            <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">SQLite</div>
-            <p class="text-slate-400 text-xs sm:text-sm">FTS5 full-text search. Single file database. Survives restarts.</p>
+            <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">PostgreSQL</div>
+            <p class="text-slate-400 text-xs sm:text-sm">tsvector full-text search. Concurrent access. Survives restarts.</p>
           </div>
           <div class="glass rounded-2xl p-6 sm:p-8 hover:border-amber-500/30 transition-colors">
-            <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">sqlite-vec</div>
-            <p class="text-slate-400 text-xs sm:text-sm">Hybrid vector storage with LEANN-inspired selective embeddings. 60-80% storage reduction.</p>
+            <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">pgvector</div>
+            <p class="text-slate-400 text-xs sm:text-sm">HNSW cosine vector index for fast approximate nearest-neighbor search.</p>
           </div>
           <div class="glass rounded-2xl p-6 sm:p-8 hover:border-amber-500/30 transition-colors">
-            <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">BGE</div>
+            <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">OpenAI API</div>
             <p class="text-slate-400 text-xs sm:text-sm">Two-stage retrieval: bi-encoder embeddings + cross-encoder reranking for high accuracy.</p>
           </div>
           <div class="glass rounded-2xl p-6 sm:p-8 hover:border-amber-500/30 transition-colors">
-            <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">Tree-sitter</div>
-            <p class="text-slate-400 text-xs sm:text-sm">AST-aware code chunking respects function boundaries for Go, Python, and TypeScript.</p>
+            <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">AST Chunking</div>
+            <p class="text-slate-400 text-xs sm:text-sm">AST-aware code chunking respects function boundaries for Markdown and Go.</p>
           </div>
           <div class="glass rounded-2xl p-6 sm:p-8 hover:border-amber-500/30 transition-colors">
             <div class="text-3xl sm:text-4xl font-bold text-amber-500 mb-2">CSR Graph</div>
@@ -477,6 +477,6 @@ const faqs = [
   { question: 'Does it work with my existing Claude Code setup?', answer: 'Yes. Engram installs as a Claude Code plugin with hooks. Your existing workflows, settings, and shortcuts remain unchanged.' },
   { question: 'What if I switch between projects frequently?', answer: 'That\'s the point. Each project has isolated memories. Switch from your Python ML project to your TypeScript app - context switches automatically.' },
   { question: 'Is there a performance impact?', answer: 'Minimal. The Go worker is lightweight (typically under 30MB RAM). Hybrid storage and auto-tuning optimize for your workload. Context injection at session start takes milliseconds for most projects.' },
-  { question: 'What is AST-aware chunking?', answer: 'When processing code observations, Engram uses Tree-sitter parsers to respect function and class boundaries instead of arbitrary line limits. Go, Python, and TypeScript code is chunked at semantic boundaries for better search accuracy.' },
+  { question: 'What is AST-aware chunking?', answer: 'When processing documents and code, Engram uses AST-based parsers to respect structural boundaries instead of arbitrary line limits. Markdown is chunked by headers, and Go code is chunked at function boundaries using go/ast for better search accuracy.' },
 ]
 </script>

@@ -19,18 +19,22 @@ import (
 
 // SDKSession represents a Claude Code session.
 type SDKSession struct {
-	ClaudeSessionID  string         `gorm:"uniqueIndex;not null"`
-	Project          string         `gorm:"index;not null"`
-	Status           string         `gorm:"type:text;check:status IN ('active', 'completed', 'failed');default:'active';index"`
-	StartedAt        string         `gorm:"not null"`
-	SDKSessionID     sql.NullString `gorm:"uniqueIndex"`
-	UserPrompt       sql.NullString
-	CompletedAt      sql.NullString
-	WorkerPort       sql.NullInt64
-	CompletedAtEpoch sql.NullInt64
-	ID               int64 `gorm:"primaryKey;autoIncrement"`
-	PromptCounter    int   `gorm:"default:0"`
-	StartedAtEpoch   int64 `gorm:"index:idx_sessions_started,sort:desc;not null"`
+	ClaudeSessionID   string         `gorm:"uniqueIndex;not null"`
+	Project           string         `gorm:"index;not null"`
+	Status            string         `gorm:"type:text;check:status IN ('active', 'completed', 'failed');default:'active';index"`
+	StartedAt         string         `gorm:"not null"`
+	SDKSessionID      sql.NullString `gorm:"uniqueIndex"`
+	UserPrompt        sql.NullString
+	CompletedAt       sql.NullString
+	WorkerPort        sql.NullInt64
+	CompletedAtEpoch  sql.NullInt64
+	Outcome           sql.NullString `gorm:"type:text"`
+	OutcomeReason     sql.NullString `gorm:"type:text"`
+	OutcomeRecordedAt sql.NullString `gorm:"type:timestamptz"`
+	InjectionStrategy sql.NullString `gorm:"type:text"`
+	ID                int64          `gorm:"primaryKey;autoIncrement"`
+	PromptCounter     int            `gorm:"default:0"`
+	StartedAtEpoch    int64          `gorm:"index:idx_sessions_started,sort:desc;not null"`
 }
 
 func (SDKSession) TableName() string { return "sdk_sessions" }
@@ -59,10 +63,11 @@ type Observation struct {
 	SourceType      models.SourceType       `gorm:"type:text;index:idx_observations_source_type"`
 	CreatedAt       string                  `gorm:"not null"`
 	Facts           models.JSONStringArray  `gorm:"type:text"`
+	Rejected        models.JSONStringArray  `gorm:"type:jsonb;default:'[]'"`
 	Narrative       sql.NullString          `gorm:"type:text"`
-	Concepts        models.JSONStringArray  `gorm:"type:text"`
-	FilesRead       models.JSONStringArray  `gorm:"type:text"`
-	FilesModified   models.JSONStringArray  `gorm:"type:text"`
+	Concepts        models.JSONStringArray  `gorm:"type:jsonb"`
+	FilesRead       models.JSONStringArray  `gorm:"type:jsonb"`
+	FilesModified   models.JSONStringArray  `gorm:"type:jsonb"`
 	Subtitle        sql.NullString          `gorm:"type:text"`
 	Title           sql.NullString          `gorm:"type:text"`
 	ArchivedReason  sql.NullString
@@ -73,7 +78,8 @@ type Observation struct {
 	ID              int64         `gorm:"primaryKey;autoIncrement"`
 	ImportanceScore float64       `gorm:"type:real;default:1.0;index:idx_observations_importance,priority:1,sort:desc"`
 	UtilityScore    float64       `gorm:"type:real;default:0.5"`
-	UserFeedback    int           `gorm:"default:0"`
+	UserFeedback    int           `gorm:"not null;default:0"`
+	IsSuppressed    bool          `gorm:"not null;default:false"`
 	RetrievalCount  int           `gorm:"default:0"`
 	InjectionCount  int           `gorm:"default:0"`
 	CreatedAtEpoch  int64         `gorm:"index:idx_observations_created,sort:desc;index:idx_observations_project_created,priority:2,sort:desc;not null"`
@@ -82,6 +88,13 @@ type Observation struct {
 	IsArchived                  int            `gorm:"default:0;index:idx_observations_archived;index:idx_observations_active,priority:1"`
 	EncryptedSecret             []byte         `gorm:"type:bytea"`
 	EncryptionKeyFingerprint    sql.NullString `gorm:"type:text"`
+	ExpiresAt                   sql.NullTime   `gorm:"type:timestamptz"`
+	TtlDays                     sql.NullInt32
+	Status                      string         `gorm:"column:status;default:active"`
+	StatusReason                sql.NullString `gorm:"column:status_reason"`
+	EffectivenessScore          float64        `gorm:"type:real;default:0"`
+	EffectivenessInjections     int            `gorm:"default:0"`
+	EffectivenessSuccesses      int            `gorm:"default:0"`
 }
 
 func (Observation) TableName() string { return "observations" }
@@ -358,3 +371,21 @@ type Project struct {
 }
 
 func (Project) TableName() string { return "projects" }
+
+// APIToken represents a client API token for agent authentication.
+// Tokens are stored as bcrypt hashes with a prefix for fast lookup.
+type APIToken struct {
+	ID           string     `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	Name         string     `gorm:"type:text;not null;uniqueIndex"`
+	TokenHash    string     `gorm:"type:text;not null"`
+	TokenPrefix  string     `gorm:"type:text;not null;index"`
+	Scope        string     `gorm:"type:text;not null;default:read-write"`
+	CreatedAt    time.Time  `gorm:"not null;default:now()"`
+	LastUsedAt   *time.Time `gorm:"column:last_used_at"`
+	RequestCount int64      `gorm:"not null;default:0"`
+	ErrorCount   int64      `gorm:"not null;default:0"`
+	Revoked      bool       `gorm:"not null;default:false"`
+	RevokedAt    *time.Time `gorm:"column:revoked_at"`
+}
+
+func (APIToken) TableName() string { return "api_tokens" }

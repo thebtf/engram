@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "0.5.1",
+  "version": "2.0.7",
   "description": "Persistent memory for Claude Code — captures observations, stores knowledge across sessions, injects relevant context automatically",
   "author": {
     "name": "thebtf"

@@ -142,9 +142,13 @@ func formatWarning(format string, args ...any) string {
 	return fmt.Sprintf(format, args...)
 }
 
-// handleHealth handles health check requests.
-// Returns 200 OK immediately (even during init) so hooks can connect quickly.
-// Use /api/ready for full readiness check.
+// handleHealth godoc
+// @Summary Health check
+// @Description Returns 200 OK immediately (even during init) so hooks can connect quickly. Use /api/ready for full readiness check.
+// @Tags System
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/health [get]
 func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := "starting"
 	if s.ready.Load() {
@@ -158,15 +162,27 @@ func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleVersion returns the worker version for version checking.
+// handleVersion godoc
+// @Summary Get worker version
+// @Description Returns the worker version string for version checking.
+// @Tags System
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /api/version [get]
 func (s *Service) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{
 		"version": s.version,
 	})
 }
 
-// handleRebuildStatus returns the current status of vector rebuild operations.
-// This provides visibility into long-running rebuild operations.
+// handleRebuildStatus godoc
+// @Summary Get vector rebuild status
+// @Description Returns the current status of vector rebuild operations, providing visibility into long-running rebuild operations.
+// @Tags Vectors
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/rebuild-status [get]
 func (s *Service) handleRebuildStatus(w http.ResponseWriter, _ *http.Request) {
 	s.rebuildStatusMu.RLock()
 	status := s.rebuildStatus
@@ -183,10 +199,17 @@ func (s *Service) handleRebuildStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, status)
 }
 
-// handleTriggerVectorRebuild triggers a full vector rebuild operation.
-// This rebuilds all vectors from observations, summaries, and prompts.
-// Returns 409 Conflict if a rebuild is already in progress.
-// Returns 429 Too Many Requests if called too frequently (5 minute cooldown).
+// handleTriggerVectorRebuild godoc
+// @Summary Trigger full vector rebuild
+// @Description Rebuilds all vectors from observations, summaries, and prompts. Returns 409 if already in progress, 429 if called too frequently (5 min cooldown).
+// @Tags Vectors
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 409 {string} string "rebuild already in progress"
+// @Failure 429 {string} string "rebuild requested too recently"
+// @Failure 503 {string} string "vector sync not initialized"
+// @Router /api/vectors/rebuild [post]
 func (s *Service) handleTriggerVectorRebuild(w http.ResponseWriter, _ *http.Request) {
 	// Check rate limiting for expensive operations
 	if s.expensiveOpLimiter != nil && !s.expensiveOpLimiter.CanRebuild() {
@@ -219,8 +242,15 @@ func (s *Service) handleTriggerVectorRebuild(w http.ResponseWriter, _ *http.Requ
 	})
 }
 
-// handleReady handles readiness check requests.
-// Returns 200 only when fully initialized, 503 otherwise.
+// handleReady godoc
+// @Summary Readiness check
+// @Description Returns 200 only when fully initialized, 503 otherwise.
+// @Tags System
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 500 {string} string "init error"
+// @Failure 503 {string} string "service initializing"
+// @Router /api/ready [get]
 func (s *Service) handleReady(w http.ResponseWriter, r *http.Request) {
 	if !s.ready.Load() {
 		if err := s.GetInitError(); err != nil {
@@ -248,8 +278,13 @@ func (s *Service) requireReady(next http.Handler) http.Handler {
 	})
 }
 
-// handleListModels returns available embedding models in OpenAI-compatible format.
-// Compatible with LiteLLM proxy model listing.
+// handleListModels godoc
+// @Summary List embedding models (OpenAI-compatible)
+// @Description Returns available embedding models in OpenAI-compatible format. Compatible with LiteLLM proxy model listing.
+// @Tags System
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/models [get]
 func (s *Service) handleListModels(w http.ResponseWriter, _ *http.Request) {
 	models := embedding.ListModels()
 

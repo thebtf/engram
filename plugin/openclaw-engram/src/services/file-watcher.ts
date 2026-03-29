@@ -5,7 +5,7 @@
  * debounces changes per file, and bulk-imports updated chunks into engram.
  */
 
-import chokidar, { type FSWatcher } from 'chokidar';
+import type { FSWatcher } from 'chokidar';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
@@ -41,12 +41,14 @@ class FileWatcherService implements OpenClawPluginService {
     this.projectId = config.project ?? identity.projectId;
   }
 
-  start(_ctx: OpenClawPluginServiceContext): void {
+  async start(_ctx: OpenClawPluginServiceContext): Promise<void> {
+    // Lazy-load chokidar to avoid blocking plugin discovery with native module init
+    const chokidar = await import('chokidar');
     const watchPaths = [
       join(this.workspaceDir, 'MEMORY.md'),
       join(this.workspaceDir, 'memory'),
     ];
-    this.watcher = chokidar.watch(watchPaths, {
+    this.watcher = chokidar.default.watch(watchPaths, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 500 },
       persistent: false,

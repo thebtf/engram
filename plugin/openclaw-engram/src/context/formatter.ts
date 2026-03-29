@@ -48,6 +48,60 @@ export interface FormatResult {
 // ---------------------------------------------------------------------------
 
 /**
+ * Format always_inject observations into a compact behavioral rules block.
+ *
+ * These are observations marked always_inject=true on the server. They represent
+ * standing behavioral rules (e.g., "always use X", "never do Y") that must be
+ * injected into every turn regardless of query relevance.
+ *
+ * Rendered as a lightweight XML block separate from the main engram-context so
+ * the agent can distinguish standing rules from query-matched knowledge.
+ *
+ * @param observations - The always_inject observations from the search response.
+ * @returns            A non-empty XML block string, or '' if nothing to render.
+ */
+export function formatAlwaysInject(observations: Observation[]): string {
+  const safe = observations.filter(
+    (obs) => asString(obs.type).toLowerCase() !== 'credential',
+  );
+  if (safe.length === 0) return '';
+
+  let out = '<engram-behavioral-rules>\n';
+  out += '# Standing Behavioral Rules (Always Active)\n';
+  out += 'IMPORTANT: These rules apply to ALL tasks in this session. Follow them unconditionally.\n\n';
+
+  for (let i = 0; i < safe.length; i++) {
+    const obs = safe[i];
+    const title = escapeXml(obs.title);
+    const obsType = escapeXml(asString(obs.type).toUpperCase());
+    const scopeTag =
+      typeof obs.scope === 'string' && obs.scope === 'global' ? ' [GLOBAL]' : '';
+    out += `## ${i + 1}. [${obsType}] ${title}${scopeTag}\n`;
+
+    const facts = Array.isArray(obs.facts) ? obs.facts : [];
+    if (facts.length > 0) {
+      let hasFacts = false;
+      for (const fact of facts) {
+        if (typeof fact === 'string' && fact !== '') {
+          if (!hasFacts) {
+            out += 'Key facts:\n';
+            hasFacts = true;
+          }
+          out += `- ${escapeXml(fact)}\n`;
+        }
+      }
+      if (hasFacts) out += '\n';
+    }
+
+    const narrative = escapeXml(obs.narrative);
+    if (narrative !== '') out += `${narrative}\n\n`;
+  }
+
+  out += '</engram-behavioral-rules>\n';
+  return out;
+}
+
+/**
  * Format an array of engram observations into an XML context block.
  *
  * Steps:

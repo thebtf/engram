@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  /* Dark theme for native select/option elements */
+  select {
+    background-color: #1e293b; /* slate-800 */
+    color: #e2e8f0; /* slate-200 */
+    border-color: #475569; /* slate-600 */
+  }
+
+  select option {
+    background-color: #1e293b;
+    color: #e2e8f0;
+  }
+}
+
 @layer components {
   /* Glass morphism effect */
   .glass {

@@ -219,37 +219,37 @@ function getStatusColor(status: string): string {
           <!-- Total Requests -->
           <div class="flex items-center justify-between">
             <span class="text-slate-400 text-sm">Total Requests</span>
-            <span class="text-white font-medium">{{ formatNumber(stats.retrieval.TotalRequests) }}</span>
+            <span class="text-white font-medium">{{ formatNumber(stats.retrieval.total_requests) }}</span>
           </div>
 
           <!-- Observations Served -->
           <div class="flex items-center justify-between">
             <span class="text-slate-400 text-sm">Obs Served</span>
-            <span class="text-white font-medium">{{ formatNumber(stats.retrieval.ObservationsServed) }}</span>
+            <span class="text-white font-medium">{{ formatNumber(stats.retrieval.observations_served) }}</span>
           </div>
 
           <!-- Search Requests -->
           <div class="flex items-center justify-between">
             <span class="text-slate-400 text-sm">Searches</span>
-            <span class="text-white font-medium">{{ formatNumber(stats.retrieval.SearchRequests) }}</span>
+            <span class="text-white font-medium">{{ formatNumber(stats.retrieval.search_requests) }}</span>
           </div>
 
           <!-- Context Injections -->
           <div class="flex items-center justify-between">
             <span class="text-slate-400 text-sm">Injections</span>
-            <span class="text-white font-medium">{{ formatNumber(stats.retrieval.ContextInjections) }}</span>
+            <span class="text-white font-medium">{{ formatNumber(stats.retrieval.context_injections) }}</span>
           </div>
 
           <!-- Verified Stale -->
-          <div v-if="stats.retrieval.VerifiedStale > 0" class="flex items-center justify-between">
+          <div v-if="stats.retrieval.verified_stale > 0" class="flex items-center justify-between">
             <span class="text-slate-400 text-sm">Verified Stale</span>
-            <span class="text-amber-400 font-medium">{{ formatNumber(stats.retrieval.VerifiedStale) }}</span>
+            <span class="text-amber-400 font-medium">{{ formatNumber(stats.retrieval.verified_stale) }}</span>
           </div>
 
           <!-- Deleted Invalid -->
-          <div v-if="stats.retrieval.DeletedInvalid > 0" class="flex items-center justify-between">
+          <div v-if="stats.retrieval.deleted_invalid > 0" class="flex items-center justify-between">
             <span class="text-slate-400 text-sm">Deleted Invalid</span>
-            <span class="text-red-400 font-medium">{{ formatNumber(stats.retrieval.DeletedInvalid) }}</span>
+            <span class="text-red-400 font-medium">{{ formatNumber(stats.retrieval.deleted_invalid) }}</span>
           </div>
         </div>
       </div>
@@ -313,27 +313,19 @@ function getStatusColor(status: string): string {
 
               <!-- Vector Metrics -->
               <div v-if="vectorMetrics?.enabled" class="mt-4 pt-4 border-t border-slate-700/50">
-                <div class="text-xs text-slate-400 uppercase tracking-wide mb-2">Vector Storage</div>
+                <div class="text-xs text-slate-400 uppercase tracking-wide mb-2">Vector Metrics</div>
                 <div class="space-y-2">
                   <div class="flex items-center justify-between">
-                    <span class="text-slate-400 text-sm">Savings</span>
-                    <span class="text-green-400 font-medium">
-                      {{ vectorMetrics.storage.savingsPercent.toFixed(1) }}%
-                    </span>
-                  </div>
-                  <div class="flex items-center justify-between">
                     <span class="text-slate-400 text-sm">Queries</span>
-                    <span class="text-white font-medium">{{ formatNumber(vectorMetrics.queries.total) }}</span>
-                  </div>
-                  <div class="flex items-center justify-between">
-                    <span class="text-slate-400 text-sm">Cache Hit</span>
-                    <span class="text-cyan-400 font-medium">
-                      {{ (vectorMetrics.cache.hitRate * 100).toFixed(1) }}%
-                    </span>
+                    <span class="text-white font-medium">{{ formatNumber(vectorMetrics.query_count) }}</span>
                   </div>
                   <div class="flex items-center justify-between">
                     <span class="text-slate-400 text-sm">Avg Latency</span>
-                    <span class="text-white font-medium text-xs">{{ vectorMetrics.latency.avg }}</span>
+                    <span class="text-white font-medium text-xs">{{ vectorMetrics.avg_latency_ms?.toFixed(1) ?? '0' }}ms</span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span class="text-slate-400 text-sm">Documents</span>
+                    <span class="text-white font-medium">{{ formatNumber(vectorMetrics.total_documents) }}</span>
                   </div>
                 </div>
               </div>
@@ -398,7 +390,7 @@ function getStatusColor(status: string): string {
       <div
         v-if="stats?.retrieval"
         class="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50 flex justify-center"
-        :title="`${stats.retrieval.TotalRequests} total requests`"
+        :title="`${stats.retrieval.total_requests} total requests`"
       >
         <i class="fas fa-search text-cyan-400" />
       </div>

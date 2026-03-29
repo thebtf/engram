@@ -17,7 +17,8 @@ type ExtractedLearning struct {
 	Title     string   `json:"title"`
 	Narrative string   `json:"narrative"`
 	Concepts  []string `json:"concepts"`
-	Signal    string   `json:"signal"` // "correction", "preference", "pattern"
+	Type      string   `json:"type"`   // "guidance", "decision", "bugfix", "discovery", etc.
+	Signal    string   `json:"signal"` // legacy: "correction", "preference", "pattern"
 }
 
 // ExtractionResult is the LLM response structure.
@@ -80,7 +81,7 @@ func (e *Extractor) ExtractGuidance(ctx context.Context, messages []Message, pro
 		validConcepts := filterValidConcepts(l.Concepts)
 
 		observations = append(observations, &models.ParsedObservation{
-			Type:      models.ObsTypeGuidance,
+			Type:      learningToObsType(l),
 			Title:     l.Title,
 			Narrative: l.Narrative,
 			Concepts:  validConcepts,
@@ -119,12 +120,14 @@ func parseLearnings(response string) ([]ExtractedLearning, error) {
 		if len(l.Narrative) > 500 {
 			l.Narrative = l.Narrative[:500]
 		}
-		// Validate signal type
-		switch l.Signal {
-		case "correction", "preference", "pattern":
-			// valid
-		default:
-			l.Signal = "pattern" // default
+		// Validate type/signal — at least one must be set
+		if l.Type == "" {
+			switch l.Signal {
+			case "correction", "preference", "pattern":
+				// valid legacy signal
+			default:
+				l.Signal = "pattern"
+			}
 		}
 		valid = append(valid, l)
 	}
@@ -144,6 +147,26 @@ var allowedConcepts = map[string]bool{
 	"testing": true, "debugging": true, "problem-solution": true, "trade-off": true,
 	"workflow": true, "tooling": true, "how-it-works": true, "why-it-exists": true,
 	"what-changed": true,
+}
+
+// learningToObsType determines observation type from extracted learning.
+// Prefers the new "type" field; falls back to legacy "signal" mapping.
+func learningToObsType(l ExtractedLearning) models.ObservationType {
+	// New prompt returns type directly
+	switch models.ObservationType(l.Type) {
+	case models.ObsTypeGuidance, models.ObsTypeDecision, models.ObsTypeBugfix,
+		models.ObsTypeDiscovery, models.ObsTypeFeature, models.ObsTypeRefactor,
+		models.ObsTypeChange:
+		return models.ObservationType(l.Type)
+	}
+	// Legacy signal fallback
+	switch l.Signal {
+	case "correction", "preference":
+		return models.ObsTypeGuidance
+	case "pattern":
+		return models.ObsTypeDiscovery
+	}
+	return models.ObsTypeGuidance
 }
 
 // filterValidConcepts returns only concepts from the allowed set.

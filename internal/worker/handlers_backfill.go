@@ -1,16 +1,19 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/backfill"
 	"github.com/thebtf/engram/internal/backfill/extract"
 	"github.com/thebtf/engram/internal/learning"
+	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
@@ -97,7 +100,18 @@ func (t *backfillTracker) snapshot() map[string]*RunInfo {
 	return cp
 }
 
-// handleBackfillIngest handles POST /api/backfill — stores extracted observations.
+// handleBackfillIngest godoc
+// @Summary Ingest backfill observations
+// @Description Stores pre-extracted observations from a backfill run. Supports semantic deduplication via vector similarity.
+// @Tags Backfill
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body BackfillRequest true "Backfill observations"
+// @Success 200 {object} BackfillResponse
+// @Failure 400 {string} string "bad request"
+// @Failure 503 {string} string "observation store not initialized"
+// @Router /api/backfill [post]
 func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 	var req BackfillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -190,7 +204,14 @@ func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleBackfillStatus handles GET /api/backfill/status.
+// handleBackfillStatus godoc
+// @Summary Get backfill status
+// @Description Returns status of all active backfill runs including stored/skipped/error counts per run.
+// @Tags Backfill
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} BackfillStatus
+// @Router /api/backfill/status [get]
 func (s *Service) handleBackfillStatus(w http.ResponseWriter, r *http.Request) {
 	runs := s.backfillTracker.snapshot()
 	totalObs := 0
@@ -230,8 +251,18 @@ type BackfillSessionResponse struct {
 	MetricsReport        string `json:"metrics_report,omitempty"`
 }
 
-// handleBackfillSession handles POST /api/backfill/session — accepts raw JSONL content,
-// runs server-side LLM extraction, and stores the resulting observations.
+// handleBackfillSession godoc
+// @Summary Backfill session with LLM extraction
+// @Description Accepts raw JSONL session content, runs server-side LLM extraction, and stores resulting observations with semantic deduplication.
+// @Tags Backfill
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body BackfillSessionRequest true "Session content and metadata"
+// @Success 200 {object} BackfillSessionResponse
+// @Failure 400 {string} string "bad request"
+// @Failure 503 {string} string "LLM not configured or store not initialized"
+// @Router /api/backfill/session [post]
 func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) {
 	var req BackfillSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -263,6 +294,26 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		sess.SessionID = req.SessionID
 	}
 
+	// Detect secrets in the raw content, store in vault, then redact session exchanges.
+	project := sess.ProjectPath
+	if req.Project != "" {
+		project = req.Project
+	}
+	if privacy.ContainsSecrets(req.Content) {
+		// Fire-and-forget vault storage (Constitution P3: Non-Blocking)
+		capturedContent := req.Content
+		capturedProject := project
+		go func() {
+			vaultCtx, vaultCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer vaultCancel()
+			vaultStoreDetectedSecrets(vaultCtx, s, capturedContent, capturedProject)
+		}()
+	}
+	for i := range sess.Exchanges {
+		sess.Exchanges[i].UserText = privacy.RedactSecrets(sess.Exchanges[i].UserText)
+		sess.Exchanges[i].AssistantText = privacy.RedactSecrets(sess.Exchanges[i].AssistantText)
+	}
+
 	// Initialize LLM client from server env vars.
 	llmCfg := learning.DefaultOpenAIConfig()
 	llmClient := learning.NewOpenAIClient(llmCfg)
@@ -280,12 +331,6 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		MetricsReport:         result.Metrics.Report(),
 	}
 
-	if len(result.Observations) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
 	// Store observations with semantic dedup (same logic as handleBackfillIngest).
 	s.initMu.RLock()
 	obsStore := s.observationStore
@@ -294,6 +339,37 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 
 	if obsStore == nil {
 		http.Error(w, "Observation store not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	sdkSessionID := fmt.Sprintf("backfill-%s-%s", req.RunID, req.SessionID)
+
+	// T017: Create SDK session record so backfilled sessions appear in Sessions page.
+	if s.sessionStore != nil {
+		sessionDBID, err := s.sessionStore.CreateSDKSession(r.Context(), sdkSessionID, project, "backfill")
+		if err != nil {
+			log.Warn().Err(err).Str("session_id", req.SessionID).Msg("backfill: failed to create SDK session")
+		}
+		_ = sessionDBID
+	}
+
+	// T016: Store session summary if the retrospective produced one.
+	if result.Summary != nil && result.Summary.Summary.Request != "" && s.summaryStore != nil {
+		summary := &models.ParsedSummary{
+			Request:   result.Summary.Summary.Request,
+			Completed: result.Summary.Summary.Completed,
+			Learned:   result.Summary.Summary.Learned,
+			NextSteps: result.Summary.Summary.NextSteps,
+		}
+		_, _, err := s.summaryStore.StoreSummary(r.Context(), sdkSessionID, project, summary, 0, 0)
+		if err != nil {
+			log.Warn().Err(err).Msg("backfill: failed to store summary")
+		}
+	}
+
+	if len(result.Observations) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -319,13 +395,12 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		// Add backfill metadata.
 		obs.Scope = models.ScopeProject
 
-		project := sess.ProjectPath
+		obsProject := project
 		if eo.Project != "" {
-			project = eo.Project
+			obsProject = eo.Project
 		}
 
-		sdkSessionID := fmt.Sprintf("backfill-%s-%s", req.RunID, req.SessionID)
-		_, _, storeErr := obsStore.StoreObservation(r.Context(), sdkSessionID, project, obs, 0, 0)
+		_, _, storeErr := obsStore.StoreObservation(r.Context(), sdkSessionID, obsProject, obs, 0, 0)
 		if storeErr != nil {
 			log.Error().Err(storeErr).Str("title", obs.Title).Msg("backfill-session: failed to store observation")
 			resp.Errors++
@@ -343,4 +418,185 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// vaultStoreDetectedSecrets extracts secrets from text, encrypts each with the vault,
+// and stores them as credential observations. All errors are non-fatal — secrets are
+// still redacted from the transcript even if vault storage fails.
+func vaultStoreDetectedSecrets(ctx context.Context, s *Service, text, project string) {
+	secrets := privacy.ExtractSecrets(text)
+	if len(secrets) == 0 {
+		return
+	}
+
+	vault, err := s.getVault()
+	if err != nil {
+		log.Warn().Err(err).Msg("backfill: vault not available, skipping secret storage")
+		return
+	}
+
+	s.initMu.RLock()
+	obsStore := s.observationStore
+	s.initMu.RUnlock()
+	if obsStore == nil {
+		log.Warn().Msg("backfill: observation store not available, skipping secret storage")
+		return
+	}
+
+	stored := 0
+	for _, secret := range secrets {
+		// Idempotency: skip if credential with this name already exists.
+		existing, err := obsStore.GetCredential(ctx, secret.Name, project)
+		if err != nil {
+			log.Warn().Err(err).Str("name", secret.Name).Msg("backfill: failed to check existing credential")
+			continue
+		}
+		if existing != nil {
+			continue
+		}
+
+		ciphertext, err := vault.Encrypt(secret.Value)
+		if err != nil {
+			log.Warn().Err(err).Str("name", secret.Name).Msg("backfill: failed to encrypt secret")
+			continue
+		}
+
+		obs := &models.ParsedObservation{
+			Type:                     models.ObsTypeCredential,
+			SourceType:               models.SourceBackfill,
+			Title:                    secret.Name,
+			Narrative:                secret.Name,
+			Concepts:                 []string{"auto-detected", "redactor"},
+			Scope:                    models.ScopeProject,
+			EncryptedSecret:          ciphertext,
+			EncryptionKeyFingerprint: vault.Fingerprint(),
+		}
+
+		const vaultSessionID = "credential:auto-redactor"
+		_, _, storeErr := obsStore.StoreObservation(ctx, vaultSessionID, project, obs, 0, 0)
+		if storeErr != nil {
+			log.Warn().Err(storeErr).Str("name", secret.Name).Msg("backfill: failed to store auto-detected credential")
+			continue
+		}
+		stored++
+	}
+
+	if stored > 0 {
+		log.Info().Int("count", stored).Int("detected", len(secrets)).Msg("backfill: auto-detected secrets stored in vault")
+	}
+}
+
+// handleImportFeedback godoc
+// @Summary Import a feedback rule via LLM
+// @Description Accepts raw feedback_*.md content, processes it through the server-side LLM
+// to extract a structured TRIGGER→RULE→REASON observation, deduplicates, and stores as type=guidance.
+// @Tags Import
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body object true "Feedback content: {content: string, source_file: string}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 503 {string} string "LLM not configured"
+// @Router /api/import/feedback [post]
+func (s *Service) handleImportFeedback(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Content    string `json:"content"`
+		SourceFile string `json:"source_file"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Content) == "" {
+		http.Error(w, "content is required", http.StatusBadRequest)
+		return
+	}
+
+	// Initialize LLM client from server env vars.
+	llmCfg := learning.DefaultOpenAIConfig()
+	llmClient := learning.NewOpenAIClient(llmCfg)
+	if !llmClient.IsConfigured() {
+		http.Error(w, "LLM not configured on server (set ENGRAM_LLM_URL + ENGRAM_LLM_API_KEY)", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Call LLM with feedback import prompt.
+	callCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	response, err := llmClient.Complete(callCtx, extract.FeedbackImportSystemPrompt, req.Content)
+	if err != nil {
+		log.Warn().Err(err).Str("source", req.SourceFile).Msg("feedback import: LLM call failed")
+		http.Error(w, "LLM extraction failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Constitution P9: RedactSecrets on LLM output before parsing
+	response = privacy.RedactSecrets(response)
+
+	// Parse single observation from LLM XML output.
+	obs := extract.ParseSingleObservation(response)
+	if obs == nil {
+		writeJSON(w, map[string]any{
+			"status": "skipped",
+			"reason": "LLM returned no parseable observation",
+		})
+		return
+	}
+
+	s.initMu.RLock()
+	obsStore := s.observationStore
+	vectorClient := s.vectorClient
+	s.initMu.RUnlock()
+
+	if obsStore == nil {
+		http.Error(w, "observation store not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Semantic dedup: skip if very similar rule already exists.
+	if vectorClient != nil && vectorClient.IsConnected() {
+		searchText := obs.Title + " " + obs.Narrative
+		results, qErr := vectorClient.Query(r.Context(), searchText, 1, vector.WhereFilter{})
+		if qErr == nil && len(results) > 0 && results[0].Similarity > 0.90 {
+			writeJSON(w, map[string]any{
+				"status":     "duplicate",
+				"similarity": results[0].Similarity,
+				"title":      obs.Title,
+			})
+			return
+		}
+	}
+
+	// Build and store as guidance observation.
+	parsed := &models.ParsedObservation{
+		Type:       models.ObsTypeGuidance,
+		SourceType: models.SourceManual,
+		Title:      obs.Title,
+		Narrative:  obs.Narrative,
+		Concepts:   obs.Concepts.Concepts,
+		Scope:      models.ScopeGlobal,
+	}
+
+	sessionID := fmt.Sprintf("feedback-import:%s", req.SourceFile)
+	id, _, storeErr := obsStore.StoreObservation(r.Context(), sessionID, "", parsed, 0, 0)
+	if storeErr != nil {
+		log.Error().Err(storeErr).Str("title", obs.Title).Msg("feedback import: failed to store")
+		http.Error(w, "failed to store observation: "+storeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Set high importance for behavioral rules.
+	if err := obsStore.UpdateImportanceScore(r.Context(), id, 0.8); err != nil {
+		log.Warn().Err(err).Int64("id", id).Msg("feedback import: failed to set importance")
+	}
+
+	log.Info().Int64("id", id).Str("title", obs.Title).Str("source", req.SourceFile).Msg("feedback import: stored rule")
+
+	writeJSON(w, map[string]any{
+		"status":      "imported",
+		"id":          id,
+		"title":       obs.Title,
+		"source_file": req.SourceFile,
+	})
 }

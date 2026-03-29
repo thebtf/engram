@@ -58,12 +58,12 @@ graph TB
             SM["Search Manager<br/>• Cache (30s TTL, 200 max)<br/>• Singleflight dedup<br/>• Cache warming<br/>• Latency tracking"]
 
             subgraph "Hybrid Search"
-                BM25["BM25 FTS5<br/>SQLite full-text"]
-                VEC["Vector Cosine<br/>pgvector / sqlite-vec"]
+                BM25["BM25 FTS<br/>PostgreSQL tsvector"]
+                VEC["Vector Cosine<br/>pgvector"]
                 RRF_MERGE["RRF Merge<br/>Reciprocal Rank Fusion"]
             end
 
-            RERANK["Reranker<br/>⚠ DEAD on Windows<br/>(ONNX runtime absent)"]
+            RERANK["Reranker<br/>API-based cross-encoder"]
             STALE["Staleness Check<br/>background verification"]
             CLUSTER["Deduplication<br/>cosine clustering"]
         end
@@ -111,7 +111,6 @@ graph TB
 
             subgraph "Vector Store"
                 PG["pgvector<br/>(PostgreSQL)<br/>1536-dim embeddings"]
-                SV["sqlite-vec<br/>(local fallback)"]
                 VSYNC["Vector Sync<br/>async embedding<br/>retry + backoff"]
             end
         end
@@ -195,7 +194,6 @@ graph TB
 
     %% Vector store connections
     VEC --> PG
-    VEC --> SV
     VSYNC --> PG
     PG --> PG_EXT
 
@@ -217,11 +215,11 @@ graph TB
     classDef storage fill:#da77f2,stroke:#7048e8,color:#000
     classDef bg fill:#a9e34b,stroke:#5c940d,color:#000
 
-    class RERANK dead
+    class RERANK pipeline
     class OAI,PG_EXT external
     class WK,MCP_STDIO,MCP_SSE,MCP_PROXY entry
     class L0,QE,RRF_MERGE pipeline
-    class OBS_STORE,SESS_STORE,SUM_STORE,REL_STORE,PAT_STORE,PG,SV storage
+    class OBS_STORE,SESS_STORE,SUM_STORE,REL_STORE,PAT_STORE,PG storage
     class DECAY,ASSOC,FORGET bg
 ```
 
@@ -241,7 +239,7 @@ Claude Code tool call
           • ExtractFilePaths (path extraction from input/output)
           • ExtractFacts (key-value pairs from tool output)
         → Store raw event (source of truth)
-        → Store observation (SQLite + FTS5)
+        → Store observation (PostgreSQL + tsvector FTS)
         → Async: embed observation → sync to pgvector
 ```
 
@@ -255,10 +253,10 @@ Search query (MCP tool or HTTP API)
     • Optional: vocabulary expansion from known concepts
   → Search Manager (cache check, singleflight dedup):
     → Parallel:
-      • BM25 FTS5 (SQLite full-text search)
+      • BM25 FTS (PostgreSQL tsvector full-text search)
       • Vector cosine similarity (pgvector)
     → RRF Merge (Reciprocal Rank Fusion, weighted dedup)
-    → [Reranker — currently DEAD on Windows]
+    → Reranker (API-based cross-encoder)
     → Staleness Check (verify file references still exist)
     → Deduplication (cosine clustering, remove near-duplicates)
   → Return ranked observations
@@ -304,15 +302,14 @@ Scheduler runs 3 independent cycles:
 | `internal/pipeline` | Level 0 deterministic extraction | `ClassifyEvent()`, `GenerateTitle()` |
 | `internal/search` | Search manager with caching | `Manager`, `SearchMetrics` |
 | `internal/search/expansion` | Query intent + expansion | `Expander`, `ExpandedQuery` |
-| `internal/embedding` | OpenAI embedding client | `Service` |
-| `internal/reranking` | Cross-encoder reranking (ONNX, dead) | `Service` |
+| `internal/embedding` | OpenAI-compatible REST embedding client | `Service` |
+| `internal/reranking` | API-based cross-encoder reranking | `Service` |
 | `internal/consolidation` | Memory lifecycle scheduler | `Scheduler`, `AssociationEngine` |
 | `internal/scoring` | Relevance formula | `RelevanceCalculator`, `Calculator` |
 | `internal/pattern` | Pattern detection | `Detector` |
-| `internal/db/gorm` | SQLite data layer (GORM) | `Store`, `ObservationStore`, etc. |
+| `internal/db/gorm` | PostgreSQL data layer (GORM) | `Store`, `ObservationStore`, etc. |
 | `internal/vector` | Vector store interface | `Client` |
 | `internal/vector/pgvector` | pgvector implementation + sync | `Sync` |
-| `internal/vector/sqlitevec` | sqlite-vec fallback | `Client` |
 | `internal/privacy` | Secret/PII stripping | `Stripper` |
 | `internal/config` | Configuration management | `Config` |
 | `pkg/models` | Shared domain models | `Observation`, `ObservationRelation` |

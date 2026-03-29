@@ -237,7 +237,19 @@ function detectUtilitySignal(obs, assistantTextLower) {
 }
 
 async function handleStop(ctx, input) {
+  // Diagnostic: file-based marker to prove hook was called (HTTP may fail, file won't)
+  const fs = require('fs');
+  const markerPath = require('path').join(require('os').tmpdir(), 'engram-stop-hook-marker.txt');
+  try {
+    const prev = fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf8') : '';
+    fs.writeFileSync(markerPath, prev + `${new Date().toISOString()} session=${ctx.SessionID || 'unknown'}\n`);
+  } catch {}
+
   console.error(`[stop] Raw input: ${String(ctx.RawInput || '')}`);
+
+  // Diagnostic: leave a trace in server access log to prove hook was called
+  lib.requestGet('/api/health').catch(() => {});
+  console.error(`[stop] Hook invoked for session=${ctx.SessionID || 'unknown'}`);
 
   let sessionResult;
   try {
@@ -245,11 +257,13 @@ async function handleStop(ctx, input) {
       `/api/sessions?claudeSessionId=${encodeURIComponent(ctx.SessionID)}`
     );
   } catch (error) {
+    console.error(`[stop] Session lookup failed: ${error.message} (sessionId=${ctx.SessionID})`);
     return '';
   }
 
   const sessionID = Number(sessionResult && sessionResult.id);
   if (!Number.isFinite(sessionID)) {
+    console.error(`[stop] No valid session found for claudeSessionId=${ctx.SessionID} (result=${JSON.stringify(sessionResult)})`);
     return '';
   }
 
@@ -320,13 +334,13 @@ async function handleStop(ctx, input) {
     console.error(`[stop] session index failed: ${err.message}`);
   }
 
-  // Detect utility signals for injected observations
+  // Detect utility signals using retrospective injection API (single enriched call)
   try {
-    const injectedResult = await lib.requestGet(
-      `/api/sessions/${sessionID}/injected-observations`
+    const injectionsResp = await lib.requestGet(
+      `/api/sessions/${sessionID}/injections`
     );
-    const injectedObs = Array.isArray(injectedResult && injectedResult.observations)
-      ? injectedResult.observations
+    const injectedObs = Array.isArray(injectionsResp && injectionsResp.injections)
+      ? injectionsResp.injections
       : [];
 
     if (injectedObs.length > 0 && messages.length > 0) {
@@ -337,21 +351,118 @@ async function handleStop(ctx, input) {
       const assistantTextLower = assistantText.toLowerCase();
 
       for (const obs of injectedObs) {
-        if (!obs || typeof obs !== 'object' || typeof obs.id !== 'number') continue;
+        if (!obs || typeof obs !== 'object') continue;
+        const obsId = typeof obs.observation_id === 'number' ? obs.observation_id : 0;
+        if (obsId <= 0) continue;
 
         const signal = detectUtilitySignal(obs, assistantTextLower);
         if (signal === 'ignored') continue;
 
-        lib.requestPost(`/api/observations/${obs.id}/utility`, { signal }, 3000).catch((err) => {
-          console.error(`[stop] utility signal failed for obs ${obs.id}: ${err.message}`);
+        lib.requestPost(`/api/observations/${obsId}/utility`, { signal }, 3000).catch((err) => {
+          console.error(`[stop] utility signal failed for obs ${obsId}: ${err.message}`);
         });
       }
 
-      console.error(`[stop] Checked ${injectedObs.length} injected observations for utility signals`);
+      console.error(`[stop] Checked ${injectedObs.length} injected observations for utility signals (retrospective API)`);
     }
   } catch (error) {
     console.error(`[stop] Warning: utility signal detection failed: ${error.message}`);
   }
+
+  // Detect manual search feedback: if agent used engram search tools during session,
+  // it means injected context was insufficient for those queries (FR-20).
+  try {
+    if (messages.length > 0) {
+      const searchToolPatterns = [
+        'engram__search', 'engram__decisions', 'engram__find_by_file',
+        'engram__find_by_concept', 'engram__how_it_works', 'engram__recall_memory',
+      ];
+      const assistantFullText = messages
+        .filter((m) => m.role === 'assistant')
+        .map((m) => m.text)
+        .join('\n')
+        .toLowerCase();
+
+      const manualSearchDetected = searchToolPatterns.some(
+        (pattern) => assistantFullText.includes(pattern)
+      );
+
+      if (manualSearchDetected) {
+        const project = typeof ctx.Project === 'string' ? ctx.Project : '';
+        lib
+          .requestPost('/api/observations/feedback/insufficient-injection', {
+            session_id: sessionID,
+            project: project,
+            signal: 'insufficient_injection',
+          }, 3000)
+          .catch((err) => {
+            console.error(`[stop] insufficient_injection signal failed: ${err.message}`);
+          });
+        console.error('[stop] Detected manual engram search — sent insufficient_injection signal');
+      }
+    }
+  } catch (error) {
+    console.error(`[stop] Warning: manual search detection failed: ${error.message}`);
+  }
+
+  // Record session outcome for closed-loop learning (FR-1).
+  // Heuristic from hook-accumulated signals — no transcript content parsing (NFR-4).
+  try {
+    let outcome = 'abandoned';
+    let reason = 'no observations stored during session';
+
+    // Read signal counters accumulated by post-tool-use hook during this session
+    const signals = lib.getSessionSignals(ctx.SessionID);
+    const commitCount = signals.commits || 0;
+    const prCount = signals.prs || 0;
+    const errorCount = signals.errors || 0;
+
+    console.error(
+      `[stop] Session signals: commits=${commitCount}, errors=${errorCount}, observations=${signals.observations || 0}`
+    );
+
+    // Check observations created during this session
+    const sessionObs = await lib.requestGet(
+      `/api/observations?limit=100&offset=0`
+    );
+    const observations = Array.isArray(sessionObs && sessionObs.observations)
+      ? sessionObs.observations
+      : [];
+
+    if (observations.length > 0) {
+      // Check for bugfix/feature type observations (success signal)
+      const hasActionableObs = observations.some(
+        (o) => o.type === 'bugfix' || o.type === 'feature'
+      );
+      if (hasActionableObs) {
+        outcome = 'success';
+        reason = 'session produced bugfix or feature observations';
+      } else if (commitCount > 0 || prCount > 0) {
+        // Upgrade partial to success when commits/PRs were detected
+        outcome = 'success';
+        reason = `session has commits=${commitCount}, prs=${prCount}`;
+      } else {
+        outcome = 'partial';
+        reason = 'session has observations but no bugfix/feature activity';
+      }
+    } else if (commitCount > 0 || prCount > 0) {
+      // No observations but commits were made — still a productive session
+      outcome = 'partial';
+      reason = `session produced commits=${commitCount}, prs=${prCount} but no observations`;
+    }
+
+    await lib.requestPost(
+      `/api/sessions/${sessionID}/outcome`,
+      { outcome, reason },
+      5000
+    );
+    console.error(`[stop] Session outcome recorded: ${outcome}`);
+  } catch (error) {
+    console.error(`[stop] Warning: outcome recording failed: ${error.message}`);
+  }
+
+  // Clean up signal file now that the session is complete
+  lib.clearSessionSignals(ctx.SessionID);
 
   return '';
 }

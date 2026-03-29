@@ -10,8 +10,7 @@ This document captures non-obvious behaviors, operational risks, and integration
 
 The `vectors` and `content_chunks` tables are created with `vector(384)` in migration `006` and `017` respectively. This dimension is hardcoded as DDL — GORM cannot change it without dropping and recreating the table.
 
-- Default ONNX provider (BGE-v1.5): produces **384-dim** vectors — compatible.
-- OpenAI `text-embedding-3-small`: produces **1536-dim** vectors — **incompatible**.
+- OpenAI `text-embedding-3-small` (default): produces **1536-dim** vectors — **incompatible** with the hardcoded `vector(384)` schema.
 
 If you switch `EMBEDDING_PROVIDER=openai` after initial setup without recreating the tables, all vector upserts will fail with a pgvector dimension error.
 
@@ -162,7 +161,7 @@ if len(ftsList) >= 2 &&
 
 The Makefile builds with `-tags "fts5"` and `CGO_ENABLED=1`. These were required for SQLite FTS5 in the upstream version. The PostgreSQL fork still uses these flags because `internal/db/gorm/sqlite_build.go` conditionally compiles some SQLite-related code.
 
-**Effect:** The build still requires CGO and ONNX runtime libraries (downloaded by `make setup-libs`). Build without CGO will fail.
+**Effect:** The build still uses these flags for compatibility with test files that carry the `fts5` build tag. CGO is required for tests but not for the main build.
 
 ---
 
@@ -235,10 +234,8 @@ The worker serves MCP over both SSE (`/sse`) and Streamable HTTP (`/mcp`) transp
 
 ---
 
-## ONNX Runtime Libraries Required at Build Time
+## Embedding Provider Is OpenAI-Only
 
-**Severity: BUILD CONCERN**
+**Severity: INFORMATIONAL**
 
-Local embeddings (`EMBEDDING_PROVIDER=builtin`) require platform-specific ONNX runtime shared libraries. The Makefile downloads these via `make setup-libs` before building. If the download fails or the libraries are not present in the expected path, the build will fail.
-
-The libraries are platform-specific (darwin_amd64, darwin_arm64, linux_amd64, linux_arm64, windows_amd64) and must match the target platform.
+The ONNX/builtin embedding provider has been removed. Only the OpenAI-compatible REST API provider (`EMBEDDING_PROVIDER=openai`) is available. The `ENGRAM_EMBEDDING_MODEL` config field and `DefaultEmbeddingModel` constant are legacy remnants and are not used by the embedding service.

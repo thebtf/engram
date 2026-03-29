@@ -10,6 +10,8 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // EnsureSessionExists creates a session if it doesn't exist.
@@ -98,4 +100,18 @@ func ParsePaginationParams(r *http.Request, defaultLimit int) PaginationParams {
 		Limit:  ParseLimitParam(r, defaultLimit),
 		Offset: ParseOffsetParam(r),
 	}
+}
+
+// ToModelObservation converts a GORM Observation to pkg/models.Observation.
+// This exported wrapper allows packages outside the gorm package to perform the
+// conversion without directly importing the private toModelObservation function.
+func ToModelObservation(o *Observation) *models.Observation {
+	return toModelObservation(o)
+}
+
+// ToModelRelations converts a slice of GORM ObservationRelation to pkg/models.ObservationRelation.
+// This exported wrapper is provided for use by maintenance and other packages that
+// need to convert raw GORM rows without going through RelationStore methods.
+func ToModelRelations(relations []ObservationRelation) []*models.ObservationRelation {
+	return toModelRelations(relations)
 }

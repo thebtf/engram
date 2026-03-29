@@ -69,10 +69,10 @@ graph TB
 | **Консолидация памяти** | Ежедневное затухание, ежедневные ассоциации, ежеквартальное забывание |
 | **17 типов связей** | Граф знаний: causes, fixes, supersedes, contradicts, explains, shares_theme... |
 | **Индексация сессий** | JSONL-парсер с изоляцией по рабочим станциям, инкрементальная индексация |
-| **Коллекции** | Базы знаний с YAML-конфигурацией и интеллектуальным разбиением (Markdown, Go, Python, TypeScript через tree-sitter) |
+| **Коллекции** | Базы знаний с YAML-конфигурацией и интеллектуальным разбиением (Markdown, Go) |
 | **MCP-транспорты** | SSE + Streamable HTTP (`POST /mcp`) на одном порту |
-| **Embedding** | Локальный ONNX BGE (384D) или OpenAI-совместимый REST API |
-| **Кросс-энкодерное переранжирование** | ONNX-реранкер для повышения качества поиска |
+| **Embedding** | OpenAI-совместимый REST API |
+| **Кросс-энкодерное переранжирование** | API-реранкер для повышения качества поиска |
 | **Token-аутентификация** | Bearer-аутентификация для всех эндпоинтов |
 | **Импорт инстинктов** | Импорт ECC-инстинктов как наблюдений-руководств с семантической дедупликацией |
 | **Самообучение** | Обнаружение сигналов полезности в рамках сессии для адаптивной памяти |
@@ -234,7 +234,7 @@ Hooks написаны на JavaScript и поставляются вместе 
 | `WORKER_PORT` | `37777` | Порт worker |
 | `WORKER_HOST` | `0.0.0.0` | Адрес привязки worker |
 | `API_TOKEN` | — | Bearer-токен (рекомендуется для удалённого доступа) |
-| `EMBEDDING_PROVIDER` | `onnx` | `onnx` (локальный BGE) или `openai` (REST API) |
+| `EMBEDDING_PROVIDER` | `openai` | `openai` (OpenAI-совместимый REST API) |
 | `EMBEDDING_BASE_URL` | — | URL OpenAI-совместимого эндпоинта |
 | `EMBEDDING_API_KEY` | — | API-ключ для OpenAI-провайдера |
 | `EMBEDDING_MODEL_NAME` | — | Имя модели для OpenAI-провайдера |
@@ -454,16 +454,16 @@ cmd/
   worker/             HTTP API + MCP SSE + MCP Streamable HTTP + панель управления
   hooks/              Hooks жизненного цикла Claude Code (устаревшие Go, см. plugin/hooks/)
 internal/
-  chunking/           AST-aware разбиение документов (md, Go, Python, TS)
+  chunking/           AST-aware разбиение документов (Markdown, Go)
   collections/        YAML-конфигурация коллекций + маршрутизация контекста
   instincts/          Парсер инстинктов и импорт
   config/             Управление конфигурацией
   consolidation/      Затухание, ассоциации, забывание
   db/gorm/            PostgreSQL-хранилища + автоматические миграции
-  embedding/          ONNX BGE + OpenAI REST провайдеры
+  embedding/          OpenAI-совместимый REST провайдер
   graph/              Обход графа в памяти (CSR)
   mcp/                MCP-протокол (сервер, SSE, Streamable HTTP)
-  reranking/          ONNX кросс-энкодерный реранкер
+  reranking/          API кросс-энкодерный реранкер
   scoring/            Оценка важности + релевантности
   search/             Гибридный поиск + RRF-слияние
   sessions/           JSONL-парсер + индексатор

@@ -31,6 +31,12 @@ export interface ContextInjectResponse {
 
 export interface ContextSearchResponse {
   observations: Observation[];
+  /**
+   * Observations flagged always_inject=true in the server config.
+   * These are behavioral rules that must be rendered in every context injection
+   * regardless of query relevance.
+   */
+  always_inject?: Observation[];
 }
 
 export interface SessionInitResponse {
@@ -70,6 +76,19 @@ export interface BulkDeleteResponse {
   deleted: number;
 }
 
+/** A single observation returned by the decisions search endpoint. */
+export interface DecisionSearchObservation {
+  title?: string;
+  narrative?: string;
+  concepts?: string[];
+  rejected?: string[];
+}
+
+/** Response from POST /api/decisions/search. */
+export interface DecisionSearchResponse {
+  observations: DecisionSearchObservation[];
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -94,15 +113,18 @@ export class EngramRestClient {
 
   /**
    * Fetch session context for injection (static session-level context).
-   * GET /api/context/inject?agent_id={id}&cwd={cwd}
+   * POST /api/context/inject
    */
   async getContextInject(
     agentId: string,
     cwd?: string,
   ): Promise<ContextInjectResponse | null> {
-    const params = new URLSearchParams({ agent_id: agentId });
-    if (cwd) params.set('cwd', cwd);
-    return this.get<ContextInjectResponse>(`/api/context/inject?${params.toString()}`);
+    // Inject returns large payloads (80KB+) with vector search — needs more than default 5s.
+    // Timeout failures here trigger availability cooldown, blocking ALL engram tools for 60s.
+    return this.post<ContextInjectResponse>('/api/context/inject', {
+      agent_id: agentId,
+      ...(cwd ? { cwd } : {}),
+    }, 15_000);
   }
 
   /**
@@ -114,8 +136,36 @@ export class EngramRestClient {
     query: string;
     cwd?: string;
     agent_id?: string;
+    /** Source identifier passed through to the server for analytics/routing. */
+    source?: string;
+    /** Search preset: decisions, changes, how_it_works. */
+    preset?: string;
   }): Promise<ContextSearchResponse | null> {
-    return this.post<ContextSearchResponse>('/api/context/search', body);
+    // Context search does vector query (embedding + pgvector) — needs more than default 5s.
+    return this.post<ContextSearchResponse>('/api/context/search', body, 15_000);
+  }
+
+  /**
+   * Search for relevant decisions.
+   * POST /api/decisions/search
+   */
+  async searchDecisions(body: {
+    query: string;
+    project: string;
+    limit?: number;
+  }): Promise<DecisionSearchResponse | null> {
+    return this.post('/api/decisions/search', body);
+  }
+
+  /**
+   * Track a search miss for self-tuning analytics.
+   * POST /api/analytics/search-misses (fire-and-forget)
+   */
+  async trackSearchMiss(body: {
+    project: string;
+    query: string;
+  }): Promise<void> {
+    void this.post('/api/analytics/search-misses', body, 3000);
   }
 
   /**
@@ -128,6 +178,8 @@ export class EngramRestClient {
     tool_name: string;
     tool_input: string;
     tool_result: string;
+    /** Source identifier passed through to the server for analytics/routing. */
+    source?: string;
   }): Promise<void> {
     void this.post('/api/events/ingest', body, 3000);
   }
@@ -188,11 +240,15 @@ export class EngramRestClient {
    * Bulk-import observations.
    * POST /api/observations/bulk-import
    *
-   * Server expects: { project, observations: [{ type, title, narrative, scope, concepts }] }
+   * Server expects: { project, session_id?, observations: [{ type, title, narrative, scope, concepts }] }
    * Client uses:    { content → narrative, tags → concepts }
+   *
+   * Passing sessionId reuses the caller's existing session instead of creating a new
+   * synthetic one per call, preventing phantom session proliferation.
    */
   async bulkImport(
     observations: BulkObservationInput[],
+    sessionId?: string,
   ): Promise<BulkImportResponse | null> {
     if (observations.length === 0) return { imported: 0, skipped_duplicates: 0 };
 
@@ -209,6 +265,7 @@ export class EngramRestClient {
 
     return this.post<BulkImportResponse>('/api/observations/bulk-import', {
       project,
+      ...(sessionId ? { session_id: sessionId } : {}),
       observations: mapped,
     });
   }
@@ -220,6 +277,18 @@ export class EngramRestClient {
    * The server has no dedicated bulk-delete endpoint. Archiving is the closest
    * equivalent — it removes observations from search results and context injection.
    */
+  /**
+   * Suppress an observation (reversible soft-hide from search results).
+   * POST /api/observations/bulk-status { action: "suppress", ids: [id] }
+   */
+  async suppressObservation(id: number): Promise<boolean> {
+    const resp = await this.post<{ updated: number }>('/api/observations/bulk-status', {
+      action: 'suppress',
+      ids: [id],
+    });
+    return resp != null && resp.updated > 0;
+  }
+
   async bulkDelete(ids: string[]): Promise<BulkDeleteResponse | null> {
     const numericIds = ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
     if (numericIds.length === 0) return { deleted: 0 };
@@ -230,6 +299,98 @@ export class EngramRestClient {
     );
     if (!resp) return null;
     return { deleted: resp.updated };
+  }
+
+  /**
+   * Rate an observation as useful or not useful.
+   * POST /api/observations/{id}/feedback { feedback: 1 or -1 }
+   */
+  async rateObservation(id: number, useful: boolean): Promise<boolean> {
+    const resp = await this.post<{ success: boolean }>(
+      `/api/observations/${id}/feedback`,
+      { feedback: useful ? 1 : -1 },
+    );
+    return resp != null;
+  }
+
+  /**
+   * Record session outcome for closed-loop learning.
+   * POST /api/sessions/{sessionId}/outcome { outcome, reason }
+   * sessionId is the Claude session ID string (not numeric DB ID).
+   */
+  async setSessionOutcome(
+    sessionId: string,
+    outcome: string,
+    reason?: string,
+  ): Promise<boolean> {
+    const resp = await this.post<{ success: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/outcome`,
+      { outcome, reason: reason ?? '' },
+      3000,
+    );
+    return resp != null;
+  }
+
+  /**
+   * Get file-context observations for a specific file.
+   * GET /api/context/by-file?path={file}&project={project}&limit={limit}
+   */
+  async getFileContext(
+    file: string,
+    project: string,
+    limit = 5,
+    timeoutMs = 3000,
+  ): Promise<Observation[]> {
+    const params = new URLSearchParams({ path: file, project, limit: String(limit) });
+    const resp = await this.get<{ observations: Observation[] }>(
+      `/api/context/by-file?${params.toString()}`,
+      timeoutMs,
+    );
+    return resp?.observations ?? [];
+  }
+
+  /**
+   * Get timeline of observations.
+   * POST /api/context/search with timeline params.
+   */
+  async getTimeline(
+    project: string,
+    mode: 'recent' | 'anchor' | 'query',
+    params?: { query?: string; anchor_id?: number; limit?: number },
+  ): Promise<Observation[]> {
+    const body: Record<string, unknown> = { project, mode };
+    if (params?.query) body.query = params.query;
+    if (params?.anchor_id) body.anchor_id = params.anchor_id;
+    if (params?.limit) body.limit = params.limit;
+    const resp = await this.post<{ observations: Observation[] }>('/api/context/search', body, 15_000);
+    return resp?.observations ?? [];
+  }
+
+  /**
+   * Store an encrypted credential in the vault.
+   * POST /api/vault/credentials { name, value, scope, project }
+   */
+  async storeCredential(
+    name: string,
+    value: string,
+    scope: string,
+    project?: string,
+  ): Promise<boolean> {
+    const resp = await this.post<{ success: boolean }>('/api/vault/credentials', {
+      name,
+      value,
+      scope,
+      project: project ?? '',
+    });
+    return resp != null;
+  }
+
+  /**
+   * Retrieve and decrypt a credential from the vault.
+   * GET /api/vault/credentials/{name}
+   */
+  async getCredential(name: string): Promise<{ name: string; value: string } | null> {
+    return this.get<{ name: string; value: string }>(`/api/vault/credentials/${encodeURIComponent(name)}`);
   }
 
   /** Returns true if the server is currently considered reachable. */
@@ -268,6 +429,7 @@ export class EngramRestClient {
     const timeout = timeoutMs ?? this.defaultTimeoutMs;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
+    const startMs = Date.now();
 
     try {
       const headers: Record<string, string> = {
@@ -285,8 +447,10 @@ export class EngramRestClient {
       });
 
       const text = await response.text();
+      const elapsedMs = Date.now() - startMs;
+
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}: ${text}`);
+        throw new Error(`HTTP ${response.status} ${response.statusText} (${elapsedMs}ms): ${text.slice(0, 200)}`);
       }
 
       this.availability.recordSuccess();
@@ -294,9 +458,14 @@ export class EngramRestClient {
       if (!text) return null;
       return JSON.parse(text) as T;
     } catch (err: unknown) {
+      const elapsedMs = Date.now() - startMs;
       this.availability.recordFailure();
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[engram] ${method} ${path} failed: ${msg}`);
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      console.error(
+        `[engram] ${method} ${path} failed after ${elapsedMs}ms` +
+        `${isAbort ? ` (timeout=${timeout}ms)` : ''}: ${msg}`,
+      );
       return null;
     } finally {
       clearTimeout(timer);
