@@ -1945,6 +1945,40 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil // Cannot undo keyword-based backfill
 		},
 	},
+	{
+		ID: "064_backfill_missing_concepts",
+		Migrate: func(tx *gorm.DB) error {
+			updates := []struct {
+				concept  string
+				keywords []string
+			}{
+				{"why-it-exists", []string{"rationale", "reason", "purpose", "motivation", "justification", "because", "in order to"}},
+				{"what-changed", []string{"changed", "updated", "modified", "migrated", "upgraded", "deprecated", "removed", "added new"}},
+				{"anti-pattern", []string{"anti-pattern", "antipattern", "bad practice", "should not", "forbidden", "prohibited", "never do"}},
+				{"gotcha", []string{"gotcha", "unexpected", "surprising", "counterintuitive", "pitfall", "trap", "caveat", "watch out"}},
+				{"trade-off", []string{"trade-off", "tradeoff", "versus", "vs ", "pros and cons", "downside", "compromise", "at the cost of"}},
+			}
+
+			for _, u := range updates {
+				for _, kw := range u.keywords {
+					tx.Exec(`
+						UPDATE observations
+						SET concepts = CASE
+							WHEN concepts IS NULL OR concepts = '[]' OR concepts = 'null'
+							THEN '["` + u.concept + `"]'::jsonb
+							ELSE concepts || '["` + u.concept + `"]'::jsonb
+						END
+						WHERE (concepts IS NULL OR concepts = '[]' OR concepts = 'null' OR NOT concepts @> '["` + u.concept + `"]'::jsonb)
+						AND (COALESCE(title, '') || ' ' || COALESCE(narrative, '')) ILIKE '%` + kw + `%'
+					`)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

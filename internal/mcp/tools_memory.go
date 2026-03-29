@@ -59,7 +59,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 	if params.Content == "" {
-		return "", fmt.Errorf("content is required")
+		return "", fmt.Errorf("content is required for store_memory")
 	}
 	if params.Importance != nil && (*params.Importance < 0 || *params.Importance > 1) {
 		return "", fmt.Errorf("importance must be between 0 and 1")

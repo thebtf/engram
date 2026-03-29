@@ -567,7 +567,7 @@ func (p *Processor) ProcessSummary(ctx context.Context, sessionDBID int64, sdkSe
 	}
 
 	// Third fallback: use the session's initial user prompt
-	if !hasMeaningfulContent(lastAssistantMsg) && userPrompt != "" && len(strings.TrimSpace(userPrompt)) >= 50 {
+	if !hasMeaningfulContent(lastAssistantMsg) && userPrompt != "" && len(strings.TrimSpace(userPrompt)) >= 10 {
 		lastAssistantMsg = "Session started with user request: " + userPrompt
 		log.Debug().
 			Int64("sessionId", sessionDBID).

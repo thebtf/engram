@@ -178,6 +178,11 @@ export interface BeforePromptBuildEvent extends BaseHookEvent {
   messages?: unknown[];
 }
 
+export interface BeforeToolCallEvent extends BaseHookEvent {
+  toolName?: string;
+  toolInput?: unknown;
+}
+
 export interface AfterToolCallEvent extends BaseHookEvent {
   toolName?: string;
   toolInput?: unknown;
@@ -214,13 +219,18 @@ export interface SessionStartResult {
   appendSystemContext?: string;
 }
 
-export type HookResult = void | PromptBuildResult | SessionStartResult | BeforeAgentStartResult | undefined;
+export interface BeforeToolCallResult {
+  appendSystemContext?: string;
+}
+
+export type HookResult = void | PromptBuildResult | SessionStartResult | BeforeAgentStartResult | BeforeToolCallResult | undefined;
 
 /** Map hook names to their event types (for hooks we use). */
 export interface HookEventMap {
   session_start: SessionStartEvent;
   before_agent_start: BeforeAgentStartEvent;
   before_prompt_build: BeforePromptBuildEvent;
+  before_tool_call: BeforeToolCallEvent;
   after_tool_call: AfterToolCallEvent;
   before_compaction: BeforeCompactionEvent;
   session_end: SessionEndEvent;
