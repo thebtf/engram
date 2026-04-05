@@ -87,13 +87,20 @@ async function handleUserPrompt(ctx, input) {
     // Do NOT re-inject them here — it wastes ~4K tokens per prompt.
     // Only technical observations go into <relevant-memory> below.
 
-    if (technicalObs.length > 0) {
+    // Filter out observations with negligible similarity (noise from global scope leak)
+    const MIN_SIMILARITY = 0.10;
+    const relevantObs = technicalObs.filter(obs => {
+      const sim = typeof obs.similarity === 'number' ? obs.similarity : 0;
+      return sim >= MIN_SIMILARITY;
+    });
+
+    if (relevantObs.length > 0) {
       // Sort by similarity score (highest first)
-      technicalObs.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+      relevantObs.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
 
       // Dedup by title word overlap (>80% Jaccard = near-duplicate)
       const dedupedObs = [];
-      for (const obs of technicalObs) {
+      for (const obs of relevantObs) {
         const title = asString(obs.title).toLowerCase();
         const words = new Set(title.split(/\s+/).filter(w => w.length > 2));
         let isDup = false;

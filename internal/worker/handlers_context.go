@@ -234,7 +234,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	// Try vector search first if available
 	var vectorSearchFailed bool
 	if s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, project, true)
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false)
 
 		// Search with each expanded query and merge results
 		// Pre-allocate with estimated capacity to avoid repeated reallocation
@@ -596,7 +596,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	if alwaysInjectLimit <= 0 {
 		alwaysInjectLimit = 20
 	}
-	alwaysInjectObs, aiErr := s.observationStore.GetAlwaysInjectObservations(r.Context(), alwaysInjectLimit)
+	alwaysInjectObs, aiErr := s.observationStore.GetAlwaysInjectObservations(r.Context(), project, alwaysInjectLimit)
 	if aiErr != nil {
 		log.Debug().Err(aiErr).Msg("Failed to fetch always-inject observations for search")
 	}
@@ -701,7 +701,7 @@ func (s *Service) handleFileContext(w http.ResponseWriter, r *http.Request) {
 			// Build search query from file path
 			query := buildFileQuery(file)
 
-			where := vector.BuildWhereFilter(vector.DocTypeObservation, project, true)
+			where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false)
 			vectorResults, vecErr := s.vectorClient.Query(ctx, query, limit*2, where)
 			if vecErr != nil {
 				log.Warn().Err(vecErr).Str("file", file).Msg("Vector search failed for file context")
@@ -1192,7 +1192,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	var relevantObservations []*models.Observation
 	if s.vectorClient != nil && s.vectorClient.IsConnected() {
 		query := project + " code development"
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, project, true)
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false)
 
 		vectorResults, vecErr := s.vectorClient.Query(ctx, query, 20, where)
 		if vecErr != nil {
@@ -1282,7 +1282,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	if alwaysInjectLimit <= 0 {
 		alwaysInjectLimit = 20
 	}
-	alwaysInjectRaw, aiErr := s.observationStore.GetAlwaysInjectObservations(ctx, alwaysInjectLimit)
+	alwaysInjectRaw, aiErr := s.observationStore.GetAlwaysInjectObservations(ctx, project, alwaysInjectLimit)
 	if aiErr != nil {
 		log.Debug().Err(aiErr).Msg("Failed to fetch always-inject observations")
 	} else {

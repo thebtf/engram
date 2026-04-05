@@ -206,8 +206,19 @@ func ApplyCompositeScoring(observations []*models.Observation, similarityScores 
 			feedbackBoost = 2.0
 		}
 
+		// Effectiveness multiplier: Bayesian trust score from injection outcomes.
+		// Formula: (successes + α) / (injections + α + β) with neutral prior α=1, β=1.
+		// New observations (0 injections) score 0.5 (neutral). Well-used observations
+		// converge toward their true success rate. No minimum injection gate needed.
+		effectivenessMultiplier := 1.0
+		if obs.EffectivenessInjections > 0 {
+			bayesian := (float64(obs.EffectivenessSuccesses) + 1.0) / (float64(obs.EffectivenessInjections) + 2.0)
+			// Scale: 0.5 = neutral (no effect), >0.5 = boost, <0.5 = penalize
+			effectivenessMultiplier = 0.5 + bayesian
+		}
+
 		// Composite score replaces raw similarity
-		compositeScore := sim * recency * tw * imp * sourceBoost * feedbackBoost
+		compositeScore := sim * recency * tw * imp * sourceBoost * feedbackBoost * effectivenessMultiplier
 		similarityScores[obs.ID] = compositeScore
 	}
 }

@@ -481,15 +481,18 @@ func (s *ObservationStore) GetGuidanceObservations(ctx context.Context, project 
 }
 
 // GetAlwaysInjectObservations retrieves observations tagged with the "always-inject" concept.
-// These are unconditionally injected in every session regardless of similarity matching.
+// Only returns observations scoped to the given project or global scope.
 // Results are ordered by importance_score DESC, limited to the configured cap.
-func (s *ObservationStore) GetAlwaysInjectObservations(ctx context.Context, limit int) ([]*models.Observation, error) {
+func (s *ObservationStore) GetAlwaysInjectObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
 	var dbObservations []Observation
-	err := s.db.WithContext(ctx).
+	q := s.db.WithContext(ctx).
 		Scopes(activeObservationFilter(), importanceOrdering()).
 		Where("concepts @> ?", `["always-inject"]`).
-		Limit(limit).
-		Find(&dbObservations).Error
+		Limit(limit)
+	if project != "" {
+		q = q.Where("(project = ? OR COALESCE(scope, 'project') = 'global')", project)
+	}
+	err := q.Find(&dbObservations).Error
 
 	if err != nil {
 		return nil, err
