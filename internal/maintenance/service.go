@@ -459,6 +459,18 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
+	// Task 20: Adaptive threshold adjustment per project (Learning Memory v3 FR-6)
+	// Reads citation rates from injection_log, adjusts per-project thresholds.
+	// Bounds: [0.15, 0.60]. Window: last 50 sessions per project.
+	if s.observationStore != nil {
+		adjusted, err := s.adjustAdaptiveThresholds(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("Adaptive threshold adjustment failed")
+		} else if adjusted > 0 {
+			s.log.Info().Int("adjusted", adjusted).Msg("Adjusted per-project thresholds from citation data")
+		}
+	}
+
 	// Update metrics
 	s.mu.Lock()
 	s.lastRunTime = time.Now()
@@ -1217,4 +1229,65 @@ func (s *Service) detectAPOCandidates(ctx context.Context) {
 			Int("injections", c.EffectivenessInjections).
 			Msg("APO candidate")
 	}
+}
+
+// adjustAdaptiveThresholds reads citation rates per project and adjusts search thresholds.
+// Projects with low citation rate (< 0.2) get raised threshold (+0.05).
+// Projects with high citation rate (> 0.6) get lowered threshold (-0.05).
+// Bounds: [0.15, 0.60]. Window: last 50 sessions per project.
+// Requires >= 10 sessions to avoid noisy adjustment on sparse data.
+func (s *Service) adjustAdaptiveThresholds(ctx context.Context) (int, error) {
+	// Get distinct projects with injection data
+	var projects []string
+	if err := s.observationStore.GetDB().WithContext(ctx).
+		Raw(`SELECT DISTINCT project FROM injection_log WHERE project != '' LIMIT 100`).
+		Pluck("project", &projects).Error; err != nil {
+		return 0, err
+	}
+
+	psStore := gorm.NewProjectSettingsStore(s.observationStore.GetDB())
+	adjusted := 0
+
+	for _, project := range projects {
+		citationRate, err := s.observationStore.GetCitationRate(ctx, project, 50)
+		if err != nil {
+			s.log.Debug().Err(err).Str("project", project).Msg("Failed to get citation rate")
+			continue
+		}
+
+		// Skip neutral zone (0.2 - 0.6) — no adjustment needed
+		if citationRate >= 0.2 && citationRate <= 0.6 {
+			continue
+		}
+
+		// Determine delta
+		var delta float64
+		if citationRate < 0.2 {
+			delta = 0.05 // raise threshold (be more selective)
+		} else {
+			delta = -0.05 // lower threshold (be more inclusive)
+		}
+
+		// Check current threshold for bounds enforcement
+		current, _ := psStore.GetThreshold(ctx, project)
+		newThreshold := current + delta
+		if newThreshold < 0.15 || newThreshold > 0.60 {
+			continue // would exceed bounds, skip
+		}
+
+		if err := psStore.AdjustThreshold(ctx, project, delta); err != nil {
+			s.log.Warn().Err(err).Str("project", project).Float64("delta", delta).Msg("Failed to adjust threshold")
+			continue
+		}
+
+		s.log.Info().
+			Str("project", project).
+			Float64("citation_rate", citationRate).
+			Float64("delta", delta).
+			Float64("new_threshold", newThreshold).
+			Msg("Adjusted project threshold from citation data")
+		adjusted++
+	}
+
+	return adjusted, nil
 }
