@@ -2011,6 +2011,22 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec("DROP TABLE IF EXISTS reasoning_traces").Error
 		},
 	},
+	// Migration 066: Add cited column to injection_log for citation-based effectiveness tracking.
+	// Learning Memory v3: detectUtilitySignal in stop hook marks which injected observations
+	// were actually cited by the agent. This feeds into PropagateCitation → effectiveness_score.
+	{
+		ID: "066_injection_log_cited_column",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`ALTER TABLE injection_log ADD COLUMN IF NOT EXISTS cited BOOLEAN DEFAULT false`).Error; err != nil {
+				return fmt.Errorf("add cited column: %w", err)
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_injection_log_session_cited ON injection_log(session_id, cited)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`DROP INDEX IF EXISTS idx_injection_log_session_cited`)
+			return tx.Exec(`ALTER TABLE injection_log DROP COLUMN IF EXISTS cited`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

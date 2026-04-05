@@ -157,3 +157,50 @@ func PropagateOutcome(
 
 	return updated, nil
 }
+
+// PropagateCitation updates effectiveness stats based on per-observation citation detection.
+// For each observation in allInjectedIDs: increment effectiveness_injections by 1.
+// For each observation in citedIDs: also increment effectiveness_successes by 1.
+// This provides a per-observation signal independent of session outcome.
+func PropagateCitation(
+	ctx context.Context,
+	obsStore EffectivenessUpdater,
+	citedIDs []int64,
+	allInjectedIDs []int64,
+) (int, error) {
+	if len(allInjectedIDs) == 0 {
+		return 0, nil
+	}
+
+	citedSet := make(map[int64]struct{}, len(citedIDs))
+	for _, id := range citedIDs {
+		citedSet[id] = struct{}{}
+	}
+
+	updated := 0
+	for _, obsID := range allInjectedIDs {
+		addSuccesses := 0
+		if _, wasCited := citedSet[obsID]; wasCited {
+			addSuccesses = 1
+		}
+
+		currentScore, err := obsStore.GetUtilityScore(ctx, obsID)
+		if err != nil {
+			continue
+		}
+
+		// Citation-based delta: cited = +0.03, uncited = -0.01
+		delta := -0.01
+		if addSuccesses > 0 {
+			delta = 0.03
+		}
+		newScore := clamp(currentScore+delta, 0.0, 1.0)
+
+		if err := obsStore.UpdateEffectivenessStats(ctx, obsID, 1, addSuccesses, newScore); err != nil {
+			continue
+		}
+		updated++
+	}
+
+	return updated, nil
+}

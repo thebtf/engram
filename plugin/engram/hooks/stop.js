@@ -350,17 +350,37 @@ async function handleStop(ctx, input) {
         .join('\n');
       const assistantTextLower = assistantText.toLowerCase();
 
+      const citedIds = [];
+      const allInjectedIds = [];
+
       for (const obs of injectedObs) {
         if (!obs || typeof obs !== 'object') continue;
         const obsId = typeof obs.observation_id === 'number' ? obs.observation_id : 0;
         if (obsId <= 0) continue;
 
+        allInjectedIds.push(obsId);
+
         const signal = detectUtilitySignal(obs, assistantTextLower);
+        if (signal !== 'ignored') {
+          citedIds.push(obsId);
+        }
+
         if (signal === 'ignored') continue;
 
         lib.requestPost(`/api/observations/${obsId}/utility`, { signal }, 3000).catch((err) => {
           console.error(`[stop] utility signal failed for obs ${obsId}: ${err.message}`);
         });
+      }
+
+      // Send citation data to mark-cited endpoint (Learning Memory v3)
+      if (allInjectedIds.length > 0) {
+        lib.requestPost(`/api/sessions/${sessionID}/mark-cited`, {
+          cited_ids: citedIds,
+          all_injected_ids: allInjectedIds,
+        }, 5000).catch((err) => {
+          console.error(`[stop] mark-cited failed: ${err.message}`);
+        });
+        console.error(`[stop] Citation signal: ${citedIds.length}/${allInjectedIds.length} cited`);
       }
 
       console.error(`[stop] Checked ${injectedObs.length} injected observations for utility signals (retrospective API)`);

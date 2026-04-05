@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
 )
@@ -799,4 +800,85 @@ func (s *Service) incrementRetrievalCounts(ids []int64) {
 			}
 		}
 	}()
+}
+
+// handleMarkCited godoc
+// @Summary Mark observations as cited in a session
+// @Description Records which injected observations were actually cited by the agent.
+// Updates injection_log.cited=true for cited observations and propagates citation signal
+// to effectiveness_score via PropagateCitation. Idempotent.
+// @Tags Scoring
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param sessionId path int true "Session database ID"
+// @Param body body object true "Citation data: {cited_ids: [1,2], all_injected_ids: [1,2,3,4]}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 503 {string} string "service not ready"
+// @Router /api/sessions/{sessionId}/mark-cited [post]
+func (s *Service) handleMarkCited(w http.ResponseWriter, r *http.Request) {
+	sessionIdStr := chi.URLParam(r, "sessionId")
+	if sessionIdStr == "" {
+		http.Error(w, "session id required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		CitedIDs       []int64 `json:"cited_ids"`
+		AllInjectedIDs []int64 `json:"all_injected_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.AllInjectedIDs) == 0 {
+		writeJSON(w, map[string]any{"status": "ok", "marked": 0, "propagated": 0})
+		return
+	}
+
+	s.initMu.RLock()
+	observationStore := s.observationStore
+	s.initMu.RUnlock()
+
+	if observationStore == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Mark cited observations in injection_log
+	var marked int64
+	if len(req.CitedIDs) > 0 {
+		var err error
+		marked, err = observationStore.MarkCited(r.Context(), sessionIdStr, req.CitedIDs)
+		if err != nil {
+			log.Warn().Err(err).Str("session", sessionIdStr).Msg("Failed to mark cited")
+		}
+	}
+
+	// Propagate citation signal to effectiveness_score (async, non-blocking)
+	capturedCited := req.CitedIDs
+	capturedAll := req.AllInjectedIDs
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		propagated, err := learning.PropagateCitation(bgCtx, observationStore, capturedCited, capturedAll)
+		if err != nil {
+			log.Warn().Err(err).Str("session", sessionIdStr).Msg("Citation propagation failed")
+		} else {
+			log.Info().
+				Str("session", sessionIdStr).
+				Int("cited", len(capturedCited)).
+				Int("total", len(capturedAll)).
+				Int("propagated", propagated).
+				Msg("Citation signal propagated")
+		}
+	}()
+
+	writeJSON(w, map[string]any{
+		"status":     "ok",
+		"marked":     marked,
+		"propagated": len(req.AllInjectedIDs),
+	})
 }

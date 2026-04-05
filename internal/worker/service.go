@@ -1805,6 +1805,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/sessions/{id}/summarize", s.handleSummarize)
 		r.Post("/api/sessions/{id}/extract-learnings", s.handleExtractLearnings)
 		r.Post("/api/sessions/{sessionId}/mark-injected", s.handleSessionMarkInjected)
+		r.Post("/api/sessions/{sessionId}/mark-cited", s.handleMarkCited)
 		r.Get("/api/sessions/{sessionId}/injected-observations", s.handleGetSessionInjectedObservations)
 		r.Post("/api/sessions/{sessionId}/outcome", s.handleSetSessionOutcome)
 		r.Get("/api/learning/effectiveness-distribution", s.handleGetEffectivenessDistribution)
