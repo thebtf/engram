@@ -147,15 +147,19 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			Msg("store_memory: storing global-scoped observation")
 	}
 
-	// Dedup check: skip if very similar observation already exists.
-	// includeGlobal=true so that global observations are considered during dedup.
+	// Contradiction detection + dedup check (Learning Memory v3 FR-7, Mem0 Algorithm 1).
+	// Decision tree: cosine >= 0.92 → NOOP (near-duplicate), 0.75-0.92 → UPDATE (supersede),
+	// < 0.75 → ADD (new observation). Uses existing pgvector HNSW index (~3-5ms).
+	var contradictionAction string // "ADD", "UPDATE", or "NOOP"
+	var supersededID int64
 	if s.vectorClient != nil && s.vectorClient.IsConnected() {
 		where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, true)
-		similar, err := s.vectorClient.Query(ctx, params.Content, 1, where)
-		if err == nil && len(similar) > 0 && similar[0].Similarity >= dedupThreshold {
+		similar, err := s.vectorClient.Query(ctx, params.Content, 5, where)
+		if err == nil && len(similar) > 0 {
+			topSim := similar[0].Similarity
 			existingID := vector.ExtractRowID(similar[0].Metadata)
-			// Don't block on suppressed/archived duplicates — allow re-creation.
-			// Vector index doesn't exclude suppressed observations, so check DB.
+
+			// Check if the match is suppressed/archived — allow re-creation if so.
 			var isSuppressed bool
 			var checkResult struct{ Count int64 }
 			if checkErr := s.observationStore.GetDB().WithContext(ctx).
@@ -163,17 +167,33 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				Scan(&checkResult).Error; checkErr == nil && checkResult.Count > 0 {
 				isSuppressed = true
 			}
+
 			if !isSuppressed {
-				result := map[string]any{
-					"id":        existingID,
-					"duplicate": true,
-					"message":   fmt.Sprintf("Similar observation already exists (similarity: %.2f)", similar[0].Similarity),
+				if topSim >= dedupThreshold { // >= 0.92: NOOP (near-duplicate)
+					contradictionAction = "NOOP"
+					result := map[string]any{
+						"id":        existingID,
+						"action":    "NOOP",
+						"duplicate": true,
+						"message":   fmt.Sprintf("Near-duplicate observation exists (similarity: %.2f)", topSim),
+					}
+					out, _ := json.MarshalIndent(result, "", "  ")
+					return string(out), nil
+				} else if topSim >= 0.75 { // 0.75-0.92: UPDATE (supersede with EVOLVES_FROM)
+					contradictionAction = "UPDATE"
+					supersededID = existingID
+					log.Info().
+						Int64("superseded_id", existingID).
+						Float64("similarity", topSim).
+						Msg("store_memory: superseding existing observation (contradiction zone)")
 				}
-				out, _ := json.MarshalIndent(result, "", "  ")
-				return string(out), nil
+			} else {
+				log.Debug().Int64("existing_id", existingID).Msg("store_memory: skipping dedup — existing observation is suppressed/archived")
 			}
-			log.Debug().Int64("existing_id", existingID).Msg("store_memory: skipping dedup — existing observation is suppressed/archived")
 		}
+	}
+	if contradictionAction == "" {
+		contradictionAction = "ADD"
 	}
 
 	title := params.Title
@@ -204,6 +224,24 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if params.Importance != nil {
 		if err := s.observationStore.UpdateImportanceScore(ctx, id, *params.Importance); err != nil {
 			return "", fmt.Errorf("set importance: %w", err)
+		}
+	}
+
+	// Contradiction resolution: if UPDATE action, mark old observation as superseded (Learning Memory v3 FR-7)
+	if contradictionAction == "UPDATE" && supersededID > 0 {
+		if err := s.observationStore.MarkAsSuperseded(ctx, supersededID); err != nil {
+			log.Warn().Err(err).Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: failed to mark old observation superseded")
+		} else {
+			// Create EVOLVES_FROM relation
+			if s.relationStore != nil {
+				_, _ = s.relationStore.StoreRelation(ctx, &models.ObservationRelation{
+					SourceID:     id,
+					TargetID:     supersededID,
+					RelationType: models.RelationEvolvesFrom,
+					Confidence:   1.0,
+				})
+			}
+			log.Info().Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: superseded old observation with EVOLVES_FROM")
 		}
 	}
 
@@ -251,7 +289,11 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"title":   title,
 		"type":    string(obsType),
 		"scope":   string(scope),
+		"action":  contradictionAction,
 		"message": "Memory stored successfully",
+	}
+	if supersededID > 0 {
+		result["superseded_id"] = supersededID
 	}
 	if ttlApplied {
 		result["ttl_days"] = ttlDays
