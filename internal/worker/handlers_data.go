@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -16,13 +15,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// handleGetObservations returns recent observations.
-// Supports optional query parameter for semantic search via vector store.
-// Supports pagination via limit and offset query parameters.
+// handleGetObservations godoc
+// @Summary List observations
+// @Description Returns recent observations with optional semantic search via vector store. Supports pagination.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param query query string false "Semantic search query"
+// @Param limit query int false "Number of results (default 100)"
+// @Param offset query int false "Pagination offset"
+// @Param concept query string false "Filter by concept (LIKE match on concepts JSON column)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations [get]
 func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) {
 	pagination := gorm.ParsePaginationParams(r, DefaultObservationsLimit)
 	project := r.URL.Query().Get("project")
 	query := r.URL.Query().Get("query")
+	obsType := r.URL.Query().Get("type")
+	status := r.URL.Query().Get("status")
+	memoryType := r.URL.Query().Get("memory_type")
+	concept := r.URL.Query().Get("concept")
 
 	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
@@ -34,6 +49,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	var total int64
 	var err error
 	var usedVector bool
+	searchStart := time.Now()
 
 	// Use vector search if query is provided and vector client is available
 	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
@@ -55,10 +71,10 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	if !usedVector {
 		if project != "" {
 			// Strict project filtering for dashboard - only observations from this project
-			observations, total, err = s.observationStore.GetObservationsByProjectStrictPaginated(r.Context(), project, pagination.Limit, pagination.Offset)
+			observations, total, err = s.observationStore.GetObservationsByProjectStrictPaginated(r.Context(), project, obsType, status, memoryType, concept, pagination.Limit, pagination.Offset)
 		} else {
 			// All projects
-			observations, total, err = s.observationStore.GetAllRecentObservationsPaginated(r.Context(), pagination.Limit, pagination.Offset)
+			observations, total, err = s.observationStore.GetAllRecentObservationsPaginated(r.Context(), obsType, status, memoryType, concept, pagination.Limit, pagination.Offset)
 		}
 	}
 
@@ -74,7 +90,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 
 	// Track search if query was provided
 	if query != "" {
-		s.trackSearchQuery(query, project, "observations", len(observations), usedVector)
+		s.trackSearchQuery(query, project, "observations", len(observations), usedVector, float32(time.Since(searchStart).Milliseconds()))
 	}
 
 	// Return paginated response
@@ -87,8 +103,19 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleGetSummaries returns recent summaries.
-// Supports optional query parameter for semantic search via vector store.
+// handleGetSummaries godoc
+// @Summary List summaries
+// @Description Returns recent session summaries with optional semantic search via vector store.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param query query string false "Semantic search query"
+// @Param limit query int false "Number of results (default 50)"
+// @Success 200 {array} models.SessionSummary
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/summaries [get]
 func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultSummariesLimit)
 	project := r.URL.Query().Get("project")
@@ -140,8 +167,19 @@ func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, summaries)
 }
 
-// handleGetPrompts returns recent user prompts.
-// Supports optional query parameter for semantic search via vector store.
+// handleGetPrompts godoc
+// @Summary List user prompts
+// @Description Returns recent user prompts with optional semantic search via vector store.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param query query string false "Semantic search query"
+// @Param limit query int false "Number of results (default 100)"
+// @Success 200 {array} models.UserPromptWithSession
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/prompts [get]
 func (s *Service) handleGetPrompts(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultPromptsLimit)
 	project := r.URL.Query().Get("project")
@@ -193,8 +231,15 @@ func (s *Service) handleGetPrompts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, prompts)
 }
 
-// handleGetProjects returns all projects.
-// Response is cacheable for 5 minutes since project list changes infrequently.
+// handleGetProjects godoc
+// @Summary List projects
+// @Description Returns all known projects. Response is cacheable for 5 minutes.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {array} object
+// @Failure 500 {string} string "internal error"
+// @Router /api/projects [get]
 func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 	projects, err := s.sessionStore.GetAllProjects(r.Context())
 	if err != nil {
@@ -207,9 +252,14 @@ func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, projects)
 }
 
-// handleGetTypes returns the canonical list of observation and concept types.
-// This provides a single source of truth for both backend and frontend.
-// Response is cacheable as these values never change at runtime.
+// handleGetTypes godoc
+// @Summary List observation and concept types
+// @Description Returns the canonical list of observation and concept types. Cacheable for 24 hours.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/types [get]
 func (s *Service) handleGetTypes(w http.ResponseWriter, r *http.Request) {
 	// Cache for 24 hours - these values are compile-time constants
 	w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -219,8 +269,14 @@ func (s *Service) handleGetTypes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGetModels returns available embedding models.
-// Response is cacheable as model list doesn't change without restart.
+// handleGetModels godoc
+// @Summary List embedding models
+// @Description Returns available embedding models with default and current model info. Cacheable for 1 hour.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/models [get]
 func (s *Service) handleGetModels(w http.ResponseWriter, _ *http.Request) {
 	// Cache for 1 hour - model list is static during runtime
 	w.Header().Set("Cache-Control", "public, max-age=3600")
@@ -235,7 +291,16 @@ func (s *Service) handleGetModels(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleGetStats returns worker statistics.
+// handleGetStats godoc
+// @Summary Get worker statistics
+// @Description Returns comprehensive worker statistics including uptime, memory, database health, vector cache, graph, and rate limiter stats.
+// @Tags Analytics
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter stats by project"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Router /api/stats [get]
 func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 
@@ -307,6 +372,14 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Include total observation count (active, non-archived, non-superseded)
+	if s.observationStore != nil {
+		obsCount, err := s.observationStore.GetTotalObservationCount(r.Context(), project)
+		if err == nil {
+			response["observationCount"] = obsCount
+		}
+	}
+
 	// Include project-specific observation count if project is specified
 	if project != "" {
 		count, err := s.getCachedObservationCount(r.Context(), project)
@@ -356,19 +429,72 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
-// handleGetRetrievalStats returns detailed retrieval statistics.
+// handleGetRetrievalStats godoc
+// @Summary Get retrieval statistics
+// @Description Returns detailed retrieval statistics including hit rates and latency.
+// @Tags Analytics
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param since query string false "ISO8601 timestamp for time range filter"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/stats/retrieval [get]
 func (s *Service) handleGetRetrievalStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
+
+	// Try persistent DB stats first, fall back to in-memory.
+	s.initMu.RLock()
+	logStore := s.retrievalStatsLogStore
+	s.initMu.RUnlock()
+
+	if logStore != nil {
+		var since time.Time
+		if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+			if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+				since = t
+			}
+		}
+		dbStats, err := logStore.GetStats(r.Context(), project, since)
+		if err == nil {
+			writeJSON(w, dbStats)
+			return
+		}
+		log.Warn().Err(err).Msg("failed to get retrieval stats from DB, falling back to in-memory")
+	}
+
+	// Fallback to in-memory stats (no time range support).
 	stats := s.GetRetrievalStats(project)
 	writeJSON(w, stats)
 }
 
-// handleGetRecentQueries returns recent search queries for analytics.
+// handleGetRecentQueries godoc
+// @Summary Get recent search queries
+// @Description Returns recent search queries for analytics purposes.
+// @Tags Analytics
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param limit query int false "Number of results (default 20)"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/search/recent [get]
 func (s *Service) handleGetRecentQueries(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	store := s.searchQueryLogStore
+	s.initMu.RUnlock()
+
 	project := r.URL.Query().Get("project")
 	limit := gorm.ParseLimitParam(r, 20)
 
-	queries := s.getRecentSearchQueries(project, limit)
+	if store == nil {
+		writeJSON(w, map[string]any{"queries": []any{}, "count": 0, "project": project})
+		return
+	}
+
+	queries, err := store.GetRecent(r.Context(), project, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, map[string]any{
 		"queries": queries,
@@ -377,77 +503,65 @@ func (s *Service) handleGetRecentQueries(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// handleGetSearchAnalytics returns comprehensive search analytics and statistics.
+// handleGetSearchAnalytics godoc
+// @Summary Get search analytics
+// @Description Returns aggregated search analytics from the persistent search query log, including vector search counts, latency, and zero-result rate. Supports optional time-range filtering via the 'since' parameter.
+// @Tags Analytics
+// @Produce json
+// @Security ApiKeyAuth
+// @Param since query string false "ISO8601 timestamp to filter results (e.g. 2024-01-01T00:00:00Z)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid 'since' parameter"
+// @Failure 500 {string} string "internal error"
+// @Router /api/search/analytics [get]
 func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
+	s.initMu.RLock()
+	store := s.searchQueryLogStore
+	s.initMu.RUnlock()
 
-	// Get all recent queries for analysis
-	queries := s.getRecentSearchQueries(project, maxRecentQueries)
+	if store == nil {
+		writeJSON(w, map[string]any{
+			"total_searches":   0,
+			"searches_today":   0,
+			"avg_latency_ms":   0,
+			"zero_result_rate": 0,
+			"vector_searches":  0,
+			"filter_searches":  0,
+			"cache_hits":       0,
+			"search_errors":    0,
+		})
+		return
+	}
 
-	// Calculate analytics
-	totalQueries := len(queries)
-	vectorSearches := 0
-	totalResults := 0
-	zeroResultQueries := 0
-	queryTypes := make(map[string]int)
-	topKeywords := make(map[string]int)
-
-	for _, q := range queries {
-		if q.UsedVector {
-			vectorSearches++
-		}
-		totalResults += q.Results
-		if q.Results == 0 {
-			zeroResultQueries++
-		}
-		queryTypes[q.Type]++
-
-		// Extract keywords (simple word tokenization using iterator)
-		for word := range strings.FieldsSeq(strings.ToLower(q.Query)) {
-			if len(word) > 3 { // Skip short words
-				topKeywords[word]++
-			}
+	var since time.Time
+	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+		var err error
+		since, err = time.Parse(time.RFC3339, sinceStr)
+		if err != nil {
+			http.Error(w, "invalid 'since' parameter: "+err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 
-	// Sort keywords by frequency
-	type keywordCount struct {
-		Keyword string `json:"keyword"`
-		Count   int    `json:"count"`
-	}
-	sortedKeywords := make([]keywordCount, 0, len(topKeywords))
-	for kw, count := range topKeywords {
-		sortedKeywords = append(sortedKeywords, keywordCount{Keyword: kw, Count: count})
-	}
-	sort.Slice(sortedKeywords, func(i, j int) bool {
-		return sortedKeywords[i].Count > sortedKeywords[j].Count
-	})
-	if len(sortedKeywords) > 10 {
-		sortedKeywords = sortedKeywords[:10]
+	analytics, err := store.GetAnalytics(r.Context(), since)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	// Calculate averages
-	avgResults := float64(0)
-	vectorSearchRate := float64(0)
-	zeroResultRate := float64(0)
-	if totalQueries > 0 {
-		avgResults = float64(totalResults) / float64(totalQueries)
-		vectorSearchRate = float64(vectorSearches) / float64(totalQueries) * 100
-		zeroResultRate = float64(zeroResultQueries) / float64(totalQueries) * 100
-	}
-
-	writeJSON(w, map[string]any{
-		"total_queries":      totalQueries,
-		"vector_search_rate": vectorSearchRate,
-		"avg_results":        avgResults,
-		"zero_result_rate":   zeroResultRate,
-		"query_types":        queryTypes,
-		"top_keywords":       sortedKeywords,
-		"project":            project,
-	})
+	writeJSON(w, analytics)
 }
 
-// handleVectorHealth returns comprehensive health information about the vector database.
+// handleVectorHealth godoc
+// @Summary Get vector database health
+// @Description Returns comprehensive health information about the vector database including health score, warnings, cache hit rate, and rebuild status.
+// @Tags Vectors
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "vector client not initialized"
+// @Router /api/vectors/health [get]
 func (s *Service) handleVectorHealth(w http.ResponseWriter, r *http.Request) {
 	if s.vectorClient == nil {
 		http.Error(w, "vector client not initialized", http.StatusServiceUnavailable)
@@ -519,8 +633,20 @@ type UpdateObservationRequest struct {
 	FilesModified []string `json:"files_modified,omitempty"`
 }
 
-// handleUpdateObservation updates an existing observation.
-// PUT /api/observations/{id}
+// handleUpdateObservation godoc
+// @Summary Update an observation
+// @Description Updates an existing observation's fields. Only provided fields are updated.
+// @Tags Observations
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Param body body UpdateObservationRequest true "Fields to update"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 404 {string} string "observation not found"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/{id} [put]
 func (s *Service) handleUpdateObservation(w http.ResponseWriter, r *http.Request) {
 	// Parse observation ID from URL
 	id, ok := parseIDParam(w, r.PathValue("id"), "observation")
@@ -600,8 +726,18 @@ func (s *Service) handleUpdateObservation(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleGetObservationByID returns a single observation by ID.
-// GET /api/observations/{id}
+// handleGetObservationByID godoc
+// @Summary Get observation by ID
+// @Description Returns a single observation by its ID.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Success 200 {object} models.Observation
+// @Failure 400 {string} string "bad request"
+// @Failure 404 {string} string "observation not found"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/{id} [get]
 func (s *Service) handleGetObservationByID(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r.PathValue("id"), "observation")
 	if !ok {
@@ -622,8 +758,14 @@ func (s *Service) handleGetObservationByID(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, obs)
 }
 
-// handleGraphStats returns graph statistics for the dashboard.
-// Uses relation data to compute knowledge graph metrics.
+// handleGraphStats godoc
+// @Summary Get graph statistics
+// @Description Returns graph statistics for the dashboard, using relation data to compute knowledge graph metrics.
+// @Tags Graph
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/graph/stats [get]
 func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
 	// Get relation count (edges) - this represents the knowledge graph
 	edgeCount, err := s.relationStore.GetTotalRelationCount(r.Context())
@@ -640,12 +782,10 @@ func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get unique observation IDs involved in relations (approximate node count)
-	// For now, use edge count as a proxy - each edge has 2 nodes
-	nodeCount := 0
-	if edgeCount > 0 {
-		// Rough estimate: unique nodes ≈ edges * 1.5 (since nodes can have multiple edges)
-		nodeCount = int(float64(edgeCount) * 1.5)
+	// Get unique observation IDs involved in relations (real node count)
+	nodeCount, err := s.relationStore.GetDistinctNodeCount(r.Context())
+	if err != nil {
+		nodeCount = 0
 	}
 
 	// Calculate average degree
@@ -675,8 +815,14 @@ func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleVectorMetrics returns vector database metrics for the dashboard.
-// Returns enabled: false if vector features are not available.
+// handleVectorMetrics godoc
+// @Summary Get vector database metrics
+// @Description Returns vector database metrics for the dashboard including queries, latency, storage, and cache stats. Returns enabled: false if vector features are not available.
+// @Tags Vectors
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/vector/metrics [get]
 func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.vectorClient == nil {
 		writeJSON(w, map[string]any{
@@ -686,57 +832,32 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get cache stats from vector client
-	cacheStats := s.vectorClient.GetCacheStats()
-	count, _ := s.vectorClient.Count(r.Context())
-
-	uptime := time.Since(s.startTime).Round(time.Second).String()
-
-	// Calculate total queries from cache hits/misses
-	totalQueries := cacheStats.EmbeddingHits + cacheStats.EmbeddingMisses + cacheStats.ResultHits + cacheStats.ResultMisses
-	totalHits := cacheStats.EmbeddingHits + cacheStats.ResultHits
-	totalMisses := cacheStats.EmbeddingMisses + cacheStats.ResultMisses
+	metrics := s.vectorClient.GetMetrics(r.Context())
 
 	writeJSON(w, map[string]any{
-		"enabled": true,
-		"queries": map[string]any{
-			"total":    totalQueries,
-			"hubOnly":  0,
-			"hybrid":   0,
-			"onDemand": 0,
-			"graph":    0,
-		},
-		"latency": map[string]any{
-			"avg":          "0ms",
-			"p50":          "0ms",
-			"p95":          "0ms",
-			"p99":          "0ms",
-			"avgHub":       "0ms",
-			"avgRecompute": "0ms",
-		},
-		"storage": map[string]any{
-			"totalDocuments":   count,
-			"hubDocuments":     0,
-			"storedEmbeddings": count,
-			"savingsPercent":   0.0,
-			"recomputedTotal":  0,
-		},
-		"cache": map[string]any{
-			"hits":    totalHits,
-			"misses":  totalMisses,
-			"hitRate": cacheStats.HitRate(),
-		},
-		"graph": map[string]any{
-			"traversals": 0,
-			"avgDepth":   0.0,
-		},
-		"uptime": uptime,
+		"enabled":         true,
+		"query_count":     metrics.QueryCount,
+		"avg_latency_ms":  metrics.AvgLatencyMs,
+		"p50_latency_ms":  metrics.P50LatencyMs,
+		"p95_latency_ms":  metrics.P95LatencyMs,
+		"p99_latency_ms":  metrics.P99LatencyMs,
+		"total_documents": metrics.TotalDocs,
+		"uptime":          time.Since(s.startTime).Round(time.Second).String(),
 	})
 }
 
-// handleGraphSync triggers a manual re-sync of relations from PostgreSQL to FalkorDB.
+// handleGraphSync godoc
+// @Summary Sync graph from relations
+// @Description Triggers a manual re-sync of relations from PostgreSQL to FalkorDB. Runs in background.
+// @Tags Graph
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {string} string "graph backend not connected"
+// @Router /api/graph/sync [post]
 func (s *Service) handleGraphSync(w http.ResponseWriter, r *http.Request) {
 	if s.graphStore == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
 		writeJSON(w, map[string]any{"error": "graph backend not configured"})
 		return
 	}
@@ -754,8 +875,127 @@ func (s *Service) handleGraphSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"status": "sync started in background"})
 }
 
-// handleGetSimilarityTelemetry returns the latest similarity telemetry data.
-// GET /api/telemetry/similarity
+// bulkDeleteRequest is the JSON body for DELETE /api/observations/bulk.
+type bulkDeleteRequest struct {
+	IDs []int64 `json:"ids"`
+}
+
+// handleBulkDeleteREST godoc
+// @Summary Bulk delete observations
+// @Description Deletes multiple observations by ID. Maximum 100 per request.
+// @Tags Observations
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body bulkDeleteRequest true "Observation IDs to delete"
+// @Success 200 {object} object
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/bulk [delete]
+func (s *Service) handleBulkDeleteREST(w http.ResponseWriter, r *http.Request) {
+	if s.observationStore == nil {
+		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req bulkDeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids is required and must not be empty", http.StatusBadRequest)
+		return
+	}
+	if len(req.IDs) > 100 {
+		http.Error(w, "ids must not exceed 100 entries per request", http.StatusBadRequest)
+		return
+	}
+
+	deleted, err := s.observationStore.DeleteObservations(r.Context(), req.IDs)
+	if err != nil {
+		log.Error().Err(err).Int("count", len(req.IDs)).Msg("bulk-delete: delete observations failed")
+		http.Error(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"deleted": deleted,
+	})
+}
+
+// bulkScopeChangeRequest is the JSON body for PATCH /api/observations/bulk-scope.
+type bulkScopeChangeRequest struct {
+	IDs   []int64 `json:"ids"`
+	Scope string  `json:"scope"` // "global" or "project"
+}
+
+// handleBulkScopeChange godoc
+// @Summary Bulk update observation scope
+// @Description Changes the scope of multiple observations to either "global" or "project".
+// @Tags Observations
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body bulkScopeChangeRequest true "IDs and new scope"
+// @Success 200 {object} object
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/bulk-scope [patch]
+func (s *Service) handleBulkScopeChange(w http.ResponseWriter, r *http.Request) {
+	if s.observationStore == nil {
+		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req bulkScopeChangeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids is required and must not be empty", http.StatusBadRequest)
+		return
+	}
+	switch req.Scope {
+	case "global", "project":
+		// valid
+	default:
+		http.Error(w, "scope must be 'global' or 'project'", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	var updated int64
+
+	scope := req.Scope
+	update := &gorm.ObservationUpdate{Scope: &scope}
+
+	for _, id := range req.IDs {
+		if _, err := s.observationStore.UpdateObservation(ctx, id, update); err != nil {
+			log.Error().Err(err).Int64("id", id).Msg("bulk-scope: update observation failed")
+			continue
+		}
+		updated++
+	}
+
+	writeJSON(w, map[string]any{
+		"updated": updated,
+	})
+}
+
+// handleGetSimilarityTelemetry godoc
+// @Summary Get similarity telemetry
+// @Description Returns the latest similarity telemetry data. Optionally filter by project to get a single snapshot.
+// @Tags Analytics
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Router /api/telemetry/similarity [get]
 func (s *Service) handleGetSimilarityTelemetry(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	st := s.similarityTelemetry

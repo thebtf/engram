@@ -8,14 +8,12 @@
 
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
+import { normalizeEngramContent } from './content.js';
 import { resolveIdentity } from '../identity.js';
-import { redactSecrets } from '../security/redactor.js';
 import type { BeforeCompactionEvent, ConversationMessage, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
 /** Maximum recent messages to include in the backfill payload. */
 const MAX_MESSAGES = 20;
-/** Soft character limit for the content field (server hard limit: 10,000). */
-const CONTENT_MAX_CHARS = 6000;
 
 /**
  * Handle the before_compaction hook.
@@ -37,6 +35,8 @@ export function handleBeforeCompaction(
     if (!config.autoExtract) return;
 
     const agentId = ctx.agentId ?? '';
+    const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
+    if (!sessionId?.trim()) return; // no session identity available — skip
     const identity = resolveIdentity(agentId, ctx.workspaceDir);
     const project = config.project ?? identity.projectId;
 
@@ -45,15 +45,11 @@ export function handleBeforeCompaction(
     const content = serializeMessages(recent);
     if (!content) return;
 
-    const stripped = stripEngramContext(content);
-    const redacted = redactSecrets(stripped);
-    const truncated = redacted.length > CONTENT_MAX_CHARS
-      ? redacted.slice(0, CONTENT_MAX_CHARS)
-      : redacted;
+    const truncated = normalizeEngramContent(content);
 
     // Fire-and-forget — do not await
     void client.backfillSession({
-      session_id: agentId,
+      session_id: sessionId,
       project,
       content: truncated,
     });
@@ -76,6 +72,3 @@ function serializeMessages(messages: ConversationMessage[]): string {
     .join('\n\n');
 }
 
-function stripEngramContext(text: string): string {
-  return text.replace(/<engram-context>[\s\S]*?<\/engram-context>/g, '');
-}

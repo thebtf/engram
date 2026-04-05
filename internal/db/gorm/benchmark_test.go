@@ -90,7 +90,7 @@ func BenchmarkObservationStore_StoreObservation(b *testing.B) {
 	defer cleanup()
 
 	sessionStore := NewSessionStore(store)
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	ctx := context.Background()
 
 	// Create session
@@ -116,7 +116,7 @@ func BenchmarkObservationStore_GetRecentObservations(b *testing.B) {
 	defer cleanup()
 
 	sessionStore := NewSessionStore(store)
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	ctx := context.Background()
 
 	// Create session and observations
@@ -145,7 +145,7 @@ func BenchmarkObservationStore_SearchObservationsFTS(b *testing.B) {
 	defer cleanup()
 
 	sessionStore := NewSessionStore(store)
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	ctx := context.Background()
 
 	// Create session and observations with searchable content
@@ -174,7 +174,7 @@ func BenchmarkObservationStore_UpdateImportanceScore(b *testing.B) {
 	defer cleanup()
 
 	sessionStore := NewSessionStore(store)
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	ctx := context.Background()
 
 	// Create session and observation
@@ -198,7 +198,7 @@ func BenchmarkObservationStore_UpdateImportanceScores_Bulk(b *testing.B) {
 	defer cleanup()
 
 	sessionStore := NewSessionStore(store)
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	ctx := context.Background()
 
 	// Create session and 100 observations
@@ -277,7 +277,7 @@ func BenchmarkRelationStore_StoreRelation(b *testing.B) {
 	defer cleanup()
 
 	sessionStore := NewSessionStore(store)
-	obsStore := NewObservationStore(store, nil, nil, nil)
+	obsStore := NewObservationStore(store, nil)
 	relationStore := NewRelationStore(store)
 	ctx := context.Background()
 

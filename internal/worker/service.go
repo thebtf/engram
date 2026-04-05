@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,15 +18,18 @@ import (
 	mdchunking "github.com/thebtf/engram/internal/chunking/markdown"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/crypto"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/graph/falkordb"
 	"github.com/thebtf/engram/internal/consolidation"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/maintenance"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/pattern"
+	"github.com/thebtf/engram/internal/relation"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
@@ -41,6 +45,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // Service configuration constants
@@ -92,16 +97,16 @@ func retryWithBackoff(ctx context.Context, maxRetries int, initialBackoff time.D
 
 // RetrievalStats tracks observation retrieval metrics.
 type RetrievalStats struct {
-	TotalRequests      int64 // Total retrieval requests (inject + search)
-	ObservationsServed int64 // Observations returned to clients
-	VerifiedStale      int64 // Stale observations that passed verification
-	DeletedInvalid     int64 // Invalid observations deleted
-	SearchRequests     int64 // Semantic search requests
-	ContextInjections  int64 // Session-start context injections
-	StaleExcluded      int64 // Observations excluded due to staleness check
-	FreshCount         int64 // Observations that passed staleness check
-	DuplicatesRemoved  int64 // Observations removed by clustering
-	LastUpdated        int64 // Unix timestamp of last update (atomic)
+	TotalRequests      int64 `json:"total_requests"`      // Total retrieval requests (inject + search)
+	ObservationsServed int64 `json:"observations_served"` // Observations returned to clients
+	VerifiedStale      int64 `json:"verified_stale"`      // Stale observations that passed verification
+	DeletedInvalid     int64 `json:"deleted_invalid"`     // Invalid observations deleted
+	SearchRequests     int64 `json:"search_requests"`     // Semantic search requests
+	ContextInjections  int64 `json:"context_injections"`  // Session-start context injections
+	StaleExcluded      int64 `json:"stale_excluded"`      // Observations excluded due to staleness check
+	FreshCount         int64 `json:"fresh_count"`         // Observations that passed staleness check
+	DuplicatesRemoved  int64 `json:"duplicates_removed"`  // Observations removed by clustering
+	LastUpdated        int64 `json:"last_updated"`        // Unix timestamp of last update (atomic)
 }
 
 // maxRetrievalStatsProjects limits the number of projects tracked to prevent unbounded memory growth.
@@ -129,10 +134,12 @@ type Service struct {
 	graphStore             graphpkg.GraphStore
 	graphWriter            *graphpkg.AsyncGraphWriter
 	patternDetector        *pattern.Detector
+	relationDetector       *relation.Detector
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
 	embedSvc               *embedding.Service
+	resilientEmbedder      *embedding.ResilientEmbedder
 	vectorClient           vector.Client
 	vectorSync             *pgvector.Sync
 	vectorSyncSem          chan struct{}
@@ -143,6 +150,7 @@ type Service struct {
 	consolidationScheduler *consolidation.Scheduler
 	mcpSSEHandler          *mcp.SSEHandler
 	mcpStreamableHandler   *mcp.StreamableHandler
+	mcpHealth              *mcp.MCPHealth
 	searchMgr              *search.Manager
 	collectionRegistry     *collections.Registry
 	sessionIdxStore        *sessions.Store
@@ -151,6 +159,7 @@ type Service struct {
 	retrievalStats         map[string]*RetrievalStats
 	sessionStore           *gorm.SessionStore
 	rawEventStore          *gorm.RawEventStore
+	tokenStore             *gorm.TokenStore
 	ingestDedup            *deduplicationCache
 	cancel                 context.CancelFunc
 	cachedObsCounts        map[string]cachedCount
@@ -166,7 +175,16 @@ type Service struct {
 	expensiveOpLimiter     *ExpensiveOperationLimiter
 	logBuffer              *logbuf.RingBuffer
 	backfillTracker        *backfillTracker
-	version                string
+	searchQueryLogStore     *gorm.SearchQueryLogStore
+	retrievalStatsLogStore  *gorm.RetrievalStatsLogStore
+	injectionStore          *gorm.InjectionStore
+	agentStatsStore         *gorm.AgentStatsStore
+	versionStore            *gorm.VersionStore
+	llmFilter               *search.LLMFilter
+	llmClient               learning.LLMClient
+	projectSettingsStore    *gorm.ProjectSettingsStore
+	strategySelector        *learning.StrategySelector
+	version                 string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
 	wg                     sync.WaitGroup
 	recentQueriesLen       int
@@ -180,12 +198,55 @@ type Service struct {
 	staleQueueOnce         sync.Once
 	ready                  atomic.Bool
 	vectorSyncDropped      atomic.Int64
+	vault                  *crypto.Vault
+	vaultOnce              sync.Once
+	vaultErr               error
+	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
+}
+
+// promptCacheEntry stores a user prompt with a timestamp for eviction.
+type promptCacheEntry struct {
+	Prompt    string
+	Timestamp time.Time
+}
+
+// SetLastPrompt stores the most recent user prompt for a session.
+func (s *Service) SetLastPrompt(sessionID int64, prompt string) {
+	s.promptCache.Store(sessionID, promptCacheEntry{Prompt: prompt, Timestamp: time.Now()})
+}
+
+// GetLastPrompt retrieves the most recent user prompt for a session.
+func (s *Service) GetLastPrompt(sessionID int64) string {
+	if v, ok := s.promptCache.Load(sessionID); ok {
+		return v.(promptCacheEntry).Prompt
+	}
+	return ""
+}
+
+// evictStalePrompts removes prompt cache entries older than 2 hours.
+func (s *Service) evictStalePrompts() {
+	cutoff := time.Now().Add(-2 * time.Hour)
+	s.promptCache.Range(func(key, value any) bool {
+		if entry, ok := value.(promptCacheEntry); ok && entry.Timestamp.Before(cutoff) {
+			s.promptCache.Delete(key)
+		}
+		return true
+	})
 }
 
 // cachedCount stores a cached count value with expiration.
 type cachedCount struct {
 	timestamp time.Time
 	count     int
+}
+
+// getVault returns the shared Vault singleton, initializing it once on first call.
+// All errors are cached — a misconfigured vault fails permanently (no retry).
+func (s *Service) getVault() (*crypto.Vault, error) {
+	s.vaultOnce.Do(func() {
+		s.vault, s.vaultErr = crypto.NewVault(s.config)
+	})
+	return s.vault, s.vaultErr
 }
 
 // RebuildStatus tracks the progress of vector rebuild operations.
@@ -226,16 +287,12 @@ func (s *Service) asyncVectorSync(fn func()) {
 
 // asyncVectorSyncWithID executes a vector sync with an observation ID for reconciliation.
 func (s *Service) asyncVectorSyncWithID(fn func(), obsID int64) {
-	s.wg.Add(1)
 	if s.vectorSyncSem == nil {
-		// Fallback if semaphore not initialized
-		go func() {
-			defer s.wg.Done()
-			fn()
-		}()
+		log.Warn().Int64("obs_id", obsID).Msg("vector sync dropped: semaphore not initialized")
 		return
 	}
 
+	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		select {
@@ -491,11 +548,24 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		vectorSyncSem:      make(chan struct{}, 10), // Limit to 10 concurrent vector syncs
 		pendingVectorSyncs: make(chan int64, 1000),  // Buffer for dropped syncs awaiting reconciliation
 		ingestDedup:        newDeduplicationCache(5 * time.Minute),
+		mcpHealth:          mcp.NewMCPHealth(),
+		strategySelector:   learning.NewStrategySelector(cfg.InjectionStrategies, cfg.InjectionStrategyMode, cfg.DefaultStrategy),
 	}
 
 	// Setup middleware and routes (health endpoint works immediately)
 	svc.setupMiddleware()
 	svc.setupRoutes()
+
+	// Auth startup gate (ADR-0001): validate before starting heavy initialization.
+	// Fail fast here so initializeAsync never runs without a token unless explicitly disabled.
+	{
+		token := config.GetWorkerToken()
+		authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
+		if token == "" && !authDisabled {
+			cancel()
+			return nil, fmt.Errorf("ENGRAM_AUTH_ADMIN_TOKEN (or ENGRAM_API_TOKEN) is not set — set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production)")
+		}
+	}
 
 	// Start async initialization
 	go svc.initializeAsync()
@@ -637,8 +707,8 @@ func (s *Service) initializeAsync() {
 		}
 	}
 
-	// Create observation store with conflict and relation stores for automatic detection
-	observationStore := gorm.NewObservationStore(store, nil, conflictStore, relationStore)
+	// Create observation store
+	observationStore := gorm.NewObservationStore(store, nil)
 
 	// Create session manager
 	sessionManager := session.NewManager(sessionStore)
@@ -655,6 +725,10 @@ func (s *Service) initializeAsync() {
 		log.Warn().Err(err).Msg("Embedding service creation failed - vector search disabled")
 	} else {
 		embedSvc = emb
+
+		// Wrap with resilience layer for circuit breaking and automatic recovery
+		s.resilientEmbedder = embedding.NewResilientEmbedder(embedSvc)
+
 		// Create pgvector client using the GORM DB connection
 		client, err := pgvector.NewClient(pgvector.Config{
 			DB:       store.DB,
@@ -694,14 +768,36 @@ func (s *Service) initializeAsync() {
 		log.Info().Msg("SDK processor initialized")
 	}
 
+	// Create token store and wire into auth middleware
+	tokenStore := gorm.NewTokenStore(store)
+
 	// Create raw event store and ingest deduplication cache
 	rawEventStore := gorm.NewRawEventStore(store)
+
+	// Create injection store for closed-loop learning
+	injectionStore := gorm.NewInjectionStore(store.GetDB())
+
+	// Create agent stats store for Phase 4 agent-specific effectiveness tracking
+	agentStatsStore := gorm.NewAgentStatsStore(store.GetDB())
+
+	// Create version store for Phase 5 APO-lite observation rewrites
+	versionStore := gorm.NewVersionStore(store.GetDB())
+
+	// Create reasoning trace store for System 2 memory (reasoning chains)
+	reasoningStore := gorm.NewReasoningTraceStore(store)
+	if processor != nil {
+		processor.SetReasoningStore(reasoningStore)
+	}
 
 	// Set all the initialized components
 	s.initMu.Lock()
 	s.store = store
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
+	s.injectionStore = injectionStore
+	s.agentStatsStore = agentStatsStore
+	s.versionStore = versionStore
+	s.tokenStore = tokenStore
 	s.observationStore = observationStore
 	s.summaryStore = summaryStore
 	s.promptStore = promptStore
@@ -721,6 +817,14 @@ func (s *Service) initializeAsync() {
 	s.reranker = reranker
 	s.initMu.Unlock()
 
+	// Wire token store into auth middleware for client token lookups
+	if s.tokenAuth != nil {
+		s.tokenAuth.SetTokenStore(tokenStore)
+	}
+
+	// Start buffered token stats flusher (batches DB writes every 5s)
+	s.startTokenStatsFlusher(s.ctx)
+
 	// Initialize similarity telemetry (optional — requires vector client)
 	if vectorClient != nil && store != nil && observationStore != nil {
 		simTelemetry := telemetry.NewSimilarityTelemetry(store, observationStore, vectorClient, log.Logger)
@@ -732,6 +836,19 @@ func (s *Service) initializeAsync() {
 	// Background sync: populate FalkorDB from existing PostgreSQL relations.
 	if _, ok := gs.(*graphpkg.NoopGraphStore); !ok && gs != nil {
 		go s.syncGraphFromRelations()
+	}
+
+	// Initialize async relation detector (requires embedding + vector search)
+	if embedSvc != nil && vectorClient != nil {
+		detector := relation.NewDetector(vectorClient, relationStore, conflictStore, observationStore, promptStore)
+		observationStore.SetRelationDetector(detector)
+		s.relationDetector = detector
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			detector.Start(s.ctx)
+		}()
+		log.Info().Msg("Async relation detector enabled")
 	}
 
 	// Initialize pattern detector
@@ -815,8 +932,12 @@ func (s *Service) initializeAsync() {
 		)
 	}
 	maintenanceSvc := maintenance.NewService(
-		store, observationStore, summaryStore, promptStore,
-		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, log.Logger,
+		store, observationStore, injectionStore, summaryStore, promptStore,
+		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore,
+		vectorClient, vectorSync, relationStore, gs,
+		sessionStore, agentStatsStore,
+		s.llmClient,
+		log.Logger,
 	)
 	s.initMu.Lock()
 	s.maintenanceService = maintenanceSvc
@@ -828,6 +949,22 @@ func (s *Service) initializeAsync() {
 	}()
 	log.Info().Bool("smart_gc", cfg.SmartGCEnabled).Msg("Maintenance service started")
 
+	// Periodic prompt cache eviction (Learning Memory v3)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.evictStalePrompts()
+			case <-s.ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Initialize collection registry
 	collectionRegistry, colErr := collections.Load(config.GetCollectionConfigPath())
 	if colErr != nil {
@@ -838,6 +975,46 @@ func (s *Service) initializeAsync() {
 	// Initialize session index store (clients push transcripts via REST API)
 	sessionIdxStore := sessions.NewStore(store)
 
+	// Initialize search query log store for persistent analytics
+	searchQueryLogStore := gorm.NewSearchQueryLogStore(store.GetDB())
+
+	// Initialize retrieval stats log store with batched flush
+	retrievalStatsLogStore := gorm.NewRetrievalStatsLogStore(store.GetDB())
+
+	// Initialize shared LLM client (used for pattern insights and LLM filter)
+	{
+		llmCfg := learning.DefaultOpenAIConfig()
+		sharedLLM := learning.NewOpenAIClient(llmCfg)
+		if sharedLLM.IsConfigured() {
+			s.initMu.Lock()
+			s.llmClient = sharedLLM
+			s.initMu.Unlock()
+			log.Info().Str("model", llmCfg.Model).Msg("LLM client initialized for pattern insights")
+		}
+	}
+
+	// Initialize LLM filter if enabled
+	if cfg.LLMFilterEnabled {
+		llmCfg := learning.DefaultOpenAIConfig()
+		if cfg.LLMFilterModel != "" {
+			llmCfg.Model = cfg.LLMFilterModel
+		}
+		llmClient := learning.NewOpenAIClient(llmCfg)
+		if llmClient.IsConfigured() {
+			filterTimeout := time.Duration(cfg.LLMFilterTimeoutMS) * time.Millisecond
+			s.initMu.Lock()
+			s.llmFilter = search.NewLLMFilter(llmClient, filterTimeout)
+			s.initMu.Unlock()
+			log.Info().
+				Str("model", llmCfg.Model).
+				Int("timeout_ms", cfg.LLMFilterTimeoutMS).
+				Int("candidates", cfg.LLMFilterCandidates).
+				Msg("LLM behavioral relevance filter enabled")
+		} else {
+			log.Warn().Msg("LLM filter enabled but LLM not configured (set ENGRAM_LLM_URL + ENGRAM_LLM_API_KEY)")
+		}
+	}
+
 	// Initialize search manager for MCP tools
 	searchMgr := search.NewManager(observationStore, summaryStore, promptStore, vectorClient)
 
@@ -847,6 +1024,9 @@ func (s *Service) initializeAsync() {
 
 	// Create chunking manager for document ingestion
 	chunkManager := s.createChunkManager()
+
+	// Create versioned document store for collaborative document MCP tools (migration 051).
+	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
 
 	mcpServer := mcp.NewServer(
 		searchMgr,
@@ -877,18 +1057,34 @@ func (s *Service) initializeAsync() {
 		return s.backfillTracker.snapshot(), nil
 	})
 
+	// Wire versioned document store into MCP server for collaborative document tools.
+	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
+
+	// Wire reasoning trace store into MCP server for System 2 memory recall.
+	mcpServer.SetReasoningStore(reasoningStore)
+
+	// TODO: Document embedding will be triggered on doc_create/doc_update via vectorSync.SyncDocument()
+	// when the full embedding pipeline integration is implemented.
+
 	// Wire document store into search manager for unified document search.
 	if documentStore != nil && embedSvc != nil {
 		searchMgr.SetDocumentStore(documentStore, embedSvc)
 	}
 
+	// Wire project settings store for adaptive per-project thresholds.
+	projectSettingsStore := gorm.NewProjectSettingsStore(store.DB)
+	searchMgr.SetProjectSettingsStore(projectSettingsStore)
+	s.projectSettingsStore = projectSettingsStore
+
 	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
-	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer)
+	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer, s.mcpHealth)
 
 	s.initMu.Lock()
 	s.searchMgr = searchMgr
 	s.collectionRegistry = collectionRegistry
 	s.sessionIdxStore = sessionIdxStore
+	s.searchQueryLogStore = searchQueryLogStore
+	s.retrievalStatsLogStore = retrievalStatsLogStore
 	s.mcpSSEHandler = mcpSSEHandler
 	s.mcpStreamableHandler = mcpStreamableHandler
 	s.initMu.Unlock()
@@ -1014,8 +1210,8 @@ func (s *Service) reinitializeDatabase() {
 		relationStore.SetCallback(s.graphWriter.Enqueue)
 	}
 
-	// Create observation store with conflict and relation stores for automatic detection
-	observationStore := gorm.NewObservationStore(store, nil, conflictStore, relationStore)
+	// Create observation store
+	observationStore := gorm.NewObservationStore(store, nil)
 
 	// Create new session manager
 	sessionManager := session.NewManager(sessionStore)
@@ -1032,6 +1228,13 @@ func (s *Service) reinitializeDatabase() {
 		log.Warn().Err(err).Msg("Embedding service creation failed after reinit")
 	} else {
 		embedSvc = emb
+
+		// Stop old resilient embedder health-check goroutine before replacing
+		if s.resilientEmbedder != nil {
+			s.resilientEmbedder.Stop()
+		}
+		s.resilientEmbedder = embedding.NewResilientEmbedder(embedSvc)
+
 		client, err := pgvector.NewClient(pgvector.Config{
 			DB:       store.DB,
 			EmbedSvc: embedSvc,
@@ -1072,6 +1275,8 @@ func (s *Service) reinitializeDatabase() {
 		processor.SetBroadcastFunc(func(event map[string]any) {
 			s.sseBroadcaster.Broadcast(event)
 		})
+		// Wire reasoning trace store for System 2 memory
+		processor.SetReasoningStore(gorm.NewReasoningTraceStore(store))
 	}
 
 	// Stop old pattern detector if it exists
@@ -1090,6 +1295,14 @@ func (s *Service) reinitializeDatabase() {
 	s.store = store
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
+	s.injectionStore = gorm.NewInjectionStore(store.GetDB())
+	s.agentStatsStore = gorm.NewAgentStatsStore(store.GetDB())
+	s.versionStore = gorm.NewVersionStore(store.GetDB())
+	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
+	if s.retrievalStatsLogStore != nil {
+		s.retrievalStatsLogStore.Close()
+	}
+	s.retrievalStatsLogStore = gorm.NewRetrievalStatsLogStore(store.GetDB())
 	s.observationStore = observationStore
 	s.summaryStore = summaryStore
 	s.promptStore = promptStore
@@ -1126,22 +1339,30 @@ func (s *Service) reinitializeDatabase() {
 	})
 }
 
-// reloadConfig reloads configuration from disk.
-// For now, this triggers a graceful restart by exiting (hooks will restart us).
+// reloadConfig hot-reloads configuration from disk without process restart.
+// Uses config.Reload() to atomically swap the global config. Services that
+// call config.Get() per-request will pick up new values automatically.
+// Structural changes (port, token) log a warning — manual restart needed.
 func (s *Service) reloadConfig() {
-	log.Info().Msg("Config changed, triggering graceful restart...")
+	_, changed, err := config.Reload()
+	if err != nil {
+		log.Error().Err(err).Msg("Config reload failed — keeping current config")
+		return
+	}
 
-	// Broadcast notification
+	if len(changed) == 0 {
+		log.Info().Msg("Config file changed but no values differ")
+		return
+	}
+
+	log.Info().Strs("changed", changed).Msg("Config hot-reloaded")
+
+	// Broadcast to dashboard
 	s.sseBroadcaster.Broadcast(map[string]any{
-		"type":    "config_changed",
-		"message": "Configuration changed, restarting worker...",
+		"type":    "config_reloaded",
+		"message": "Configuration reloaded",
+		"changed": changed,
 	})
-
-	// Give SSE clients a moment to receive the message
-	time.Sleep(100 * time.Millisecond)
-
-	// Exit cleanly - hooks will restart us with new config
-	os.Exit(0)
 }
 
 // setInitError records an initialization error.
@@ -1540,6 +1761,10 @@ func (s *Service) setupRoutes() {
 	s.router.Get("/", serveIndex)
 	s.router.Get("/assets/*", serveAssets)
 
+	// Auth routes (public — login/logout do not require auth)
+	s.router.Post("/api/auth/login", s.handleAuthLogin)
+	s.router.Post("/api/auth/logout", s.handleAuthLogout)
+
 	// Health check (both root and API-prefixed for compatibility)
 	// Returns 200 immediately so hooks can connect quickly during init
 	// Also returns version for stale worker detection
@@ -1549,43 +1774,55 @@ func (s *Service) setupRoutes() {
 	// Version endpoint for hooks to check if worker needs restart
 	s.router.Get("/api/version", s.handleVersion)
 
-	// Rebuild status endpoint for visibility into vector rebuild progress
-	s.router.Get("/api/rebuild-status", s.handleRebuildStatus)
-
-	// Vector management endpoints
-	s.router.Post("/api/vectors/rebuild", s.handleTriggerVectorRebuild)
-	s.router.Get("/api/vectors/health", s.handleVectorHealth)
-	s.router.Get("/api/vector/metrics", s.handleVectorMetrics)
-	s.router.Get("/api/graph/stats", s.handleGraphStats)
-
 	// Readiness check - returns 200 only when fully initialized
 	s.router.Get("/api/ready", s.handleReady)
 
-	// Update endpoints (work before DB is ready)
-	s.router.Get("/api/update/check", s.handleUpdateCheck)
-	s.router.Post("/api/update/apply", s.handleUpdateApply)
-	s.router.Get("/api/update/status", s.handleUpdateStatus)
-	s.router.Post("/api/update/restart", s.handleUpdateRestart)
+	// MCP health counters (public — no auth required, lightweight)
+	s.router.Get("/api/mcp/health", s.mcpHealth.HandleHealth)
 
-	// General restart endpoint (works before DB is ready)
-	s.router.Post("/api/restart", s.handleRestart)
+	// OpenAPI docs (read-only spec; protected by global auth middleware if ENGRAM_API_TOKEN is set)
+	s.router.Get("/api/docs", http.RedirectHandler("/api/docs/index.html", http.StatusMovedPermanently).ServeHTTP)
+	s.router.Get("/api/docs/*", httpSwagger.WrapHandler)
 
-	// Selfcheck endpoint (works before DB is ready - checks all components)
-	s.router.Get("/api/selfcheck", s.handleSelfCheck)
+	// Admin/management routes — authentication applied globally via setupMiddleware.
+	// Grouped for logical organization; no additional middleware needed.
+	s.router.Group(func(r chi.Router) {
+		// Rebuild status endpoint for visibility into vector rebuild progress
+		r.Get("/api/rebuild-status", s.handleRebuildStatus)
 
-	// Dashboard SSE endpoint (works before DB is ready)
-	s.router.Get("/api/events", s.sseBroadcaster.HandleSSE)
+		// Vector management endpoints
+		r.Post("/api/vectors/rebuild", s.handleTriggerVectorRebuild)
+		r.Get("/api/vectors/health", s.handleVectorHealth)
+		r.Get("/api/vector/metrics", s.handleVectorMetrics)
+		r.Get("/api/graph/stats", s.handleGraphStats)
 
-	// Log viewer endpoint (works before DB is ready, supports SSE follow mode)
-	s.router.Get("/api/logs", s.handleGetLogs)
+		// Update endpoints (work before DB is ready)
+		r.Get("/api/update/check", s.handleUpdateCheck)
+		r.Post("/api/update/apply", s.handleUpdateApply)
+		r.Get("/api/update/status", s.handleUpdateStatus)
+		r.Post("/api/update/restart", s.handleUpdateRestart)
 
-	// Instinct import endpoint
-	s.router.Post("/api/instincts/import", s.handleInstinctsImport)
+		// General restart endpoint (works before DB is ready)
+		r.Post("/api/restart", s.handleRestart)
 
-	// Backfill endpoints
-	s.router.Post("/api/backfill", s.handleBackfillIngest)
-	s.router.Post("/api/backfill/session", s.handleBackfillSession)
-	s.router.Get("/api/backfill/status", s.handleBackfillStatus)
+		// Selfcheck endpoint (works before DB is ready - checks all components)
+		r.Get("/api/selfcheck", s.handleSelfCheck)
+
+		// Dashboard SSE endpoint (works before DB is ready)
+		r.Get("/api/events", s.sseBroadcaster.HandleSSE)
+
+		// Log viewer endpoint (works before DB is ready, supports SSE follow mode)
+		r.Get("/api/logs", s.handleGetLogs)
+
+		// Instinct import endpoint
+		r.Post("/api/instincts/import", s.handleInstinctsImport)
+
+		// Backfill endpoints
+		r.Post("/api/backfill", s.handleBackfillIngest)
+		r.Post("/api/backfill/session", s.handleBackfillSession)
+		r.Get("/api/backfill/status", s.handleBackfillStatus)
+		r.Post("/api/import/feedback", s.handleImportFeedback)
+	})
 
 	// MCP routes (require DB ready, no timeout — long-lived SSE connections)
 	s.router.Group(func(r chi.Router) {
@@ -1607,14 +1844,21 @@ func (s *Service) setupRoutes() {
 
 		// Session routes
 		r.Post("/api/sessions/init", s.handleSessionInit)
+		r.Get("/api/sessions/list", s.handleListSessions)
 		r.Get("/api/sessions", s.handleGetSessionByClaudeID)
-		r.Post("/sessions/{id}/init", s.handleSessionStart)
+		r.Post("/api/sessions/{id}/init", s.handleSessionStart)
 		r.Post("/api/sessions/observations", s.handleObservation)
 		r.Post("/api/sessions/subagent-complete", s.handleSubagentComplete)
-		r.Post("/sessions/{id}/summarize", s.handleSummarize)
+		r.Post("/api/sessions/{id}/summarize", s.handleSummarize)
 		r.Post("/api/sessions/{id}/extract-learnings", s.handleExtractLearnings)
 		r.Post("/api/sessions/{sessionId}/mark-injected", s.handleSessionMarkInjected)
+		r.Post("/api/sessions/{sessionId}/mark-cited", s.handleMarkCited)
 		r.Get("/api/sessions/{sessionId}/injected-observations", s.handleGetSessionInjectedObservations)
+		r.Post("/api/sessions/{sessionId}/outcome", s.handleSetSessionOutcome)
+		r.Get("/api/learning/effectiveness-distribution", s.handleGetEffectivenessDistribution)
+		r.Get("/api/learning/strategies", s.handleGetStrategies)
+		r.Get("/api/learning/curve", s.handleGetLearningCurve)
+		r.Get("/api/sessions/{sessionId}/injections", s.handleGetSessionInjections)
 
 		// Session transcript indexing (client pushes JSONL for FTS)
 		r.Post("/api/sessions/index", s.handleIndexSession)
@@ -1640,6 +1884,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/observations/{id}/feedback", s.handleObservationFeedback)
 		r.Post("/api/observations/{id}/utility", s.handleObservationUtility)
 		r.Get("/api/observations/{id}/score", s.handleExplainScore)
+		r.Get("/api/observations/{id}/effectiveness", s.handleGetEffectiveness)
 		r.Post("/api/observations/mark-injected", s.handleMarkInjected)
 		r.Get("/api/observations/top", s.handleGetTopObservations)
 		r.Get("/api/observations/most-retrieved", s.handleGetMostRetrieved)
@@ -1653,10 +1898,13 @@ func (s *Service) setupRoutes() {
 
 		// Context injection
 		r.Get("/api/context/count", s.handleContextCount)
-		r.Get("/api/context/inject", s.handleContextInject)
+		r.Post("/api/context/inject", s.handleContextInject)
+		r.Get("/api/context/inject", s.handleContextInject) // deprecated — use POST
 		r.Get("/api/context/search", s.handleSearchByPrompt)
 		r.Post("/api/context/search", s.handleSearchByPrompt)
 		r.Get("/api/context/files", s.handleFileContext)
+		r.Get("/api/context/by-file", s.handleContextByFile)
+		r.Post("/api/decisions/search", s.handleSearchDecisions)
 
 		// Pattern routes
 		r.Get("/api/patterns", s.handleGetPatterns)
@@ -1665,6 +1913,8 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/patterns/by-name", s.handleGetPatternByName)
 		r.Get("/api/patterns/{id}", s.handleGetPatternByID)
 		r.Get("/api/patterns/{id}/insight", s.handleGetPatternInsight)
+		r.Get("/api/patterns/{id}/observations", s.handleGetPatternObservations)
+		r.Post("/api/patterns/{id}/insight", s.handlePostPatternInsight)
 		r.Delete("/api/patterns/{id}", s.handleDeletePattern)
 		r.Post("/api/patterns/{id}/deprecate", s.handleDeprecatePattern)
 		r.Post("/api/patterns/merge", s.handleMergePatterns)
@@ -1687,6 +1937,7 @@ func (s *Service) setupRoutes() {
 		// Search analytics
 		r.Get("/api/search/recent", s.handleGetRecentQueries)
 		r.Get("/api/search/analytics", s.handleGetSearchAnalytics)
+		r.Post("/api/analytics/search-misses", s.handleSearchMissAnalytics)
 
 		// Duplicate detection
 		r.Get("/api/observations/duplicates", s.handleFindDuplicates)
@@ -1696,6 +1947,52 @@ func (s *Service) setupRoutes() {
 
 		// Telemetry
 		r.Get("/api/telemetry/similarity", s.handleGetSimilarityTelemetry)
+
+		// Auth routes (require auth — admin only)
+		r.Get("/api/auth/me", s.handleAuthMe)
+		r.Get("/api/auth/tokens", s.handleListTokens)
+		r.Post("/api/auth/tokens", s.handleCreateToken)
+		r.Delete("/api/auth/tokens/{id}", s.handleRevokeToken)
+
+		// Vault routes
+		r.Get("/api/vault/credentials", s.handleListCredentials)
+		r.Get("/api/vault/credentials/{name}", s.handleGetCredential)
+		r.Post("/api/vault/credentials", s.handleStoreCredential)
+		r.Delete("/api/vault/credentials/{name}", s.handleDeleteCredential)
+		r.Get("/api/vault/status", s.handleVaultStatus)
+		r.Delete("/api/vault/orphaned-credentials", s.handleDeleteOrphanedCredentials)
+
+		// Tag routes
+		r.Post("/api/observations/{id}/tags", s.handleTagObservation)
+		r.Get("/api/observations/by-tag/{tag}", s.handleGetObservationsByTag)
+		r.Post("/api/observations/batch-tag", s.handleBatchTagObservations)
+		r.Get("/api/observations/tag-cloud", s.handleTagCloud)
+
+		// Bulk observation operations
+		r.Delete("/api/observations/bulk", s.handleBulkDeleteREST)
+		r.Patch("/api/observations/bulk-scope", s.handleBulkScopeChange)
+
+		// Token stats
+		r.Get("/api/auth/tokens/{id}/stats", s.handleGetTokenStats)
+
+		// Indexed session routes (separate from live session management)
+		r.Get("/api/sessions-index", s.handleListIndexedSessions)
+		r.Get("/api/sessions-index/search", s.handleSearchIndexedSessions)
+
+		// Maintenance routes
+		r.Post("/api/maintenance/consolidation", s.handleTriggerConsolidation)
+		r.Post("/api/maintenance/run", s.handleRunMaintenance)
+		r.Get("/api/maintenance/stats", s.handleGetMaintenanceStats)
+		r.Get("/api/maintenance/consistency", s.handleConsistencyCheck)
+		r.Post("/api/maintenance/backfill-relations", s.handleBackfillRelations)
+		r.Post("/api/maintenance/purge-patterns", s.handlePurgePatterns)
+		r.Post("/api/maintenance/pattern-cleanup", s.handlePatternCleanup)
+		r.Post("/api/maintenance/purge-rebuild", s.handlePurgeRebuild)
+		r.Post("/api/maintenance/patterns/cleanup", s.handlePatternCleanupAdvanced)
+		r.Post("/api/maintenance/apo/rewrite", s.handleAPORewrite)
+
+		// Analytics routes
+		r.Get("/api/analytics/trends", s.handleGetTrends)
 	})
 }
 
@@ -1756,6 +2053,30 @@ func (s *Service) recordRetrievalStatsExtended(project string, served, verified,
 	} else {
 		atomic.AddInt64(&stats.ContextInjections, 1)
 	}
+
+	// Persist to DB via batched flusher (non-blocking).
+	s.initMu.RLock()
+	logStore := s.retrievalStatsLogStore
+	s.initMu.RUnlock()
+	if logStore != nil {
+		if isSearch {
+			logStore.LogEvent(project, "search_request", 1)
+		} else {
+			logStore.LogEvent(project, "context_injection", 1)
+		}
+		if served > 0 {
+			logStore.LogEvent(project, "observations_served", int(served))
+		}
+		if staleExcluded > 0 {
+			logStore.LogEvent(project, "stale_excluded", int(staleExcluded))
+		}
+		if freshCount > 0 {
+			logStore.LogEvent(project, "fresh_count", int(freshCount))
+		}
+		if duplicatesRemoved > 0 {
+			logStore.LogEvent(project, "duplicates_removed", int(duplicatesRemoved))
+		}
+	}
 }
 
 // cleanupRetrievalStatsLocked removes stale entries from retrievalStats.
@@ -1810,9 +2131,19 @@ func (s *Service) GetRetrievalStats(project string) RetrievalStats {
 	return result
 }
 
-// trackSearchQuery records a search query for analytics using a circular buffer.
-// O(1) insertion - no memory allocation or copying on each insert.
-func (s *Service) trackSearchQuery(query, project, queryType string, results int, usedVector bool) {
+// trackSearchQuery records a search query for analytics.
+// Writes to the persistent DB store (fire-and-forget) and the in-memory ring buffer.
+// O(1) insertion for the ring buffer - no memory allocation or copying on each insert.
+func (s *Service) trackSearchQuery(query, project, queryType string, results int, usedVector bool, latencyMs float32) {
+	// Persist to DB asynchronously (fire-and-forget, never blocks caller).
+	s.initMu.RLock()
+	sqlStore := s.searchQueryLogStore
+	s.initMu.RUnlock()
+	if sqlStore != nil {
+		sqlStore.LogQuery(project, query, queryType, results, usedVector, latencyMs)
+	}
+
+	// Also maintain the in-memory ring buffer for low-latency in-process access.
 	s.recentQueriesMu.Lock()
 	defer s.recentQueriesMu.Unlock()
 
@@ -1934,6 +2265,38 @@ func (s *Service) invalidateAllObsCountCache() {
 func (s *Service) Start() error {
 	port := config.GetWorkerPort()
 
+	// Auth startup gate (ADR-0001): refuse to start without token unless explicitly disabled
+	token := config.GetWorkerToken()
+	authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
+
+	if token == "" && !authDisabled {
+		log.Fatal().Msg("ENGRAM_AUTH_ADMIN_TOKEN (or ENGRAM_API_TOKEN) is not set. Set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production).")
+	}
+
+	// Deprecation warning for old env var name
+	if os.Getenv("ENGRAM_API_TOKEN") != "" && os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN") == "" {
+		log.Warn().Msg("auth: ENGRAM_API_TOKEN is deprecated — rename to ENGRAM_AUTH_ADMIN_TOKEN (old name will be removed in v1.3)")
+	}
+
+	if authDisabled {
+		log.Warn().Msg("auth: authentication is explicitly disabled via ENGRAM_AUTH_DISABLED=true — all endpoints are unauthenticated")
+		// Start periodic warning goroutine tracked by WaitGroup for graceful shutdown.
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-s.ctx.Done():
+					return
+				case <-ticker.C:
+					log.Warn().Msg("auth: reminder — authentication is disabled, all endpoints are unauthenticated")
+				}
+			}
+		}()
+	}
+
 	host := config.GetWorkerHost()
 	s.server = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", host, port),
@@ -2042,6 +2405,7 @@ func (s *Service) processAllSessions() {
 							msg.Observation.ToolResponse,
 							msg.Observation.PromptNumber,
 							msg.Observation.CWD,
+							msg.Observation.UserPrompt,
 						)
 						if err != nil {
 							log.Error().Err(err).
@@ -2199,6 +2563,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	log.Debug().Msg("Phase 6: Closing AI/ML services...")
 	if s.reranker != nil {
 		collectError("reranker", s.reranker.Close())
+	}
+	if s.resilientEmbedder != nil {
+		s.resilientEmbedder.Stop()
 	}
 	if s.embedSvc != nil {
 		collectError("embedding_service", s.embedSvc.Close())

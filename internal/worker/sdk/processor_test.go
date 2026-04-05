@@ -255,13 +255,13 @@ func TestShouldSkipTrivialOperation(t *testing.T) {
 			outputStr: "total 123\ndrwxr-xr-x some long listing that is at least 50 chars",
 			expected:  true,
 		},
-		// Valid operations that should NOT be skipped
+		// Read is skipped by design — high-volume, low-insight (whitelist approach)
 		{
 			name:      "valid_read",
 			toolName:  "Read",
 			inputStr:  `{"file_path": "/project/main.go"}`,
 			outputStr: "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "valid_edit",
@@ -512,12 +512,10 @@ func TestObservationConcepts(t *testing.T) {
 // TestProcessorStruct tests processor struct initialization and methods.
 func TestProcessorStruct(t *testing.T) {
 	p := &Processor{
-		claudePath: "/path/to/claude",
-		model:      "haiku",
-		sem:        make(chan struct{}, DefaultConcurrentLLMCalls),
+		model: "haiku",
+		sem:   make(chan struct{}, DefaultConcurrentLLMCalls),
 	}
 
-	assert.Equal(t, "/path/to/claude", p.claudePath)
 	assert.Equal(t, "haiku", p.model)
 	assert.NotNil(t, p.sem)
 }
@@ -590,30 +588,10 @@ func TestBroadcast_NilFunc(t *testing.T) {
 	p.broadcast(map[string]interface{}{"type": "test"})
 }
 
-// TestIsAvailable_NonexistentPath tests IsAvailable with non-existent path.
-func TestIsAvailable_NonexistentPath(t *testing.T) {
-	p := &Processor{
-		claudePath: "/nonexistent/path/to/claude",
-	}
-
+// TestIsAvailable tests IsAvailable requires LLM client.
+func TestIsAvailable(t *testing.T) {
+	p := &Processor{}
 	assert.False(t, p.IsAvailable())
-}
-
-// TestIsAvailable_ExistingPath tests IsAvailable with existing path.
-func TestIsAvailable_ExistingPath(t *testing.T) {
-	// Create a temp file to simulate claude binary
-	tmpFile, err := os.CreateTemp("", "claude-test-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
-
-	p := &Processor{
-		claudePath: tmpFile.Name(),
-	}
-
-	assert.True(t, p.IsAvailable())
 }
 
 // TestShouldSkipTrivialOperation_EdgeCases tests edge cases for trivial operation detection.
@@ -700,7 +678,7 @@ func TestShouldSkipTrivialOperation_EdgeCases(t *testing.T) {
 			toolName:  "Grep",
 			inputStr:  `{"pattern": "func main"}`,
 			outputStr: "main.go:10:func main() {\nmain.go:11:    fmt.Println(\"Hello\")\n}",
-			expected:  false,
+			expected:  true, // Grep falls into default → skipped (whitelist: only Edit/Write/interesting Bash)
 		},
 		{
 			name:      "valid_bash_build",
@@ -891,9 +869,9 @@ func TestToJSONString_ComplexTypes(t *testing.T) {
 // TestSystemPrompt tests that the system prompt is defined.
 func TestSystemPrompt(t *testing.T) {
 	assert.NotEmpty(t, systemPrompt)
-	assert.Contains(t, systemPrompt, "memory extraction agent")
 	assert.Contains(t, systemPrompt, "observation")
-	assert.Contains(t, systemPrompt, "GUIDELINES")
+	assert.Contains(t, systemPrompt, "CATEGORY")
+	assert.Contains(t, systemPrompt, "user_behavior")
 }
 
 // TestProcessorSemaphore tests the semaphore behavior.
@@ -1449,24 +1427,6 @@ func TestHashRequest_OutputTruncation(t *testing.T) {
 // TESTS FOR Processor methods
 // =============================================================================
 
-func TestProcessor_CircuitBreakerState(t *testing.T) {
-	p := &Processor{
-		circuitBreaker: NewCircuitBreaker(2, 60),
-	}
-
-	// Initially closed
-	assert.Equal(t, "closed", p.CircuitBreakerState())
-
-	// After enough failures, open
-	p.circuitBreaker.RecordFailure()
-	p.circuitBreaker.RecordFailure()
-	assert.Equal(t, "open", p.CircuitBreakerState())
-
-	// After success, closed
-	p.circuitBreaker.RecordSuccess()
-	assert.Equal(t, "closed", p.CircuitBreakerState())
-}
-
 func TestProcessor_CircuitBreakerMetrics(t *testing.T) {
 	p := &Processor{
 		circuitBreaker: NewCircuitBreaker(5, 120),
@@ -1731,7 +1691,6 @@ func TestProcessObservation_SkipDuplicate(t *testing.T) {
 		circuitBreaker: NewCircuitBreaker(5, 60),
 		deduplicator:   NewRequestDeduplicator(300, 1000),
 		sem:            make(chan struct{}, 4),
-		claudePath:     "/nonexistent/path", // Will fail at CLI call stage
 	}
 
 	ctx := context.Background()
@@ -1741,12 +1700,12 @@ func TestProcessObservation_SkipDuplicate(t *testing.T) {
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
 	// First call should try to process (will fail because claudePath doesn't exist)
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
 	// Expect error because claudePath doesn't exist
 	assert.Error(t, err)
 
 	// Second call with same input should be skipped as duplicate
-	err = p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
+	err = p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
 	assert.NoError(t, err) // No error because it was skipped as duplicate
 }
 
@@ -1761,11 +1720,12 @@ func TestProcessObservation_CircuitBreakerOpen(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Valid input that would be processed
+	// Use "Edit" tool — bypasses shouldSkipTrivialOperation (Edit always proceeds)
+	// so the circuit breaker check is actually reached.
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "circuit breaker open")
 }
@@ -1775,7 +1735,6 @@ func TestProcessObservation_ContextCancel(t *testing.T) {
 		circuitBreaker: NewCircuitBreaker(5, 60),
 		deduplicator:   NewRequestDeduplicator(300, 1000),
 		sem:            make(chan struct{}, 1), // Small semaphore
-		claudePath:     "/fake/claude",
 	}
 
 	// Fill the semaphore
@@ -1789,7 +1748,9 @@ func TestProcessObservation_ContextCancel(t *testing.T) {
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
+	// Use "Edit" tool — bypasses shouldSkipTrivialOperation so the semaphore
+	// and context cancellation checks are actually reached.
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
@@ -1819,7 +1780,6 @@ func TestProcessSummary_CircuitBreakerOpen(t *testing.T) {
 		circuitBreaker: cb,
 		deduplicator:   NewRequestDeduplicator(300, 1000),
 		sem:            make(chan struct{}, 4),
-		claudePath:     "/nonexistent/path",
 	}
 
 	ctx := context.Background()
@@ -1831,40 +1791,8 @@ I've added a check for the exp claim and implemented proper error handling.
 The changes have been tested and the build passes successfully.
 Here's the implementation details and code review.`
 
-	// Valid request but circuit breaker is open
+	// Valid request but no LLM client → should fail
 	err := p.ProcessSummary(ctx, 1, "session-1", "project-1",
 		"Implement authentication", "User message", assistantMsg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "claude CLI failed")
-}
-
-// =============================================================================
-// TESTS FOR callClaudeCLI Error Paths
-// =============================================================================
-
-func TestCallClaudeCLI_PromptTooLarge(t *testing.T) {
-	p := &Processor{
-		claudePath: "/fake/claude",
-	}
-
-	ctx := context.Background()
-
-	// Create a prompt that exceeds MaxPromptSize
-	largePrompt := string(make([]byte, MaxPromptSize+1))
-
-	_, err := p.callClaudeCLI(ctx, largePrompt)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "prompt exceeds maximum size")
-}
-
-func TestCallClaudeCLI_BinaryNotFound(t *testing.T) {
-	p := &Processor{
-		claudePath: "/nonexistent/path/to/claude",
-	}
-
-	ctx := context.Background()
-
-	_, err := p.callClaudeCLI(ctx, "test prompt")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "claude CLI failed")
 }

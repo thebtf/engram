@@ -37,7 +37,11 @@ async function handleSessionStart(ctx, input) {
   const gitRemote = typeof ctx.GitRemote === 'string' ? ctx.GitRemote : '';
   const relativePath = typeof ctx.RelativePath === 'string' ? ctx.RelativePath : '';
 
+  const ccSessionID = typeof ctx.SessionID === 'string' ? ctx.SessionID : '';
   let injectURL = `/api/context/inject?project=${encodeURIComponent(project)}&cwd=${encodeURIComponent(cwd)}`;
+  if (ccSessionID) {
+    injectURL += `&session_id=${encodeURIComponent(ccSessionID)}`;
+  }
   if (legacyProject && legacyProject !== project) {
     injectURL += `&legacy_project=${encodeURIComponent(legacyProject)}`;
     injectURL += `&git_remote=${encodeURIComponent(gitRemote)}`;
@@ -52,7 +56,11 @@ async function handleSessionStart(ctx, input) {
     return '';
   }
 
-  const observations = Array.isArray(result.observations) ? result.observations : [];
+  const observations = Array.isArray(result.results)
+    ? result.results
+    : Array.isArray(result.observations)
+      ? result.observations
+      : [];
   let fullCount = 25;
   const fullCountCandidate = Number(result.full_count);
   if (Number.isFinite(fullCountCandidate) && fullCountCandidate > 0) {
@@ -64,8 +72,33 @@ async function handleSessionStart(ctx, input) {
   console.error(
     `[engram] Injecting ${observations.length} observations from project memory (${detailedCount} detailed, ${condensedCount} condensed)`
   );
+  if (result && result.strategy) {
+    console.error(`[session-start] Injection strategy: ${result.strategy}`);
+  }
 
-  let contextBuilder = '<engram-context>\n';
+  // Always-inject tier: unconditional behavioral rules (FR-1, FR-6)
+  const alwaysInject = Array.isArray(result.always_inject) ? result.always_inject : [];
+  let contextBuilder = '';
+  if (alwaysInject.length > 0) {
+    contextBuilder += '<user-behavior-rules>\n';
+    contextBuilder += '# Behavioral Rules (Always Active)\n';
+    contextBuilder += 'These rules are injected unconditionally. Follow them in every session.\n\n';
+    for (const rule of alwaysInject) {
+      if (!rule || typeof rule !== 'object') continue;
+      const rTitle = escapeXmlTags(getString(rule.title));
+      const rNarrative = escapeXmlTags(getString(rule.narrative));
+      contextBuilder += `## ${rTitle}\n`;
+      if (rNarrative !== '') {
+        contextBuilder += `${rNarrative}\n`;
+      }
+      contextBuilder += formatFactsLine(rule.facts);
+      contextBuilder += '\n';
+    }
+    contextBuilder += '</user-behavior-rules>\n';
+    console.error(`[engram] Injected ${alwaysInject.length} always-inject behavioral rules`);
+  }
+
+  contextBuilder += '<engram-context>\n';
   contextBuilder += `# Project Memory (${observations.length} observations)\n`;
   contextBuilder +=
     'Use this knowledge to answer questions without re-exploring the codebase.\n\n';

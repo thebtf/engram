@@ -42,7 +42,6 @@ type Config struct {
 	ContextFullField          string `json:"context_full_field"`
 	DBPath                    string `json:"db_path"`
 	Model                     string `json:"model"`
-	ClaudeCodePath            string `json:"claude_code_path"`
 	EmbeddingModel            string `json:"embedding_model"`
 	VectorStorageStrategy     string `json:"vector_storage_strategy"`
 	EmbeddingProvider         string `json:"embedding_provider"`
@@ -108,7 +107,7 @@ type Config struct {
 	SmartGCMinAgeDays           int      `json:"smart_gc_min_age_days"`
 	LogBufferSize               int      `json:"log_buffer_size"`               // Ring buffer capacity for /api/logs (default: 10000)
 	QueryExpansionTimeoutMS     int      `json:"query_expansion_timeout_ms"`    // Timeout for query expansion (default: 3000ms)
-	DedupSimilarityThreshold    float64  `json:"dedup_similarity_threshold"`    // Cosine similarity threshold for dedup clustering (default: 0.55)
+	DedupSimilarityThreshold    float64  `json:"dedup_similarity_threshold"`    // Cosine similarity threshold for dedup clustering (default: 0.7)
 	DedupWindowSize             int      `json:"dedup_window_size"`             // Max observations considered for dedup (default: 200)
 	ClusteringThreshold         float64  `json:"clustering_threshold"`          // Similarity threshold for result clustering (default: 0.55)
 	StoreMemoryHardLimit        int      `json:"store_memory_hard_limit"`       // Max chars for store_memory content (default: 10000)
@@ -117,7 +116,32 @@ type Config struct {
 	StoreMemorySummarize        bool     `json:"store_memory_summarize"`        // Use LLM to summarize long content (default: false)
 	EncryptionKeyFile      string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
 	EncryptionKey          string `json:"-"` // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
-	LocalVerificationEnabled bool `json:"local_verification_enabled"` // Enable local file reads and CLI calls (default: false, for Docker/remote)
+	LLMMaxTokens           int    `json:"llm_max_tokens"`        // ENGRAM_LLM_MAX_TOKENS (default: 4096)
+	LLMFilterEnabled       bool   `json:"llm_filter_enabled"`    // ENGRAM_LLM_FILTER_ENABLED (default: false)
+	LLMFilterModel         string `json:"llm_filter_model"`      // ENGRAM_LLM_FILTER_MODEL (default: same as ENGRAM_LLM_MODEL)
+	LLMFilterTimeoutMS     int    `json:"llm_filter_timeout_ms"` // ENGRAM_LLM_FILTER_TIMEOUT_MS (default: 3000)
+	LLMFilterCandidates    int    `json:"llm_filter_candidates"` // ENGRAM_LLM_FILTER_CANDIDATES (default: 15)
+	ConsolidationEnabled   bool    `json:"consolidation_enabled"`    // ENGRAM_CONSOLIDATION_ENABLED (default: false)
+	SupersessionEnabled    bool    `json:"supersession_enabled"`     // ENGRAM_SUPERSESSION_ENABLED (default: true)
+	SupersessionThreshold  float64 `json:"supersession_threshold"`   // ENGRAM_SUPERSESSION_THRESHOLD (default: 0.9)
+	ConsolidationThreshold float64 `json:"consolidation_threshold"`  // ENGRAM_CONSOLIDATION_THRESHOLD (default: 0.95)
+	AlwaysInjectLimit      int     `json:"always_inject_limit"`       // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
+	ProjectInjectLimit     int     `json:"project_inject_limit"`      // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
+	InjectionFloor         int     `json:"injection_floor"`           // ENGRAM_INJECTION_FLOOR (default: 3)
+	SessionBoost           float64 `json:"session_boost"`             // ENGRAM_SESSION_BOOST (default: 1.3)
+
+	// Injection strategy A/B testing (closed-loop learning FR-5)
+	InjectionStrategies   []string `json:"injection_strategies"`    // Available strategies
+	InjectionStrategyMode string   `json:"injection_strategy_mode"` // "round-robin" or "fixed"
+	DefaultStrategy       string   `json:"default_strategy"`        // Default strategy name
+
+	// Signal weights for reward computation (closed-loop learning FR-7)
+	SignalWeights map[string]float64 `json:"signal_weights"`
+
+	// OutcomeRecorderIntervalMinutes controls how often the periodic outcome recorder runs.
+	// It records outcomes for sessions that have injection records but no outcome yet.
+	// Env: ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES (default: 15)
+	OutcomeRecorderIntervalMinutes int `json:"outcome_recorder_interval_minutes"`
 }
 
 var (
@@ -242,13 +266,36 @@ func Default() *Config {
 		SmartGCThreshold:            0.05,  // FinalScore below this = candidate for archival
 		SmartGCMinAgeDays:           14,    // Only consider observations older than 14 days
 		QueryExpansionTimeoutMS:     3000,  // 3s cap for HyDE + synonym expansion
-		DedupSimilarityThreshold:    0.55,  // 55% similarity threshold for deduplication
+		DedupSimilarityThreshold:    0.7,   // 70% similarity threshold for deduplication (raised from 0.55 after pre-test T029)
 		DedupWindowSize:             200,   // Examine up to 200 candidates for dedup
 		ClusteringThreshold:         0.55,  // 55% similarity threshold for result clustering
 		StoreMemoryHardLimit:        10000,
 		StoreMemorySoftLimit:        1000,
 		StoreMemorySummarize:        false,
 		StoreMemoryDedupThreshold:   0.92,
+		LLMMaxTokens:                4096,  // Enough for thinking models (reasoning + content)
+		LLMFilterEnabled:            false, // Opt-in: requires LLM configuration
+		LLMFilterTimeoutMS:          3000,  // 3s timeout for LLM filter
+		LLMFilterCandidates:         15,    // Evaluate top 15 candidates
+		ConsolidationEnabled:        false, // Opt-in: near-duplicate merging during maintenance
+		SupersessionEnabled:         true,  // Enabled: mark old decisions superseded on new write
+		SupersessionThreshold:       0.9,   // 90% similarity triggers write-time supersession
+		ConsolidationThreshold:      0.95,  // 95% similarity triggers maintenance-time merge
+		AlwaysInjectLimit:           20,    // Inject up to 20 always-inject observations per session
+		ProjectInjectLimit:          15,    // Inject up to 15 project-scoped observations per session
+		InjectionFloor:              3,     // Always inject at least 3 observations regardless of threshold
+		SessionBoost:                1.3,   // Boost factor for observations from recently active sessions
+		InjectionStrategies:           []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
+		InjectionStrategyMode:         "round-robin",
+		DefaultStrategy:               "baseline",
+		OutcomeRecorderIntervalMinutes: 15,
+		SignalWeights: map[string]float64{
+			"git_commit":   1.0,
+			"pr_created":   2.0,
+			"pr_merged":    3.0,
+			"test_passed":  0.5,
+			"error_streak": -0.5,
+		},
 	}
 }
 
@@ -274,9 +321,6 @@ func Load() (*Config, error) {
 			}
 			if v, ok := settings["ENGRAM_MODEL"].(string); ok {
 				cfg.Model = v
-			}
-			if v, ok := settings["CLAUDE_CODE_PATH"].(string); ok {
-				cfg.ClaudeCodePath = v
 			}
 			if v, ok := settings["ENGRAM_EMBEDDING_MODEL"].(string); ok && v != "" {
 				cfg.EmbeddingModel = v
@@ -376,7 +420,10 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_WORKER_HOST")); v != "" {
 		cfg.WorkerHost = v
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN")); v != "" {
+	// Auth admin token: new name takes priority, old name is deprecated alias
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); v != "" {
+		cfg.WorkerToken = v
+	} else if v := strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN")); v != "" {
 		cfg.WorkerToken = v
 	}
 	if v := envFirstOf("ENGRAM_EMBEDDING_PROVIDER", "EMBEDDING_PROVIDER"); v != "" {
@@ -518,13 +565,80 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENCRYPTION_KEY_FILE")); v != "" {
 		cfg.EncryptionKeyFile = v
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENCRYPTION_KEY")); v != "" {
+	// ENGRAM_VAULT_KEY is the primary name; ENGRAM_ENCRYPTION_KEY is accepted as alias.
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_VAULT_KEY")); v != "" {
+		cfg.EncryptionKey = v
+	} else if v := strings.TrimSpace(os.Getenv("ENGRAM_ENCRYPTION_KEY")); v != "" {
 		cfg.EncryptionKey = v
 	}
-	if v := strings.TrimSpace(os.Getenv("LOCAL_VERIFICATION_ENABLED")); v != "" {
-		cfg.LocalVerificationEnabled = v == "true" || v == "1"
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_MAX_TOKENS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.LLMMaxTokens = n
+		}
 	}
-
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_ENABLED")); v == "true" || v == "1" {
+		cfg.LLMFilterEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_MODEL")); v != "" {
+		cfg.LLMFilterModel = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_TIMEOUT_MS")); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			cfg.LLMFilterTimeoutMS = ms
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_CANDIDATES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.LLMFilterCandidates = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONSOLIDATION_ENABLED")); v == "true" || v == "1" {
+		cfg.ConsolidationEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_SUPERSESSION_ENABLED")); v == "false" || v == "0" {
+		cfg.SupersessionEnabled = false
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_SUPERSESSION_THRESHOLD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1.0 {
+			cfg.SupersessionThreshold = f
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONSOLIDATION_THRESHOLD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1.0 {
+			cfg.ConsolidationThreshold = f
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_ALWAYS_INJECT_LIMIT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.AlwaysInjectLimit = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_PROJECT_INJECT_LIMIT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ProjectInjectLimit = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECTION_FLOOR")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.InjectionFloor = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_SESSION_BOOST")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			cfg.SessionBoost = f
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECTION_STRATEGY_MODE")); v != "" {
+		cfg.InjectionStrategyMode = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_DEFAULT_STRATEGY")); v != "" {
+		cfg.DefaultStrategy = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.OutcomeRecorderIntervalMinutes = n
+		}
+	}
 	return cfg, nil
 }
 
@@ -567,6 +681,57 @@ func Get() *Config {
 	return globalConfig
 }
 
+// Reload re-reads configuration from disk and updates the global config atomically.
+// Returns the new config and any fields that changed.
+func Reload() (*Config, []string, error) {
+	newCfg, err := Load()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	configMu.Lock()
+	old := globalConfig
+	globalConfig = newCfg
+	configMu.Unlock()
+
+	// Detect changed fields for logging
+	var changed []string
+	if old != nil {
+		if old.Model != newCfg.Model {
+			changed = append(changed, "model")
+		}
+		if old.EmbeddingBaseURL != newCfg.EmbeddingBaseURL {
+			changed = append(changed, "embedding_base_url")
+		}
+		if old.EmbeddingModelName != newCfg.EmbeddingModelName {
+			changed = append(changed, "embedding_model_name")
+		}
+		if old.ContextMaxTokens != newCfg.ContextMaxTokens {
+			changed = append(changed, "context_max_tokens")
+		}
+		if old.ContextObservations != newCfg.ContextObservations {
+			changed = append(changed, "context_observations")
+		}
+		if old.RerankingEnabled != newCfg.RerankingEnabled {
+			changed = append(changed, "reranking_enabled")
+		}
+		if old.MaintenanceEnabled != newCfg.MaintenanceEnabled {
+			changed = append(changed, "maintenance_enabled")
+		}
+		if old.HyDEEnabled != newCfg.HyDEEnabled {
+			changed = append(changed, "hyde_enabled")
+		}
+		if old.WorkerPort != newCfg.WorkerPort {
+			changed = append(changed, "worker_port (requires restart)")
+		}
+		if old.WorkerToken != newCfg.WorkerToken {
+			changed = append(changed, "worker_token (requires restart)")
+		}
+	}
+
+	return newCfg, changed, nil
+}
+
 // GetWorkerPort returns the worker port from environment or config.
 func GetWorkerPort() int {
 	if port := os.Getenv("ENGRAM_WORKER_PORT"); port != "" {
@@ -591,7 +756,12 @@ func GetWorkerHost() string {
 }
 
 // GetWorkerToken returns the worker authentication token.
+// GetWorkerToken returns the admin authentication token.
+// Checks ENGRAM_AUTH_ADMIN_TOKEN first (preferred), falls back to ENGRAM_API_TOKEN (deprecated).
 func GetWorkerToken() string {
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); v != "" {
+		return v
+	}
 	return strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN"))
 }
 

@@ -29,12 +29,9 @@ type QueryResult struct {
 
 // StaleVectorInfo contains information about a vector that needs rebuilding.
 type StaleVectorInfo struct {
-	DocID     string
-	DocType   string
-	FieldType string
-	Project   string
-	Scope     string
-	SQLiteID  int64
+	DocID    string
+	DocType  string
+	SQLiteID int64
 }
 
 // HealthStats contains comprehensive health information about the vector store.
@@ -44,6 +41,16 @@ type HealthStats struct {
 	CurrentModel  string `json:"current_model"`
 	NeedsRebuild  bool   `json:"needs_rebuild"`
 	RebuildReason string `json:"rebuild_reason"`
+}
+
+// VectorMetricsSnapshot contains real query instrumentation data.
+type VectorMetricsSnapshot struct {
+	QueryCount   int64   `json:"query_count"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	P50LatencyMs float64 `json:"p50_latency_ms"`
+	P95LatencyMs float64 `json:"p95_latency_ms"`
+	P99LatencyMs float64 `json:"p99_latency_ms"`
+	TotalDocs    int64   `json:"total_documents"`
 }
 
 // CacheStatsSnapshot is an exported snapshot of cache performance metrics.

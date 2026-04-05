@@ -10,9 +10,6 @@ import (
 )
 
 const (
-	// SemanticSimilarityThreshold for creating semantic edges
-	SemanticSimilarityThreshold = 0.85
-
 	// MinFileOverlapForEdge minimum file overlap ratio to create edge
 	MinFileOverlapForEdge = 0.3
 
@@ -349,69 +346,3 @@ func edgeKey(id1, id2 int64) string {
 	return fmt.Sprintf("%d-%d", id2, id1)
 }
 
-// DetectSemanticEdges creates edges based on semantic similarity
-// This requires embeddings and is called separately when available
-func DetectSemanticEdges(ctx context.Context, observations []*models.Observation, embeddings map[int64][]float32) []Edge {
-	edges := make([]Edge, 0)
-	seen := make(map[string]bool)
-
-	// Compare all pairs (expensive, but necessary for semantic similarity)
-	for i := 0; i < len(observations); i++ {
-		emb1, ok1 := embeddings[observations[i].ID]
-		if !ok1 {
-			continue
-		}
-
-		for j := i + 1; j < len(observations); j++ {
-			emb2, ok2 := embeddings[observations[j].ID]
-			if !ok2 {
-				continue
-			}
-
-			similarity := cosineSimilarity(emb1, emb2)
-			if similarity < SemanticSimilarityThreshold {
-				continue
-			}
-
-			pairKey := edgeKey(observations[i].ID, observations[j].ID)
-			if seen[pairKey] {
-				continue
-			}
-			seen[pairKey] = true
-
-			edges = append(edges, Edge{
-				FromID:   observations[i].ID,
-				ToID:     observations[j].ID,
-				Relation: RelationSemantic,
-				Weight:   similarity,
-			})
-		}
-	}
-
-	log.Info().
-		Int("semantic_edges", len(edges)).
-		Float32("threshold", SemanticSimilarityThreshold).
-		Msg("Detected semantic edges")
-
-	return edges
-}
-
-// cosineSimilarity computes cosine similarity between two vectors
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) {
-		return 0.0
-	}
-
-	var dotProduct, normA, normB float32
-	for i := range a {
-		dotProduct += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0.0
-	}
-
-	return dotProduct / float32(math.Sqrt(float64(normA))*math.Sqrt(float64(normB)))
-}

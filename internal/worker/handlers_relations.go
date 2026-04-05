@@ -12,7 +12,17 @@ import (
 // DefaultRelationsLimit is the default number of relations to return.
 const DefaultRelationsLimit = 50
 
-// handleGetRelations returns relations for an observation.
+// handleGetRelations godoc
+// @Summary Get observation relations
+// @Description Returns all relations for a specific observation with full details.
+// @Tags Relations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Success 200 {array} models.RelationWithDetails
+// @Failure 400 {string} string "invalid observation id"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/{id}/relations [get]
 func (s *Service) handleGetRelations(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -34,7 +44,18 @@ func (s *Service) handleGetRelations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, relations)
 }
 
-// handleGetRelationGraph returns the relation graph for an observation.
+// handleGetRelationGraph godoc
+// @Summary Get relation graph
+// @Description Returns the relation graph for an observation up to the specified depth.
+// @Tags Relations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Param depth query int false "Graph traversal depth (default 2, max 5)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid observation id"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/{id}/graph [get]
 func (s *Service) handleGetRelationGraph(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -60,7 +81,18 @@ func (s *Service) handleGetRelationGraph(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, graph)
 }
 
-// handleGetRelatedObservations returns observations related to a given one.
+// handleGetRelatedObservations godoc
+// @Summary Get related observations
+// @Description Returns observations related to a given one, filtered by minimum confidence.
+// @Tags Relations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Param min_confidence query number false "Minimum confidence threshold (default 0.4, range 0-1)"
+// @Success 200 {array} models.Observation
+// @Failure 400 {string} string "invalid observation id"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/{id}/related [get]
 func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -103,7 +135,18 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 	writeJSON(w, observations)
 }
 
-// handleGetRelationsByType returns all relations of a specific type.
+// handleGetRelationsByType godoc
+// @Summary Get relations by type
+// @Description Returns all relations of a specific type (e.g., supersedes, contradicts, extends).
+// @Tags Relations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param type path string true "Relation type"
+// @Param limit query int false "Number of results (default 50, max 100)"
+// @Success 200 {array} models.ObservationRelation
+// @Failure 400 {string} string "invalid relation type"
+// @Failure 500 {string} string "internal error"
+// @Router /api/relations/type/{type} [get]
 func (s *Service) handleGetRelationsByType(w http.ResponseWriter, r *http.Request) {
 	relType := chi.URLParam(r, "type")
 
@@ -140,7 +183,15 @@ func (s *Service) handleGetRelationsByType(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, relations)
 }
 
-// handleGetRelationStats returns statistics about relations.
+// handleGetRelationStats godoc
+// @Summary Get relation statistics
+// @Description Returns statistics about relations including total count, high confidence count, and breakdown by type.
+// @Tags Relations
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Router /api/relations/stats [get]
 func (s *Service) handleGetRelationStats(w http.ResponseWriter, r *http.Request) {
 	// Get total relation count
 	totalCount, err := s.relationStore.GetTotalRelationCount(r.Context())

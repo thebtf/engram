@@ -7,6 +7,219 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-04-06
+
+### Added
+
+- **Learning Memory** — engram now learns from every session which observations are useful
+  - **Citation signal wiring**: stop hook detects which injected observations were referenced by the agent (via existing `detectUtilitySignal`), sends citation data to new `POST /api/sessions/{id}/mark-cited` endpoint. `PropagateCitation` updates effectiveness_score per-observation: cited = +0.03, uncited = -0.01.
+  - **Observation enrichment**: user prompts stored server-side as context for tool calls. `BuildObservationPrompt` now includes `<user_intent>` tag — extraction LLM sees WHY the agent acted, not just WHAT it did.
+  - **Mid-session extract-learnings**: PreCompact hook sends last 20 messages (4000 token budget) to extract-learnings endpoint. Reliable trigger (replaces unreliable stop hook). Idempotent.
+  - **Contradiction detection on write** (Mem0 Algorithm 1 adapted): cosine >= 0.92 = NOOP (near-duplicate), 0.75-0.92 = UPDATE (supersede with EVOLVES_FROM), < 0.75 = ADD. Synchronous, ~3-5ms.
+  - **Adaptive per-project threshold**: maintenance Task 20 reads citation rates from injection_log, adjusts relevance threshold ± 0.05 per project. Bounds [0.15, 0.60]. Window: 50 sessions.
+  - **Migration 066**: `cited` BOOLEAN column on injection_log with composite index
+
+### Changed
+
+- Store response now includes `action` field (ADD/UPDATE/NOOP) and `superseded_id` when applicable
+
+## [2.5.0] - 2026-04-06
+
+### Added
+
+- **Minimum Viable Learning Loop** — first production system to close the retrieve → measure → adjust → re-retrieve feedback loop
+  - Bayesian effectiveness multiplier in `ApplyCompositeScoring`: `(successes + 1) / (injections + 2)`. No minimum injection gate.
+  - Project-only vector search: removed `includeGlobal=true` from 3 context search call sites
+  - Project filter on `GetAlwaysInjectObservations`
+  - Client min similarity filter > 0.10 in user-prompt.js
+
+## [2.4.1] - 2026-04-06
+
+### Added
+
+- **Stronger MCP instructions**: exclusivity claim ("Your ONLY Persistent Memory"), mandatory AFTER workflow
+
+### Changed
+
+- PostToolUse hook matcher narrowed `*` → `Write|Edit|Bash|Agent|mcp__aimux` (~50+ fewer node process spawns)
+- Behavioral rules de-duplicated (session-start only, removed from user-prompt.js)
+- Documentation rewrite (README, CHANGELOG, translations)
+
+## [2.4.0] - 2026-03-29
+
+### Added
+
+- **LLM-Driven Memory Extraction** (ADR-005): `store(action="extract", content="...")` — agent dumps raw content, LLM extracts structured observations autonomously
+- Each extracted observation: type, title, narrative, concepts (from 20 valid concepts)
+- Privacy: content redacted via `privacy.RedactSecrets` before LLM call
+- Returns: `{extracted, stored, duplicates, titles}`
+
+## [2.3.1] - 2026-03-29
+
+### Added
+
+- **Embedding Resilience Layer** (ADR-004): independent circuit breaker for embeddings
+- 4 health states: HEALTHY → DEGRADED → DISABLED → RECOVERING
+- Background health check goroutine (30s probe interval)
+- Automatic recovery within 60s of API returning
+- Selfcheck reports embedding status with failure counts
+
+## [2.3.0] - 2026-03-29
+
+### Added
+
+- **Reasoning Traces — System 2 Memory** (ADR-003): structured reasoning chains (thought→action→observation→decision→conclusion)
+- Quality scoring (0-1) via LLM evaluation — only traces ≥ 0.5 stored
+- Auto-detection of reasoning patterns in tool events
+- `recall(action="reasoning")` retrieves past reasoning by project
+- `reasoning_traces` database table with session/project indexes
+
+## [2.2.1] - 2026-03-29
+
+### Fixed
+
+- P1+P2 findings from 13-area investigation report
+- Summary observation fallback when assistant message empty
+- userPrompt fallback threshold lowered 50→10 chars
+- Circuit breaker recovery logging
+- BeforeToolCallResult type added to OpenClaw HookResult
+- Missing concept keywords backfill migration
+
+## [2.2.0] - 2026-03-28
+
+### Added
+
+- **Server-side periodic summarizer** (maintenance Task 19): sessions summarized automatically, no client hook dependency
+
+### Fixed
+
+- Pre-edit guardrails: guidance rules no longer shown as warnings
+- Removed broken client-side summarizer from session-start.js
+
+### Changed
+
+- Summary generation moved from client to server
+
+## [2.1.9] - 2026-03-28
+
+### Added
+
+- Dashboard search miss handling with frequency display
+- Session views with date filtering and min_prompts filter
+
+### Fixed
+
+- Search miss API response unwrapping (miss_stats envelope)
+- Session list filtering (min_prompts, from, to query params)
+
+## [2.1.8] - 2026-03-28
+
+### Added
+
+- Dashboard UX polish: tooltips on observation cards, cursor-pointer, hover transitions, color coding by type
+
+## [2.1.7] - 2026-03-28
+
+### Added
+
+- Dashboard pattern insights view with LLM-generated descriptions
+- Background pattern insight generation (maintenance Task 18, 5 per cycle)
+- Session detail view with metadata, observations, injections
+
+### Fixed
+
+- Summary content built from observations when no transcript available
+
+## [2.1.6] - 2026-03-28
+
+### Added
+
+- Knowledge graph local mode (per-observation neighborhood view)
+- Graph node search functionality
+- Visual styling improvements for graph visualization
+
+## [2.1.5] - 2026-03-28
+
+### Added
+
+- "Sessions Today" counter on dashboard (replaced always-0 "Active Sessions")
+- Consistency check endpoint: `GET /api/maintenance/consistency`
+- `memory_get` import bridge: read file AND store as observation
+
+## [2.1.4] - 2026-03-28
+
+### Added
+
+- Config hot-reload: atomic config swap via `config.Reload()`, no process restart needed
+
+## [2.1.3] - 2026-03-28
+
+### Added
+
+- Pre-edit guardrails hook (recall by_file before file modifications)
+- Session summarization on session start
+- Statusline hook: learning effectiveness metric with 60s cache
+
+## [2.1.2] - 2026-03-28
+
+### Added
+
+- 4 user slash commands: `/retro` (session analysis), `/stats` (memory analytics), `/cleanup` (observation curation), `/export` (data export)
+
+## [2.1.1] - 2026-03-28
+
+### Fixed
+
+- Dashboard concept filter (JSONB @> operator replaces LIKE)
+- Dashboard type filter
+- Hardcoded observation/prompt counts replaced with real API data
+
+## [2.1.0] - 2026-03-28
+
+### Changed
+
+- **MCP Tool API Consolidation**: 61 tools → 7 primary tools (recall, store, feedback, vault, docs, admin, check_system_health)
+- >80% context window reduction (~6100 → ~900 tokens per session)
+- All 61 original tool names work as backward-compatible dispatch aliases
+- Updated MCP server instructions for consolidated API
+- 6 new router files for action-based dispatch
+
+## [2.0.9] - 2026-03-28
+
+### Added
+
+- OpenClaw plugin expanded from 8 → 17 tools with lifecycle hooks
+- Tool descriptions include trigger conditions
+- Stop hook: switched to retrospective injection API
+- Statusline: learning effectiveness metric
+
+### Fixed
+
+- `engram_decisions` uses dedicated endpoint
+- `memory_forget` defaults to suppress (reversible)
+- Suppress action: RowsAffected check + cache invalidation
+- Session outcome recording uses Claude session ID string
+
+### Changed
+
+- Removed 7 redundant MCP tool registrations (68 → 61)
+
+## [2.0.8] - 2026-03-28
+
+### Added
+
+- Session injection retrospective API (`GET /api/sessions/:id/injections`)
+
+### Fixed
+
+- Effectiveness distribution excludes never-injected observations
+
+## [2.0.7] - 2026-03-27
+
+### Note
+
+Releases v0.9.0 through v2.0.7 included incremental improvements to search quality, scoring algorithms, session indexing, knowledge graph, and infrastructure. See [GitHub Releases](https://github.com/thebtf/engram/releases) for detailed per-version notes.
+
 ## [0.5.1] - 2026-03-08
 
 ### Added
@@ -129,7 +342,25 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/thebtf/engram/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/thebtf/engram/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/thebtf/engram/compare/v2.2.1...v2.3.0
+[2.2.1]: https://github.com/thebtf/engram/compare/v2.2.0...v2.2.1
+[2.2.0]: https://github.com/thebtf/engram/compare/v2.1.9...v2.2.0
+[2.1.9]: https://github.com/thebtf/engram/compare/v2.1.8...v2.1.9
+[2.1.8]: https://github.com/thebtf/engram/compare/v2.1.7...v2.1.8
+[2.1.7]: https://github.com/thebtf/engram/compare/v2.1.6...v2.1.7
+[2.1.6]: https://github.com/thebtf/engram/compare/v2.1.5...v2.1.6
+[2.1.5]: https://github.com/thebtf/engram/compare/v2.1.4...v2.1.5
+[2.1.4]: https://github.com/thebtf/engram/compare/v2.1.3...v2.1.4
+[2.1.3]: https://github.com/thebtf/engram/compare/v2.1.2...v2.1.3
+[2.1.2]: https://github.com/thebtf/engram/compare/v2.1.1...v2.1.2
+[2.1.1]: https://github.com/thebtf/engram/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/thebtf/engram/compare/v2.0.9...v2.1.0
+[2.0.9]: https://github.com/thebtf/engram/compare/v2.0.8...v2.0.9
+[2.0.8]: https://github.com/thebtf/engram/compare/v2.0.7...v2.0.8
+[2.0.7]: https://github.com/thebtf/engram/compare/v0.5.1...v2.0.7
 [0.5.1]: https://github.com/thebtf/engram/compare/v0.3.0...v0.5.1
 [0.3.0]: https://github.com/thebtf/engram/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/thebtf/engram/compare/v0.1.0...v0.2.0

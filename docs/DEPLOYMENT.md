@@ -91,17 +91,17 @@ docker run -d --name cmplus-postgres \
   pgvector/pgvector:pg17
 
 # 2. Build the server image
-docker build --target server -t cmplus-server .
+docker build --target server -t engram-server .
 
 # 3. Start server (worker + MCP SSE on single port)
-docker run -d --name cmplus-server \
+docker run -d --name engram-server \
   -e DATABASE_DSN="postgres://engram:change-me@host.docker.internal:5432/engram?sslmode=disable" \
   -e ENGRAM_API_TOKEN="your-secret-token" \
   -e ENGRAM_EMBEDDING_PROVIDER=openai \
   -e ENGRAM_EMBEDDING_BASE_URL=http://host.docker.internal:4000/v1 \
   -e ENGRAM_EMBEDDING_DIMENSIONS=4096 \
   -p 37777:37777 \
-  cmplus-server
+  engram-server
 ```
 
 ---
@@ -196,14 +196,9 @@ ENGRAM_EMBEDDING_MODEL_NAME=openai/Qwen/Qwen3-Embedding-8B
 ENGRAM_EMBEDDING_DIMENSIONS=4096
 ```
 
-### Built-in ONNX (BGE v1.5, 384 dims)
+### Note on Legacy ONNX Provider
 
-Runs locally, no external dependencies. Lower quality but zero-config:
-
-```env
-ENGRAM_EMBEDDING_PROVIDER=builtin
-# No other embedding vars needed
-```
+The built-in ONNX BGE provider has been removed. Only the OpenAI-compatible REST API provider is available. Set `ENGRAM_EMBEDDING_PROVIDER=openai` and configure `ENGRAM_EMBEDDING_BASE_URL`, `ENGRAM_EMBEDDING_API_KEY`, and `ENGRAM_EMBEDDING_MODEL_NAME`.
 
 > **Note:** Changing embedding dimensions on an existing database triggers migration 020, which **truncates all vector data** and re-creates indexes. This is irreversible.
 
@@ -219,7 +214,7 @@ ENGRAM_EMBEDDING_PROVIDER=builtin
 | `ENGRAM_WORKER_HOST` | `0.0.0.0` | Worker bind address |
 | `ENGRAM_WORKER_PORT` | `37777` | Worker HTTP port (API + MCP) |
 | `ENGRAM_API_TOKEN` | (empty) | Auth token for all endpoints |
-| `ENGRAM_EMBEDDING_PROVIDER` | `builtin` | `builtin` or `openai` |
+| `ENGRAM_EMBEDDING_PROVIDER` | `openai` | Embedding provider (`openai`) |
 | `ENGRAM_EMBEDDING_BASE_URL` | `https://api.openai.com/v1` | Embedding API URL |
 | `ENGRAM_EMBEDDING_API_KEY` | (empty) | Embedding API key |
 | `ENGRAM_EMBEDDING_MODEL_NAME` | `text-embedding-3-small` | Model identifier |

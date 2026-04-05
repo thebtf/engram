@@ -25,6 +25,7 @@ type ObservationData struct {
 	ToolResponse interface{}
 	ToolName     string
 	CWD          string
+	UserPrompt   string // Preceding user prompt for observation context (Learning Memory v3)
 	PromptNumber int
 }
 

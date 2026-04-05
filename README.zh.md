@@ -1,3 +1,4 @@
+<!-- redoc:start:header -->
 [English](README.md) | [Русский](README.ru.md) | **中文**
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
@@ -5,30 +6,57 @@
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://www.docker.com/)
 [![CI](https://github.com/thebtf/engram/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/thebtf/engram/actions/workflows/docker-publish.yml)
 [![License](https://img.shields.io/github/license/thebtf/engram)](LICENSE)
+<!-- redoc:end:header -->
 
+<!-- redoc:start:intro -->
 # Engram
 
-Claude Code 工作站的持久化共享记忆基础设施。
+**AI 编程代理的持久化共享记忆基础设施。**
 
-Engram 从编码会话中捕获观察，将其存储在带有 pgvector 扩展的 PostgreSQL 中，并提供 **48 个 MCP 工具** — 包括混合搜索、知识图谱、记忆整合以及跨多个工作站的会话索引。
+AI 编程代理在会话之间会遗忘一切。每次新对话都从零开始——过往的决策、bug 修复、架构选择和已学习的模式全部丢失。你不得不反复解释上下文，而代理则重复犯同样的错误。
+
+Engram 解决了这个问题。它从编程会话中捕获观察记录，使用向量嵌入存储到 PostgreSQL 中，并在新会话中自动注入相关记忆。一台服务器，多个工作站，零上下文丢失。
+
+**7 个整合后的 MCP 工具**替代了原来的 61 个遗留工具，上下文窗口占用减少超过 80%。混合搜索结合全文检索、向量相似度和 BM25，并配合交叉编码器重排序，精准呈现最相关的记忆。
+<!-- redoc:end:intro -->
 
 ---
 
+<!-- redoc:start:whats-new -->
+## 最新版本
+
+| 版本 | 亮点 |
+|------|------|
+| **v2.4.0** | LLM 驱动的记忆提取 — `store(action="extract")` 从原始内容中提取 (ADR-005) |
+| **v2.3.1** | 嵌入弹性层 — 四状态熔断器，支持自动恢复 (ADR-004) |
+| **v2.3.0** | 推理痕迹 / System 2 记忆 — 结构化推理链与质量评分 (ADR-003) |
+| **v2.2.0** | 服务端周期性摘要生成器 — 摘要整合不再依赖客户端 |
+| **v2.1.6** | 知识图谱体验优化 — 本地模式、搜索、视觉样式 |
+| **v2.1.4** | 配置热重载，无需重启 |
+| **v2.1.2** | 用户命令 — `/retro`、`/stats`、`/cleanup`、`/export` |
+| **v2.1.0** | MCP 工具整合 — 从 61 个缩减到 7 个主要工具，上下文窗口占用减少超过 80% |
+
+完整更新日志请查看 [Releases](https://github.com/thebtf/engram/releases)。
+<!-- redoc:end:whats-new -->
+
+---
+
+<!-- redoc:start:architecture -->
 ## 架构
 
-单一服务端口（`37777`）提供 HTTP API、MCP 传输和 Web 仪表板占位页面。
+单服务器运行在端口 `37777`，提供 HTTP REST API、MCP 传输、Vue 3 仪表盘和后台任务。多个工作站通过 hooks 和 MCP 插件连接。
 
 ```mermaid
 graph TB
     subgraph "Workstation A"
         CC_A[Claude Code]
-        H_A[Hooks / MCP Plugin]
+        H_A[Hooks + MCP Plugin]
         CC_A --> H_A
     end
 
     subgraph "Workstation B"
         CC_B[Claude Code]
-        H_B[Hooks / MCP Plugin]
+        H_B[Hooks + MCP Plugin]
         CC_B --> H_B
     end
 
@@ -39,47 +67,83 @@ graph TB
         Server[Worker]
         Server --> |HTTP API| API[REST Endpoints]
         Server --> |MCP| MCP_T["SSE + Streamable HTTP"]
-        Server --> |Web| Dash["Dashboard *"]
+        Server --> |Web| Dash["Vue 3 Dashboard"]
+        Server --> |Background| BG["Summarizer + Insights"]
     end
 
     Server --> PG[(PostgreSQL 17\n+ pgvector)]
-
-    style Dash stroke-dasharray: 5 5
+    Server -.-> LLM["LLM API\n(extraction/summarization)"]
+    Server -.-> EMB["Embedding API"]
+    Server -.-> RR["Reranker API"]
 ```
 
-\* 仪表板目前为占位页面 — 计划在未来版本中实现。
-
-**服务端**（远程主机 / Unraid / NAS 上的 Docker）：
-- PostgreSQL 17 + pgvector 扩展
-- Worker — HTTP API、MCP SSE、MCP Streamable HTTP（`POST /mcp`）、仪表板、整合调度器
+**服务器**（Docker 部署于远程主机 / Unraid / NAS）：
+- PostgreSQL 17 + pgvector（HNSW 余弦索引）
+- Worker — HTTP API、MCP SSE、MCP Streamable HTTP（`POST /mcp`）、Vue 3 仪表盘、整合调度器、周期性摘要生成器
 
 **客户端**（每个工作站）：
-- Hooks — 从 Claude Code 会话中捕获观察
-- MCP 插件 — 通过 Streamable HTTP 或 SSE 将 Claude Code 连接到远程服务器
+- Hooks — 从 Claude Code 会话中捕获观察记录（11 个生命周期 hooks）
+- MCP 插件 — 将 Claude Code 连接到远程服务器
+- 斜杠命令 — `/retro`、`/stats`、`/cleanup`、`/export`、`/setup`、`/doctor`、`/restart`
+<!-- redoc:end:architecture -->
 
 ---
 
-## 功能特性
+<!-- redoc:start:features -->
+## 功能
 
-| 功能 | 描述 |
-|------|------|
-| **PostgreSQL + pgvector** | 支持并发存储，配备 HNSW 余弦向量索引 |
-| **混合搜索** | tsvector GIN + 向量相似度 + BM25，RRF 融合 |
-| **48 个 MCP 工具** | 搜索、上下文、关系、批量操作、会话、维护、集合 |
-| **记忆整合** | 每日衰减、每日关联、季度遗忘 |
-| **17 种关系类型** | 知识图谱：causes、fixes、supersedes、contradicts、explains、shares_theme... |
-| **会话索引** | JSONL 解析器，支持工作站隔离和增量索引 |
-| **集合** | YAML 配置的知识库，支持智能分块（Markdown、Go、Python、TypeScript，基于 tree-sitter） |
-| **MCP 传输** | SSE + Streamable HTTP（`POST /mcp`），单端口 |
-| **嵌入向量** | 本地 ONNX BGE（384 维）或 OpenAI 兼容 REST API |
-| **交叉编码器重排序** | ONNX 重排序器，提升搜索结果质量 |
-| **Token 认证** | 所有端点的 Bearer 认证 |
-| **Instinct 导入** | 将 ECC instinct 导入为指导性观察，支持语义去重 |
-| **自学习** | 每会话效用信号检测，实现自适应记忆 |
-| **仪表板** | Worker 端口上的 Web 仪表板 *（占位 — 计划中）* |
+### 搜索与检索
+- **混合搜索** — tsvector 全文检索 + pgvector 余弦相似度 + BM25，使用 Reciprocal Rank Fusion 融合
+- **交叉编码器重排序** — 基于 API 的重排序器，提升精确度
+- **HyDE 查询扩展** — 假设文档嵌入，改善召回率
+- **知识图谱** — 17 种关系类型，可选 FalkorDB 后端，可视化浏览器
+- **预设查询** — `decisions`、`changes`、`how_it_works`，满足常见查询需求
+
+### 存储与组织
+- **LLM 驱动提取** — 输入原始内容，获得结构化观察记录 (ADR-005)
+- **推理痕迹** — System 2 记忆，包含结构化推理链和质量评分 (ADR-003)
+- **版本化文档** — 支持历史记录、评论和语义搜索的文档集合
+- **加密保险库** — AES-256-GCM 凭据存储，支持作用域访问控制
+- **观察记录合并** — 去重和整合相关记忆
+
+### 整合与维护
+- **记忆衰减** — 每日指数衰减，结合访问频率提升
+- **创意关联** — 自动发现 CONTRADICTS、EXPLAINS、SHARES_THEME 关系
+- **季度遗忘** — 归档低相关性观察记录（受保护类型豁免）
+- **周期性摘要生成器** — 服务端模式洞察生成，不依赖客户端
+- **重要性评分** — 基于类型的加权评分，结合概念、反馈和检索加成
+
+### 弹性与运维
+- **嵌入弹性** — 四状态熔断器，支持自动恢复 (ADR-004)
+- **配置热重载** — 无需重启即可更改设置
+- **Token 预算** — 上下文注入遵循可配置的 token 限制
+- **闭环学习** — A/B 注入策略，带结果追踪
+- **编辑前护栏** — 修改文件前按 by_file 回忆相关记忆
+
+### 仪表盘与用户体验
+- **Vue 3 仪表盘** — 15 个视图：观察记录、搜索、图谱、模式、会话、分析、保险库、学习、系统健康
+- **7 个斜杠命令** — `/retro`、`/stats`、`/cleanup`、`/export`、`/setup`、`/doctor`、`/restart`
+- **11 个生命周期 hooks** — 从 session-start 到 stop
+- **多工作站隔离** — 工作站 ID 作用域，支持跨工作站搜索
+<!-- redoc:end:features -->
 
 ---
 
+<!-- redoc:start:use-cases -->
+## 使用场景
+
+- **上下文连续性** — 开启新会话时自动回忆相关决策、模式和历史工作
+- **架构记忆** — 做新决策前查询过往的设计决策
+- **编辑前感知** — 修改文件前检查已知的相关信息
+- **模式检测** — 跨会话和工作站发现重复出现的模式
+- **团队知识共享** — 多个工作站共享同一个记忆服务器
+- **凭据管理** — 无需 .env 文件即可存储和检索 API 密钥和密钥
+- **会话回顾** — 分析历史会话，获取生产力洞察
+<!-- redoc:end:use-cases -->
+
+---
+
+<!-- redoc:start:quick-start -->
 ## 快速开始
 
 ```bash
@@ -87,8 +151,9 @@ git clone https://github.com/thebtf/engram.git
 cd engram
 
 # 配置
-cp .env.example .env   # 编辑为您的设置
+cp .env.example .env   # 编辑配置
 
+# 启动
 docker compose up -d
 ```
 
@@ -100,28 +165,38 @@ docker compose up -d
 curl http://your-server:37777/health
 ```
 
-**已有 PostgreSQL？** 仅运行服务器容器并设置 `DATABASE_DSN`：
+然后在 Claude Code 中安装插件：
 
-```bash
-DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
-  docker compose up -d server
+```
+/plugin marketplace add thebtf/engram-marketplace
+/plugin install engram
 ```
 
-然后配置 MCP（见下方[安装](#安装)部分）。
+设置环境变量（Claude Code 在运行时读取）：
+
+```bash
+# Linux/macOS: 添加到 shell 配置文件
+# Windows: 设置为系统环境变量
+ENGRAM_URL=http://your-server:37777/mcp
+ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
+```
+
+重启 Claude Code。记忆功能现已激活。
+<!-- redoc:end:quick-start -->
 
 ---
 
+<!-- redoc:start:installation -->
 ## 安装
 
 ### 插件安装（推荐）
 
-插件会自动注册 MCP 服务器。设置两个环境变量后安装：
+插件会自动注册 MCP 服务器、hooks 和斜杠命令。
 
 ```bash
-# 设置环境变量（Claude Code 运行时读取）
-# Linux/macOS：添加到 shell 配置文件；Windows：设置为系统环境变量
+# 先设置环境变量
 ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_API_TOKEN=your-api-token
+ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
 ```
 
 ```
@@ -129,21 +204,28 @@ ENGRAM_API_TOKEN=your-api-token
 /plugin install engram
 ```
 
-重启 Claude Code。插件提供 hooks、skills 和 MCP 连接 — 全部已配置完成。
+重启 Claude Code，一切就绪。
+
+### Docker Compose
+
+```bash
+git clone https://github.com/thebtf/engram.git && cd engram
+cp .env.example .env   # 编辑 DATABASE_DSN、token、嵌入配置
+docker compose up -d
+```
+
+**已有 PostgreSQL？** 只运行服务器容器：
+
+```bash
+DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
+  docker compose up -d server
+```
 
 ### 手动 MCP 配置
 
-如果不使用插件，可直接配置 MCP。Engram 在同一端口暴露三种传输方式：
-
-| 传输方式 | 端点 | 协议 | 最佳用途 |
-|----------|------|------|----------|
-| **Streamable HTTP** | `POST /mcp` | JSON-RPC over HTTP | 直接连接（推荐） |
-| **SSE** | `GET /sse` + `POST /message` | Server-Sent Events | 长连接流式传输 |
-| **Stdio 代理** | 本地二进制文件 | stdio 到 SSE 桥接 | 仅支持 stdio 的客户端 |
+如果不使用插件，可以在 `~/.claude/settings.json` 中直接配置 MCP：
 
 #### Streamable HTTP（推荐）
-
-添加到 `~/.claude/settings.json`（用户范围）或 `.claude/settings.json`（项目范围）：
 
 ```json
 {
@@ -152,42 +234,28 @@ ENGRAM_API_TOKEN=your-api-token
       "type": "url",
       "url": "http://your-server:37777/mcp",
       "headers": {
-        "Authorization": "Bearer ${ENGRAM_API_TOKEN}"
+        "Authorization": "Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"
       }
     }
   }
 }
 ```
 
-Claude Code 在运行时会展开环境变量中的 `${VAR}` 引用。您也可以使用字面值。
+Claude Code 在运行时会从环境变量中展开 `${VAR}`。
 
 **CLI 快捷方式：**
 
 ```bash
-claude mcp add-json engram '{"type":"http","url":"http://your-server:37777/mcp","headers":{"Authorization":"Bearer ${ENGRAM_API_TOKEN}"}}' -s user
+claude mcp add-json engram '{"type":"http","url":"http://your-server:37777/mcp","headers":{"Authorization":"Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"}}' -s user
 ```
 
 #### SSE 传输
 
-使用 `http://your-server:37777/sse` 作为 URL：
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "type": "url",
-      "url": "http://your-server:37777/sse",
-      "headers": {
-        "Authorization": "Bearer ${ENGRAM_API_TOKEN}"
-      }
-    }
-  }
-}
-```
+使用 `http://your-server:37777/sse` 作为 URL（JSON 结构同上）。
 
 #### Stdio 代理（旧版）
 
-适用于仅支持 stdio 的客户端。需要 `mcp-stdio-proxy` 二进制文件：
+适用于仅支持 stdio 的客户端：
 
 ```json
 {
@@ -200,306 +268,293 @@ claude mcp add-json engram '{"type":"http","url":"http://your-server:37777/mcp",
 }
 ```
 
-### 客户端二进制文件（可选）
+### 从源码构建
 
-仅在使用 **stdio 代理**或 **hooks** 时需要。Streamable HTTP / SSE 传输无需任何客户端二进制文件。
-
-**脚本安装（macOS / Linux）：**
+需要 Go 1.25+ 和 Node.js（用于仪表盘）。
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
-```
-
-**从源码构建（Windows PowerShell）：**
-
-```powershell
 git clone https://github.com/thebtf/engram.git && cd engram
-
-$env:CGO_ENABLED = "1"
-go build -tags fts5 -ldflags "-s -w" -o bin\mcp-stdio-proxy.exe .\cmd\mcp-stdio-proxy
+make build    # 构建仪表盘 + worker + mcp 二进制文件
+make install  # 安装插件 + 启动 worker
 ```
-
-Hooks 是 JavaScript 文件，随插件预配置。无需构建。
+<!-- redoc:end:installation -->
 
 ---
 
+<!-- redoc:start:upgrading -->
+## 从 v1.x 升级到 v2.x
+
+**工具整合：** 61 个遗留工具已被 7 个主要工具替代。现有的工具调用将停止工作。请更新你的工作流：
+
+| 旧工具 | v2.x 对应工具 |
+|--------|--------------|
+| `search`、`decisions`、`how_it_works`、`find_by_file`、... | `recall(action="search")`、`recall(action="preset", preset="decisions")` 等 |
+| `edit_observation`、`merge_observations`、... | `store(action="edit")`、`store(action="merge")` 等 |
+| `get_memory_stats`、`bulk_delete_observations`、... | `admin(action="stats")`、`admin(action="bulk_delete")` 等 |
+
+**新环境变量：**
+- `ENGRAM_LLM_URL` / `ENGRAM_LLM_API_KEY` / `ENGRAM_LLM_MODEL` — 用于 LLM 驱动的提取
+- `ENGRAM_ENCRYPTION_KEY` — 保险库加密（十六进制编码的 AES-256）
+- `ENGRAM_HYDE_ENABLED` — HyDE 查询扩展
+- `ENGRAM_GRAPH_PROVIDER` — `falkordb` 或留空（内存模式）
+- `ENGRAM_CONSOLIDATION_ENABLED` / `ENGRAM_SMART_GC_ENABLED` — 整合功能
+
+**Docker 镜像：** 从 `ghcr.io/thebtf/engram:latest` 拉取最新版本。数据库迁移在启动时自动执行。
+<!-- redoc:end:upgrading -->
+
+---
+
+<!-- redoc:start:configuration -->
 ## 配置
 
-### 服务端
+### 服务器
 
-| 变量 | 默认值 | 描述 |
+| 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DATABASE_DSN` | — | PostgreSQL 连接字符串 **（必需）** |
+| `DATABASE_DSN` | — | PostgreSQL 连接字符串 **（必填）** |
 | `DATABASE_MAX_CONNS` | `10` | 最大数据库连接数 |
-| `WORKER_PORT` | `37777` | Worker 端口 |
-| `WORKER_HOST` | `0.0.0.0` | Worker 绑定地址 |
-| `API_TOKEN` | — | Bearer 令牌（远程访问时推荐） |
-| `EMBEDDING_PROVIDER` | `onnx` | `onnx`（本地 BGE）或 `openai`（REST API） |
-| `EMBEDDING_BASE_URL` | — | OpenAI 兼容端点 URL |
-| `EMBEDDING_API_KEY` | — | OpenAI 提供者的 API 密钥 |
-| `EMBEDDING_MODEL_NAME` | — | OpenAI 提供者的模型名称 |
-| `EMBEDDING_DIMENSIONS` | `384` | 嵌入向量维度 |
-| `RERANKING_ENABLED` | `true` | 启用交叉编码器重排序 |
-| `ENGRAM_LLM_URL` | — | 用于观察提取的 OpenAI 兼容 LLM 端点 |
-| `ENGRAM_LLM_API_KEY` | — | LLM 端点的 API 密钥 |
-| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | 用于观察提取的模型名称 |
+| `ENGRAM_WORKER_PORT` | `37777` | 服务器端口 |
+| `ENGRAM_API_TOKEN` | — | Bearer 认证 token |
+| `ENGRAM_AUTH_ADMIN_TOKEN` | — | 管理员 token |
+| `ENGRAM_EMBEDDING_BASE_URL` | — | OpenAI 兼容的嵌入 API 端点 |
+| `ENGRAM_EMBEDDING_API_KEY` | — | 嵌入 API 密钥 |
+| `ENGRAM_EMBEDDING_MODEL_NAME` | — | 嵌入模型名称 |
+| `ENGRAM_EMBEDDING_DIMENSIONS` | `4096` | 嵌入向量维度 |
+| `ENGRAM_LLM_URL` | — | 用于提取/摘要的 LLM 端点 |
+| `ENGRAM_LLM_API_KEY` | — | LLM API 密钥 |
+| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | LLM 模型名称 |
+| `ENGRAM_RERANKING_API_URL` | — | 交叉编码器重排序器端点 |
+| `ENGRAM_ENCRYPTION_KEY` | — | 保险库加密密钥（十六进制编码的 AES-256） |
+| `ENGRAM_HYDE_ENABLED` | `false` | 启用 HyDE 查询扩展 |
+| `ENGRAM_CONTEXT_MAX_TOKENS` | `8000` | 上下文注入的 token 预算 |
+| `ENGRAM_GRAPH_PROVIDER` | — | `falkordb` 或留空（内存模式） |
+| `ENGRAM_CONSOLIDATION_ENABLED` | `false` | 启用记忆整合 |
+| `ENGRAM_SMART_GC_ENABLED` | `false` | 启用智能垃圾回收 |
 
-### 客户端（仅 hooks）
+### 客户端（hooks）
 
-这些变量由客户端 hooks 使用，**不**用于 MCP 传输配置。MCP 连接在 `settings.json` 中配置（见[安装](#安装)）。
-
-| 变量 | 默认值 | 描述 |
+| 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `ENGRAM_URL` | — | 插件的完整 MCP 端点 URL |
-| `ENGRAM_API_TOKEN` | — | 插件的 API 令牌 |
-| `ENGRAM_WORKER_HOST` | `127.0.0.1` | Hooks 的 Worker 地址 |
-| `ENGRAM_WORKER_PORT` | `37777` | Hooks 的 Worker 端口 |
-| `ENGRAM_SESSIONS_DIR` | `~/.claude/projects/` | 会话 JSONL 目录 |
-| `ENGRAM_WORKSTATION_ID` | 自动生成 | 覆盖工作站 ID（8 位十六进制） |
-| `ENGRAM_CONTEXT_OBSERVATIONS` | `100` | 每会话最大记忆数 |
-| `ENGRAM_CONTEXT_FULL_COUNT` | `25` | 包含完整详情的记忆数 |
+| `ENGRAM_URL` | — | 插件使用的完整 MCP 端点 URL |
+| `ENGRAM_AUTH_ADMIN_TOKEN` | — | 插件使用的 API token |
+| `ENGRAM_WORKSTATION_ID` | 自动 | 覆盖工作站 ID（8 位十六进制） |
+<!-- redoc:end:configuration -->
 
 ---
 
-## MCP 工具（48 个）
+<!-- redoc:start:mcp-tools -->
+## MCP 工具
 
-44 个始终可用的工具，4 个条件性工具（需要文档存储），另加 `import_instincts`（始终可用，使用嵌入向量进行去重）。
+Engram 提供 7 个主要工具，整合了所有记忆操作。每个工具支持多种操作。
 
-<details>
-<summary><strong>搜索与发现（11 个）</strong></summary>
+### `recall` — 搜索与检索
 
-| 工具 | 描述 |
+| 操作 | 说明 |
 |------|------|
-| `search` | 跨所有记忆的混合语义 + 全文搜索 |
-| `timeline` | 按时间范围浏览观察 |
-| `decisions` | 查找架构和设计决策 |
-| `changes` | 查找代码修改和变更 |
-| `how_it_works` | 系统理解查询 |
-| `find_by_concept` | 按概念标签查找观察 |
-| `find_by_file` | 查找与文件相关的观察 |
-| `find_by_type` | 按类型查找观察 |
-| `find_similar_observations` | 向量相似度搜索 |
-| `find_related_observations` | 基于图的关系遍历 |
-| `explain_search_ranking` | 调试搜索结果排序 |
+| `search` | 混合语义 + 全文搜索（默认） |
+| `preset` | 预设查询：`decisions`、`changes`、`how_it_works` |
+| `by_file` | 查找与特定文件相关的观察记录 |
+| `by_concept` | 按概念标签查找 |
+| `by_type` | 按观察类型查找 |
+| `similar` | 向量相似度搜索 |
+| `timeline` | 按时间范围浏览 |
+| `related` | 基于图谱的关系遍历 |
+| `patterns` | 已检测到的重复模式 |
+| `get` | 按 ID 获取观察记录 |
+| `sessions` | 搜索/列出已索引的会话 |
+| `explain` | 调试搜索结果排序 |
+| `reasoning` | 检索推理痕迹 |
 
-</details>
+### `store` — 保存与组织
 
-<details>
-<summary><strong>上下文检索（4 个）</strong></summary>
-
-| 工具 | 描述 |
+| 操作 | 说明 |
 |------|------|
-| `get_recent_context` | 获取项目的近期观察 |
-| `get_context_timeline` | 按时间段组织的上下文 |
-| `get_timeline_by_query` | 按查询过滤的时间线 |
-| `get_patterns` | 检测到的重复模式 |
+| `create` | 存储新的观察记录（默认） |
+| `edit` | 修改观察记录字段 |
+| `merge` | 合并重复的观察记录 |
+| `import` | 批量导入观察记录 |
+| `extract` | 从原始内容中进行 LLM 驱动的提取 |
 
-</details>
+### `feedback` — 评价与改进
 
-<details>
-<summary><strong>观察管理（9 个）</strong></summary>
-
-| 工具 | 描述 |
+| 操作 | 说明 |
 |------|------|
-| `get_observation` | 按 ID 获取观察 |
-| `edit_observation` | 修改观察字段 |
-| `tag_observation` | 添加/移除概念标签 |
-| `get_observations_by_tag` | 按标签查找观察 |
-| `merge_observations` | 合并重复项 |
-| `bulk_delete_observations` | 批量删除 |
-| `bulk_mark_superseded` | 标记为已取代 |
-| `bulk_boost_observations` | 提升重要性分数 |
-| `export_observations` | 导出为 JSON |
+| `rate` | 评价观察记录是否有用 |
+| `suppress` | 抑制低质量观察记录 |
+| `outcome` | 记录闭环学习的结果 |
 
-</details>
+### `vault` — 加密凭据
 
-<details>
-<summary><strong>分析与质量（11 个）</strong></summary>
-
-| 工具 | 描述 |
+| 操作 | 说明 |
 |------|------|
-| `get_memory_stats` | 记忆系统统计 |
-| `get_observation_quality` | 观察的质量评分 |
-| `suggest_consolidations` | 建议合并的观察 |
-| `get_temporal_trends` | 时间趋势分析 |
-| `get_data_quality_report` | 数据质量指标 |
-| `batch_tag_by_pattern` | 按模式匹配自动标记 |
-| `analyze_search_patterns` | 搜索使用分析 |
-| `get_observation_relationships` | 观察的关系图 |
-| `get_observation_scoring_breakdown` | 评分公式分解 |
-| `analyze_observation_importance` | 重要性分析 |
-| `check_system_health` | 系统健康检查 |
+| `store` | 存储加密凭据 |
+| `get` | 检索凭据 |
+| `list` | 列出已存储的凭据 |
+| `delete` | 删除凭据 |
+| `status` | 保险库状态和健康检查 |
 
-</details>
+### `docs` — 版本化文档
 
-<details>
-<summary><strong>会话（2 个）</strong></summary>
-
-| 工具 | 描述 |
+| 操作 | 说明 |
 |------|------|
-| `search_sessions` | 跨已索引会话的全文搜索 |
-| `list_sessions` | 带过滤的会话列表 |
+| `create` | 创建文档 |
+| `read` | 读取文档内容 |
+| `list` | 列出文档 |
+| `history` | 版本历史 |
+| `comment` | 添加评论 |
+| `collections` | 管理文档集合 |
+| `ingest` | 分块、嵌入和存储文档 |
+| `search_docs` | 跨文档语义搜索 |
 
-</details>
+### `admin` — 批量操作与分析
 
-<details>
-<summary><strong>图（2 个）</strong></summary>
+包含 21 种操作：`bulk_delete`、`bulk_supersede`、`tag`、`graph`、`stats`、`trends`、`quality`、`export`、`maintenance`、`scoring`、`consolidation` 等。
 
-| 工具 | 描述 |
-|------|------|
-| `get_graph_neighbors` | 获取知识图谱中的相邻节点 |
-| `get_graph_stats` | 知识图谱统计 |
+### `check_system_health` — 系统健康检查
 
-</details>
-
-<details>
-<summary><strong>集合与文档（7 个）</strong></summary>
-
-| 工具 | 描述 |
-|------|------|
-| `list_collections` | 列出已配置的集合及文档数量 |
-| `list_documents` | 列出集合中的文档 |
-| `get_document` | 检索完整文档内容 |
-| `ingest_document` | 摄取文档：分块、嵌入、存储 |
-| `search_collection` | 跨文档块的语义搜索 |
-| `remove_document` | 停用文档 |
-| `import_instincts` | 将 instinct 文件导入为指导性观察 |
-
-</details>
-
-<details>
-<summary><strong>整合与维护（3 个）</strong></summary>
-
-| 工具 | 描述 |
-|------|------|
-| `run_consolidation` | 触发整合周期 |
-| `trigger_maintenance` | 运行维护任务 |
-| `get_maintenance_stats` | 维护统计 |
-
-</details>
+报告所有子系统的状态：数据库、嵌入、重排序器、LLM、保险库、图谱、整合。
+<!-- redoc:end:mcp-tools -->
 
 ---
 
-## 记忆整合
+<!-- redoc:start:usage -->
+## 使用示例
 
-### 重要性评分（写入时）
+```python
+# 验证连接
+check_system_health()
 
-每个观察在创建时获得一个重要性评分：
+# 搜索记忆
+recall(query="authentication architecture")
 
+# 预设查询
+recall(action="preset", preset="decisions", query="caching strategy")
+
+# 编辑前检查文件历史
+recall(action="by_file", files="internal/search/hybrid.go")
+
+# 存储观察记录
+store(content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
+
+# 从原始内容中提取观察记录
+store(action="extract", content="<paste raw session notes or code review>")
+
+# 评价一条记忆
+feedback(action="rate", id=123, useful=true)
+
+# 存储凭据
+vault(action="store", name="OPENAI_KEY", value="sk-...")
+
+# 检索凭据
+vault(action="get", name="OPENAI_KEY")
 ```
-importance = typeWeight * (1 + conceptBonus + feedbackBonus + retrievalBonus + utilityBonus)
-```
-
-类型权重：`discovery=0.9`、`decision=0.85`、`pattern=0.8`、`insight=0.75`、`guidance=0.7`、`observation=0.5`、`question=0.4`
-
-### 相关性评分（整合时）
-
-整合调度器定期重新计算相关性：
-
-```
-relevance = decay * (0.3 + 0.3*access) * relations * (0.5 + importance) * (0.7 + 0.3*confidence)
-```
-
-其中 `decay = exp(-0.01 * daysSinceCreation)`。
-
-### 整合周期
-
-| 周期 | 频率 | 描述 |
-|------|------|------|
-| **相关性衰减** | 每 24 小时 | 指数时间衰减，配合访问频率提升 |
-| **创意关联** | 每 24 小时 | 采样观察，计算嵌入相似度，发现关系（CONTRADICTS、EXPLAINS、SHARES_THEME、PARALLEL_CONTEXT） |
-| **遗忘** | 每 90 天 | 归档相关性低于阈值的观察（默认禁用） |
-
-**遗忘保护** — 以下观察永远不会被归档：
-- 重要性评分 >= 0.7
-- 存在时间 < 90 天
-- 类型为 `decision` 或 `discovery`
+<!-- redoc:end:usage -->
 
 ---
 
-## 会话索引
+<!-- redoc:start:troubleshooting -->
+## 故障排除
 
-会话从 Claude Code JSONL 文件索引，支持工作站隔离：
+| 现象 | 解决方法 |
+|------|----------|
+| `check_system_health` 显示嵌入不健康 | 检查 `ENGRAM_EMBEDDING_BASE_URL` 和 API 密钥。熔断器会在瞬时故障后自动恢复。 |
+| 搜索无结果 | 确认观察记录是否存在：`recall(action="preset", preset="decisions")`。检查嵌入是否健康。 |
+| MCP 连接被拒绝 | 确认服务器正在运行：`curl http://your-server:37777/health`。检查环境中的 `ENGRAM_URL`。 |
+| 保险库返回 "encryption not configured" | 设置 `ENGRAM_ENCRYPTION_KEY`（64 位十六进制字符串 = 32 字节 AES-256）。 |
+| 仪表盘无法加载 | 确保使用 `make build` 构建（包含仪表盘）。检查浏览器控制台的错误信息。 |
+| 安装后插件未被检测到 | 重启 Claude Code。确认 `ENGRAM_URL` 和 `ENGRAM_AUTH_ADMIN_TOKEN` 已设置为环境变量。 |
+| 内存使用过高 | 减少 `DATABASE_MAX_CONNS`。如不需要可禁用整合功能。检查 `ENGRAM_EMBEDDING_DIMENSIONS`。 |
 
-```
-workstation_id = sha256(hostname + machine_id)[:8]
-project_id     = sha256(cwd_path)[:8]
-session_id     = UUID from JSONL filename
-composite_key  = workstation_id:project_id:session_id
-```
-
-多个工作站共享同一服务器时，会话保持隔离，同时搜索可跨所有工作站进行。
+服务器日志可在 `http://your-server:37777/api/logs` 查看。
+<!-- redoc:end:troubleshooting -->
 
 ---
 
+<!-- redoc:start:development -->
 ## 开发
 
 ```bash
-make build            # 构建所有二进制文件
-make test             # 运行测试（带竞态检测）
+make build            # 构建仪表盘 + 所有 Go 二进制文件
+make test             # 运行带竞态检测的测试
 make test-coverage    # 覆盖率报告
-make dev              # 前台运行 worker
-make install          # 安装插件、注册 MCP
+make dev              # 在前台运行 worker
+make install          # 构建 + 安装插件 + 启动 worker
 make uninstall        # 移除插件
 make clean            # 清理构建产物
 ```
 
-<details>
-<summary><strong>项目结构</strong></summary>
+### 项目结构
 
 ```
 cmd/
-  mcp/                MCP stdio 服务器（本地直接访问）
-  mcp-stdio-proxy/    stdio -> SSE 桥接（客户端）
-  worker/             HTTP API + MCP SSE + MCP Streamable HTTP + 仪表板
-  hooks/              Claude Code 生命周期 hooks（旧版 Go，见 plugin/hooks/）
+  worker/             HTTP API + MCP + 仪表盘入口
+  mcp/                独立 MCP 服务器
+  mcp-stdio-proxy/    stdio -> SSE 桥接
+  engram-cli/         CLI 客户端
 internal/
-  chunking/           AST 感知的文档分块（md、Go、Python、TS）
-  collections/        YAML 集合配置 + 上下文路由
-  instincts/          Instinct 解析器和导入
-  config/             配置管理
+  chunking/           AST 感知的文档分块
+  collections/        YAML 集合配置
+  config/             支持热重载的配置
   consolidation/      衰减、关联、遗忘
-  db/gorm/            PostgreSQL 存储 + 自动迁移
-  embedding/          ONNX BGE + OpenAI REST 提供者
-  graph/              内存 CSR 图遍历
-  mcp/                MCP 协议（服务器、SSE、Streamable HTTP）
-  reranking/          ONNX 交叉编码器重排序器
+  crypto/             AES-256-GCM 保险库加密
+  db/gorm/            PostgreSQL 存储 + 迁移
+  embedding/          REST 嵌入提供者 + 弹性层
+  graph/              内存 CSR + FalkorDB
+  instincts/          本能解析器和导入
+  learning/           自学习、LLM 客户端
+  maintenance/        后台任务（摘要生成器、模式洞察）
+  mcp/                MCP 协议，7 个主要工具处理器
+  privacy/            密钥检测和脱敏
+  reranking/          交叉编码器重排序器
   scoring/            重要性 + 相关性评分
   search/             混合检索 + RRF 融合
   sessions/           JSONL 解析器 + 索引器
-  vector/pgvector/    pgvector 客户端 + 同步
+  vector/pgvector/    pgvector 客户端
   worker/             HTTP 处理器、中间件、服务
+    sdk/              观察记录提取、推理检测
 pkg/
-  hooks/              Hook 事件客户端
   models/             领域模型 + 关系类型
   strutil/            共享字符串工具
-plugin/               Claude Code 插件定义 + 市场
+plugin/
+  engram/             Claude Code 插件（hooks、命令）
+ui/                   Vue 3 仪表盘 SPA
 ```
 
-</details>
+### CI 工作流
+
+| 工作流 | 说明 |
+|--------|------|
+| `docker-publish.yml` | 构建并发布 Docker 镜像到 ghcr.io |
+| `plugin-publish.yml` | 发布 OpenClaw 插件 |
+| `static.yml` | 部署网站到 GitHub Pages |
+| `sync-marketplace.yml` | 同步插件到 marketplace |
+<!-- redoc:end:development -->
 
 ---
 
+<!-- redoc:start:platform-support -->
 ## 平台支持
 
-| 平台 | 服务端（Docker） | 客户端插件 | 客户端构建 |
+| 平台 | 服务器（Docker） | 客户端插件 | 从源码构建 |
 |------|:-:|:-:|:-:|
-| macOS Intel | 支持 | 支持 | 支持 |
-| macOS Apple Silicon | 支持 | 支持 | 支持 |
-| Linux amd64 | 支持 | 支持 | 支持 |
-| Linux arm64 | 支持 | 支持 | 支持 |
-| Windows amd64 | WSL2/Docker Desktop | 从源码构建 | 支持 |
-| Unraid | Docker 模板 | 不适用 | 不适用 |
+| macOS Intel | Yes | Yes | Yes |
+| macOS Apple Silicon | Yes | Yes | Yes |
+| Linux amd64 | Yes | Yes | Yes |
+| Linux arm64 | Yes | Yes | Yes |
+| Windows amd64 | WSL2 / Docker Desktop | Yes | Yes |
+| Unraid | Docker template | N/A | N/A |
+<!-- redoc:end:platform-support -->
 
 ---
 
+<!-- redoc:start:uninstall -->
 ## 卸载
 
-**服务端：**
+**服务器：**
 
 ```bash
 docker compose down       # 停止容器
-docker compose down -v    # 停止容器并移除数据
+docker compose down -v    # 停止容器并删除数据
 ```
 
 **客户端（插件）：**
@@ -507,21 +562,11 @@ docker compose down -v    # 停止容器并移除数据
 ```
 /plugin uninstall engram
 ```
-
-**客户端（脚本安装，macOS/Linux）：**
-
-```bash
-curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash -s -- --uninstall
-```
-
-**客户端（Windows）：**
-
-```powershell
-Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\marketplaces\engram"
-```
+<!-- redoc:end:uninstall -->
 
 ---
 
+<!-- redoc:start:license -->
 ## 许可证
 
 [MIT](LICENSE)
@@ -529,3 +574,4 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\marketplaces\engra
 ---
 
 最初基于 Lukasz Raczylo 的 [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic)。
+<!-- redoc:end:license -->

@@ -6,7 +6,7 @@ This document maps all runtime binaries and internal Go components for `engram`.
 
 - Language/runtime target: Go 1.21+
 - Data store: PostgreSQL with pgvector and FTS
-- Embeddings: ONNX BGE-v1.5 (local) or OpenAI-compatible API
+- Embeddings: OpenAI-compatible REST API
 - Protocols: MCP over stdio, HTTP JSON APIs, SSE
 - Constraint: MCP stdio paths keep protocol frames on `stdout` and write logs to `stderr`
 
@@ -23,7 +23,7 @@ This document maps all runtime binaries and internal Go components for `engram`.
   - Init `gorm.Store` (auto-migrates DB)
   - Init stores: `ObservationStore`, `SummaryStore`, `PromptStore`, `PatternStore`, `RelationStore`, `SessionStore`
   - Init `SessionIndexer` (background) on `~/.claude/projects/` JSONL
-  - Init embedding service (ONNX/OpenAI)
+  - Init embedding service (OpenAI-compatible REST API)
   - Init `pgvector.Client`
   - Init `ScoreCalculator` and `Recalculator`
   - Init `SearchManager`
@@ -113,10 +113,7 @@ Hook registration is defined in `hooks.json`. Each hook calls the remote worker 
 
 ### `internal/embedding`
 
-- `NewService()` selects backend by `EMBEDDING_PROVIDER`.
-- `model.go`: local ONNX BGE-v1.5 embeddings.
-  - dimension: `384`
-  - runtime: `onnxruntime_go`
+- `NewServiceFromConfig()` creates the OpenAI-compatible embedding service.
 - `openai.go`: OpenAI-compatible API embeddings.
   - configurable model and dimension
   - default model `text-embedding-3-small`
@@ -169,9 +166,8 @@ Hook registration is defined in `hooks.json`. Each hook calls the remote worker 
 
 - `manager.go` routes chunking by extension.
 - Implementations:
-  - `golang/` tree-sitter AST-based chunking
+  - `golang/` AST-based chunking (using `go/ast`, not tree-sitter)
   - `markdown/` header-based chunking
-  - `python/` and `typescript/` regex-based chunking
 - Shared model: `Chunk{Text, Start, End, Type}`.
 
 ### `internal/mcp`

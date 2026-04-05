@@ -10,7 +10,7 @@ The fork targets shared-team usage and production-ready durability:
 - It replaces SQLite/sqlite-vec with PostgreSQL + pgvector.
 - It adds a multi-workstation access path through MCP SSE.
 - It adds lifecycle-driven memory management (decay, association, forgetting).
-- It supports both ONNX local embeddings and OpenAI-compatible remote embeddings.
+- It supports OpenAI-compatible REST API embeddings.
 
 ## Logical Architecture
 
@@ -142,7 +142,7 @@ The fork extends that foundation to support:
 | Memory lifecycle | No | Decay/associations/forgetting |
 | Session indexing | No | JSONL parser (workstation-isolated) |
 | Collections | No | YAML-configured namespaces |
-| Embedding | ONNX BGE only | ONNX BGE or OpenAI REST |
+| Embedding | ONNX BGE only | OpenAI-compatible REST API |
 | Dashboard | No | Vue.js dashboard |
 | Auth | No | Bearer token |
 

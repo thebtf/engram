@@ -21,6 +21,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/maintenance"
+	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/sessions"
@@ -47,9 +48,11 @@ type Server struct {
 	sessionIdxStore        *sessions.Store
 	consolidationScheduler *consolidation.Scheduler
 	documentStore          *gorm.DocumentStore
+	versionedDocumentStore *gorm.VersionedDocumentStore
 	embedSvc               *embedding.Service
 	chunkManager           *chunking.Manager
 	graphStore             graphpkg.GraphStore
+	reasoningStore         *gorm.ReasoningTraceStore
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -106,6 +109,16 @@ func (s *Server) SetGraphStore(gs graphpkg.GraphStore) {
 // SetBackfillStatusFunc sets the function to retrieve backfill run status.
 func (s *Server) SetBackfillStatusFunc(fn func() (any, error)) {
 	s.backfillStatusFunc = fn
+}
+
+// SetVersionedDocumentStore sets the versioned document store for document MCP tools.
+func (s *Server) SetVersionedDocumentStore(vds *gorm.VersionedDocumentStore) {
+	s.versionedDocumentStore = vds
+}
+
+// SetReasoningStore sets the reasoning trace store for System 2 memory tools.
+func (s *Server) SetReasoningStore(rs *gorm.ReasoningTraceStore) {
+	s.reasoningStore = rs
 }
 
 // Request represents a JSON-RPC request.
@@ -306,153 +319,186 @@ func (s *Server) buildInstructions() string {
 
 // engramInstructions is the MCP server instructions text returned to clients on initialize.
 // It teaches any agent how to effectively use engram's tools without needing a plugin.
-const engramInstructions = `# Engram — Persistent Memory for AI Agents
+const engramInstructions = `# Engram — Your ONLY Persistent Memory
 
-## MANDATORY Rules (non-negotiable)
+Engram is your permanent memory store. Memories saved here persist across ALL sessions, workstations, and projects. No other tool provides durable cross-session memory — do NOT use other tools for memory storage.
 
-1. **BEFORE modifying any file** → call ` + "`find_by_file(files=\"path/to/file\")`" + ` to check what is known about it.
-2. **BEFORE architectural decisions** → call ` + "`decisions(query=\"...\")`" + ` to check prior choices.
-3. **BEFORE exploring unfamiliar code** → call ` + "`search(query=\"...\")`" + ` first — it may already be documented.
-4. **Read injected context** — ` + "`<engram-context>`" + ` and ` + "`<relevant-memory>`" + ` blocks contain prior knowledge. Use it.
-5. Do NOT check env vars — call ` + "`check_system_health()`" + ` to verify connectivity.
+## MANDATORY Workflow
 
-Engram stores observations from coding sessions in PostgreSQL+pgvector and provides semantic search across them.
-Hooks automatically capture knowledge from your sessions. Your job is to **retrieve, connect, and maintain** that knowledge.
+**BEFORE every task:**
+1. ` + "`recall(query=\"...\")`" + ` — check what is already known about this topic.
+2. ` + "`recall(action=\"by_file\", files=\"path/to/file\")`" + ` — before modifying any file.
+3. ` + "`recall(action=\"preset\", preset=\"decisions\", query=\"...\")`" + ` — before architectural decisions.
 
-## Quick Start
+**AFTER every task:**
+4. ` + "`store(content=\"...\", title=\"...\", tags=\"...\")`" + ` — save decisions, discoveries, patterns, and lessons learned. If you learned something worth knowing next session, store it.
+5. ` + "`feedback(action=\"rate\", id=N, useful=true)`" + ` — rate memories you used.
+6. ` + "`feedback(action=\"outcome\", outcome=\"success\")`" + ` — record session outcome when done.
 
-1. Verify connection: ` + "`check_system_health()`" + `
-2. Search existing knowledge: ` + "`search(query=\"...\")`" + `
-3. Before modifying code: ` + "`find_by_file(files=\"path/to/file\")`" + `
-4. Before architectural decisions: ` + "`decisions(query=\"...\")`" + `
-5. To explicitly remember something: ` + "`store_memory(content=\"...\", title=\"...\")`" + `
-6. To recall stored knowledge: ` + "`recall_memory(query=\"...\")`" + `
+**Steps 4-6 are NOT optional.** Every completed task produces knowledge. Store it or it is lost forever.
 
-## Tool Categories
+## 7 Tools
 
-### Memory Management (Tier 1 — use proactively)
-| Tool | When to Use |
-|------|-------------|
-| ` + "`store_memory`" + ` | Explicitly remember something across sessions — decisions, patterns, preferences, insights. |
-| ` + "`recall_memory`" + ` | Retrieve stored knowledge by semantic search. Supports text/items/detailed formats. |
+| Tool | Purpose | Key Actions |
+|------|---------|-------------|
+| ` + "`recall`" + ` | **Search & retrieve** memories | search (default), preset, by_file, by_concept, by_type, similar, timeline, related, patterns, get, sessions, explain, reasoning |
+| ` + "`store`" + ` | **Save** memories, edit, merge, extract | create (default), edit, merge, import, extract |
+| ` + "`feedback`" + ` | **Rate** quality, suppress, record outcomes | rate, suppress, outcome |
+| ` + "`vault`" + ` | **Credentials** — encrypted AES-256-GCM | store, get, list, delete, status |
+| ` + "`docs`" + ` | **Documents** — versioned docs & collections | create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs |
+| ` + "`admin`" + ` | **Bulk ops**, maintenance, analytics | bulk_delete, bulk_supersede, tag, graph, stats, trends, quality, export, maintenance, ... |
+| ` + "`check_system_health`" + ` | **Health** check of all subsystems | (no params) |
 
-### Credential Management (secure storage)
-| Tool | When to Use |
-|------|-------------|
-| ` + "`store_credential`" + ` | Securely store an API key, password, or token. Encrypted with AES-256-GCM. |
-| ` + "`get_credential`" + ` | Retrieve and decrypt a stored credential by name. |
-| ` + "`list_credentials`" + ` | List stored credentials (names and metadata only, no values). |
-| ` + "`delete_credential`" + ` | Delete a stored credential by name. Scope-aware (project or global). |
-| ` + "`vault_status`" + ` | Check vault encryption status: key configured, fingerprint, credential count, key source. |
+## What to Store
 
-### Search & Retrieval (primary workflow)
-| Tool | When to Use |
-|------|-------------|
-| ` + "`search`" + ` | General semantic search across observations, sessions, prompts. Start here. |
-| ` + "`decisions`" + ` | Find past architecture/design decisions before making new ones. |
-| ` + "`changes`" + ` | Find code modifications, refactorings, migration history. |
-| ` + "`how_it_works`" + ` | Understand system design, patterns, implementation details. |
-| ` + "`find_by_concept`" + ` | Browse by concept tag (e.g., "vector-search", "authentication"). |
-| ` + "`find_by_file`" + ` | What's known about a file? Check BEFORE modifying unfamiliar code. |
-| ` + "`find_by_type`" + ` | Filter by observation type (decision, bugfix, feature, etc.). |
-| ` + "`find_similar_observations`" + ` | Pure vector similarity — detect duplicates before creating new ones. |
-| ` + "`search_sessions`" + ` | Full-text search across indexed Claude Code session transcripts. |
+After completing work, store observations about:
+- **Decisions made** and WHY (architecture, library choices, trade-offs)
+- **Bugs found** and their root cause (prevents recurrence)
+- **Patterns discovered** (recurring code structures, project conventions)
+- **Lessons learned** (what worked, what failed, what to avoid)
+- **File knowledge** (what a file does, gotchas, non-obvious behavior)
 
-### Timeline & Context
-| Tool | When to Use |
-|------|-------------|
-| ` + "`timeline`" + ` | Browse observations around a specific point in time. |
-| ` + "`get_recent_context`" + ` | Quick dump of latest observations for a project. |
-| ` + "`get_context_timeline`" + ` | Timeline around a specific observation ID. |
-| ` + "`get_timeline_by_query`" + ` | Search + timeline combined — finds best match, shows surrounding context. |
-
-### Graph & Relationships
-| Tool | When to Use |
-|------|-------------|
-| ` + "`find_related_observations`" + ` | Follow knowledge graph edges (causes, fixes, explains, contradicts). |
-| ` + "`get_observation_relationships`" + ` | Multi-hop graph traversal with configurable depth. |
-| ` + "`get_graph_neighbors`" + ` | FalkorDB graph neighbors (requires FalkorDB backend). |
-| ` + "`get_graph_stats`" + ` | Graph backend status and statistics. |
-
-### Observation Management
-| Tool | When to Use |
-|------|-------------|
-| ` + "`get_observation`" + ` | Fetch single observation by ID with full metadata. |
-| ` + "`edit_observation`" + ` | Correct errors, add details, update scope. Only provided fields change. |
-| ` + "`tag_observation`" + ` | Add/remove/set concept tags. Modes: add, remove, set. |
-| ` + "`get_observations_by_tag`" + ` | List all observations with a specific tag. |
-| ` + "`batch_tag_by_pattern`" + ` | Auto-tag observations matching a text pattern. Use dry_run=true first. |
-| ` + "`merge_observations`" + ` | Combine duplicates — target kept and boosted, source superseded. |
-| ` + "`bulk_delete_observations`" + ` | Batch delete by IDs. |
-| ` + "`bulk_mark_superseded`" + ` | Mark observations as stale without deleting. |
-| ` + "`bulk_boost_observations`" + ` | Adjust importance scores in bulk (-1.0 to 1.0). |
-| ` + "`export_observations`" + ` | Export as JSON, JSONL, or Markdown. |
-
-### Quality & Analytics
-| Tool | When to Use |
-|------|-------------|
-| ` + "`get_memory_stats`" + ` | System overview — counts, storage, health. |
-| ` + "`get_observation_quality`" + ` | Quality score for a single observation with improvement suggestions. |
-| ` + "`get_data_quality_report`" + ` | Comprehensive quality assessment across observations. |
-| ` + "`get_observation_scoring_breakdown`" + ` | Debug why an observation has its current importance score. |
-| ` + "`analyze_observation_importance`" + ` | Project-level importance analysis — top scored, most retrieved. |
-| ` + "`get_temporal_trends`" + ` | Activity patterns over time (daily, weekly, hourly). |
-| ` + "`explain_search_ranking`" + ` | Debug search result ordering for a query. |
-| ` + "`analyze_search_patterns`" + ` | Search usage analytics — common queries, missed results. |
-| ` + "`get_patterns`" + ` | Detected recurring patterns (workflow, best_practice, anti_pattern). |
-
-### Maintenance
-| Tool | When to Use |
-|------|-------------|
-| ` + "`check_system_health`" + ` | Health check of all subsystems. Also verifies engram connectivity. |
-| ` + "`suggest_consolidations`" + ` | Find observations that should be merged. |
-| ` + "`run_consolidation`" + ` | Trigger decay, association discovery, and/or forgetting cycles. |
-| ` + "`trigger_maintenance`" + ` | Run cleanup (old observations, DB optimization). |
-| ` + "`get_maintenance_stats`" + ` | Last run time, cleanup counts, configuration. |
-
-### Sessions
-| Tool | When to Use |
-|------|-------------|
-| ` + "`list_sessions`" + ` | List indexed sessions with workstation/project filters. |
-| ` + "`search_sessions`" + ` | Full-text search within session transcripts. |
-
-### Collections & Documents
-| Tool | When to Use |
-|------|-------------|
-| ` + "`list_collections`" + ` | Show configured collections with document counts. |
-| ` + "`list_documents`" + ` | List documents in a collection. |
-| ` + "`get_document`" + ` | Retrieve full document content. |
-| ` + "`ingest_document`" + ` | Add document — chunks, embeds, stores. Idempotent (same hash = skip). |
-| ` + "`search_collection`" + ` | Semantic search across document chunks. |
-| ` + "`remove_document`" + ` | Soft-delete (deactivate) a document. |
-
-### Import
-| Tool | When to Use |
-|------|-------------|
-| ` + "`import_instincts`" + ` | Import ECC instinct files as guidance observations. Idempotent. |
+Use ` + "`store(action=\"extract\", content=\"...\")`" + ` to let the LLM extract structured observations from raw content automatically.
 
 ## Workflow Patterns
 
-**Starting work:** Context is auto-injected by hooks. Use ` + "`search`" + ` or ` + "`get_recent_context`" + ` for more.
-**Before modifying code:** ` + "`find_by_file`" + ` + ` + "`how_it_works`" + ` to understand what's known.
-**Before architectural decisions:** ` + "`decisions`" + ` to check prior choices.
-**Debugging:** ` + "`find_related_observations`" + ` to trace cause chains.
-**Periodic cleanup:** ` + "`suggest_consolidations`" + ` → ` + "`merge_observations`" + ` → ` + "`trigger_maintenance`" + `.
-**Storing secrets:** ` + "`store_credential`" + ` for API keys, passwords, tokens. ` + "`vault_status`" + ` to verify encryption is active.
+**Starting work:** Context is auto-injected by hooks. Use ` + "`recall(query=\"...\")`" + ` for deeper search.
+**Before modifying code:** ` + "`recall(action=\"by_file\")`" + ` + ` + "`recall(action=\"preset\", preset=\"how_it_works\")`" + `
+**After completing a feature:** ` + "`store(content=\"...\", title=\"...\", type=\"decision\")`" + ` — capture what was built and why.
+**After fixing a bug:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture root cause and fix.
+**After research:** ` + "`store(content=\"...\", title=\"...\", type=\"insight\")`" + ` — capture findings.
+**Debugging:** ` + "`recall(action=\"related\", id=N)`" + ` to trace cause chains.
+**Secrets:** ` + "`vault(action=\"store\")`" + ` for API keys. Never store secrets in observations.
 
-## Engram vs File-Based Memory
+`
 
-Prefer ` + "`store_memory`" + ` over file-based memory for decisions, patterns, and insights.
-Engram provides semantic search, cross-project visibility (global scope), and cross-machine access.
-Use file-based memory only for static instructions and user preferences.
-
-## Common Mistakes
-
-- Do NOT check ENGRAM_URL/ENGRAM_API_TOKEN env vars — call ` + "`check_system_health()`" + ` instead.
-- Use ` + "`store_memory`" + ` when you want to explicitly remember something. Hooks capture observations automatically, but ` + "`store_memory`" + ` lets you create memories on demand.
-- Read injected ` + "`<engram-context>`" + ` and ` + "`<relevant-memory>`" + ` blocks — they contain prior knowledge.
-- Search BEFORE re-exploring code — someone already documented it.
-- Use specialized tools: ` + "`decisions`" + ` for architecture, ` + "`find_by_file`" + ` for code, ` + "`timeline`" + ` for history.`
+// primaryTools returns the 7 consolidated primary tools shown by default.
+func (s *Server) primaryTools() []Tool {
+	return []Tool{
+		{
+			Name:        "recall",
+			Description: "Search and retrieve memories. Actions: search (default), preset (decisions/changes/how_it_works), by_file, by_concept, by_type, similar, timeline, related, patterns, get, sessions, explain, reasoning.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action":         map[string]any{"type": "string", "enum": []string{"search", "preset", "by_file", "by_concept", "by_type", "similar", "timeline", "related", "patterns", "get", "sessions", "explain", "reasoning"}, "default": "search", "description": "Action to perform"},
+					"query":          map[string]any{"type": "string", "description": "Search query (for search, preset, similar, timeline:query, sessions, explain)"},
+					"preset":         map[string]any{"type": "string", "enum": []string{"decisions", "changes", "how_it_works"}, "description": "Search preset (for action=preset)"},
+					"files":          map[string]any{"type": "string", "description": "File paths (for action=by_file)"},
+					"concept":        map[string]any{"type": "string", "description": "Concept tag (for action=by_concept)"},
+					"type":           map[string]any{"type": "string", "description": "Observation type (for action=by_type)"},
+					"id":             map[string]any{"type": "number", "description": "Observation ID (for action=get, related)"},
+					"project":        map[string]any{"type": "string", "description": "Project name filter"},
+					"limit":          map[string]any{"type": "number", "description": "Max results"},
+					"mode":           map[string]any{"type": "string", "description": "Timeline mode: recent/anchor/query (for action=timeline)"},
+					"min_similarity": map[string]any{"type": "number", "description": "Min similarity 0-1 (for action=similar)"},
+					"min_confidence": map[string]any{"type": "number", "description": "Min confidence 0-1 (for action=related)"},
+					"format":         map[string]any{"type": "string", "description": "Output format: text/items/detailed"},
+				},
+			},
+		},
+		{
+			Name:        "store",
+			Description: "Store, edit, merge, or extract memories. Actions: create (default), edit, merge, import, extract.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action":        map[string]any{"type": "string", "enum": []string{"create", "edit", "merge", "import", "extract"}, "default": "create", "description": "Action to perform"},
+					"content":       map[string]any{"type": "string", "description": "Observation content (for create)"},
+					"title":         map[string]any{"type": "string", "description": "Title (for create, edit)"},
+					"id":            map[string]any{"type": "number", "description": "Observation ID (for edit)"},
+					"source_id":     map[string]any{"type": "number", "description": "Source observation ID (for merge)"},
+					"target_id":     map[string]any{"type": "number", "description": "Target observation ID (for merge)"},
+					"type":          map[string]any{"type": "string", "description": "Observation type (for create)"},
+					"tags":          map[string]any{"type": "string", "description": "Comma-separated tags (for create)"},
+					"scope":         map[string]any{"type": "string", "description": "Scope: project/global/agent (for create)"},
+					"always_inject": map[string]any{"type": "boolean", "description": "Always inject in context (for create, edit)"},
+					"narrative":     map[string]any{"type": "string", "description": "Narrative text (for edit)"},
+					"path":          map[string]any{"type": "string", "description": "File path (for import)"},
+					"project":       map[string]any{"type": "string", "description": "Project name"},
+				},
+			},
+		},
+		{
+			Name:        "feedback",
+			Description: "Rate observations, suppress bad ones, or record session outcome. Actions: rate, suppress, outcome. Action required.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":  map[string]any{"type": "string", "enum": []string{"rate", "suppress", "outcome"}, "description": "Action to perform (required)"},
+					"id":      map[string]any{"type": "number", "description": "Observation ID (for rate, suppress)"},
+					"useful":  map[string]any{"type": "boolean", "description": "Was it helpful? (for rate)"},
+					"outcome": map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome (for outcome action)"},
+					"reason":  map[string]any{"type": "string", "description": "Outcome reason (for outcome action)"},
+				},
+			},
+		},
+		{
+			Name:        "vault",
+			Description: "Manage encrypted credentials. Actions: store, get, list, delete, status. Action required.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":  map[string]any{"type": "string", "enum": []string{"store", "get", "list", "delete", "status"}, "description": "Action to perform (required)"},
+					"name":    map[string]any{"type": "string", "description": "Credential name (for store, get, delete)"},
+					"value":   map[string]any{"type": "string", "description": "Credential value (for store)"},
+					"scope":   map[string]any{"type": "string", "description": "Scope: project/global (for store)"},
+					"project": map[string]any{"type": "string", "description": "Project name (for store)"},
+				},
+			},
+		},
+		{
+			Name:        "docs",
+			Description: "Versioned documents and collections. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs. Action required.",
+			tier:        tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":     map[string]any{"type": "string", "enum": []string{"create", "read", "list", "history", "comment", "collections", "documents", "get_doc", "remove", "ingest", "search_docs"}, "description": "Action to perform (required)"},
+					"path":       map[string]any{"type": "string", "description": "Document path (for create, read, list, history, comment)"},
+					"project":    map[string]any{"type": "string", "description": "Project name"},
+					"content":    map[string]any{"type": "string", "description": "Document content (for create, ingest)"},
+					"collection": map[string]any{"type": "string", "description": "Collection name (for documents, get_doc, remove, ingest, search_docs)"},
+					"query":      map[string]any{"type": "string", "description": "Search query (for search_docs)"},
+					"version":    map[string]any{"type": "number", "description": "Version number (for read)"},
+					"comment":    map[string]any{"type": "string", "description": "Comment text (for comment)"},
+					"doc_type":   map[string]any{"type": "string", "description": "Document type (for create, list)"},
+					"id":         map[string]any{"type": "string", "description": "Document ID (for get_doc, remove)"},
+				},
+			},
+		},
+		{
+			Name:        "admin",
+			Description: "Administrative operations: bulk ops, tagging, graph, analytics, maintenance. Actions: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, consolidations, maintenance, maintenance_stats, consolidation, export, backfill_status. Action required.",
+			tier:        tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":  map[string]any{"type": "string", "description": "Action to perform (required). See tool description for valid actions."},
+					"ids":     map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "description": "Observation IDs (for bulk_delete, bulk_supersede, bulk_boost)"},
+					"id":      map[string]any{"type": "number", "description": "Observation ID (for tag, obs_quality, scoring, graph)"},
+					"tag":     map[string]any{"type": "string", "description": "Tag name (for by_tag, batch_tag)"},
+					"project": map[string]any{"type": "string", "description": "Project name (for trends, quality, importance, etc.)"},
+					"format":  map[string]any{"type": "string", "description": "Export format: json/jsonl/markdown (for export)"},
+					"mode":    map[string]any{"type": "string", "description": "Graph mode (for graph action)"},
+					"amount":  map[string]any{"type": "number", "description": "Boost amount (for bulk_boost)"},
+					"add":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to add (for tag)"},
+					"remove":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to remove (for tag)"},
+					"pattern": map[string]any{"type": "string", "description": "Search pattern (for batch_tag)"},
+					"days":    map[string]any{"type": "number", "description": "Days to analyze (for trends)"},
+				},
+			},
+		},
+	}
+}
 
 // handleToolsList returns the list of available tools.
 func (s *Server) handleToolsList(req *Request) *Response {
@@ -591,6 +637,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
+		// find_by_file_context removed from registration (near-duplicate of find_by_file) — dispatch alias retained
 		{
 			Name:        "find_by_type",
 			Description: "Find observations of specific types.",
@@ -612,64 +659,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
-		{
-			Name:        "get_recent_context",
-			Description: "Get recent session context for timeline display.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"project":   map[string]any{"type": "string"},
-					"type":      map[string]any{"type": "string"},
-					"concepts":  map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"limit":     map[string]any{"type": "number", "default": 30, "minimum": 1, "maximum": 100},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		{
-			Name:        "get_context_timeline",
-			Description: "Get timeline of observations around a specific observation ID.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"anchor_id"},
-				"properties": map[string]any{
-					"anchor_id": map[string]any{"type": "number", "description": "Observation ID to use as anchor point"},
-					"before":    map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"after":     map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"project":   map[string]any{"type": "string"},
-					"type":      map[string]any{"type": "string"},
-					"concepts":  map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		{
-			Name:        "get_timeline_by_query",
-			Description: "Combined search + timeline tool. First searches for observations matching the query, then returns timeline around the best match.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"query"},
-				"properties": map[string]any{
-					"query":     map[string]any{"type": "string", "description": "Natural language query to find anchor observation"},
-					"before":    map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"after":     map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"project":   map[string]any{"type": "string"},
-					"type":      map[string]any{"type": "string"},
-					"concepts":  map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
+		// get_recent_context removed from registration (consolidated into timeline) — dispatch alias retained
+		// get_context_timeline removed from registration (consolidated into timeline) — dispatch alias retained
+		// get_timeline_by_query removed from registration (consolidated into timeline) — dispatch alias retained
 		{
 			Name:        "find_related_observations",
 			Description: "Find observations related to a given observation ID filtered by confidence threshold. Returns related observations sorted by confidence score. Useful for discovering relevant context.",
@@ -836,6 +828,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"files_read":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "New files read list (optional)"},
 					"files_modified": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "New files modified list (optional)"},
 					"scope":          map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "New scope (optional)"},
+					"status":         map[string]any{"type": "string", "description": "Observation status: active or resolved", "enum": []string{"active", "resolved"}},
+					"status_reason":  map[string]any{"type": "string", "description": "Reason for status change"},
+					"always_inject":  map[string]any{"type": "boolean", "description": "If true, add always-inject concept (injected into every context). If false, remove it."},
 				},
 			},
 		},
@@ -984,33 +979,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
-		{
-			Name:        "get_observation_relationships",
-			Description: "Get relationship graph for an observation. Shows how observations relate to each other (depends_on, extends, conflicts_with, supersedes). Useful for understanding dependencies and context.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id"},
-				"properties": map[string]any{
-					"id":        map[string]any{"type": "number", "description": "Observation ID to analyze relationships for"},
-					"max_depth": map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "How many hops to traverse (1=direct, 2=neighbors of neighbors)"},
-				},
-			},
-		},
-		{
-			Name:        "get_graph_neighbors",
-			Description: "Get graph neighbors of an observation via FalkorDB. Returns multi-hop neighbors with relationship types and hop distance. Requires FalkorDB graph backend to be configured.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"observation_id"},
-				"properties": map[string]any{
-					"observation_id": map[string]any{"type": "number", "description": "Observation ID to find graph neighbors for"},
-					"max_hops":       map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "Maximum hop distance (1=direct neighbors, 2=neighbors of neighbors)"},
-					"limit":          map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100, "description": "Maximum number of neighbors to return"},
-				},
-			},
-		},
+		// get_observation_relationships removed from registration (subset of graph_query) — dispatch alias retained
+		// get_graph_neighbors removed from registration (subset of graph_query) — dispatch alias retained
 		{
 			Name:        "get_graph_stats",
 			Description: "Get graph backend statistics. Returns provider, connection status, node count, and edge count.",
@@ -1147,10 +1117,13 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"content":    map[string]any{"type": "string", "description": "The content/knowledge to remember"},
 						"title":      map[string]any{"type": "string", "description": "Short title for the memory"},
 						"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
+						"rejected":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
 						"type":       map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
 						"importance": map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
 						"scope":      map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Visibility scope"},
 						"project":    map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
+						"ttl_days":       map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
+						"always_inject":  map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
 					},
 				},
 			},
@@ -1168,6 +1141,51 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"limit":  map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
 						"format":  map[string]any{"type": "string", "enum": []string{"text", "items", "detailed"}, "default": "text"},
 						"project": map[string]any{"type": "string", "description": "Project ID to scope results (includes project-scoped and global observations)"},
+					},
+				},
+			},
+			Tool{
+				Name:        "rate_memory",
+				Description: "Rate a memory as useful or not useful. Affects future ranking in search results.",
+				tier:        tierCore,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"id", "rating"},
+					"properties": map[string]any{
+						"id":     map[string]any{"type": "integer", "description": "Observation ID to rate"},
+						"rating": map[string]any{"type": "string", "enum": []string{"useful", "not_useful"}, "description": "Rating: useful or not_useful"},
+					},
+				},
+			},
+			Tool{
+				Name:        "suppress_memory",
+				Description: "Suppress an observation so it is excluded from future search results. The observation remains in the database but is hidden.",
+				tier:        tierCore,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"id"},
+					"properties": map[string]any{
+						"id": map[string]any{"type": "integer", "description": "Observation ID to suppress"},
+					},
+				},
+			},
+		)
+	}
+
+	// Session outcome tool — only advertise when session store is available
+	if s.sessionStore != nil {
+		tools = append(tools,
+			Tool{
+				Name:        "set_session_outcome",
+				Description: "Record the outcome of the current session (success/partial/failure/abandoned). Use at session end to enable closed-loop learning.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"session_id", "outcome"},
+					"properties": map[string]any{
+						"session_id": map[string]any{"type": "string", "description": "Claude session ID"},
+						"outcome":    map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome"},
+						"reason":     map[string]any{"type": "string", "description": "Optional explanation for the outcome"},
 					},
 				},
 			},
@@ -1325,39 +1343,118 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
-	// Tool tiering: parse optional cursor from request params.
-	// No cursor / empty → return T1+T2 tools only + nextCursor: "all"
-	// cursor: "all" → return ALL tools
+	// Versioned document tools — only advertise when versioned document store is available
+	if s.versionedDocumentStore != nil {
+		tools = append(tools,
+			Tool{
+				Name:        "doc_create",
+				Description: "[Versioned Docs] Create a new versioned document or a new version of an existing document. Each call increments the version atomically.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"path", "project", "content"},
+					"properties": map[string]any{
+						"path":     map[string]any{"type": "string", "description": "Document path identifier (e.g. 'docs/architecture.md')"},
+						"project":  map[string]any{"type": "string", "description": "Project name"},
+						"content":  map[string]any{"type": "string", "description": "Full document content"},
+						"doc_type": map[string]any{"type": "string", "default": "markdown", "description": "Document type (e.g. markdown, text, json)"},
+						"metadata": map[string]any{"type": "string", "default": "{}", "description": "JSON metadata string"},
+						"author":   map[string]any{"type": "string", "default": "agent", "description": "Author identifier"},
+					},
+				},
+			},
+			Tool{
+				Name:        "doc_read",
+				Description: "[Versioned Docs] Read the latest or a specific version of a versioned document.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"path", "project"},
+					"properties": map[string]any{
+						"path":    map[string]any{"type": "string", "description": "Document path identifier"},
+						"project": map[string]any{"type": "string", "description": "Project name"},
+						"version": map[string]any{"type": "number", "description": "Specific version to read (omit for latest)"},
+					},
+				},
+			},
+			// doc_update removed from registration (alias of doc_create) — dispatch alias retained in handleCallTool
+			Tool{
+				Name:        "doc_list",
+				Description: "[Versioned Docs] List the latest version of each document path in a project. Supports filtering by doc_type and path prefix.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"project"},
+					"properties": map[string]any{
+						"project":     map[string]any{"type": "string", "description": "Project name"},
+						"doc_type":    map[string]any{"type": "string", "description": "Filter by document type (optional)"},
+						"path_prefix": map[string]any{"type": "string", "description": "Filter by path prefix (optional)"},
+						"limit":       map[string]any{"type": "number", "default": 50, "minimum": 1, "maximum": 500, "description": "Maximum documents to return"},
+					},
+				},
+			},
+			Tool{
+				Name:        "doc_history",
+				Description: "[Versioned Docs] Get the full version history of a document. Returns all versions ordered newest first.",
+				tier:        tierAdmin,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"path", "project"},
+					"properties": map[string]any{
+						"path":    map[string]any{"type": "string", "description": "Document path identifier"},
+						"project": map[string]any{"type": "string", "description": "Project name"},
+						"limit":   map[string]any{"type": "number", "default": 0, "minimum": 0, "description": "Maximum versions to return (0 = no limit)"},
+					},
+				},
+			},
+			Tool{
+				Name:        "doc_comment",
+				Description: "[Versioned Docs] Add a comment to a specific document version. Optionally anchored to a line range.",
+				tier:        tierAdmin,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"document_id", "content"},
+					"properties": map[string]any{
+						"document_id": map[string]any{"type": "number", "description": "Document ID (from doc_create or doc_read response)"},
+						"content":     map[string]any{"type": "string", "description": "Comment text"},
+						"author":      map[string]any{"type": "string", "default": "agent", "description": "Author identifier"},
+						"line_start":  map[string]any{"type": "number", "description": "Starting line number for line-anchored comment (optional)"},
+						"line_end":    map[string]any{"type": "number", "description": "Ending line number for line-anchored comment (optional)"},
+					},
+				},
+			},
+		)
+	}
+
+	// Tool tiering: consolidated primary tools by default, all aliases with cursor=all.
 	var listParams struct {
-		Cursor string `json:"cursor"`
+		Cursor     string `json:"cursor"`
+		IncludeAll bool   `json:"include_all"`
 	}
 	if req.Params != nil {
 		_ = json.Unmarshal(req.Params, &listParams)
 	}
 
-	if listParams.Cursor != "all" {
-		// Filter to primary tools (T1 + T2)
-		primary := make([]Tool, 0, len(tools))
-		for _, t := range tools {
-			if t.tier <= tierUseful {
-				primary = append(primary, t)
-			}
-		}
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: map[string]any{
-				"tools":      primary,
-				"nextCursor": "all",
-			},
-		}
-	}
+	primary := s.primaryTools()
 
+	// Always include check_system_health with primary tools
+	primary = append(primary, Tool{
+		Name:        "check_system_health",
+		Description: "Comprehensive system health check. Returns status of all subsystems (database, vectors, cache, search) with actionable diagnostics.",
+		tier:        tierCore,
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+	})
+
+	// Always return only the 7 primary tools. Legacy aliases are handled
+	// by callTool dispatch only — they don't appear in tools/list.
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result: map[string]any{
-			"tools": tools,
+			"tools": primary,
 		},
 	}
 }
@@ -1379,7 +1476,13 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 	result, err := s.callTool(ctx, params.Name, params.Arguments)
 	if err != nil {
-		log.Error().Err(err).Str("tool", params.Name).Msg("Tool call failed")
+		// Truncated args for debugging (first 200 chars)
+		argsStr := string(params.Arguments)
+		if len(argsStr) > 200 {
+			argsStr = argsStr[:200] + "..."
+		}
+		argsStr = privacy.RedactSecrets(argsStr)
+		log.Error().Err(err).Str("tool", params.Name).Str("args", argsStr).Msg("Tool call failed")
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -1407,7 +1510,23 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 // callTool dispatches to the appropriate tool handler.
 func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	// Special handlers for non-search tools
+	// Primary consolidated tool handlers
+	switch name {
+	case "recall":
+		return s.handleRecall(ctx, args)
+	case "store":
+		return s.handleStoreConsolidated(ctx, args)
+	case "feedback":
+		return s.handleFeedbackConsolidated(ctx, args)
+	case "vault":
+		return s.handleVaultConsolidated(ctx, args)
+	case "docs":
+		return s.handleDocsConsolidated(ctx, args)
+	case "admin":
+		return s.handleAdmin(ctx, args)
+	}
+
+	// Legacy alias handlers for non-search tools
 	switch name {
 	case "graph_query":
 		// Consolidated graph tool — routes by mode parameter
@@ -1499,6 +1618,32 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleSearchCollection(ctx, args)
 	case "remove_document":
 		return s.handleRemoveDocument(ctx, args)
+	// Document tool aliases
+	case "doc_list_collections":
+		return s.handleListCollections(ctx)
+	case "doc_list_documents":
+		return s.handleListDocuments(ctx, args)
+	case "doc_get":
+		return s.handleGetDocument(ctx, args)
+	case "doc_ingest":
+		return s.handleIngestDocument(ctx, args)
+	case "doc_search":
+		return s.handleSearchCollection(ctx, args)
+	case "doc_remove":
+		return s.handleRemoveDocument(ctx, args)
+	// Versioned document tools
+	case "doc_create":
+		return s.handleDocCreate(ctx, args)
+	case "doc_read":
+		return s.handleDocRead(ctx, args)
+	case "doc_update":
+		return s.handleDocUpdate(ctx, args)
+	case "doc_list":
+		return s.handleDocList(ctx, args)
+	case "doc_history":
+		return s.handleDocHistory(ctx, args)
+	case "doc_comment":
+		return s.handleDocComment(ctx, args)
 	case "import_instincts":
 		return s.handleImportInstincts(ctx, args)
 	case "backfill_status":
@@ -1513,10 +1658,27 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleDeleteCredential(ctx, args)
 	case "vault_status":
 		return s.handleVaultStatus(ctx, args)
+	// Vault tool aliases
+	case "vault_store":
+		return s.handleStoreCredential(ctx, args)
+	case "vault_get":
+		return s.handleGetCredential(ctx, args)
+	case "vault_list":
+		return s.handleListCredentials(ctx, args)
+	case "vault_delete":
+		return s.handleDeleteCredential(ctx, args)
+	case "find_by_file_context":
+		return s.handleFindByFileContext(ctx, args)
 	case "store_memory":
 		return s.handleStoreMemory(ctx, args)
 	case "recall_memory":
 		return s.handleRecallMemory(ctx, args)
+	case "rate_memory":
+		return s.handleRateMemory(ctx, args)
+	case "suppress_memory":
+		return s.handleSuppressMemory(ctx, args)
+	case "set_session_outcome":
+		return s.handleSetSessionOutcomeMCP(ctx, args)
 	}
 
 	// Search-based tools: use parseArgs + coercion instead of direct unmarshal
@@ -1927,7 +2089,7 @@ func (s *Server) handleGetPatterns(ctx context.Context, args json.RawMessage) (s
 		patterns, err = s.patternStore.GetPatternsByProject(ctx, params.Project, params.Limit)
 	} else {
 		// Get all active patterns
-		patterns, err = s.patternStore.GetActivePatterns(ctx, params.Limit)
+		patterns, err = s.patternStore.GetActivePatterns(ctx, params.Limit, 0, "")
 	}
 
 	if err != nil {
@@ -2353,6 +2515,8 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 		Subtitle      *string
 		Narrative     *string
 		Scope         *string
+		Status        *string
+		StatusReason  *string
 		Facts         []string
 		Concepts      []string
 		FilesRead     []string
@@ -2376,6 +2540,14 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 		s := coerceString(v, "")
 		params.Scope = &s
 	}
+	if v, ok := m["status"]; ok && v != nil {
+		s := coerceString(v, "")
+		params.Status = &s
+	}
+	if v, ok := m["status_reason"]; ok && v != nil {
+		s := coerceString(v, "")
+		params.StatusReason = &s
+	}
 	params.Facts = coerceStringSlice(m["facts"])
 	params.Concepts = coerceStringSlice(m["concepts"])
 	params.FilesRead = coerceStringSlice(m["files_read"])
@@ -2388,6 +2560,37 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 	// Validate scope if provided
 	if params.Scope != nil && *params.Scope != "project" && *params.Scope != "global" {
 		return "", fmt.Errorf("scope must be 'project' or 'global'")
+	}
+
+	// Validate status if provided
+	if params.Status != nil && *params.Status != "active" && *params.Status != "resolved" {
+		return "", fmt.Errorf("status must be 'active' or 'resolved'")
+	}
+
+	// Handle always_inject: merge "always-inject" concept into existing concepts
+	if v, ok := m["always_inject"]; ok && v != nil {
+		alwaysInject := coerceBool(v, false)
+		// Fetch current observation to get existing concepts
+		existing, fetchErr := s.observationStore.GetObservationByID(ctx, params.ID)
+		if fetchErr == nil && existing != nil {
+			concepts := make([]string, 0, len(existing.Concepts)+1)
+			hasIt := false
+			for _, c := range existing.Concepts {
+				if c == "always-inject" {
+					hasIt = true
+					if !alwaysInject {
+						continue // remove it
+					}
+				}
+				concepts = append(concepts, c)
+			}
+			if alwaysInject && !hasIt {
+				concepts = append(concepts, "always-inject")
+			}
+			if alwaysInject != hasIt { // changed
+				params.Concepts = concepts
+			}
+		}
 	}
 
 	// Build update struct
@@ -2415,6 +2618,12 @@ func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage
 	}
 	if params.Scope != nil {
 		update.Scope = params.Scope
+	}
+	if params.Status != nil {
+		update.Status = params.Status
+	}
+	if params.StatusReason != nil {
+		update.StatusReason = params.StatusReason
 	}
 
 	// Update the observation
@@ -3646,7 +3855,7 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 		Metrics: make(map[string]any),
 	}
 	if s.patternStore != nil {
-		patterns, err := s.patternStore.GetActivePatterns(ctx, 100)
+		patterns, err := s.patternStore.GetActivePatterns(ctx, 100, 0, "")
 		if err != nil {
 			patternHealth.Status = "degraded"
 			patternHealth.Message = "Could not query patterns: " + err.Error()
@@ -4421,4 +4630,58 @@ func (s *Server) handleGetGraphStats(ctx context.Context) (string, error) {
 	}
 	b, _ := json.MarshalIndent(result, "", "  ")
 	return string(b), nil
+}
+
+// handleFindByFileContext retrieves observations directly associated with a specific file path,
+// ordered by importance score DESC. Uses the JSONB file-index for precise, fast lookups.
+func (s *Server) handleFindByFileContext(ctx context.Context, args json.RawMessage) (string, error) {
+	if s.observationStore == nil {
+		return "", fmt.Errorf("observation store not available")
+	}
+
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
+	var params struct {
+		FilePath string
+		Limit    int
+	}
+	params.FilePath = coerceString(m["file_path"], "")
+	params.Limit = coerceInt(m["limit"], 10)
+
+	if params.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+	if params.Limit < 1 || params.Limit > 100 {
+		params.Limit = 10
+	}
+
+	observations, err := s.observationStore.GetObservationsByFile(ctx, params.FilePath, params.Limit)
+	if err != nil {
+		return "", fmt.Errorf("get observations by file: %w", err)
+	}
+
+	type fileContextResult struct {
+		FilePath     string               `json:"file_path"`
+		Count        int                  `json:"count"`
+		Observations []*models.Observation `json:"observations"`
+	}
+
+	out := fileContextResult{
+		FilePath:     params.FilePath,
+		Count:        len(observations),
+		Observations: observations,
+	}
+	if out.Observations == nil {
+		out.Observations = []*models.Observation{}
+	}
+
+	output, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal result: %w", err)
+	}
+
+	return string(output), nil
 }

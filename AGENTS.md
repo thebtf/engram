@@ -28,8 +28,8 @@ exposes 48 MCP tools via Streamable HTTP / SSE on port 37777.
 - Build: `make build`
 - Test: `go test ./...`
 - Database: PostgreSQL 17 + pgvector (HNSW cosine index)
-- Embedding: ONNX BGE (384D) or OpenAI-compatible REST API
-- Reranking: ONNX cross-encoder reranker
+- Embedding: OpenAI-compatible REST API
+- Reranking: API-based cross-encoder reranker
 - Worker: `cmd/worker/main.go` — HTTP API + MCP SSE + MCP Streamable HTTP + dashboard
 - Hooks: `plugin/hooks/` — JavaScript hooks for Claude Code lifecycle
 - Plugin: `plugin/` — Claude Code plugin definition + marketplace
@@ -41,7 +41,7 @@ cmd/worker/          — server entry point
 internal/mcp/        — MCP protocol, 48 tool handlers (tools_*.go)
 internal/search/     — hybrid search (tsvector + vector + BM25, RRF fusion)
 internal/scoring/    — importance + relevance scoring
-internal/embedding/  — ONNX BGE + OpenAI REST providers
+internal/embedding/  — OpenAI-compatible REST embedding provider
 internal/worker/sdk/ — observation extraction (LLM API or Claude CLI)
 internal/learning/   — self-learning, LLM client
 plugin/hooks/        — JS hooks (session-start, user-prompt, post-tool-use, stop)

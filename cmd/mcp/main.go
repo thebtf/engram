@@ -88,7 +88,7 @@ func main() {
 	defer store.Close()
 
 	// Initialize stores
-	observationStore := gorm.NewObservationStore(store, nil, nil, nil)
+	observationStore := gorm.NewObservationStore(store, nil)
 	summaryStore := gorm.NewSummaryStore(store)
 	promptStore := gorm.NewPromptStore(store, nil)
 	patternStore := gorm.NewPatternStore(store)

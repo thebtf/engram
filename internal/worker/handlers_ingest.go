@@ -74,10 +74,18 @@ func (c *deduplicationCache) cleanup() {
 	}
 }
 
-// handleIngestEvent handles POST /api/events/ingest.
-// Receives raw tool events from Claude Code hooks, stores them in raw_events,
-// runs the deterministic Level 0 pipeline, creates an observation, and
-// triggers asynchronous embedding via vectorSync.
+// handleIngestEvent godoc
+// @Summary Ingest tool event
+// @Description Receives raw tool events from Claude Code hooks. Stores in raw_events, runs deterministic Level 0 pipeline, creates an observation, and triggers async embedding.
+// @Tags Events
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body IngestRequest true "Tool event data"
+// @Success 202 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/events/ingest [post]
 func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 	var req IngestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

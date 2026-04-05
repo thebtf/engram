@@ -294,7 +294,7 @@ Both use HNSW index with `m=16`, `ef_construction=64`, cosine distance.
 
 ### CRITICAL: Embedding Dimension Mismatch
 
-The migrations hardcode `vector(384)`. The default ONNX provider (BGE-v1.5) produces 384-dim vectors and is compatible. The OpenAI provider defaults to `text-embedding-3-small`, which produces 1536-dim vectors and is incompatible with the hardcoded schema. If `EMBEDDING_PROVIDER=openai` is set:
+The migrations hardcode `vector(384)`. The OpenAI provider defaults to `text-embedding-3-small`, which produces 1536-dim vectors and is incompatible with the hardcoded schema. To use a different dimension:
 
 1. Set `EMBEDDING_DIMENSIONS=384` to use a 384-dim OpenAI model, OR
 2. Drop and recreate `vectors` and `content_chunks` with `vector(1536)` before switching providers.

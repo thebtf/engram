@@ -47,7 +47,7 @@ func TestIntegration_EndToEndWorkflow(t *testing.T) {
 	patternStore := NewPatternStore(store)
 
 	// Create observation store with dependencies
-	observationStore := NewObservationStore(store, nil, conflictStore, relationStore)
+	observationStore := NewObservationStore(store, nil)
 	promptStore := NewPromptStore(store, nil)
 
 	// Step 3: Create a session
@@ -295,7 +295,7 @@ func TestIntegration_FTS5Search(t *testing.T) {
 
 	ctx := context.Background()
 	sessionStore := NewSessionStore(store)
-	observationStore := NewObservationStore(store, nil, nil, nil)
+	observationStore := NewObservationStore(store, nil)
 
 	// Create session
 	sessionID, _ := sessionStore.CreateSDKSession(ctx, "claude-fts5", "test-project", "")

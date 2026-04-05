@@ -10,6 +10,7 @@ import Badge from './Badge.vue'
 import RelationGraph from './RelationGraph.vue'
 import ScoreBreakdown from './ScoreBreakdown.vue'
 import { computed, ref, onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
 
 const props = defineProps<{
   observation: ObservationFeedItem
@@ -167,7 +168,7 @@ const splitPath = (path: string, components = 3) => {
     :gradient="`bg-gradient-to-br from-amber-500/10 to-orange-500/5`"
     :border-class="config.borderClass"
     :highlight="highlight"
-    class="mb-4 hover:border-amber-400/50"
+    class="mb-4 hover:border-amber-400/50 transition-all duration-200"
   >
     <div class="flex items-start gap-4">
       <!-- Icon -->
@@ -254,8 +255,9 @@ const splitPath = (path: string, components = 3) => {
           <div class="flex items-center justify-between">
             <button
               @click="toggleRelations"
-              class="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-300 transition-colors"
+              class="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-300 transition-colors duration-200 cursor-pointer"
               :disabled="relationsLoading"
+              title="Toggle related observations list"
             >
               <i class="fas fa-diagram-project text-cyan-500/70" />
               <span v-if="relationsLoading" class="text-slate-500">
@@ -272,16 +274,29 @@ const splitPath = (path: string, components = 3) => {
               />
             </button>
 
-            <!-- View Graph button -->
-            <button
-              v-if="hasRelations"
-              @click="openGraph"
-              class="flex items-center gap-1.5 px-2 py-1 text-xs text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 rounded transition-colors"
-              title="View knowledge graph"
-            >
-              <i class="fas fa-project-diagram" />
-              <span>View Graph</span>
-            </button>
+            <div class="flex items-center gap-2">
+              <!-- Local graph link (navigates to /graph/:id) -->
+              <RouterLink
+                v-if="hasRelations"
+                :to="`/graph/${observation.id}`"
+                class="flex items-center gap-1.5 px-2 py-1 text-xs text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 rounded transition-colors duration-200 cursor-pointer"
+                title="Open in full graph view"
+                @click.stop
+              >
+                <i class="fas fa-diagram-project" />
+              </RouterLink>
+
+              <!-- View Graph button (modal) -->
+              <button
+                v-if="hasRelations"
+                @click="openGraph"
+                class="flex items-center gap-1.5 px-2 py-1 text-xs text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 rounded transition-colors duration-200 cursor-pointer"
+                title="View knowledge graph centered on this observation"
+              >
+                <i class="fas fa-project-diagram" />
+                <span>View Graph</span>
+              </button>
+            </div>
           </div>
 
           <!-- Expanded relations list -->
@@ -292,7 +307,7 @@ const splitPath = (path: string, components = 3) => {
             <div
               v-for="rel in relations"
               :key="rel.relation.id"
-              class="flex items-center gap-2 text-xs p-1.5 rounded bg-slate-800/30 hover:bg-slate-800/50 transition-colors group"
+              class="flex items-center gap-2 text-xs p-1.5 rounded bg-slate-800/30 hover:bg-slate-800/50 transition-colors duration-200 group"
             >
               <!-- Relation type icon -->
               <i
@@ -344,19 +359,19 @@ const splitPath = (path: string, components = 3) => {
           @click="submitFeedback(1)"
           :disabled="isSubmitting"
           :class="[
-            'p-1.5 rounded-lg transition-all duration-200',
+            'p-1.5 rounded-lg transition-all duration-200 cursor-pointer',
             currentFeedback === 1
               ? 'bg-green-500/30 text-green-300 shadow-green-500/20 shadow-sm'
-              : 'text-slate-500 hover:text-green-400 hover:bg-green-500/10'
+              : 'text-blue-400 hover:text-green-400 hover:bg-green-500/10'
           ]"
-          title="Helpful"
+          title="Rate as useful — improves future ranking"
         >
           <i class="fas fa-thumbs-up text-sm" />
         </button>
 
         <button
           @click="showScoreBreakdown = true"
-          class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800/50 text-slate-400 flex items-center gap-1 transition-all duration-300 hover:bg-purple-500/20 hover:text-purple-300 cursor-pointer"
+          class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800/50 text-slate-400 flex items-center gap-1 transition-all duration-200 hover:bg-purple-500/20 hover:text-purple-300 cursor-pointer"
           :class="{ 'text-green-400': localScore !== null && localScore > (observation.importance_score || 1), 'text-red-400': localScore !== null && localScore < (observation.importance_score || 1) }"
           :title="`Importance Score: ${currentScore.toFixed(3)}\nRetrieval Count: ${observation.retrieval_count || 0}\nClick for details`"
         >
@@ -368,12 +383,12 @@ const splitPath = (path: string, components = 3) => {
           @click="submitFeedback(-1)"
           :disabled="isSubmitting"
           :class="[
-            'p-1.5 rounded-lg transition-all duration-200',
+            'p-1.5 rounded-lg transition-all duration-200 cursor-pointer',
             currentFeedback === -1
               ? 'bg-red-500/30 text-red-300 shadow-red-500/20 shadow-sm'
-              : 'text-slate-500 hover:text-red-400 hover:bg-red-500/10'
+              : 'text-blue-400 hover:text-red-400 hover:bg-red-500/10'
           ]"
-          title="Not helpful"
+          title="Rate as not useful — lowers future ranking"
         >
           <i class="fas fa-thumbs-down text-sm" />
         </button>

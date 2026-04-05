@@ -24,6 +24,7 @@ import (
 // BulkImportRequest is the request body for bulk observation import.
 type BulkImportRequest struct {
 	Project      string                 `json:"project"`
+	SessionID    string                 `json:"session_id,omitempty"`
 	Observations []BulkObservationInput `json:"observations"`
 }
 
@@ -48,8 +49,18 @@ type BulkImportResponse struct {
 	SkippedDuplicates int      `json:"skipped_duplicates,omitempty"`
 }
 
-// handleBulkImport handles bulk import of observations.
-// This is useful for migrating data or importing observations from external sources.
+// handleBulkImport godoc
+// @Summary Bulk import observations
+// @Description Imports multiple observations in a single request. Supports deduplication within the batch. Max batch size: 100.
+// @Tags Import/Export
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body BulkImportRequest true "Observations to import"
+// @Success 200 {object} BulkImportResponse
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/bulk-import [post]
 func (s *Service) handleBulkImport(w http.ResponseWriter, r *http.Request) {
 	var req BulkImportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -80,8 +91,14 @@ func (s *Service) handleBulkImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a synthetic session for bulk import
-	sessionID, err := s.sessionStore.CreateSDKSession(r.Context(), fmt.Sprintf("bulk-import-%d", time.Now().UnixMilli()), req.Project, "bulk import")
+	// Reuse existing session if provided; otherwise create a synthetic one.
+	// CreateSDKSession is idempotent: calling it with the same claude_session_id
+	// returns the existing session ID without creating a duplicate row.
+	claudeSessionKey := req.SessionID
+	if claudeSessionKey == "" {
+		claudeSessionKey = fmt.Sprintf("bulk-import-%d", time.Now().UnixMilli())
+	}
+	sessionID, err := s.sessionStore.CreateSDKSession(r.Context(), claudeSessionKey, req.Project, "bulk import")
 	if err != nil {
 		http.Error(w, "failed to create import session: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -207,8 +224,18 @@ type ArchiveRequest struct {
 	MaxAgeDays int     `json:"max_age_days,omitempty"`
 }
 
-// handleArchiveObservations archives observations by ID or by age.
-// Supports batch archival with error tracking per observation.
+// handleArchiveObservations godoc
+// @Summary Archive observations
+// @Description Archives observations by ID list or by age criteria. Supports batch archival with parallel processing and per-observation error tracking.
+// @Tags Import/Export
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body ArchiveRequest true "Archive criteria: ids, project, max_age_days, reason"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/archive [post]
 func (s *Service) handleArchiveObservations(w http.ResponseWriter, r *http.Request) {
 	var req ArchiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -315,7 +342,17 @@ func (s *Service) handleArchiveObservations(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, response)
 }
 
-// handleUnarchiveObservation restores an archived observation.
+// handleUnarchiveObservation godoc
+// @Summary Unarchive observation
+// @Description Restores an archived observation to active status.
+// @Tags Import/Export
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Observation ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid observation id"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/{id}/unarchive [post]
 func (s *Service) handleUnarchiveObservation(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -338,7 +375,17 @@ func (s *Service) handleUnarchiveObservation(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// handleGetArchivedObservations returns archived observations.
+// handleGetArchivedObservations godoc
+// @Summary List archived observations
+// @Description Returns archived observations, optionally filtered by project.
+// @Tags Import/Export
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param limit query int false "Number of results (default 100)"
+// @Success 200 {array} models.Observation
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/archived [get]
 func (s *Service) handleGetArchivedObservations(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	limit := gorm.ParseLimitParam(r, DefaultObservationsLimit)
@@ -356,7 +403,16 @@ func (s *Service) handleGetArchivedObservations(w http.ResponseWriter, r *http.R
 	writeJSON(w, observations)
 }
 
-// handleGetArchivalStats returns archival statistics.
+// handleGetArchivalStats godoc
+// @Summary Get archival statistics
+// @Description Returns archival statistics including counts and trends.
+// @Tags Import/Export
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/archival-stats [get]
 func (s *Service) handleGetArchivalStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 
@@ -369,8 +425,21 @@ func (s *Service) handleGetArchivalStats(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, stats)
 }
 
-// handleExportObservations exports observations in JSON or CSV format.
-// Supports query parameters: project, format (json/csv), scope, type, limit.
+// handleExportObservations godoc
+// @Summary Export observations
+// @Description Exports observations in JSON or CSV format. Supports filtering by project, scope, and type. Returns file as download attachment.
+// @Tags Import/Export
+// @Produce json text/csv
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param format query string false "Export format: json or csv (default json)"
+// @Param scope query string false "Filter by scope: project, global"
+// @Param type query string false "Filter by observation type"
+// @Param limit query int false "Number of results (default 1000, max 5000)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/export [get]
 func (s *Service) handleExportObservations(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	format := r.URL.Query().Get("format")
@@ -393,9 +462,9 @@ func (s *Service) handleExportObservations(w http.ResponseWriter, r *http.Reques
 	var err error
 
 	if project != "" {
-		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, limit, 0)
+		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", "", limit, 0)
 	} else {
-		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, limit, 0)
+		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", "", limit, 0)
 	}
 
 	if err != nil {
@@ -490,7 +559,18 @@ type BulkStatusRequest struct {
 	Feedback int     `json:"feedback,omitempty"`
 }
 
-// handleBulkStatusUpdate updates status for multiple observations in one request.
+// handleBulkStatusUpdate godoc
+// @Summary Bulk status update
+// @Description Updates status for multiple observations in one request. Actions: supersede, archive, set_feedback. Max 500 IDs.
+// @Tags Import/Export
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body BulkStatusRequest true "Bulk action request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/bulk-status [post]
 func (s *Service) handleBulkStatusUpdate(w http.ResponseWriter, r *http.Request) {
 	var req BulkStatusRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -547,13 +627,28 @@ func (s *Service) handleBulkStatusUpdate(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
+	case "suppress":
+		for _, id := range req.IDs {
+			result := s.observationStore.GetDB().WithContext(ctx).
+				Exec("UPDATE observations SET is_suppressed = TRUE WHERE id = ?", id)
+			if result.Error != nil {
+				failed++
+				errors = append(errors, fmt.Sprintf("id %d: %v", id, result.Error))
+			} else if result.RowsAffected > 0 {
+				updated++
+			} else {
+				failed++
+				errors = append(errors, fmt.Sprintf("id %d: not found", id))
+			}
+		}
+
 	default:
-		http.Error(w, "action must be 'supersede', 'archive', or 'set_feedback'", http.StatusBadRequest)
+		http.Error(w, "action must be 'supersede', 'archive', 'suppress', or 'set_feedback'", http.StatusBadRequest)
 		return
 	}
 
-	// Invalidate cache for archive action (affects observation counts)
-	if req.Action == "archive" && updated > 0 {
+	// Invalidate cache for actions that affect visibility/counts
+	if (req.Action == "archive" || req.Action == "suppress") && updated > 0 {
 		// No project info available, invalidate all caches
 		s.invalidateAllObsCountCache()
 	}
@@ -570,8 +665,18 @@ func (s *Service) handleBulkStatusUpdate(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, response)
 }
 
-// handleFindDuplicates finds potential duplicate observations using similarity clustering.
-// Returns groups of similar observations that may be candidates for merging or archival.
+// handleFindDuplicates godoc
+// @Summary Find duplicate observations
+// @Description Finds potential duplicate observations using Jaccard similarity clustering. Returns groups of similar observations.
+// @Tags Import/Export
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Filter by project"
+// @Param threshold query number false "Similarity threshold (default 0.6, range 0-1)"
+// @Param limit query int false "Number of observations to check (default 100)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Router /api/observations/duplicates [get]
 func (s *Service) handleFindDuplicates(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	thresholdStr := r.URL.Query().Get("threshold")
@@ -591,9 +696,9 @@ func (s *Service) handleFindDuplicates(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if project != "" {
-		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, limit, 0)
+		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", "", limit, 0)
 	} else {
-		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, limit, 0)
+		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", "", limit, 0)
 	}
 
 	if err != nil {

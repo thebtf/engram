@@ -206,7 +206,8 @@ func (p *Pattern) AddOccurrence(project string, observationID int64) {
 // updateConfidence adjusts confidence based on frequency and cross-project validation.
 func (p *Pattern) updateConfidence() {
 	// Base confidence from frequency (logarithmic scaling)
-	freqConfidence := 0.3 + (0.4 * (float64(min(p.Frequency, 10)) / 10.0))
+	// freqConfidence max = 0.3 + 0.5 = 0.8; projectBonus max = 0.2; total max = 1.0
+	freqConfidence := 0.3 + (0.5 * (float64(min(p.Frequency, 10)) / 10.0))
 
 	// Cross-project bonus: patterns seen across multiple projects are more reliable
 	projectBonus := 0.0

@@ -56,7 +56,12 @@ func NewVault(cfg *config.Config) (*Vault, error) {
 		return &Vault{key: key, fingerprint: computeFingerprint(key), source: "file"}, nil
 
 	default:
+		// Prefer /data/vault.key (Docker persistent volume) over ~/.engram/vault.key.
+		// This prevents key loss when containers are recreated.
 		keyFile := filepath.Join(config.DataDir(), "vault.key")
+		if altDir := "/data"; isDir(altDir) {
+			keyFile = filepath.Join(altDir, "vault.key")
+		}
 		if _, statErr := os.Stat(keyFile); statErr == nil {
 			key, err = loadKeyFromFile(keyFile)
 			if err != nil {
@@ -197,6 +202,12 @@ func loadKeyFromFile(path string) ([]byte, error) {
 		return raw, nil
 	}
 	return nil, fmt.Errorf("key file must contain 32 raw bytes or 64 hex chars, got %d bytes", len(data))
+}
+
+// isDir returns true if path exists and is a directory.
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // saveKeyToFile saves the key as hex to path with 0600 permissions.

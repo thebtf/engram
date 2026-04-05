@@ -8,9 +8,17 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/embedding"
 )
 
-// handleUpdateCheck checks for available updates.
+// handleUpdateCheck godoc
+// @Summary Check for updates
+// @Description Checks for available updates from the release server. Returns current version and availability info. Handles rate limiting gracefully.
+// @Tags Update
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/update/check [get]
 func (s *Service) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	info, err := s.updater.CheckForUpdate(r.Context())
 	if err != nil {
@@ -27,7 +35,15 @@ func (s *Service) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, info)
 }
 
-// handleUpdateApply downloads and applies an available update.
+// handleUpdateApply godoc
+// @Summary Apply update
+// @Description Downloads and applies an available update in the background.
+// @Tags Update
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {string} string "internal error"
+// @Router /api/update/apply [post]
 func (s *Service) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	// First check for update
 	info, err := s.updater.CheckForUpdate(r.Context())
@@ -58,7 +74,14 @@ func (s *Service) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUpdateStatus returns the current update status.
+// handleUpdateStatus godoc
+// @Summary Get update status
+// @Description Returns the current update status (idle, downloading, done, error).
+// @Tags Update
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/update/status [get]
 func (s *Service) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	status := s.updater.GetStatus()
 	writeJSON(w, status)
@@ -79,7 +102,14 @@ type SelfCheckResponse struct {
 	Components []ComponentHealth `json:"components"`
 }
 
-// handleSelfCheck returns the health status of all components.
+// handleSelfCheck godoc
+// @Summary Self-check all components
+// @Description Returns the health status of all system components (PostgreSQL, Vector DB, SDK Processor, SSE, Reranker).
+// @Tags System
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} SelfCheckResponse
+// @Router /api/selfcheck [get]
 func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	components := []ComponentHealth{}
 	overall := "healthy"
@@ -157,6 +187,41 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	components = append(components, sseStatus)
 
+	// Check Embedding Resilience
+	embeddingStatus := ComponentHealth{Name: "Embedding", Status: "healthy"}
+	if s.resilientEmbedder == nil {
+		embeddingStatus.Status = "degraded"
+		embeddingStatus.Message = "Not configured"
+		if overall == "healthy" {
+			overall = "degraded"
+		}
+	} else {
+		status := s.resilientEmbedder.Status()
+		switch status {
+		case embedding.StatusHealthy:
+			embeddingStatus.Message = "OK"
+		case embedding.StatusDegraded:
+			embeddingStatus.Status = "degraded"
+			embeddingStatus.Message = fmt.Sprintf("Degraded (%d consecutive failures)", s.resilientEmbedder.ConsecutiveFailures())
+			if overall == "healthy" {
+				overall = "degraded"
+			}
+		case embedding.StatusDisabled:
+			embeddingStatus.Status = "unhealthy"
+			embeddingStatus.Message = fmt.Sprintf("Disabled (%d consecutive failures)", s.resilientEmbedder.ConsecutiveFailures())
+			if overall == "healthy" || overall == "degraded" {
+				overall = "degraded"
+			}
+		case embedding.StatusRecovering:
+			embeddingStatus.Status = "degraded"
+			embeddingStatus.Message = "Recovering — probe succeeded, awaiting real request"
+			if overall == "healthy" {
+				overall = "degraded"
+			}
+		}
+	}
+	components = append(components, embeddingStatus)
+
 	// Check Cross-Encoder Reranker
 	rerankerStatus := ComponentHealth{Name: "Cross-Encoder Reranker", Status: "healthy"}
 	if !s.config.RerankingEnabled {
@@ -197,7 +262,15 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUpdateRestart restarts the worker with the new binary (after update).
+// handleUpdateRestart godoc
+// @Summary Restart after update
+// @Description Restarts the worker with the new binary after an update has been applied. Requires update state to be 'done'.
+// @Tags Update
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "no update has been applied"
+// @Router /api/update/restart [post]
 func (s *Service) handleUpdateRestart(w http.ResponseWriter, r *http.Request) {
 	status := s.updater.GetStatus()
 	if status.State != "done" {
@@ -224,7 +297,14 @@ func (s *Service) handleUpdateRestart(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// handleRestart restarts the worker process (general restart, not tied to update).
+// handleRestart godoc
+// @Summary Restart worker
+// @Description Restarts the worker process (general restart, not tied to update).
+// @Tags System
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Router /api/restart [post]
 func (s *Service) handleRestart(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msg("Manual restart requested via API")
 

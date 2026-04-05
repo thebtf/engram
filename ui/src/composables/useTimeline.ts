@@ -37,9 +37,13 @@ export function useTimeline() {
   // SSE for real-time updates
   const { lastEvent } = useSSE()
 
-  // Counts (reflect data fetched for current project/all)
-  const observationCount = computed(() => observations.value.length)
-  const promptCount = computed(() => prompts.value.length)
+  // Totals from the API (reflect actual DB count, not page size)
+  const observationTotal = ref(0)
+  const promptTotal = ref(0)
+
+  // Counts: use API total when available, fall back to loaded array length
+  const observationCount = computed(() => observationTotal.value || observations.value.length)
+  const promptCount = computed(() => promptTotal.value || prompts.value.length)
   const summaryCount = computed(() => summaries.value.length)
 
   // Filtered items (further filter by type/concept within fetched data)
@@ -93,14 +97,22 @@ export function useTimeline() {
       const project = currentProject.value || undefined
       const limit = project ? 100 : 50
 
-      const [obs, prm, sum] = await Promise.all([
-        fetchObservations(limit, project, signal),
+      // Pass type and concept filters to the API for server-side filtering
+      const typeFilter = currentTypeFilter.value || undefined
+      const conceptFilter = currentConceptFilter.value || undefined
+
+      const [obsResult, prm, sum] = await Promise.all([
+        fetchObservations(limit, project, signal, typeFilter, conceptFilter),
         fetchPrompts(limit, project, signal),
         fetchSummaries(limit, project, signal)
       ])
 
+      // Track API totals for accurate counts
+      observationTotal.value = obsResult.total
+      promptTotal.value = prm.length
+
       // Combine into timeline
-      allItems.value = combineTimeline(obs, prm, sum)
+      allItems.value = combineTimeline(obsResult.observations, prm, sum)
 
       // Update individual arrays for counting (data already filtered by project from API)
       observations.value = allItems.value.filter(i => i.itemType === 'observation')
@@ -136,10 +148,14 @@ export function useTimeline() {
 
   const setTypeFilter = (type: ObservationType | null) => {
     currentTypeFilter.value = type
+    // Re-fetch with server-side type filtering
+    refresh()
   }
 
   const setConceptFilter = (concept: ConceptType | null) => {
     currentConceptFilter.value = concept
+    // Re-fetch with server-side concept filtering
+    refresh()
   }
 
   // Watch for SSE events and debounced refresh

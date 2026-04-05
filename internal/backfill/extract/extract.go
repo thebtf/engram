@@ -5,10 +5,14 @@ package extract
 import (
 	"encoding/xml"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/thebtf/engram/pkg/models"
 )
+
+// xmlTagRe matches XML-like tags to prevent prompt boundary injection.
+var xmlTagRe = regexp.MustCompile(`</?(?:session_transcript|observations?|metadata|no_observations_found)[^>]*>`)
 
 // SystemPrompt is the frozen poc-v1 extraction prompt for historical sessions.
 const SystemPrompt = `You are an expert Principal Staff Engineer responsible for maintaining the permanent architectural memory of a project.
@@ -77,12 +81,19 @@ var ValidOutcomes = map[string]bool{
 
 // XMLObservation represents a single observation parsed from LLM XML output.
 type XMLObservation struct {
+	Category  string      `xml:"category"` // decision|correction|debugging|gotcha|pattern|user_behavior
 	Type      string      `xml:"type"`
 	Outcome   string      `xml:"outcome"`
 	Title     string      `xml:"title"`
 	Narrative string      `xml:"narrative"`
 	Concepts  xmlConcepts `xml:"concepts"`
 	Files     xmlFiles    `xml:"files"`
+}
+
+// ValidCategories contains allowed observation category values.
+var ValidCategories = map[string]bool{
+	"decision": true, "correction": true, "debugging": true,
+	"gotcha": true, "pattern": true, "user_behavior": true,
 }
 
 type xmlObservations struct {
@@ -174,8 +185,57 @@ func ValidateXML(raw string) ValidationResult {
 }
 
 // BuildUserPrompt constructs the user prompt for LLM extraction.
+// Transcript content is sanitized to prevent XML tag injection (AG06-005).
 func BuildUserPrompt(projectPath, gitBranch string, durationMin, exchangeCount int, chunkInfo, alreadyExtracted, transcript string) string {
-	return fmt.Sprintf(UserPromptTemplate, projectPath, gitBranch, durationMin, exchangeCount, chunkInfo, alreadyExtracted, transcript)
+	// Replace XML tags that could break prompt boundaries with bracketed equivalents
+	sanitized := xmlTagRe.ReplaceAllStringFunc(transcript, func(tag string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(tag, "<", "["), ">", "]")
+	})
+	return fmt.Sprintf(UserPromptTemplate, projectPath, gitBranch, durationMin, exchangeCount, chunkInfo, alreadyExtracted, sanitized)
+}
+
+// BuildChunkUserPrompt constructs the user prompt using ChunkExtractionUserTemplate.
+// Transcript content is sanitized to prevent XML tag injection (AG06-005).
+func BuildChunkUserPrompt(projectPath string, exchangeCount int, chunkInfo, transcript string) string {
+	// Replace XML tags that could break prompt boundaries with bracketed equivalents
+	sanitized := xmlTagRe.ReplaceAllStringFunc(transcript, func(tag string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(tag, "<", "["), ">", "]")
+	})
+	return fmt.Sprintf(ChunkExtractionUserTemplate, projectPath, exchangeCount, chunkInfo, sanitized)
+}
+
+// ParseSingleObservation extracts a single observation from XML that may contain
+// a bare <observation>...</observation> element (without a wrapper <observations> element).
+// Returns nil if parsing fails or the input is empty.
+func ParseSingleObservation(raw string) *XMLObservation {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	// Strip markdown code fences if present.
+	if strings.HasPrefix(raw, "```") {
+		lines := strings.Split(raw, "\n")
+		start := 1
+		end := len(lines) - 1
+		if end > start && strings.HasPrefix(lines[end], "```") {
+			raw = strings.Join(lines[start:end], "\n")
+			raw = strings.TrimSpace(raw)
+		}
+	}
+
+	start := strings.Index(raw, "<observation>")
+	end := strings.Index(raw, "</observation>")
+	if start == -1 || end == -1 || end <= start {
+		return nil
+	}
+	xmlStr := raw[start : end+len("</observation>")]
+
+	var obs XMLObservation
+	if err := xml.Unmarshal([]byte(xmlStr), &obs); err != nil {
+		return nil
+	}
+	return &obs
 }
 
 // BuildAlreadyExtracted builds the <already_extracted> context block for multi-chunk dedup.

@@ -387,6 +387,15 @@ func (s *RelationStore) GetTotalRelationCount(ctx context.Context) (int, error) 
 	return int(count), err
 }
 
+// GetDistinctNodeCount returns the count of unique observation IDs participating in relations.
+func (s *RelationStore) GetDistinctNodeCount(ctx context.Context) (int, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Raw(
+		`SELECT COUNT(*) FROM (SELECT source_id AS id FROM observation_relations UNION SELECT target_id FROM observation_relations) AS nodes`,
+	).Scan(&count).Error
+	return int(count), err
+}
+
 // GetHighConfidenceRelations retrieves relations with confidence above threshold.
 func (s *RelationStore) GetHighConfidenceRelations(ctx context.Context, minConfidence float64, limit int) ([]*models.ObservationRelation, error) {
 	var relations []ObservationRelation

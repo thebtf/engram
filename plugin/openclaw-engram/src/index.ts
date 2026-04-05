@@ -33,6 +33,7 @@ import { handleBeforePromptBuild } from './hooks/before-prompt-build.js';
 import { handleAfterToolCall } from './hooks/after-tool-call.js';
 import { handleBeforeCompaction } from './hooks/before-compaction.js';
 import { handleSessionEnd } from './hooks/session-end.js';
+import { handleBeforeToolCall } from './hooks/before-tool-call.js';
 
 import { createEngramSearchTool, createMemorySearchTool } from './tools/engram-search.js';
 import { createEngramRememberTool, createMemoryStoreTool } from './tools/engram-remember.js';
@@ -40,6 +41,13 @@ import { createEngramDecisionsTool } from './tools/engram-decisions.js';
 import { createMemoryForgetTool } from './tools/memory-forget.js';
 import { createMemoryGetTool } from './tools/memory-get.js';
 import { createMemoryMigrateTool } from './tools/memory-migrate.js';
+import { createEngramRateTool } from './tools/engram-rate.js';
+import { createEngramSuppressTool } from './tools/engram-suppress.js';
+import { createEngramOutcomeTool } from './tools/engram-outcome.js';
+import { createEngramFindByFileTool } from './tools/engram-find-by-file.js';
+import { createEngramTimelineTool } from './tools/engram-timeline.js';
+import { createEngramChangesTool, createEngramHowItWorksTool } from './tools/engram-presets.js';
+import { createEngramVaultStoreTool, createEngramVaultGetTool } from './tools/engram-vault.js';
 
 import { buildMemoryCommand } from './commands/memory.js';
 import { buildRememberCommand } from './commands/remember.js';
@@ -87,6 +95,10 @@ const plugin: OpenClawPluginDefinition = {
       handleBeforeCompaction(event, ctx, client, config, api.logger);
     });
 
+    api.on('before_tool_call', (event, ctx: PluginHookContext) =>
+      handleBeforeToolCall(event, ctx, client, config),
+    );
+
     api.on('session_end', (event, ctx: PluginHookContext) => {
       handleSessionEnd(event, ctx, client, config, api.logger);
     });
@@ -104,6 +116,15 @@ const plugin: OpenClawPluginDefinition = {
       createMemoryForgetTool(ctx, client, config),
       createMemoryGetTool(ctx, client, config, api),
       createMemoryMigrateTool(ctx, client, config, api),
+      createEngramRateTool(ctx, client, config),
+      createEngramSuppressTool(ctx, client, config),
+      createEngramOutcomeTool(ctx, client, config),
+      createEngramFindByFileTool(ctx, client, config),
+      createEngramTimelineTool(ctx, client, config),
+      createEngramChangesTool(ctx, client, config),
+      createEngramHowItWorksTool(ctx, client, config),
+      createEngramVaultStoreTool(ctx, client, config),
+      createEngramVaultGetTool(ctx, client, config),
     ];
 
     api.registerTool(toolFactory, {

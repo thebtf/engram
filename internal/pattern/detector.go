@@ -31,8 +31,8 @@ type DetectorConfig struct {
 // DefaultConfig returns the default detector configuration.
 func DefaultConfig() DetectorConfig {
 	return DetectorConfig{
-		MinMatchScore:          0.3, // 30% similarity threshold
-		MinFrequencyForPattern: 2,   // At least 2 occurrences to form a pattern
+		MinMatchScore:          0.5, // 50% similarity threshold
+		MinFrequencyForPattern: 5,   // At least 5 occurrences to form a pattern
 		AnalysisInterval:       5 * time.Minute,
 		MaxPatternsToTrack:     1000,
 		MaxCandidates:          500, // Prevent unbounded growth
@@ -369,6 +369,52 @@ func (d *Detector) CandidateCount() int {
 	d.candidatesMu.RLock()
 	defer d.candidatesMu.RUnlock()
 	return len(d.candidates)
+}
+
+// BatchRecalculateConfidence recomputes confidence for all active patterns using the model formula
+// (frequency + cross-project bonus) and persists updated values.
+// Returns the number of patterns recalculated.
+func (d *Detector) BatchRecalculateConfidence(ctx context.Context) (int, error) {
+	const maxPatterns = 10000
+	patterns, err := d.patternStore.GetActivePatterns(ctx, maxPatterns, 0, "")
+	if err != nil {
+		return 0, fmt.Errorf("fetch active patterns: %w", err)
+	}
+
+	recalculated := 0
+	for _, p := range patterns {
+		prevConfidence := p.Confidence
+
+		// Replicate the formula from models.Pattern.updateConfidence.
+		freqConfidence := 0.3 + (0.5 * (float64(min(p.Frequency, 10)) / 10.0))
+
+		projectBonus := 0.0
+		if len(p.Projects) >= 2 {
+			projectBonus = 0.1
+		}
+		if len(p.Projects) >= 5 {
+			projectBonus = 0.2
+		}
+
+		newConfidence := freqConfidence + projectBonus
+		if newConfidence > 1.0 {
+			newConfidence = 1.0
+		}
+
+		if newConfidence == prevConfidence {
+			continue // No change needed.
+		}
+
+		updated := *p
+		updated.Confidence = newConfidence
+		if err := d.patternStore.UpdatePattern(ctx, &updated); err != nil {
+			log.Warn().Err(err).Int64("pattern_id", p.ID).Msg("Failed to update pattern confidence")
+			continue
+		}
+		recalculated++
+	}
+
+	return recalculated, nil
 }
 
 // GetPatternInsight returns a formatted insight string for a pattern.

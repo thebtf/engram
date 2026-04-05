@@ -40,35 +40,42 @@ var commonWords = map[string]struct{}{
 // Receives the IDs of deleted observations for downstream cleanup (e.g., vector DB).
 type CleanupFunc func(ctx context.Context, deletedIDs []int64)
 
+// RelationDetector is the interface for async relation detection.
+// Implemented by relation.Detector; defined here to avoid circular imports.
+type RelationDetector interface {
+	Enqueue(obsID int64, project string)
+}
+
 // ObservationStore provides observation-related database operations using GORM.
 type ObservationStore struct {
-	conflictStore  any
-	relationStore  any
-	db             *gorm.DB
-	rawDB          *sql.DB
-	cleanupFunc    CleanupFunc
-	cleanupQueue   chan string
-	stopCleanup    chan struct{}
-	cleanupWg      sync.WaitGroup
-	cleanupOnce    sync.Once
-	cleanupStarted atomic.Bool
+	relationDetector RelationDetector
+	db               *gorm.DB
+	rawDB            *sql.DB
+	cleanupFunc      CleanupFunc
+	cleanupQueue     chan string
+	stopCleanup      chan struct{}
+	cleanupWg        sync.WaitGroup
+	cleanupOnce      sync.Once
+	cleanupStarted   atomic.Bool
 }
 
 // NewObservationStore creates a new observation store.
-// The conflictStore and relationStore parameters are optional (can be nil) and will be used in Phase 4.
-func NewObservationStore(store *Store, cleanupFunc CleanupFunc, conflictStore, relationStore any) *ObservationStore {
+func NewObservationStore(store *Store, cleanupFunc CleanupFunc) *ObservationStore {
 	s := &ObservationStore{
-		db:            store.DB,
-		rawDB:         store.GetRawDB(),
-		cleanupFunc:   cleanupFunc,
-		conflictStore: conflictStore,
-		relationStore: relationStore,
-		cleanupQueue:  make(chan string, cleanupQueueSize),
-		stopCleanup:   make(chan struct{}),
+		db:           store.DB,
+		rawDB:        store.GetRawDB(),
+		cleanupFunc:  cleanupFunc,
+		cleanupQueue: make(chan string, cleanupQueueSize),
+		stopCleanup:  make(chan struct{}),
 	}
 	// Start the cleanup worker
 	s.startCleanupWorker()
 	return s
+}
+
+// GetDB returns the underlying GORM DB instance for direct queries.
+func (s *ObservationStore) GetDB() *gorm.DB {
+	return s.db
 }
 
 // startCleanupWorker starts the background cleanup worker.
@@ -134,6 +141,11 @@ func (s *ObservationStore) SetCleanupFunc(fn CleanupFunc) {
 	s.cleanupFunc = fn
 }
 
+// SetRelationDetector sets the async relation detector for post-creation detection.
+func (s *ObservationStore) SetRelationDetector(d RelationDetector) {
+	s.relationDetector = d
+}
+
 // StoreObservation stores a new observation.
 func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, project string, obs *models.ParsedObservation, promptNumber int, discoveryTokens int64) (int64, int64, error) {
 	now := time.Now()
@@ -160,6 +172,7 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 		Title:           nullString(obs.Title),
 		Subtitle:        nullString(obs.Subtitle),
 		Facts:           models.JSONStringArray(obs.Facts),
+		Rejected:        models.JSONStringArray(obs.Rejected),
 		Narrative:       nullString(obs.Narrative),
 		Concepts:        models.JSONStringArray(obs.Concepts),
 		FilesRead:       models.JSONStringArray(obs.FilesRead),
@@ -169,6 +182,7 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 		DiscoveryTokens:          discoveryTokens,
 		CreatedAt:                now.Format(time.RFC3339),
 		CreatedAtEpoch:           nowEpoch,
+		MemoryType:               obs.MemoryType,
 		EncryptedSecret:          obs.EncryptedSecret,
 		EncryptionKeyFingerprint: sql.NullString{String: obs.EncryptionKeyFingerprint, Valid: obs.EncryptionKeyFingerprint != ""},
 	}
@@ -189,8 +203,10 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 		}
 	}
 
-	// Note: Conflict and relation detection intentionally omitted for now
-	// Will be added in Phase 4 when ConflictStore and RelationStore are implemented
+	// Queue async relation detection (non-blocking)
+	if s.relationDetector != nil {
+		s.relationDetector.Enqueue(dbObs.ID, project)
+	}
 
 	return dbObs.ID, nowEpoch, nil
 }
@@ -206,6 +222,8 @@ type ObservationUpdate struct {
 	FilesRead     *[]string // New files read (replaces existing)
 	FilesModified *[]string // New files modified (replaces existing)
 	Scope         *string   // New scope (project or global)
+	Status        *string   // New status (active or resolved)
+	StatusReason  *string   // Reason for status change
 }
 
 // UpdateObservation updates an existing observation with the provided fields.
@@ -256,9 +274,12 @@ func (s *ObservationStore) UpdateObservation(ctx context.Context, id int64, upda
 	if update.Scope != nil {
 		updates["scope"] = sql.NullString{String: *update.Scope, Valid: true}
 	}
-
-	// Add updated_at timestamp
-	updates["updated_at_epoch"] = sql.NullInt64{Int64: time.Now().Unix(), Valid: true}
+	if update.Status != nil {
+		updates["status"] = *update.Status
+	}
+	if update.StatusReason != nil {
+		updates["status_reason"] = *update.StatusReason
+	}
 
 	if len(updates) == 0 {
 		// Nothing to update, just return existing observation
@@ -384,11 +405,13 @@ func (s *ObservationStore) BatchGetObservationsWithScores(ctx context.Context, i
 
 // GetRecentObservations retrieves recent observations for a project.
 // This includes project-scoped observations for the specified project AND global observations.
+// Excludes resolved observations (status != 'active') to avoid injecting stale context.
 // Results are ordered by importance_score DESC, then created_at_epoch DESC.
 func (s *ObservationStore) GetRecentObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
 	var dbObservations []Observation
 	err := s.db.WithContext(ctx).
 		Scopes(projectScopeFilter(project), importanceOrdering()).
+		Where("COALESCE(status, 'active') = 'active'").
 		Limit(limit).
 		Find(&dbObservations).Error
 
@@ -401,6 +424,7 @@ func (s *ObservationStore) GetRecentObservations(ctx context.Context, project st
 
 // GetRecentObservationsFiltered retrieves recent observations using a ScopeFilter.
 // When f.AgentID is set, also includes scope="agent" observations for that agent.
+// Excludes resolved observations (status != 'active') to avoid injecting stale context.
 // Results are ordered by importance_score DESC, then created_at_epoch DESC.
 func (s *ObservationStore) GetRecentObservationsFiltered(ctx context.Context, f ScopeFilter, limit int) ([]*models.Observation, error) {
 	if f.AgentID == "" {
@@ -410,6 +434,7 @@ func (s *ObservationStore) GetRecentObservationsFiltered(ctx context.Context, f 
 	var dbObservations []Observation
 	err := s.db.WithContext(ctx).
 		Scopes(agentScopeFilter(f), importanceOrdering()).
+		Where("COALESCE(status, 'active') = 'active'").
 		Limit(limit).
 		Find(&dbObservations).Error
 
@@ -453,6 +478,70 @@ func (s *ObservationStore) GetGuidanceObservations(ctx context.Context, project 
 	}
 
 	return toModelObservations(dbObservations), nil
+}
+
+// GetAlwaysInjectObservations retrieves observations tagged with the "always-inject" concept.
+// Only returns observations scoped to the given project or global scope.
+// Results are ordered by importance_score DESC, limited to the configured cap.
+func (s *ObservationStore) GetAlwaysInjectObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
+	var dbObservations []Observation
+	q := s.db.WithContext(ctx).
+		Scopes(activeObservationFilter(), importanceOrdering()).
+		Where("concepts @> ?", `["always-inject"]`).
+		Limit(limit)
+	if project != "" {
+		q = q.Where("(project = ? OR COALESCE(scope, 'project') = 'global')", project)
+	}
+	err := q.Find(&dbObservations).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelObservations(dbObservations), nil
+}
+
+// GetObservationsByFile retrieves observations related to a specific file path.
+// Matches against both files_modified and files_read JSONB arrays.
+// Results are ordered by importance_score DESC.
+func (s *ObservationStore) GetObservationsByFile(ctx context.Context, filePath string, limit int) ([]*models.Observation, error) {
+	var dbObservations []Observation
+	// Use json.Marshal to properly escape backslashes in Windows paths (e.g., D:\Dev\...).
+	// fmt.Sprintf(`["%s"]`, path) produces invalid JSON when path contains backslashes.
+	fileJSONBytes, _ := json.Marshal([]string{filePath})
+	fileJSON := string(fileJSONBytes)
+	err := s.db.WithContext(ctx).
+		Scopes(activeObservationFilter(), importanceOrdering()).
+		Where("files_modified @> ? OR files_read @> ?", fileJSON, fileJSON).
+		Limit(limit).
+		Find(&dbObservations).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelObservations(dbObservations), nil
+}
+
+// GetPreviousObservationInSession finds the observation that immediately precedes
+// the given prompt_number within the same session. Used for temporal chain linking.
+func (s *ObservationStore) GetPreviousObservationInSession(ctx context.Context, sessionID string, promptNumber int) (*models.Observation, error) {
+	var dbObs Observation
+	err := s.db.WithContext(ctx).
+		Scopes(activeObservationFilter()).
+		Where("sdk_session_id = ? AND prompt_number < ?", sessionID, promptNumber).
+		Order("prompt_number DESC").
+		First(&dbObs).Error
+
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	obs := toModelObservation(&dbObs)
+	return obs, nil
 }
 
 // GetSupersededObservations retrieves observations that have been superseded by newer ones.
@@ -499,6 +588,22 @@ func (s *ObservationStore) GetObservationCount(ctx context.Context, project stri
 	return int(count), err
 }
 
+// GetTotalObservationCount returns the count of active (non-archived, non-superseded) observations.
+// If project is empty, counts across all projects.
+func (s *ObservationStore) GetTotalObservationCount(ctx context.Context, project string) (int, error) {
+	var count int64
+	q := s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Where("COALESCE(is_superseded, 0) = 0 AND COALESCE(is_archived, 0) = 0")
+	if project != "" {
+		q = q.Where("project = ?", project)
+	}
+	if err := q.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
 // GetAllRecentObservations retrieves recent observations across all projects.
 func (s *ObservationStore) GetAllRecentObservations(ctx context.Context, limit int) ([]*models.Observation, error) {
 	var dbObservations []Observation
@@ -515,17 +620,36 @@ func (s *ObservationStore) GetAllRecentObservations(ctx context.Context, limit i
 }
 
 // GetAllRecentObservationsPaginated retrieves recent observations with pagination.
-func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass obsType="" to return all types. Pass status="" to return all statuses.
+// Pass memoryType="any" to filter observations that have any non-empty memory_type.
+// Pass memoryType="<value>" to filter by a specific memory_type value.
+// Pass memoryType="" for no memory_type filter (current behavior).
+// Pass concept="" for no concept filter; non-empty concept uses LIKE match on JSON concepts column.
+func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context, obsType string, status string, memoryType string, concept string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
-	// Get total count
-	if err := s.db.WithContext(ctx).Model(&Observation{}).Count(&total).Error; err != nil {
+	baseQuery := s.db.WithContext(ctx).Model(&Observation{})
+	if obsType != "" {
+		baseQuery = baseQuery.Where("type = ?", obsType)
+	}
+	if status != "" {
+		baseQuery = baseQuery.Where("COALESCE(status, 'active') = ?", status)
+	}
+	if memoryType == "any" {
+		baseQuery = baseQuery.Where("memory_type IS NOT NULL AND memory_type != ''")
+	} else if memoryType != "" {
+		baseQuery = baseQuery.Where("memory_type = ?", memoryType)
+	}
+	if concept != "" {
+		baseQuery = baseQuery.Where("concepts @> ?::jsonb", `["`+concept+`"]`)
+	}
+
+	if err := baseQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// Get paginated results
-	err := s.db.WithContext(ctx).
+	err := baseQuery.
 		Scopes(importanceOrdering()).
 		Limit(limit).
 		Offset(offset).
@@ -539,18 +663,36 @@ func (s *ObservationStore) GetAllRecentObservationsPaginated(ctx context.Context
 }
 
 // GetObservationsByProjectStrictPaginated retrieves observations strictly from a project with pagination.
-func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, limit, offset int) ([]*models.Observation, int64, error) {
+// Pass obsType="" to return all types. Pass status="" to return all statuses.
+// Pass memoryType="any" to filter observations that have any non-empty memory_type.
+// Pass memoryType="<value>" to filter by a specific memory_type value.
+// Pass memoryType="" for no memory_type filter (current behavior).
+// Pass concept="" for no concept filter; non-empty concept uses LIKE match on JSON concepts column.
+func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.Context, project string, obsType string, status string, memoryType string, concept string, limit, offset int) ([]*models.Observation, int64, error) {
 	var dbObservations []Observation
 	var total int64
 
-	// Get total count for project
-	if err := s.db.WithContext(ctx).Model(&Observation{}).Where("project = ?", project).Count(&total).Error; err != nil {
+	baseQuery := s.db.WithContext(ctx).Model(&Observation{}).Where("project = ?", project)
+	if obsType != "" {
+		baseQuery = baseQuery.Where("type = ?", obsType)
+	}
+	if status != "" {
+		baseQuery = baseQuery.Where("COALESCE(status, 'active') = ?", status)
+	}
+	if memoryType == "any" {
+		baseQuery = baseQuery.Where("memory_type IS NOT NULL AND memory_type != ''")
+	} else if memoryType != "" {
+		baseQuery = baseQuery.Where("memory_type = ?", memoryType)
+	}
+	if concept != "" {
+		baseQuery = baseQuery.Where("concepts @> ?::jsonb", `["`+concept+`"]`)
+	}
+
+	if err := baseQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// Get paginated results
-	err := s.db.WithContext(ctx).
-		Where("project = ?", project).
+	err := baseQuery.
 		Scopes(importanceOrdering()).
 		Limit(limit).
 		Offset(offset).
@@ -561,6 +703,23 @@ func (s *ObservationStore) GetObservationsByProjectStrictPaginated(ctx context.C
 	}
 
 	return toModelObservations(dbObservations), total, nil
+}
+
+// GetObservationsSinceEpoch retrieves observations created at or after the given epoch (ms).
+// Includes project-scoped observations for the specified project AND global observations.
+// Results are ordered by created_at_epoch DESC.
+func (s *ObservationStore) GetObservationsSinceEpoch(ctx context.Context, project string, sinceEpochMs int64) ([]*models.Observation, error) {
+	var dbObservations []Observation
+	err := s.db.WithContext(ctx).
+		Where("created_at_epoch >= ?", sinceEpochMs).
+		Scopes(projectScopeFilter(project), importanceOrdering()).
+		Find(&dbObservations).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelObservations(dbObservations), nil
 }
 
 // GetAllObservations retrieves all observations (for vector rebuild).
@@ -650,10 +809,13 @@ func (s *ObservationStore) SearchObservationsFTS(ctx context.Context, query, pro
 		       COALESCE(o.user_feedback, 0) as user_feedback,
 		       COALESCE(o.retrieval_count, 0) as retrieval_count,
 		       o.last_retrieved_at_epoch, o.score_updated_at_epoch,
-		       COALESCE(o.is_superseded, 0) as is_superseded
+		       COALESCE(o.is_superseded, 0) as is_superseded,
+		       o.expires_at, o.ttl_days
 		FROM observations o
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
 		  AND (o.project = $2 OR o.scope = 'global')
+		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
+		  AND COALESCE(o.status, 'active') = 'active'
 		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) DESC,
 		         COALESCE(o.importance_score, 1.0) DESC
 		LIMIT $3
@@ -704,10 +866,13 @@ func (s *ObservationStore) SearchObservationsFTSFiltered(ctx context.Context, qu
 		       COALESCE(o.user_feedback, 0) as user_feedback,
 		       COALESCE(o.retrieval_count, 0) as retrieval_count,
 		       o.last_retrieved_at_epoch, o.score_updated_at_epoch,
-		       COALESCE(o.is_superseded, 0) as is_superseded
+		       COALESCE(o.is_superseded, 0) as is_superseded,
+		       o.expires_at, o.ttl_days
 		FROM observations o
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
 		  AND (o.scope = 'global' OR (o.scope = 'project' AND o.project = $2) OR (o.scope = 'agent' AND o.agent_id = $3))
+		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
+		  AND COALESCE(o.status, 'active') = 'active'
 		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) DESC,
 		         COALESCE(o.importance_score, 1.0) DESC
 		LIMIT $4
@@ -755,10 +920,13 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 		       COALESCE(o.retrieval_count, 0) as retrieval_count,
 		       o.last_retrieved_at_epoch, o.score_updated_at_epoch,
 		       COALESCE(o.is_superseded, 0) as is_superseded,
+		       o.expires_at, o.ttl_days,
 		       ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) AS rank_score
 		FROM observations o
 		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
 		  AND (o.project = $2 OR o.scope = 'global')
+		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
+		  AND COALESCE(o.status, 'active') = 'active'
 		ORDER BY rank_score DESC
 		LIMIT $3
 	`
@@ -783,6 +951,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 			&obs.PromptNumber, &obs.DiscoveryTokens, &obs.CreatedAt, &obs.CreatedAtEpoch,
 			&obs.ImportanceScore, &obs.UserFeedback, &obs.RetrievalCount,
 			&obs.LastRetrievedAt, &obs.ScoreUpdatedAt, &isSuperseded,
+			&obs.ExpiresAt, &obs.TtlDays,
 			&rankScore,
 		); err != nil {
 			return nil, fmt.Errorf("scan fts scored row: %w", err)
@@ -804,6 +973,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 			_ = json.Unmarshal(fileMtimesJSON, &obs.FileMtimes)
 		}
 		obs.IsSuperseded = isSuperseded != 0
+		obs.IsExpired = obs.ExpiresAt.Valid && obs.ExpiresAt.Time.Before(time.Now())
 
 		results = append(results, ScoredObservation{Observation: &obs, Score: rankScore})
 	}
@@ -840,7 +1010,7 @@ func (s *ObservationStore) searchObservationsLike(ctx context.Context, keywords 
 
 	// Build WHERE clause
 	whereClause := strings.Join(conditions, " OR ")
-	fullWhere := "(" + whereClause + ") AND (project = ? OR scope = 'global')"
+	fullWhere := "(" + whereClause + ") AND (project = ? OR scope = 'global') AND COALESCE(is_suppressed, FALSE) = FALSE AND COALESCE(status, 'active') = 'active'"
 	args = append(args, project)
 
 	var dbObservations []Observation
@@ -879,7 +1049,7 @@ func (s *ObservationStore) searchObservationsLikeFiltered(ctx context.Context, k
 	}
 
 	whereClause := strings.Join(conditions, " OR ")
-	fullWhere := "(" + whereClause + ") AND (scope = 'global' OR (scope = 'project' AND project = ?) OR (scope = 'agent' AND agent_id = ?))"
+	fullWhere := "(" + whereClause + ") AND (scope = 'global' OR (scope = 'project' AND project = ?) OR (scope = 'agent' AND agent_id = ?)) AND COALESCE(is_suppressed, FALSE) = FALSE AND COALESCE(status, 'active') = 'active'"
 	args = append(args, f.Project, f.AgentID)
 
 	var dbObservations []Observation
@@ -903,7 +1073,15 @@ func (s *ObservationStore) DeleteObservations(ctx context.Context, ids []int64) 
 	}
 
 	result := s.db.WithContext(ctx).Delete(&Observation{}, ids)
-	return result.RowsAffected, result.Error
+	if result.Error != nil {
+		return result.RowsAffected, result.Error
+	}
+
+	// Sync deletes to vector store (cleanup orphaned embeddings).
+	if result.RowsAffected > 0 && s.cleanupFunc != nil {
+		s.cleanupFunc(ctx, ids)
+	}
+	return result.RowsAffected, nil
 }
 
 // DeleteObservation deletes a single observation by ID.
@@ -914,6 +1092,11 @@ func (s *ObservationStore) DeleteObservation(ctx context.Context, id int64) erro
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("observation %d not found", id)
+	}
+
+	// Sync delete to vector store (cleanup orphaned embedding).
+	if s.cleanupFunc != nil {
+		s.cleanupFunc(ctx, []int64{id})
 	}
 	return nil
 }
@@ -1124,10 +1307,11 @@ func (s *ObservationStore) CleanupOldObservations(ctx context.Context, project s
 	var idsToDelete []int64
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Find IDs to keep (most recent MaxObservationsPerProject)
+		// Find IDs to keep (most recent MaxObservationsPerProject, excluding credentials
+		// which must never be evicted by the rotation policy).
 		var idsToKeep []int64
 		err := tx.Model(&Observation{}).
-			Where("project = ?", project).
+			Where("project = ? AND type != 'credential'", project).
 			Order("created_at_epoch DESC").
 			Limit(MaxObservationsPerProject).
 			Pluck("id", &idsToKeep).Error
@@ -1140,10 +1324,10 @@ func (s *ObservationStore) CleanupOldObservations(ctx context.Context, project s
 			return nil
 		}
 
-		// Find IDs to delete (all IDs not in the keep list)
-		// This happens in the same transaction to prevent race conditions
+		// Find IDs to delete (all non-credential IDs not in the keep list).
+		// Runs in the same transaction to prevent TOCTOU races.
 		err = tx.Model(&Observation{}).
-			Where("project = ? AND id NOT IN ?", project, idsToKeep).
+			Where("project = ? AND type != 'credential' AND id NOT IN ?", project, idsToKeep).
 			Pluck("id", &idsToDelete).Error
 
 		if err != nil {
@@ -1195,12 +1379,11 @@ func agentScopeFilter(f ScopeFilter) func(*gorm.DB) *gorm.DB {
 	}
 }
 
-// activeObservationFilter filters for active (non-archived, non-superseded) observations.
-// This is more efficient than chaining notSupersededFilter + notArchivedFilter
-// as it produces a single WHERE clause for the query optimizer.
+// activeObservationFilter filters for active (non-archived, non-superseded, status='active') observations.
+// This is more efficient than chaining individual filters as it produces a single WHERE clause.
 func activeObservationFilter() func(*gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
-		return db.Where("COALESCE(is_archived, 0) = 0 AND COALESCE(is_superseded, 0) = 0")
+		return db.Where("COALESCE(is_archived, 0) = 0 AND COALESCE(is_superseded, 0) = 0 AND COALESCE(status, 'active') = 'active'")
 	}
 }
 
@@ -1262,6 +1445,7 @@ func scanObservation(scanner interface{ Scan(...any) error }) (*models.Observati
 		&obs.PromptNumber, &obs.DiscoveryTokens, &obs.CreatedAt, &obs.CreatedAtEpoch,
 		&obs.ImportanceScore, &obs.UserFeedback, &obs.RetrievalCount,
 		&obs.LastRetrievedAt, &obs.ScoreUpdatedAt, &isSuperseded,
+		&obs.ExpiresAt, &obs.TtlDays,
 	)
 	if err != nil {
 		return nil, err
@@ -1286,6 +1470,8 @@ func scanObservation(scanner interface{ Scan(...any) error }) (*models.Observati
 
 	// Convert int to bool for IsSuperseded
 	obs.IsSuperseded = isSuperseded != 0
+	// Compute IsExpired from ExpiresAt
+	obs.IsExpired = obs.ExpiresAt.Valid && obs.ExpiresAt.Time.Before(time.Now())
 
 	return &obs, nil
 }
@@ -1303,6 +1489,7 @@ func toModelObservation(o *Observation) *models.Observation {
 		Title:           o.Title,
 		Subtitle:        o.Subtitle,
 		Facts:           o.Facts,
+		Rejected:        o.Rejected,
 		Narrative:       o.Narrative,
 		Concepts:        o.Concepts,
 		FilesRead:       o.FilesRead,
@@ -1320,6 +1507,14 @@ func toModelObservation(o *Observation) *models.Observation {
 		LastRetrievedAt: o.LastRetrievedAt,
 		ScoreUpdatedAt:  o.ScoreUpdatedAt,
 		IsSuperseded:    o.IsSuperseded != 0, // Convert int to bool
+		ExpiresAt:       o.ExpiresAt,
+		TtlDays:         o.TtlDays,
+		IsExpired:               o.ExpiresAt.Valid && o.ExpiresAt.Time.Before(time.Now()),
+		Status:                  o.Status,
+		StatusReason:            o.StatusReason,
+		EffectivenessScore:      o.EffectivenessScore,
+		EffectivenessInjections: o.EffectivenessInjections,
+		EffectivenessSuccesses:  o.EffectivenessSuccesses,
 	}
 }
 
@@ -1330,6 +1525,18 @@ func toModelObservations(observations []Observation) []*models.Observation {
 		result[i] = toModelObservation(&observations[i])
 	}
 	return result
+}
+
+// SetObservationTTL sets the TTL (expires_at and ttl_days) on an observation.
+func (s *ObservationStore) SetObservationTTL(ctx context.Context, id int64, ttlDays int) error {
+	expiresAt := time.Now().AddDate(0, 0, ttlDays)
+	return s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"ttl_days":   ttlDays,
+			"expires_at": expiresAt,
+		}).Error
 }
 
 // nullInt64 converts an int to sql.NullInt64.
@@ -1417,4 +1624,131 @@ func (s *ObservationStore) CountCredentials(ctx context.Context) (int64, error) 
 		return 0, fmt.Errorf("count credentials: %w", err)
 	}
 	return count, nil
+}
+
+// CountCredentialsWithDifferentFingerprint counts credentials whose encryption_key_fingerprint
+// differs from the given fingerprint — indicating they cannot be decrypted with the current key.
+func (s *ObservationStore) CountCredentialsWithDifferentFingerprint(ctx context.Context, currentFingerprint string) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Where("type = ?", "credential").
+		Where("COALESCE(is_archived, 0) = 0").
+		Where("encryption_key_fingerprint IS NOT NULL AND encryption_key_fingerprint != ''").
+		Where("encryption_key_fingerprint != ?", currentFingerprint).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("count mismatched credentials: %w", err)
+	}
+	return count, nil
+}
+
+// DeleteOrphanedCredentials removes credentials encrypted with a key that doesn't match
+// the current fingerprint. These credentials cannot be decrypted and are irrecoverable.
+func (s *ObservationStore) DeleteOrphanedCredentials(ctx context.Context, currentFingerprint string) (int64, error) {
+	if currentFingerprint == "" {
+		return 0, fmt.Errorf("current fingerprint is required")
+	}
+	result := s.db.WithContext(ctx).
+		Where("type = ?", "credential").
+		Where("encrypted_secret IS NOT NULL").
+		Where("encryption_key_fingerprint IS NOT NULL AND encryption_key_fingerprint != ''").
+		Where("encryption_key_fingerprint != ?", currentFingerprint).
+		Delete(&Observation{})
+	return result.RowsAffected, result.Error
+}
+
+// SearchMissStat holds aggregated analytics for a search query that returned zero results.
+type SearchMissStat struct {
+	Query     string    `json:"query"`
+	MissCount int       `json:"miss_count"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
+// RecordSearchMiss stores a search query that returned 0 results.
+// Query is trimmed, validated (non-empty), and capped at 500 chars to prevent
+// storage flooding and PII retention from arbitrarily long inputs.
+func (s *ObservationStore) RecordSearchMiss(ctx context.Context, project, query string) error {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil // nothing meaningful to record
+	}
+	if len(query) > 500 {
+		query = query[:500]
+	}
+	return s.db.WithContext(ctx).Exec(
+		`INSERT INTO search_misses (project, query, created_at) VALUES (?, ?, NOW())`,
+		project, query,
+	).Error
+}
+
+// GetSearchMissStats returns analytics about search misses grouped by query.
+// When project is empty, results are aggregated across all projects.
+func (s *ObservationStore) GetSearchMissStats(ctx context.Context, project string, limit int) ([]SearchMissStat, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	var stats []SearchMissStat
+	q := s.db.WithContext(ctx).
+		Table("search_misses").
+		Select("query, COUNT(*) as miss_count, MAX(created_at) as last_seen").
+		Group("query").
+		Order("miss_count DESC").
+		Limit(limit)
+	if project != "" {
+		q = q.Where("project = ?", project)
+	}
+	err := q.Scan(&stats).Error
+	return stats, err
+}
+
+// GetRecentSessionIDs returns a set of sdk_session_id values that have observations
+// created on or after the given time, within the specified project.
+// Used by the composite scoring pipeline to apply a session activity boost.
+func (s *ObservationStore) GetRecentSessionIDs(ctx context.Context, project string, since time.Time) (map[string]bool, error) {
+	var sessionIDs []string
+	err := s.db.WithContext(ctx).
+		Model(&Observation{}).
+		Distinct("sdk_session_id").
+		Where("project = ? AND created_at_epoch >= ? AND sdk_session_id IS NOT NULL AND sdk_session_id != ''",
+			project, since.UnixMilli()).
+		Pluck("sdk_session_id", &sessionIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]bool, len(sessionIDs))
+	for _, id := range sessionIDs {
+		result[id] = true
+	}
+	return result, nil
+}
+
+// GetTopImportanceObservations retrieves observations for a project ordered by importance DESC.
+// Used to fill the injection floor when the main result set falls below the minimum.
+// Delegates to GetActiveObservations which applies the same filter/ordering.
+func (s *ObservationStore) GetTopImportanceObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
+	return s.GetActiveObservations(ctx, project, limit)
+}
+
+// CountBySessionAndType counts observations for a session with a given type.
+// Used for idempotency checks (e.g., skip extract-learnings if guidance already extracted).
+func (s *ObservationStore) CountBySessionAndType(ctx context.Context, sessionID, obsType string) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Table("observations").
+		Where("sdk_session_id = ? AND type = ? AND COALESCE(status, 'active') = 'active'", sessionID, obsType).
+		Count(&count).Error
+	return count, err
+}
+
+// GetObservationsBySession returns all observations recorded during the given Claude session.
+// Used by the outcome heuristic to determine session success/partial/abandoned.
+func (s *ObservationStore) GetObservationsBySession(ctx context.Context, sessionID string) ([]*models.Observation, error) {
+	var rows []*models.Observation
+	err := s.db.WithContext(ctx).
+		Table("observations").
+		Select("id, sdk_session_id, project, COALESCE(scope, 'project') as scope, type, memory_type, source_type, title, subtitle, narrative, created_at, created_at_epoch, importance_score, utility_score, user_feedback, retrieval_count, injection_count, COALESCE(is_superseded, 0) as is_superseded, enrichment_level, status").
+		Where("sdk_session_id = ?", sessionID).
+		Scan(&rows).Error
+	return rows, err
 }

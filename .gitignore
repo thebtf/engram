@@ -94,5 +94,8 @@ docs/dist
 # Session artifacts
 continuity.txt
 
+# Playwright MCP test artifacts
+.playwright-mcp/
+
 # Marketplace submodule (separate repo)
 engram-marketplace/

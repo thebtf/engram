@@ -1143,6 +1143,890 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return nil
 		},
 	},
+	{
+		ID: "033_create_search_misses",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE TABLE IF NOT EXISTS search_misses (
+					id BIGSERIAL PRIMARY KEY,
+					project TEXT NOT NULL,
+					query TEXT NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_search_misses_project ON search_misses (project)`,
+				`CREATE INDEX IF NOT EXISTS idx_search_misses_created ON search_misses (created_at)`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 033: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS search_misses`).Error
+		},
+	},
+	{
+		ID: "034_credential_uniqueness_and_search_miss_index",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_credential_unique
+					ON observations (project, title) WHERE type = 'credential'`,
+				`CREATE INDEX IF NOT EXISTS idx_search_misses_project_query_created
+					ON search_misses (project, query, created_at DESC)`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 034: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			sqls := []string{
+				`DROP INDEX IF EXISTS idx_observations_credential_unique`,
+				`DROP INDEX IF EXISTS idx_search_misses_project_query_created`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					log.Warn().Err(err).Str("sql", s).Msg("migration 034 rollback step failed")
+				}
+			}
+			return nil
+		},
+	},
+	// Migration 035: Add rejected[] JSONB column to observations for structured decision schema.
+	// Stores alternatives that were considered and dismissed, enabling reliable contradiction detection
+	// without fragile narrative-text parsing.
+	{
+		ID: "035_decision_rejected_field",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS rejected JSONB DEFAULT '[]'`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS rejected`).Error
+		},
+	},
+	// Migration 036: API tokens table for client token authentication.
+	// Stores bcrypt-hashed client tokens with prefix-based lookup for the auth middleware.
+	{
+		ID: "036_api_tokens",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE TABLE IF NOT EXISTS api_tokens (
+					id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+					name TEXT NOT NULL UNIQUE,
+					token_hash TEXT NOT NULL,
+					token_prefix TEXT NOT NULL,
+					scope TEXT NOT NULL DEFAULT 'read-write',
+					created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+					last_used_at TIMESTAMPTZ,
+					request_count BIGINT NOT NULL DEFAULT 0,
+					error_count BIGINT NOT NULL DEFAULT 0,
+					revoked BOOLEAN NOT NULL DEFAULT false,
+					revoked_at TIMESTAMPTZ
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix ON api_tokens (token_prefix) WHERE NOT revoked`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 036: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec("DROP TABLE IF EXISTS api_tokens").Error
+		},
+	},
+	// Migration 037: Persistent search query log for analytics that survive server restarts.
+	{
+		ID: "037_search_query_log",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE TABLE IF NOT EXISTS search_query_log (
+					id BIGSERIAL PRIMARY KEY,
+					project TEXT,
+					query TEXT NOT NULL,
+					search_type TEXT NOT NULL,
+					results INT NOT NULL DEFAULT 0,
+					used_vector BOOL NOT NULL DEFAULT false,
+					latency_ms REAL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_search_query_log_created ON search_query_log (created_at DESC)`,
+				`CREATE INDEX IF NOT EXISTS idx_search_query_log_project ON search_query_log (project, created_at DESC)`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 037: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS search_query_log`).Error
+		},
+	},
+	// Migration 038: Persistent retrieval stats log for analytics that survive server restarts.
+	{
+		ID: "038_retrieval_stats_log",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`CREATE TABLE IF NOT EXISTS retrieval_stats_log (
+					id BIGSERIAL PRIMARY KEY,
+					project TEXT NOT NULL,
+					event_type TEXT NOT NULL,
+					count INT NOT NULL DEFAULT 1,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_retrieval_stats_project_type_created ON retrieval_stats_log (project, event_type, created_at DESC)`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 038: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS retrieval_stats_log`).Error
+		},
+	},
+	// Migration 039: Add TTL support for verified facts on observations.
+	// NULL = no expiration (backwards-compatible). TTL only applies to verified-tagged observations.
+	{
+		ID: "039_observations_verified_ttl",
+		Migrate: func(tx *gorm.DB) error {
+			sqls := []string{
+				`ALTER TABLE observations ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL`,
+				`ALTER TABLE observations ADD COLUMN IF NOT EXISTS ttl_days INT NULL`,
+				`CREATE INDEX IF NOT EXISTS idx_observations_expires ON observations (expires_at) WHERE expires_at IS NOT NULL`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					return fmt.Errorf("migration 039: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			sqls := []string{
+				`DROP INDEX IF EXISTS idx_observations_expires`,
+				`ALTER TABLE observations DROP COLUMN IF EXISTS ttl_days`,
+				`ALTER TABLE observations DROP COLUMN IF EXISTS expires_at`,
+			}
+			for _, s := range sqls {
+				if err := tx.Exec(s).Error; err != nil {
+					log.Warn().Err(err).Str("sql", s).Msg("migration 039 rollback step failed")
+				}
+			}
+			return nil
+		},
+	},
+	// Migration 040: One-time cleanup of garbage observations created by SDK tool output extraction.
+	// Deletes observations with titles matching known garbage patterns (PowerShell errors, auth failures,
+	// stdin terminal checks, etc.) and orphan vectors not matching any observation.
+	{
+		ID: "040_cleanup_garbage_observations",
+		Migrate: func(tx *gorm.DB) error {
+			// Delete garbage observations by title pattern
+			garbagePatterns := []string{
+				"PowerShell%Error%",
+				"PowerShell%Anomaly%",
+				"PowerShell Dot-Source%",
+				"Stdin Terminal%",
+				"Authorization Header Missing%",
+				"FINDSTR%Cannot%",
+				"Missing Authentication%",
+				"JavaScript Property Setting%",
+				"Incorrect FINDSTR%",
+				"Invalid Argument in Child%",
+				"bufio Over-read%",
+				"Stdin Terminal Check%",
+				"File Lock Handling%",
+				"Upstream Connection%",
+				"TRACE Logging Removal%",
+				"npm install completion%",
+				"Stderr Input Handling%",
+				"Status Discrepancy Detection%",
+				"Job-Session ID Synchronization%",
+				"Incorrect Redirection Syntax%",
+				"Rename node_modules%",
+				"Case Sensitivity in Format%",
+				"Cleanup Function%Parameter%",
+				"Cleanup by startedAt%",
+				"Null%Numeric Properties%",
+				"User Cancellation Handling%",
+			}
+			var totalDeleted int64
+			for _, pattern := range garbagePatterns {
+				result := tx.Exec(`DELETE FROM observations WHERE title LIKE ?`, pattern)
+				if result.Error != nil {
+					log.Warn().Err(result.Error).Str("pattern", pattern).Msg("migration 040: delete pattern failed")
+					continue
+				}
+				totalDeleted += result.RowsAffected
+			}
+
+			// Delete orphan vectors: observation_vectors entries whose sqlite_id
+			// (stored in metadata) doesn't match any existing observation.
+			orphanResult := tx.Exec(`
+				DELETE FROM observation_vectors
+				WHERE id IN (
+					SELECT ov.id FROM observation_vectors ov
+					LEFT JOIN observations o ON ov.metadata->>'sqlite_id' = o.id::text
+					WHERE o.id IS NULL
+				)
+			`)
+			orphanCount := int64(0)
+			if orphanResult.Error != nil {
+				// observation_vectors table might not exist or have different schema — not fatal
+				log.Warn().Err(orphanResult.Error).Msg("migration 040: orphan vector cleanup failed (non-fatal)")
+			} else {
+				orphanCount = orphanResult.RowsAffected
+			}
+
+			log.Info().
+				Int64("garbage_deleted", totalDeleted).
+				Int64("orphan_vectors_deleted", orphanCount).
+				Msg("migration 040: garbage cleanup complete")
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			// One-time cleanup — no rollback possible
+			return nil
+		},
+	},
+	// Migration 041: Purge orphan vectors — correct table name (vectors, not observation_vectors).
+	{
+		ID: "041_purge_orphan_vectors",
+		Migrate: func(tx *gorm.DB) error {
+			result := tx.Exec(`DELETE FROM vectors WHERE sqlite_id NOT IN (SELECT id FROM observations)`)
+			if result.Error != nil {
+				log.Warn().Err(result.Error).Msg("migration 041: orphan vector purge failed (non-fatal)")
+				return nil
+			}
+			log.Info().Int64("orphan_vectors_deleted", result.RowsAffected).Msg("migration 041: orphan vector purge complete")
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
+	// Migration 042: Purge low-quality patterns (frequency < 5).
+	// With 111K+ patterns accumulated from garbage SDK extraction, most are noise.
+	// MinFrequency threshold was raised to 5 in T019 — patterns below this are worthless.
+	{
+		ID: "042_purge_low_quality_patterns",
+		Migrate: func(tx *gorm.DB) error {
+			result := tx.Exec(`DELETE FROM patterns WHERE frequency < 5`)
+			if result.Error != nil {
+				log.Warn().Err(result.Error).Msg("migration 042: pattern purge failed (non-fatal)")
+				return nil
+			}
+			log.Info().Int64("patterns_deleted", result.RowsAffected).Msg("migration 042: low-quality pattern purge complete")
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
+	// Migration 043: Radical cleanup of garbage SDK-extracted observations.
+	// These observations were created by the SDK tool output extraction pipeline before v1.3.4
+	// (whitelist mode). They are trivially discoverable facts, tool errors, status transitions,
+	// and cross-project noise that pollute semantic search and degrade agent performance.
+	{
+		ID: "043_radical_observation_cleanup",
+		Migrate: func(tx *gorm.DB) error {
+			garbagePatterns := []string{
+				// Tool mechanics (trivially discoverable at runtime)
+				"Tool%Query Pattern%",
+				"Tool%Search%Pattern%",
+				"Tool%Naming Convention%",
+				"Tool%Selection%Pattern%",
+				"Tool Search%Found%",
+				"Tool%Match%Found%",
+				"Memory Store Tool%",
+				"Deferred Tool%",
+				"Exact Tool Match%",
+
+				// Task status transitions (repeated 20+ times, zero value)
+				"Task Status%Transition%",
+				"Task%Completion%Confirmed%",
+				"Status Transition%",
+				"Status%Discrepancy%",
+				"No Work Available%",
+
+				// Job tracking noise
+				"Job Status%",
+				"Job-Session ID%",
+
+				// Process output artifacts
+				"Process Output%",
+				"Stderr%Handling%",
+
+				// System prompt meta-observations
+				"Claude Anti-Sycophancy%",
+				"User Interaction Guidelines%",
+				"User Communication Guidelines%",
+				"Strict Verification Guidelines%",
+				"Copyright Enforcement%",
+				"Critical Reminders%",
+				"Search Scaling by%",
+				"Past Conversation Search%",
+				"System Prompt Access%",
+				"Anti-Sycophancy%",
+				"Keyword Extraction Guidelines%",
+				"Tone Consistency%",
+				"Zero-confirmation Rule%",
+				"Plugin Configuration Warnings%",
+				"Prioritize Internal Tools%",
+
+				// Generic discoveries with no behavioral impact
+				"Brace%Discrepancy%",
+				"Brace%Detection%",
+				"Content Structure Pattern%",
+				"Severity Classification%",
+				"Pre-commit Check%",
+				"Commit Message%Convention%",
+				"Commit Message Structure%",
+				"File Size Monitoring%",
+
+				// iSCSI debug noise (from nvmdfs project)
+				"iSCSI%",
+
+				// Timestamp-based titles from subtitle parser
+				"00:%",
+
+				// Test observations
+				"type test",
+
+				// Robocopy/npm transient noise
+				"Robocopy%",
+				"npm install completion%",
+			}
+
+			var totalDeleted int64
+			for _, pattern := range garbagePatterns {
+				result := tx.Exec("DELETE FROM observations WHERE title LIKE ?", pattern)
+				if result.Error != nil {
+					log.Warn().Err(result.Error).Str("pattern", pattern).Msg("migration 043: delete failed")
+					continue
+				}
+				totalDeleted += result.RowsAffected
+			}
+
+			log.Info().Int64("total_deleted", totalDeleted).Msg("migration 043: radical observation cleanup complete")
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
+	// Migration 044: Add user_feedback column to observations.
+	{
+		ID: "044_observation_user_feedback",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS user_feedback INT NOT NULL DEFAULT 0`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS user_feedback`).Error
+		},
+	},
+	// Migration 045: Add is_suppressed column to observations.
+	{
+		ID: "045_observation_is_suppressed",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS is_suppressed BOOLEAN NOT NULL DEFAULT FALSE`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS is_suppressed`).Error
+		},
+	},
+	// Migration 046: Create injection_log table for tracking context injections.
+	{
+		ID: "046_injection_log",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS injection_log (
+				id BIGSERIAL PRIMARY KEY,
+				observation_id BIGINT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+				project TEXT NOT NULL DEFAULT '',
+				task_context TEXT NOT NULL DEFAULT '',
+				session_id TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_injection_log_observation_id ON injection_log(observation_id)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_injection_log_project ON injection_log(project)`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_injection_log_created_at ON injection_log(created_at)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS injection_log`).Error
+		},
+	},
+	// Migration 047: Drop unused memory_blocks table (created by migration 024, never populated).
+	{
+		ID: "047_drop_memory_blocks",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS memory_blocks`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			// Table was unused — no rollback needed
+			return nil
+		},
+	},
+	// Migration 048: Convert text JSON columns to jsonb + GIN indexes for concept-tag queries and file-context lookup.
+	// Columns concepts, files_modified, files_read were stored as text (JSON strings).
+	// PostgreSQL GIN indexes require jsonb type, so we ALTER TYPE first.
+	{
+		ID: "048_gin_indexes_concepts_files",
+		Migrate: func(tx *gorm.DB) error {
+			// Convert text columns to jsonb (safe: content is already valid JSON)
+			if err := tx.Exec(`ALTER TABLE observations ALTER COLUMN concepts TYPE jsonb USING COALESCE(concepts::jsonb, '[]'::jsonb)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE observations ALTER COLUMN files_modified TYPE jsonb USING COALESCE(files_modified::jsonb, '[]'::jsonb)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE observations ALTER COLUMN files_read TYPE jsonb USING COALESCE(files_read::jsonb, '[]'::jsonb)`).Error; err != nil {
+				return err
+			}
+			// Now create GIN indexes on jsonb columns
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_concepts_gin ON observations USING GIN (concepts)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_files_modified_gin ON observations USING GIN (files_modified)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_files_read_gin ON observations USING GIN (files_read)`).Error; err != nil {
+				return err
+			}
+			// Composite index for temporal chain lookups
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_session_prompt ON observations (sdk_session_id, prompt_number DESC) WHERE COALESCE(is_superseded, 0) = 0`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_concepts_gin`)
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_files_modified_gin`)
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_files_read_gin`)
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_session_prompt`)
+			// Revert jsonb back to text
+			tx.Exec(`ALTER TABLE observations ALTER COLUMN concepts TYPE text USING concepts::text`)
+			tx.Exec(`ALTER TABLE observations ALTER COLUMN files_modified TYPE text USING files_modified::text`)
+			tx.Exec(`ALTER TABLE observations ALTER COLUMN files_read TYPE text USING files_read::text`)
+			return nil
+		},
+	},
+	// Migration 049: Create project_settings table for per-project adaptive threshold.
+	{
+		ID: "049_project_settings",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`CREATE TABLE IF NOT EXISTS project_settings (
+				project TEXT PRIMARY KEY,
+				relevance_threshold FLOAT NOT NULL DEFAULT 0.3,
+				feedback_count INT NOT NULL DEFAULT 0,
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS project_settings`).Error
+		},
+	},
+
+		// Migration 050: System configuration key-value store.
+		// Stores persistent system-level settings such as the current embedding model name.
+		// Used by the maintenance service to detect embedding model changes across restarts.
+		{
+			ID: "050_system_config",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`CREATE TABLE IF NOT EXISTS system_config (
+					key        TEXT PRIMARY KEY,
+					value      TEXT NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS system_config`).Error
+			},
+		},
+	// Migration 051: versioned_documents + versioned_document_comments tables for
+	// versioned document storage. Uses distinct table names to avoid collision with
+	// the RAG `documents` table created by migration 017.
+	// Foundation for AI agent collaboration platform (task/issue management).
+	{
+		ID: "051_documents",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS versioned_documents (
+				id BIGSERIAL PRIMARY KEY,
+				path TEXT NOT NULL,
+				project TEXT NOT NULL,
+				version INT NOT NULL DEFAULT 1,
+				content TEXT NOT NULL,
+				content_hash TEXT NOT NULL,
+				doc_type TEXT NOT NULL DEFAULT 'markdown',
+				metadata JSONB NOT NULL DEFAULT '{}',
+				author TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				UNIQUE(path, project, version)
+			)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_versioned_documents_project_path ON versioned_documents (project, path, version DESC)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_versioned_documents_doc_type ON versioned_documents (doc_type)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS versioned_document_comments (
+				id BIGSERIAL PRIMARY KEY,
+				document_id BIGINT NOT NULL REFERENCES versioned_documents(id),
+				author TEXT NOT NULL,
+				content TEXT NOT NULL,
+				line_start INT,
+				line_end INT,
+				status TEXT NOT NULL DEFAULT 'open',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_versioned_document_comments_doc ON versioned_document_comments (document_id)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			if err := tx.Exec(`DROP TABLE IF EXISTS versioned_document_comments`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`DROP TABLE IF EXISTS versioned_documents`).Error
+		},
+	},
+	{
+		// Migration 052: Delete phantom bulk-import sessions created before PR #65 fix.
+		ID: "052_cleanup_phantom_bulk_import_sessions",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`DELETE FROM sdk_sessions WHERE claude_session_id LIKE 'bulk-import-%' AND prompt_counter = 0`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil // Cannot restore deleted sessions
+		},
+	},
+	{
+		// Migration 053: Delete all vault credentials encrypted with lost key.
+		// All 15 existing credentials were encrypted with an auto-generated key stored
+		// in Docker ephemeral filesystem. Container recreated = key lost = data unrecoverable.
+		// Current vault key (ENGRAM_VAULT_KEY env) is different. No valid credentials exist.
+		// Safe to delete all — users will re-create with the current key.
+		ID: "053_cleanup_dead_vault_credentials",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`DELETE FROM observations WHERE type = 'credential'`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil // Cannot restore encrypted data with lost key
+		},
+	},
+	{
+		// Migration 054: Add status lifecycle columns to observations.
+		// Introduces status (active/resolved) and status_reason for explicit lifecycle management.
+		ID: "054_observation_status_lifecycle",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS status_reason TEXT`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_status ON observations (status)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`DROP INDEX IF EXISTS idx_observations_status`)
+			tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS status_reason`)
+			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS status`).Error
+		},
+	},
+	{
+		// Migration 055: Backfill NULL status to 'active' for all existing observations.
+		// ADD COLUMN ... DEFAULT only applies to new rows. Existing rows have NULL.
+		// Dashboard status filter uses WHERE status = 'active' which misses NULLs.
+		ID: "055_backfill_null_status",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`UPDATE observations SET status = 'active' WHERE status IS NULL`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
+	{
+		// Migration 056: Backfill memory_type for existing store_memory observations.
+		// store_memory creates observations with source_type='manual' but never set memory_type.
+		// Classify based on type column and concepts JSONB content, mirroring ClassifyMemoryType() logic.
+		ID: "056_backfill_memory_type",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`
+				UPDATE observations SET memory_type = CASE
+					WHEN type = 'guidance' THEN 'guidance'
+					WHEN concepts::text ILIKE '%architecture%' OR concepts::text ILIKE '%design%' OR concepts::text ILIKE '%choice%' THEN 'decision'
+					WHEN concepts::text ILIKE '%pattern%' OR concepts::text ILIKE '%best-practice%' OR concepts::text ILIKE '%anti-pattern%' THEN 'pattern'
+					WHEN concepts::text ILIKE '%preference%' OR concepts::text ILIKE '%config%' OR concepts::text ILIKE '%setting%' THEN 'preference'
+					WHEN concepts::text ILIKE '%style%' OR concepts::text ILIKE '%naming%' OR concepts::text ILIKE '%format%' THEN 'style'
+					WHEN concepts::text ILIKE '%workflow%' OR concepts::text ILIKE '%habit%' OR concepts::text ILIKE '%routine%' THEN 'habit'
+					WHEN concepts::text ILIKE '%insight%' OR concepts::text ILIKE '%discovery%' OR concepts::text ILIKE '%gotcha%' THEN 'insight'
+					ELSE 'context'
+				END
+				WHERE source_type = 'manual'
+				AND (memory_type IS NULL OR memory_type = '')
+			`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`UPDATE observations SET memory_type = '' WHERE source_type = 'manual'`).Error
+		},
+	},
+	// Migration 057: Session outcome columns — closed-loop learning Phase 1.
+	// Adds outcome tracking to sdk_sessions for self-improvement feedback loop.
+	{
+		ID: "057_session_outcome_columns",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS outcome TEXT`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS outcome_reason TEXT`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS outcome_recorded_at TIMESTAMPTZ`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS injection_strategy TEXT`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS injection_strategy`)
+			tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS outcome_recorded_at`)
+			tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS outcome_reason`)
+			return tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS outcome`).Error
+		},
+	},
+	// Migration 058: observation_injections table — tracks which observations were injected per session.
+	// Foundation for closed-loop learning: correlates injections with session outcomes.
+	{
+		ID: "058_observation_injections_table",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS observation_injections (
+				id BIGSERIAL PRIMARY KEY,
+				observation_id BIGINT NOT NULL,
+				session_id TEXT NOT NULL,
+				injection_section TEXT NOT NULL,
+				injected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_injections_session ON observation_injections (session_id)`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_injections_obs ON observation_injections (observation_id)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS observation_injections`).Error
+		},
+	},
+	// Migration 059: effectiveness columns on observations — tracks injection outcome stats per observation.
+	// Used by closed-loop learning Phase 2 to compute per-observation effectiveness scores.
+	{
+		ID: "059_observation_effectiveness_columns",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS effectiveness_score REAL DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS effectiveness_injections INT DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS effectiveness_successes INT DEFAULT 0`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS effectiveness_successes`)
+			tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS effectiveness_injections`)
+			return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS effectiveness_score`).Error
+		},
+	},
+	// Migration 060: agent_observation_stats table — tracks per-agent effectiveness for each observation.
+	// Used by closed-loop learning Phase 4 to personalize injection scoring per agent.
+	{
+		ID: "060_agent_observation_stats",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`
+				CREATE TABLE IF NOT EXISTS agent_observation_stats (
+					agent_id TEXT NOT NULL,
+					observation_id BIGINT NOT NULL,
+					injections INT NOT NULL DEFAULT 0,
+					successes INT NOT NULL DEFAULT 0,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					PRIMARY KEY (agent_id, observation_id)
+				)
+			`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS agent_observation_stats`).Error
+		},
+	},
+	// Migration 061: observation_versions table — stores rewritten guidance narratives for A/B testing.
+	// Used by closed-loop learning Phase 5 (APO-lite) to track LLM-rewritten guidance alternatives.
+	{
+		ID: "061_observation_versions",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`CREATE TABLE IF NOT EXISTS observation_versions (
+				id BIGSERIAL PRIMARY KEY,
+				observation_id BIGINT NOT NULL,
+				version INT NOT NULL DEFAULT 1,
+				narrative TEXT NOT NULL,
+				is_active BOOLEAN NOT NULL DEFAULT TRUE,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				source TEXT NOT NULL DEFAULT 'original'
+			)`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_versions_obs ON observation_versions (observation_id)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS observation_versions`).Error
+		},
+	},
+	{
+		// Migration 062: Cleanup remaining phantom bulk-import sessions.
+		// PR #65 stopped creating new phantom sessions. Migration 052 cleaned most.
+		// This catches any remaining bulk-import-* sessions with 0 prompts.
+		ID: "062_cleanup_phantom_bulk_import_sessions",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`DELETE FROM sdk_sessions WHERE claude_session_id LIKE 'bulk-import-%'`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
+	{
+		ID: "063_backfill_observation_concepts",
+		Migrate: func(tx *gorm.DB) error {
+			// Backfill concepts for existing observations based on title/narrative keywords.
+			// Uses JSONB array format: '["concept1","concept2"]'
+			updates := []struct {
+				concept  string
+				keywords []string
+			}{
+				{"architecture", []string{"architecture", "design pattern", "system design", "microservice", "monolith"}},
+				{"security", []string{"security", "authentication", "authorization", "CSRF", "XSS", "injection", "token", "credential"}},
+				{"performance", []string{"performance", "latency", "cache", "timeout", "optimization", "slow"}},
+				{"testing", []string{"test", "coverage", "assertion", "mock", "TDD"}},
+				{"debugging", []string{"debug", "error", "stack trace", "fix", "bug", "regression"}},
+				{"workflow", []string{"workflow", "CI/CD", "pipeline", "deployment", "process", "automation"}},
+				{"api", []string{"API", "endpoint", "REST", "GraphQL", "handler", "route"}},
+				{"database", []string{"database", "SQL", "migration", "schema", "query", "index", "PostgreSQL"}},
+				{"configuration", []string{"config", "environment", "setting", "flag", "parameter"}},
+				{"error-handling", []string{"error handling", "panic", "recover", "retry", "fallback", "circuit breaker"}},
+			}
+
+			for _, u := range updates {
+				for _, kw := range u.keywords {
+					// Only update observations with empty/null concepts
+					tx.Exec(`
+						UPDATE observations
+						SET concepts = CASE
+							WHEN concepts IS NULL OR concepts = '[]' OR concepts = 'null'
+							THEN '["` + u.concept + `"]'::jsonb
+							ELSE concepts || '["` + u.concept + `"]'::jsonb
+						END
+						WHERE (concepts IS NULL OR concepts = '[]' OR concepts = 'null' OR NOT concepts @> '["` + u.concept + `"]'::jsonb)
+						AND (COALESCE(title, '') || ' ' || COALESCE(narrative, '')) ILIKE '%` + kw + `%'
+					`)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil // Cannot undo keyword-based backfill
+		},
+	},
+	{
+		ID: "064_backfill_missing_concepts",
+		Migrate: func(tx *gorm.DB) error {
+			updates := []struct {
+				concept  string
+				keywords []string
+			}{
+				{"why-it-exists", []string{"rationale", "reason", "purpose", "motivation", "justification", "because", "in order to"}},
+				{"what-changed", []string{"changed", "updated", "modified", "migrated", "upgraded", "deprecated", "removed", "added new"}},
+				{"anti-pattern", []string{"anti-pattern", "antipattern", "bad practice", "should not", "forbidden", "prohibited", "never do"}},
+				{"gotcha", []string{"gotcha", "unexpected", "surprising", "counterintuitive", "pitfall", "trap", "caveat", "watch out"}},
+				{"trade-off", []string{"trade-off", "tradeoff", "versus", "vs ", "pros and cons", "downside", "compromise", "at the cost of"}},
+			}
+
+			for _, u := range updates {
+				for _, kw := range u.keywords {
+					tx.Exec(`
+						UPDATE observations
+						SET concepts = CASE
+							WHEN concepts IS NULL OR concepts = '[]' OR concepts = 'null'
+							THEN '["` + u.concept + `"]'::jsonb
+							ELSE concepts || '["` + u.concept + `"]'::jsonb
+						END
+						WHERE (concepts IS NULL OR concepts = '[]' OR concepts = 'null' OR NOT concepts @> '["` + u.concept + `"]'::jsonb)
+						AND (COALESCE(title, '') || ' ' || COALESCE(narrative, '')) ILIKE '%` + kw + `%'
+					`)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	},
+	{
+		ID: "065_reasoning_traces",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`
+				CREATE TABLE IF NOT EXISTS reasoning_traces (
+					id BIGSERIAL PRIMARY KEY,
+					sdk_session_id TEXT NOT NULL,
+					project TEXT NOT NULL DEFAULT '',
+					steps JSONB NOT NULL DEFAULT '[]',
+					quality_score REAL NOT NULL DEFAULT 0,
+					task_context JSONB DEFAULT '{}',
+					created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+					created_at_epoch BIGINT NOT NULL DEFAULT 0
+				)
+			`).Error; err != nil {
+				return fmt.Errorf("create reasoning_traces table: %w", err)
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_reasoning_traces_session ON reasoning_traces(sdk_session_id)`).Error; err != nil {
+				return fmt.Errorf("create session index: %w", err)
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_reasoning_traces_project ON reasoning_traces(project)`).Error; err != nil {
+				return fmt.Errorf("create project index: %w", err)
+			}
+			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_reasoning_traces_quality ON reasoning_traces(quality_score)`).Error; err != nil {
+				return fmt.Errorf("create quality index: %w", err)
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec("DROP TABLE IF EXISTS reasoning_traces").Error
+		},
+	},
+	// Migration 066: Add cited column to injection_log for citation-based effectiveness tracking.
+	// Learning Memory v3: detectUtilitySignal in stop hook marks which injected observations
+	// were actually cited by the agent. This feeds into PropagateCitation → effectiveness_score.
+	{
+		ID: "066_injection_log_cited_column",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(`ALTER TABLE injection_log ADD COLUMN IF NOT EXISTS cited BOOLEAN DEFAULT false`).Error; err != nil {
+				return fmt.Errorf("add cited column: %w", err)
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_injection_log_session_cited ON injection_log(session_id, cited)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`DROP INDEX IF EXISTS idx_injection_log_session_cited`)
+			return tx.Exec(`ALTER TABLE injection_log DROP COLUMN IF EXISTS cited`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
