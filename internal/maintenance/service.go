@@ -1249,6 +1249,15 @@ func (s *Service) adjustAdaptiveThresholds(ctx context.Context) (int, error) {
 	adjusted := 0
 
 	for _, project := range projects {
+		// Minimum session guard: require >= 10 sessions to avoid noisy adjustment
+		var sessionCount int64
+		s.observationStore.GetDB().WithContext(ctx).
+			Raw(`SELECT COUNT(DISTINCT session_id) FROM injection_log WHERE project = ?`, project).
+			Scan(&sessionCount)
+		if sessionCount < 10 {
+			continue
+		}
+
 		citationRate, err := s.observationStore.GetCitationRate(ctx, project, 50)
 		if err != nil {
 			s.log.Debug().Err(err).Str("project", project).Msg("Failed to get citation rate")

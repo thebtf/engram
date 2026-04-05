@@ -949,6 +949,22 @@ func (s *Service) initializeAsync() {
 	}()
 	log.Info().Bool("smart_gc", cfg.SmartGCEnabled).Msg("Maintenance service started")
 
+	// Periodic prompt cache eviction (Learning Memory v3)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.evictStalePrompts()
+			case <-s.ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Initialize collection registry
 	collectionRegistry, colErr := collections.Load(config.GetCollectionConfigPath())
 	if colErr != nil {

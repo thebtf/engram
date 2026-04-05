@@ -877,8 +877,8 @@ func (s *Service) handleMarkCited(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	writeJSON(w, map[string]any{
-		"status":     "ok",
-		"marked":     marked,
-		"propagated": len(req.AllInjectedIDs),
+		"status": "ok",
+		"marked": marked,
+		"queued": len(req.AllInjectedIDs),
 	})
 }

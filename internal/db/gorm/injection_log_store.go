@@ -92,8 +92,8 @@ func (s *ObservationStore) GetCitationRate(ctx context.Context, project string, 
 		`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE cited = true) AS cited
 		 FROM injection_log
 		 WHERE project = ? AND session_id IN (
-			 SELECT DISTINCT session_id FROM injection_log
-			 WHERE project = ? ORDER BY session_id DESC LIMIT ?
+			 SELECT session_id FROM injection_log
+			 WHERE project = ? GROUP BY session_id ORDER BY MIN(created_at) DESC LIMIT ?
 		 )`,
 		project, project, windowSize,
 	).Scan(&result).Error
@@ -112,7 +112,7 @@ func (s *ObservationStore) GetInjectedObservationIDs(ctx context.Context, sessio
 	err := s.db.WithContext(ctx).Raw(
 		`SELECT DISTINCT observation_id FROM injection_log WHERE session_id = ?`,
 		sessionID,
-	).Pluck("observation_id", &ids).Error
+	).Scan(&ids).Error
 	return ids, err
 }
 

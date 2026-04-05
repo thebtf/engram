@@ -247,7 +247,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 
 	// Write-time supersession: if storing a decision and a very similar decision exists,
 	// mark the old one as superseded (new decision replaces old).
-	if s.vectorClient != nil && s.vectorClient.IsConnected() && obsType == models.ObsTypeDecision && config.Get().SupersessionEnabled {
+	// Skip if contradiction detection already handled supersession (avoid double-supersede).
+	if contradictionAction != "UPDATE" && s.vectorClient != nil && s.vectorClient.IsConnected() && obsType == models.ObsTypeDecision && config.Get().SupersessionEnabled {
 		threshold := config.Get().SupersessionThreshold
 		if threshold <= 0 {
 			threshold = 0.9

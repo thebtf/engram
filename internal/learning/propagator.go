@@ -148,7 +148,9 @@ func PropagateOutcome(
 			addSuccesses = 1
 		}
 
-		if err := obsStore.UpdateEffectivenessStats(ctx, rec.ObservationID, 1, addSuccesses, newScore); err != nil {
+		// addInjections=0: citation path (PropagateCitation) owns the injection counter.
+		// Outcome path only updates successes and utility score to avoid double-counting.
+		if err := obsStore.UpdateEffectivenessStats(ctx, rec.ObservationID, 0, addSuccesses, newScore); err != nil {
 			continue
 		}
 
