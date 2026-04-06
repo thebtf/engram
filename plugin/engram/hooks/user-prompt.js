@@ -170,14 +170,29 @@ async function handleUserPrompt(ctx, input) {
         if (!isDup) dedupedObs.push(obs);
       }
 
-      // Group by type
+      // Separate wiki and entity observations from regular observations
+      const wikiObs = [];
+      const entityObs = [];
+      const regularObs = [];
+      for (const obs of dedupedObs) {
+        const t = asString(obs.type).toLowerCase();
+        if (t === 'wiki') {
+          wikiObs.push(obs);
+        } else if (t === 'entity') {
+          entityObs.push(obs);
+        } else {
+          regularObs.push(obs);
+        }
+      }
+
+      // Group regular observations by type
       const groups = {
         decisions: [],
         patterns: [],
         changes: [],
         general: [],
       };
-      for (const obs of dedupedObs) {
+      for (const obs of regularObs) {
         const t = asString(obs.type).toLowerCase();
         if (t === 'decision') {
           groups.decisions.push(obs);
@@ -255,7 +270,33 @@ async function handleUserPrompt(ctx, input) {
       // to return context. matchedCount is the true total matched count from the
       // server (pre-max_results-cap), so the badge shows meaningful signal.
       matchedCount = totalResults - (observations.length - technicalObs.length);
-      observationCount = budgetObs.length;
+      observationCount = budgetObs.length + wikiObs.length + entityObs.length;
+
+      // Build wiki knowledge section (before relevant-memory)
+      let wikiBlock = '';
+      if (wikiObs.length > 0) {
+        const wikiCap = Math.min(wikiObs.length, 3); // Cap at 3 wiki results
+        wikiBlock = '<wiki-knowledge>\n';
+        for (let i = 0; i < wikiCap; i++) {
+          const w = wikiObs[i];
+          wikiBlock += `## ${escapeXmlTags(asString(w.title))}\n`;
+          const narrative = escapeXmlTags(asString(w.narrative));
+          if (narrative) wikiBlock += `${narrative}\n`;
+          wikiBlock += '\n';
+          if (w && typeof w.id === 'number' && w.id > 0) searchIds.push(w.id);
+        }
+        wikiBlock += '</wiki-knowledge>\n';
+      }
+
+      // Entity references as one-liners (after wiki, before relevant-memory)
+      if (entityObs.length > 0) {
+        for (const e of entityObs.slice(0, 5)) {
+          wikiBlock += `[ENTITY] ${escapeXmlTags(asString(e.title))} — ${escapeXmlTags(asString(e.subtitle || e.narrative))}\n`;
+          if (e && typeof e.id === 'number' && e.id > 0) searchIds.push(e.id);
+        }
+        if (entityObs.length > 0) wikiBlock += '\n';
+      }
+
       let contextBuilder = '<relevant-memory>\n';
       contextBuilder += '# Relevant Knowledge From Previous Sessions\n';
       contextBuilder +=
@@ -305,7 +346,7 @@ async function handleUserPrompt(ctx, input) {
       }
 
       contextBuilder += '</relevant-memory>\n';
-      contextToInject = contextBuilder;
+      contextToInject = wikiBlock + contextBuilder;
     }
   } catch (error) {
     console.error(`[engram] context search failed: ${error.message}`);

@@ -142,6 +142,13 @@ type Config struct {
 	// It records outcomes for sessions that have injection records but no outcome yet.
 	// Env: ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES (default: 15)
 	OutcomeRecorderIntervalMinutes int `json:"outcome_recorder_interval_minutes"`
+
+	// Synthesis: entity extraction + wiki layer (synthesize-wiki-layer spec)
+	EntityExtractionEnabled bool   `json:"entity_extraction_enabled"` // ENGRAM_ENTITY_EXTRACTION_ENABLED (default: true)
+	EntityExtractionLimit   int    `json:"entity_extraction_limit"`   // ENGRAM_ENTITY_EXTRACTION_LIMIT (default: 20)
+	WikiGenerationLimit     int    `json:"wiki_generation_limit"`     // ENGRAM_WIKI_GENERATION_LIMIT (default: 10)
+	WikiMinSources          int    `json:"wiki_min_sources"`          // ENGRAM_WIKI_MIN_SOURCES (default: 5)
+	WikiDataDir             string `json:"wiki_data_dir"`             // ENGRAM_WIKI_DATA_DIR (default: {DataDir}/wiki)
 }
 
 var (
@@ -289,6 +296,10 @@ func Default() *Config {
 		InjectionStrategyMode:         "round-robin",
 		DefaultStrategy:               "baseline",
 		OutcomeRecorderIntervalMinutes: 15,
+		EntityExtractionEnabled:        true,  // Enabled by default when LLM client is available
+		EntityExtractionLimit:          20,    // Max observations processed per maintenance cycle
+		WikiGenerationLimit:            10,    // Max wiki pages generated per maintenance cycle
+		WikiMinSources:                 5,     // Min linked observations to trigger wiki generation
 		SignalWeights: map[string]float64{
 			"git_commit":   1.0,
 			"pr_created":   2.0,
@@ -639,6 +650,35 @@ func Load() (*Config, error) {
 			cfg.OutcomeRecorderIntervalMinutes = n
 		}
 	}
+
+	// Synthesis: entity extraction + wiki layer
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENTITY_EXTRACTION_ENABLED")); v == "false" || v == "0" {
+		cfg.EntityExtractionEnabled = false
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENTITY_EXTRACTION_LIMIT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.EntityExtractionLimit = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_WIKI_GENERATION_LIMIT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.WikiGenerationLimit = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_WIKI_MIN_SOURCES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.WikiMinSources = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_WIKI_DATA_DIR")); v != "" {
+		cfg.WikiDataDir = v
+	}
+
+	// Set WikiDataDir default relative to DataDir if not explicitly set
+	if cfg.WikiDataDir == "" {
+		cfg.WikiDataDir = filepath.Join(filepath.Dir(cfg.DBPath), "wiki")
+	}
+
 	return cfg, nil
 }
 

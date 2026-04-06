@@ -1,6 +1,6 @@
 {
   "name": "openclaw-engram",
-  "version": "3.0.4",
+  "version": "3.1.0",
   "description": "OpenClaw plugin that connects to engram persistent memory server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

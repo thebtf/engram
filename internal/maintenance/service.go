@@ -471,6 +471,31 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
+	// Task 21: Entity extraction from recent observations (synthesize-wiki-layer FR-1)
+	// LLM extracts structured entities + relations from observations, stores as type=entity.
+	if s.llmClient != nil && s.config.EntityExtractionEnabled {
+		extracted, err := s.extractEntities(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("Entity extraction failed")
+		} else if extracted > 0 {
+			s.log.Info().Int("entities", extracted).Msg("Extracted entities from observations")
+		}
+	}
+
+	// Task 22: Wiki generation for entities with sufficient sources (synthesize-wiki-layer FR-2)
+	// Generates LLM wiki summaries, stores as type=wiki, writes markdown to disk.
+	// Runs AFTER Task 21 so newly created entities can be considered.
+	// Note: Gated by EntityExtractionEnabled because wiki pages are derived from entities;
+	// disabling entity extraction also disables wiki generation to keep the pipeline consistent.
+	if s.llmClient != nil && s.config.EntityExtractionEnabled {
+		wikiGenerated, err := s.generateWikiPages(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("Wiki generation failed")
+		} else if wikiGenerated > 0 {
+			s.log.Info().Int("wiki_pages", wikiGenerated).Msg("Generated wiki pages")
+		}
+	}
+
 	// Update metrics
 	s.mu.Lock()
 	s.lastRunTime = time.Now()

@@ -128,11 +128,13 @@ func ApplyCompositeScoring(observations []*models.Observation, similarityScores 
 
 	// Type weights: behavioral rules and decisions have highest impact.
 	typeWeights := map[models.ObservationType]float64{
-		"guidance":  1.8, // Behavioral rules — highest value (user corrections, workflow preferences)
+		"wiki":      2.0, // Synthesized knowledge — highest value (pre-computed summaries)
+		"guidance":  1.8, // Behavioral rules — user corrections, workflow preferences
 		"decision":  1.4,
 		"bugfix":    1.3,
 		"feature":   1.2,
 		"pattern":   1.2,
+		"entity":    1.0, // Structured entities — neutral weight (navigational, not content)
 		"refactor":  0.9,
 		"discovery": 0.8,
 		"change":    0.7,
@@ -142,6 +144,7 @@ func ApplyCompositeScoring(observations []*models.Observation, similarityScores 
 	// Guidance rules are near-permanent — they represent user preferences that rarely change.
 	typeHalfLife := map[models.ObservationType]float64{
 		"guidance":  365, // Behavioral rules — near-permanent (user preferences evolve slowly)
+		"entity":    90,  // Structured entities — persist longer than raw observations
 		"decision":  30,
 		"pattern":   30,
 		"bugfix":    14,
@@ -149,6 +152,7 @@ func ApplyCompositeScoring(observations []*models.Observation, similarityScores 
 		"discovery": 7,
 		"change":    7,
 		"refactor":  7,
+		// "wiki" not listed — wiki observations bypass half-life entirely (recency=1.0)
 	}
 
 	for _, obs := range observations {
@@ -157,10 +161,10 @@ func ApplyCompositeScoring(observations []*models.Observation, similarityScores 
 			sim = 0.5 // default if no similarity score
 		}
 
-		// Recency decay: per-type half-life; manual saves (store_memory) never decay
+		// Recency decay: per-type half-life; manual saves and wiki never decay
 		var recency float64
-		if obs.SourceType == models.SourceManual {
-			// Explicit saves are permanent until suppressed — no decay
+		if obs.SourceType == models.SourceManual || obs.Type == "wiki" {
+			// Explicit saves and wiki summaries are permanent until superseded — no decay
 			recency = 1.0
 		} else {
 			halfLife := 7.0 // default half-life in days for unknown types
