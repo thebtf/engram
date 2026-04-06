@@ -1,0 +1,9 @@
+# Go module cache — vendored dependencies, not project code
+.gomodcache/
+
+# Agent/Claude artifacts
+.claude/
+.agent/
+
+# Build output
+bin/
