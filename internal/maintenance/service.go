@@ -482,6 +482,18 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
+	// Task 22: Wiki generation for entities with sufficient sources (synthesize-wiki-layer FR-2)
+	// Generates LLM wiki summaries, stores as type=wiki, writes markdown to disk.
+	// Runs AFTER Task 21 so newly created entities can be considered.
+	if s.llmClient != nil && s.config.EntityExtractionEnabled {
+		wikiGenerated, err := s.generateWikiPages(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("Wiki generation failed")
+		} else if wikiGenerated > 0 {
+			s.log.Info().Int("wiki_pages", wikiGenerated).Msg("Generated wiki pages")
+		}
+	}
+
 	// Update metrics
 	s.mu.Lock()
 	s.lastRunTime = time.Now()
