@@ -1278,7 +1278,11 @@ func (s *Service) adjustAdaptiveThresholds(ctx context.Context) (int, error) {
 		}
 
 		// Check current threshold for bounds enforcement
-		current, _ := psStore.GetThreshold(ctx, project)
+		current, threshErr := psStore.GetThreshold(ctx, project)
+		if threshErr != nil {
+			s.log.Debug().Err(threshErr).Str("project", project).Msg("Failed to get current threshold, skipping")
+			continue
+		}
 		newThreshold := current + delta
 		if newThreshold < 0.15 || newThreshold > 0.60 {
 			continue // would exceed bounds, skip

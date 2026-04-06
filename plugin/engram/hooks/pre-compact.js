@@ -236,14 +236,9 @@ async function handlePreCompact(ctx, input) {
       recentMessages.unshift(msg);
     }
 
-    // Resolve session DB ID for the endpoint
-    lib.requestPost('/api/sessions/init', {
-      claudeSessionId: sessionId,
-      project: project,
-      prompt: '',
-      matchedObservations: 0,
-    }, 3000).then((initResp) => {
-      const dbId = initResp && initResp.sessionDbId;
+    // Resolve session DB ID via GET (avoid side effects of POST /api/sessions/init)
+    lib.requestGet(`/api/sessions?claudeSessionId=${encodeURIComponent(sessionId)}`, 3000).then((sessResp) => {
+      const dbId = sessResp && sessResp.id;
       if (dbId) {
         lib.requestPost(`/api/sessions/${dbId}/extract-learnings`, {
           messages: recentMessages,

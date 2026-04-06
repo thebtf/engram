@@ -87,11 +87,12 @@ async function handleUserPrompt(ctx, input) {
     // Do NOT re-inject them here — it wastes ~4K tokens per prompt.
     // Only technical observations go into <relevant-memory> below.
 
-    // Filter out observations with negligible similarity (noise from global scope leak)
+    // Filter out observations with negligible similarity (noise from global scope leak).
+    // Preserve observations without a similarity score (e.g., always-inject tagged).
     const MIN_SIMILARITY = 0.10;
     const relevantObs = technicalObs.filter(obs => {
-      const sim = typeof obs.similarity === 'number' ? obs.similarity : 0;
-      return sim >= MIN_SIMILARITY;
+      if (typeof obs.similarity !== 'number') return true; // no score = keep (always-inject)
+      return obs.similarity >= MIN_SIMILARITY;
     });
 
     if (relevantObs.length > 0) {
@@ -297,7 +298,7 @@ async function handleUserPrompt(ctx, input) {
   }
 
   lib
-    .requestPost(`/sessions/${sessionID}/init`, {
+    .requestPost(`/api/sessions/${sessionID}/init`, {
       userPrompt: prompt,
       promptNumber: promptNo,
     })

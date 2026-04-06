@@ -290,7 +290,7 @@ async function handleStop(ctx, input) {
   );
 
   try {
-    await lib.requestPost(`/sessions/${sessionID}/summarize`, {
+    await lib.requestPost(`/api/sessions/${sessionID}/summarize`, {
       lastUserMessage: lastUser,
       lastAssistantMessage: lastAssistant,
     });

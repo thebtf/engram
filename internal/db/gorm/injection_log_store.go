@@ -106,15 +106,6 @@ func (s *ObservationStore) GetCitationRate(ctx context.Context, project string, 
 	return float64(result.Cited) / float64(result.Total), nil
 }
 
-// GetInjectedObservationIDs returns all observation IDs that were injected in a given session.
-func (s *ObservationStore) GetInjectedObservationIDs(ctx context.Context, sessionID string) ([]int64, error) {
-	var ids []int64
-	err := s.db.WithContext(ctx).Raw(
-		`SELECT DISTINCT observation_id FROM injection_log WHERE session_id = ?`,
-		sessionID,
-	).Scan(&ids).Error
-	return ids, err
-}
 
 // CleanupInjectionLog removes entries older than the given number of days.
 func (s *ObservationStore) CleanupInjectionLog(ctx context.Context, retentionDays int) (int64, error) {
