@@ -99,14 +99,7 @@ async function handleUserPrompt(ctx, input) {
     if (uniqueRules.length > 0) {
       behaviorRulesBlock = '<behavioral-rules>\n';
       for (const rule of uniqueRules.slice(0, 20)) {
-        const title = escapeXmlTags(asString(rule.title));
-        // Compact format: title + first sentence of narrative (~1-1.5K total vs ~4K full)
-        const narrative = asString(rule.narrative);
-        const firstSentence = narrative.split(/\.\s/)[0];
-        const compact = firstSentence && firstSentence.length > 10 && firstSentence.length < 200
-          ? `: ${escapeXmlTags(firstSentence)}.`
-          : '';
-        behaviorRulesBlock += `- ${title}${compact}\n`;
+        behaviorRulesBlock += `- ${escapeXmlTags(asString(rule.title))}\n`;
       }
       behaviorRulesBlock += '</behavioral-rules>\n';
     }
