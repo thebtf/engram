@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"time"
 
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -45,6 +46,8 @@ type RelationEdge struct {
 	TargetID     int64
 	RelationType models.RelationType // string: "causes", "fixes", etc.
 	Confidence   float64
+	ValidFrom    *time.Time // Temporal validity start (nil = always valid)
+	ValidTo      *time.Time // Temporal validity end (nil = still valid)
 }
 
 // Neighbor represents a graph neighbor found via multi-hop traversal.

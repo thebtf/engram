@@ -71,9 +71,17 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 	case "reasoning":
 		return s.handleReasoningSearch(ctx, args)
 
+	// Palace actions
+	case "wake_up":
+		return s.handleWakeUp(ctx, args)
+	case "taxonomy":
+		return s.handleTaxonomy(ctx, args)
+	case "tunnels":
+		return s.handleTunnels(ctx, args)
+
 	default:
 		return "", fmt.Errorf(
-			"unknown recall action: %q (valid: search, preset, by_file, by_concept, by_type, similar, timeline, related, patterns, get, sessions, explain, reasoning)",
+			"unknown recall action: %q (valid: search, preset, by_file, by_concept, by_type, similar, timeline, related, patterns, get, sessions, explain, reasoning, wake_up, taxonomy, tunnels)",
 			action,
 		)
 	}

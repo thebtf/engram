@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/palace/aaak"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
 )
@@ -38,13 +39,38 @@ func StoreEntities(ctx context.Context, p StoreEntitiesParams) (*StoreEntitiesRe
 	now := time.Now().UTC().Format(time.RFC3339)
 	entityIDsByName := make(map[string]int64)
 
+	// Build existing AAAK code set for collision avoidance
+	existingCodes := make(map[string]bool)
+	var codeRows []struct{ Narrative string }
+	if err := p.DB.WithContext(ctx).
+		Table("observations").
+		Select("COALESCE(narrative, '') as narrative").
+		Where("type = 'entity' AND is_superseded = 0").
+		Find(&codeRows).Error; err != nil {
+		// Non-fatal: proceed with empty existing codes (worst case: collisions resolved by GenerateCode)
+		codeRows = nil
+	}
+	for _, row := range codeRows {
+		if idx := strings.Index(row.Narrative, `"aaak_code":"`); idx >= 0 {
+			start := idx + len(`"aaak_code":"`)
+			if end := strings.Index(row.Narrative[start:], `"`); end > 0 && end <= 5 {
+				existingCodes[row.Narrative[start:start+end]] = true
+			}
+		}
+	}
+
 	for _, entity := range p.Result.Entities {
+		// Generate AAAK code for new entity
+		code := aaak.GenerateCode(entity.Name, existingCodes)
+		existingCodes[code] = true
+
 		meta := EntityMetadata{
 			EntityType:           entity.Type,
 			ObservationCount:     len(p.SourceIDs),
 			Relations:            extractRelationsFor(entity.Name, p.Result.Relations),
 			SourceObservationIDs: p.SourceIDs,
 			LastExtracted:        now,
+			AAKCode:              code,
 		}
 		metaJSON, err := json.Marshal(meta)
 		if err != nil {

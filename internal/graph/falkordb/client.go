@@ -134,11 +134,21 @@ func (s *FalkorDBGraphStore) StoreEdge(_ context.Context, edge graph.RelationEdg
 		"conf":    edge.Confidence,
 	}
 
+	setClause := "SET r.confidence = $conf"
+	if edge.ValidFrom != nil {
+		params["vf"] = edge.ValidFrom.Unix()
+		setClause += ", r.valid_from = $vf"
+	}
+	if edge.ValidTo != nil {
+		params["vt"] = edge.ValidTo.Unix()
+		setClause += ", r.valid_to = $vt"
+	}
+
 	_, err = g.ParameterizedQuery(
 		"MERGE (a:Observation {id: $src}) "+
 			"MERGE (b:Observation {id: $tgt}) "+
 			"MERGE (a)-[r:REL {type: $relType}]->(b) "+
-			"SET r.confidence = $conf",
+			setClause,
 		params,
 	)
 	return err

@@ -59,7 +59,14 @@ func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string,
 		return s.handleExportObservations(ctx, args)
 	case "backfill_status":
 		return s.handleBackfillStatus()
+	// Palace actions
+	case "compress_aaak":
+		return s.handleCompressAAK(ctx, args)
+	case "set_aaak_code":
+		return s.handleSetAAKCode(ctx, args)
+	case "taxonomy_stats":
+		return s.handleTaxonomyStats(ctx, args)
 	default:
-		return "", fmt.Errorf("unknown admin action: %q (valid: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, consolidations, maintenance, maintenance_stats, consolidation, export, backfill_status)", action)
+		return "", fmt.Errorf("unknown admin action: %q (valid: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, consolidations, maintenance, maintenance_stats, consolidation, export, backfill_status, compress_aaak, set_aaak_code, taxonomy_stats)", action)
 	}
 }
