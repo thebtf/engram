@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	dedupPkg "github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/pipeline"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/models"
@@ -181,6 +183,22 @@ func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 		FilesModified: filesModified,
 	}
 	parsed.SourceType = models.ClassifySourceType(req.ToolName)
+
+	// Semantic dedup: skip near-duplicates via vector similarity (shared Mem0 Algorithm 1).
+	// Complements the hash-based TTL dedup above with semantic similarity detection.
+	dedupContent := parsed.Title + " " + strings.Join(parsed.Facts, " ")
+	if dedupContent != "" && s.vectorClient != nil {
+		dedupResult, _ := dedupPkg.CheckDuplicate(r.Context(), s.vectorClient, s.observationStore.GetDB(), req.Project, dedupContent, 0)
+		if dedupResult != nil && dedupResult.Action == dedupPkg.ActionNoop {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "skipped", "reason": "semantic_duplicate",
+				"existing_id": dedupResult.ExistingID, "similarity": dedupResult.Similarity,
+			})
+			return
+		}
+	}
 
 	// Store observation using the existing store interface
 	obsID, _, err := s.observationStore.StoreObservation(r.Context(), req.SessionID, req.Project, parsed, 0, 0)
