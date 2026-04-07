@@ -177,7 +177,7 @@ func (s *SchedulerSuite) TestDefaultSchedulerConfigValues() {
 	assert.Equal(s.T(), 24*time.Hour, cfg.DecayInterval)
 	assert.Equal(s.T(), 24*time.Hour, cfg.AssociationInterval)
 	assert.Equal(s.T(), 2160*time.Hour, cfg.ForgetInterval)
-	assert.False(s.T(), cfg.ForgetEnabled)
+	assert.True(s.T(), cfg.ForgetEnabled)
 	assert.InDelta(s.T(), 0.01, cfg.ForgetThreshold, 0)
 }
 
