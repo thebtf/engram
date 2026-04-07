@@ -21,13 +21,13 @@ type Embedder interface {
 type AssociationConfig struct {
 	// SampleSize is the number of observations to sample per run (default 50).
 	SampleSize int `json:"sample_size"`
-	// ThemeSimilarity is the minimum cosine similarity for SHARES_THEME (default 0.7).
+	// ThemeSimilarity is the minimum cosine similarity for SHARES_THEME (default 0.55).
 	ThemeSimilarity float64 `json:"theme_similarity"`
 	// ExplainSimilarity is the minimum similarity for EXPLAINS relation (default 0.5).
 	ExplainSimilarity float64 `json:"explain_similarity"`
-	// ParallelMaxDays is the max age gap in days for PARALLEL_CONTEXT (default 7).
+	// ParallelMaxDays is the max age gap in days for PARALLEL_CONTEXT (default 14).
 	ParallelMaxDays int `json:"parallel_max_days"`
-	// ParallelMaxSim is the max similarity for PARALLEL_CONTEXT (default 0.4).
+	// ParallelMaxSim is the max similarity for PARALLEL_CONTEXT (default 0.5).
 	ParallelMaxSim float64 `json:"parallel_max_sim"`
 	// ContradictMaxSim is the max similarity for CONTRADICTS between decisions (default 0.3).
 	ContradictMaxSim float64 `json:"contradict_max_sim"`

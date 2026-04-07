@@ -79,8 +79,13 @@ func CheckDuplicate(
 	topSim := similar[0].Similarity
 	existingID := vector.ExtractRowID(similar[0].Metadata)
 
+	// ExtractRowID can return 0 if metadata is missing — treat as no match.
+	if existingID <= 0 {
+		return &Result{Action: ActionAdd}, nil
+	}
+
 	// Check if the match is suppressed/archived — allow re-creation if so.
-	if db != nil && existingID > 0 {
+	if db != nil {
 		var checkResult struct{ Count int64 }
 		if checkErr := db.WithContext(ctx).
 			Raw("SELECT COUNT(*) as count FROM observations WHERE id = ? AND (is_suppressed = TRUE OR COALESCE(is_archived, 0) != 0)", existingID).

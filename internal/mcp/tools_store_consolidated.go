@@ -189,10 +189,11 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 			}
 			if s.relationStore != nil {
 				_, _ = s.relationStore.StoreRelation(ctx, &models.ObservationRelation{
-					SourceID:     obsID,
-					TargetID:     dedupResult.ExistingID,
-					RelationType: models.RelationEvolvesFrom,
-					Confidence:   dedupResult.Similarity,
+					SourceID:        obsID,
+					TargetID:        dedupResult.ExistingID,
+					RelationType:    models.RelationEvolvesFrom,
+					Confidence:      dedupResult.Similarity,
+					DetectionSource: models.DetectionSourceEmbeddingSimilarity,
 				})
 			}
 		}
