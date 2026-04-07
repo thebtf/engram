@@ -2027,6 +2027,20 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			return tx.Exec(`ALTER TABLE injection_log DROP COLUMN IF EXISTS cited`).Error
 		},
 	},
+	{
+		ID: "067_relation_temporal_validity",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`
+				ALTER TABLE observation_relations
+				ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ,
+				ADD COLUMN IF NOT EXISTS valid_to TIMESTAMPTZ
+			`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx.Exec(`ALTER TABLE observation_relations DROP COLUMN IF EXISTS valid_to`)
+			return tx.Exec(`ALTER TABLE observation_relations DROP COLUMN IF EXISTS valid_from`).Error
+		},
+	},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

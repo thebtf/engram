@@ -205,6 +205,8 @@ type ObservationRelation struct {
 	TargetID        int64                          `gorm:"index:idx_relations_target;index:idx_relations_both,priority:2;uniqueIndex:idx_relations_unique,priority:2;not null"`
 	Confidence      float64                        `gorm:"type:real;default:0.5;index:idx_relations_confidence,sort:desc;not null"`
 	CreatedAtEpoch  int64                          `gorm:"not null"`
+	ValidFrom       *time.Time                     `gorm:"type:timestamptz"`
+	ValidTo         *time.Time                     `gorm:"type:timestamptz"`
 }
 
 func (ObservationRelation) TableName() string { return "observation_relations" }
