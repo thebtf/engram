@@ -33,7 +33,9 @@ func Compress(narrative string, meta CompressMeta) string {
 	parts[0] = strings.Join(entities, ",")
 	parts[1] = strings.Join(topics, ",")
 	if quote != "" {
-		parts[2] = fmt.Sprintf("%q", quote)
+		// Escape pipe chars in quote to prevent breaking wire format delimiter
+		safeQuote := strings.ReplaceAll(quote, "|", "/")
+		parts[2] = fmt.Sprintf("%q", safeQuote)
 	}
 	parts[3] = strings.Join(emotions, ",")
 	parts[4] = strings.Join(flags, ",")

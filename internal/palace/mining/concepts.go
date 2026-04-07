@@ -57,6 +57,9 @@ func DetectConcepts(text string, buckets map[string][]string) []string {
 
 // countOccurrences counts non-overlapping occurrences of substr in s.
 func countOccurrences(s, substr string) int {
+	if substr == "" {
+		return 0
+	}
 	count := 0
 	start := 0
 	for {

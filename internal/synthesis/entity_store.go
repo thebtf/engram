@@ -42,11 +42,14 @@ func StoreEntities(ctx context.Context, p StoreEntitiesParams) (*StoreEntitiesRe
 	// Build existing AAAK code set for collision avoidance
 	existingCodes := make(map[string]bool)
 	var codeRows []struct{ Narrative string }
-	p.DB.WithContext(ctx).
+	if err := p.DB.WithContext(ctx).
 		Table("observations").
 		Select("COALESCE(narrative, '') as narrative").
 		Where("type = 'entity' AND is_superseded = 0").
-		Find(&codeRows)
+		Find(&codeRows).Error; err != nil {
+		// Non-fatal: proceed with empty existing codes (worst case: collisions resolved by GenerateCode)
+		codeRows = nil
+	}
 	for _, row := range codeRows {
 		if idx := strings.Index(row.Narrative, `"aaak_code":"`); idx >= 0 {
 			start := idx + len(`"aaak_code":"`)
