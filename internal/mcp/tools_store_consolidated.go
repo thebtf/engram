@@ -53,8 +53,13 @@ func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessa
 		return s.handleImportInstincts(ctx, args)
 	case "extract":
 		return s.handleExtractAndOperate(ctx, args)
+	// Palace actions
+	case "mine":
+		return s.handleMine(ctx, args)
+	case "mine_directory":
+		return s.handleMineDirectory(ctx, args)
 	default:
-		return "", fmt.Errorf("unknown store action: %q (valid: create, edit, merge, import, extract)", action)
+		return "", fmt.Errorf("unknown store action: %q (valid: create, edit, merge, import, extract, mine, mine_directory)", action)
 	}
 }
 

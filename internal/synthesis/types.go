@@ -36,6 +36,7 @@ type EntityMetadata struct {
 	Relations            []EntityRelation `json:"relations"`
 	SourceObservationIDs []int64          `json:"source_observation_ids"`
 	LastExtracted        string           `json:"last_extracted"` // ISO 8601
+	AAKCode              string           `json:"aaak_code,omitempty"`
 }
 
 // EntityRelation is a lightweight relation stored in entity metadata.

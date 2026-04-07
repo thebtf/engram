@@ -4,6 +4,7 @@ package gorm
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -450,6 +451,8 @@ func toModelRelation(r *ObservationRelation) *models.ObservationRelation {
 		DetectionSource: r.DetectionSource,
 		CreatedAt:       r.CreatedAt,
 		CreatedAtEpoch:  r.CreatedAtEpoch,
+		ValidFrom:       r.ValidFrom,
+		ValidTo:         r.ValidTo,
 	}
 
 	if r.Reason.Valid {
@@ -466,4 +469,32 @@ func toModelRelations(relations []ObservationRelation) []*models.ObservationRela
 		result[i] = toModelRelation(&r)
 	}
 	return result
+}
+
+// InvalidateRelation sets valid_to = now() on a relation, making it temporally bounded.
+// The relation remains in the database but is filtered out by as-of queries.
+func (s *RelationStore) InvalidateRelation(ctx context.Context, relationID int64) error {
+	return s.db.WithContext(ctx).
+		Table("observation_relations").
+		Where("id = ? AND valid_to IS NULL", relationID).
+		Update("valid_to", time.Now()).Error
+}
+
+// GetRelationsAsOf returns relations valid at a specific point in time.
+// Relations without valid_from are treated as always-valid from creation.
+// Relations without valid_to are treated as still-valid (open-ended).
+func (s *RelationStore) GetRelationsAsOf(ctx context.Context, obsID int64, asOf time.Time) ([]*models.ObservationRelation, error) {
+	var relations []ObservationRelation
+
+	err := s.db.WithContext(ctx).
+		Where("(source_id = ? OR target_id = ?)", obsID, obsID).
+		Where("(valid_from IS NULL OR valid_from <= ?)", asOf).
+		Where("(valid_to IS NULL OR valid_to >= ?)", asOf).
+		Order("confidence DESC").
+		Find(&relations).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelRelations(relations), nil
 }

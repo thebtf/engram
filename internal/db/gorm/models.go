@@ -58,7 +58,7 @@ type Observation struct {
 	Project         string                  `gorm:"index:idx_observations_project;index:idx_observations_project_created,priority:1;not null"`
 	Scope           models.ObservationScope `gorm:"type:text;default:'project';check:scope IN ('project', 'global', 'agent');index:idx_observations_scope;index:idx_observations_project_scope,priority:2"`
 	AgentID         string                  `gorm:"type:text;default:'';index:idx_observations_agent_id"`
-	Type            models.ObservationType  `gorm:"type:text;check:type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change', 'guidance');index;not null"`
+	Type            models.ObservationType  `gorm:"type:text;check:type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change', 'guidance', 'credential', 'entity', 'wiki');index;not null"`
 	MemoryType      models.MemoryType       `gorm:"type:text;index:idx_observations_memory_type"`
 	SourceType      models.SourceType       `gorm:"type:text;index:idx_observations_source_type"`
 	CreatedAt       string                  `gorm:"not null"`
@@ -205,6 +205,8 @@ type ObservationRelation struct {
 	TargetID        int64                          `gorm:"index:idx_relations_target;index:idx_relations_both,priority:2;uniqueIndex:idx_relations_unique,priority:2;not null"`
 	Confidence      float64                        `gorm:"type:real;default:0.5;index:idx_relations_confidence,sort:desc;not null"`
 	CreatedAtEpoch  int64                          `gorm:"not null"`
+	ValidFrom       *time.Time                     `gorm:"type:timestamptz"`
+	ValidTo         *time.Time                     `gorm:"type:timestamptz"`
 }
 
 func (ObservationRelation) TableName() string { return "observation_relations" }
