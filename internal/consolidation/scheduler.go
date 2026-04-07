@@ -52,7 +52,7 @@ func DefaultSchedulerConfig() SchedulerConfig {
 		DecayInterval:       24 * time.Hour,
 		AssociationInterval: 24 * time.Hour, // Daily (was weekly)
 		ForgetInterval:      2160 * time.Hour,
-		ForgetEnabled:       false,
+		ForgetEnabled:       true,
 		ForgetThreshold:     0.01,
 	}
 }
@@ -345,7 +345,7 @@ func mergeAndDedup(a, b []*models.Observation) []*models.Observation {
 // Protected observations are never archived:
 // - importance_score >= 0.7
 // - age < 90 days
-// - type in {decision, discovery}
+// - type in {decision, discovery, guidance, entity, wiki}
 func (s *Scheduler) RunForgetting(ctx context.Context) error {
 	if !s.config.ForgetEnabled {
 		return nil
@@ -377,8 +377,10 @@ func (s *Scheduler) RunForgetting(ctx context.Context) error {
 				continue
 			}
 
-			// Protection rule: important types
-			if obs.Type == models.ObsTypeDecision || obs.Type == models.ObsTypeDiscovery {
+			// Protection rule: important types (never archive these)
+			switch obs.Type {
+			case models.ObsTypeDecision, models.ObsTypeDiscovery, models.ObsTypeGuidance,
+				models.ObsTypeEntity, models.ObsTypeWiki:
 				continue
 			}
 

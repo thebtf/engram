@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/models"
@@ -162,13 +163,39 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 			Scope:     models.ObservationScope(scope),
 		}
 
+		// Dedup check: skip near-duplicates, supersede contradictions (shared Mem0 Algorithm 1).
+		dedupResult, dedupErr := dedup.CheckDuplicate(ctx, s.vectorClient, s.observationStore.GetDB(), project, obs.Narrative, 0)
+		if dedupErr != nil {
+			log.Debug().Err(dedupErr).Str("title", obs.Title).Msg("extract: dedup check failed, proceeding with ADD")
+		}
+		if dedupResult != nil && dedupResult.Action == dedup.ActionNoop {
+			duplicates++
+			continue
+		}
+
 		// Generate a unique session ID to avoid duplicate key violations.
 		extractSessionID := "extract-" + uuid.NewString()
 
-		_, _, err := s.observationStore.StoreObservation(ctx, extractSessionID, project, parsedObs, 0, 0)
+		obsID, _, err := s.observationStore.StoreObservation(ctx, extractSessionID, project, parsedObs, 0, 0)
 		if err != nil {
 			log.Warn().Err(err).Str("title", obs.Title).Msg("Failed to store extracted observation")
 			continue
+		}
+
+		// If UPDATE: supersede existing observation.
+		if dedupResult != nil && dedupResult.Action == dedup.ActionUpdate && dedupResult.ExistingID > 0 {
+			if supersErr := s.observationStore.MarkAsSuperseded(ctx, dedupResult.ExistingID); supersErr != nil {
+				log.Warn().Err(supersErr).Int64("id", dedupResult.ExistingID).Msg("extract: failed to mark superseded")
+			}
+			if s.relationStore != nil {
+				_, _ = s.relationStore.StoreRelation(ctx, &models.ObservationRelation{
+					SourceID:        obsID,
+					TargetID:        dedupResult.ExistingID,
+					RelationType:    models.RelationEvolvesFrom,
+					Confidence:      dedupResult.Similarity,
+					DetectionSource: models.DetectionSourceEmbeddingSimilarity,
+				})
+			}
 		}
 
 		stored++

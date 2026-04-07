@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/vector"
@@ -148,48 +149,31 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 
 	// Contradiction detection + dedup check (Learning Memory v3 FR-7, Mem0 Algorithm 1).
-	// Decision tree: cosine >= 0.92 → NOOP (near-duplicate), 0.75-0.92 → UPDATE (supersede),
-	// < 0.75 → ADD (new observation). Uses existing pgvector HNSW index (~3-5ms).
-	var contradictionAction string // "ADD", "UPDATE", or "NOOP"
+	// Shared implementation in internal/dedup/checker.go.
+	var contradictionAction string
 	var supersededID int64
-	if s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, true)
-		similar, err := s.vectorClient.Query(ctx, params.Content, 5, where)
-		if err == nil && len(similar) > 0 {
-			topSim := similar[0].Similarity
-			existingID := vector.ExtractRowID(similar[0].Metadata)
-
-			// Check if the match is suppressed/archived — allow re-creation if so.
-			var isSuppressed bool
-			var checkResult struct{ Count int64 }
-			if checkErr := s.observationStore.GetDB().WithContext(ctx).
-				Raw("SELECT COUNT(*) as count FROM observations WHERE id = ? AND (is_suppressed = TRUE OR COALESCE(is_archived, 0) != 0)", existingID).
-				Scan(&checkResult).Error; checkErr == nil && checkResult.Count > 0 {
-				isSuppressed = true
+	dedupResult, dedupErr := dedup.CheckDuplicate(ctx, s.vectorClient, s.observationStore.GetDB(), params.Project, params.Content, dedupThreshold)
+	if dedupErr != nil {
+		log.Warn().Err(dedupErr).Msg("store_memory: dedup check failed, proceeding with ADD")
+	}
+	if dedupResult != nil {
+		contradictionAction = string(dedupResult.Action)
+		if dedupResult.Action == dedup.ActionNoop {
+			result := map[string]any{
+				"id":        dedupResult.ExistingID,
+				"action":    "NOOP",
+				"duplicate": true,
+				"message":   fmt.Sprintf("Near-duplicate observation exists (similarity: %.2f)", dedupResult.Similarity),
 			}
-
-			if !isSuppressed {
-				if topSim >= dedupThreshold { // >= 0.92: NOOP (near-duplicate)
-					contradictionAction = "NOOP"
-					result := map[string]any{
-						"id":        existingID,
-						"action":    "NOOP",
-						"duplicate": true,
-						"message":   fmt.Sprintf("Near-duplicate observation exists (similarity: %.2f)", topSim),
-					}
-					out, _ := json.MarshalIndent(result, "", "  ")
-					return string(out), nil
-				} else if topSim >= 0.75 { // 0.75-0.92: UPDATE (supersede with EVOLVES_FROM)
-					contradictionAction = "UPDATE"
-					supersededID = existingID
-					log.Info().
-						Int64("superseded_id", existingID).
-						Float64("similarity", topSim).
-						Msg("store_memory: superseding existing observation (contradiction zone)")
-				}
-			} else {
-				log.Debug().Int64("existing_id", existingID).Msg("store_memory: skipping dedup — existing observation is suppressed/archived")
-			}
+			out, _ := json.MarshalIndent(result, "", "  ")
+			return string(out), nil
+		}
+		if dedupResult.Action == dedup.ActionUpdate {
+			supersededID = dedupResult.ExistingID
+			log.Info().
+				Int64("superseded_id", dedupResult.ExistingID).
+				Float64("similarity", dedupResult.Similarity).
+				Msg("store_memory: superseding existing observation (contradiction zone)")
 		}
 	}
 	if contradictionAction == "" {

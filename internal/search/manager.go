@@ -1156,7 +1156,7 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 	}
 
 	// --- Graph expansion (optional) ---
-	fused = m.expandViaGraph(ctx, fused, params.Limit)
+	fused = m.ExpandViaGraph(ctx, fused, params.Limit)
 
 	// Collect IDs by type.
 	var obsIDs, summaryIDs, promptIDs []int64
@@ -1469,11 +1469,11 @@ const (
 	graphExpansionDecay   = 0.7
 )
 
-// expandViaGraph takes the top-N fused results and expands them via graph neighbors.
+// ExpandViaGraph takes the top-N fused results and expands them via graph neighbors.
 // Neighbor scores decay as 0.7^hops relative to the parent's score.
 // Only observation-type results are expanded. New neighbors are merged into the
 // fused list, re-sorted by score, and capped at the original limit.
-func (m *Manager) expandViaGraph(ctx context.Context, fused []ScoredID, limit int) []ScoredID {
+func (m *Manager) ExpandViaGraph(ctx context.Context, fused []ScoredID, limit int) []ScoredID {
 	if m.graphStore == nil {
 		return fused
 	}

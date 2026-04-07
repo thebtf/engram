@@ -416,6 +416,38 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	clusteredObservations := clusterObservations(freshObservations, s.config.ClusteringThreshold)
 	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
 
+	// Graph expansion: enrich results with FalkorDB neighbors (same as hybridSearch path).
+	// Runs after clustering, before composite scoring, so neighbors get scored equally.
+	if len(clusteredObservations) > 0 && s.searchMgr != nil {
+		scoredIDs := make([]search.ScoredID, 0, len(clusteredObservations))
+		for _, obs := range clusteredObservations {
+			scoredIDs = append(scoredIDs, search.ScoredID{
+				ID:      obs.ID,
+				DocType: "observation",
+				Score:   similarityScores[obs.ID],
+			})
+		}
+		expanded := s.searchMgr.ExpandViaGraph(r.Context(), scoredIDs, limit)
+		// Merge new IDs back: fetch any expanded observations not already in clusteredObservations
+		existingIDs := make(map[int64]bool, len(clusteredObservations))
+		for _, obs := range clusteredObservations {
+			existingIDs[obs.ID] = true
+		}
+		var newIDs []int64
+		for _, sid := range expanded {
+			if !existingIDs[sid.ID] && sid.DocType == "observation" {
+				newIDs = append(newIDs, sid.ID)
+				similarityScores[sid.ID] = sid.Score // propagate decayed score
+			}
+		}
+		if len(newIDs) > 0 {
+			graphObs, err := s.observationStore.GetObservationsByIDs(r.Context(), newIDs, "", 0)
+			if err == nil && len(graphObs) > 0 {
+				clusteredObservations = append(clusteredObservations, graphObs...)
+			}
+		}
+	}
+
 	// Apply composite scoring (recency × type × importance) as a post-processing step.
 	// This re-weights scores already computed by vector search or cross-encoder reranking.
 	if len(clusteredObservations) > 0 {

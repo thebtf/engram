@@ -889,12 +889,16 @@ func (s *Service) initializeAsync() {
 	// Start consolidation scheduler
 	relevanceCalc := scoring.NewRelevanceCalculator(nil) // default config
 	assocEngine := consolidation.NewAssociationEngine(s.embedSvc, consolidation.DefaultAssociationConfig(), log.Logger)
+	schedCfg := consolidation.DefaultSchedulerConfig()
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("ENGRAM_FORGET_ENABLED"))); v == "false" || v == "0" {
+		schedCfg.ForgetEnabled = false
+	}
 	consolidationScheduler := consolidation.NewScheduler(
 		relevanceCalc,
 		assocEngine,
 		observationStore,
 		relationStore,
-		consolidation.DefaultSchedulerConfig(),
+		schedCfg,
 		log.Logger,
 	)
 	s.initMu.Lock()

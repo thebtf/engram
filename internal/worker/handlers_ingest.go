@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	dedupPkg "github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/pipeline"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/models"
@@ -182,12 +184,38 @@ func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	parsed.SourceType = models.ClassifySourceType(req.ToolName)
 
+	// Semantic dedup: skip near-duplicates via vector similarity (shared Mem0 Algorithm 1).
+	// Complements the hash-based TTL dedup above with semantic similarity detection.
+	var ingestDedupResult *dedupPkg.Result
+	dedupContent := parsed.Title + " " + strings.Join(parsed.Facts, " ")
+	if dedupContent != "" && s.vectorClient != nil {
+		ingestDedupResult, _ = dedupPkg.CheckDuplicate(r.Context(), s.vectorClient, s.observationStore.GetDB(), req.Project, dedupContent, 0)
+		if ingestDedupResult != nil && ingestDedupResult.Action == dedupPkg.ActionNoop {
+			// Mark raw event processed even on NOOP to avoid reprocessing.
+			if markErr := s.rawEventStore.MarkProcessed(r.Context(), eventID); markErr != nil {
+				log.Warn().Err(markErr).Int64("eventId", eventID).Msg("Failed to mark raw event as processed (dedup noop)")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "skipped", "reason": "semantic_duplicate",
+				"existing_id": ingestDedupResult.ExistingID, "similarity": ingestDedupResult.Similarity,
+			})
+			return
+		}
+	}
+
 	// Store observation using the existing store interface
 	obsID, _, err := s.observationStore.StoreObservation(r.Context(), req.SessionID, req.Project, parsed, 0, 0)
 	if err != nil {
 		log.Error().Err(err).Str("tool", req.ToolName).Msg("Failed to store observation")
 		http.Error(w, "failed to store observation", http.StatusInternalServerError)
 		return
+	}
+
+	// Handle UPDATE: supersede existing observation if dedup detected contradiction.
+	if ingestDedupResult != nil && ingestDedupResult.Action == dedupPkg.ActionUpdate && ingestDedupResult.ExistingID > 0 {
+		_ = s.observationStore.MarkAsSuperseded(r.Context(), ingestDedupResult.ExistingID)
 	}
 
 	// Mark raw event as processed

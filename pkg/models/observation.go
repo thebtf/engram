@@ -22,6 +22,8 @@ const (
 	ObsTypeChange    ObservationType = "change"
 	ObsTypeGuidance    ObservationType = "guidance"
 	ObsTypeCredential  ObservationType = "credential"
+	ObsTypeEntity      ObservationType = "entity"
+	ObsTypeWiki        ObservationType = "wiki"
 )
 
 // MemoryType represents the classification for memory storage and retrieval.

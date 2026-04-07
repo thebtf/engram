@@ -53,7 +53,8 @@ func (s *AssociationsSuite) TestApplyTypePairRules_ContradictsExplainsSharesThem
 		{name: "explains for bugfix and refactor", aType: models.ObsTypeBugfix, bType: models.ObsTypeRefactor, ageDiffDays: 50, similarity: 0.9, expectedType: models.RelationExplains},
 		{name: "shares theme for high similarity any type", aType: models.ObsTypeChange, bType: models.ObsTypeDiscovery, ageDiffDays: 90, similarity: 0.95, expectedType: models.RelationSharesTheme},
 		{name: "parallel context when close in time and low similarity", aType: models.ObsTypeDecision, bType: models.ObsTypeFeature, ageDiffDays: 3, similarity: 0.1, expectedType: models.RelationParallelCtx},
-		{name: "no relation when no condition matches", aType: models.ObsTypeFeature, bType: models.ObsTypeChange, ageDiffDays: 90, similarity: 0.6, expectNil: true},
+		{name: "shares theme for medium-high similarity", aType: models.ObsTypeChange, bType: models.ObsTypeDiscovery, ageDiffDays: 90, similarity: 0.6, expectedType: models.RelationSharesTheme},
+		{name: "no relation when no condition matches", aType: models.ObsTypeFeature, bType: models.ObsTypeChange, ageDiffDays: 90, similarity: 0.45, expectNil: true},
 	}
 
 	for _, tt := range tests {
