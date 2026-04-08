@@ -380,7 +380,7 @@ func (s *Scheduler) RunForgetting(ctx context.Context) error {
 			// Protection rule: important types (never archive these)
 			switch obs.Type {
 			case models.ObsTypeDecision, models.ObsTypeDiscovery, models.ObsTypeGuidance,
-				models.ObsTypeEntity, models.ObsTypeWiki:
+				models.ObsTypeEntity, models.ObsTypeWiki, models.ObsTypeTimeline:
 				continue
 			}
 

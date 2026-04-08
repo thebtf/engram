@@ -24,6 +24,9 @@ const (
 	ObsTypeCredential  ObservationType = "credential"
 	ObsTypeEntity      ObservationType = "entity"
 	ObsTypeWiki        ObservationType = "wiki"
+	ObsTypePitfall     ObservationType = "pitfall"
+	ObsTypeOperational ObservationType = "operational"
+	ObsTypeTimeline    ObservationType = "timeline"
 )
 
 // MemoryType represents the classification for memory storage and retrieval.
@@ -64,7 +67,38 @@ const (
 	SourceBackfill         SourceType = "backfill"
 	SourceUnknown          SourceType = "unknown"
 	SourceManual           SourceType = "manual"
+	SourceCrossModel       SourceType = "cross_model"
 )
+
+// AgentSource represents which AI tool created an observation.
+type AgentSource string
+
+const (
+	AgentClaude  AgentSource = "claude-code"
+	AgentCodex   AgentSource = "codex"
+	AgentGemini  AgentSource = "gemini"
+	AgentOther   AgentSource = "other"
+	AgentUnknown AgentSource = "unknown"
+)
+
+// ValidAgentSources contains all valid agent source values for validation.
+var ValidAgentSources = []AgentSource{
+	AgentClaude,
+	AgentCodex,
+	AgentGemini,
+	AgentOther,
+	AgentUnknown,
+}
+
+// IsValidAgentSource checks if a string is a recognized agent source value.
+func IsValidAgentSource(s string) bool {
+	for _, v := range ValidAgentSources {
+		if string(v) == s {
+			return true
+		}
+	}
+	return false
+}
 
 // ClassifySourceType maps a Claude Code tool name to its source type.
 func ClassifySourceType(toolName string) SourceType {
@@ -190,6 +224,7 @@ type Observation struct {
 	Project         string           `db:"project" json:"project"`
 	Scope           ObservationScope `db:"scope" json:"scope"`
 	AgentID         string           `db:"agent_id" json:"agent_id,omitempty"`
+	AgentSource     AgentSource      `db:"agent_source" json:"agent_source,omitempty"`
 	Type            ObservationType  `db:"type" json:"type"`
 	MemoryType      MemoryType       `db:"memory_type" json:"memory_type"`
 	SourceType      SourceType       `db:"source_type" json:"source_type,omitempty"`
@@ -314,6 +349,7 @@ type ObservationJSON struct {
 	SDKSessionID    string           `json:"sdk_session_id"`
 	Scope           ObservationScope `json:"scope"`
 	AgentID         string           `json:"agent_id,omitempty"`
+	AgentSource     string           `json:"agent_source,omitempty"`
 	Type            ObservationType  `json:"type"`
 	MemoryType      string           `json:"memory_type"`
 	SourceType      string           `json:"source_type,omitempty"`
@@ -358,6 +394,7 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		Project:         o.Project,
 		Scope:           o.Scope,
 		AgentID:         o.AgentID,
+		AgentSource:     string(o.AgentSource),
 		Type:            o.Type,
 		MemoryType:      string(o.MemoryType),
 		SourceType:      string(o.SourceType),
