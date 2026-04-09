@@ -37,6 +37,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		Type         string
 		Scope        string
 		Project      string
+		AgentSource  string
 		Importance   *float64
 		TtlDays      *int
 		AlwaysInject bool
@@ -48,6 +49,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	params.Type = coerceString(m["type"], "")
 	params.Scope = coerceString(m["scope"], "")
 	params.Project = coerceString(m["project"], "")
+	params.AgentSource = coerceString(m["agent_source"], "")
 	params.AlwaysInject = coerceBool(m["always_inject"], false)
 	if v, ok := m["importance"]; ok && v != nil {
 		f := coerceFloat64(v, 0)
@@ -185,15 +187,26 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		title = truncateTitle(params.Content, 80)
 	}
 
+	// Validate agent_source: coerce to 'unknown' if unrecognized
+	agentSource := models.AgentUnknown
+	if params.AgentSource != "" {
+		if models.IsValidAgentSource(params.AgentSource) {
+			agentSource = models.AgentSource(params.AgentSource)
+		} else {
+			return "", fmt.Errorf("invalid agent_source %q: must be one of claude-code, codex, gemini, other, unknown", params.AgentSource)
+		}
+	}
+
 	obs := &models.ParsedObservation{
-		Type:       obsType,
-		SourceType: models.SourceManual,
-		MemoryType: models.ClassifyMemoryType(&models.ParsedObservation{Type: obsType, Narrative: params.Content, Concepts: concepts}),
-		Title:      title,
-		Narrative:  params.Content,
-		Concepts:   concepts,
-		Rejected:   params.Rejected,
-		Scope:      scope,
+		Type:        obsType,
+		SourceType:  models.SourceManual,
+		MemoryType:  models.ClassifyMemoryType(&models.ParsedObservation{Type: obsType, Narrative: params.Content, Concepts: concepts}),
+		Title:       title,
+		Narrative:   params.Content,
+		Concepts:    concepts,
+		Rejected:    params.Rejected,
+		Scope:       scope,
+		AgentSource: agentSource,
 	}
 
 	// Generate a unique session ID for manual memories to avoid

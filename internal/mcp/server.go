@@ -1124,6 +1124,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"project":    map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
 						"ttl_days":       map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
 						"always_inject":  map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
+						"agent_source":   map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
 					},
 				},
 			},
