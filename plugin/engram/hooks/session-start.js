@@ -33,6 +33,38 @@ async function handleSessionStart(ctx, input) {
   const cwd = typeof ctx.CWD === 'string' ? ctx.CWD : '';
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
 
+  // Crash-safe session tracking (gstack-insights FR-8)
+  const sessionID = typeof ctx.SessionID === 'string' ? ctx.SessionID : '';
+  if (sessionID) {
+    lib.createPendingMarker(sessionID);
+  }
+
+  // Check for stale markers from crashed sessions (>2h old)
+  const staleMarkers = lib.getStaleMarkers();
+  for (const marker of staleMarkers) {
+    // Record crashed session as timeline observation (fire-and-forget)
+    lib.requestPost('/api/store', {
+      action: 'create',
+      content: `Session ${marker.sessionId} crashed (no stop hook fired)`,
+      type: 'timeline',
+      project: project || 'unknown',
+      tags: ['event:crashed', `session:${marker.sessionId}`, 'outcome:crashed'],
+      agent_source: 'claude-code',
+    }, 3000).catch(() => {});
+  }
+
+  // Record session start timeline event (fire-and-forget, non-blocking per Constitution #3)
+  if (project) {
+    lib.requestPost('/api/store', {
+      action: 'create',
+      content: `Session started on ${project}`,
+      type: 'timeline',
+      project,
+      tags: ['event:started', `session:${sessionID || 'unknown'}`],
+      agent_source: 'claude-code',
+    }, 3000).catch(() => {});
+  }
+
   const legacyProject = typeof ctx.LegacyProject === 'string' ? ctx.LegacyProject : '';
   const gitRemote = typeof ctx.GitRemote === 'string' ? ctx.GitRemote : '';
   const relativePath = typeof ctx.RelativePath === 'string' ? ctx.RelativePath : '';

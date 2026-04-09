@@ -392,6 +392,101 @@ function clearSessionSignals(sessionID) {
   }
 }
 
+// --- Diff-scope auto-tagging (gstack-insights FR-7) ---
+
+const SCOPE_PATTERNS = [
+  { pattern: /\.(tsx|jsx|vue|svelte|css|scss|less)$/i, scope: 'scope:frontend' },
+  { pattern: /^(internal|cmd|pkg)\//i, scope: 'scope:backend' },
+  { pattern: /(prompt|generation)/i, scope: 'scope:prompts' },
+  { pattern: /(_test\.go|\.test\.[jt]sx?|_test\.py)$/i, scope: 'scope:tests' },
+  { pattern: /(\.md$|^docs\/)/i, scope: 'scope:docs' },
+  { pattern: /\.(yaml|yml|toml)$|\.json$/i, scope: 'scope:config' },
+  { pattern: /(migration|migrate)/i, scope: 'scope:migrations' },
+  { pattern: /(api|handler|route)/i, scope: 'scope:api' },
+  { pattern: /(auth|session|jwt|oauth)/i, scope: 'scope:auth' },
+];
+
+/**
+ * Analyze file paths and return matching scope tags.
+ * @param {string[]} filePaths - Array of file paths
+ * @returns {string[]} Unique scope tags
+ */
+function diffScope(filePaths) {
+  if (!filePaths || !Array.isArray(filePaths)) return [];
+  const scopes = new Set();
+  for (const fp of filePaths) {
+    if (!fp) continue;
+    for (const { pattern, scope } of SCOPE_PATTERNS) {
+      if (pattern.test(fp)) scopes.add(scope);
+    }
+  }
+  return [...scopes];
+}
+
+// --- Crash-safe session markers (gstack-insights FR-8) ---
+
+const os = require('os');
+const MARKER_PREFIX = '.engram-pending-';
+
+/**
+ * Create a pending session marker in the OS temp directory.
+ * @param {string} sessionId
+ */
+function createPendingMarker(sessionId) {
+  if (!sessionId) return;
+  try {
+    const markerPath = path.join(os.tmpdir(), MARKER_PREFIX + sessionId);
+    fs.writeFileSync(markerPath, String(Date.now()), { mode: 0o600 });
+  } catch {
+    // Non-blocking — marker failure is not critical
+  }
+}
+
+/**
+ * Delete the pending session marker.
+ * @param {string} sessionId
+ */
+function deletePendingMarker(sessionId) {
+  if (!sessionId) return;
+  try {
+    fs.unlinkSync(path.join(os.tmpdir(), MARKER_PREFIX + sessionId));
+  } catch {
+    // File may not exist
+  }
+}
+
+/**
+ * Find stale pending markers (older than maxAgeMs).
+ * @param {number} maxAgeMs - Maximum age in milliseconds (default: 2 hours)
+ * @returns {{sessionId: string, timestamp: number}[]}
+ */
+function getStaleMarkers(maxAgeMs = 2 * 60 * 60 * 1000) {
+  const stale = [];
+  try {
+    const tmpDir = os.tmpdir();
+    const files = fs.readdirSync(tmpDir);
+    const now = Date.now();
+    for (const f of files) {
+      if (!f.startsWith(MARKER_PREFIX)) continue;
+      const sessionId = f.slice(MARKER_PREFIX.length);
+      try {
+        const content = fs.readFileSync(path.join(tmpDir, f), 'utf8');
+        const timestamp = parseInt(content, 10);
+        if (!isNaN(timestamp) && (now - timestamp) > maxAgeMs) {
+          stale.push({ sessionId, timestamp });
+          // Clean up the stale marker
+          fs.unlinkSync(path.join(tmpDir, f));
+        }
+      } catch {
+        // Skip unreadable markers
+      }
+    }
+  } catch {
+    // tmpdir read failure — non-critical
+  }
+  return stale;
+}
+
 module.exports = {
   getServerURL,
   ProjectIDWithName,
@@ -406,4 +501,8 @@ module.exports = {
   incrementSessionSignals,
   getSessionSignals,
   clearSessionSignals,
+  diffScope,
+  createPendingMarker,
+  deletePendingMarker,
+  getStaleMarkers,
 };

@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -318,6 +319,45 @@ func DetermineScope(concepts []string) ObservationScope {
 	return ScopeProject
 }
 
+// scopePatterns maps regex patterns to scope tags for file path classification.
+var scopePatterns = []struct {
+	pattern *regexp.Regexp
+	scope   string
+}{
+	{regexp.MustCompile(`(?i)\.(tsx|jsx|vue|svelte|css|scss|less)$`), "scope:frontend"},
+	{regexp.MustCompile(`(?i)^(internal|cmd|pkg)/`), "scope:backend"},
+	{regexp.MustCompile(`(?i)(prompt|generation)`), "scope:prompts"},
+	{regexp.MustCompile(`(?i)(_test\.go|\.test\.[jt]sx?|_test\.py)$`), "scope:tests"},
+	{regexp.MustCompile(`(?i)(\.md$|^docs/)`), "scope:docs"},
+	{regexp.MustCompile(`(?i)\.(yaml|yml|toml)$`), "scope:config"},
+	{regexp.MustCompile(`(?i)(migration|migrate)`), "scope:migrations"},
+	{regexp.MustCompile(`(?i)(api|handler|route)`), "scope:api"},
+	{regexp.MustCompile(`(?i)(auth|session|jwt|oauth)`), "scope:auth"},
+}
+
+// classifyFileScopes analyzes file paths and returns matching scope tags.
+func classifyFileScopes(filePaths []string) []string {
+	if len(filePaths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var scopes []string
+	for _, fp := range filePaths {
+		if fp == "" {
+			continue
+		}
+		for _, sp := range scopePatterns {
+			if sp.pattern.MatchString(fp) {
+				if _, ok := seen[sp.scope]; !ok {
+					seen[sp.scope] = struct{}{}
+					scopes = append(scopes, sp.scope)
+				}
+			}
+		}
+	}
+	return scopes
+}
+
 // ClassifyMemoryType classifies an observation into a memory bucket.
 func ClassifyMemoryType(obs *ParsedObservation) MemoryType {
 	if obs.Type == ObsTypeGuidance {
@@ -468,6 +508,21 @@ func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, pro
 		scope = DetermineScope(parsed.Concepts)
 	}
 
+	// Auto-add diff-scope tags based on file paths (gstack-insights FR-7)
+	concepts := parsed.Concepts
+	allFiles := append(append([]string{}, parsed.FilesRead...), parsed.FilesModified...)
+	if scopeTags := classifyFileScopes(allFiles); len(scopeTags) > 0 {
+		seen := make(map[string]struct{}, len(concepts))
+		for _, c := range concepts {
+			seen[c] = struct{}{}
+		}
+		for _, tag := range scopeTags {
+			if _, exists := seen[tag]; !exists {
+				concepts = append(concepts, tag)
+			}
+		}
+	}
+
 	return &Observation{
 		SDKSessionID:    sdkSessionID,
 		Project:         project,
@@ -482,7 +537,7 @@ func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, pro
 		Facts:           parsed.Facts,
 		Rejected:        parsed.Rejected,
 		Narrative:       sql.NullString{String: parsed.Narrative, Valid: parsed.Narrative != ""},
-		Concepts:        parsed.Concepts,
+		Concepts:        concepts,
 		FilesRead:       parsed.FilesRead,
 		FilesModified:   parsed.FilesModified,
 		FileMtimes:      parsed.FileMtimes,

@@ -484,6 +484,22 @@ async function handleStop(ctx, input) {
   // Clean up signal file now that the session is complete
   lib.clearSessionSignals(ctx.SessionID);
 
+  // Record session completion timeline event (gstack-insights FR-4, fire-and-forget)
+  const project = typeof ctx.Project === 'string' ? ctx.Project : '';
+  if (project && ctx.SessionID) {
+    lib.requestPost('/api/store', {
+      action: 'create',
+      content: `Session completed on ${project}`,
+      type: 'timeline',
+      project,
+      tags: ['event:completed', `session:${ctx.SessionID}`, `outcome:${outcome || 'unknown'}`],
+      agent_source: 'claude-code',
+    }, 3000).catch(() => {});
+  }
+
+  // Delete pending marker (gstack-insights FR-8)
+  lib.deletePendingMarker(ctx.SessionID);
+
   return '';
 }
 
