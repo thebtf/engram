@@ -6,7 +6,7 @@ import { formatRelativeTime } from '@/utils/formatters'
 import EmptyState from '@/components/layout/EmptyState.vue'
 
 const router = useRouter()
-const { issues, total, loading, error, statusFilter, projectFilter, load } = useIssues()
+const { issues, total, loading, error, statusFilter, load } = useIssues()
 
 onMounted(() => {
   load()
@@ -72,6 +72,7 @@ function shortProject(project: string): string {
     <!-- Empty state -->
     <EmptyState
       v-else-if="issues.length === 0"
+      icon="fa-circle-exclamation"
       title="No issues found"
       description="Issues are created by AI agents to communicate across projects. Use the MCP 'issues' tool to create one."
     />
