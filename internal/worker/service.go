@@ -1083,6 +1083,7 @@ func (s *Service) initializeAsync() {
 
 	// Wire reasoning trace store into MCP server for System 2 memory recall.
 	mcpServer.SetReasoningStore(reasoningStore)
+	mcpServer.SetIssueStore(issueStore)
 
 	// TODO: Document embedding will be triggered on doc_create/doc_update via vectorSync.SyncDocument()
 	// when the full embedding pipeline integration is implemented.
