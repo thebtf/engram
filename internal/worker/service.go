@@ -199,6 +199,7 @@ type Service struct {
 	ready                  atomic.Bool
 	vectorSyncDropped      atomic.Int64
 	vault                  *crypto.Vault
+	issueStore             *gorm.IssueStore
 	vaultOnce              sync.Once
 	vaultErr               error
 	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
@@ -783,6 +784,9 @@ func (s *Service) initializeAsync() {
 	// Create version store for Phase 5 APO-lite observation rewrites
 	versionStore := gorm.NewVersionStore(store.GetDB())
 
+	// Create issue store for cross-project agent issues
+	issueStore := gorm.NewIssueStore(store.GetDB())
+
 	// Create reasoning trace store for System 2 memory (reasoning chains)
 	reasoningStore := gorm.NewReasoningTraceStore(store)
 	if processor != nil {
@@ -795,6 +799,7 @@ func (s *Service) initializeAsync() {
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
 	s.injectionStore = injectionStore
+	s.issueStore = issueStore
 	s.agentStatsStore = agentStatsStore
 	s.versionStore = versionStore
 	s.tokenStore = tokenStore
@@ -1078,6 +1083,7 @@ func (s *Service) initializeAsync() {
 
 	// Wire reasoning trace store into MCP server for System 2 memory recall.
 	mcpServer.SetReasoningStore(reasoningStore)
+	mcpServer.SetIssueStore(issueStore)
 
 	// TODO: Document embedding will be triggered on doc_create/doc_update via vectorSync.SyncDocument()
 	// when the full embedding pipeline integration is implemented.
@@ -1312,6 +1318,7 @@ func (s *Service) reinitializeDatabase() {
 	s.sessionStore = sessionStore
 	s.rawEventStore = rawEventStore
 	s.injectionStore = gorm.NewInjectionStore(store.GetDB())
+	s.issueStore = gorm.NewIssueStore(store.GetDB())
 	s.agentStatsStore = gorm.NewAgentStatsStore(store.GetDB())
 	s.versionStore = gorm.NewVersionStore(store.GetDB())
 	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
@@ -1921,6 +1928,13 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/context/files", s.handleFileContext)
 		r.Get("/api/context/by-file", s.handleContextByFile)
 		r.Post("/api/decisions/search", s.handleSearchDecisions)
+
+		// Issue tracking routes (agent-issues feature)
+		r.Get("/api/issues", s.handleListIssues)
+		r.Post("/api/issues", s.handleCreateIssue)
+		r.Get("/api/issues/{id}", s.handleGetIssue)
+		r.Patch("/api/issues/{id}", s.handleUpdateIssue)
+		r.Post("/api/issues/acknowledge", s.handleAcknowledgeIssues)
 
 		// Pattern routes
 		r.Get("/api/patterns", s.handleGetPatterns)

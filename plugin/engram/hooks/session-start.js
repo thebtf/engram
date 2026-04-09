@@ -108,9 +108,37 @@ async function handleSessionStart(ctx, input) {
     console.error(`[session-start] Injection strategy: ${result.strategy}`);
   }
 
+  // Fetch open issues for this project (agent-issues FR-5)
+  let issuesBlock = '';
+  if (project) {
+    try {
+      const issuesResult = await lib.requestGet(
+        `/api/issues?project=${encodeURIComponent(project)}&status=open,reopened&limit=10`
+      );
+      const issues = Array.isArray(issuesResult.issues) ? issuesResult.issues : [];
+      if (issues.length > 0) {
+        issuesBlock = lib.formatIssuesBlock(issues, project);
+        console.error(`[engram] Injecting ${issues.length} open issues for ${project}`);
+
+        // Auto-acknowledge: transition open → acknowledged (fire-and-forget, Constitution #3)
+        const openIds = issues.filter(i => i.status === 'open').map(i => i.id);
+        if (openIds.length > 0) {
+          lib.requestPost('/api/issues/acknowledge', { ids: openIds }, 3000).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.error(`[engram] Warning: issue fetch failed: ${err.message}`);
+    }
+  }
+
   // Always-inject tier: unconditional behavioral rules (FR-1, FR-6)
   const alwaysInject = Array.isArray(result.always_inject) ? result.always_inject : [];
   let contextBuilder = '';
+
+  // Issues block comes first (before behavioral rules and memory)
+  if (issuesBlock) {
+    contextBuilder += issuesBlock + '\n';
+  }
   if (alwaysInject.length > 0) {
     contextBuilder += '<user-behavior-rules>\n';
     contextBuilder += '# Behavioral Rules (Always Active)\n';

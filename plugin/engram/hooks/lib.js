@@ -487,6 +487,60 @@ function getStaleMarkers(maxAgeMs = 2 * 60 * 60 * 1000) {
   return stale;
 }
 
+// --- Issue injection formatting (agent-issues FR-5) ---
+
+const PRIORITY_ORDER = { critical: 1, high: 2, medium: 3, low: 4 };
+
+/**
+ * Format issues into an <open-issues> XML block for context injection.
+ * @param {Array} issues - Array of issue objects from /api/issues
+ * @param {string} project - Current project slug
+ * @returns {string} Formatted XML block, or empty string if no issues
+ */
+function formatIssuesBlock(issues, project) {
+  if (!issues || !Array.isArray(issues) || issues.length === 0) return '';
+
+  // Sort: priority (critical first), then newest first
+  const sorted = [...issues].sort((a, b) => {
+    const pa = PRIORITY_ORDER[a.priority] || 4;
+    const pb = PRIORITY_ORDER[b.priority] || 4;
+    if (pa !== pb) return pa - pb;
+    return new Date(b.created_at) - new Date(a.created_at);
+  });
+
+  let block = `<open-issues count="${sorted.length}" project="${project}">\n`;
+  for (const issue of sorted) {
+    const prio = (issue.priority || 'medium').toUpperCase();
+    const from = issue.source_project || 'unknown';
+    const prefix = issue.status === 'reopened' ? `reopened by: ${from}` : `from: ${from}`;
+    block += `#${issue.id} [${prio}] [${prefix}] ${issue.title}\n`;
+
+    // Show latest comment preview if available
+    if (issue.comment_count > 0 && issue.updated_at) {
+      const ago = _timeAgo(new Date(issue.updated_at));
+      block += `  └─ ${issue.comment_count} comment(s), updated ${ago}\n`;
+    }
+  }
+  block += '</open-issues>';
+  return block;
+}
+
+/**
+ * Simple time-ago formatter.
+ * @param {Date} date
+ * @returns {string}
+ */
+function _timeAgo(date) {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 module.exports = {
   getServerURL,
   ProjectIDWithName,
@@ -505,4 +559,5 @@ module.exports = {
   createPendingMarker,
   deletePendingMarker,
   getStaleMarkers,
+  formatIssuesBlock,
 };

@@ -53,6 +53,7 @@ type Server struct {
 	chunkManager           *chunking.Manager
 	graphStore             graphpkg.GraphStore
 	reasoningStore         *gorm.ReasoningTraceStore
+	issueStore             *gorm.IssueStore
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -119,6 +120,11 @@ func (s *Server) SetVersionedDocumentStore(vds *gorm.VersionedDocumentStore) {
 // SetReasoningStore sets the reasoning trace store for System 2 memory tools.
 func (s *Server) SetReasoningStore(rs *gorm.ReasoningTraceStore) {
 	s.reasoningStore = rs
+}
+
+// SetIssueStore sets the issue store for cross-project agent issue tracking.
+func (s *Server) SetIssueStore(is *gorm.IssueStore) {
+	s.issueStore = is
 }
 
 // Request represents a JSON-RPC request.
@@ -959,6 +965,27 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		},
 		{
+			Name:        "issues",
+			Description: "Create, track, and resolve cross-project issues between agents. Issues are automatically shown to agents working on the target project. Use to report bugs, request features, or leave notes for agents in other projects.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":         map[string]any{"type": "string", "enum": []string{"create", "list", "get", "update", "comment", "reopen"}, "description": "Action to perform"},
+					"title":          map[string]any{"type": "string", "description": "Issue title (required for create)"},
+					"body":           map[string]any{"type": "string", "description": "Issue body or comment text"},
+					"priority":       map[string]any{"type": "string", "enum": []string{"critical", "high", "medium", "low"}, "default": "medium"},
+					"target_project": map[string]any{"type": "string", "description": "Target project slug (defaults to current project)"},
+					"labels":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Labels (bug, feature, etc.)"},
+					"id":             map[string]any{"type": "integer", "description": "Issue ID (required for get/update/comment/reopen)"},
+					"status":         map[string]any{"type": "string", "enum": []string{"resolved"}, "description": "Set status (only 'resolved' via update)"},
+					"comment":        map[string]any{"type": "string", "description": "Comment to add with status change or reopen"},
+					"project":        map[string]any{"type": "string", "description": "Filter by project (for list action)"},
+				},
+			},
+		},
+		{
 			Name:        "check_system_health",
 			Description: "Comprehensive system health check. Returns status of all subsystems (database, vectors, cache, search) with actionable diagnostics.",
 			tier:        tierCore,
@@ -1586,6 +1613,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleExplainSearchRanking(ctx, args)
 	case "export_observations":
 		return s.handleExportObservations(ctx, args)
+	case "issues":
+		return s.handleIssues(ctx, args)
 	case "check_system_health":
 		return s.handleCheckSystemHealth(ctx)
 	case "analyze_search_patterns":

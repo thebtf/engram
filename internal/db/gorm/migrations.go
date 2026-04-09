@@ -2095,6 +2095,54 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 				return tx.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS agent_source`).Error
 			},
 		},
+		{
+			ID: "070_agent_issues",
+			Migrate: func(tx *gorm.DB) error {
+				// Create issues table
+				if err := tx.Exec(`CREATE TABLE IF NOT EXISTS issues (
+					id BIGSERIAL PRIMARY KEY,
+					title TEXT NOT NULL,
+					body TEXT,
+					status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'acknowledged', 'resolved', 'reopened')),
+					priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('critical', 'high', 'medium', 'low')),
+					source_project TEXT NOT NULL,
+					target_project TEXT NOT NULL,
+					source_agent TEXT,
+					created_by_session TEXT,
+					labels JSONB DEFAULT '[]',
+					acknowledged_at TIMESTAMPTZ,
+					resolved_at TIMESTAMPTZ,
+					reopened_at TIMESTAMPTZ,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`).Error; err != nil {
+					return err
+				}
+				// Indexes for issues
+				if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_issues_target_status ON issues (target_project, status)`).Error; err != nil {
+					return err
+				}
+				if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_issues_source_project ON issues (source_project)`).Error; err != nil {
+					return err
+				}
+				// Create issue_comments table
+				if err := tx.Exec(`CREATE TABLE IF NOT EXISTS issue_comments (
+					id BIGSERIAL PRIMARY KEY,
+					issue_id BIGINT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+					author_project TEXT NOT NULL,
+					author_agent TEXT,
+					body TEXT NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				)`).Error; err != nil {
+					return err
+				}
+				return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_issue_comments_issue_created ON issue_comments (issue_id, created_at)`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				tx.Exec(`DROP TABLE IF EXISTS issue_comments`)
+				return tx.Exec(`DROP TABLE IF EXISTS issues`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

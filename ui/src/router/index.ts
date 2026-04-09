@@ -49,6 +49,16 @@ const routes = [
     component: () => import('@/views/PatternsView.vue'),
   },
   {
+    path: '/issues',
+    name: 'issues',
+    component: () => import('@/views/IssuesView.vue'),
+  },
+  {
+    path: '/issues/:id',
+    name: 'issue-detail',
+    component: () => import('@/views/IssueDetailView.vue'),
+  },
+  {
     path: '/sessions',
     name: 'sessions',
     component: () => import('@/views/SessionsView.vue'),
