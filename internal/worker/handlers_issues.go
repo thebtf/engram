@@ -147,8 +147,10 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Status  string `json:"status"`
-		Comment string `json:"comment"`
+		Status        string `json:"status"`
+		Comment       string `json:"comment"`
+		SourceProject string `json:"source_project"`
+		SourceAgent   string `json:"source_agent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid JSON body"}`, http.StatusBadRequest)
@@ -171,11 +173,9 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Comment != "" {
-		sourceProject := r.URL.Query().Get("source_project")
-		sourceAgent := r.URL.Query().Get("source_agent")
 		_, err := s.issueStore.AddComment(r.Context(), id, &gormdb.IssueComment{
-			AuthorProject: sourceProject,
-			AuthorAgent:   sourceAgent,
+			AuthorProject: req.SourceProject,
+			AuthorAgent:   req.SourceAgent,
 			Body:          req.Comment,
 		})
 		if err != nil {
@@ -219,11 +219,11 @@ func formatIssuesForInjection(issues []gormdb.IssueWithCount, project string) st
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<open-issues count=\"%d\" project=\"%s\">\n", len(issues), project))
+	sb.WriteString(fmt.Sprintf("<open-issues count=\"%d\" project=\"%s\">\n", len(issues), escapeXML(project)))
 
 	for _, issue := range issues {
 		priority := strings.ToUpper(issue.Priority)
-		sb.WriteString(fmt.Sprintf("#%d [%s] [from: %s] %s\n", issue.ID, priority, issue.SourceProject, issue.Title))
+		sb.WriteString(fmt.Sprintf("#%d [%s] [from: %s] %s\n", issue.ID, priority, escapeXML(issue.SourceProject), escapeXML(issue.Title)))
 
 		if issue.CommentCount > 0 {
 			// Fetch latest comment preview — simplified: just show count
@@ -234,6 +234,15 @@ func formatIssuesForInjection(issues []gormdb.IssueWithCount, project string) st
 
 	sb.WriteString("</open-issues>")
 	return sb.String()
+}
+
+// escapeXML escapes special characters for safe inclusion in XML-like injection blocks.
+func escapeXML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	return s
 }
 
 // formatDuration returns a human-readable duration string.

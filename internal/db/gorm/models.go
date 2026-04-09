@@ -433,7 +433,7 @@ type Issue struct {
 	TargetProject    string         `gorm:"type:text;not null;index:idx_issues_target_status,priority:1"`
 	SourceAgent      string         `gorm:"type:text"`
 	CreatedBySession string         `gorm:"type:text"`
-	Labels           pq.StringArray `gorm:"type:jsonb;default:'[]'"`
+	Labels           models.JSONStringArray `gorm:"type:jsonb;default:'[]'"`
 	AcknowledgedAt   *time.Time     `gorm:"type:timestamptz"`
 	ResolvedAt       *time.Time     `gorm:"type:timestamptz"`
 	ReopenedAt       *time.Time     `gorm:"type:timestamptz"`

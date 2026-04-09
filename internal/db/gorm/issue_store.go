@@ -47,6 +47,16 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 		created.Priority = "medium"
 	}
 
+	// Validate status and priority before INSERT (avoid cryptic CHECK constraint errors)
+	validStatuses := map[string]bool{"open": true, "acknowledged": true, "resolved": true, "reopened": true}
+	if !validStatuses[created.Status] {
+		return 0, fmt.Errorf("invalid status %q: must be one of open, acknowledged, resolved, reopened", created.Status)
+	}
+	validPriorities := map[string]bool{"critical": true, "high": true, "medium": true, "low": true}
+	if !validPriorities[created.Priority] {
+		return 0, fmt.Errorf("invalid priority %q: must be one of critical, high, medium, low", created.Priority)
+	}
+
 	if err := s.db.WithContext(ctx).Create(&created).Error; err != nil {
 		return 0, fmt.Errorf("create issue: %w", err)
 	}
@@ -148,6 +158,14 @@ func (s *IssueStore) AddComment(ctx context.Context, issueID int64, comment *Iss
 	}
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Verify issue exists before inserting comment (prevents orphan rows)
+		var count int64
+		if err := tx.Model(&Issue{}).Where("id = ?", issueID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return fmt.Errorf("issue %d not found", issueID)
+		}
 		if err := tx.Create(&created).Error; err != nil {
 			return err
 		}
@@ -199,14 +217,18 @@ func (s *IssueStore) ReopenIssue(ctx context.Context, id int64, comment, authorP
 			return fmt.Errorf("issue %d is %s, not resolved — cannot reopen", id, issue.Status)
 		}
 
-		// Transition to reopened
+		// Transition to reopened — include status check in WHERE to prevent race condition
 		now := time.Now()
-		if err := tx.Model(&Issue{}).Where("id = ?", id).Updates(map[string]interface{}{
+		result := tx.Model(&Issue{}).Where("id = ? AND status = ?", id, "resolved").Updates(map[string]interface{}{
 			"status":      "reopened",
 			"reopened_at": now,
 			"updated_at":  now,
-		}).Error; err != nil {
-			return err
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("issue %d is no longer resolved (concurrent modification)", id)
 		}
 
 		// Add reopen comment if provided

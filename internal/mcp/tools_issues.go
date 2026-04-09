@@ -85,9 +85,12 @@ func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string,
 	statusParam := coerceString(m["status"], "open,reopened")
 	limit := coerceInt(m["limit"], 20)
 
-	statuses := strings.Split(statusParam, ",")
-	for i := range statuses {
-		statuses[i] = strings.TrimSpace(statuses[i])
+	var statuses []string
+	for _, s := range strings.Split(statusParam, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			statuses = append(statuses, s)
+		}
 	}
 
 	issues, total, err := s.issueStore.ListIssues(ctx, project, statuses, limit, 0)
