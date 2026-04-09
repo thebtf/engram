@@ -2067,7 +2067,9 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 					return err
 				}
 				// Expand type CHECK to include pitfall, operational, timeline.
-				tx.Exec(`ALTER TABLE observations DROP CONSTRAINT IF EXISTS chk_observations_type`)
+				if err := tx.Exec(`ALTER TABLE observations DROP CONSTRAINT IF EXISTS chk_observations_type`).Error; err != nil {
+					return err
+				}
 				if err := tx.Exec(`ALTER TABLE observations ADD CONSTRAINT chk_observations_type CHECK (type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change', 'guidance', 'credential', 'entity', 'wiki', 'pitfall', 'operational', 'timeline'))`).Error; err != nil {
 					return err
 				}

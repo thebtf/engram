@@ -64,7 +64,7 @@ var TypeBaseScores = map[ObservationType]float64{
 	ObsTypeTimeline:    0.1, // Timeline events are structural metadata, not knowledge
 }
 
-// DefaultSourceHalfLives returns the default half-life in days for each source type.
+// DefaultSourceHalfLives contains the default half-life in days for each source type.
 // Used by the scoring calculator for source-aware importance decay.
 var DefaultSourceHalfLives = map[SourceType]float64{
 	SourceManual:         30.0, // Explicit user knowledge decays slowly

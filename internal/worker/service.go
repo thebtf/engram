@@ -864,6 +864,18 @@ func (s *Service) initializeAsync() {
 	// Initialize importance scoring system
 	scoringConfig := models.DefaultScoringConfig()
 
+	// Apply per-source half-life overrides from config (gstack-insights FR-2)
+	scoringConfig.SourceHalfLives[models.SourceManual] = s.config.HalfLifeManual
+	scoringConfig.SourceHalfLives[models.SourceUnknown] = s.config.HalfLifeSDK
+	scoringConfig.SourceHalfLives[models.SourceBackfill] = s.config.HalfLifeSDK
+	scoringConfig.SourceHalfLives[models.SourceTodoWrite] = s.config.HalfLifeSDK
+	scoringConfig.SourceHalfLives[models.SourceLLMDerived] = s.config.HalfLifeLLM
+	scoringConfig.SourceHalfLives[models.SourceCrossModel] = s.config.HalfLifeCrossModel
+	scoringConfig.SourceHalfLives[models.SourceToolVerified] = s.config.HalfLifeAlgorithm * 1.5 // 21d = 14 * 1.5
+	scoringConfig.SourceHalfLives[models.SourceToolRead] = s.config.HalfLifeAlgorithm           // 14d
+	scoringConfig.SourceHalfLives[models.SourceWebFetch] = s.config.HalfLifeAlgorithm            // 14d
+	scoringConfig.SourceHalfLives[models.SourceInstinctImport] = s.config.HalfLifeManual         // 30d
+
 	// Load concept weights from database if available
 	if weights, err := observationStore.GetConceptWeights(s.ctx); err == nil && len(weights) > 0 {
 		scoringConfig.ConceptWeights = weights
