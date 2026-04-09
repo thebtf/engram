@@ -609,13 +609,16 @@ func TestTypeBaseScore_UnknownType(t *testing.T) {
 
 func TestTypeBaseScore_AllKnownTypes(t *testing.T) {
 	expected := map[models.ObservationType]float64{
-		models.ObsTypeBugfix:    1.3,
-		models.ObsTypeFeature:   1.2,
-		models.ObsTypeDiscovery: 1.1,
-		models.ObsTypeDecision:  1.1,
-		models.ObsTypeRefactor:  1.0,
-		models.ObsTypeChange:    0.9,
-		models.ObsTypeGuidance:  1.4,
+		models.ObsTypeBugfix:      1.3,
+		models.ObsTypeFeature:     1.2,
+		models.ObsTypeDiscovery:   1.1,
+		models.ObsTypeDecision:    1.1,
+		models.ObsTypeRefactor:    1.0,
+		models.ObsTypeChange:      0.9,
+		models.ObsTypeGuidance:    1.4,
+		models.ObsTypePitfall:     1.3,
+		models.ObsTypeOperational: 1.0,
+		models.ObsTypeTimeline:    0.1,
 	}
 
 	for obsType, expectedScore := range expected {
@@ -624,6 +627,49 @@ func TestTypeBaseScore_AllKnownTypes(t *testing.T) {
 			assert.Equal(t, expectedScore, score)
 		})
 	}
+}
+
+func TestCalculator_SourceAwareDecay(t *testing.T) {
+	calc := NewCalculator(nil) // Uses DefaultScoringConfig with SourceHalfLives
+	now := time.Now()
+	age14d := now.Add(-14 * 24 * time.Hour).UnixMilli()
+
+	// Same age, same type, different source → different scores
+	manualObs := &models.Observation{
+		ID: 1, Type: models.ObsTypeRefactor, SourceType: models.SourceManual,
+		CreatedAtEpoch: age14d, UtilityScore: 0.5,
+	}
+	sdkObs := &models.Observation{
+		ID: 2, Type: models.ObsTypeRefactor, SourceType: models.SourceUnknown,
+		CreatedAtEpoch: age14d, UtilityScore: 0.5,
+	}
+	llmObs := &models.Observation{
+		ID: 3, Type: models.ObsTypeRefactor, SourceType: models.SourceLLMDerived,
+		CreatedAtEpoch: age14d, UtilityScore: 0.5,
+	}
+	crossModelObs := &models.Observation{
+		ID: 4, Type: models.ObsTypeRefactor, SourceType: models.SourceCrossModel,
+		CreatedAtEpoch: age14d, UtilityScore: 0.5,
+	}
+
+	manualScore := calc.Calculate(manualObs, now)
+	sdkScore := calc.Calculate(sdkObs, now)
+	llmScore := calc.Calculate(llmObs, now)
+	crossModelScore := calc.Calculate(crossModelObs, now)
+
+	// manual (30d half-life) should decay slower than sdk (7d half-life) at 14 days
+	assert.Greater(t, manualScore, sdkScore, "manual should score higher than sdk at 14 days")
+
+	// llm (90d half-life) should decay slowest
+	assert.Greater(t, llmScore, manualScore, "llm should score higher than manual at 14 days")
+
+	// cross_model (60d half-life) should be between llm and manual
+	assert.Greater(t, crossModelScore, manualScore, "cross_model should score higher than manual")
+	assert.Less(t, crossModelScore, llmScore, "cross_model should score lower than llm")
+
+	// sdk at 14 days with 7d half-life = 2 half-lives = 0.25 recency
+	sdkComponents := calc.CalculateComponents(sdkObs, now)
+	assert.InDelta(t, 0.25, sdkComponents.RecencyDecay, 0.01, "sdk should be at ~0.25 after 2 half-lives")
 }
 
 func TestCalculator_RetrievalBoostDiminishingReturns(t *testing.T) {
