@@ -496,6 +496,30 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
+	// Task 23: Hit rate analytics (gstack-insights FR-5)
+	// Identifies noise (10+ injections, 0 citations) and star (5+ injections, >50% citation)
+	// observations. Recalculates each cycle; requires 50+ injection_log entries.
+	{
+		modified, err := s.analyzeHitRate(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("Hit rate analysis failed")
+		} else if modified > 0 {
+			s.log.Info().Int("modified", modified).Msg("Hit rate analysis adjusted observation scores")
+		}
+	}
+
+	// Task 24: File staleness detection (gstack-insights FR-9)
+	// Checks if observations' referenced files were modified by newer observations.
+	// >50% stale files → 0.7x importance penalty.
+	{
+		stale, err := s.checkFileStaleness(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("File staleness detection failed")
+		} else if stale > 0 {
+			s.log.Info().Int("stale", stale).Msg("File staleness detection marked observations")
+		}
+	}
+
 	// Update metrics
 	s.mu.Lock()
 	s.lastRunTime = time.Now()
