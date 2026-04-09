@@ -924,3 +924,66 @@ export async function updateObservationTags(
 ): Promise<{ concepts: string[] }> {
   return postJson<{ concepts: string[] }>(`${API_BASE}/observations/${id}/tags`, { action, tags: [tag] }, { signal })
 }
+
+// --- Issues API (agent-issues feature) ---
+
+export interface Issue {
+  id: number
+  title: string
+  body: string
+  status: 'open' | 'acknowledged' | 'resolved' | 'reopened'
+  priority: 'critical' | 'high' | 'medium' | 'low'
+  source_project: string
+  target_project: string
+  source_agent: string
+  labels: string[]
+  comment_count?: number
+  acknowledged_at: string | null
+  resolved_at: string | null
+  reopened_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface IssueComment {
+  id: number
+  issue_id: number
+  author_project: string
+  author_agent: string
+  body: string
+  created_at: string
+}
+
+export interface IssueListResponse {
+  issues: Issue[]
+  total: number
+}
+
+export interface IssueDetailResponse {
+  issue: Issue
+  comments: IssueComment[]
+  comment_count: number
+}
+
+export async function fetchIssues(
+  project?: string,
+  status?: string,
+  limit?: number,
+  offset?: number,
+  signal?: AbortSignal
+): Promise<IssueListResponse> {
+  const params = new URLSearchParams()
+  if (project) params.set('project', project)
+  if (status) params.set('status', status)
+  if (limit) params.set('limit', String(limit))
+  if (offset) params.set('offset', String(offset))
+  return fetchWithRetry<IssueListResponse>(`${API_BASE}/issues?${params}`, { signal })
+}
+
+export async function fetchIssue(id: number, signal?: AbortSignal): Promise<IssueDetailResponse> {
+  return fetchWithRetry<IssueDetailResponse>(`${API_BASE}/issues/${id}`, { signal })
+}
+
+export async function acknowledgeIssues(ids: number[], signal?: AbortSignal): Promise<{ acknowledged: number }> {
+  return postJson<{ acknowledged: number }>(`${API_BASE}/issues/acknowledge`, { ids }, { signal })
+}
