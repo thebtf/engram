@@ -18,6 +18,8 @@ function statusColor(status: string): string {
     case 'acknowledged': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
     case 'resolved': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
     case 'reopened': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+    case 'closed': return 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
+    case 'rejected': return 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500 line-through'
     default: return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
   }
 }
@@ -49,7 +51,7 @@ function shortProject(project: string): string {
     <!-- Filters -->
     <div class="flex gap-2 flex-wrap">
       <button
-        v-for="s in ['open,reopened', 'open', 'acknowledged', 'resolved', 'reopened', '']"
+        v-for="s in ['open,reopened', 'open', 'acknowledged', 'resolved', 'reopened', 'closed', 'rejected', '']"
         :key="s"
         @click="statusFilter = s"
         :class="[
@@ -83,7 +85,12 @@ function shortProject(project: string): string {
         v-for="issue in issues"
         :key="issue.id"
         @click="router.push(`/issues/${issue.id}`)"
-        class="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600 cursor-pointer transition-colors"
+        :class="[
+          'p-4 rounded-lg border cursor-pointer transition-colors',
+          issue.status === 'closed' || issue.status === 'rejected'
+            ? 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800 opacity-60'
+            : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600'
+        ]"
       >
         <div class="flex items-start justify-between">
           <div class="flex-1 min-w-0">

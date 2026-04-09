@@ -515,6 +515,36 @@ async function deleteJson<T>(url: string, options: FetchOptions = {}): Promise<T
   }
 }
 
+async function patchJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
+  const { timeout = DEFAULT_TIMEOUT, signal } = options
+  const timeoutController = new AbortController()
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+  const combinedSignal = signal
+    ? combineAbortSignals(signal, timeoutController.signal)
+    : timeoutController.signal
+
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: combinedSignal,
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+    return response.json()
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      if (signal?.aborted) throw err
+      throw new Error('Request timed out')
+    }
+    throw err
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 // ============================================================
 // Vault API
 // ============================================================
@@ -931,7 +961,7 @@ export interface Issue {
   id: number
   title: string
   body: string
-  status: 'open' | 'acknowledged' | 'resolved' | 'reopened'
+  status: 'open' | 'acknowledged' | 'resolved' | 'reopened' | 'closed' | 'rejected'
   priority: 'critical' | 'high' | 'medium' | 'low'
   source_project: string
   target_project: string
@@ -941,6 +971,7 @@ export interface Issue {
   acknowledged_at: string | null
   resolved_at: string | null
   reopened_at: string | null
+  closed_at: string | null
   created_at: string
   updated_at: string
 }
@@ -986,4 +1017,25 @@ export async function fetchIssue(id: number, signal?: AbortSignal): Promise<Issu
 
 export async function acknowledgeIssues(ids: number[], signal?: AbortSignal): Promise<{ acknowledged: number }> {
   return postJson<{ acknowledged: number }>(`${API_BASE}/issues/acknowledge`, { ids }, { signal })
+}
+
+export async function deleteIssue(id: number, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/issues/${id}`, { signal })
+}
+
+export async function updateIssue(
+  id: number,
+  fields: {
+    status?: string
+    comment?: string
+    source_project?: string
+    source_agent?: string
+    title?: string
+    body?: string
+    priority?: string
+    labels?: string[]
+  },
+  signal?: AbortSignal
+): Promise<{ message: string }> {
+  return patchJson<{ message: string }>(`${API_BASE}/issues/${id}`, fields, { signal })
 }
