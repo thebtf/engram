@@ -87,8 +87,16 @@ func (s *Service) checkFileStaleness(ctx context.Context) (int, error) {
 
 		// If >50% of referenced files were modified by newer observations → stale
 		if float64(staleFileCount)/float64(len(allFiles)) > 0.5 {
-			if err := appendConceptAndScale(db, obs.ID, "stale_files", 0.7); err != nil {
-				log.Warn().Err(err).Int64("obs_id", obs.ID).Msg("Failed to mark stale")
+			conceptJSON := `["stale_files"]`
+			result := db.Exec(
+				`UPDATE observations
+				 SET concepts = COALESCE(concepts, '[]'::jsonb) || ?::jsonb,
+				     importance_score = importance_score * ?
+				 WHERE id = ?`,
+				conceptJSON, 0.7, obs.ID,
+			)
+			if result.Error != nil {
+				log.Warn().Err(result.Error).Int64("obs_id", obs.ID).Msg("Failed to mark stale")
 				continue
 			}
 			staleCount++

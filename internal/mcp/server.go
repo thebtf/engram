@@ -382,7 +382,7 @@ func (s *Server) primaryTools() []Tool {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":         map[string]any{"type": "string", "enum": []string{"search", "preset", "by_file", "by_concept", "by_type", "similar", "timeline", "related", "patterns", "get", "sessions", "explain", "reasoning"}, "default": "search", "description": "Action to perform"},
+					"action":         map[string]any{"type": "string", "enum": []string{"search", "preset", "by_file", "by_concept", "by_type", "similar", "timeline", "related", "patterns", "get", "sessions", "explain", "reasoning", "hit_rate"}, "default": "search", "description": "Action to perform"},
 					"query":          map[string]any{"type": "string", "description": "Search query (for search, preset, similar, timeline:query, sessions, explain)"},
 					"preset":         map[string]any{"type": "string", "enum": []string{"decisions", "changes", "how_it_works"}, "description": "Search preset (for action=preset)"},
 					"files":          map[string]any{"type": "string", "description": "File paths (for action=by_file)"},

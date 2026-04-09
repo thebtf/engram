@@ -24,9 +24,26 @@ const (
 
 // Result holds the dedup check outcome.
 type Result struct {
-	Action     Action
-	ExistingID int64   // ID of the matched observation (0 if ADD)
-	Similarity float64 // Cosine similarity of the best match (0 if ADD)
+	Action          Action
+	ExistingID      int64   // ID of the matched observation (0 if ADD)
+	Similarity      float64 // Cosine similarity of the best match (0 if ADD)
+	CrossModelBoost bool    // True when UPDATE with different agent_sources → promote to cross_model
+}
+
+// CheckCrossModelPromotion determines if a dedup UPDATE result qualifies for
+// cross-model promotion. Both agent_sources must be known (non-"unknown") and
+// different from each other.
+func CheckCrossModelPromotion(result *Result, newAgentSource, existingAgentSource string) bool {
+	if result == nil || result.Action != ActionUpdate {
+		return false
+	}
+	if newAgentSource == "" || newAgentSource == "unknown" {
+		return false
+	}
+	if existingAgentSource == "" || existingAgentSource == "unknown" {
+		return false
+	}
+	return newAgentSource != existingAgentSource
 }
 
 // DefaultNoopThreshold is the cosine similarity above which observations are considered

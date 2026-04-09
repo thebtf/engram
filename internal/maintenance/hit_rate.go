@@ -2,176 +2,166 @@ package maintenance
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 
 	"gorm.io/gorm"
 )
 
-// analyzeHitRate examines injection_log to identify noise (frequently injected,
-// never cited) and star (frequently injected, often cited) observations.
-// Recalculates flags each cycle — previous noise_candidate/high_value flags are
-// cleared before recomputation so observations that become useful lose the penalty.
-func (s *Service) analyzeHitRate(ctx context.Context) (int, error) {
-	db := s.store.GetDB().WithContext(ctx)
-	log := s.log.With().Str("task", "hit_rate").Logger()
+const (
+	minHitRateSampleSize       int64   = 50
+	minNoiseCandidateHits      int64   = 10
+	minHighValueCandidateHits  int64   = 5
+	noiseCandidateMultiplier   float64 = 0.5
+	highValueCandidateBoost    float64 = 1.2
+	noiseCandidateConcept              = "noise_candidate"
+	highValueConcept                   = "high_value"
+)
 
-	// Guard: need statistical significance
-	var totalEntries int64
-	if err := db.Raw(`SELECT COUNT(*) FROM injection_log`).Scan(&totalEntries).Error; err != nil {
-		return 0, err
+type hitRateCandidateRow struct {
+	ObservationID int64 `gorm:"column:observation_id"`
+	Injections    int64 `gorm:"column:injections"`
+	Citations     int64 `gorm:"column:citations"`
+}
+
+func (s *Service) analyzeHitRate(ctx context.Context) (int, error) {
+	if s == nil {
+		return 0, fmt.Errorf("service is required")
 	}
-	if totalEntries < 50 {
-		log.Debug().Int64("entries", totalEntries).Msg("Skipping hit rate analysis: insufficient data")
+	if s.store == nil {
+		return 0, fmt.Errorf("store is required")
+	}
+	if ctx == nil {
+		return 0, fmt.Errorf("context is required")
+	}
+
+	db := s.store.GetDB()
+	totalLogs, err := countInjectionLogEntries(ctx, db)
+	if err != nil {
+		return 0, fmt.Errorf("count injection_log entries: %w", err)
+	}
+	if totalLogs < minHitRateSampleSize {
+		s.log.Debug().Int64("injection_logs", totalLogs).Msg("Skipping hit rate analysis due to insufficient injection samples")
 		return 0, nil
 	}
 
-	// Step 1: Clear previous flags from all observations that have them.
-	// Remove 'noise_candidate' and 'high_value' from concepts JSONB arrays,
-	// then reset their importance multiplier (undo 0.5x noise / 1.2x star).
-	if err := clearHitRateFlag(db, "noise_candidate", 1.0/0.5); err != nil {
-		log.Warn().Err(err).Msg("Failed to clear noise_candidate flags")
-	}
-	if err := clearHitRateFlag(db, "high_value", 1.0/1.2); err != nil {
-		log.Warn().Err(err).Msg("Failed to clear high_value flags")
-	}
-
-	// Step 2: Find noise candidates (10+ injections, 0 citations)
-	type hitRateRow struct {
-		ObservationID int64 `gorm:"column:observation_id"`
-		Injections    int64 `gorm:"column:injections"`
-		Citations     int64 `gorm:"column:citations"`
-	}
-
-	var noiseRows []hitRateRow
-	if err := db.Raw(`
-		SELECT observation_id, COUNT(*) as injections,
-			SUM(CASE WHEN cited THEN 1 ELSE 0 END) as citations
-		FROM injection_log
-		GROUP BY observation_id
-		HAVING COUNT(*) >= 10 AND SUM(CASE WHEN cited THEN 1 ELSE 0 END) = 0
-	`).Scan(&noiseRows).Error; err != nil {
-		return 0, err
-	}
-
-	noiseCount := 0
-	for _, row := range noiseRows {
-		if err := appendConceptAndScale(db, row.ObservationID, "noise_candidate", 0.5); err != nil {
-			log.Warn().Err(err).Int64("obs_id", row.ObservationID).Msg("Failed to flag noise candidate")
-			continue
-		}
-		noiseCount++
-	}
-
-	// Step 3: Find star candidates (5+ injections, >50% citation rate)
-	var starRows []hitRateRow
-	if err := db.Raw(`
-		SELECT observation_id, COUNT(*) as injections,
-			SUM(CASE WHEN cited THEN 1 ELSE 0 END) as citations
-		FROM injection_log
-		GROUP BY observation_id
-		HAVING COUNT(*) >= 5 AND SUM(CASE WHEN cited THEN 1 ELSE 0 END)::float / COUNT(*) > 0.5
-	`).Scan(&starRows).Error; err != nil {
-		return 0, err
-	}
-
-	starCount := 0
-	for _, row := range starRows {
-		if err := appendConceptAndScale(db, row.ObservationID, "high_value", 1.2); err != nil {
-			log.Warn().Err(err).Int64("obs_id", row.ObservationID).Msg("Failed to flag star")
-			continue
-		}
-		starCount++
-	}
-
-	total := noiseCount + starCount
-	if total > 0 {
-		log.Info().
-			Int("noise", noiseCount).
-			Int("stars", starCount).
-			Msg("Hit rate analysis complete")
-	}
-
-	return total, nil
-}
-
-// clearHitRateFlag removes a specific concept tag from all observations that have it,
-// and reverses the importance multiplier that was applied when the flag was set.
-func clearHitRateFlag(db *gorm.DB, flag string, reverseMultiplier float64) error {
-	// Find observations with this flag in concepts
-	var obsIDs []int64
-	if err := db.Raw(`
-		SELECT id FROM observations
-		WHERE concepts::text LIKE ?
-		AND status = 'active'
-	`, "%"+flag+"%").Scan(&obsIDs).Error; err != nil {
-		return err
-	}
-
-	if len(obsIDs) == 0 {
-		return nil
-	}
-
-	// Remove the flag from concepts and reverse the multiplier
-	for _, id := range obsIDs {
-		// Read current concepts
-		var conceptsJSON string
-		if err := db.Raw(`SELECT COALESCE(concepts::text, '[]') FROM observations WHERE id = ?`, id).Scan(&conceptsJSON).Error; err != nil {
-			continue
-		}
-
-		var concepts []string
-		if err := json.Unmarshal([]byte(conceptsJSON), &concepts); err != nil {
-			continue
-		}
-
-		// Filter out the flag
-		filtered := make([]string, 0, len(concepts))
-		for _, c := range concepts {
-			if c != flag {
-				filtered = append(filtered, c)
-			}
-		}
-
-		filteredJSON, err := json.Marshal(filtered)
-		if err != nil {
-			continue
-		}
-
-		// Update concepts and reverse importance multiplier
-		db.Exec(`UPDATE observations SET concepts = ?, importance_score = importance_score * ? WHERE id = ?`,
-			string(filteredJSON), reverseMultiplier, id)
-	}
-
-	return nil
-}
-
-// appendConceptAndScale adds a concept tag to an observation's concepts array
-// and multiplies its importance_score by the given multiplier.
-func appendConceptAndScale(db *gorm.DB, obsID int64, concept string, multiplier float64) error {
-	// Read current concepts
-	var conceptsJSON string
-	if err := db.Raw(`SELECT COALESCE(concepts::text, '[]') FROM observations WHERE id = ?`, obsID).Scan(&conceptsJSON).Error; err != nil {
-		return err
-	}
-
-	var concepts []string
-	if err := json.Unmarshal([]byte(conceptsJSON), &concepts); err != nil {
-		concepts = []string{}
-	}
-
-	// Check if already present
-	for _, c := range concepts {
-		if c == concept {
-			return nil // Already flagged
-		}
-	}
-
-	concepts = append(concepts, concept)
-	updated, err := json.Marshal(concepts)
+	clearedRows, err := clearHitRateFlags(ctx, db)
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("clear hit rate flags: %w", err)
 	}
 
-	return db.Exec(`UPDATE observations SET concepts = ?, importance_score = importance_score * ? WHERE id = ?`,
-		string(updated), multiplier, obsID).Error
+	noiseCandidates, err := queryNoiseCandidates(ctx, db)
+	if err != nil {
+		return 0, fmt.Errorf("query noise candidates: %w", err)
+	}
+	noiseUpdates, err := applyHitRateCandidates(ctx, db, noiseCandidates, noiseCandidateConcept, noiseCandidateMultiplier)
+	if err != nil {
+		return 0, fmt.Errorf("apply noise candidate updates: %w", err)
+	}
+
+	highValueCandidates, err := queryHighValueCandidates(ctx, db)
+	if err != nil {
+		return 0, fmt.Errorf("query high-value candidates: %w", err)
+	}
+	highValueUpdates, err := applyHitRateCandidates(ctx, db, highValueCandidates, highValueConcept, highValueCandidateBoost)
+	if err != nil {
+		return 0, fmt.Errorf("apply high-value candidate updates: %w", err)
+	}
+
+	totalModified := noiseUpdates + highValueUpdates
+	s.log.Info().
+		Int64("injection_logs", totalLogs).
+		Int64("cleared_flags", clearedRows).
+		Int("noise_candidates", len(noiseCandidates)).
+		Int("high_value_candidates", len(highValueCandidates)).
+		Int("modified_observations", totalModified).
+		Msg("Hit rate analysis completed")
+
+	return totalModified, nil
+}
+
+func countInjectionLogEntries(ctx context.Context, db *gorm.DB) (int64, error) {
+	var totalLogs int64
+	if err := db.WithContext(ctx).Table("injection_log").Count(&totalLogs).Error; err != nil {
+		return 0, err
+	}
+	return totalLogs, nil
+}
+
+func clearHitRateFlags(ctx context.Context, db *gorm.DB) (int64, error) {
+	result := db.WithContext(ctx).Exec(
+		`UPDATE observations
+		 SET concepts = COALESCE(
+			 (
+				SELECT jsonb_agg(concept)
+				FROM jsonb_array_elements_text(COALESCE(concepts, '[]'::jsonb)) AS concept
+				WHERE concept <> ? AND concept <> ?
+			 ),
+			 '[]'::jsonb
+		 )
+		 WHERE COALESCE(concepts, '[]'::jsonb) @> ?::jsonb
+		    OR COALESCE(concepts, '[]'::jsonb) @> ?::jsonb`,
+		noiseCandidateConcept,
+		highValueConcept,
+		`["noise_candidate"]`,
+		`["high_value"]`,
+	)
+	return result.RowsAffected, result.Error
+}
+
+func queryNoiseCandidates(ctx context.Context, db *gorm.DB) ([]hitRateCandidateRow, error) {
+	var candidates []hitRateCandidateRow
+	err := db.WithContext(ctx).Raw(
+		`SELECT observation_id, COUNT(*) AS injections, SUM(CASE WHEN cited THEN 1 ELSE 0 END) AS citations
+		 FROM injection_log
+		 GROUP BY observation_id
+		 HAVING COUNT(*) >= ? AND SUM(CASE WHEN cited THEN 1 ELSE 0 END) = 0`,
+		minNoiseCandidateHits,
+	).Scan(&candidates).Error
+	if err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func queryHighValueCandidates(ctx context.Context, db *gorm.DB) ([]hitRateCandidateRow, error) {
+	var candidates []hitRateCandidateRow
+	err := db.WithContext(ctx).Raw(
+		`SELECT observation_id, COUNT(*) AS injections, SUM(CASE WHEN cited THEN 1 ELSE 0 END) AS citations
+		 FROM injection_log
+		 GROUP BY observation_id
+		 HAVING COUNT(*) >= ?
+		    AND SUM(CASE WHEN cited THEN 1 ELSE 0 END)::float / COUNT(*) > ?`,
+		minHighValueCandidateHits,
+		0.5,
+	).Scan(&candidates).Error
+	if err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func applyHitRateCandidates(ctx context.Context, db *gorm.DB, candidates []hitRateCandidateRow, concept string, multiplier float64) (int, error) {
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	conceptJSON := fmt.Sprintf("[\"%s\"]", concept)
+	modifiedCount := 0
+	for _, candidate := range candidates {
+		result := db.WithContext(ctx).Exec(
+			`UPDATE observations
+			 SET concepts = COALESCE(concepts, '[]'::jsonb) || ?::jsonb,
+			     importance_score = importance_score * ?
+			 WHERE id = ?`,
+			conceptJSON,
+			multiplier,
+			candidate.ObservationID,
+		)
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		modifiedCount += int(result.RowsAffected)
+	}
+
+	return modifiedCount, nil
 }
