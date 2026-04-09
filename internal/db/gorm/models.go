@@ -424,33 +424,33 @@ func (r *ReasoningTrace) BeforeCreate(tx *gorm.DB) error {
 // Issue represents a cross-project issue filed by an agent.
 // Lifecycle: open → acknowledged → resolved ⟲ reopened
 type Issue struct {
-	ID               int64          `gorm:"primaryKey;autoIncrement"`
-	Title            string         `gorm:"type:text;not null"`
-	Body             string         `gorm:"type:text"`
-	Status           string         `gorm:"type:text;not null;default:'open';check:status IN ('open','acknowledged','resolved','reopened');index:idx_issues_target_status,priority:2"`
-	Priority         string         `gorm:"type:text;not null;default:'medium';check:priority IN ('critical','high','medium','low')"`
-	SourceProject    string         `gorm:"type:text;not null;index:idx_issues_source_project"`
-	TargetProject    string         `gorm:"type:text;not null;index:idx_issues_target_status,priority:1"`
-	SourceAgent      string         `gorm:"type:text"`
-	CreatedBySession string         `gorm:"type:text"`
-	Labels           models.JSONStringArray `gorm:"type:jsonb;default:'[]'"`
-	AcknowledgedAt   *time.Time     `gorm:"type:timestamptz"`
-	ResolvedAt       *time.Time     `gorm:"type:timestamptz"`
-	ReopenedAt       *time.Time     `gorm:"type:timestamptz"`
-	CreatedAt        time.Time      `gorm:"type:timestamptz;not null;default:now()"`
-	UpdatedAt        time.Time      `gorm:"type:timestamptz;not null;default:now()"`
+	ID               int64                  `gorm:"primaryKey;autoIncrement" json:"id"`
+	Title            string                 `gorm:"type:text;not null" json:"title"`
+	Body             string                 `gorm:"type:text" json:"body"`
+	Status           string                 `gorm:"type:text;not null;default:'open';check:status IN ('open','acknowledged','resolved','reopened');index:idx_issues_target_status,priority:2" json:"status"`
+	Priority         string                 `gorm:"type:text;not null;default:'medium';check:priority IN ('critical','high','medium','low')" json:"priority"`
+	SourceProject    string                 `gorm:"type:text;not null;index:idx_issues_source_project" json:"source_project"`
+	TargetProject    string                 `gorm:"type:text;not null;index:idx_issues_target_status,priority:1" json:"target_project"`
+	SourceAgent      string                 `gorm:"type:text" json:"source_agent"`
+	CreatedBySession string                 `gorm:"type:text" json:"created_by_session"`
+	Labels           models.JSONStringArray `gorm:"type:jsonb;default:'[]'" json:"labels"`
+	AcknowledgedAt   *time.Time             `gorm:"type:timestamptz" json:"acknowledged_at"`
+	ResolvedAt       *time.Time             `gorm:"type:timestamptz" json:"resolved_at"`
+	ReopenedAt       *time.Time             `gorm:"type:timestamptz" json:"reopened_at"`
+	CreatedAt        time.Time              `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
+	UpdatedAt        time.Time              `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
 }
 
 func (Issue) TableName() string { return "issues" }
 
 // IssueComment represents a comment on an issue, enabling dialogue between agents.
 type IssueComment struct {
-	ID            int64     `gorm:"primaryKey;autoIncrement"`
-	IssueID       int64     `gorm:"not null;index:idx_issue_comments_issue_created,priority:1"`
-	AuthorProject string    `gorm:"type:text;not null"`
-	AuthorAgent   string    `gorm:"type:text"`
-	Body          string    `gorm:"type:text;not null"`
-	CreatedAt     time.Time `gorm:"type:timestamptz;not null;default:now();index:idx_issue_comments_issue_created,priority:2"`
+	ID            int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	IssueID       int64     `gorm:"not null;index:idx_issue_comments_issue_created,priority:1" json:"issue_id"`
+	AuthorProject string    `gorm:"type:text;not null" json:"author_project"`
+	AuthorAgent   string    `gorm:"type:text" json:"author_agent"`
+	Body          string    `gorm:"type:text;not null" json:"body"`
+	CreatedAt     time.Time `gorm:"type:timestamptz;not null;default:now();index:idx_issue_comments_issue_created,priority:2" json:"created_at"`
 }
 
 func (IssueComment) TableName() string { return "issue_comments" }
