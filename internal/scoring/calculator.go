@@ -53,8 +53,11 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 		ageDays = 0 // Handle future timestamps gracefully
 	}
 	halfLifeDays := c.config.RecencyHalfLifeDays // fallback
-	if hl, ok := c.config.SourceHalfLives[obs.SourceType]; ok {
+	if hl, ok := c.config.SourceHalfLives[obs.SourceType]; ok && hl > 0 {
 		halfLifeDays = hl
+	}
+	if halfLifeDays <= 0 {
+		halfLifeDays = 7.0 // safety fallback to default
 	}
 	recencyDecay := math.Pow(0.5, ageDays/halfLifeDays)
 

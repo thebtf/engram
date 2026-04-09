@@ -331,8 +331,8 @@ var scopePatterns = []struct {
 	{regexp.MustCompile(`(?i)(\.md$|^docs/)`), "scope:docs"},
 	{regexp.MustCompile(`(?i)\.(yaml|yml|toml)$`), "scope:config"},
 	{regexp.MustCompile(`(?i)(migration|migrate)`), "scope:migrations"},
-	{regexp.MustCompile(`(?i)(api|handler|route)`), "scope:api"},
-	{regexp.MustCompile(`(?i)(auth|session|jwt|oauth)`), "scope:auth"},
+	{regexp.MustCompile(`(?i)(/api/|[/_]api[/_.]|handler|route)`), "scope:api"},
+	{regexp.MustCompile(`(?i)(/auth/|[/_]auth[/_.]|jwt|oauth)`), "scope:auth"},
 }
 
 // classifyFileScopes analyzes file paths and returns matching scope tags.

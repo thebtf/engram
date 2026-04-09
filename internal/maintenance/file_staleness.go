@@ -42,6 +42,7 @@ func (s *Service) checkFileStaleness(ctx context.Context) (int, error) {
 			(files_read IS NOT NULL AND files_read::text != '[]' AND files_read::text != 'null')
 			OR (files_modified IS NOT NULL AND files_modified::text != '[]' AND files_modified::text != 'null')
 		)
+		AND COALESCE(concepts::text, '[]') NOT LIKE '%stale_files%'
 		ORDER BY created_at_epoch DESC
 		LIMIT 100
 	`, cutoff).Scan(&observations).Error; err != nil {
@@ -120,13 +121,15 @@ func buildProjectModifiedFiles(db *gorm.DB, cutoff int64) map[string]map[string]
 	}
 
 	var rows []modRow
-	db.Raw(`
+	if err := db.Raw(`
 		SELECT project, COALESCE(files_modified::text, '[]') as files_modified, created_at_epoch
 		FROM observations
 		WHERE created_at_epoch > ?
 		AND files_modified IS NOT NULL AND files_modified::text != '[]' AND files_modified::text != 'null'
 		AND status = 'active'
-	`, cutoff).Scan(&rows)
+	`, cutoff).Scan(&rows).Error; err != nil {
+		return nil
+	}
 
 	result := make(map[string]map[string]int64)
 	for _, row := range rows {

@@ -75,9 +75,14 @@ func (s *ObservationSuite) TestClassifyFileScopes() {
 	// Multiple scopes from single file
 	scopes = classifyFileScopes([]string{"internal/api/auth_handler_test.go"})
 	s.Contains(scopes, "scope:backend")
-	s.Contains(scopes, "scope:api")
-	s.Contains(scopes, "scope:auth")
+	s.Contains(scopes, "scope:api")  // /api/ path segment
+	s.Contains(scopes, "scope:auth") // /auth/ in path
 	s.Contains(scopes, "scope:tests")
+
+	// Avoid false positives on partial matches
+	scopes = classifyFileScopes([]string{"internal/mcp/tools_memory.go"})
+	s.NotContains(scopes, "scope:api")  // "mcp" doesn't match /api/
+	s.NotContains(scopes, "scope:auth") // "memory" doesn't match /auth/
 
 	// Empty/nil input
 	s.Empty(classifyFileScopes(nil))

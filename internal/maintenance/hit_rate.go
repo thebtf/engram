@@ -34,8 +34,8 @@ func (s *Service) analyzeHitRate(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("context is required")
 	}
 
-	db := s.store.GetDB()
-	totalLogs, err := countInjectionLogEntries(ctx, db)
+	baseDB := s.store.GetDB()
+	totalLogs, err := countInjectionLogEntries(ctx, baseDB)
 	if err != nil {
 		return 0, fmt.Errorf("count injection_log entries: %w", err)
 	}
@@ -44,27 +44,48 @@ func (s *Service) analyzeHitRate(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	clearedRows, err := clearHitRateFlags(ctx, db)
+	// Wrap clear + query + apply in a transaction for atomicity.
+	// On error, partial state is rolled back; on success, all changes commit together.
+	db := baseDB.WithContext(ctx)
+	tx := db.Begin()
+	if tx.Error != nil {
+		return 0, fmt.Errorf("begin transaction: %w", tx.Error)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	clearedRows, err := clearHitRateFlags(ctx, tx)
 	if err != nil {
 		return 0, fmt.Errorf("clear hit rate flags: %w", err)
 	}
 
-	noiseCandidates, err := queryNoiseCandidates(ctx, db)
+	noiseCandidates, err := queryNoiseCandidates(ctx, tx)
 	if err != nil {
+		tx.Rollback()
 		return 0, fmt.Errorf("query noise candidates: %w", err)
 	}
-	noiseUpdates, err := applyHitRateCandidates(ctx, db, noiseCandidates, noiseCandidateConcept, noiseCandidateMultiplier)
+	noiseUpdates, err := applyHitRateCandidates(ctx, tx, noiseCandidates, noiseCandidateConcept, noiseCandidateMultiplier)
 	if err != nil {
+		tx.Rollback()
 		return 0, fmt.Errorf("apply noise candidate updates: %w", err)
 	}
 
-	highValueCandidates, err := queryHighValueCandidates(ctx, db)
+	highValueCandidates, err := queryHighValueCandidates(ctx, tx)
 	if err != nil {
+		tx.Rollback()
 		return 0, fmt.Errorf("query high-value candidates: %w", err)
 	}
-	highValueUpdates, err := applyHitRateCandidates(ctx, db, highValueCandidates, highValueConcept, highValueCandidateBoost)
+	highValueUpdates, err := applyHitRateCandidates(ctx, tx, highValueCandidates, highValueConcept, highValueCandidateBoost)
 	if err != nil {
+		tx.Rollback()
 		return 0, fmt.Errorf("apply high-value candidate updates: %w", err)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return 0, fmt.Errorf("commit hit rate transaction: %w", err)
 	}
 
 	totalModified := noiseUpdates + highValueUpdates

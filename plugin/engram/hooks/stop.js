@@ -427,8 +427,10 @@ async function handleStop(ctx, input) {
 
   // Record session outcome for closed-loop learning (FR-1).
   // Heuristic from hook-accumulated signals — no transcript content parsing (NFR-4).
+  // NOTE: outcome declared OUTSIDE try block — used by timeline event below (v3.0.6 scoping lesson).
+  let outcome = 'unknown';
   try {
-    let outcome = 'abandoned';
+    outcome = 'abandoned';
     let reason = 'no observations stored during session';
 
     // Read signal counters accumulated by post-tool-use hook during this session
