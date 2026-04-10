@@ -1932,10 +1932,12 @@ func (s *Service) setupRoutes() {
 		// Issue tracking routes (agent-issues feature)
 		r.Get("/api/issues", s.handleListIssues)
 		r.Post("/api/issues", s.handleCreateIssue)
+		// Static routes must come BEFORE /{id} to avoid chi matching them as IDs.
+		r.Get("/api/issues/tracked-projects", s.handleTrackedProjects)
+		r.Post("/api/issues/acknowledge", s.handleAcknowledgeIssues)
 		r.Get("/api/issues/{id}", s.handleGetIssue)
 		r.Patch("/api/issues/{id}", s.handleUpdateIssue)
 		r.Delete("/api/issues/{id}", s.handleDeleteIssue)
-		r.Post("/api/issues/acknowledge", s.handleAcknowledgeIssues)
 
 		// Pattern routes
 		r.Get("/api/patterns", s.handleGetPatterns)

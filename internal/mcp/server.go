@@ -361,6 +361,10 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 The ` + "`issues`" + ` tool tracks bugs, feature requests, and tasks between agents across projects.
 **Do NOT use ` + "`store`" + ` or ` + "`docs`" + ` for issues** — they lack lifecycle management.
 
+**For the full triage workflow use the ` + "`/engram:issue`" + ` slash command.** It walks through: (1) live issues assigned to you, (2) your reopens, (3) your cross-project issues to verify, (4) filing new issues. Run it at the start of every session in a tracked project.
+
+**Engram issues are ONLY for engram-tracked projects.** Before filing an issue against another project, check it exists in the tracker: ` + "`GET /api/issues/tracked-projects`" + ` returns the list of projects that have observations or issues in engram. If the target project is NOT in that list, use its native issue tracker (GitHub, Linear, etc.) — engram agents working on it won't see injected issues otherwise.
+
 ### Lifecycle
 ` + "`open → acknowledged (auto) → resolved (target agent) → closed (source confirms) ⟲ reopened`" + `
 - **Target agent** (assignee): resolves issues or comments with progress. Cannot close.

@@ -264,6 +264,25 @@ func (s *Service) handleAcknowledgeIssues(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// handleTrackedProjects handles GET /api/issues/tracked-projects.
+// Returns the set of projects that use engram's issue system, so agents can
+// tell "is this project in engram?" — if not, they should use GitHub/Linear/etc.
+func (s *Service) handleTrackedProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := s.issueStore.GetTrackedProjects(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if projects == nil {
+		projects = []string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"projects": projects,
+		"count":    len(projects),
+	})
+}
+
 // handleDeleteIssue handles DELETE /api/issues/{id}. Hard delete — intended for dashboard operators.
 func (s *Service) handleDeleteIssue(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")

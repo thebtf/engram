@@ -3,10 +3,20 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"gorm.io/gorm"
 )
+
+// projectBareName strips the "_<hash>" suffix from a canonical hashed project ID
+// like "mcp-mux_e54050" → "mcp-mux". If the input has no recognizable hash suffix,
+// it is returned unchanged. Hash suffixes are 6-8 hex characters following "_".
+var projectHashSuffixRe = regexp.MustCompile(`_[0-9a-f]{6,8}$`)
+
+func projectBareName(projectID string) string {
+	return projectHashSuffixRe.ReplaceAllString(projectID, "")
+}
 
 // IssueStore provides CRUD operations for issues and issue comments.
 type IssueStore struct {
@@ -92,11 +102,19 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	}
 
 	query := s.db.WithContext(ctx).Table("issues")
+	// Project matching accepts both canonical hashed IDs (dirname_hash) and bare
+	// slug names, because hooks use hashed IDs but MCP callers use bare names.
+	// Query "mcp-mux" matches issues with target_project="mcp-mux" AND "mcp-mux_e54050".
+	// Query "mcp-mux_e54050" matches issues with target_project="mcp-mux_e54050" AND "mcp-mux".
 	if params.TargetProject != "" {
-		query = query.Where("target_project = ?", params.TargetProject)
+		bare := projectBareName(params.TargetProject)
+		query = query.Where("target_project = ? OR target_project = ? OR target_project LIKE ?",
+			params.TargetProject, bare, bare+"_%")
 	}
 	if params.SourceProject != "" {
-		query = query.Where("source_project = ?", params.SourceProject)
+		bare := projectBareName(params.SourceProject)
+		query = query.Where("source_project = ? OR source_project = ? OR source_project LIKE ?",
+			params.SourceProject, bare, bare+"_%")
 	}
 	if len(params.Statuses) > 0 {
 		query = query.Where("status IN ?", params.Statuses)
@@ -401,4 +419,31 @@ func (s *IssueStore) UpdateIssueFields(ctx context.Context, id int64, title, bod
 		return fmt.Errorf("issue %d not found", id)
 	}
 	return nil
+}
+
+// GetTrackedProjects returns the set of projects connected to engram.
+// A project is "tracked" if it has EITHER:
+//   - at least one observation in engram (its agents have been running → reachable), OR
+//   - at least one existing issue (source or target)
+//
+// Both criteria together answer the real question: "if I file an issue for project X,
+// will an agent working on X see it?". Pure observation-count or issue-count alone
+// would miss freshly-connected projects or projects that only received issues.
+func (s *IssueStore) GetTrackedProjects(ctx context.Context) ([]string, error) {
+	var projects []string
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT DISTINCT project FROM (
+			SELECT project FROM observations WHERE project != ''
+			UNION
+			SELECT target_project AS project FROM issues WHERE target_project != ''
+			UNION
+			SELECT source_project AS project FROM issues WHERE source_project != ''
+		) AS p
+		WHERE project != ''
+		ORDER BY project
+	`).Scan(&projects).Error
+	if err != nil {
+		return nil, fmt.Errorf("get tracked projects: %w", err)
+	}
+	return projects, nil
 }

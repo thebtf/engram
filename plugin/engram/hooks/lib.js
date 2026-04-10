@@ -511,9 +511,13 @@ function formatIssuesBlock(issues, project) {
   const staleDays = parseInt(process.env.ENGRAM_ISSUE_STALE_DAYS || '3', 10);
   const nowMs = Date.now();
 
-  let block = `<open-issues count="${sorted.length}" project="${project}">\n`;
-  block += `You are the TARGET agent. Your job: resolve these issues or comment with progress.\n`;
-  block += `Do NOT close issues — only the source agent (creator) can close after verifying your fix.\n\n`;
+  let block = `<open-issues count="${sorted.length}" project="${project}" action-required="true">\n`;
+  block += `ACTION REQUIRED: ${sorted.length} open issue(s) assigned to this project.\n`;
+  block += `Before starting new work, you MUST triage these. Run /engram:issue for the full workflow, or at minimum:\n`;
+  block += `  1. Read each with issues(action="get", id=N, project="${project}")\n`;
+  block += `  2. Resolve, comment with progress, or explain blocker\n`;
+  block += `  3. Do NOT close — only the source agent closes after verifying your fix\n`;
+  block += `Ignoring this block means real work from another agent is blocked on you.\n\n`;
 
   for (const issue of sorted) {
     const prio = (issue.priority || 'medium').toUpperCase();
@@ -557,10 +561,14 @@ function formatIssuesBlock(issues, project) {
 function formatResolvedIssuesBlock(issues, project) {
   if (!issues || !Array.isArray(issues) || issues.length === 0) return '';
 
-  let block = `<resolved-issues from-you count="${issues.length}" project="${project}">\n`;
-  block += `You CREATED these issues and they have been RESOLVED by the target agent.\n`;
-  block += `For each: verify the fix works, then close (confirms fix) or reopen (fix didn't work).\n`;
-  block += `Close: issues(action="close", id=N) | Reopen: issues(action="reopen", id=N, body="reason")\n\n`;
+  let block = `<resolved-issues from-you count="${issues.length}" project="${project}" action-required="true">\n`;
+  block += `ACTION REQUIRED: ${issues.length} issue(s) you filed were RESOLVED by target agents. You must verify.\n`;
+  block += `Run /engram:issue for the full workflow, or at minimum for each issue:\n`;
+  block += `  1. issues(action="get", id=N) — read the resolution comment\n`;
+  block += `  2. Actually verify the fix works (test, read code, check deployed version)\n`;
+  block += `  3. If it works: issues(action="close", id=N, project="${project}")\n`;
+  block += `  4. If it doesn't: issues(action="reopen", id=N, project="${project}", body="<concrete evidence>")\n`;
+  block += `Leaving these unverified means false-positive 'fixed' claims stay in the system.\n\n`;
 
   for (const issue of issues) {
     const target = issue.target_project || 'unknown';
