@@ -10,6 +10,57 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
+// actionRequirements describes required parameters for each issues action.
+// Used for upfront validation and consistent error messages.
+var actionRequirements = map[string]struct {
+	required []string
+	full     string
+}{
+	"create":  {required: []string{"project", "title", "target_project"}, full: "action, project, title, target_project"},
+	"list":    {required: []string{}, full: "action  [optional: project, source_project, status, resolved_since, limit]"},
+	"get":     {required: []string{"id"}, full: "action, id"},
+	"update":  {required: []string{"project", "id", "status"}, full: "action, project, id, status=resolved"},
+	"comment": {required: []string{"project", "id", "body"}, full: "action, project, id, body"},
+	"reopen":  {required: []string{"project", "id"}, full: "action, project, id"},
+	"close":   {required: []string{"project", "id"}, full: "action, project, id"},
+}
+
+// validateIssueActionParams checks that all required params for the given action are present.
+// Returns an error listing ALL missing params and the full required signature, so the caller
+// can see the complete picture in one error.
+func validateIssueActionParams(action string, m map[string]any) error {
+	spec, ok := actionRequirements[action]
+	if !ok {
+		return fmt.Errorf("unknown issues action: %q (valid: create, list, get, update, comment, reopen, close)", action)
+	}
+
+	var missing []string
+	for _, param := range spec.required {
+		switch param {
+		case "id":
+			if int64(coerceInt(m["id"], 0)) <= 0 {
+				missing = append(missing, "id (integer)")
+			}
+		case "status":
+			if coerceString(m["status"], "") == "" {
+				missing = append(missing, `status="resolved"`)
+			}
+		default:
+			if coerceString(m[param], "") == "" {
+				missing = append(missing, param)
+			}
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf(
+			"issues %q: missing required param(s): %s.\nFull signature: issues(%s)",
+			action, strings.Join(missing, ", "), spec.full,
+		)
+	}
+	return nil
+}
+
 // handleIssues dispatches issue actions: create, list, get, update, comment, reopen, close.
 func (s *Server) handleIssues(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.issueStore == nil {
@@ -23,19 +74,10 @@ func (s *Server) handleIssues(ctx context.Context, args json.RawMessage) (string
 
 	action := coerceString(m["action"], "list")
 
-	// Enforce project parameter for mutating/audit-critical actions.
-	// list and get are read-only and don't need audit trail.
-	mutatingActions := map[string]bool{
-		"create":  true,
-		"update":  true,
-		"comment": true,
-		"reopen":  true,
-		"close":   true,
-	}
-	if mutatingActions[action] {
-		if coerceString(m["project"], "") == "" {
-			return "", fmt.Errorf("project parameter is required for action %q (identifies who is acting — audit trail). Pass project=\"<your-current-project-slug>\"", action)
-		}
+	// Per-action required parameter validation with helpful error messages.
+	// Returns the full required list for the action when any param is missing.
+	if err := validateIssueActionParams(action, m); err != nil {
+		return "", err
 	}
 
 	switch action {
