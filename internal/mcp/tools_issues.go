@@ -23,6 +23,21 @@ func (s *Server) handleIssues(ctx context.Context, args json.RawMessage) (string
 
 	action := coerceString(m["action"], "list")
 
+	// Enforce project parameter for mutating/audit-critical actions.
+	// list and get are read-only and don't need audit trail.
+	mutatingActions := map[string]bool{
+		"create":  true,
+		"update":  true,
+		"comment": true,
+		"reopen":  true,
+		"close":   true,
+	}
+	if mutatingActions[action] {
+		if coerceString(m["project"], "") == "" {
+			return "", fmt.Errorf("project parameter is required for action %q (identifies who is acting — audit trail). Pass project=\"<your-current-project-slug>\"", action)
+		}
+	}
+
 	switch action {
 	case "create":
 		return s.handleIssueCreate(ctx, m)

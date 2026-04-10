@@ -559,13 +559,14 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name:        "issues",
-			Description: "Cross-project issue tracking between agents. Use to report bugs, request features, or leave tasks for agents in other projects. Do NOT use store or docs for issues. Issues are automatically injected into target project sessions. Actions: create, list, get, update, comment, reopen, close. Close = source agent confirms fix works (only source project can close).",
+			Description: "Cross-project issue tracking between agents. Use to report bugs, request features, or leave tasks for agents in other projects. Do NOT use store or docs for issues. Issues are automatically injected into target project sessions. Actions: create, list, get, update, comment, reopen, close. Close = source agent confirms fix works (only source project can close). The `project` parameter is REQUIRED for all actions except `list` and `get` — it identifies WHO is acting (audit trail).",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
-				"required": []string{"action"},
+				"required": []string{"action", "project"},
 				"properties": map[string]any{
 					"action":         map[string]any{"type": "string", "enum": []string{"create", "list", "get", "update", "comment", "reopen", "close"}, "description": "Action to perform"},
+					"project":        map[string]any{"type": "string", "description": "REQUIRED: your current working project slug. Identifies who is acting (audit trail). For list action, filters by target_project."},
 					"title":          map[string]any{"type": "string", "description": "Issue title (required for create)"},
 					"body":           map[string]any{"type": "string", "description": "Issue body or comment text"},
 					"priority":       map[string]any{"type": "string", "enum": []string{"critical", "high", "medium", "low"}, "default": "medium"},
@@ -575,7 +576,6 @@ func (s *Server) primaryTools() []Tool {
 					"id":             map[string]any{"type": "integer", "description": "Issue ID (required for get/update/comment/reopen/close)"},
 					"status":         map[string]any{"type": "string", "enum": []string{"resolved"}, "description": "Set status (only 'resolved' via update)"},
 					"comment":        map[string]any{"type": "string", "description": "Comment to add with status change or reopen"},
-					"project":        map[string]any{"type": "string", "description": "Current project context (auto-filled)"},
 					"resolved_since": map[string]any{"type": "integer", "description": "Filter: issues resolved after this epoch ms (for list)"},
 				},
 			},
@@ -1043,11 +1043,11 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		{
 			Name:        "issues",
-			Description: "Cross-project issue tracking between agents. Actions: create, list, get, update, comment, reopen, close.",
+			Description: "Cross-project issue tracking between agents. Actions: create, list, get, update, comment, reopen, close. The `project` parameter is required for mutating actions (audit trail).",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
-				"required": []string{"action"},
+				"required": []string{"action", "project"},
 				"properties": map[string]any{
 					"action":         map[string]any{"type": "string", "enum": []string{"create", "list", "get", "update", "comment", "reopen", "close"}, "description": "Action to perform"},
 					"title":          map[string]any{"type": "string", "description": "Issue title (required for create)"},
