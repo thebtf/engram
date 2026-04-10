@@ -484,31 +484,14 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Injection floor: ensure at least N observations are returned regardless of threshold.
-	// Fetch top-importance observations to fill the gap if the result set is too small.
+	// When InjectionFloor == 0 (v4 default, FR-1), the silence path is active — no fill.
+	// Operators can set InjectionFloor > 0 via ENGRAM_INJECTION_FLOOR for legacy fill behavior.
 	injectionFloor := s.config.InjectionFloor
-	if injectionFloor <= 0 {
-		injectionFloor = 3
-	}
-	if len(clusteredObservations) < injectionFloor && s.observationStore != nil {
-		needed := injectionFloor - len(clusteredObservations)
-		// Build set of already-included IDs for deduplication.
-		includedIDs := make(map[int64]struct{}, len(clusteredObservations))
-		for _, obs := range clusteredObservations {
-			includedIDs[obs.ID] = struct{}{}
-		}
-		fillObs, fillErr := s.observationStore.GetTopImportanceObservations(r.Context(), project, needed+len(clusteredObservations))
-		if fillErr == nil {
-			for _, obs := range fillObs {
-				if _, already := includedIDs[obs.ID]; !already {
-					clusteredObservations = append(clusteredObservations, obs)
-					includedIDs[obs.ID] = struct{}{}
-					needed--
-					if needed == 0 {
-						break
-					}
-				}
-			}
-		}
+	if injectionFloor > 0 && s.observationStore != nil {
+		clusteredObservations = fillToFloor(r.Context(), injectionFloor, clusteredObservations, nil,
+			func(ctx context.Context, limit int) ([]*models.Observation, error) {
+				return s.observationStore.GetTopImportanceObservations(ctx, project, limit)
+			})
 	}
 
 	// Count observations with meaningful composite scores (above noise floor).
@@ -1336,23 +1319,23 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Injection floor: ensure minimum observations across all sections ---
-	// Count total distinct observations already collected.
+	// When InjectionFloor == 0 (v4 default, FR-1), the silence path is active — no fill.
+	// Operators can set InjectionFloor > 0 via ENGRAM_INJECTION_FLOOR for legacy fill behavior.
 	injectionFloor := s.config.InjectionFloor
-	if injectionFloor <= 0 {
-		injectionFloor = 3
-	}
-	totalInjected := len(recentFresh) + len(relevantObservations) + len(guidanceObservations) + len(alwaysInjectObservations)
-	if totalInjected < injectionFloor && s.observationStore != nil {
-		needed := injectionFloor - totalInjected
-		fillObs, fillErr := s.observationStore.GetTopImportanceObservations(ctx, project, needed+totalInjected)
-		if fillErr == nil {
-			for _, obs := range fillObs {
-				if _, already := recentIDs[obs.ID]; !already {
-					recentFresh = append(recentFresh, obs)
-					recentIDs[obs.ID] = struct{}{}
-					needed--
-					if needed == 0 {
-						break
+	if injectionFloor > 0 && s.observationStore != nil {
+		totalInjected := len(recentFresh) + len(relevantObservations) + len(guidanceObservations) + len(alwaysInjectObservations)
+		if totalInjected < injectionFloor {
+			needed := injectionFloor - totalInjected
+			fillObs, fillErr := s.observationStore.GetTopImportanceObservations(ctx, project, needed+totalInjected)
+			if fillErr == nil {
+				for _, obs := range fillObs {
+					if _, already := recentIDs[obs.ID]; !already {
+						recentFresh = append(recentFresh, obs)
+						recentIDs[obs.ID] = struct{}{}
+						needed--
+						if needed == 0 {
+							break
+						}
 					}
 				}
 			}

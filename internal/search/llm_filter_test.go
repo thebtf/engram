@@ -1,4 +1,3 @@
-// Package search provides unified search capabilities for engram.
 package search
 
 import (
@@ -7,74 +6,100 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/thebtf/engram/pkg/models"
 )
 
-type llmClientMock struct {
+type mockLLMClient struct {
 	complete func(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 }
 
-func (m llmClientMock) Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	return m.complete(ctx, systemPrompt, userPrompt)
+func (c mockLLMClient) Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	return c.complete(ctx, systemPrompt, userPrompt)
 }
 
-func buildLLMFilterTestCandidates() []*models.Observation {
-	return []*models.Observation{
-		{
-			ID:        101,
-			Type:      models.ObsTypeDiscovery,
-			Title:     sql.NullString{String: "First", Valid: true},
-			Narrative: sql.NullString{String: "First candidate", Valid: true},
-		},
-		{
-			ID:        202,
-			Type:      models.ObsTypeBugfix,
-			Title:     sql.NullString{String: "Second", Valid: true},
-			Narrative: sql.NullString{String: "Second candidate", Valid: true},
-		},
-	}
-}
-
-func TestLLMFilterFilterByRelevance_EmptyResponseSilencesInjection(t *testing.T) {
+func TestLLMFilterReturnsEmptySliceWhenLLMSilences(t *testing.T) {
 	t.Parallel()
 
-	filter := NewLLMFilter(llmClientMock{
-		complete: func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	filter := NewLLMFilter(mockLLMClient{
+		complete: func(_ context.Context, _, _ string) (string, error) {
 			return "[]", nil
 		},
 	}, time.Second)
 
-	result := filter.FilterByRelevance(context.Background(), buildLLMFilterTestCandidates(), "engram", "fix silence gate")
+	relevantIDs := filter.FilterByRelevance(context.Background(), testObservations(), "engram", "find silent memories")
 
-	assert.Empty(t, result)
-	assert.Len(t, result, 0)
+	if len(relevantIDs) != 0 {
+		t.Fatalf("expected empty slice, got %v", relevantIDs)
+	}
 }
 
-func TestLLMFilterFilterByRelevance_ParseFailureFallsBackToAllCandidates(t *testing.T) {
+func TestLLMFilterReturnsAllCandidateIDsOnParseError(t *testing.T) {
 	t.Parallel()
 
-	filter := NewLLMFilter(llmClientMock{
-		complete: func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-			return "not json", nil
+	candidates := testObservations()
+	filter := NewLLMFilter(mockLLMClient{
+		complete: func(_ context.Context, _, _ string) (string, error) {
+			return "not-json", nil
 		},
 	}, time.Second)
 
-	result := filter.FilterByRelevance(context.Background(), buildLLMFilterTestCandidates(), "engram", "fix silence gate")
+	relevantIDs := filter.FilterByRelevance(context.Background(), candidates, "engram", "parse failure")
 
-	assert.Equal(t, []int64{101, 202}, result)
+	assertIDsEqual(t, relevantIDs, []int64{101, 202, 303})
 }
 
-func TestLLMFilterFilterByRelevance_TimeoutFallsBackToAllCandidates(t *testing.T) {
+func TestLLMFilterReturnsAllCandidateIDsOnTimeout(t *testing.T) {
 	t.Parallel()
 
-	filter := NewLLMFilter(llmClientMock{
-		complete: func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-			return "", context.DeadlineExceeded
+	candidates := testObservations()
+	filter := NewLLMFilter(mockLLMClient{
+		complete: func(ctx context.Context, _, _ string) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
 		},
-	}, time.Millisecond)
+	}, 5*time.Millisecond)
 
-	result := filter.FilterByRelevance(context.Background(), buildLLMFilterTestCandidates(), "engram", "fix silence gate")
+	relevantIDs := filter.FilterByRelevance(context.Background(), candidates, "engram", "timeout fallback")
 
-	assert.Equal(t, []int64{101, 202}, result)
+	assertIDsEqual(t, relevantIDs, []int64{101, 202, 303})
 }
+
+func testObservations() []*models.Observation {
+	return []*models.Observation{
+		{
+			ID:        101,
+			Type:      models.ObsTypeDecision,
+			Title:     sql.NullString{String: "Decision", Valid: true},
+			Narrative: sql.NullString{String: "Relevant implementation detail", Valid: true},
+		},
+		{
+			ID:        202,
+			Type:      models.ObsTypeBugfix,
+			Title:     sql.NullString{String: "Bugfix", Valid: true},
+			Narrative: sql.NullString{String: "Historical fix context", Valid: true},
+		},
+		{
+			ID:        303,
+			Type:      models.ObsTypeGuidance,
+			Title:     sql.NullString{String: "Guidance", Valid: true},
+			Narrative: sql.NullString{String: "Operator preference", Valid: true},
+		},
+	}
+}
+
+func assertIDsEqual(t *testing.T, got, want []int64) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("unexpected ID count: got %d want %d (%v vs %v)", len(got), len(want), got, want)
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected ID at index %d: got %d want %d", i, got[i], want[i])
+		}
+	}
+}
+
+// Anti-stub verification: replacing the empty-set branch with `return candidates`
+// would make TestLLMFilterReturnsEmptySliceWhenLLMSilences fail.
