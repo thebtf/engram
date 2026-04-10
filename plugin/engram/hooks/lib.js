@@ -127,6 +127,7 @@ const HOOKS_WITH_EVENT_NAME = new Set([
   'PreToolUse',
   'UserPromptSubmit',
   'PostToolUse',
+  'SessionStart',
 ]);
 
 function writeResponse(hookName, additionalContext) {
