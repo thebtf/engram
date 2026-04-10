@@ -44,6 +44,13 @@ const SYSTEM_CONTENT_PATTERNS: readonly string[] = [
   'Sender (untrusted metadata)',
   '<task-notification>',
   '<command-name>',
+  // SDK keepalive / sandbox denial noise — never real user content
+  'An async command did not run',
+  'Do not mention, summarize, or reuse output',
+  'Exec denied',
+  'approval-timeout',
+  'Exact completion details:',
+  'There is no new command again',
 ];
 
 // ---------------------------------------------------------------------------

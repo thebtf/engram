@@ -10,6 +10,7 @@ import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { normalizeEngramContent } from './content.js';
 import { resolveIdentity } from '../identity.js';
+import { classifyMessage } from './message-classifier.js';
 import type { SessionEndEvent, ConversationMessage, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
 const MAX_MESSAGES = 20;
@@ -78,8 +79,14 @@ export function handleSessionEnd(
     if (!sessionId?.trim()) return;
 
     // 1. Backfill remaining conversation content (fire-and-forget)
+    //    Filter out heartbeats, SDK metadata, denials — these produce noise observations.
     if (config.autoExtract && messages.length > 0) {
-      const recent = messages.slice(-MAX_MESSAGES);
+      const filtered = messages.filter((m) => {
+        const content = typeof m.content === 'string' ? m.content : '';
+        if (!content.trim()) return false;
+        return classifyMessage(content) === 'user_prompt';
+      });
+      const recent = filtered.slice(-MAX_MESSAGES);
       const content = recent
         .map((m) => `[${m.role}]: ${m.content}`)
         .join('\n\n');
@@ -93,8 +100,9 @@ export function handleSessionEnd(
         });
 
         (logger ?? console).warn(
-          `[engram] session-end: submitted ${recent.length} messages for backfill` +
-            ` (project ${project}, reason: ${event.reason ?? 'unknown'})`,
+          `[engram] session-end: submitted ${recent.length}/${messages.length} messages for backfill` +
+            ` (filtered ${messages.length - filtered.length} heartbeat/system,` +
+            ` project ${project}, reason: ${event.reason ?? 'unknown'})`,
         );
       }
     }
