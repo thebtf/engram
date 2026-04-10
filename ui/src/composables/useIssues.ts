@@ -6,7 +6,7 @@ export function useIssues() {
   const total = ref(0)
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const statusFilter = ref('open,reopened')
+  const statusFilter = ref('open,acknowledged,resolved,reopened')
   const projectFilter = ref('')
 
   let abortController: AbortController | null = null

@@ -51,7 +51,7 @@ function shortProject(project: string): string {
     <!-- Filters -->
     <div class="flex gap-2 flex-wrap">
       <button
-        v-for="s in ['open,reopened', 'open', 'acknowledged', 'resolved', 'reopened', 'closed', 'rejected', '']"
+        v-for="s in ['open,acknowledged,resolved,reopened', 'open', 'acknowledged', 'resolved', 'reopened', 'closed', 'rejected', '']"
         :key="s"
         @click="statusFilter = s"
         :class="[
@@ -61,7 +61,7 @@ function shortProject(project: string): string {
             : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
         ]"
       >
-        {{ s === '' ? 'All' : s === 'open,reopened' ? 'Active' : s }}
+        {{ s === '' ? 'All' : s === 'open,acknowledged,resolved,reopened' ? 'Active' : s }}
       </button>
     </div>
 
