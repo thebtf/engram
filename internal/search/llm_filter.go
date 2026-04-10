@@ -73,21 +73,11 @@ func (f *LLMFilter) FilterByRelevance(ctx context.Context, candidates []*models.
 	}
 
 	if len(relevantIDs) == 0 {
-		// Empty set from LLM = "none relevant". Fall back to composite scoring top-5
-		// per FR-7: "If LLM returns empty set → fallback to composite scoring top-5."
 		log.Debug().
 			Str("project", project).
 			Int("total", len(candidates)).
-			Msg("LLM filter returned no relevant candidates, falling back to top-5")
-		limit := 5
-		if limit > len(candidates) {
-			limit = len(candidates)
-		}
-		fallbackIDs := make([]int64, limit)
-		for i := 0; i < limit; i++ {
-			fallbackIDs[i] = candidates[i].ID
-		}
-		return fallbackIDs
+			Msg("LLM filter silenced injection for project X (no relevant candidates)")
+		return []int64{}
 	}
 
 	log.Debug().
