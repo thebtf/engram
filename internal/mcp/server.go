@@ -381,14 +381,16 @@ When you see ` + "`<resolved-issues from-you>`" + ` in your session context:
 3. If fix works: ` + "`issues(action=\"close\", id=N)`" + ` — confirms fix, removes from all injections
 4. If fix doesn't work: ` + "`issues(action=\"reopen\", id=N, body=\"Still broken because...\")`" + `
 
-### Actions
-**Create:** ` + "`issues(action=\"create\", title=\"...\", body=\"...\", priority=\"high\", target_project=\"other-project\")`" + `
+### Actions (ALWAYS pass your current project via ` + "`project`" + ` param for audit trail)
+**Create:** ` + "`issues(action=\"create\", title=\"...\", body=\"...\", priority=\"high\", target_project=\"other-project\", project=\"my-project\")`" + `
 **List yours:** ` + "`issues(action=\"list\", source_project=\"my-project\", status=\"resolved\")`" + ` — issues you created
-**List assigned:** ` + "`issues(action=\"list\")`" + ` — issues targeting your project
-**Comment:** ` + "`issues(action=\"comment\", id=N, body=\"...\")`" + `
-**Resolve:** ` + "`issues(action=\"update\", id=N, status=\"resolved\", comment=\"Fixed in...\")`" + `
-**Close:** ` + "`issues(action=\"close\", id=N)`" + ` — source confirms fix (only source project can close)
-**Reopen:** ` + "`issues(action=\"reopen\", id=N, body=\"Still broken...\")`" + `
+**List assigned:** ` + "`issues(action=\"list\", project=\"my-project\")`" + ` — issues targeting your project
+**Comment:** ` + "`issues(action=\"comment\", id=N, body=\"...\", project=\"my-project\")`" + `
+**Resolve:** ` + "`issues(action=\"update\", id=N, status=\"resolved\", comment=\"Fixed in...\", project=\"my-project\")`" + `
+**Close:** ` + "`issues(action=\"close\", id=N, project=\"my-project\")`" + ` — source confirms fix (only source project can close)
+**Reopen:** ` + "`issues(action=\"reopen\", id=N, body=\"Still broken...\", project=\"my-project\")`" + `
+
+**CRITICAL:** The ` + "`project`" + ` parameter identifies WHO is acting. Without it, comments show as anonymous in audit trails. Always pass your current working project name.
 
 ### DO NOT
 - Close issues you didn't create (only source/operator can close)
