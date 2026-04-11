@@ -126,7 +126,8 @@ func (s *Service) handleSetSessionOutcome(w http.ResponseWriter, r *http.Request
 		}
 
 		go func() {
-			bgCtx := context.Background()
+			bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
 			// Propagate global effectiveness scores.
 			if _, err := learning.PropagateOutcome(bgCtx, injStore, obsStore, capturedSessionID, capturedOutcome); err != nil {
@@ -177,53 +178,50 @@ func (s *Service) handlePropagateOutcome(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if sess.UtilityPropagatedAt.Valid {
-		elapsed := time.Since(sess.UtilityPropagatedAt.Time)
-		if elapsed < time.Minute {
-			retryAfter := int((time.Minute - elapsed).Seconds())
-			if retryAfter < 1 {
-				retryAfter = 1
-			}
-			w.WriteHeader(http.StatusConflict)
-			writeJSON(w, map[string]interface{}{
-				"error":       "rate_limited",
-				"retry_after": retryAfter,
-			})
-			return
-		}
-	}
-
 	outcome := learning.Outcome(sess.Outcome.String)
 	if !sess.Outcome.Valid || !learning.IsValidOutcome(outcome) {
 		http.Error(w, "session outcome not recorded", http.StatusBadRequest)
 		return
 	}
 
-	updatedCount, err := injStore.CountInjectionsBySession(r.Context(), sessionID)
+	// Atomically claim the propagation slot. This is TOCTOU-free: the WHERE clause
+	// ensures only one concurrent caller wins the slot; others see zero rows affected.
+	claimed, err := sessionStore.UpdateUtilityPropagatedAtIfStale(r.Context(), sessionID)
 	if err != nil {
-		http.Error(w, "failed to count injections: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to claim propagation slot: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	if err := sessionStore.UpdateUtilityPropagatedAt(r.Context(), sessionID); err != nil {
-		http.Error(w, "failed to update utility propagation timestamp: "+err.Error(), http.StatusInternalServerError)
+	if !claimed {
+		w.WriteHeader(http.StatusConflict)
+		writeJSON(w, map[string]interface{}{
+			"error":   "rate_limited",
+			"message": "propagation already triggered within the last 60 seconds",
+		})
 		return
 	}
 
 	capturedSessionID := sessionID
 	capturedOutcome := outcome
+	capturedSessionStore := sessionStore
+	capturedInjStore := injStore
+	capturedObsStore := obsStore
 	go func() {
-		bgCtx := context.Background()
-		if _, err := learning.PropagateOutcome(bgCtx, injStore, obsStore, capturedSessionID, capturedOutcome); err != nil {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := learning.PropagateOutcome(bgCtx, capturedInjStore, capturedObsStore, capturedSessionID, capturedOutcome); err != nil {
 			log.Warn().Err(err).Str("session", capturedSessionID).Msg("manual outcome propagation failed")
+			// Revert the timestamp claim so the next caller can retry.
+			if clearErr := capturedSessionStore.ClearUtilityPropagatedAt(context.Background(), capturedSessionID); clearErr != nil {
+				log.Warn().Err(clearErr).Str("session", capturedSessionID).Msg("failed to clear utility_propagated_at after propagation failure")
+			}
 		}
 	}()
 
-	utilityPropagatedAt := time.Now().UTC().Format(time.RFC3339)
+	// Return 202 Accepted: propagation is dispatched asynchronously.
+	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]interface{}{
-		"updated":               updatedCount,
-		"session_id":            sessionID,
-		"utility_propagated_at": utilityPropagatedAt,
+		"session_id": sessionID,
+		"status":     "accepted",
 	})
 }
 

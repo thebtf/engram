@@ -265,7 +265,7 @@ func (s *SessionStore) UpdateUtilityPropagatedAt(ctx context.Context, claudeSess
 	result := s.db.WithContext(ctx).
 		Model(&SDKSession{}).
 		Where("claude_session_id = ?", claudeSessionID).
-		Update("utility_propagated_at", time.Now())
+		Update("utility_propagated_at", time.Now().UTC())
 	if result.Error != nil {
 		return result.Error
 	}
@@ -273,6 +273,31 @@ func (s *SessionStore) UpdateUtilityPropagatedAt(ctx context.Context, claudeSess
 		return fmt.Errorf("session not found: %s", claudeSessionID)
 	}
 	return nil
+}
+
+// UpdateUtilityPropagatedAtIfStale atomically claims the propagation slot for a session.
+// Returns (true, nil) if the claim succeeded (session was not propagated within the last minute),
+// or (false, nil) if the session is rate-limited (propagated within the last minute).
+// This is the TOCTOU-free replacement for the read-then-write pattern.
+func (s *SessionStore) UpdateUtilityPropagatedAtIfStale(ctx context.Context, claudeSessionID string) (bool, error) {
+	result := s.db.WithContext(ctx).Exec(`
+		UPDATE sdk_sessions
+		SET utility_propagated_at = NOW()
+		WHERE claude_session_id = ?
+		  AND (utility_propagated_at IS NULL OR utility_propagated_at < NOW() - INTERVAL '1 minute')
+	`, claudeSessionID)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// ClearUtilityPropagatedAt resets the propagation timestamp to NULL for a session.
+// Called when a background propagation goroutine fails, to allow the next caller to retry.
+func (s *SessionStore) ClearUtilityPropagatedAt(ctx context.Context, claudeSessionID string) error {
+	return s.db.WithContext(ctx).Exec(`
+		UPDATE sdk_sessions SET utility_propagated_at = NULL WHERE claude_session_id = ?
+	`, claudeSessionID).Error
 }
 
 // StrategyStatRow holds aggregated stats for a single injection strategy.
