@@ -128,6 +128,7 @@ type Config struct {
 	AlwaysInjectLimit      int     `json:"always_inject_limit"`       // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
 	ProjectInjectLimit     int     `json:"project_inject_limit"`      // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
 	InjectionFloor         int     `json:"injection_floor"`           // ENGRAM_INJECTION_FLOOR (default: 0)
+	InjectUnified          bool    `json:"inject_unified"`            // ENGRAM_INJECT_UNIFIED (default: true) — emergency rollback flag; removed after two release cycles
 	SessionBoost           float64 `json:"session_boost"`             // ENGRAM_SESSION_BOOST (default: 1.3)
 
 	// Injection strategy A/B testing (closed-loop learning FR-5)
@@ -298,6 +299,7 @@ func Default() *Config {
 		AlwaysInjectLimit:           20,    // Inject up to 20 always-inject observations per session
 		ProjectInjectLimit:          15,    // Inject up to 15 project-scoped observations per session
 		InjectionFloor:              0,     // Silence path: 0 = disabled (v4 default, FR-1). Operators can set ENGRAM_INJECTION_FLOOR=3 for legacy fill behavior.
+		InjectUnified:               true,  // Use unified RetrieveRelevant path for inject (FR-3). Set ENGRAM_INJECT_UNIFIED=false for emergency rollback.
 		SessionBoost:                1.3,   // Boost factor for observations from recently active sessions
 		InjectionStrategies:           []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
 		InjectionStrategyMode:         "round-robin",
@@ -645,6 +647,11 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECTION_FLOOR")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.InjectionFloor = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECT_UNIFIED")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.InjectUnified = b
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_SESSION_BOOST")); v != "" {

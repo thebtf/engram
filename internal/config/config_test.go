@@ -68,6 +68,22 @@ func (s *ConfigSuite) TestInjectionFloorEnvOverride() {
 	s.Equal(3, cfg.InjectionFloor)
 }
 
+// TestInjectUnifiedDefaultTrue verifies that ENGRAM_INJECT_UNIFIED defaults to true (FR-3).
+func (s *ConfigSuite) TestInjectUnifiedDefaultTrue() {
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.InjectUnified, "InjectUnified must default to true so the unified inject path is active")
+}
+
+// TestInjectUnifiedEnvOverride verifies that ENGRAM_INJECT_UNIFIED=false enables the emergency rollback path.
+func (s *ConfigSuite) TestInjectUnifiedEnvOverride() {
+	os.Setenv("ENGRAM_INJECT_UNIFIED", "false")
+	defer os.Unsetenv("ENGRAM_INJECT_UNIFIED")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.False(cfg.InjectUnified, "ENGRAM_INJECT_UNIFIED=false must activate the legacy inject path")
+}
+
 // TestDataDir tests data directory path.
 func (s *ConfigSuite) TestDataDir() {
 	dir := DataDir()
