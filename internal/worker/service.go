@@ -758,7 +758,7 @@ func (s *Service) initializeAsync() {
 
 	// Create SDK processor (optional - requires LLM API or Claude CLI)
 	var processor *sdk.Processor
-	proc, err := sdk.NewProcessor(observationStore, summaryStore)
+	proc, err := sdk.NewProcessor(observationStore, summaryStore, vectorClient)
 	if err != nil {
 		log.Warn().Err(err).Msg("SDK processor not available — set ENGRAM_LLM_URL for observation extraction")
 	} else {
@@ -1291,7 +1291,7 @@ func (s *Service) reinitializeDatabase() {
 
 	// Recreate SDK processor with new stores
 	var processor *sdk.Processor
-	proc, err := sdk.NewProcessor(observationStore, summaryStore)
+	proc, err := sdk.NewProcessor(observationStore, summaryStore, vectorClient)
 	if err != nil {
 		log.Warn().Err(err).Msg("SDK processor not available after reinit — set ENGRAM_LLM_URL")
 	} else {
@@ -1884,6 +1884,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/learning/effectiveness-distribution", s.handleGetEffectivenessDistribution)
 		r.Get("/api/learning/strategies", s.handleGetStrategies)
 		r.Get("/api/learning/curve", s.handleGetLearningCurve)
+		r.Get("/api/learning/hit-rate", s.handleGetHitRateAnalytics)
 		r.Get("/api/sessions/{sessionId}/injections", s.handleGetSessionInjections)
 
 		// Session transcript indexing (client pushes JSONL for FTS)
@@ -1930,6 +1931,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/context/search", s.handleSearchByPrompt)
 		r.Get("/api/context/files", s.handleFileContext)
 		r.Get("/api/context/by-file", s.handleContextByFile)
+		r.Post("/api/memory/triggers", s.handleMemoryTriggers)
 		r.Post("/api/decisions/search", s.handleSearchDecisions)
 
 		// Issue tracking routes (agent-issues feature)

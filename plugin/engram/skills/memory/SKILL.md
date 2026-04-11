@@ -274,13 +274,15 @@ The `issues` tool tracks bugs, feature requests, and tasks between agents across
 | Action | Usage |
 |--------|-------|
 | **Create** | `issues(action="create", title="...", body="...", priority="high", target_project="other-project")` |
-| **List** | `issues(action="list")` or `issues(action="list", target_project="...", status="open,acknowledged")` |
+| **List** | `issues(action="list", project="<your-project>", status="open,acknowledged,reopened")` for active target work, or `issues(action="list", target_project="...", status="open,acknowledged,reopened")` for another project |
 | **Comment** | `issues(action="comment", id=N, body="...")` |
 | **Resolve** | `issues(action="update", id=N, status="resolved", body="Fixed in commit abc123")` |
 | **Reopen** | `issues(action="reopen", id=N, body="Still broken after fix")` |
 
 Issues are automatically injected into sessions for agents working on the target project.
-Lifecycle: open → acknowledged (auto on injection) → resolved (explicit) ⟲ reopened.
+Lifecycle: open → acknowledged (auto on injection) → resolved (explicit) → closed, with reopened returning the issue to active work.
+For the TARGET project, `acknowledged` and `reopened` are active backlog states — this is your team's inbox, not a done state.
+For the SOURCE project, `resolved` issues are a follow-up inbox — you must read the other team's report, verify the result, and then close or reopen with evidence.
 
 **When to use issues vs store:**
 - Bug in the CURRENT project → `store(type="discovery")` — it's knowledge about a fix

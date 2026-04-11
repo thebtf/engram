@@ -14,8 +14,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // MaxObservationsPerProject is the maximum number of observations to keep per project.
@@ -169,22 +169,23 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 	}
 
 	dbObs := &Observation{
-		SDKSessionID:    sdkSessionID,
-		Project:         project,
-		Scope:           scope,
-		AgentID:         obs.AgentID,
-		AgentSource:     agentSource,
-		Type:            obs.Type,
-		SourceType:      obs.SourceType,
-		Title:           nullString(obs.Title),
-		Subtitle:        nullString(obs.Subtitle),
-		Facts:           models.JSONStringArray(obs.Facts),
-		Rejected:        models.JSONStringArray(obs.Rejected),
-		Narrative:       nullString(obs.Narrative),
-		Concepts:        models.JSONStringArray(obs.Concepts),
-		FilesRead:       models.JSONStringArray(obs.FilesRead),
-		FilesModified:   models.JSONStringArray(obs.FilesModified),
-		FileMtimes:      models.JSONInt64Map(obs.FileMtimes),
+		SDKSessionID:             sdkSessionID,
+		Project:                  project,
+		Scope:                    scope,
+		AgentID:                  obs.AgentID,
+		AgentSource:              agentSource,
+		Type:                     obs.Type,
+		SourceType:               obs.SourceType,
+		Title:                    nullString(obs.Title),
+		Subtitle:                 nullString(obs.Subtitle),
+		Facts:                    models.JSONStringArray(obs.Facts),
+		Rejected:                 models.JSONStringArray(obs.Rejected),
+		Narrative:                nullString(obs.Narrative),
+		Concepts:                 models.JSONStringArray(obs.Concepts),
+		FilesRead:                models.JSONStringArray(obs.FilesRead),
+		FilesModified:            models.JSONStringArray(obs.FilesModified),
+		CommandsRun:              models.JSONStringArray(obs.CommandsRun),
+		FileMtimes:               models.JSONInt64Map(obs.FileMtimes),
 		PromptNumber:             nullInt64(promptNumber),
 		DiscoveryTokens:          discoveryTokens,
 		CreatedAt:                now.Format(time.RFC3339),
@@ -221,16 +222,18 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 // ObservationUpdate contains fields that can be updated on an observation.
 // Only non-nil fields will be updated.
 type ObservationUpdate struct {
-	Title         *string   // New title
-	Subtitle      *string   // New subtitle
-	Narrative     *string   // New narrative
-	Facts         *[]string // New facts (replaces existing)
-	Concepts      *[]string // New concepts (replaces existing)
-	FilesRead     *[]string // New files read (replaces existing)
-	FilesModified *[]string // New files modified (replaces existing)
-	Scope         *string   // New scope (project or global)
-	Status        *string   // New status (active or resolved)
-	StatusReason  *string   // Reason for status change
+	Title         *string          // New title
+	Subtitle      *string          // New subtitle
+	Narrative     *string          // New narrative
+	Facts         *[]string        // New facts (replaces existing)
+	Concepts      *[]string        // New concepts (replaces existing)
+	FilesRead     *[]string        // New files read (replaces existing)
+	FilesModified *[]string        // New files modified (replaces existing)
+	CommandsRun   *[]string        // New commands run (replaces existing)
+	FileMtimes    *map[string]int64 // New file mtimes (replaces existing)
+	Scope         *string          // New scope (project or global)
+	Status        *string          // New status (active or resolved)
+	StatusReason  *string          // Reason for status change
 }
 
 // UpdateObservation updates an existing observation with the provided fields.
@@ -277,6 +280,14 @@ func (s *ObservationStore) UpdateObservation(ctx context.Context, id int64, upda
 	if update.FilesModified != nil {
 		filesModifiedJSON, _ := json.Marshal(*update.FilesModified)
 		updates["files_modified"] = string(filesModifiedJSON)
+	}
+	if update.CommandsRun != nil {
+		commandsRunJSON, _ := json.Marshal(*update.CommandsRun)
+		updates["commands_run"] = string(commandsRunJSON)
+	}
+	if update.FileMtimes != nil {
+		fileMtimesJSON, _ := json.Marshal(*update.FileMtimes)
+		updates["file_mtimes"] = string(fileMtimesJSON)
 	}
 	if update.Scope != nil {
 		updates["scope"] = sql.NullString{String: *update.Scope, Valid: true}
@@ -508,6 +519,25 @@ func (s *ObservationStore) GetAlwaysInjectObservations(ctx context.Context, proj
 	return toModelObservations(dbObservations), nil
 }
 
+// GetProjectBriefingObservation retrieves the active wiki observation tagged with
+// the "project-briefing" concept for a specific project.
+func (s *ObservationStore) GetProjectBriefingObservation(ctx context.Context, project string) (*models.Observation, error) {
+	var dbObservation Observation
+	err := s.db.WithContext(ctx).
+		Scopes(activeObservationFilter(), importanceOrdering()).
+		Where("project = ?", project).
+		Where("type = ?", string(models.ObsTypeWiki)).
+		Where("concepts @> ?", `["project-briefing"]`).
+		First(&dbObservation).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toModelObservation(&dbObservation), nil
+}
+
 // GetObservationsByFile retrieves observations related to a specific file path.
 // Matches against both files_modified and files_read JSONB arrays.
 // Results are ordered by importance_score DESC.
@@ -527,6 +557,30 @@ func (s *ObservationStore) GetObservationsByFile(ctx context.Context, filePath s
 		return nil, err
 	}
 
+	return toModelObservations(dbObservations), nil
+}
+
+// GetObservationsByCommandPrefix retrieves bugfix/pitfall observations whose commands_run
+// entries start with the supplied command prefix. Results are ordered by importance score.
+func (s *ObservationStore) GetObservationsByCommandPrefix(ctx context.Context, project, command string, limit int) ([]*models.Observation, error) {
+	if strings.TrimSpace(command) == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	pattern := strings.TrimSpace(command) + "%"
+	var dbObservations []Observation
+	err := s.db.WithContext(ctx).
+		Scopes(projectScopeFilter(project), activeObservationFilter(), importanceOrdering()).
+		Where("type IN ?", []models.ObservationType{models.ObsTypeBugfix, models.ObsTypePitfall}).
+		Where("EXISTS (SELECT 1 FROM jsonb_array_elements_text(commands_run) AS cmd WHERE cmd LIKE ?)", pattern).
+		Limit(limit).
+		Find(&dbObservations).Error
+	if err != nil {
+		return nil, err
+	}
 	return toModelObservations(dbObservations), nil
 }
 
@@ -810,7 +864,7 @@ func (s *ObservationStore) SearchObservationsFTS(ctx context.Context, query, pro
 	// websearch_to_tsquery handles natural-language queries including OR operators.
 	ftsQuery := `
 		SELECT o.id, o.sdk_session_id, o.project, COALESCE(o.scope, 'project') as scope, o.type,
-		       o.title, o.subtitle, o.facts, o.narrative, o.concepts, o.files_read, o.files_modified,
+		       o.title, o.subtitle, o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.commands_run,
 		       o.file_mtimes, o.prompt_number, o.discovery_tokens, o.created_at, o.created_at_epoch,
 		       COALESCE(o.importance_score, 1.0) as importance_score,
 		       COALESCE(o.user_feedback, 0) as user_feedback,
@@ -867,7 +921,7 @@ func (s *ObservationStore) SearchObservationsFTSFiltered(ctx context.Context, qu
 
 	ftsQuery := `
 		SELECT o.id, o.sdk_session_id, o.project, COALESCE(o.scope, 'project') as scope, o.type,
-		       o.title, o.subtitle, o.facts, o.narrative, o.concepts, o.files_read, o.files_modified,
+		       o.title, o.subtitle, o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.commands_run,
 		       o.file_mtimes, o.prompt_number, o.discovery_tokens, o.created_at, o.created_at_epoch,
 		       COALESCE(o.importance_score, 1.0) as importance_score,
 		       COALESCE(o.user_feedback, 0) as user_feedback,
@@ -920,7 +974,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 
 	ftsQuery := `
 		SELECT o.id, o.sdk_session_id, o.project, COALESCE(o.scope, 'project') as scope, o.type,
-		       o.title, o.subtitle, o.facts, o.narrative, o.concepts, o.files_read, o.files_modified,
+		       o.title, o.subtitle, o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.commands_run,
 		       o.file_mtimes, o.prompt_number, o.discovery_tokens, o.created_at, o.created_at_epoch,
 		       COALESCE(o.importance_score, 1.0) as importance_score,
 		       COALESCE(o.user_feedback, 0) as user_feedback,
@@ -946,7 +1000,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 
 	var results []ScoredObservation
 	for rows.Next() {
-		var factsJSON, conceptsJSON, filesReadJSON, filesModifiedJSON, fileMtimesJSON []byte
+		var factsJSON, conceptsJSON, filesReadJSON, filesModifiedJSON, commandsRunJSON, fileMtimesJSON []byte
 		var isSuperseded int
 		var rankScore float64
 		var obs models.Observation
@@ -954,7 +1008,7 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 		if err := rows.Scan(
 			&obs.ID, &obs.SDKSessionID, &obs.Project, &obs.Scope, &obs.Type,
 			&obs.Title, &obs.Subtitle, &factsJSON, &obs.Narrative, &conceptsJSON,
-			&filesReadJSON, &filesModifiedJSON, &fileMtimesJSON,
+			&filesReadJSON, &filesModifiedJSON, &commandsRunJSON, &fileMtimesJSON,
 			&obs.PromptNumber, &obs.DiscoveryTokens, &obs.CreatedAt, &obs.CreatedAtEpoch,
 			&obs.ImportanceScore, &obs.UserFeedback, &obs.RetrievalCount,
 			&obs.LastRetrievedAt, &obs.ScoreUpdatedAt, &isSuperseded,
@@ -975,6 +1029,9 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 		}
 		if len(filesModifiedJSON) > 0 {
 			_ = json.Unmarshal(filesModifiedJSON, &obs.FilesModified)
+		}
+		if len(commandsRunJSON) > 0 {
+			_ = json.Unmarshal(commandsRunJSON, &obs.CommandsRun)
 		}
 		if len(fileMtimesJSON) > 0 {
 			_ = json.Unmarshal(fileMtimesJSON, &obs.FileMtimes)
@@ -1442,13 +1499,13 @@ func scanObservationRows(rows *sql.Rows) ([]*models.Observation, error) {
 // scanObservation scans a single observation from a row scanner.
 func scanObservation(scanner interface{ Scan(...any) error }) (*models.Observation, error) {
 	var obs models.Observation
-	var factsJSON, conceptsJSON, filesReadJSON, filesModifiedJSON, fileMtimesJSON []byte
+	var factsJSON, conceptsJSON, filesReadJSON, filesModifiedJSON, commandsRunJSON, fileMtimesJSON []byte
 	var isSuperseded int
 
 	err := scanner.Scan(
 		&obs.ID, &obs.SDKSessionID, &obs.Project, &obs.Scope, &obs.Type,
 		&obs.Title, &obs.Subtitle, &factsJSON, &obs.Narrative, &conceptsJSON,
-		&filesReadJSON, &filesModifiedJSON, &fileMtimesJSON,
+		&filesReadJSON, &filesModifiedJSON, &commandsRunJSON, &fileMtimesJSON,
 		&obs.PromptNumber, &obs.DiscoveryTokens, &obs.CreatedAt, &obs.CreatedAtEpoch,
 		&obs.ImportanceScore, &obs.UserFeedback, &obs.RetrievalCount,
 		&obs.LastRetrievedAt, &obs.ScoreUpdatedAt, &isSuperseded,
@@ -1471,6 +1528,9 @@ func scanObservation(scanner interface{ Scan(...any) error }) (*models.Observati
 	if len(filesModifiedJSON) > 0 {
 		_ = json.Unmarshal(filesModifiedJSON, &obs.FilesModified)
 	}
+	if len(commandsRunJSON) > 0 {
+		_ = json.Unmarshal(commandsRunJSON, &obs.CommandsRun)
+	}
 	if len(fileMtimesJSON) > 0 {
 		_ = json.Unmarshal(fileMtimesJSON, &obs.FileMtimes)
 	}
@@ -1486,37 +1546,38 @@ func scanObservation(scanner interface{ Scan(...any) error }) (*models.Observati
 // toModelObservation converts a GORM Observation to pkg/models.Observation.
 func toModelObservation(o *Observation) *models.Observation {
 	return &models.Observation{
-		ID:              o.ID,
-		SDKSessionID:    o.SDKSessionID,
-		Project:         o.Project,
-		Scope:           o.Scope,
-		AgentID:         o.AgentID,
-		AgentSource:     o.AgentSource,
-		Type:            o.Type,
-		SourceType:      o.SourceType,
-		Title:           o.Title,
-		Subtitle:        o.Subtitle,
-		Facts:           o.Facts,
-		Rejected:        o.Rejected,
-		Narrative:       o.Narrative,
-		Concepts:        o.Concepts,
-		FilesRead:       o.FilesRead,
-		FilesModified:   o.FilesModified,
-		FileMtimes:      o.FileMtimes,
-		PromptNumber:    o.PromptNumber,
-		DiscoveryTokens: o.DiscoveryTokens,
-		CreatedAt:       o.CreatedAt,
-		CreatedAtEpoch:  o.CreatedAtEpoch,
-		ImportanceScore: o.ImportanceScore,
-		UtilityScore:    o.UtilityScore,
-		UserFeedback:    o.UserFeedback,
-		RetrievalCount:  o.RetrievalCount,
-		InjectionCount:  o.InjectionCount,
-		LastRetrievedAt: o.LastRetrievedAt,
-		ScoreUpdatedAt:  o.ScoreUpdatedAt,
-		IsSuperseded:    o.IsSuperseded != 0, // Convert int to bool
-		ExpiresAt:       o.ExpiresAt,
-		TtlDays:         o.TtlDays,
+		ID:                      o.ID,
+		SDKSessionID:            o.SDKSessionID,
+		Project:                 o.Project,
+		Scope:                   o.Scope,
+		AgentID:                 o.AgentID,
+		AgentSource:             o.AgentSource,
+		Type:                    o.Type,
+		SourceType:              o.SourceType,
+		Title:                   o.Title,
+		Subtitle:                o.Subtitle,
+		Facts:                   o.Facts,
+		Rejected:                o.Rejected,
+		Narrative:               o.Narrative,
+		Concepts:                o.Concepts,
+		FilesRead:               o.FilesRead,
+		FilesModified:           o.FilesModified,
+		CommandsRun:             o.CommandsRun,
+		FileMtimes:              o.FileMtimes,
+		PromptNumber:            o.PromptNumber,
+		DiscoveryTokens:         o.DiscoveryTokens,
+		CreatedAt:               o.CreatedAt,
+		CreatedAtEpoch:          o.CreatedAtEpoch,
+		ImportanceScore:         o.ImportanceScore,
+		UtilityScore:            o.UtilityScore,
+		UserFeedback:            o.UserFeedback,
+		RetrievalCount:          o.RetrievalCount,
+		InjectionCount:          o.InjectionCount,
+		LastRetrievedAt:         o.LastRetrievedAt,
+		ScoreUpdatedAt:          o.ScoreUpdatedAt,
+		IsSuperseded:            o.IsSuperseded != 0, // Convert int to bool
+		ExpiresAt:               o.ExpiresAt,
+		TtlDays:                 o.TtlDays,
 		IsExpired:               o.ExpiresAt.Valid && o.ExpiresAt.Time.Before(time.Now()),
 		Status:                  o.Status,
 		StatusReason:            o.StatusReason,

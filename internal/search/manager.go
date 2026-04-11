@@ -13,13 +13,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/strutil"
-	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -239,6 +239,30 @@ func ApplySessionBoost(observations []*models.Observation, scores map[int64]floa
 			if current, exists := scores[obs.ID]; exists {
 				scores[obs.ID] = current * boostFactor
 			}
+		}
+	}
+}
+
+// ApplyLaneWeights multiplies composite scores by per-type reranker weights.
+// Used by typed retrieval lanes (FR-8 / T027).
+func ApplyLaneWeights(observations []*models.Observation, scores map[int64]float64, laneWeights map[models.ObservationType]float64) {
+	if len(laneWeights) == 0 {
+		return
+	}
+	defaultWeight := 1.0
+	if defaultLane, hasDefault := laneWeights[models.ObservationType("default")]; hasDefault {
+		defaultWeight = defaultLane
+	}
+	for _, obs := range observations {
+		weight, ok := laneWeights[obs.Type]
+		if !ok {
+			weight = defaultWeight
+		}
+		if weight <= 0 {
+			continue
+		}
+		if current, exists := scores[obs.ID]; exists {
+			scores[obs.ID] = current * weight
 		}
 	}
 }
@@ -1098,11 +1122,11 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 	var where vector.WhereFilter
 	switch params.Scope {
 	case "global":
-		where = vector.BuildWhereFilter(docType, "", true)
+		where = vector.BuildWhereFilter(docType, "", true, nil)
 	case "project":
-		where = vector.BuildWhereFilter(docType, params.Project, false)
+		where = vector.BuildWhereFilter(docType, params.Project, false, nil)
 	default:
-		where = vector.BuildWhereFilter(docType, params.Project, params.IncludeGlobal)
+		where = vector.BuildWhereFilter(docType, params.Project, params.IncludeGlobal, nil)
 	}
 
 	vectorResults, err := m.vectorClient.Query(ctx, params.Query, params.Limit*2, where)
@@ -1177,117 +1201,118 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 	// Create a map to lookup original RRF scores
 	rrfScores := make(map[string]float64)
 	for _, item := range fused {
-	        key := item.DocType + ":" + strconv.FormatInt(item.ID, 10)
-	        rrfScores[key] = item.Score
+		key := item.DocType + ":" + strconv.FormatInt(item.ID, 10)
+		rrfScores[key] = item.Score
 	}
 
 	if len(obsIDs) > 0 && (params.Type == "" || params.Type == "observations") {
-	        obs, err := m.observationStore.GetObservationsByIDs(ctx, obsIDs, params.OrderBy, 0)
-	        if err != nil {
-	                log.Warn().Err(err).Msg("hybridSearch: failed to fetch observations by IDs")
-	        } else {
-	                for _, o := range obs {
-	                        if params.ExcludeSuperseded && o.IsSuperseded {
-	                                continue
-	                        }
-	                        res := m.observationToResult(o, params.Format)
-	                        key := "observation:" + strconv.FormatInt(o.ID, 10)
-	                        if score, ok := rrfScores[key]; ok {
-	                                res.Score = score
-	                        }
-	                        results = append(results, res)
-	                }
-	        }
+		obs, err := m.observationStore.GetObservationsByIDs(ctx, obsIDs, params.OrderBy, 0)
+		if err != nil {
+			log.Warn().Err(err).Msg("hybridSearch: failed to fetch observations by IDs")
+		} else {
+			for _, o := range obs {
+				if params.ExcludeSuperseded && o.IsSuperseded {
+					continue
+				}
+				res := m.observationToResult(o, params.Format)
+				key := "observation:" + strconv.FormatInt(o.ID, 10)
+				if score, ok := rrfScores[key]; ok {
+					res.Score = score
+				}
+				results = append(results, res)
+			}
+		}
 	}
 
 	if len(summaryIDs) > 0 && (params.Type == "" || params.Type == "sessions") {
-	        summaries, err := m.summaryStore.GetSummariesByIDs(ctx, summaryIDs, params.OrderBy, 0)
-	        if err != nil {
-	                log.Warn().Err(err).Msg("hybridSearch: failed to fetch summaries by IDs")
-	        } else {
-	                for _, s := range summaries {
-	                        res := m.summaryToResult(s, params.Format)
-	                        key := "session:" + strconv.FormatInt(s.ID, 10)
-	                        if score, ok := rrfScores[key]; ok {
-	                                res.Score = score
-	                        }
-	                        results = append(results, res)
-	                }
-	        }
+		summaries, err := m.summaryStore.GetSummariesByIDs(ctx, summaryIDs, params.OrderBy, 0)
+		if err != nil {
+			log.Warn().Err(err).Msg("hybridSearch: failed to fetch summaries by IDs")
+		} else {
+			for _, s := range summaries {
+				res := m.summaryToResult(s, params.Format)
+				key := "session:" + strconv.FormatInt(s.ID, 10)
+				if score, ok := rrfScores[key]; ok {
+					res.Score = score
+				}
+				results = append(results, res)
+			}
+		}
 	}
 
 	if len(promptIDs) > 0 && (params.Type == "" || params.Type == "prompts") {
-	        prompts, err := m.promptStore.GetPromptsByIDs(ctx, promptIDs, params.OrderBy, 0)
-	        if err != nil {
-	                log.Warn().Err(err).Msg("hybridSearch: failed to fetch prompts by IDs")
-	        } else {
-	                for _, p := range prompts {
-	                        res := m.promptToResult(p, params.Format)
-	                        key := "prompt:" + strconv.FormatInt(p.ID, 10)
-	                        if score, ok := rrfScores[key]; ok {
-	                                res.Score = score
-	                        }
-	                        results = append(results, res)
-	                }
-	        }
+		prompts, err := m.promptStore.GetPromptsByIDs(ctx, promptIDs, params.OrderBy, 0)
+		if err != nil {
+			log.Warn().Err(err).Msg("hybridSearch: failed to fetch prompts by IDs")
+		} else {
+			for _, p := range prompts {
+				res := m.promptToResult(p, params.Format)
+				key := "prompt:" + strconv.FormatInt(p.ID, 10)
+				if score, ok := rrfScores[key]; ok {
+					res.Score = score
+				}
+				results = append(results, res)
+			}
+		}
 	}
 
 	// Sort results by original RRF score to restore ranking
 	sort.Slice(results, func(i, j int) bool {
-	        return results[i].Score > results[j].Score
+		return results[i].Score > results[j].Score
 	})
 
 	// --- Shadow Scoring Engine ---
 	if len(results) > 0 {
-	        // Calculate shadow scores
-	        type shadowResult struct {
-	                originalIdx int
-	                shadowScore float64
-	                res         SearchResult
-	        }
+		// Calculate shadow scores
+		type shadowResult struct {
+			originalIdx int
+			shadowScore float64
+			res         SearchResult
+		}
 
-	        shadowRanked := make([]shadowResult, len(results))
-	        for i, r := range results {
-	                importanceContrib := 0.0
-	                if r.Type == "observation" {
-	                        if importance, ok := r.Metadata["importance_score"].(float64); ok {
-	                                importanceContrib = importance * 0.05
-	                        }
-	                }
-	                shadowRanked[i] = shadowResult{
-	                        originalIdx: i,
-	                        shadowScore: r.Score + importanceContrib,
-	                        res:         r,
-	                }
-	        }
+		shadowRanked := make([]shadowResult, len(results))
+		for i, r := range results {
+			importanceContrib := 0.0
+			if r.Type == "observation" {
+				if importance, ok := r.Metadata["importance_score"].(float64); ok {
+					importanceContrib = importance * 0.05
+				}
+			}
+			shadowRanked[i] = shadowResult{
+				originalIdx: i,
+				shadowScore: r.Score + importanceContrib,
+				res:         r,
+			}
+		}
 
-	        // Sort by shadow score
-	        sort.Slice(shadowRanked, func(i, j int) bool {
-	                return shadowRanked[i].shadowScore > shadowRanked[j].shadowScore
-	        })
+		// Sort by shadow score
+		sort.Slice(shadowRanked, func(i, j int) bool {
+			return shadowRanked[i].shadowScore > shadowRanked[j].shadowScore
+		})
 
-	        // Calculate differential (shift)
-	        shifts := 0
-	        for shadowIdx, sr := range shadowRanked {
-	                if shadowIdx != sr.originalIdx {
-	                        shifts++
-	                }
-	        }
+		// Calculate differential (shift)
+		shifts := 0
+		for shadowIdx, sr := range shadowRanked {
+			if shadowIdx != sr.originalIdx {
+				shifts++
+			}
+		}
 
-	        if shifts > 0 {
-	                log.Debug().
-	                        Int("shifts", shifts).
-	                        Int("total", len(results)).
-	                        Msg("Shadow scoring produced differential ranking")
-	        }
+		if shifts > 0 {
+			log.Debug().
+				Int("shifts", shifts).
+				Int("total", len(results)).
+				Msg("Shadow scoring produced differential ranking")
+		}
 	}
 	// -----------------------------
 
 	return &UnifiedSearchResult{
-	        Results:    results,
-	        TotalCount: len(results),
-	        Query:      params.Query,
-	}, nil}
+		Results:    results,
+		TotalCount: len(results),
+		Query:      params.Query,
+	}, nil
+}
 
 // buildResultFromFTS constructs a UnifiedSearchResult from pre-fetched FTS observations.
 func (m *Manager) buildResultFromFTS(ftsResults []gorm.ScoredObservation, params SearchParams) (*UnifiedSearchResult, error) {
@@ -1398,31 +1423,31 @@ func (m *Manager) HowItWorks(ctx context.Context, params SearchParams) (*Unified
 // Helper methods
 
 func (m *Manager) observationToResult(obs *models.Observation, format string) SearchResult {
-        result := SearchResult{
-                Type:      "observation",
-                ID:        obs.ID,
-                Project:   obs.Project,
-                Scope:     string(obs.Scope),
-                CreatedAt: obs.CreatedAtEpoch,
-                Metadata: map[string]any{
-                        "obs_type":         string(obs.Type),
-                        "scope":            string(obs.Scope),
-                        "memory_type":      string(obs.MemoryType),
-                        "facts":            obs.Facts,
-                        "rejected":         obs.Rejected,
-                        "importance_score": obs.ImportanceScore,
-                },
-        }
+	result := SearchResult{
+		Type:      "observation",
+		ID:        obs.ID,
+		Project:   obs.Project,
+		Scope:     string(obs.Scope),
+		CreatedAt: obs.CreatedAtEpoch,
+		Metadata: map[string]any{
+			"obs_type":         string(obs.Type),
+			"scope":            string(obs.Scope),
+			"memory_type":      string(obs.MemoryType),
+			"facts":            obs.Facts,
+			"rejected":         obs.Rejected,
+			"importance_score": obs.ImportanceScore,
+		},
+	}
 
-        if obs.Title.Valid {
-                result.Title = obs.Title.String
-        }
+	if obs.Title.Valid {
+		result.Title = obs.Title.String
+	}
 
-        if format == "full" && obs.Narrative.Valid {
-                result.Content = obs.Narrative.String
-        }
+	if format == "full" && obs.Narrative.Valid {
+		result.Content = obs.Narrative.String
+	}
 
-        return result
+	return result
 }
 func (m *Manager) summaryToResult(summary *models.SessionSummary, format string) SearchResult {
 	result := SearchResult{

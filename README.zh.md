@@ -440,7 +440,7 @@ store(content="Switched from Redis to in-memory cache for dev environments", tit
 store(action="extract", content="<paste raw session notes or code review>")
 
 # 评价一条记忆
-feedback(action="rate", id=123, useful=true)
+feedback(action="rate", id=123, rating="useful")
 
 # 存储凭据
 vault(action="store", name="OPENAI_KEY", value="sk-...")

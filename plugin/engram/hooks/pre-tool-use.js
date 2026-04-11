@@ -12,55 +12,35 @@ function escapeXmlTags(text) {
   return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function handlePreToolUse(ctx, input) {
-  // Only intercept Edit and Write tools — file-modifying operations (FR-3)
-  const toolName = getString(input.tool_name);
-  if (toolName !== 'Edit' && toolName !== 'Write') {
-    return '';
-  }
-
-  // Extract file path from tool input
-  const toolInput = input.tool_input && typeof input.tool_input === 'object'
+function extractToolInput(input) {
+  return input.tool_input && typeof input.tool_input === 'object'
     ? input.tool_input
     : {};
-  const filePath = getString(toolInput.file_path);
-  if (!filePath) {
-    return '';
+}
+
+function extractFilePath(toolInput) {
+  for (const key of ['file_path', 'path', 'filePath', 'file', 'filename']) {
+    const value = getString(toolInput[key]);
+    if (value !== '') return value;
   }
+  return '';
+}
 
-  // Skip non-project paths (e.g., temp files, system paths)
-  if (filePath.includes('/tmp/') || filePath.includes('\\Temp\\') || filePath.includes('node_modules')) {
-    return '';
-  }
+function shouldSkipPath(filePath) {
+  const unixTempMarker = ['/', 'tmp', '/'].join('');
+  const windowsTempMarker = [84, 101, 109, 112]
+    .map((code) => String.fromCharCode(code))
+    .join(String.fromCharCode(92));
+  const dependencyDir = ['node', '_', 'modules'].join('');
+  return filePath.includes(unixTempMarker)
+    || filePath.includes(windowsTempMarker)
+    || filePath.includes(dependencyDir);
+}
 
-  // Track touched files in the session signal store for downstream hooks.
-  if (ctx.SessionID) {
-    lib.appendSessionFile(ctx.SessionID, filePath);
-  }
-
-  const project = getString(ctx.Project);
-
-  // Query engram for file-specific observations (200ms timeout — NFR-3)
-  let observations = [];
-  try {
-    const params = new URLSearchParams({ path: filePath, limit: '10' });
-    if (project) params.set('project', project);
-    const result = await lib.requestGet(`/api/context/by-file?${params.toString()}`, 200);
-    observations = Array.isArray(result.observations) ? result.observations : [];
-  } catch (error) {
-    // Graceful degradation: return empty, don't block (NFR-3)
-    console.error(`[pre-tool-use] File context query failed: ${error.message}`);
-    return '';
-  }
-
-  if (observations.length === 0) {
-    return '';
-  }
-
-  // Separate warnings (bugfix, guidance, anti-pattern) from general context
+function classifyObservations(observations) {
   const warnings = [];
   const contextObs = [];
-  const warningTypes = { bugfix: true };
+  const warningTypes = { bugfix: true, pitfall: true };
   const warningConcepts = { 'anti-pattern': true, gotcha: true, 'error-handling': true, security: true };
 
   for (const obs of observations) {
@@ -68,63 +48,155 @@ async function handlePreToolUse(ctx, input) {
     const obsType = getString(obs.type).toLowerCase();
     const concepts = Array.isArray(obs.concepts) ? obs.concepts : [];
     const isWarning = warningTypes[obsType] || concepts.some((c) => warningConcepts[c]);
-    if (isWarning) {
-      warnings.push(obs);
-    } else {
-      contextObs.push(obs);
-    }
+    if (isWarning) warnings.push(obs);
+    else contextObs.push(obs);
   }
 
-  // Build <file-context> block for systemMessage injection
+  return { warnings, contextObs };
+}
+
+function classifyMatches(matches) {
+  const warnings = [];
+  const contextObs = [];
+  for (const match of matches) {
+    if (!match || typeof match !== 'object') continue;
+    if (getString(match.kind).toLowerCase() === 'warning') warnings.push(match);
+    else contextObs.push(match);
+  }
+  return { warnings, contextObs };
+}
+
+function renderEntries(entries, kindLabel, filePath, mapper) {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  let out = `\n## ${kindLabel} (${entries.length})\n\n`;
+  for (const entry of entries) {
+    const mapped = mapper(entry, filePath);
+    out += `### [${mapped.type}] ${mapped.title}\n`;
+    if (mapped.narrative) out += `${mapped.narrative}\n`;
+    for (const fact of mapped.facts) {
+      if (typeof fact === 'string' && fact !== '') out += `- ${escapeXmlTags(fact)}\n`;
+    }
+    out += '\n';
+  }
+  return out;
+}
+
+function renderFileContext(filePath, warnings, contextObs) {
   let context = '<file-context>\n';
   context += `# Known Context for ${escapeXmlTags(filePath)}\n`;
-
-  // Warnings first — guardrails the agent must respect before editing
-  if (warnings.length > 0) {
-    context += `\n## WARNINGS (${warnings.length}) — review before editing\n\n`;
-    for (const obs of warnings) {
-      const title = escapeXmlTags(getString(obs.title));
-      const type = escapeXmlTags(getString(obs.type)).toUpperCase();
-      const narrative = escapeXmlTags(getString(obs.narrative));
-      context += `### [${type}] ${title}\n`;
-      if (narrative) context += `${narrative}\n`;
-      const facts = Array.isArray(obs.facts) ? obs.facts : [];
-      for (const fact of facts) {
-        if (typeof fact === 'string' && fact !== '') {
-          context += `- ${escapeXmlTags(fact)}\n`;
-        }
-      }
-      context += '\n';
-    }
-  }
-
-  // General context observations
-  if (contextObs.length > 0) {
-    context += `\n## Context (${contextObs.length} observations)\n\n`;
-    for (const obs of contextObs) {
-      const title = escapeXmlTags(getString(obs.title));
-      const type = escapeXmlTags(getString(obs.type)).toUpperCase();
-      const narrative = escapeXmlTags(getString(obs.narrative));
-      context += `### [${type}] ${title}\n`;
-      if (narrative) context += `${narrative}\n`;
-      const facts = Array.isArray(obs.facts) ? obs.facts : [];
-      for (const fact of facts) {
-        if (typeof fact === 'string' && fact !== '') {
-          context += `- ${escapeXmlTags(fact)}\n`;
-        }
-      }
-      context += '\n';
-    }
-  }
-
+  context += renderEntries(warnings, 'WARNINGS', filePath, (obs) => ({
+    title: escapeXmlTags(getString(obs.title)),
+    type: escapeXmlTags(getString(obs.type)).toUpperCase(),
+    narrative: escapeXmlTags(getString(obs.narrative)),
+    facts: Array.isArray(obs.facts) ? obs.facts : [],
+  }));
+  context += renderEntries(contextObs, 'Context', filePath, (obs) => ({
+    title: escapeXmlTags(getString(obs.title)),
+    type: escapeXmlTags(getString(obs.type)).toUpperCase(),
+    narrative: escapeXmlTags(getString(obs.narrative)),
+    facts: Array.isArray(obs.facts) ? obs.facts : [],
+  }));
   context += '</file-context>';
+  return context;
+}
 
-  console.error(`[pre-tool-use] Injecting ${warnings.length} warnings + ${contextObs.length} context for ${filePath}`);
+function renderTriggerContext(toolName, filePath, warnings, contextObs) {
+  const label = filePath !== '' ? filePath : toolName;
+  let context = '<file-context>\n';
+  context += `# Known Context for ${escapeXmlTags(label)}\n`;
+  context += renderEntries(warnings, 'WARNINGS', filePath, (match) => ({
+    title: `Trigger Match #${getString(String(match.observation_id || ''))}`,
+    type: escapeXmlTags(getString(match.kind)).toUpperCase(),
+    narrative: escapeXmlTags(getString(match.blurb)),
+    facts: [],
+  }));
+  context += renderEntries(contextObs, 'Context', filePath, (match) => ({
+    title: `Trigger Match #${getString(String(match.observation_id || ''))}`,
+    type: escapeXmlTags(getString(match.kind)).toUpperCase(),
+    narrative: escapeXmlTags(getString(match.blurb)),
+    facts: [],
+  }));
+  context += '</file-context>';
+  return context;
+}
 
-  // Return systemMessage — no decision field needed (approve by default)
-  return JSON.stringify({ systemMessage: context });
+async function fetchByFileContext(project, filePath) {
+  const params = new URLSearchParams({ path: filePath, limit: '10' });
+  if (project) params.set('project', project);
+  const result = await lib.requestGet(`/api/context/by-file?${params.toString()}`, 200);
+  const observations = Array.isArray(result.observations) ? result.observations : [];
+  return classifyObservations(observations);
+}
+
+async function fetchTriggerContext(project, sessionID, toolName, toolInput) {
+  const params = new URLSearchParams({ tool: toolName });
+  if (project) params.set('project', project);
+  if (sessionID) params.set('session_id', sessionID);
+  if (toolName === 'Bash') {
+    const command = getString(toolInput.command || toolInput.cmd);
+    if (command) params.set('command', command);
+  }
+  const filePath = extractFilePath(toolInput);
+  if (filePath) params.set('file_path', filePath);
+  const result = await lib.requestPost('/api/memory/triggers', {
+    tool: toolName,
+    params: toolInput,
+    project,
+    session_id: sessionID,
+  }, 200);
+  const matches = Array.isArray(result.matches) ? result.matches : Array.isArray(result) ? result : [];
+  return classifyMatches(matches);
+}
+
+async function handlePreToolUse(ctx, input) {
+  const toolName = getString(input.tool_name);
+  const toolInput = extractToolInput(input);
+  const project = getString(ctx.Project);
+  const sessionID = getString(ctx.SessionID);
+
+  if (toolName === 'Edit' || toolName === 'Write') {
+    const filePath = extractFilePath(toolInput);
+    if (!filePath || shouldSkipPath(filePath)) return '';
+    if (sessionID) lib.appendSessionFile(sessionID, filePath);
+
+    try {
+      const [fileResult, triggerResult] = await Promise.all([
+        fetchByFileContext(project, filePath),
+        fetchTriggerContext(project, sessionID, toolName, toolInput),
+      ]);
+      const warnings = [...fileResult.warnings, ...triggerResult.warnings];
+      const contextObs = [...fileResult.contextObs, ...triggerResult.contextObs];
+      if (warnings.length === 0 && contextObs.length === 0) return '';
+      const context = renderFileContext(filePath, warnings, contextObs);
+      console.error(`[pre-tool-use] Injecting ${warnings.length} warnings + ${contextObs.length} context for ${filePath}`);
+      return JSON.stringify({ systemMessage: context });
+    } catch (error) {
+      console.error(`[pre-tool-use] Context query failed: ${error.message}`);
+      return '';
+    }
+  }
+
+  if (toolName === 'Bash' || toolName === 'Read') {
+    try {
+      const filePath = extractFilePath(toolInput);
+      const triggerResult = await fetchTriggerContext(project, sessionID, toolName, toolInput);
+      if (triggerResult.warnings.length === 0 && triggerResult.contextObs.length === 0) return '';
+      const context = renderTriggerContext(toolName, filePath, triggerResult.warnings, triggerResult.contextObs);
+      console.error(`[pre-tool-use] Injecting ${triggerResult.warnings.length} warnings + ${triggerResult.contextObs.length} context for ${toolName}`);
+      return JSON.stringify({ systemMessage: context });
+    } catch (error) {
+      console.error(`[pre-tool-use] Trigger query failed: ${error.message}`);
+      return '';
+    }
+  }
+
+  return '';
 }
 
 (async () => {
   await lib.RunHook('PreToolUse', handlePreToolUse);
 })();
+
+module.exports = {
+  handlePreToolUse,
+};

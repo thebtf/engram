@@ -83,7 +83,7 @@ func CheckDuplicate(
 		noopThreshold = DefaultNoopThreshold
 	}
 
-	where := vector.BuildWhereFilter(vector.DocTypeObservation, project, true)
+	where := vector.BuildWhereFilter(vector.DocTypeObservation, project, true, nil)
 	similar, err := vectorClient.Query(ctx, content, 5, where)
 	if err != nil {
 		return nil, fmt.Errorf("dedup vector query: %w", err)

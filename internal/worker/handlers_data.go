@@ -2,9 +2,12 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1002,6 +1005,162 @@ func (s *Service) handleBulkScopeChange(w http.ResponseWriter, r *http.Request) 
 // @Success 200 {object} map[string]interface{}
 // @Failure 500 {string} string "internal error"
 // @Router /api/telemetry/similarity [get]
+func (s *Service) handleMCPHitRateAnalytics(ctx context.Context, project string, limit int) (string, error) {
+	if s.observationStore == nil {
+		return "", nil
+	}
+	db := s.observationStore.GetDB().WithContext(ctx)
+	type hitRateObs struct {
+		ID    int64  `gorm:"column:id"`
+		Title string `gorm:"column:title"`
+		Type  string `gorm:"column:type"`
+		Flag  string `gorm:"column:flag"`
+	}
+	var results []hitRateObs
+	sql := `
+		SELECT id, COALESCE(title, '') as title, type,
+			CASE
+				WHEN concepts::text LIKE '%noise_candidate%' THEN 'noise_candidate'
+				WHEN concepts::text LIKE '%high_value%' THEN 'high_value'
+			END as flag
+		FROM observations
+		WHERE (concepts::text LIKE '%noise_candidate%' OR concepts::text LIKE '%high_value%')
+		AND status = 'active'`
+	params := []any{}
+	if project != "" {
+		sql += " AND project = ?"
+		params = append(params, project)
+	}
+	sql += " ORDER BY importance_score DESC LIMIT ?"
+	params = append(params, limit)
+	if err := db.Raw(sql, params...).Scan(&results).Error; err != nil {
+		return "", fmt.Errorf("hit_rate query: %w", err)
+	}
+	if len(results) == 0 {
+		return "No hit rate analytics data yet. Hit rate flags are computed during maintenance cycles and require 50+ injection_log entries.", nil
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## Hit Rate Analytics (%d observations)\n\n", len(results)))
+	noiseCount, starCount := 0, 0
+	sb.WriteString("### Noise Candidates (injected 10+ times, never cited)\n")
+	for _, r := range results {
+		if r.Flag == "noise_candidate" {
+			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", r.ID, r.Title, r.Type))
+			noiseCount++
+		}
+	}
+	if noiseCount == 0 {
+		sb.WriteString("None found.\n")
+	}
+	sb.WriteString("\n### High Value (injected 5+ times, >50% citation rate)\n")
+	for _, r := range results {
+		if r.Flag == "high_value" {
+			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", r.ID, r.Title, r.Type))
+			starCount++
+		}
+	}
+	if starCount == 0 {
+		sb.WriteString("None found.\n")
+	}
+	return sb.String(), nil
+}
+
+func parseHitRateAnalyticsText(text string) ([]map[string]any, error) {
+	observations := make([]map[string]any, 0)
+	section := ""
+
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "### Noise Candidates"):
+			section = "noise_candidate"
+			continue
+		case strings.HasPrefix(line, "### High Value"):
+			section = "high_value"
+			continue
+		case !strings.HasPrefix(line, "- ["):
+			continue
+		}
+
+		if section != "noise_candidate" && section != "high_value" {
+			continue
+		}
+
+		tail := strings.TrimPrefix(line, "- ")
+		opening := strings.Index(tail, "[")
+		closing := strings.Index(tail, "]")
+		if opening != 0 || closing <= opening+1 {
+			continue
+		}
+
+		idText := strings.TrimSpace(tail[opening+1 : closing])
+		id, err := strconv.Atoi(idText)
+		if err != nil {
+			continue
+		}
+
+		rest := tail[closing+1:]
+		openParen := strings.LastIndex(rest, "(")
+		closeParen := strings.LastIndex(rest, ")")
+		if openParen == -1 || closeParen <= openParen {
+			continue
+		}
+
+		title := strings.TrimSpace(rest[:openParen])
+		typeVal := strings.TrimSpace(rest[openParen+1 : closeParen])
+		if title == "" || typeVal == "" {
+			continue
+		}
+
+		observations = append(observations, map[string]any{
+			"id":    id,
+			"title": title,
+			"type":  typeVal,
+			"flag":  section,
+		})
+	}
+
+	return observations, nil
+}
+
+func (s *Service) handleGetHitRateAnalytics(w http.ResponseWriter, r *http.Request) {
+	if s.observationStore == nil {
+		writeJSON(w, map[string]any{"high_value": 0, "noise_candidates": 0, "observations": []any{}, "total": 0})
+		return
+	}
+
+	text, err := s.handleMCPHitRateAnalytics(r.Context(), r.URL.Query().Get("project"), 50)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	observations, parseErr := parseHitRateAnalyticsText(text)
+	if parseErr != nil {
+		http.Error(w, parseErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	noiseCount := 0
+	valueCount := 0
+	for _, obs := range observations {
+		switch obs["flag"] {
+		case "noise_candidate":
+			noiseCount++
+		case "high_value":
+			valueCount++
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"high_value":      valueCount,
+		"noise_candidates": noiseCount,
+		"observations":     observations,
+		"total":           len(observations),
+	})
+}
+
 func (s *Service) handleGetSimilarityTelemetry(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	st := s.similarityTelemetry

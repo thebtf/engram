@@ -17,6 +17,8 @@ AI coding agents forget everything between sessions. Every new conversation star
 
 Engram fixes this. It captures observations from coding sessions, stores them in PostgreSQL with vector embeddings, and automatically injects relevant memories into new sessions. One server, multiple workstations, zero context loss.
 
+Since learning-memory-v4, context injection treats **silence as valid**: when no observation passes the relevance gate, Engram returns nothing instead of force-filling the prompt with top-importance noise. The inject path also defaults to the **unified retrieval pipeline** (`ENGRAM_INJECT_UNIFIED=true`), so inject and search now share the same scoring/filtering semantics.
+
 **7 consolidated MCP tools** replace 61 legacy tools, cutting context window usage by over 80%. Hybrid search combines full-text, vector similarity, and BM25 with cross-encoder reranking to surface exactly the memories that matter.
 <!-- redoc:end:intro -->
 
@@ -133,6 +135,8 @@ graph TB
 ## Use Cases
 
 - **Context continuity** — Start a new session and automatically recall relevant decisions, patterns, and prior work
+- **Silence over noise** — if nothing is relevant, inject returns an empty relevant-memory block instead of filler observations
+- **Unified inject/search semantics** — inject now uses the same retrieval path as search by default (`ENGRAM_INJECT_UNIFIED=true`)
 - **Architectural memory** — Query past design decisions before making new ones
 - **Pre-edit awareness** — Check what is known about a file before modifying it
 - **Pattern detection** — Surface recurring patterns across sessions and workstations
@@ -327,6 +331,8 @@ make install  # installs plugin + starts worker
 | `ENGRAM_ENCRYPTION_KEY` | — | Vault encryption key (hex-encoded AES-256) |
 | `ENGRAM_HYDE_ENABLED` | `false` | Enable HyDE query expansion |
 | `ENGRAM_CONTEXT_MAX_TOKENS` | `8000` | Token budget for context injection |
+| `ENGRAM_INJECTION_FLOOR` | `0` | Minimum injected count. `0` keeps the silence path active; set `3` for legacy fill behavior |
+| `ENGRAM_INJECT_UNIFIED` | `true` | Use the unified retrieval pipeline for inject (disable only for emergency rollback) |
 | `ENGRAM_GRAPH_PROVIDER` | — | `falkordb` or empty (in-memory) |
 | `ENGRAM_CONSOLIDATION_ENABLED` | `false` | Enable memory consolidation |
 | `ENGRAM_SMART_GC_ENABLED` | `false` | Enable smart garbage collection |
@@ -440,7 +446,7 @@ store(content="Switched from Redis to in-memory cache for dev environments", tit
 store(action="extract", content="<paste raw session notes or code review>")
 
 # Rate a memory
-feedback(action="rate", id=123, useful=true)
+feedback(action="rate", id=123, rating="useful")
 
 # Store a credential
 vault(action="store", name="OPENAI_KEY", value="sk-...")

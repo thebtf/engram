@@ -197,6 +197,32 @@ This requires either SUPERUSER privilege or the `vector` extension to be pre-ins
 
 ---
 
+## Injection Silence Is Now Correct Behavior
+
+**Severity: BEHAVIORAL CHANGE**
+
+Since learning-memory-v4, `InjectionFloor` defaults to `0` and the inject path no longer force-fills empty result sets with top-importance observations. If no candidate survives relevance filtering, Engram returns silence.
+
+**Effect:** An empty relevant-memory section is no longer a bug by itself. It often means the retrieval path correctly rejected noise.
+
+**Migration path:**
+- Keep the v4 behavior (recommended): leave `ENGRAM_INJECTION_FLOOR` unset or set it to `0`
+- Restore legacy always-fill behavior temporarily: set `ENGRAM_INJECTION_FLOOR=3`
+
+---
+
+## Inject Uses Unified Retrieval By Default
+
+**Severity: BEHAVIORAL CHANGE**
+
+`ENGRAM_INJECT_UNIFIED` now defaults to `true`, which means inject uses the same retrieval path as search. This unifies score thresholds, freshness filtering, typed lanes, file filters, BFS expansion, and later retrieval improvements under one code path.
+
+**Effect:** Inject behavior may change immediately when search-path ranking changes — by design. This reduces drift between “what search finds” and “what inject surfaces”.
+
+**Rollback path:** Set `ENGRAM_INJECT_UNIFIED=false` only as an emergency kill-switch to temporarily reactivate the legacy inject path.
+
+---
+
 ## Hooks Communicate Via HTTP (Worker Must Be Running)
 
 **Severity: OPERATIONAL**

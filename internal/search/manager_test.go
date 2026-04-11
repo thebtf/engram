@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thebtf/engram/pkg/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // ManagerSuite is a test suite for search Manager operations.
@@ -1050,6 +1050,38 @@ func TestSearchResult_Metadata(t *testing.T) {
 	assert.Equal(t, true, result.Metadata["is_important"])
 }
 
+func TestApplyLaneWeightsMultiplesPerTypeWeight(t *testing.T) {
+	observations := []*models.Observation{
+		{Type: models.ObsTypeFeature, ID: 1},
+		{Type: models.ObsTypeDecision, ID: 2},
+	}
+	scores := map[int64]float64{
+		1: 1.0,
+		2: 1.0,
+	}
+	laneWeights := map[models.ObservationType]float64{
+		"feature": 1.5,
+		"default": 1.0,
+	}
+
+	ApplyLaneWeights(observations, scores, laneWeights)
+	assert.InDelta(t, 1.5, scores[1], 0.0001)
+	assert.InDelta(t, 1.0, scores[2], 0.0001)
+}
+
+func TestApplyLaneWeightsUsesDefaultForMissingType(t *testing.T) {
+	observations := []*models.Observation{
+		{Type: models.ObsTypeBugfix, ID: 1},
+	}
+	scores := map[int64]float64{1: 2.0}
+	laneWeights := map[models.ObservationType]float64{
+		"default": 0.5,
+	}
+
+	ApplyLaneWeights(observations, scores, laneWeights)
+	assert.InDelta(t, 1.0, scores[1], 0.0001)
+}
+
 // TestSearchResult_Scores tests score handling in SearchResult.
 func TestSearchResult_Scores(t *testing.T) {
 	tests := []struct {
@@ -1073,4 +1105,23 @@ func TestSearchResult_Scores(t *testing.T) {
 			assert.Equal(t, tt.score, result.Score)
 		})
 	}
+}
+
+func TestApplyLaneWeights(t *testing.T) {
+	observations := []*models.Observation{
+		{ID: 1, Type: models.ObsTypeGuidance},
+		{ID: 2, Type: models.ObsTypeChange},
+	}
+	scores := map[int64]float64{
+		1: 2.0,
+		2: 3.0,
+	}
+
+	ApplyLaneWeights(observations, scores, map[models.ObservationType]float64{
+		models.ObsTypeGuidance:            1.5,
+		models.ObservationType("default"): 0.8,
+	})
+
+	assert.InDelta(t, 3.0, scores[1], 0.0001)
+	assert.InDelta(t, 2.4, scores[2], 0.0001)
 }

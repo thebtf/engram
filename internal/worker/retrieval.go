@@ -69,10 +69,126 @@ type retrievalHooks struct {
 	getRecentSessionIDs           func(ctx context.Context, project string, since time.Time) (map[string]bool, error)
 	getTopImportanceObservations  func(ctx context.Context, project string, limit int) ([]*models.Observation, error)
 	filterByRelevance             func(ctx context.Context, candidates []*models.Observation, project, taskContext string) []int64
-	getRecentUserPromptsByProject func(ctx context.Context, project string, limit int) ([]*models.UserPromptWithSession, error)
+	getRecentUserPromptsByProject  func(ctx context.Context, project string, limit int) ([]*models.UserPromptWithSession, error)
+	readSignalCountForPath         func(sessionID, filePath string) int
+	filePathObservations           func(ctx context.Context, project, filePath string, limit int) ([]*models.Observation, error)
+	getEntityObservationsBySession func(ctx context.Context, sessionID string) ([]*models.Observation, error)
+	getGraphNeighbors              func(ctx context.Context, obsID int64, maxHops int, limit int) ([]int64, error)
 	// getLastPromptBySession returns the most recent user prompt for a specific session.
 	// When nil, loadLastUserPromptBySession falls back to project-wide lookup.
 	getLastPromptBySession func(ctx context.Context, project, sessionID string) (*models.UserPromptWithSession, error)
+}
+
+func (s *Service) typeLanesEnabled() bool {
+	return s.config != nil && s.config.TypeLanesEnabled && len(s.config.TypeSearchLanes) > 0
+}
+
+func (s *Service) laneConfigForType(obsType models.ObservationType) (cfg struct {
+	MinScore       float64
+	TopK           int
+	RerankerWeight float64
+}) {
+	toLaneConfig := func(minScore float64, topK int, rerankerWeight float64) struct {
+		MinScore       float64
+		TopK           int
+		RerankerWeight float64
+	} {
+		return struct {
+			MinScore       float64
+			TopK           int
+			RerankerWeight float64
+		}{MinScore: minScore, TopK: topK, RerankerWeight: rerankerWeight}
+	}
+
+	if s.config == nil || len(s.config.TypeSearchLanes) == 0 {
+		if lane, ok := search.DefaultSearchLanes[string(obsType)]; ok {
+			return toLaneConfig(lane.MinScore, lane.TopK, lane.RerankerWeight)
+		}
+		lane := search.DefaultSearchLanes["default"]
+		return toLaneConfig(lane.MinScore, lane.TopK, lane.RerankerWeight)
+	}
+	if lane, ok := s.config.TypeSearchLanes[string(obsType)]; ok {
+		return toLaneConfig(lane.MinScore, lane.TopK, lane.RerankerWeight)
+	}
+	if lane, ok := s.config.TypeSearchLanes["default"]; ok {
+		return toLaneConfig(lane.MinScore, lane.TopK, lane.RerankerWeight)
+	}
+	lane := search.DefaultSearchLanes["default"]
+	return toLaneConfig(lane.MinScore, lane.TopK, lane.RerankerWeight)
+}
+
+func (s *Service) laneWeightMap() map[models.ObservationType]float64 {
+	weights := make(map[models.ObservationType]float64)
+	if s.config == nil {
+		return weights
+	}
+	for name, lane := range s.config.TypeSearchLanes {
+		weights[models.ObservationType(name)] = lane.RerankerWeight
+	}
+	return weights
+}
+
+func (s *Service) typedLaneMinScore() float64 {
+	minScore := 0.0
+	found := false
+	applyLane := func(score float64) {
+		if score <= 0 {
+			return
+		}
+		if !found || score < minScore {
+			minScore = score
+			found = true
+		}
+	}
+
+	if s.config != nil && len(s.config.TypeSearchLanes) > 0 {
+		for _, lane := range s.config.TypeSearchLanes {
+			applyLane(lane.MinScore)
+		}
+	} else {
+		for _, lane := range search.DefaultSearchLanes {
+			applyLane(lane.MinScore)
+		}
+	}
+
+	if !found {
+		return search.DefaultSearchLanes["default"].MinScore
+	}
+	return minScore
+}
+
+func (s *Service) applyTypedLaneSelection(observations []*models.Observation, similarityScores map[int64]float64) []*models.Observation {
+	grouped := make(map[models.ObservationType][]*models.Observation)
+	for _, obs := range observations {
+		grouped[obs.Type] = append(grouped[obs.Type], obs)
+	}
+
+	selected := make([]*models.Observation, 0, len(observations))
+	seen := make(map[int64]struct{})
+	for obsType, items := range grouped {
+		lane := s.laneConfigForType(obsType)
+		filtered := make([]*models.Observation, 0, len(items))
+		for _, obs := range items {
+			if score, ok := similarityScores[obs.ID]; ok && score < lane.MinScore {
+				continue
+			}
+			filtered = append(filtered, obs)
+		}
+		sort.Slice(filtered, func(i, j int) bool {
+			return similarityScores[filtered[i].ID] > similarityScores[filtered[j].ID]
+		})
+		if lane.TopK > 0 && len(filtered) > lane.TopK {
+			filtered = filtered[:lane.TopK]
+		}
+		for _, obs := range filtered {
+			if _, ok := seen[obs.ID]; ok {
+				continue
+			}
+			seen[obs.ID] = struct{}{}
+			selected = append(selected, obs)
+		}
+	}
+	return selected
 }
 
 func withRetrievalRequest(ctx context.Context, agentID, cwd string, metadata *retrievalMetadata) context.Context {
@@ -129,7 +245,13 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 			log.Warn().Int("errors", vectorErrors).Str("project", project).Msg("All vector queries failed, falling back to FTS")
 		}
 		if len(allVectorResults) > 0 {
-			filteredResults := vector.FilterByThreshold(allVectorResults, threshold*vectorPreFilterFactor, 0)
+			prefilterThreshold := threshold
+			if s.typeLanesEnabled() {
+				if laneThreshold := s.typedLaneMinScore(); laneThreshold > 0 && laneThreshold < prefilterThreshold {
+					prefilterThreshold = laneThreshold
+				}
+			}
+			filteredResults := vector.FilterByThreshold(allVectorResults, prefilterThreshold*vectorPreFilterFactor, 0)
 			for _, result := range filteredResults {
 				id := vector.ExtractRowID(result.Metadata)
 				if existingScore, exists := similarityScores[id]; !exists || result.Similarity > existingScore {
@@ -161,6 +283,45 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 		observations = fallbackObservations
 	}
 
+	if s.config != nil && s.config.InjectGraphBFSEnabled {
+		seedIDs := s.ExtractSessionEntitySeeds(ctx, opts.SessionID, project)
+		if len(seedIDs) > 0 {
+			graphList := make([]search.ScoredID, 0, len(seedIDs))
+			for _, seedID := range seedIDs {
+				neighborIDs, err := s.lookupGraphSeedNeighbors(ctx, seedID)
+				if err != nil {
+					continue
+				}
+				for _, neighborID := range neighborIDs {
+					graphList = append(graphList, search.ScoredID{ID: neighborID, DocType: "observation", Score: 0.2})
+				}
+			}
+			if len(graphList) > 0 {
+				vectorList := make([]search.ScoredID, 0, len(similarityScores))
+				for id, score := range similarityScores {
+					vectorList = append(vectorList, search.ScoredID{ID: id, DocType: "observation", Score: score})
+				}
+				sort.Slice(vectorList, func(i, j int) bool {
+					return vectorList[i].Score > vectorList[j].Score
+				})
+				fused := search.RRF(vectorList, graphList)
+				fusedIDs := make([]int64, 0, len(fused))
+				for _, item := range fused {
+					if item.DocType == "observation" {
+						fusedIDs = append(fusedIDs, item.ID)
+						similarityScores[item.ID] = item.Score
+					}
+				}
+				if len(fusedIDs) > 0 {
+					fusedObs, err := s.fetchObservationsByID(ctx, fusedIDs, "", limit)
+					if err == nil && len(fusedObs) > 0 {
+						observations = fusedObs
+					}
+				}
+			}
+		}
+	}
+
 	freshObservations, staleCount := s.filterFreshObservations(ctx, observations, state.cwd)
 	freshCount := len(freshObservations)
 	if usedVector && len(freshObservations) > 0 {
@@ -176,8 +337,14 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	clusteredObservations := clusterObservations(freshObservations, clusteringThreshold)
 	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
 	clusteredObservations = s.expandGraphNeighbors(ctx, clusteredObservations, similarityScores, limit)
+	if s.typeLanesEnabled() && len(clusteredObservations) > 0 {
+		clusteredObservations = s.applyTypedLaneSelection(clusteredObservations, similarityScores)
+	}
 	if len(clusteredObservations) > 0 {
 		search.ApplyCompositeScoring(clusteredObservations, similarityScores)
+		if s.typeLanesEnabled() {
+			search.ApplyLaneWeights(clusteredObservations, similarityScores, s.laneWeightMap())
+		}
 		if diversityScores, diversityErr := s.lookupDiversityScores(ctx, clusteredObservations); diversityErr == nil && len(diversityScores) > 0 {
 			search.ApplyDiversityPenalty(clusteredObservations, similarityScores, diversityScores)
 		}

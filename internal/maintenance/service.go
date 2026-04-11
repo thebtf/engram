@@ -496,7 +496,18 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		}
 	}
 
-	// Task 23: Hit rate analytics (gstack-insights FR-5)
+	// Task 23: Project briefing generation (learning-memory-v4 FR-6)
+	// Generates a compact per-project wiki briefing from recent observations.
+	if s.llmClient != nil && s.observationStore != nil && s.config.ProjectBriefingEnabled {
+		briefingsGenerated, err := s.generateProjectBriefing(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("Project briefing generation failed")
+		} else if briefingsGenerated > 0 {
+			s.log.Info().Int("project_briefings", briefingsGenerated).Msg("Generated project briefings")
+		}
+	}
+
+	// Task 24: Hit rate analytics (gstack-insights FR-5)
 	// Identifies noise (10+ injections, 0 citations) and star (5+ injections, >50% citation)
 	// observations. Recalculates each cycle; requires 50+ injection_log entries.
 	{
@@ -560,6 +571,69 @@ func (s *Service) generatePatternInsights(ctx context.Context) (int, error) {
 			if err := s.patternStore.UpdatePatternDescription(ctx, p.ID, insight); err == nil {
 				generated++
 			}
+		}
+	}
+	return generated, nil
+}
+
+func (s *Service) generateProjectBriefing(ctx context.Context) (int, error) {
+	if s.llmClient == nil || s.observationStore == nil || s.config == nil || !s.config.ProjectBriefingEnabled {
+		return 0, nil
+	}
+
+	type projectRow struct {
+		Project string `gorm:"column:project"`
+	}
+
+	var rows []projectRow
+	err := s.store.GetDB().WithContext(ctx).
+		Table("observations").
+		Select("DISTINCT project").
+		Where("project != ''").
+		Where("is_superseded = 0 AND is_archived = 0").
+		Order("project ASC").
+		Limit(2).
+		Scan(&rows).Error
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	generated := 0
+	for _, row := range rows {
+		if row.Project == "" {
+			continue
+		}
+		observations, err := s.observationStore.GetRecentObservations(ctx, row.Project, 20)
+		if err != nil || len(observations) == 0 {
+			continue
+		}
+		existingBriefing, err := s.observationStore.GetProjectBriefingObservation(ctx, row.Project)
+		if err != nil {
+			continue
+		}
+		briefing, err := learning.GenerateProjectBriefing(ctx, s.llmClient, row.Project, learning.ObservationNarrativeString(existingBriefing), observations)
+		if err != nil {
+			s.log.Debug().Err(err).Str("project", row.Project).Msg("Project briefing generation failed for project")
+			continue
+		}
+		if briefing == "" || briefing == learning.ProjectBriefingNoChange {
+			continue
+		}
+
+		if existingBriefing != nil {
+			update := &gorm.ObservationUpdate{Narrative: &briefing}
+			if _, err := s.observationStore.UpdateObservation(ctx, existingBriefing.ID, update); err == nil {
+				generated++
+			}
+			continue
+		}
+
+		obs := learning.NewProjectBriefingObservation(row.Project, briefing)
+		if _, _, err := s.observationStore.StoreObservation(ctx, "maintenance-project-briefing", row.Project, obs, 0, 0); err == nil {
+			generated++
 		}
 	}
 	return generated, nil

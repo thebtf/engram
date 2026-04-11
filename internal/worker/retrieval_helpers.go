@@ -2,6 +2,9 @@ package worker
 
 import (
 	"context"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -73,6 +76,35 @@ func (s *Service) lookupRecentSessionIDs(ctx context.Context, project string, si
 		return nil, nil
 	}
 	return s.observationStore.GetRecentSessionIDs(ctx, project, since)
+}
+
+func (s *Service) lookupGraphSeedNeighbors(ctx context.Context, seedID int64) ([]int64, error) {
+	if seedID <= 0 {
+		return nil, nil
+	}
+	if s.retrievalHooks != nil && s.retrievalHooks.getGraphNeighbors != nil {
+		return s.retrievalHooks.getGraphNeighbors(ctx, seedID, 2, 10)
+	}
+	if s.graphStore == nil {
+		return nil, nil
+	}
+	neighbors, err := s.graphStore.GetNeighbors(ctx, seedID, 2, 10)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(neighbors))
+	seen := make(map[int64]struct{}, len(neighbors))
+	for _, neighbor := range neighbors {
+		if neighbor.ObsID <= 0 {
+			continue
+		}
+		if _, ok := seen[neighbor.ObsID]; ok {
+			continue
+		}
+		seen[neighbor.ObsID] = struct{}{}
+		ids = append(ids, neighbor.ObsID)
+	}
+	return ids, nil
 }
 
 func (s *Service) sessionBoostFactor() float64 {
@@ -173,4 +205,81 @@ func (s *Service) loadLastUserPromptBySession(ctx context.Context, project, sess
 		return nil, nil
 	}
 	return prompts[0], nil
+}
+
+func (s *Service) ExtractSessionEntitySeeds(ctx context.Context, sessionID, project string) []int64 {
+	if sessionID == "" || project == "" {
+		return nil
+	}
+
+	nameSet := make(map[string]struct{})
+	appendName := func(raw string) {
+		raw = strings.TrimSpace(strings.ToLower(raw))
+		if raw == "" {
+			return
+		}
+		nameSet[raw] = struct{}{}
+	}
+
+	if prompt, err := s.loadLastUserPromptBySession(ctx, project, sessionID, 20); err == nil && prompt != nil {
+		for _, token := range strings.Fields(prompt.PromptText) {
+			appendName(token)
+		}
+	}
+
+	var entityObservations []*models.Observation
+	if s.retrievalHooks != nil && s.retrievalHooks.getEntityObservationsBySession != nil {
+		entityObservations, _ = s.retrievalHooks.getEntityObservationsBySession(ctx, sessionID)
+	} else if s.observationStore != nil {
+		allSessionObservations, _ := s.observationStore.GetObservationsBySession(ctx, sessionID)
+		for _, obs := range allSessionObservations {
+			if obs != nil && obs.Type == models.ObsTypeEntity {
+				entityObservations = append(entityObservations, obs)
+			}
+		}
+	}
+
+	seedIDs := make([]int64, 0, 5)
+	for _, obs := range entityObservations {
+		if obs == nil || obs.ID <= 0 {
+			continue
+		}
+		appendName(obs.Title.String)
+		for _, path := range obs.FilesRead {
+			appendName(filepath.Base(path))
+		}
+		for _, path := range obs.FilesModified {
+			appendName(filepath.Base(path))
+		}
+	}
+
+	if len(entityObservations) > 0 {
+		for _, obs := range entityObservations {
+			if obs == nil || obs.ID <= 0 {
+				continue
+			}
+			title := strings.TrimSpace(strings.ToLower(obs.Title.String))
+			if _, ok := nameSet[title]; ok {
+				seedIDs = append(seedIDs, obs.ID)
+			}
+		}
+	}
+
+	if len(seedIDs) == 0 {
+		return nil
+	}
+	unique := make(map[int64]struct{}, len(seedIDs))
+	result := make([]int64, 0, len(seedIDs))
+	for _, id := range seedIDs {
+		if _, ok := unique[id]; ok {
+			continue
+		}
+		unique[id] = struct{}{}
+		result = append(result, id)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	if len(result) > 5 {
+		result = result[:5]
+	}
+	return result
 }

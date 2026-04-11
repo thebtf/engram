@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v4.x-in-progress] - 2026-04-11
+
+Learning Memory v4 post-MVP feature wave. This entry tracks the FRs shipped after the v3.7.0 MVP foundation and before the final v4 polish/staging sign-off.
+
+### Shipped FRs
+
+- **FR-4 File-scope prefiltering**: inject/search can now narrow observation retrieval to files currently being edited. Added file-path support to `BuildWhereFilter`, tracked edited files in hook-side session signals, and passed `files_being_edited` through inject/search flows.
+- **FR-5 Per-type search lanes**: retrieval can now use type-specific `(min_score, top_k, reranker_weight)` lanes when `ENGRAM_TYPE_LANES_ENABLED=true`, allowing guidance/pitfall, decision, wiki/entity, and default classes to rank differently.
+- **FR-6 Project briefing**: per-project synthesized briefing lookup/generation and inject wiring are now present behind `ENGRAM_PROJECT_BRIEFING_ENABLED`.
+- **FR-7 Alarm model expansion**: file alarm model now covers semantic Edit/Write trigger matching, Bash command prefix warnings, and repeated-Read path context via `/api/memory/triggers` plus hook-side merged rendering.
+- **FR-8 Write-time merge decision**: `DecideMerge` is wired into the observation ingest path with `CREATE_NEW`, `UPDATE`, `SUPERSEDE`, and `SKIP` handling. The supersede path now keeps the old observation active until the replacement insert succeeds.
+- **FR-8a Contradiction kill-switch**: `ENGRAM_CONTRADICTION_DETECTION_ENABLED` lets operators disable the old supersede path and fall through to `CREATE_NEW`.
+- **FR-8b Wrong-supersede audit artifacts**: `.agent/reports/wrong-supersede-audit.md` and `.agent/reports/restore-candidates.sql` capture the known-bad supersede IDs for operator review.
+- **FR-9 Entity-seeded graph traversal**: inject path can derive entity seeds from the current session and fuse graph-neighbor observations with vector results through `search.RRF` when `ENGRAM_INJECT_GRAPH_BFS_ENABLED=true`.
+
+### Memory correction
+
+- The previous memory shorthand "stop hook unreliable" is no longer accurate enough and has been corrected.
+- The important distinction is: **Claude Code `Stop` was the wrong lifecycle point for realtime outcome propagation; `SessionEnd` is the correct hook for graceful session exit, and the server periodic recorder remains the backup path.**
+- Memory index and memory note were updated to reflect this correction so future sessions do not keep repeating the old oversimplified claim.
+
 ## [3.7.0] - 2026-04-11
 
 Learning Memory v4 MVP -- empirically-driven rebuild of the retrieval path after baseline

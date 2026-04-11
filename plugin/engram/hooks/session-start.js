@@ -45,6 +45,17 @@ function buildInjectURL(project, cwd, sessionID, legacyProject, gitRemote, relat
   return injectURL;
 }
 
+function formatProjectBriefingBlock(projectBriefing) {
+  const briefing = escapeXmlTags(getString(projectBriefing)).trim();
+  if (briefing === '') {
+    return '';
+  }
+  return '<project-briefing>\n'
+    + '# Project Briefing\n'
+    + briefing
+    + '\n</project-briefing>\n';
+}
+
 async function handleSessionStart(ctx, input) {
   if (!process.env.ENGRAM_URL) {
     return '<engram-setup>\nEngram plugin is installed but not configured.\nSet environment variables to connect to your Engram server:\n  export ENGRAM_URL=http://your-server:37777/mcp\n  export ENGRAM_API_TOKEN=your-token\nThen restart Claude Code.\n</engram-setup>';
@@ -141,7 +152,7 @@ async function handleSessionStart(ctx, input) {
       const issues = Array.isArray(issuesResult.issues) ? issuesResult.issues : [];
       if (issues.length > 0) {
         issuesBlock = lib.formatIssuesBlock(issues, project);
-        console.error(`[engram] Injecting ${issues.length} open issues for ${project}`);
+        console.error(`[engram] Injecting ${issues.length} active issues for ${project}`);
 
         // Auto-acknowledge: transition open → acknowledged (fire-and-forget, Constitution #3)
         const openIds = issues.filter(i => i.status === 'open').map(i => i.id);
@@ -231,6 +242,11 @@ async function handleSessionStart(ctx, input) {
 
   contextBuilder += '</engram-context>\n';
 
+  const projectBriefingBlock = formatProjectBriefingBlock(result.project_briefing);
+  if (projectBriefingBlock) {
+    contextBuilder += projectBriefingBlock;
+  }
+
   // Render guidance block if server provides guidance observations
   const guidance = Array.isArray(result.guidance) ? result.guidance : [];
   if (guidance.length > 0) {
@@ -308,5 +324,6 @@ if (require.main === module) {
 
 module.exports = {
   buildInjectURL,
+  formatProjectBriefingBlock,
   handleSessionStart,
 };

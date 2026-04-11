@@ -71,7 +71,7 @@ func (f *NearDuplicateFinder) FindAndMerge(ctx context.Context) (int, error) {
 
 		// Build a project-scoped filter (not global) so we only merge within the same project.
 		project := obs.Project
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false)
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false, nil)
 
 		if !obs.Narrative.Valid || obs.Narrative.String == "" {
 			continue

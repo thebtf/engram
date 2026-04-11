@@ -112,6 +112,66 @@ func (s *ConfigSuite) TestTypeLanesEnabledEnvOverride() {
 	s.True(cfg.TypeLanesEnabled, "ENGRAM_TYPE_LANES_ENABLED=true must enable typed lane dispatch")
 }
 
+// TestProjectBriefingEnabledDefaultFalse verifies project briefing generation is opt-in.
+func (s *ConfigSuite) TestProjectBriefingEnabledDefaultFalse() {
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.False(cfg.ProjectBriefingEnabled, "project briefing must default to disabled")
+}
+
+// TestProjectBriefingEnabledEnvOverride verifies the env flag enables project briefing.
+func (s *ConfigSuite) TestProjectBriefingEnabledEnvOverride() {
+	s.T().Setenv("ENGRAM_PROJECT_BRIEFING_ENABLED", "true")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.ProjectBriefingEnabled, "ENGRAM_PROJECT_BRIEFING_ENABLED=true must enable project briefing")
+}
+
+// TestWriteMergeEnabledDefaultFalse verifies write-time merge is opt-in.
+func (s *ConfigSuite) TestWriteMergeEnabledDefaultFalse() {
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.False(cfg.WriteMergeEnabled, "write-time merge must default to disabled")
+}
+
+// TestWriteMergeEnabledEnvOverride verifies the env flag enables write-time merge.
+func (s *ConfigSuite) TestWriteMergeEnabledEnvOverride() {
+	s.T().Setenv("ENGRAM_WRITE_MERGE_ENABLED", "true")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.WriteMergeEnabled, "ENGRAM_WRITE_MERGE_ENABLED=true must enable write-time merge")
+}
+
+// TestContradictionDetectionEnabledDefaultTrue verifies contradiction detection defaults to enabled.
+func (s *ConfigSuite) TestContradictionDetectionEnabledDefaultTrue() {
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.ContradictionDetectionEnabled, "contradiction detection must default to enabled until operators disable it explicitly")
+}
+
+// TestContradictionDetectionEnabledEnvOverride verifies the env flag disables contradiction detection.
+func (s *ConfigSuite) TestContradictionDetectionEnabledEnvOverride() {
+	s.T().Setenv("ENGRAM_CONTRADICTION_DETECTION_ENABLED", "false")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.False(cfg.ContradictionDetectionEnabled, "ENGRAM_CONTRADICTION_DETECTION_ENABLED=false must disable contradiction detection")
+}
+
+// TestInjectGraphBFSEnabledDefaultFalse verifies graph BFS inject path is opt-in.
+func (s *ConfigSuite) TestInjectGraphBFSEnabledDefaultFalse() {
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.False(cfg.InjectGraphBFSEnabled, "graph BFS inject path must default to disabled")
+}
+
+// TestInjectGraphBFSEnabledEnvOverride verifies the env flag enables graph BFS inject path.
+func (s *ConfigSuite) TestInjectGraphBFSEnabledEnvOverride() {
+	s.T().Setenv("ENGRAM_INJECT_GRAPH_BFS_ENABLED", "true")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.InjectGraphBFSEnabled, "ENGRAM_INJECT_GRAPH_BFS_ENABLED=true must enable graph BFS inject path")
+}
+
 // TestTypeSearchLanesDefaultsInitialized verifies defaults are present in config.
 func (s *ConfigSuite) TestTypeSearchLanesDefaultsInitialized() {
 	cfg := Default()

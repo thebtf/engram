@@ -66,8 +66,8 @@ Based on the analysis:
 
 For each recommendation, ask the user if they want to act:
 - Suppress: `feedback(action="suppress", id=N)`
-- Rate useful: `feedback(action="rate", id=N, useful=true)`
-- Rate not useful: `feedback(action="rate", id=N, useful=false)`
+- Rate useful: `feedback(action="rate", id=N, rating="useful")`
+- Rate not useful: `feedback(action="rate", id=N, rating="not_useful")`
 
 ### 5. Report Summary
 

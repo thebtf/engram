@@ -13,12 +13,15 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.
 
 const RateParamsSchema = z.object({
   id: z.number().int().positive(),
-  useful: z.boolean(),
+  rating: z.enum(['useful', 'not_useful']),
 });
 
 const rateParameters = Type.Object({
   id: Type.Number({ description: 'Observation ID to rate' }),
-  useful: Type.Boolean({ description: 'true if the observation was helpful, false if not' }),
+  rating: Type.String({
+    description: 'Rating value',
+    enum: ['useful', 'not_useful'],
+  }),
 });
 
 export function createEngramRateTool(
@@ -29,7 +32,7 @@ export function createEngramRateTool(
   return {
     name: 'engram_rate',
     description:
-      'Rate a recalled observation as useful or not useful. ' +
+      'Rate a recalled observation with rating="useful" or rating="not_useful". ' +
       'Call this AFTER using a memory that influenced your response — helps engram learn what to prioritize.',
     parameters: rateParameters,
 
@@ -43,10 +46,9 @@ export function createEngramRateTool(
         return 'engram is currently unreachable — rating unavailable';
       }
 
-      const success = await client.rateObservation(parsed.data.id, parsed.data.useful);
-      const label = parsed.data.useful ? 'useful' : 'not useful';
+      const success = await client.rateObservation(parsed.data.id, parsed.data.rating);
       return success
-        ? `Rated observation ${parsed.data.id} as ${label}`
+        ? `Rated observation ${parsed.data.id} as ${parsed.data.rating}`
         : `Failed to rate observation ${parsed.data.id}`;
     },
   };

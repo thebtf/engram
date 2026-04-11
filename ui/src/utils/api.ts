@@ -941,8 +941,24 @@ export interface EffectivenessDistribution {
   total: number
 }
 
+export interface HitRateAnalyticsResponse {
+  high_value: number
+  noise_candidates: number
+  observations: Array<{
+    id: number
+    title: string
+    type: string
+    flag: 'noise_candidate' | 'high_value'
+  }>
+  total: number
+}
+
 export async function fetchEffectivenessDistribution(signal?: AbortSignal): Promise<EffectivenessDistribution> {
   return fetchWithRetry<EffectivenessDistribution>(`${API_BASE}/learning/effectiveness-distribution`, { signal })
+}
+
+export async function fetchHitRateAnalytics(signal?: AbortSignal): Promise<HitRateAnalyticsResponse> {
+  return fetchWithRetry<HitRateAnalyticsResponse>(`${API_BASE}/learning/hit-rate`, { signal })
 }
 
 // Observation tag management

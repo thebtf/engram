@@ -344,8 +344,8 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 
 **AFTER every task:**
 4. ` + "`store(content=\"...\", title=\"...\", tags=\"...\")`" + ` — save decisions, discoveries, patterns, and lessons learned. If you learned something worth knowing next session, store it.
-5. ` + "`feedback(action=\"rate\", id=N, useful=true)`" + ` — rate memories you used.
-6. ` + "`feedback(action=\"outcome\", outcome=\"success\")`" + ` — record session outcome when done.
+5. ` + "`feedback(action=\"rate\", id=N, rating=\"useful\")`" + ` — rate memories you used.
+6. ` + "`feedback(action=\"outcome\", session_id=\"<claude-session-id>\", outcome=\"success\")`" + ` — record session outcome when done.
 
 **Steps 4-6 are NOT optional.** Every completed task produces knowledge. Store it or it is lost forever.
 
@@ -430,7 +430,7 @@ Use ` + "`store(action=\"extract\", content=\"...\")`" + ` to let the LLM extrac
 **Before modifying code:** ` + "`recall(action=\"by_file\")`" + ` + ` + "`recall(action=\"preset\", preset=\"how_it_works\")`" + `
 **After completing a feature:** ` + "`store(content=\"...\", title=\"...\", type=\"decision\")`" + ` — capture what was built and why.
 **After fixing a bug:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture root cause and fix.
-**After research:** ` + "`store(content=\"...\", title=\"...\", type=\"insight\")`" + ` — capture findings.
+**After research:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture findings. (Do NOT use memory_type values like ` + "`insight`" + ` in the observation ` + "`type`" + ` field.)
 **Found a bug in another project:** ` + "`issues(action=\"create\", title=\"...\", target_project=\"...\", priority=\"high\")`" + ` — NOT store.
 **Debugging:** ` + "`recall(action=\"related\", id=N)`" + ` to trace cause chains.
 **Secrets:** ` + "`vault(action=\"store\")`" + ` for API keys. Never store secrets in observations.
@@ -481,7 +481,7 @@ func (s *Server) primaryTools() []Tool {
 					"id":            map[string]any{"type": "number", "description": "Observation ID (for edit)"},
 					"source_id":     map[string]any{"type": "number", "description": "Source observation ID (for merge)"},
 					"target_id":     map[string]any{"type": "number", "description": "Target observation ID (for merge)"},
-					"type":          map[string]any{"type": "string", "description": "Observation type (for create)"},
+					"type":          map[string]any{"type": "string", "enum": []string{"decision", "bugfix", "feature", "refactor", "discovery", "change", "guidance", "credential", "entity", "wiki", "pitfall", "operational", "timeline"}, "description": "Observation type (for create). Must be an observation type, not a memory_type value like insight/context/pattern."},
 					"tags":          map[string]any{"type": "string", "description": "Comma-separated tags (for create)"},
 					"scope":         map[string]any{"type": "string", "description": "Scope: project/global/agent (for create)"},
 					"always_inject": map[string]any{"type": "boolean", "description": "Always inject in context (for create, edit)"},
@@ -499,11 +499,12 @@ func (s *Server) primaryTools() []Tool {
 				"type":     "object",
 				"required": []string{"action"},
 				"properties": map[string]any{
-					"action":  map[string]any{"type": "string", "enum": []string{"rate", "suppress", "outcome"}, "description": "Action to perform (required)"},
-					"id":      map[string]any{"type": "number", "description": "Observation ID (for rate, suppress)"},
-					"useful":  map[string]any{"type": "boolean", "description": "Was it helpful? (for rate)"},
-					"outcome": map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome (for outcome action)"},
-					"reason":  map[string]any{"type": "string", "description": "Outcome reason (for outcome action)"},
+					"action":     map[string]any{"type": "string", "enum": []string{"rate", "suppress", "outcome"}, "description": "Action to perform (required)"},
+					"id":         map[string]any{"type": "number", "description": "Observation ID (for rate, suppress)"},
+					"rating":     map[string]any{"type": "string", "enum": []string{"useful", "not_useful"}, "description": "Rating value for action=rate"},
+					"session_id": map[string]any{"type": "string", "description": "Claude session ID string (required for action=outcome)"},
+					"outcome":    map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome (for action=outcome)"},
+					"reason":     map[string]any{"type": "string", "description": "Outcome reason (for action=outcome)"},
 				},
 			},
 		},

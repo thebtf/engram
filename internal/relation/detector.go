@@ -328,7 +328,7 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 	}
 
 	// 3. Vector similarity search for candidates in same project
-	where := vector.BuildWhereFilter(vector.DocTypeObservation, project, true)
+	where := vector.BuildWhereFilter(vector.DocTypeObservation, project, true, nil)
 	results, err := d.vectorClient.Query(ctx, embedText, candidateLimit, where)
 	if err != nil {
 		return fmt.Errorf("vector query: %w", err)

@@ -94,6 +94,7 @@ func ParseObservations(text string, correlationID string) []*models.ParsedObserv
 		concepts := extractArrayElements(obsContent, "concepts", "concept")
 		filesRead := extractArrayElements(obsContent, "files_read", "file")
 		filesModified := extractArrayElements(obsContent, "files_modified", "file")
+		commandsRun := extractArrayElements(obsContent, "commands_run", "command")
 
 		// Determine final type: category mapping takes precedence over <type> field.
 		// This ensures category-based extraction produces the correct observation type.
@@ -154,6 +155,7 @@ func ParseObservations(text string, correlationID string) []*models.ParsedObserv
 			Concepts:      cleanedConcepts,
 			FilesRead:     filesRead,
 			FilesModified: filesModified,
+			CommandsRun:   commandsRun,
 		})
 	}
 

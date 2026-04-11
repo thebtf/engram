@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -144,6 +145,175 @@ func TestRetrieveRelevant_WithoutFilePaths_OmitsFileScopeClause(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestRetrieveRelevant_TypedLanesRespectPerTypeThresholds(t *testing.T) {
+	service := newRetrievalTestService()
+	service.config.TypeLanesEnabled = true
+	service.config.TypeSearchLanes = config.DefaultTypeSearchLanes
+	service.retrievalHooks.vectorQuery = func(_ context.Context, _ string, _ int, _ vector.WhereFilter) ([]vector.QueryResult, error) {
+		return []vector.QueryResult{
+			{Similarity: 0.22, Metadata: map[string]any{"sqlite_id": float64(1), "doc_type": "observation", "project": "engram"}},
+			{Similarity: 0.50, Metadata: map[string]any{"sqlite_id": float64(2), "doc_type": "observation", "project": "engram"}},
+		}, nil
+	}
+	service.retrievalHooks.getObservationsByIDs = func(_ context.Context, _ []int64, _ string, _ int) ([]*models.Observation, error) {
+		guidance := newObservation(1, "Guidance")
+		guidance.Type = models.ObsTypeGuidance
+		decision := newObservation(2, "Decision")
+		decision.Type = models.ObsTypeDecision
+		return []*models.Observation{guidance, decision}, nil
+	}
+
+	observations, _, err := service.RetrieveRelevant(context.Background(), "engram", "query", RetrievalOptions{MaxResults: 10})
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	require.Equal(t, int64(1), observations[0].ID)
+}
+
+func TestRetrieveRelevant_TypedLanesWeightMultiplication(t *testing.T) {
+	service := newRetrievalTestService()
+	service.config.TypeLanesEnabled = true
+	service.config.TypeSearchLanes = map[string]config.SearchLaneConfig{
+		"feature": {
+			MinScore:       0.10,
+			TopK:           10,
+			RerankerWeight: 2.0,
+		},
+		"bugfix": {
+			MinScore:       0.10,
+			TopK:           10,
+			RerankerWeight: 0.5,
+		},
+		"default": {
+			MinScore:       0.10,
+			TopK:           10,
+			RerankerWeight: 1.0,
+		},
+	}
+	service.retrievalHooks.vectorQuery = func(_ context.Context, _ string, _ int, _ vector.WhereFilter) ([]vector.QueryResult, error) {
+		return []vector.QueryResult{
+			{Similarity: 0.50, Metadata: map[string]any{"sqlite_id": float64(1), "doc_type": "observation", "project": "engram"}},
+			{Similarity: 0.50, Metadata: map[string]any{"sqlite_id": float64(2), "doc_type": "observation", "project": "engram"}},
+		}, nil
+	}
+	service.retrievalHooks.getObservationsByIDs = func(_ context.Context, ids []int64, _ string, _ int) ([]*models.Observation, error) {
+		feature := newObservation(1, "Feature")
+		feature.Type = models.ObsTypeFeature
+		bugfix := newObservation(2, "Bugfix")
+		bugfix.Type = models.ObsTypeBugfix
+		return []*models.Observation{feature, bugfix}, nil
+	}
+
+	_, scores, err := service.RetrieveRelevant(context.Background(), "engram", "query", RetrievalOptions{MaxResults: 10})
+	require.NoError(t, err)
+	require.Greater(t, scores[1], scores[2], "feature should get higher lane weight than bugfix")
+}
+
+func TestRetrieveRelevant_TypedLanesDisabledPreservesSingleLaneBehavior(t *testing.T) {
+	service := newRetrievalTestService()
+	service.config.TypeLanesEnabled = false
+	service.retrievalHooks.vectorQuery = func(_ context.Context, _ string, _ int, _ vector.WhereFilter) ([]vector.QueryResult, error) {
+		return []vector.QueryResult{
+			{Similarity: 0.22, Metadata: map[string]any{"sqlite_id": float64(1), "doc_type": "observation", "project": "engram"}},
+			{Similarity: 0.50, Metadata: map[string]any{"sqlite_id": float64(2), "doc_type": "observation", "project": "engram"}},
+		}, nil
+	}
+	service.retrievalHooks.getObservationsByIDs = func(_ context.Context, _ []int64, _ string, _ int) ([]*models.Observation, error) {
+		guidance := newObservation(1, "Guidance")
+		guidance.Type = models.ObsTypeGuidance
+		decision := newObservation(2, "Decision")
+		decision.Type = models.ObsTypeDecision
+		return []*models.Observation{guidance, decision}, nil
+	}
+
+	observations, _, err := service.RetrieveRelevant(context.Background(), "engram", "query", RetrievalOptions{MaxResults: 10})
+	require.NoError(t, err)
+	require.Len(t, observations, 2)
+}
+
+func TestExtractSessionEntitySeeds_UsesPromptAndSessionEntities(t *testing.T) {
+	service := newRetrievalTestService()
+	service.retrievalHooks.getLastPromptBySession = func(_ context.Context, project, sessionID string) (*models.UserPromptWithSession, error) {
+		require.Equal(t, "engram", project)
+		require.Equal(t, "session-1", sessionID)
+		return &models.UserPromptWithSession{UserPrompt: models.UserPrompt{PromptText: "authctx extra authctx"}}, nil
+	}
+	service.retrievalHooks.getEntityObservationsBySession = func(_ context.Context, sessionID string) ([]*models.Observation, error) {
+		require.Equal(t, "session-1", sessionID)
+		entity1 := newObservation(10, "authctx")
+		entity1.Type = models.ObsTypeEntity
+		entity1.FilesRead = []string{"internal/authctx.go"}
+		entity2 := newObservation(11, "billing")
+		entity2.Type = models.ObsTypeEntity
+		entity2.FilesModified = []string{"pkg/billing.go"}
+		entity3 := newObservation(12, "extra")
+		entity3.Type = models.ObsTypeEntity
+		return []*models.Observation{entity1, entity2, entity3}, nil
+	}
+
+	seeds := service.ExtractSessionEntitySeeds(context.Background(), "session-1", "engram")
+	require.Equal(t, []int64{10, 11, 12}, seeds)
+}
+
+func TestExtractSessionEntitySeeds_LimitsToFiveUniqueIDs(t *testing.T) {
+	service := newRetrievalTestService()
+	service.retrievalHooks.getLastPromptBySession = func(_ context.Context, _, _ string) (*models.UserPromptWithSession, error) {
+		return &models.UserPromptWithSession{UserPrompt: models.UserPrompt{PromptText: "a b c d e f g"}}, nil
+	}
+	service.retrievalHooks.getEntityObservationsBySession = func(_ context.Context, _ string) ([]*models.Observation, error) {
+		observations := make([]*models.Observation, 0, 7)
+		for i, title := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+			entity := newObservation(int64(i+1), title)
+			entity.Type = models.ObsTypeEntity
+			observations = append(observations, entity)
+		}
+		return observations, nil
+	}
+
+	seeds := service.ExtractSessionEntitySeeds(context.Background(), "session-1", "engram")
+	require.Equal(t, []int64{1, 2, 3, 4, 5}, seeds)
+}
+
+func TestRetrieveRelevant_InjectGraphBFSEnabled_FusesGraphNeighbors(t *testing.T) {
+	service := newRetrievalTestService()
+	service.config.InjectGraphBFSEnabled = true
+	service.retrievalHooks.getLastPromptBySession = func(_ context.Context, _, _ string) (*models.UserPromptWithSession, error) {
+		return &models.UserPromptWithSession{UserPrompt: models.UserPrompt{PromptText: "authctx"}}, nil
+	}
+	service.retrievalHooks.getEntityObservationsBySession = func(_ context.Context, _ string) ([]*models.Observation, error) {
+		entity := newObservation(100, "authctx")
+		entity.Type = models.ObsTypeEntity
+		entity.FilesRead = []string{"internal/auth.go"}
+		return []*models.Observation{entity}, nil
+	}
+	service.retrievalHooks.getGraphNeighbors = func(_ context.Context, obsID int64, maxHops int, limit int) ([]int64, error) {
+		require.Equal(t, int64(100), obsID)
+		require.Equal(t, 2, maxHops)
+		require.Equal(t, 10, limit)
+		return []int64{42}, nil
+	}
+	service.retrievalHooks.vectorQuery = func(_ context.Context, _ string, _ int, _ vector.WhereFilter) ([]vector.QueryResult, error) {
+		return []vector.QueryResult{}, nil
+	}
+	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ gorm.ScopeFilter, _ int) ([]*models.Observation, error) {
+		return []*models.Observation{}, nil
+	}
+	service.retrievalHooks.getObservationsByIDs = func(_ context.Context, ids []int64, _ string, _ int) ([]*models.Observation, error) {
+		result := make([]*models.Observation, 0, len(ids))
+		for _, id := range ids {
+			obs := newObservation(id, "Graph seeded")
+			obs.Type = models.ObsTypeDiscovery
+			result = append(result, obs)
+		}
+		return result, nil
+	}
+
+	observations, scores, err := service.RetrieveRelevant(context.Background(), "engram", "auth query", RetrievalOptions{MaxResults: 10, SessionID: "session-1"})
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	require.Equal(t, int64(42), observations[0].ID)
+	require.NotZero(t, scores[42])
 }
 
 func newRetrievalTestService() *Service {

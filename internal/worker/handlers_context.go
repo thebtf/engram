@@ -624,6 +624,16 @@ func compactObservations(observations []*models.Observation) []map[string]any {
 	return compactObservationsWithLimit(observations, -1)
 }
 
+func projectBriefingNarrative(enabled bool, briefing *models.Observation) any {
+	if !enabled {
+		return nil
+	}
+	if briefing == nil || !briefing.Narrative.Valid || strings.TrimSpace(briefing.Narrative.String) == "" {
+		return nil
+	}
+	return briefing.Narrative.String
+}
+
 // compactObservationsWithLimit converts observations to compact format.
 // First `fullCount` observations get full detail (narrative + facts).
 // Remaining observations get condensed format (title + subtitle only).
@@ -1008,6 +1018,17 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		recentIDs[obs.ID] = struct{}{}
 	}
 
+	// --- Project briefing section: optional synthesized per-project digest (FR-6) ---
+	var projectBriefing *models.Observation
+	if s.config.ProjectBriefingEnabled && s.observationStore != nil {
+		briefingObs, briefingErr := s.observationStore.GetProjectBriefingObservation(ctx, project)
+		if briefingErr != nil {
+			log.Debug().Err(briefingErr).Str("project", project).Msg("Failed to fetch project briefing observation")
+		} else {
+			projectBriefing = briefingObs
+		}
+	}
+
 	// --- Always-inject section: observations tagged with "always-inject" concept (FR-1, FR-6) ---
 	var alwaysInjectObservations []*models.Observation
 	alwaysInjectLimit := s.config.AlwaysInjectLimit
@@ -1240,6 +1261,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"relevant":           compactObservations(relevantObservations),
 			"guidance":           compactObservations(guidanceObservations),
 			"always_inject":      compactObservations(alwaysInjectObservations),
+			"project_briefing":   projectBriefingNarrative(s.config.ProjectBriefingEnabled, projectBriefing),
 			"full_count":         fullCount,
 			"stale_excluded":     staleCount,
 			"duplicates_removed": duplicatesRemoved,
@@ -1255,6 +1277,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"relevant":           relevantObservations,
 			"guidance":           guidanceObservations,
 			"always_inject":      alwaysInjectObservations,
+			"project_briefing":   projectBriefingNarrative(s.config.ProjectBriefingEnabled, projectBriefing),
 			"full_count":         fullCount,
 			"stale_excluded":     staleCount,
 			"duplicates_removed": duplicatesRemoved,

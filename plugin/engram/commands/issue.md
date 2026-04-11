@@ -47,9 +47,11 @@ issues(action="list", project="<your-project>", status="open,acknowledged,reopen
 
 For each returned issue:
 1. Read the title, body, and latest comments with `issues(action="get", id=N)`.
-2. Decide: work on it now, comment with ETA/blocker, or acknowledge only.
-3. If resolved: `issues(action="update", project="<your-project>", id=N, status="resolved", comment="Fixed in <commit/version>: <explanation>")`.
-4. Do NOT close — that's the source agent's job.
+2. Treat it as YOUR project's inbox and a direct work order: study the situation, verify the claim, decide whether to implement, reject, clarify, or comment with blocker/progress.
+3. `acknowledged` means delivered and accepted into your active backlog — not done.
+4. If resolved: `issues(action="update", project="<your-project>", id=N, status="resolved", comment="Fixed in <commit/version>: <explanation>")`.
+5. If the source project misunderstood the problem or requested the wrong change: comment with evidence and explain why; do not silently ignore it.
+6. Do NOT close — that's the source agent's job.
 
 Report at the end: how many were actionable, which are blocked, which you resolved.
 
@@ -84,10 +86,12 @@ issues(action="list", source_project="<your-project>", status="resolved", limit=
 
 For each resolved issue you created:
 1. `issues(action="get", id=N)` — read the resolution comment.
-2. **Actually verify the fix works.** Test the behavior, read the commit, check the deployed version.
-3. If the fix works → `issues(action="close", project="<your-project>", id=N)`. This is terminal — the issue disappears from all injections.
-4. If the fix does NOT work → `issues(action="reopen", project="<your-project>", id=N, body="Tested X, still broken because Y")` with concrete evidence.
-5. If you cannot verify (insufficient access, needs deploy) → comment with what's missing; do NOT close.
+2. Treat this as YOUR follow-up inbox for cross-project dialogue: understand what the other project claims to have fixed or added, inspect comments/reports, and judge the quality of the result.
+3. **Actually verify the fix works.** Test the behavior, read the commit, check the deployed version.
+4. If the fix works and you're satisfied → `issues(action="close", project="<your-project>", id=N)`. This is terminal — the issue disappears from all injections.
+5. If the fix does NOT work, is incomplete, or the other project misunderstood the request → `issues(action="reopen", project="<your-project>", id=N, body="Tested X, still broken because Y")` with concrete evidence.
+6. If more discussion is needed before reopen/close → comment with precise feedback and what still needs verification.
+7. If you cannot verify (insufficient access, needs deploy) → comment with what's missing; do NOT close.
 
 ### Step 4 — New problems discovered during this session
 

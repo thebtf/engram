@@ -1885,6 +1885,46 @@ func TestToolInputSchema(t *testing.T) {
 	}
 }
 
+func TestPrimaryToolSchemas_FeedbackAndStore(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	resp := server.handleToolsList(&Request{JSONRPC: "2.0", ID: 1, Method: "tools/list"})
+	result := resp.Result.(map[string]any)
+	tools := result["tools"].([]Tool)
+
+	var feedbackTool *Tool
+	var storeTool *Tool
+	for i := range tools {
+		switch tools[i].Name {
+		case "feedback":
+			feedbackTool = &tools[i]
+		case "store":
+			storeTool = &tools[i]
+		}
+	}
+
+	require.NotNil(t, feedbackTool)
+	require.NotNil(t, storeTool)
+
+	feedbackProps := feedbackTool.InputSchema["properties"].(map[string]any)
+	_, hasUseful := feedbackProps["useful"]
+	assert.False(t, hasUseful, "feedback schema should advertise rating enum, not useful boolean")
+	_, hasRating := feedbackProps["rating"]
+	assert.True(t, hasRating, "feedback schema should expose rating field")
+	_, hasSessionID := feedbackProps["session_id"]
+	assert.True(t, hasSessionID, "feedback schema should expose session_id for outcome action")
+
+	storeProps := storeTool.InputSchema["properties"].(map[string]any)
+	typeSchema := storeProps["type"].(map[string]any)
+	enumValues := typeSchema["enum"].([]string)
+	assert.Contains(t, enumValues, "decision")
+	assert.Contains(t, enumValues, "discovery")
+	assert.Contains(t, enumValues, "pitfall")
+	assert.Contains(t, enumValues, "timeline")
+	assert.NotContains(t, enumValues, "insight")
+}
+
 // TestCallTool_UnknownToolName tests callTool with various unknown tool names.
 func TestCallTool_UnknownToolName(t *testing.T) {
 	t.Parallel()

@@ -190,7 +190,11 @@ type Config struct {
 	InjectionFloor               int      `json:"injection_floor"`                 // ENGRAM_INJECTION_FLOOR (default: 0)
 	InjectUnified                bool     `json:"inject_unified"`                  // ENGRAM_INJECT_UNIFIED (default: true) — emergency rollback flag; removed after two release cycles
 	TypeLanesEnabled             bool     `json:"type_lanes_enabled"`              // ENGRAM_TYPE_LANES_ENABLED (default: false)
-	SessionBoost                 float64  `json:"session_boost"`                   // ENGRAM_SESSION_BOOST (default: 1.3)
+	ProjectBriefingEnabled       bool     `json:"project_briefing_enabled"`        // ENGRAM_PROJECT_BRIEFING_ENABLED (default: false)
+	WriteMergeEnabled             bool     `json:"write_merge_enabled"`              // ENGRAM_WRITE_MERGE_ENABLED (default: false)
+	ContradictionDetectionEnabled bool     `json:"contradiction_detection_enabled"`  // ENGRAM_CONTRADICTION_DETECTION_ENABLED (default: true)
+	InjectGraphBFSEnabled         bool     `json:"inject_graph_bfs_enabled"`         // ENGRAM_INJECT_GRAPH_BFS_ENABLED (default: false)
+	SessionBoost                  float64  `json:"session_boost"`                    // ENGRAM_SESSION_BOOST (default: 1.3)
 	TypeSearchLanes              map[string]SearchLaneConfig `json:"type_search_lanes"` // typed lane overrides; merged over DefaultTypeSearchLanes
 
 	// Injection strategy A/B testing (closed-loop learning FR-5)
@@ -364,7 +368,11 @@ func Default() *Config {
 		InjectionFloor:                 0,     // Silence path: 0 = disabled (v4 default, FR-1). Operators can set ENGRAM_INJECTION_FLOOR=3 for legacy fill behavior.
 		InjectUnified:                  true,  // Use unified RetrieveRelevant path for inject (FR-3). Set ENGRAM_INJECT_UNIFIED=false for emergency rollback.
 		TypeLanesEnabled:               false, // Opt-in: typed lane dispatch for retrieval (FR-8)
-		SessionBoost:                   1.3,   // Boost factor for observations from recently active sessions
+		ProjectBriefingEnabled:          false, // Opt-in: inject synthesized per-project briefing block (FR-6 / T029)
+		WriteMergeEnabled:               false, // Opt-in: write-time merge path for observations (FR-10 / T040)
+		ContradictionDetectionEnabled:   true,  // Safety default until operators disable the old supersede path explicitly (T038a)
+		InjectGraphBFSEnabled:           false, // Opt-in: entity-seeded BFS traversal for inject path (US8 / T042)
+		SessionBoost:                    1.3,   // Boost factor for observations from recently active sessions
 		TypeSearchLanes:                cloneTypeSearchLanes(DefaultTypeSearchLanes),
 		InjectionStrategies:            []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
 		InjectionStrategyMode:          "round-robin",
@@ -503,6 +511,18 @@ func Load() (*Config, error) {
 			}
 			if v, ok := settings["ENGRAM_TYPE_LANES_ENABLED"].(bool); ok {
 				cfg.TypeLanesEnabled = v
+			}
+			if v, ok := settings["ENGRAM_PROJECT_BRIEFING_ENABLED"].(bool); ok {
+				cfg.ProjectBriefingEnabled = v
+			}
+			if v, ok := settings["ENGRAM_WRITE_MERGE_ENABLED"].(bool); ok {
+				cfg.WriteMergeEnabled = v
+			}
+			if v, ok := settings["ENGRAM_CONTRADICTION_DETECTION_ENABLED"].(bool); ok {
+				cfg.ContradictionDetectionEnabled = v
+			}
+			if v, ok := settings["ENGRAM_INJECT_GRAPH_BFS_ENABLED"].(bool); ok {
+				cfg.InjectGraphBFSEnabled = v
 			}
 			if raw, ok := settings["type_search_lanes"]; ok {
 				cfg.TypeSearchLanes = mergeTypeSearchLanes(DefaultTypeSearchLanes, raw)
@@ -733,6 +753,26 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_TYPE_LANES_ENABLED")); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TypeLanesEnabled = b
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_PROJECT_BRIEFING_ENABLED")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.ProjectBriefingEnabled = b
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_WRITE_MERGE_ENABLED")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.WriteMergeEnabled = b
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONTRADICTION_DETECTION_ENABLED")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.ContradictionDetectionEnabled = b
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECT_GRAPH_BFS_ENABLED")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.InjectGraphBFSEnabled = b
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_SESSION_BOOST")); v != "" {

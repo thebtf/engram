@@ -4,6 +4,7 @@ import {
   fetchLearningCurve,
   fetchStrategies,
   fetchEffectivenessDistribution,
+  fetchHitRateAnalytics,
   type LearningCurvePoint,
   type StrategyRow,
 } from '@/utils/api'
@@ -21,6 +22,8 @@ const effYellow = ref(0)
 const effRed = ref(0)
 const effGray = ref(0)
 const effTotal = ref(0)
+const hitRateHighValue = ref(0)
+const hitRateNoiseCandidates = ref(0)
 
 let abortController: AbortController | null = null
 
@@ -31,10 +34,11 @@ async function loadAll() {
   error.value = null
 
   try {
-    const [curveData, strategiesData, distData] = await Promise.all([
+    const [curveData, strategiesData, distData, hitRateData] = await Promise.all([
       fetchLearningCurve(selectedDays.value, undefined, abortController.signal).catch(() => ({ data_points: [] })),
       fetchStrategies(abortController.signal).catch(() => ({ strategies: [] })),
       fetchEffectivenessDistribution(abortController.signal).catch(() => ({ high: 0, medium: 0, low: 0, insufficient: 0, total: 0 })),
+      fetchHitRateAnalytics(abortController.signal).catch(() => ({ high_value: 0, noise_candidates: 0, observations: [], total: 0 })),
     ])
 
     curvePoints.value = curveData.data_points || []
@@ -45,6 +49,8 @@ async function loadAll() {
     effRed.value = distData.low
     effGray.value = distData.insufficient
     effTotal.value = distData.total
+    hitRateHighValue.value = hitRateData.high_value
+    hitRateNoiseCandidates.value = hitRateData.noise_candidates
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
     error.value = err instanceof Error ? err.message : 'Failed to load learning data'
@@ -227,7 +233,28 @@ function outcomeColor(rate: number): string {
         </div>
       </div>
 
-      <!-- Section 3: Strategy Comparison -->
+      <!-- Section 3: Citation-Rate Trend -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-5">
+        <h2 class="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+          <i class="fas fa-bullseye text-orange-400" />
+          Citation-Rate Trend
+        </h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+            <div class="text-xs text-slate-500 uppercase tracking-wide mb-1">High value</div>
+            <div class="text-2xl font-semibold text-green-400">{{ hitRateHighValue }}</div>
+            <div class="text-xs text-slate-500 mt-1">Observations tagged as high_value by hit-rate analysis</div>
+          </div>
+          <div class="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+            <div class="text-xs text-slate-500 uppercase tracking-wide mb-1">Noise candidates</div>
+            <div class="text-2xl font-semibold text-red-400">{{ hitRateNoiseCandidates }}</div>
+            <div class="text-xs text-slate-500 mt-1">Observations injected repeatedly with no citations</div>
+          </div>
+        </div>
+        <p class="text-xs text-slate-500 mt-3">This widget summarizes citation-rate signals from the server-side hit_rate analytics path and gives a fast noise-vs-value snapshot for the current corpus.</p>
+      </div>
+
+      <!-- Section 4: Strategy Comparison -->
       <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-5">
         <h2 class="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
           <i class="fas fa-flask text-orange-400" />

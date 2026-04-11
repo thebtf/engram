@@ -19,23 +19,23 @@ import (
 
 // SDKSession represents a Claude Code session.
 type SDKSession struct {
-	ClaudeSessionID   string         `gorm:"uniqueIndex;not null"`
-	Project           string         `gorm:"index;not null"`
-	Status            string         `gorm:"type:text;check:status IN ('active', 'completed', 'failed');default:'active';index"`
-	StartedAt         string         `gorm:"not null"`
-	SDKSessionID      sql.NullString `gorm:"uniqueIndex"`
-	UserPrompt        sql.NullString
-	CompletedAt       sql.NullString
-	WorkerPort        sql.NullInt64
-	CompletedAtEpoch  sql.NullInt64
-	Outcome           sql.NullString `gorm:"type:text"`
-	OutcomeReason     sql.NullString `gorm:"type:text"`
-	OutcomeRecordedAt sql.NullString `gorm:"type:timestamptz"`
-	UtilityPropagatedAt sql.NullTime `gorm:"type:timestamptz"`
-	InjectionStrategy sql.NullString `gorm:"type:text"`
-	ID                int64          `gorm:"primaryKey;autoIncrement"`
-	PromptCounter     int            `gorm:"default:0"`
-	StartedAtEpoch    int64          `gorm:"index:idx_sessions_started,sort:desc;not null"`
+	ClaudeSessionID     string         `gorm:"uniqueIndex;not null"`
+	Project             string         `gorm:"index;not null"`
+	Status              string         `gorm:"type:text;check:status IN ('active', 'completed', 'failed');default:'active';index"`
+	StartedAt           string         `gorm:"not null"`
+	SDKSessionID        sql.NullString `gorm:"uniqueIndex"`
+	UserPrompt          sql.NullString
+	CompletedAt         sql.NullString
+	WorkerPort          sql.NullInt64
+	CompletedAtEpoch    sql.NullInt64
+	Outcome             sql.NullString `gorm:"type:text"`
+	OutcomeReason       sql.NullString `gorm:"type:text"`
+	OutcomeRecordedAt   sql.NullString `gorm:"type:timestamptz"`
+	UtilityPropagatedAt sql.NullTime   `gorm:"type:timestamptz"`
+	InjectionStrategy   sql.NullString `gorm:"type:text"`
+	ID                  int64          `gorm:"primaryKey;autoIncrement"`
+	PromptCounter       int            `gorm:"default:0"`
+	StartedAtEpoch      int64          `gorm:"index:idx_sessions_started,sort:desc;not null"`
 }
 
 func (SDKSession) TableName() string { return "sdk_sessions" }
@@ -54,49 +54,50 @@ func (s *SDKSession) BeforeCreate(tx *gorm.DB) error {
 // Observation represents a stored observation (learning).
 // Field order optimized for memory alignment (fieldalignment).
 type Observation struct {
-	FileMtimes      models.JSONInt64Map     `gorm:"type:text"`
-	SDKSessionID    string                  `gorm:"index;not null"`
-	Project         string                  `gorm:"index:idx_observations_project;index:idx_observations_project_created,priority:1;not null"`
-	Scope           models.ObservationScope `gorm:"type:text;default:'project';check:scope IN ('project', 'global', 'agent');index:idx_observations_scope;index:idx_observations_project_scope,priority:2"`
-	AgentID         string                  `gorm:"type:text;default:'';index:idx_observations_agent_id"`
-	AgentSource     models.AgentSource      `gorm:"type:text;default:'unknown';index:idx_observations_agent_source"`
-	Type            models.ObservationType  `gorm:"type:text;check:type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change', 'guidance', 'credential', 'entity', 'wiki', 'pitfall', 'operational', 'timeline');index;not null"`
-	MemoryType      models.MemoryType       `gorm:"type:text;index:idx_observations_memory_type"`
-	SourceType      models.SourceType       `gorm:"type:text;index:idx_observations_source_type"`
-	CreatedAt       string                  `gorm:"not null"`
-	Facts           models.JSONStringArray  `gorm:"type:text"`
-	Rejected        models.JSONStringArray  `gorm:"type:jsonb;default:'[]'"`
-	Narrative       sql.NullString          `gorm:"type:text"`
-	Concepts        models.JSONStringArray  `gorm:"type:jsonb"`
-	FilesRead       models.JSONStringArray  `gorm:"type:jsonb"`
-	FilesModified   models.JSONStringArray  `gorm:"type:jsonb"`
-	Subtitle        sql.NullString          `gorm:"type:text"`
-	Title           sql.NullString          `gorm:"type:text"`
-	ArchivedReason  sql.NullString
-	ScoreUpdatedAt  sql.NullInt64 `gorm:"column:score_updated_at_epoch;index:idx_observations_score_updated"`
-	PromptNumber    sql.NullInt64
-	ArchivedAt      sql.NullInt64 `gorm:"column:archived_at_epoch"`
-	LastRetrievedAt sql.NullInt64 `gorm:"column:last_retrieved_at_epoch"`
-	ID              int64         `gorm:"primaryKey;autoIncrement"`
-	ImportanceScore float64       `gorm:"type:real;default:1.0;index:idx_observations_importance,priority:1,sort:desc"`
-	UtilityScore    float64       `gorm:"type:real;default:0.5"`
-	UserFeedback    int           `gorm:"not null;default:0"`
-	IsSuppressed    bool          `gorm:"not null;default:false"`
-	RetrievalCount  int           `gorm:"default:0"`
-	InjectionCount  int           `gorm:"default:0"`
-	CreatedAtEpoch  int64         `gorm:"index:idx_observations_created,sort:desc;index:idx_observations_project_created,priority:2,sort:desc;not null"`
-	DiscoveryTokens int64         `gorm:"default:0"`
-	IsSuperseded    int           `gorm:"default:0;index:idx_observations_superseded;index:idx_observations_active,priority:2"`
-	IsArchived                  int            `gorm:"default:0;index:idx_observations_archived;index:idx_observations_active,priority:1"`
-	EncryptedSecret             []byte         `gorm:"type:bytea"`
-	EncryptionKeyFingerprint    sql.NullString `gorm:"type:text"`
-	ExpiresAt                   sql.NullTime   `gorm:"type:timestamptz"`
-	TtlDays                     sql.NullInt32
-	Status                      string         `gorm:"column:status;default:active"`
-	StatusReason                sql.NullString `gorm:"column:status_reason"`
-	EffectivenessScore          float64        `gorm:"type:real;default:0"`
-	EffectivenessInjections     int            `gorm:"default:0"`
-	EffectivenessSuccesses      int            `gorm:"default:0"`
+	FileMtimes               models.JSONInt64Map     `gorm:"type:text"`
+	SDKSessionID             string                  `gorm:"index;not null"`
+	Project                  string                  `gorm:"index:idx_observations_project;index:idx_observations_project_created,priority:1;not null"`
+	Scope                    models.ObservationScope `gorm:"type:text;default:'project';check:scope IN ('project', 'global', 'agent');index:idx_observations_scope;index:idx_observations_project_scope,priority:2"`
+	AgentID                  string                  `gorm:"type:text;default:'';index:idx_observations_agent_id"`
+	AgentSource              models.AgentSource      `gorm:"type:text;default:'unknown';index:idx_observations_agent_source"`
+	Type                     models.ObservationType  `gorm:"type:text;check:type IN ('decision', 'bugfix', 'feature', 'refactor', 'discovery', 'change', 'guidance', 'credential', 'entity', 'wiki', 'pitfall', 'operational', 'timeline');index;not null"`
+	MemoryType               models.MemoryType       `gorm:"type:text;index:idx_observations_memory_type"`
+	SourceType               models.SourceType       `gorm:"type:text;index:idx_observations_source_type"`
+	CreatedAt                string                  `gorm:"not null"`
+	Facts                    models.JSONStringArray  `gorm:"type:text"`
+	Rejected                 models.JSONStringArray  `gorm:"type:jsonb;default:'[]'"`
+	Narrative                sql.NullString          `gorm:"type:text"`
+	Concepts                 models.JSONStringArray  `gorm:"type:jsonb"`
+	FilesRead                models.JSONStringArray  `gorm:"type:jsonb"`
+	FilesModified            models.JSONStringArray  `gorm:"type:jsonb"`
+	CommandsRun              models.JSONStringArray  `gorm:"type:jsonb"`
+	Subtitle                 sql.NullString          `gorm:"type:text"`
+	Title                    sql.NullString          `gorm:"type:text"`
+	ArchivedReason           sql.NullString
+	ScoreUpdatedAt           sql.NullInt64 `gorm:"column:score_updated_at_epoch;index:idx_observations_score_updated"`
+	PromptNumber             sql.NullInt64
+	ArchivedAt               sql.NullInt64  `gorm:"column:archived_at_epoch"`
+	LastRetrievedAt          sql.NullInt64  `gorm:"column:last_retrieved_at_epoch"`
+	ID                       int64          `gorm:"primaryKey;autoIncrement"`
+	ImportanceScore          float64        `gorm:"type:real;default:1.0;index:idx_observations_importance,priority:1,sort:desc"`
+	UtilityScore             float64        `gorm:"type:real;default:0.5"`
+	UserFeedback             int            `gorm:"not null;default:0"`
+	IsSuppressed             bool           `gorm:"not null;default:false"`
+	RetrievalCount           int            `gorm:"default:0"`
+	InjectionCount           int            `gorm:"default:0"`
+	CreatedAtEpoch           int64          `gorm:"index:idx_observations_created,sort:desc;index:idx_observations_project_created,priority:2,sort:desc;not null"`
+	DiscoveryTokens          int64          `gorm:"default:0"`
+	IsSuperseded             int            `gorm:"default:0;index:idx_observations_superseded;index:idx_observations_active,priority:2"`
+	IsArchived               int            `gorm:"default:0;index:idx_observations_archived;index:idx_observations_active,priority:1"`
+	EncryptedSecret          []byte         `gorm:"type:bytea"`
+	EncryptionKeyFingerprint sql.NullString `gorm:"type:text"`
+	ExpiresAt                sql.NullTime   `gorm:"type:timestamptz"`
+	TtlDays                  sql.NullInt32
+	Status                   string         `gorm:"column:status;default:active"`
+	StatusReason             sql.NullString `gorm:"column:status_reason"`
+	EffectivenessScore       float64        `gorm:"type:real;default:0"`
+	EffectivenessInjections  int            `gorm:"default:0"`
+	EffectivenessSuccesses   int            `gorm:"default:0"`
 }
 
 func (Observation) TableName() string { return "observations" }
@@ -366,12 +367,12 @@ func (TelemetrySnapshot) TableName() string { return "telemetry_snapshots" }
 // Maps a canonical git-remote-based project ID to optional legacy path-based aliases,
 // enabling zero-downtime migration when clients upgrade to git-remote IDs.
 type Project struct {
-	GitRemote    sql.NullString         `gorm:"column:git_remote;index"`
-	RelativePath sql.NullString         `gorm:"column:relative_path"`
-	DisplayName  sql.NullString         `gorm:"column:display_name"`
-	LegacyIDs    pq.StringArray         `gorm:"column:legacy_ids;type:text[]"`
-	ID           string                 `gorm:"primaryKey"`
-	CreatedAt    time.Time              `gorm:"autoCreateTime"`
+	GitRemote    sql.NullString `gorm:"column:git_remote;index"`
+	RelativePath sql.NullString `gorm:"column:relative_path"`
+	DisplayName  sql.NullString `gorm:"column:display_name"`
+	LegacyIDs    pq.StringArray `gorm:"column:legacy_ids;type:text[]"`
+	ID           string         `gorm:"primaryKey"`
+	CreatedAt    time.Time      `gorm:"autoCreateTime"`
 }
 
 func (Project) TableName() string { return "projects" }
@@ -399,11 +400,11 @@ func (APIToken) TableName() string { return "api_tokens" }
 // to arrive at a decision, enabling future agents to learn from
 // high-quality reasoning patterns.
 type ReasoningTrace struct {
-	SDKSessionID   string `gorm:"column:sdk_session_id;index"`
-	Project        string `gorm:"index;default:''"`
-	Steps          string `gorm:"type:jsonb;default:'[]'"`
-	TaskContext    string `gorm:"type:jsonb;default:'{}'"`
-	ID             int64  `gorm:"primaryKey;autoIncrement"`
+	SDKSessionID   string  `gorm:"column:sdk_session_id;index"`
+	Project        string  `gorm:"index;default:''"`
+	Steps          string  `gorm:"type:jsonb;default:'[]'"`
+	TaskContext    string  `gorm:"type:jsonb;default:'{}'"`
+	ID             int64   `gorm:"primaryKey;autoIncrement"`
 	QualityScore   float64 `gorm:"column:quality_score;type:real;default:0;index"`
 	CreatedAt      time.Time
 	CreatedAtEpoch int64 `gorm:"column:created_at_epoch;default:0"`
