@@ -392,6 +392,7 @@ func (s *SessionStore) GetSessionsWithPendingOutcome(ctx context.Context) ([]Pen
 			WHERE oi.session_id = s.claude_session_id
 			AND oi.injected_at > NOW() - INTERVAL '10 minutes'
 		)
+		AND (s.utility_propagated_at IS NULL OR s.utility_propagated_at < NOW() - INTERVAL '2 hours')
 	`).Scan(&rows).Error
 	if err != nil {
 		return nil, err
