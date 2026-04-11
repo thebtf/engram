@@ -28,10 +28,16 @@ for i in $(seq 1 "${N}"); do
         -X POST "${ENDPOINT}" \
         -H "Content-Type: application/json" \
         ${ENGRAM_API_TOKEN:+-H "Authorization: Bearer ${ENGRAM_API_TOKEN}"} \
-        -d "${BODY}")
+        -d "${BODY}") || true
 
     HTTP_CODE=$(echo "${HTTP_RESPONSE}" | awk '{print $1}')
     TIME_TOTAL=$(echo "${HTTP_RESPONSE}" | awk '{print $2}')
+
+    if [[ -z "${HTTP_CODE}" || "${HTTP_CODE}" == "000" ]]; then
+        echo "" >&2
+        echo "ERROR: curl failed to get HTTP code — server unreachable at ${ENGRAM_URL}" >&2
+        exit 2
+    fi
 
     if [[ "${HTTP_CODE}" -lt 200 || "${HTTP_CODE}" -ge 300 ]]; then
         echo "" >&2
