@@ -169,38 +169,12 @@ func (c *Client) Query(ctx context.Context, query string, limit int, where vecto
 	args = append(args, queryVec)
 	argIdx := 2
 
-	// allowedColumns is the set of column identifiers permitted in WHERE clauses.
-	// This prevents SQL injection via unvalidated column names in fmt.Sprintf.
-	allowedColumns := map[string]struct{}{
-		"doc_type":   {},
-		"project":    {},
-		"scope":      {},
-		"field_type": {},
-		"sqlite_id":  {},
+	whereClauses, whereArgs, err := buildWhereClauses(where, argIdx)
+	if err != nil {
+		return nil, err
 	}
-
-	var whereClauses []string
-	for _, clause := range where.Clauses {
-		if len(clause.OrGroup) > 0 {
-			var orParts []string
-			for _, oc := range clause.OrGroup {
-				if _, ok := allowedColumns[oc.Column]; !ok {
-					return nil, fmt.Errorf("unsupported where column: %s", oc.Column)
-				}
-				orParts = append(orParts, fmt.Sprintf("%s = $%d", oc.Column, argIdx))
-				args = append(args, oc.Value)
-				argIdx++
-			}
-			whereClauses = append(whereClauses, "("+strings.Join(orParts, " OR ")+")")
-		} else {
-			if _, ok := allowedColumns[clause.Column]; !ok {
-				return nil, fmt.Errorf("unsupported where column: %s", clause.Column)
-			}
-			whereClauses = append(whereClauses, fmt.Sprintf("%s = $%d", clause.Column, argIdx))
-			args = append(args, clause.Value)
-			argIdx++
-		}
-	}
+	args = append(args, whereArgs...)
+	argIdx += len(whereArgs)
 	args = append(args, limit)
 
 	sqlStr := fmt.Sprintf(`
@@ -335,6 +309,72 @@ func extractString(v any) string {
 }
 
 // buildWhereClause joins SQL WHERE conditions with AND, prefixed with WHERE.
+func buildWhereClauses(where vector.WhereFilter, startIdx int) ([]string, []any, error) {
+	if len(where.Clauses) == 0 {
+		return []string{}, nil, nil
+	}
+
+	// allowedColumns is the set of column identifiers permitted in WHERE clauses.
+	// This prevents SQL injection via unvalidated column names in fmt.Sprintf.
+	allowedColumns := map[string]struct{}{
+		"doc_type":       {},
+		"project":        {},
+		"scope":          {},
+		"field_type":     {},
+		"sqlite_id":      {},
+		"files_modified": {},
+		"files_read":     {},
+	}
+
+	var whereClauses []string
+	var args []any
+	argIdx := startIdx
+
+	for _, clause := range where.Clauses {
+		if len(clause.OrGroup) > 0 {
+			var orParts []string
+			orArgIndexes := make(map[string]int)
+			for _, oc := range clause.OrGroup {
+				if _, ok := allowedColumns[oc.Column]; !ok {
+					return nil, nil, fmt.Errorf("unsupported where column: %s", oc.Column)
+				}
+				operator := oc.Operator
+				if operator == "" {
+					operator = "="
+				}
+				key := fmt.Sprintf("%s:%T:%v", operator, oc.Value, oc.Value)
+				placeholderIdx := argIdx
+				if operator == "?|" {
+					if reusedArgIdx, ok := orArgIndexes[key]; ok {
+						placeholderIdx = reusedArgIdx
+					} else {
+						orArgIndexes[key] = argIdx
+						args = append(args, oc.Value)
+						argIdx++
+					}
+				} else {
+					args = append(args, oc.Value)
+					argIdx++
+				}
+				orParts = append(orParts, fmt.Sprintf("%s %s $%d", oc.Column, operator, placeholderIdx))
+			}
+			whereClauses = append(whereClauses, "("+strings.Join(orParts, " OR ")+")")
+		} else {
+			if _, ok := allowedColumns[clause.Column]; !ok {
+				return nil, nil, fmt.Errorf("unsupported where column: %s", clause.Column)
+			}
+			operator := clause.Operator
+			if operator == "" {
+				operator = "="
+			}
+			whereClauses = append(whereClauses, fmt.Sprintf("%s %s $%d", clause.Column, operator, argIdx))
+			args = append(args, clause.Value)
+			argIdx++
+		}
+	}
+	return whereClauses, args, nil
+}
+
 func buildWhereClause(clauses []string) string {
 	if len(clauses) == 0 {
 		return ""
