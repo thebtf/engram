@@ -229,9 +229,16 @@ func (s *Service) ExtractSessionEntitySeeds(ctx context.Context, sessionID, proj
 
 	var entityObservations []*models.Observation
 	if s.retrievalHooks != nil && s.retrievalHooks.getEntityObservationsBySession != nil {
-		entityObservations, _ = s.retrievalHooks.getEntityObservationsBySession(ctx, sessionID)
+		var err error
+		entityObservations, err = s.retrievalHooks.getEntityObservationsBySession(ctx, sessionID)
+		if err != nil {
+			log.Debug().Err(err).Str("session_id", sessionID).Msg("failed to get entity observations via hook")
+		}
 	} else if s.observationStore != nil {
-		allSessionObservations, _ := s.observationStore.GetObservationsBySession(ctx, sessionID)
+		allSessionObservations, err := s.observationStore.GetObservationsBySession(ctx, sessionID)
+		if err != nil {
+			log.Debug().Err(err).Str("session_id", sessionID).Msg("failed to get session observations")
+		}
 		for _, obs := range allSessionObservations {
 			if obs != nil && obs.Type == models.ObsTypeEntity {
 				entityObservations = append(entityObservations, obs)

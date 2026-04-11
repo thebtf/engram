@@ -1,7 +1,9 @@
 package sdk
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1887,35 +1889,35 @@ func setWriteMergeEnabledForTest(t *testing.T, enabled bool) {
 }
 
 func testObservationXML(title, narrative string, facts, concepts, filesRead, filesModified, commands []string) string {
-	factXML := ""
-	for _, fact := range facts {
-		factXML += "<fact>" + fact + "</fact>"
+	escape := func(value string) string {
+		var buf bytes.Buffer
+		if err := xml.EscapeText(&buf, []byte(value)); err != nil {
+			return value
+		}
+		return buf.String()
 	}
-	conceptXML := ""
-	for _, concept := range concepts {
-		conceptXML += "<concept>" + concept + "</concept>"
+
+	appendList := func(tag, itemTag string, values []string) string {
+		var buf bytes.Buffer
+		buf.WriteString("<" + tag + ">")
+		for _, value := range values {
+			buf.WriteString("<" + itemTag + ">")
+			buf.WriteString(escape(value))
+			buf.WriteString("</" + itemTag + ">")
+		}
+		buf.WriteString("</" + tag + ">")
+		return buf.String()
 	}
-	filesReadXML := ""
-	for _, file := range filesRead {
-		filesReadXML += "<file>" + file + "</file>"
-	}
-	filesModifiedXML := ""
-	for _, file := range filesModified {
-		filesModifiedXML += "<file>" + file + "</file>"
-	}
-	commandXML := ""
-	for _, cmd := range commands {
-		commandXML += "<command>" + cmd + "</command>"
-	}
+
 	return "<observation>" +
 		"<type>decision</type>" +
-		"<title>" + title + "</title>" +
-		"<narrative>" + narrative + "</narrative>" +
-		"<facts>" + factXML + "</facts>" +
-		"<concepts>" + conceptXML + "</concepts>" +
-		"<files_read>" + filesReadXML + "</files_read>" +
-		"<files_modified>" + filesModifiedXML + "</files_modified>" +
-		"<commands_run>" + commandXML + "</commands_run>" +
+		"<title>" + escape(title) + "</title>" +
+		"<narrative>" + escape(narrative) + "</narrative>" +
+		appendList("facts", "fact", facts) +
+		appendList("concepts", "concept", concepts) +
+		appendList("files_read", "file", filesRead) +
+		appendList("files_modified", "file", filesModified) +
+		appendList("commands_run", "command", commands) +
 		"</observation>"
 }
 

@@ -17,7 +17,7 @@ AI coding agents forget everything between sessions. Every new conversation star
 
 Engram fixes this. It captures observations from coding sessions, stores them in PostgreSQL with vector embeddings, and automatically injects relevant memories into new sessions. One server, multiple workstations, zero context loss.
 
-Since learning-memory-v4, context injection treats **silence as valid**: when no observation passes the relevance gate, Engram returns nothing instead of force-filling the prompt with top-importance noise. The inject path also defaults to the **unified retrieval pipeline** (`ENGRAM_INJECT_UNIFIED=true`), so inject and search now share the same scoring/filtering semantics.
+Since learning-memory-v4, context injection treats **silence as valid**: when no observation passes the relevance gate, Engram returns an empty relevant-memory block instead of force-filling the prompt with top-importance noise. The inject path also defaults to the **unified retrieval pipeline** (`ENGRAM_INJECT_UNIFIED=true`), so inject and search now share the same scoring/filtering semantics.
 
 **7 consolidated MCP tools** replace 61 legacy tools, cutting context window usage by over 80%. Hybrid search combines full-text, vector similarity, and BM25 with cross-encoder reranking to surface exactly the memories that matter.
 <!-- redoc:end:intro -->

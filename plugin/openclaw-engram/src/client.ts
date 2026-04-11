@@ -368,7 +368,10 @@ export class EngramRestClient {
    * MCP uses feedback(action="rate", id, rating="useful"|"not_useful").
    */
   async rateObservation(id: number, rating: 'useful' | 'not_useful'): Promise<boolean> {
-    const resp = await this.post<{ result?: { content?: Array<{ text?: string }> } }>(
+    const resp = await this.post<{
+      result?: { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
+      error?: { code?: number; message?: string };
+    }>(
       '/mcp',
       {
         jsonrpc: '2.0',
@@ -384,7 +387,25 @@ export class EngramRestClient {
         },
       },
     );
-    return resp?.result?.content?.[0]?.text?.includes(`Rated observation ${id} as ${rating}`) ?? false;
+
+    if (!resp) return false;
+
+    if (resp.error) {
+      console.error(`[engram] rateObservation failed: ${resp.error.message ?? 'unknown error'}`);
+      return false;
+    }
+
+    if (resp.result?.isError) {
+      console.error('[engram] rateObservation failed: MCP tool result flagged as error');
+      return false;
+    }
+
+    const content = resp.result?.content;
+    if (!Array.isArray(content) || content.length === 0) {
+      return false;
+    }
+
+    return content.some((item) => typeof item?.text === 'string' && item.text.trim().length > 0);
   }
 
   /**

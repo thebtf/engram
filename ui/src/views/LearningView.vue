@@ -233,11 +233,11 @@ function outcomeColor(rate: number): string {
         </div>
       </div>
 
-      <!-- Section 3: Citation-Rate Trend -->
+      <!-- Section 3: Citation-Rate Snapshot -->
       <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-5">
         <h2 class="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
           <i class="fas fa-bullseye text-orange-400" />
-          Citation-Rate Trend
+          Citation-Rate Snapshot
         </h2>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="rounded-lg border border-slate-800 bg-slate-950/60 p-4">

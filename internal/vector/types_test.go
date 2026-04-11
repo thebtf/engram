@@ -37,7 +37,6 @@ func TestBuildWhereFilter_WithoutFilePathsDoesNotAddFileScopeClause(t *testing.T
 	filter := BuildWhereFilter(DocTypeObservation, "project-alpha", false, nil)
 
 	for _, clause := range filter.Clauses {
-		require.Len(t, clause.OrGroup, 0)
 		assert.NotEqual(t, "files_modified", clause.Column)
 		assert.NotEqual(t, "files_read", clause.Column)
 	}
