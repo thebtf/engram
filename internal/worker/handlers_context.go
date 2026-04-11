@@ -13,9 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/search"
-	"github.com/thebtf/engram/internal/search/expansion"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
@@ -199,354 +197,38 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 
 	limit := gorm.ParseLimitParamWithMax(r, DefaultSearchLimit, 200)
 	searchStart := time.Now()
-
-	var observations []*models.Observation
-	var err error
-	var usedVector bool
-	similarityScores := make(map[int64]float64) // Track similarity per observation
-
-	// Get threshold settings: prefer per-project adaptive threshold, fall back to global config.
-	threshold := s.searchMgr.GetProjectThreshold(r.Context(), project, s.config.ContextRelevanceThreshold)
 	maxResults := s.config.ContextMaxPromptResults
-
-	// Generate expanded queries if query expander is available
-	// Use timeout context to prevent query expansion from blocking
-	var expandedQueries []expansion.ExpandedQuery
-	var detectedIntent string
-	if s.queryExpander != nil {
-		expandCtx, expandCancel := context.WithTimeout(r.Context(), time.Duration(s.config.QueryExpansionTimeoutMS)*time.Millisecond)
-		cfg := expansion.DefaultConfig()
-		cfg.EnableVocabularyExpansion = false // Vocabulary expansion is optional
-		cfg.EnableHyDE = s.config.HyDEEnabled
-		expandedQueries = s.queryExpander.Expand(expandCtx, query, cfg)
-		expandCancel() // Cancel immediately after use (defer not needed - no panic possible between creation and here)
-		if len(expandedQueries) > 0 {
-			detectedIntent = string(expandedQueries[0].Intent)
-		}
+	if limit > 0 && (maxResults <= 0 || limit < maxResults) {
+		maxResults = limit
 	}
-	if len(expandedQueries) == 0 {
-		// Fallback to just the original query
-		expandedQueries = []expansion.ExpandedQuery{
-			{Query: query, Weight: 1.0, Source: "original"},
-		}
+	retrievalMeta := &retrievalMetadata{}
+	retrievalCtx := withRetrievalRequest(r.Context(), agentID, cwd, retrievalMeta)
+	clusteredObservations, similarityScores, err := s.RetrieveRelevant(retrievalCtx, project, query, RetrievalOptions{
+		MaxResults:   maxResults,
+		UseLLMFilter: s.config.LLMFilterEnabled,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-
-	// Try vector search first if available
-	var vectorSearchFailed bool
-	if s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false)
-
-		// Search with each expanded query and merge results
-		// Pre-allocate with estimated capacity to avoid repeated reallocation
-		estimatedCapacity := len(expandedQueries) * limit * 2
-		allVectorResults := make([]vector.QueryResult, 0, estimatedCapacity)
-		queryWeights := make(map[string]float64, len(expandedQueries))
-		var vectorErrors int
-
-		for _, eq := range expandedQueries {
-			vectorResults, vecErr := s.vectorClient.Query(r.Context(), eq.Query, limit*2, where)
-			if vecErr != nil {
-				vectorErrors++
-				log.Debug().Err(vecErr).Str("query", eq.Query).Msg("Vector query failed")
-			} else if len(vectorResults) > 0 {
-				// Apply weight to similarity scores before merging
-				for i := range vectorResults {
-					vectorResults[i].Similarity *= eq.Weight
-				}
-				allVectorResults = append(allVectorResults, vectorResults...)
-				queryWeights[eq.Query] = eq.Weight
-			}
-		}
-
-		// Track if vector search had issues
-		if vectorErrors > 0 && vectorErrors == len(expandedQueries) {
-			vectorSearchFailed = true
-			log.Warn().Int("errors", vectorErrors).Str("project", project).Msg("All vector queries failed, falling back to FTS")
-		}
-
-		if len(allVectorResults) > 0 {
-			// Filter by relevance threshold before extracting IDs
-			// Use a slightly lower threshold for expanded queries
-			effectiveThreshold := threshold * 0.9 // Allow slightly lower scores for expanded queries
-			filteredResults := vector.FilterByThreshold(allVectorResults, effectiveThreshold, 0)
-
-			// Build similarity map for filtered results (keeping highest weighted score per observation)
-			for _, vr := range filteredResults {
-				if sqliteID, ok := vr.Metadata["sqlite_id"].(float64); ok {
-					id := int64(sqliteID)
-					// Keep the highest score for each observation
-					if existing, exists := similarityScores[id]; !exists || vr.Similarity > existing {
-						similarityScores[id] = vr.Similarity
-					}
-				}
-			}
-
-			// Extract observation IDs with project/scope filtering using shared helper
-			obsIDs := vector.ExtractObservationIDs(filteredResults, project)
-
-			if len(obsIDs) > 0 {
-				// Fetch full observations from database
-				observations, err = s.observationStore.GetObservationsByIDs(r.Context(), obsIDs, "date_desc", limit)
-				if err == nil {
-					usedVector = true
-				}
-			}
-		}
-	}
-
-	// Fall back to FTS if vector search not available, failed, or returned no results
-	if !usedVector || len(observations) == 0 {
-		if vectorSearchFailed {
-			log.Info().Str("project", project).Msg("Using FTS fallback due to vector search failure")
-		}
-		scopeFilter := gorm.ScopeFilter{Project: project, AgentID: agentID}
-		observations, err = s.observationStore.SearchObservationsFTSFiltered(r.Context(), query, scopeFilter, limit)
-		if err != nil {
-			// FTS might fail if query has special chars, try without
-			log.Warn().Err(err).Str("query", query).Msg("FTS search failed, falling back to recent")
-			observations, err = s.observationStore.GetRecentObservationsFiltered(r.Context(), scopeFilter, limit)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-	}
-
+	threshold := retrievalMeta.threshold
+	expandedQueries := retrievalMeta.expandedQueries
+	detectedIntent := retrievalMeta.detectedIntent
+	usedVector := retrievalMeta.usedVector
+	staleCount := retrievalMeta.staleCount
+	freshCount := retrievalMeta.freshCount
+	duplicatesRemoved := retrievalMeta.duplicatesRemoved
+	totalResults := retrievalMeta.totalResults
 	// Filter by observation type if requested (e.g., obs_type=guidance for behavioral rules)
 	if obsTypeFilter != "" {
-		filtered := make([]*models.Observation, 0, len(observations))
-		for _, obs := range observations {
+		filtered := make([]*models.Observation, 0, len(clusteredObservations))
+		for _, obs := range clusteredObservations {
 			if string(obs.Type) == obsTypeFilter {
 				filtered = append(filtered, obs)
 			}
 		}
-		observations = filtered
+		clusteredObservations = filtered
 	}
-
-	// Fast staleness filter - NO verification (that's too slow for interactive use)
-	// Just check mtimes and exclude obviously stale observations
-	var staleCount int
-	freshObservations := make([]*models.Observation, 0, len(observations))
-
-	for _, obs := range observations {
-		if len(obs.FileMtimes) > 0 && cwd != "" {
-			var paths []string
-			for path := range obs.FileMtimes {
-				paths = append(paths, path)
-			}
-			currentMtimes := sdk.GetFileMtimes(paths, cwd)
-
-			if obs.CheckStaleness(currentMtimes) {
-				// Stale - exclude but don't verify (too slow)
-				// Queue for background verification instead
-				staleCount++
-				s.queueStaleVerification(obs.ID, cwd)
-				continue
-			}
-		}
-		freshObservations = append(freshObservations, obs)
-	}
-
-	// Apply cross-encoder reranking if available
-	if s.reranker != nil && len(freshObservations) > 0 && usedVector {
-		// Build candidates from observations with their bi-encoder scores
-		candidates := make([]reranking.Candidate, len(freshObservations))
-		for i, obs := range freshObservations {
-			// Use strings.Builder for efficient concatenation
-			var content string
-			if obs.Narrative.Valid && obs.Narrative.String != "" {
-				var sb strings.Builder
-				sb.Grow(len(obs.Title.String) + 1 + len(obs.Narrative.String))
-				sb.WriteString(obs.Title.String)
-				sb.WriteByte(' ')
-				sb.WriteString(obs.Narrative.String)
-				content = sb.String()
-			} else {
-				content = obs.Title.String
-			}
-			candidates[i] = reranking.Candidate{
-				ID:       strconv.FormatInt(obs.ID, 10), // Faster than fmt.Sprintf
-				Content:  content,
-				Score:    similarityScores[obs.ID],
-				Metadata: map[string]any{"obs_idx": i},
-			}
-		}
-
-		// Rerank using cross-encoder - use pure mode or combined scores
-		var rerankResults []reranking.RerankResult
-		var rerankErr error
-		if s.config.RerankingPureMode {
-			rerankResults, rerankErr = s.reranker.RerankByScore(query, candidates, s.config.RerankingResults)
-		} else {
-			rerankResults, rerankErr = s.reranker.Rerank(query, candidates, s.config.RerankingResults)
-		}
-		if rerankErr != nil {
-			log.Warn().Err(rerankErr).Msg("Cross-encoder reranking failed, using original order")
-		} else if len(rerankResults) > 0 {
-			// Update similarity scores with reranked scores
-			for _, rr := range rerankResults {
-				if id, err := strconv.ParseInt(rr.ID, 10, 64); err == nil {
-					similarityScores[id] = rr.CombinedScore
-				}
-			}
-
-			// Reorder observations based on rerank results
-			reorderedObs := make([]*models.Observation, 0, len(rerankResults))
-			obsMap := make(map[int64]*models.Observation)
-			for _, obs := range freshObservations {
-				obsMap[obs.ID] = obs
-			}
-			for _, rr := range rerankResults {
-				if id, err := strconv.ParseInt(rr.ID, 10, 64); err == nil {
-					if obs, ok := obsMap[id]; ok {
-						reorderedObs = append(reorderedObs, obs)
-					}
-				}
-			}
-			freshObservations = reorderedObs
-
-			log.Debug().
-				Int("candidates", len(candidates)).
-				Int("returned", len(rerankResults)).
-				Msg("Cross-encoder reranking complete")
-		}
-	}
-
-	// Cluster similar observations to remove duplicates
-	clusteredObservations := clusterObservations(freshObservations, s.config.ClusteringThreshold)
-	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
-
-	// Graph expansion: enrich results with FalkorDB neighbors (same as hybridSearch path).
-	// Runs after clustering, before composite scoring, so neighbors get scored equally.
-	if len(clusteredObservations) > 0 && s.searchMgr != nil {
-		scoredIDs := make([]search.ScoredID, 0, len(clusteredObservations))
-		for _, obs := range clusteredObservations {
-			scoredIDs = append(scoredIDs, search.ScoredID{
-				ID:      obs.ID,
-				DocType: "observation",
-				Score:   similarityScores[obs.ID],
-			})
-		}
-		expanded := s.searchMgr.ExpandViaGraph(r.Context(), scoredIDs, limit)
-		// Merge new IDs back: fetch any expanded observations not already in clusteredObservations
-		existingIDs := make(map[int64]bool, len(clusteredObservations))
-		for _, obs := range clusteredObservations {
-			existingIDs[obs.ID] = true
-		}
-		var newIDs []int64
-		for _, sid := range expanded {
-			if !existingIDs[sid.ID] && sid.DocType == "observation" {
-				newIDs = append(newIDs, sid.ID)
-				similarityScores[sid.ID] = sid.Score // propagate decayed score
-			}
-		}
-		if len(newIDs) > 0 {
-			graphObs, err := s.observationStore.GetObservationsByIDs(r.Context(), newIDs, "", 0)
-			if err == nil && len(graphObs) > 0 {
-				clusteredObservations = append(clusteredObservations, graphObs...)
-			}
-		}
-	}
-
-	// Apply composite scoring (recency × type × importance) as a post-processing step.
-	// This re-weights scores already computed by vector search or cross-encoder reranking.
-	if len(clusteredObservations) > 0 {
-		search.ApplyCompositeScoring(clusteredObservations, similarityScores)
-
-		// Apply injection diversity penalty: observations injected across many projects = generic = penalize
-		if s.observationStore != nil {
-			ids := make([]int64, 0, len(clusteredObservations))
-			for _, obs := range clusteredObservations {
-				ids = append(ids, obs.ID)
-			}
-			if diversityScores, err := s.observationStore.GetDiversityScores(r.Context(), ids); err == nil && len(diversityScores) > 0 {
-				search.ApplyDiversityPenalty(clusteredObservations, similarityScores, diversityScores)
-			}
-		}
-	}
-
-	// Apply cross-session priming boost: observations from recently active sessions score higher.
-	// Fetch once per search call and check membership to avoid per-observation queries.
-	if s.config.SessionBoost > 1.0 && len(clusteredObservations) > 0 {
-		twoHoursAgo := time.Now().Add(-2 * time.Hour)
-		if recentSessions, sessErr := s.observationStore.GetRecentSessionIDs(r.Context(), project, twoHoursAgo); sessErr == nil {
-			search.ApplySessionBoost(clusteredObservations, similarityScores, recentSessions, s.config.SessionBoost)
-		}
-	}
-
-	// Sort by composite score (highest first)
-	if len(similarityScores) > 0 && len(clusteredObservations) > 0 {
-		sort.Slice(clusteredObservations, func(i, j int) bool {
-			scoreI := similarityScores[clusteredObservations[i].ID]
-			scoreJ := similarityScores[clusteredObservations[j].ID]
-			return scoreI > scoreJ
-		})
-	}
-
-	// Injection floor: ensure at least N observations are returned regardless of threshold.
-	// When InjectionFloor == 0 (v4 default, FR-1), the silence path is active — no fill.
-	// Operators can set InjectionFloor > 0 via ENGRAM_INJECTION_FLOOR for legacy fill behavior.
-	injectionFloor := s.config.InjectionFloor
-	if injectionFloor > 0 && s.observationStore != nil {
-		clusteredObservations = fillToFloor(r.Context(), injectionFloor, clusteredObservations, nil,
-			func(ctx context.Context, limit int) ([]*models.Observation, error) {
-				return s.observationStore.GetTopImportanceObservations(ctx, project, limit)
-			})
-	}
-
-	// Count observations with meaningful composite scores (above noise floor).
-	// Raw len(observations) is misleading — in high-dim embedding spaces,
-	// nearly all observations pass the vector threshold. Only observations
-	// with composite score > 0.05 are genuinely matched.
-	totalResults := 0
-	for _, obs := range clusteredObservations {
-		if score, ok := similarityScores[obs.ID]; ok && score > 0.05 {
-			totalResults++
-		}
-	}
-
-	// Apply max results cap if configured
-	if maxResults > 0 && len(clusteredObservations) > maxResults {
-		clusteredObservations = clusteredObservations[:maxResults]
-	}
-
-	// Apply LLM behavioral relevance filter if enabled
-	if s.llmFilter != nil && s.config.LLMFilterEnabled && len(clusteredObservations) > 0 {
-		llmFilter := s.llmFilter
-		// Take top candidates for LLM evaluation (avoid sending too many)
-		candidates := clusteredObservations
-		if s.config.LLMFilterCandidates > 0 && len(candidates) > s.config.LLMFilterCandidates {
-			candidates = candidates[:s.config.LLMFilterCandidates]
-		}
-		relevantIDs := llmFilter.FilterByRelevance(r.Context(), candidates, project, query)
-		if len(relevantIDs) == 0 {
-			// LLM filter returned empty set — silence: inject nothing.
-			log.Info().
-				Str("project", project).
-				Int("total_considered", len(candidates)).
-				Msg("LLM filter silenced injection")
-			clusteredObservations = []*models.Observation{}
-		} else if len(relevantIDs) < len(candidates) {
-			// Build a fast lookup set
-			idSet := make(map[int64]struct{}, len(relevantIDs))
-			for _, id := range relevantIDs {
-				idSet[id] = struct{}{}
-			}
-			filtered := make([]*models.Observation, 0, len(relevantIDs))
-			for _, obs := range clusteredObservations {
-				if _, ok := idSet[obs.ID]; ok {
-					filtered = append(filtered, obs)
-				}
-			}
-			log.Info().
-				Str("project", project).
-				Int("before", len(clusteredObservations)).
-				Int("after", len(filtered)).
-				Msg("LLM filter applied")
-			clusteredObservations = filtered
-		}
-	}
-
 	// Async: log which observations were injected into this context
 	if s.observationStore != nil && len(clusteredObservations) > 0 {
 		resultIDs := make([]int64, len(clusteredObservations))
@@ -564,7 +246,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 
 	// Record retrieval stats with staleness metrics
 	s.recordRetrievalStatsExtended(project, int64(len(clusteredObservations)), 0, 0,
-		int64(staleCount), int64(len(freshObservations)), int64(duplicatesRemoved), true)
+		int64(staleCount), int64(freshCount), int64(duplicatesRemoved), true)
 
 	// Increment retrieval counts for scoring (async, non-blocking)
 	if len(clusteredObservations) > 0 {
@@ -605,7 +287,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Track search misses for self-tuning analytics (inline — avoids unbounded goroutine spawn)
+	// Track search misses for self-tuning analytics (inline РІР‚вЂќ avoids unbounded goroutine spawn)
 	if len(clusteredObservations) == 0 && query != "" {
 		s.trackSearchMiss(project, query)
 	}
@@ -743,7 +425,7 @@ func (s *Service) handleFileContext(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Pre-build score map from vector results (O(n) instead of O(n²))
+			// Pre-build score map from vector results (O(n) instead of O(nР’Р†))
 			scoreMap := make(map[int64]float64, len(vectorResults))
 			var avgScore float64
 			for _, vr := range vectorResults {
@@ -1007,7 +689,7 @@ func splitCamelCase(s string) string {
 
 // applyActiveVersions replaces each observation's narrative with its active ObservationVersion
 // narrative when one exists. Returns a new slice; original observation pointers are not mutated.
-// Errors from the version store are silently logged — the original narrative is used as fallback.
+// Errors from the version store are silently logged РІР‚вЂќ the original narrative is used as fallback.
 func applyActiveVersions(ctx context.Context, vs *gorm.VersionStore, observations []*models.Observation) []*models.Observation {
 	if len(observations) == 0 || vs == nil {
 		return observations
@@ -1025,7 +707,7 @@ func applyActiveVersions(ctx context.Context, vs *gorm.VersionStore, observation
 			result[i] = obs
 			continue
 		}
-		// Shallow copy — only swap the narrative field so the original model is not mutated.
+		// Shallow copy РІР‚вЂќ only swap the narrative field so the original model is not mutated.
 		copy := *obs
 		copy.Narrative.String = active.Narrative
 		copy.Narrative.Valid = true
@@ -1077,7 +759,7 @@ func formatStructured(obs *models.Observation) string {
 
 // handleContextInject godoc
 // @Summary Inject context for session start
-// @Description Returns context for injection at session start. Response includes recent (last 5), relevant (top 10 semantic), and guidance sections. Supports GET (deprecated) and POST. Critical startup path — optimized for speed.
+// @Description Returns context for injection at session start. Response includes recent (last 5), relevant (top 10 semantic), and guidance sections. Supports GET (deprecated) and POST. Critical startup path РІР‚вЂќ optimized for speed.
 // @Tags Context
 // @Accept json
 // @Produce json
@@ -1116,7 +798,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		relativePath = req.RelativePath
 		sessionID = req.SessionID
 	} else {
-		// GET (deprecated — use POST)
+		// GET (deprecated РІР‚вЂќ use POST)
 		project = r.URL.Query().Get("project")
 		agentID = r.URL.Query().Get("agent_id")
 		cwd = r.URL.Query().Get("cwd")
@@ -1318,7 +1000,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Injection floor: ensure minimum observations across all sections ---
-	// When InjectionFloor == 0 (v4 default, FR-1), the silence path is active — no fill.
+	// When InjectionFloor == 0 (v4 default, FR-1), the silence path is active РІР‚вЂќ no fill.
 	// Operators can set InjectionFloor > 0 via ENGRAM_INJECTION_FLOOR for legacy fill behavior.
 	injectionFloor := s.config.InjectionFloor
 	if injectionFloor > 0 && s.observationStore != nil {
@@ -1518,7 +1200,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 
 	if compact {
 		// Compact format: only fields the hook actually uses.
-		// Main observations use fullCount limit — condensed entries skip narrative/facts.
+		// Main observations use fullCount limit РІР‚вЂќ condensed entries skip narrative/facts.
 		// Recalculate token estimate accounting for condensed format savings.
 		compactTokenEstimate := estimateTokensWithLimit(clusteredObservations, fullCount) +
 			estimateTokens(guidanceObservations)
@@ -1667,7 +1349,7 @@ func (s *Service) trackSearchMiss(project, query string) {
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param body body object true "Params: project (optional — omit to aggregate across all projects), limit (optional)"
+// @Param body body object true "Params: project (optional РІР‚вЂќ omit to aggregate across all projects), limit (optional)"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "invalid project name"
 // @Failure 500 {string} string "internal error"

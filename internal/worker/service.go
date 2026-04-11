@@ -13,19 +13,21 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog/log"
+	httpSwagger "github.com/swaggo/http-swagger"
 	"github.com/thebtf/engram/internal/chunking"
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
 	mdchunking "github.com/thebtf/engram/internal/chunking/markdown"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/crypto"
-	graphpkg "github.com/thebtf/engram/internal/graph"
-	"github.com/thebtf/engram/internal/graph/falkordb"
 	"github.com/thebtf/engram/internal/consolidation"
-	"github.com/thebtf/engram/internal/logbuf"
+	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
+	graphpkg "github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/graph/falkordb"
 	"github.com/thebtf/engram/internal/learning"
+	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/maintenance"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/pattern"
@@ -44,8 +46,6 @@ import (
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/pkg/models"
-	"github.com/rs/zerolog/log"
-	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // Service configuration constants
@@ -175,16 +175,17 @@ type Service struct {
 	expensiveOpLimiter     *ExpensiveOperationLimiter
 	logBuffer              *logbuf.RingBuffer
 	backfillTracker        *backfillTracker
-	searchQueryLogStore     *gorm.SearchQueryLogStore
-	retrievalStatsLogStore  *gorm.RetrievalStatsLogStore
-	injectionStore          *gorm.InjectionStore
-	agentStatsStore         *gorm.AgentStatsStore
-	versionStore            *gorm.VersionStore
-	llmFilter               *search.LLMFilter
-	llmClient               learning.LLMClient
-	projectSettingsStore    *gorm.ProjectSettingsStore
-	strategySelector        *learning.StrategySelector
-	version                 string
+	searchQueryLogStore    *gorm.SearchQueryLogStore
+	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
+	injectionStore         *gorm.InjectionStore
+	agentStatsStore        *gorm.AgentStatsStore
+	versionStore           *gorm.VersionStore
+	llmFilter              *search.LLMFilter
+	retrievalHooks         *retrievalHooks
+	llmClient              learning.LLMClient
+	projectSettingsStore   *gorm.ProjectSettingsStore
+	strategySelector       *learning.StrategySelector
+	version                string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
 	wg                     sync.WaitGroup
 	recentQueriesLen       int
@@ -878,8 +879,8 @@ func (s *Service) initializeAsync() {
 	scoringConfig.SourceHalfLives[models.SourceCrossModel] = s.config.HalfLifeCrossModel
 	scoringConfig.SourceHalfLives[models.SourceToolVerified] = s.config.HalfLifeAlgorithm * 1.5 // 21d = 14 * 1.5
 	scoringConfig.SourceHalfLives[models.SourceToolRead] = s.config.HalfLifeAlgorithm           // 14d
-	scoringConfig.SourceHalfLives[models.SourceWebFetch] = s.config.HalfLifeAlgorithm            // 14d
-	scoringConfig.SourceHalfLives[models.SourceInstinctImport] = s.config.HalfLifeManual         // 30d
+	scoringConfig.SourceHalfLives[models.SourceWebFetch] = s.config.HalfLifeAlgorithm           // 14d
+	scoringConfig.SourceHalfLives[models.SourceInstinctImport] = s.config.HalfLifeManual        // 30d
 
 	// Load concept weights from database if available
 	if weights, err := observationStore.GetConceptWeights(s.ctx); err == nil && len(weights) > 0 {
@@ -1067,6 +1068,7 @@ func (s *Service) initializeAsync() {
 		embedSvc,
 		chunkManager,
 	)
+	mcpServer.SetInjectionStore(injectionStore)
 	// Wire graph store into MCP server and search manager.
 	if s.graphStore != nil {
 		mcpServer.SetGraphStore(s.graphStore)
