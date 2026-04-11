@@ -16,6 +16,11 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+// NoiseFloorScore is the minimum composite score an observation must exceed to count as a
+// genuine semantic match. In high-dimensional embedding spaces, nearly all observations pass
+// the raw vector similarity threshold; only scores above 0.05 indicate meaningful relevance.
+const NoiseFloorScore = 0.05
+
 // RetrievalOptions configures shared semantic retrieval.
 type RetrievalOptions struct {
 	MaxResults   int
@@ -190,7 +195,7 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	}
 	totalResults := 0
 	for _, observation := range clusteredObservations {
-		if score, exists := similarityScores[observation.ID]; exists && score > 0.05 {
+		if score, exists := similarityScores[observation.ID]; exists && score > NoiseFloorScore {
 			totalResults++
 		}
 	}
