@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/learning"
 )
 
@@ -39,6 +40,17 @@ func (s *Server) handleSetSessionOutcomeMCP(ctx context.Context, args json.RawMe
 
 	if err := s.sessionStore.UpdateSessionOutcome(ctx, sessionID, outcomeStr, reason); err != nil {
 		return "", fmt.Errorf("failed to update session outcome: %w", err)
+	}
+
+	if s.injectionStore != nil && s.observationStore != nil {
+		capturedSessionID := sessionID
+		capturedOutcome := outcome
+		go func() {
+			bgCtx := context.Background()
+			if _, err := learning.PropagateOutcome(bgCtx, s.injectionStore, s.observationStore, capturedSessionID, capturedOutcome); err != nil {
+				log.Warn().Err(err).Str("session", capturedSessionID).Msg("MCP set_session_outcome: outcome propagation failed")
+			}
+		}()
 	}
 
 	return fmt.Sprintf("Session outcome recorded: %s (session: %s)", outcomeStr, sessionID), nil

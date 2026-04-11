@@ -40,6 +40,7 @@ type Server struct {
 	patternStore           *gorm.PatternStore
 	relationStore          *gorm.RelationStore
 	sessionStore           *gorm.SessionStore
+	injectionStore         *gorm.InjectionStore
 	vectorClient           vector.Client
 	scoreCalculator        *scoring.Calculator
 	recalculator           *scoring.Recalculator
@@ -105,6 +106,11 @@ func NewServer(
 // SetGraphStore sets the graph store for graph-related MCP tools.
 func (s *Server) SetGraphStore(gs graphpkg.GraphStore) {
 	s.graphStore = gs
+}
+
+// SetInjectionStore sets the injection store for learning MCP tools.
+func (s *Server) SetInjectionStore(is *gorm.InjectionStore) {
+	s.injectionStore = is
 }
 
 // SetBackfillStatusFunc sets the function to retrieve backfill run status.
