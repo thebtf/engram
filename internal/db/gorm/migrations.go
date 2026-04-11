@@ -2162,6 +2162,15 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 				return tx.Exec(`ALTER TABLE issues DROP COLUMN IF EXISTS closed_at`).Error
 			},
 		},
+		{
+			ID: "072_sessions_utility_propagated_at",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE sdk_sessions ADD COLUMN IF NOT EXISTS utility_propagated_at TIMESTAMPTZ`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE sdk_sessions DROP COLUMN IF EXISTS utility_propagated_at`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

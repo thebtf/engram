@@ -31,6 +31,7 @@ type SDKSession struct {
 	Outcome           sql.NullString `gorm:"type:text"`
 	OutcomeReason     sql.NullString `gorm:"type:text"`
 	OutcomeRecordedAt sql.NullString `gorm:"type:timestamptz"`
+	UtilityPropagatedAt sql.NullTime `gorm:"type:timestamptz"`
 	InjectionStrategy sql.NullString `gorm:"type:text"`
 	ID                int64          `gorm:"primaryKey;autoIncrement"`
 	PromptCounter     int            `gorm:"default:0"`
