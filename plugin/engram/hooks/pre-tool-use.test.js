@@ -41,7 +41,7 @@ test('Read with repeated signal returns trigger context', async () => {
     assert.equal(timeoutMs, 200);
     assert.deepEqual(body, {
       tool: 'Read',
-      params: { file_path: 'internal/auth.go' },
+      params: { file_path: 'internal/auth.go', read_counts: { 'internal/auth.go': 3 } },
       project: 'engram',
       session_id: sessionID,
     });

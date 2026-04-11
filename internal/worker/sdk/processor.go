@@ -459,17 +459,17 @@ func (p *Processor) queryWriteMergeCandidateIDs(ctx context.Context, project str
 	return candidateIDs
 }
 
-func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, project string, obs *models.ParsedObservation, promptNumber int) (*models.Observation, bool, error) {
+func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, project string, obs *models.ParsedObservation, promptNumber int) (*models.Observation, bool, string, error) {
 	if obs == nil || !config.Get().WriteMergeEnabled || p.llmClient == nil {
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 	candidateIDs := p.queryWriteMergeCandidateIDs(ctx, project, obs)
 	if len(candidateIDs) == 0 {
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 	fetchedCandidates, err := p.observationStore.GetObservationsByIDs(ctx, candidateIDs, "default", len(candidateIDs))
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	candidates := make([]*models.Observation, 0, len(fetchedCandidates))
 	for _, candidate := range fetchedCandidates {
@@ -479,19 +479,19 @@ func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, p
 		candidates = append(candidates, candidate)
 	}
 	if len(candidates) == 0 {
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 	newObs := models.NewObservation(sdkSessionID, project, obs, promptNumber, 0)
 	decision, err := learning.DecideMerge(ctx, p.llmClient, newObs, candidates)
 	if err != nil {
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 	if decision.Action == learning.MergeActionCreateNew {
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 	if decision.TargetID <= 0 {
 		log.Warn().Str("action", decision.Action).Msg("write-merge: missing target_id, falling back to create")
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 	var target *models.Observation
 	for _, candidate := range candidates {
@@ -502,21 +502,21 @@ func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, p
 	}
 	if target == nil {
 		log.Warn().Int64("target_id", decision.TargetID).Msg("write-merge: target_id not in candidate set, falling back to create")
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 
 	switch decision.Action {
 	case learning.MergeActionSkip:
 		log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: skipped new observation")
-		return nil, true, nil
+		return nil, true, learning.MergeActionSkip, nil
 	case learning.MergeActionSupersede:
 		if !config.Get().ContradictionDetectionEnabled {
 			log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: contradiction detection disabled; falling back to create path")
-			return nil, false, nil
+			return nil, false, "", nil
 		}
 		// Keep old observation active until the caller successfully creates the replacement row.
 		// This avoids the lossy state where the old row is superseded but the new insert fails.
-		return target, false, nil
+		return target, false, learning.MergeActionSupersede, nil
 	case learning.MergeActionUpdate:
 		title := target.Title.String
 		if title == "" {
@@ -545,7 +545,7 @@ func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, p
 			FileMtimes: &fileMtimes,
 		})
 		if err != nil {
-			return nil, false, err
+			return nil, false, "", err
 		}
 		if p.syncObservationFunc != nil && updated != nil {
 			p.syncObservationFunc(updated)
@@ -557,9 +557,9 @@ func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, p
 			"project": project,
 		})
 		log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: updated existing observation")
-		return updated, false, nil
+		return updated, false, learning.MergeActionUpdate, nil
 	default:
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 }
 
@@ -665,7 +665,7 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 		}
 
 		mergeEvaluatedCount++
-		mergedObs, mergeSkipped, mergeErr := p.applyWriteMergeDecision(ctx, sdkSessionID, project, obs, promptNumber)
+		mergedObs, mergeSkipped, mergeAction, mergeErr := p.applyWriteMergeDecision(ctx, sdkSessionID, project, obs, promptNumber)
 		if mergeErr != nil {
 			log.Warn().Err(mergeErr).Msg("write-merge: failed to apply merge decision, falling back to create path")
 		}
@@ -688,8 +688,7 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 					existingObs = append(existingObs, mergedObs)
 				}
 			}
-			// UPDATE path returns the already-updated target observation and should not create a new row.
-			if mergedObs.Narrative.String != obs.Narrative || mergedObs.Title.String != obs.Title || len(mergedObs.Facts) != len(obs.Facts) {
+			if mergeAction == learning.MergeActionUpdate {
 				storedCount++
 				continue
 			}

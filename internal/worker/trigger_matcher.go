@@ -68,7 +68,11 @@ func (s *Service) matchReadPathTriggers(ctx context.Context, req MemoryTriggerRe
 	if filePath == "" || req.SessionID == "" {
 		return []MemoryTriggerMatch{}, nil
 	}
-	if s.readSignalCountForPath(req.SessionID, filePath) < repeatedReadThreshold {
+	readCount := readSignalCountFromParams(req.Params, filePath)
+	if readCount <= 0 {
+		readCount = s.readSignalCountForPath(req.SessionID, filePath)
+	}
+	if readCount < repeatedReadThreshold {
 		return []MemoryTriggerMatch{}, nil
 	}
 
@@ -239,6 +243,44 @@ func extractTriggerFilePath(params map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func readSignalCountFromParams(params map[string]any, filePath string) int {
+	if params == nil || filePath == "" {
+		return 0
+	}
+	rawReadCounts, ok := params["read_counts"]
+	if !ok {
+		return 0
+	}
+	switch counts := rawReadCounts.(type) {
+	case map[string]any:
+		if value, exists := counts[filePath]; exists {
+			if parsed, ok := parseReadCount(value); ok {
+				return parsed
+			}
+		}
+	case map[string]int:
+		return counts[filePath]
+	}
+	return 0
+}
+
+func parseReadCount(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		parsed, err := v.Int64()
+		if err == nil {
+			return int(parsed), true
+		}
+	}
+	return 0, false
 }
 
 func buildEditWriteTriggerQuery(tool, filePath string, params map[string]any) string {

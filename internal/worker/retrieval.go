@@ -157,7 +157,7 @@ func (s *Service) typedLaneMinScore() float64 {
 	return minScore
 }
 
-func (s *Service) applyTypedLaneSelection(observations []*models.Observation, similarityScores map[int64]float64) []*models.Observation {
+func (s *Service) applyTypedLaneSelection(observations []*models.Observation, rankingScores, thresholdScores map[int64]float64, limit int) []*models.Observation {
 	grouped := make(map[models.ObservationType][]*models.Observation)
 	for _, obs := range observations {
 		grouped[obs.Type] = append(grouped[obs.Type], obs)
@@ -169,13 +169,17 @@ func (s *Service) applyTypedLaneSelection(observations []*models.Observation, si
 		lane := s.laneConfigForType(obsType)
 		filtered := make([]*models.Observation, 0, len(items))
 		for _, obs := range items {
-			if score, ok := similarityScores[obs.ID]; ok && score < lane.MinScore {
+			score, ok := thresholdScores[obs.ID]
+			if !ok {
+				score = rankingScores[obs.ID]
+			}
+			if score < lane.MinScore {
 				continue
 			}
 			filtered = append(filtered, obs)
 		}
 		sort.Slice(filtered, func(i, j int) bool {
-			return similarityScores[filtered[i].ID] > similarityScores[filtered[j].ID]
+			return rankingScores[filtered[i].ID] > rankingScores[filtered[j].ID]
 		})
 		if lane.TopK > 0 && len(filtered) > lane.TopK {
 			filtered = filtered[:lane.TopK]
@@ -186,6 +190,9 @@ func (s *Service) applyTypedLaneSelection(observations []*models.Observation, si
 			}
 			seen[obs.ID] = struct{}{}
 			selected = append(selected, obs)
+			if limit > 0 && len(selected) >= limit {
+				return selected
+			}
 		}
 	}
 	return selected
@@ -221,6 +228,7 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	}
 
 	similarityScores := make(map[int64]float64)
+	baseSimilarityScores := make(map[int64]float64)
 	observations := make([]*models.Observation, 0)
 	usedVector := false
 	vectorSearchFailed := false
@@ -256,6 +264,9 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 				id := vector.ExtractRowID(result.Metadata)
 				if existingScore, exists := similarityScores[id]; !exists || result.Similarity > existingScore {
 					similarityScores[id] = result.Similarity
+				}
+				if existingScore, exists := baseSimilarityScores[id]; !exists || result.Similarity > existingScore {
+					baseSimilarityScores[id] = result.Similarity
 				}
 			}
 			observationIDs := vector.ExtractObservationIDs(filteredResults, project)
@@ -337,8 +348,12 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	clusteredObservations := clusterObservations(freshObservations, clusteringThreshold)
 	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
 	clusteredObservations = s.expandGraphNeighbors(ctx, clusteredObservations, similarityScores, limit)
+	laneThresholdScores := similarityScores
+	if len(baseSimilarityScores) > 0 {
+		laneThresholdScores = baseSimilarityScores
+	}
 	if s.typeLanesEnabled() && len(clusteredObservations) > 0 {
-		clusteredObservations = s.applyTypedLaneSelection(clusteredObservations, similarityScores)
+		clusteredObservations = s.applyTypedLaneSelection(clusteredObservations, similarityScores, laneThresholdScores, limit)
 	}
 	if len(clusteredObservations) > 0 {
 		search.ApplyCompositeScoring(clusteredObservations, similarityScores)

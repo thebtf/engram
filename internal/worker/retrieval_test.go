@@ -278,6 +278,14 @@ func TestExtractSessionEntitySeeds_LimitsToFiveUniqueIDs(t *testing.T) {
 func TestRetrieveRelevant_InjectGraphBFSEnabled_FusesGraphNeighbors(t *testing.T) {
 	service := newRetrievalTestService()
 	service.config.InjectGraphBFSEnabled = true
+	service.config.TypeLanesEnabled = true
+	service.config.TypeSearchLanes = map[string]config.SearchLaneConfig{
+		"default": {
+			MinScore:       0.55,
+			TopK:           10,
+			RerankerWeight: 1.0,
+		},
+	}
 	service.retrievalHooks.getLastPromptBySession = func(_ context.Context, _, _ string) (*models.UserPromptWithSession, error) {
 		return &models.UserPromptWithSession{UserPrompt: models.UserPrompt{PromptText: "authctx"}}, nil
 	}
@@ -294,7 +302,9 @@ func TestRetrieveRelevant_InjectGraphBFSEnabled_FusesGraphNeighbors(t *testing.T
 		return []int64{42}, nil
 	}
 	service.retrievalHooks.vectorQuery = func(_ context.Context, _ string, _ int, _ vector.WhereFilter) ([]vector.QueryResult, error) {
-		return []vector.QueryResult{}, nil
+		return []vector.QueryResult{
+			{Similarity: 0.56, Metadata: map[string]any{"sqlite_id": float64(1), "doc_type": "observation", "project": "engram"}},
+		}, nil
 	}
 	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ gorm.ScopeFilter, _ int) ([]*models.Observation, error) {
 		return []*models.Observation{}, nil
@@ -312,7 +322,7 @@ func TestRetrieveRelevant_InjectGraphBFSEnabled_FusesGraphNeighbors(t *testing.T
 	observations, scores, err := service.RetrieveRelevant(context.Background(), "engram", "auth query", RetrievalOptions{MaxResults: 10, SessionID: "session-1"})
 	require.NoError(t, err)
 	require.Len(t, observations, 1)
-	require.Equal(t, int64(42), observations[0].ID)
+	require.Equal(t, int64(1), observations[0].ID)
 	require.NotZero(t, scores[42])
 }
 

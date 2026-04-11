@@ -179,7 +179,10 @@ async function handlePreToolUse(ctx, input) {
   if (toolName === 'Bash' || toolName === 'Read') {
     try {
       const filePath = extractFilePath(toolInput);
-      const triggerResult = await fetchTriggerContext(project, sessionID, toolName, toolInput);
+      const triggerInput = toolName === 'Read' && filePath
+        ? { ...toolInput, read_counts: { [filePath]: 3 } }
+        : toolInput;
+      const triggerResult = await fetchTriggerContext(project, sessionID, toolName, triggerInput);
       if (triggerResult.warnings.length === 0 && triggerResult.contextObs.length === 0) return '';
       const context = renderTriggerContext(toolName, filePath, triggerResult.warnings, triggerResult.contextObs);
       console.error(`[pre-tool-use] Injecting ${triggerResult.warnings.length} warnings + ${triggerResult.contextObs.length} context for ${toolName}`);
