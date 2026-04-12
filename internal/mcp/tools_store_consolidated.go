@@ -95,7 +95,15 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 		content = privacy.RedactSecrets(content)
 	}
 
-	project := coerceString(m["project"], "")
+	var project string
+	if config.Get().EnforceSourceProject {
+		project = projectFromContext(ctx)
+		if project == "" {
+			project = coerceString(m["project"], "")
+		}
+	} else {
+		project = coerceString(m["project"], "")
+	}
 	scope := coerceString(m["scope"], "project")
 
 	// Create LLM client for extraction.

@@ -194,6 +194,7 @@ type Config struct {
 	WriteMergeEnabled             bool     `json:"write_merge_enabled"`              // ENGRAM_WRITE_MERGE_ENABLED (default: false)
 	ContradictionDetectionEnabled bool     `json:"contradiction_detection_enabled"`  // ENGRAM_CONTRADICTION_DETECTION_ENABLED (default: true)
 	InjectGraphBFSEnabled         bool     `json:"inject_graph_bfs_enabled"`         // ENGRAM_INJECT_GRAPH_BFS_ENABLED (default: false)
+	EnforceSourceProject          bool     `json:"enforce_source_project"`           // ENGRAM_ENFORCE_SOURCE_PROJECT (default: true)
 	SessionBoost                  float64  `json:"session_boost"`                    // ENGRAM_SESSION_BOOST (default: 1.3)
 	TypeSearchLanes              map[string]SearchLaneConfig `json:"type_search_lanes"` // typed lane overrides; merged over DefaultTypeSearchLanes
 
@@ -372,6 +373,7 @@ func Default() *Config {
 		WriteMergeEnabled:               false, // Opt-in: write-time merge path for observations (FR-10 / T040)
 		ContradictionDetectionEnabled:   true,  // Safety default until operators disable the old supersede path explicitly (T038a)
 		InjectGraphBFSEnabled:           false, // Opt-in: entity-seeded BFS traversal for inject path (US8 / T042)
+		EnforceSourceProject:            true,  // Enforce source/project scoping on store/recall (T010)
 		SessionBoost:                    1.3,   // Boost factor for observations from recently active sessions
 		TypeSearchLanes:                cloneTypeSearchLanes(DefaultTypeSearchLanes),
 		InjectionStrategies:            []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
@@ -523,6 +525,9 @@ func Load() (*Config, error) {
 			}
 			if v, ok := settings["ENGRAM_INJECT_GRAPH_BFS_ENABLED"].(bool); ok {
 				cfg.InjectGraphBFSEnabled = v
+			}
+			if v, ok := settings["ENGRAM_ENFORCE_SOURCE_PROJECT"].(bool); ok {
+				cfg.EnforceSourceProject = v
 			}
 			if raw, ok := settings["type_search_lanes"]; ok {
 				cfg.TypeSearchLanes = mergeTypeSearchLanes(DefaultTypeSearchLanes, raw)
@@ -773,6 +778,11 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECT_GRAPH_BFS_ENABLED")); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.InjectGraphBFSEnabled = b
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENFORCE_SOURCE_PROJECT")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.EnforceSourceProject = b
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_TYPE_SEARCH_LANES")); v != "" {
