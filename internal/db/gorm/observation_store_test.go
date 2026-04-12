@@ -482,6 +482,102 @@ func TestObservationStore_GetObservationsByProjectStrict(t *testing.T) {
 	}
 }
 
+func TestObservationStore_GetObservationsByFile_ProjectScopedIncludesGlobal(t *testing.T) {
+	observationStore, _, cleanup := testObservationStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	filePath := "internal/auth/service.go"
+
+	fooProjectObsID, _, err := observationStore.StoreObservation(ctx, "claude-file-foo", "foo", &models.ParsedObservation{
+		Type:          models.ObsTypeDecision,
+		Title:         "foo project file decision",
+		FilesModified: []string{filePath},
+		Scope:         models.ScopeProject,
+	}, 1, 10)
+	require.NoError(t, err)
+
+	barProjectObsID, _, err := observationStore.StoreObservation(ctx, "claude-file-bar", "bar", &models.ParsedObservation{
+		Type:      models.ObsTypeDecision,
+		Title:     "bar project file decision",
+		FilesRead: []string{filePath},
+		Scope:     models.ScopeProject,
+	}, 1, 10)
+	require.NoError(t, err)
+
+	globalObsID, _, err := observationStore.StoreObservation(ctx, "claude-file-global", "bar", &models.ParsedObservation{
+		Type:      models.ObsTypeGuidance,
+		Title:     "global file guidance",
+		FilesRead: []string{filePath},
+		Scope:     models.ScopeGlobal,
+	}, 1, 10)
+	require.NoError(t, err)
+
+	observations, err := observationStore.GetObservationsByFile(ctx, "foo", filePath, 10)
+	require.NoError(t, err)
+	require.Len(t, observations, 2)
+
+	ids := make(map[int64]struct{}, len(observations))
+	for _, observation := range observations {
+		ids[observation.ID] = struct{}{}
+	}
+
+	_, hasFoo := ids[fooProjectObsID]
+	_, hasGlobal := ids[globalObsID]
+	_, hasBar := ids[barProjectObsID]
+	assert.True(t, hasFoo, "project-scoped query should include matching project observation")
+	assert.True(t, hasGlobal, "project-scoped query should include global observation")
+	assert.False(t, hasBar, "project-scoped query should exclude other project observations")
+}
+
+func TestObservationStore_GetObservationsByFile_EmptyProjectReturnsGlobalOnly(t *testing.T) {
+	observationStore, _, cleanup := testObservationStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	filePath := "internal/auth/service.go"
+
+	fooProjectObsID, _, err := observationStore.StoreObservation(ctx, "claude-file-foo-empty", "foo", &models.ParsedObservation{
+		Type:          models.ObsTypeDecision,
+		Title:         "foo project file decision",
+		FilesModified: []string{filePath},
+		Scope:         models.ScopeProject,
+	}, 1, 10)
+	require.NoError(t, err)
+
+	barProjectObsID, _, err := observationStore.StoreObservation(ctx, "claude-file-bar-empty", "bar", &models.ParsedObservation{
+		Type:      models.ObsTypeDecision,
+		Title:     "bar project file decision",
+		FilesRead: []string{filePath},
+		Scope:     models.ScopeProject,
+	}, 1, 10)
+	require.NoError(t, err)
+
+	globalObsID, _, err := observationStore.StoreObservation(ctx, "claude-file-global-empty", "bar", &models.ParsedObservation{
+		Type:          models.ObsTypeGuidance,
+		Title:         "global file guidance",
+		FilesModified: []string{filePath},
+		Scope:         models.ScopeGlobal,
+	}, 1, 10)
+	require.NoError(t, err)
+
+	observations, err := observationStore.GetObservationsByFile(ctx, "", filePath, 10)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+
+	ids := make(map[int64]struct{}, len(observations))
+	for _, observation := range observations {
+		ids[observation.ID] = struct{}{}
+	}
+
+	_, hasFoo := ids[fooProjectObsID]
+	_, hasBar := ids[barProjectObsID]
+	_, hasGlobal := ids[globalObsID]
+	assert.False(t, hasFoo, "empty project query must exclude project-scoped observations")
+	assert.False(t, hasBar, "empty project query must exclude cross-project observations")
+	assert.True(t, hasGlobal, "empty project query should include global-scoped observations")
+}
+
 func TestObservationStore_SearchObservationsFTS(t *testing.T) {
 	observationStore, _, cleanup := testObservationStore(t)
 	defer cleanup()

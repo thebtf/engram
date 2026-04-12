@@ -4745,12 +4745,17 @@ func (s *Server) handleFindByFileContext(ctx context.Context, args json.RawMessa
 	}
 
 	var params struct {
+		Project  string
 		FilePath string
 		Limit    int
 	}
+	params.Project = strings.TrimSpace(coerceString(m["project"], ""))
 	params.FilePath = coerceString(m["file_path"], "")
 	params.Limit = coerceInt(m["limit"], 10)
 
+	if params.Project == "" {
+		return "", fmt.Errorf("project is required")
+	}
 	if params.FilePath == "" {
 		return "", fmt.Errorf("file_path is required")
 	}
@@ -4758,7 +4763,7 @@ func (s *Server) handleFindByFileContext(ctx context.Context, args json.RawMessa
 		params.Limit = 10
 	}
 
-	observations, err := s.observationStore.GetObservationsByFile(ctx, params.FilePath, params.Limit)
+	observations, err := s.observationStore.GetObservationsByFile(ctx, params.Project, params.FilePath, params.Limit)
 	if err != nil {
 		return "", fmt.Errorf("get observations by file: %w", err)
 	}

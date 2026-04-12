@@ -114,24 +114,11 @@ func (s *Service) filePathObservations(ctx context.Context, project, filePath st
 	if s.observationStore == nil {
 		return []*models.Observation{}, nil
 	}
-	observations, err := s.observationStore.GetObservationsByFile(ctx, filePath, limit)
+	observations, err := s.observationStore.GetObservationsByFile(ctx, project, filePath, limit)
 	if err != nil {
 		return nil, err
 	}
-	if project == "" {
-		return observations, nil
-	}
-	scoped := make([]*models.Observation, 0, len(observations))
-	for _, observation := range observations {
-		if observation == nil || observation.Project != project {
-			continue
-		}
-		scoped = append(scoped, observation)
-		if limit > 0 && len(scoped) >= limit {
-			break
-		}
-	}
-	return scoped, nil
+	return observations, nil
 }
 
 func hasPatternConcept(concepts []string) bool {

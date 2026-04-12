@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -2094,10 +2095,8 @@ func TestHandleTimeline_Defaults(t *testing.T) {
 
 	// Test that handleTimeline sets default before/after values
 	params := TimelineParams{
-		AnchorID: 0,
-		Query:    "",
-		Before:   0,
-		After:    0,
+		Before: 0,
+		After:  0,
 	}
 
 	// Simulate the default value assignment from handleTimeline
@@ -2628,6 +2627,16 @@ func TestCallTool_SearchTools(t *testing.T) {
 			assert.Contains(t, err.Error(), "invalid")
 		})
 	}
+}
+
+func TestHandleFindByFileContext_ProjectRequired(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, "1.0.0", &dbgorm.ObservationStore{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	_, err := server.handleFindByFileContext(context.Background(), json.RawMessage(`{"file_path":"internal/auth/service.go"}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "project is required")
 }
 
 // TestHandleTriggerMaintenance_NilService tests trigger_maintenance with nil service.

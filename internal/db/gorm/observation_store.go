@@ -223,18 +223,18 @@ func (s *ObservationStore) StoreObservation(ctx context.Context, sdkSessionID, p
 // ObservationUpdate contains fields that can be updated on an observation.
 // Only non-nil fields will be updated.
 type ObservationUpdate struct {
-	Title         *string          // New title
-	Subtitle      *string          // New subtitle
-	Narrative     *string          // New narrative
-	Facts         *[]string        // New facts (replaces existing)
-	Concepts      *[]string        // New concepts (replaces existing)
-	FilesRead     *[]string        // New files read (replaces existing)
-	FilesModified *[]string        // New files modified (replaces existing)
-	CommandsRun   *[]string        // New commands run (replaces existing)
+	Title         *string           // New title
+	Subtitle      *string           // New subtitle
+	Narrative     *string           // New narrative
+	Facts         *[]string         // New facts (replaces existing)
+	Concepts      *[]string         // New concepts (replaces existing)
+	FilesRead     *[]string         // New files read (replaces existing)
+	FilesModified *[]string         // New files modified (replaces existing)
+	CommandsRun   *[]string         // New commands run (replaces existing)
 	FileMtimes    *map[string]int64 // New file mtimes (replaces existing)
-	Scope         *string          // New scope (project or global)
-	Status        *string          // New status (active or resolved)
-	StatusReason  *string          // Reason for status change
+	Scope         *string           // New scope (project or global)
+	Status        *string           // New status (active or resolved)
+	StatusReason  *string           // Reason for status change
 }
 
 // UpdateObservation updates an existing observation with the provided fields.
@@ -545,19 +545,34 @@ func (s *ObservationStore) GetProjectBriefingObservation(ctx context.Context, pr
 
 // GetObservationsByFile retrieves observations related to a specific file path.
 // Matches against both files_modified and files_read JSONB arrays.
+// When project is non-empty, includes project-scoped observations for that project
+// plus global-scoped observations.
+// When project is empty, applies a safe default and returns only global-scoped observations.
 // Results are ordered by importance_score DESC.
-func (s *ObservationStore) GetObservationsByFile(ctx context.Context, filePath string, limit int) ([]*models.Observation, error) {
+func (s *ObservationStore) GetObservationsByFile(ctx context.Context, project, filePath string, limit int) ([]*models.Observation, error) {
 	var dbObservations []Observation
 	// Use json.Marshal to properly escape backslashes in Windows paths (e.g., D:\Dev\...).
 	// fmt.Sprintf(`["%s"]`, path) produces invalid JSON when path contains backslashes.
 	fileJSONBytes, _ := json.Marshal([]string{filePath})
 	fileJSON := string(fileJSONBytes)
-	err := s.db.WithContext(ctx).
-		Scopes(activeObservationFilter(), importanceOrdering()).
-		Where("files_modified @> ? OR files_read @> ?", fileJSON, fileJSON).
-		Limit(limit).
-		Find(&dbObservations).Error
+	project = strings.TrimSpace(project)
 
+	q := s.db.WithContext(ctx).
+		Scopes(activeObservationFilter(), importanceOrdering()).
+		Where("files_modified @> ? OR files_read @> ?", fileJSON, fileJSON)
+	if project != "" {
+		q = q.Where(
+			"((project = ? AND COALESCE(NULLIF(scope, ''), 'project') = 'project') OR COALESCE(NULLIF(scope, ''), 'project') = 'global')",
+			project,
+		)
+	} else {
+		q = q.Where("COALESCE(NULLIF(scope, ''), 'project') = 'global'")
+	}
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+
+	err := q.Find(&dbObservations).Error
 	if err != nil {
 		return nil, err
 	}

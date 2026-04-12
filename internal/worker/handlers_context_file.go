@@ -3,6 +3,7 @@ package worker
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -16,7 +17,7 @@ import (
 //	@Produce json
 //	@Security ApiKeyAuth
 //	@Param path query string true "File path to search for"
-//	@Param project query string false "Project name"
+//	@Param project query string true "Project name"
 //	@Param limit query int false "Max results (default 10, max 20)"
 //	@Success 200 {object} map[string]interface{}
 //	@Failure 400 {string} string "bad request"
@@ -28,13 +29,14 @@ func (s *Service) handleContextByFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate project name if provided
-	project := r.URL.Query().Get("project")
-	if project != "" {
-		if err := ValidateProjectName(project); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	if project == "" {
+		http.Error(w, "project required", http.StatusBadRequest)
+		return
+	}
+	if err := ValidateProjectName(project); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	limit := 10
@@ -44,7 +46,7 @@ func (s *Service) handleContextByFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	observations, err := s.observationStore.GetObservationsByFile(r.Context(), filePath, limit)
+	observations, err := s.observationStore.GetObservationsByFile(r.Context(), project, filePath, limit)
 	if err != nil {
 		log.Debug().Err(err).Str("path", filePath).Msg("Failed to fetch file-context observations")
 		// Graceful degradation: return empty, don't error (NFR-3)
