@@ -224,7 +224,7 @@ async function handleSessionStart(ctx, input) {
 
     if (i < fullCount) {
       const narrative = escapeXmlTags(getString(observation.narrative));
-      contextBuilder += `## ${i + 1}. [${typeLabel}] ${title}${scopeTag}\n`;
+      contextBuilder += `## ${i + 1}. [${typeLabel}] ${title}${scopeTag} (id:${observation.id || '?'})\n`;
       if (narrative !== '') {
         contextBuilder += `${narrative}\n`;
       }

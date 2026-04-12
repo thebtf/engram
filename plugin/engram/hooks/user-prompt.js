@@ -331,7 +331,7 @@ async function handleUserPrompt(ctx, input) {
           const scoreTag = score ? ` [relevance: ${score}]` : '';
           const scopeTag = (typeof obs.scope === 'string' && obs.scope === 'global') ? ' [GLOBAL]' : '';
 
-          contextBuilder += `## ${idx}. [${obsType}] ${title}${scopeTag}${scoreTag}\n`;
+          contextBuilder += `## ${idx}. [${obsType}] ${title}${scopeTag}${scoreTag} (id:${obs.id || '?'})\n`;
 
           if (Array.isArray(obs.facts) && obs.facts.length > 0) {
             contextBuilder += 'Key facts:\n';
