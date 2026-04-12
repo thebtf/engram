@@ -1220,7 +1220,7 @@ func (s *Service) detectMissingVectors(ctx context.Context) (int64, error) {
 	var allObsIDs []int64
 	if err := s.store.GetDB().WithContext(ctx).
 		Table("observations").
-		Where("is_superseded = ? OR is_superseded IS NULL", false).
+		Where("is_superseded = 0 OR is_superseded IS NULL").
 		Pluck("id", &allObsIDs).Error; err != nil {
 		return 0, fmt.Errorf("query active observation IDs: %w", err)
 	}
@@ -1303,8 +1303,8 @@ func (s *Service) cleanStaleRelations(ctx context.Context) (int64, error) {
 	// Delete relations whose source or target observation no longer exists.
 	result := s.store.GetDB().WithContext(ctx).
 		Exec(`DELETE FROM observation_relations
-		      WHERE source_observation_id NOT IN (SELECT id FROM observations)
-		         OR target_observation_id NOT IN (SELECT id FROM observations)`)
+		      WHERE source_id NOT IN (SELECT id FROM observations)
+		         OR target_id NOT IN (SELECT id FROM observations)`)
 	if result.Error != nil {
 		return 0, fmt.Errorf("delete stale relations: %w", result.Error)
 	}
@@ -1352,7 +1352,7 @@ func (s *Service) detectGraphDrift(ctx context.Context) error {
 	var obsCount int64
 	if err := s.store.GetDB().WithContext(ctx).
 		Table("observations").
-		Where("is_superseded = ? OR is_superseded IS NULL", false).
+		Where("is_superseded = 0 OR is_superseded IS NULL").
 		Count(&obsCount).Error; err != nil {
 		return fmt.Errorf("count observations for drift detection: %w", err)
 	}
