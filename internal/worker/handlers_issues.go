@@ -19,7 +19,7 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	sourceProject := r.URL.Query().Get("source_project")
 	statusParam := r.URL.Query().Get("status")
-	typeParam := r.URL.Query().Get("type")
+	typeParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
 	resolvedSinceStr := r.URL.Query().Get("resolved_since")
@@ -120,6 +120,7 @@ func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "title is required"}`, http.StatusBadRequest)
 		return
 	}
+	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 	if req.TargetProject == "" && req.SourceProject != "" {
 		req.TargetProject = req.SourceProject
 	}
@@ -185,6 +186,9 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "invalid JSON body"}`, http.StatusBadRequest)
 		return
 	}
+
+	// Normalize type before validation and storage.
+	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 
 	// Field edits (dashboard inline editing)
 	if req.Title != "" || req.Body != "" || req.Priority != "" || req.Type != "" || req.Labels != nil {

@@ -1061,40 +1061,25 @@ export async function updateIssue(
 }
 
 export async function createIssue(
-  data: { title: string; body?: string; type?: string; priority?: string; target_project?: string },
+  data: { title: string; body?: string; type?: string; priority?: string; target_project: string },
   signal?: AbortSignal
 ): Promise<{ id: number; message: string }> {
-  const { timeout = DEFAULT_TIMEOUT } = {}
-  const timeoutController = new AbortController()
-  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
-  const combinedSignal = signal
-    ? combineAbortSignals(signal, timeoutController.signal)
-    : timeoutController.signal
-
-  try {
-    const response = await fetch(`${API_BASE}/issues`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        type: data.type || 'task',
-        priority: data.priority || 'medium',
-        source_project: 'dashboard',
-        source_agent: 'human',
-      }),
-      signal: combinedSignal,
-    })
-    if (!response.ok) throw new Error(await response.text())
-    return response.json()
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      if (signal?.aborted) throw err
-      throw new Error('Request timed out')
-    }
-    throw err
-  } finally {
-    clearTimeout(timeoutId)
+  const targetProject = data.target_project?.trim()
+  if (!targetProject) {
+    throw new Error('target_project is required')
   }
+  return postJson<{ id: number; message: string }>(
+    `${API_BASE}/issues`,
+    {
+      ...data,
+      target_project: targetProject,
+      type: data.type || 'task',
+      priority: data.priority || 'medium',
+      source_project: 'dashboard',
+      source_agent: 'human',
+    },
+    { signal },
+  )
 }
 
 export async function fetchTrackedProjects(signal?: AbortSignal): Promise<string[]> {

@@ -45,7 +45,7 @@ async function submitNewIssue() {
       body: newBody.value.trim() || undefined,
       type: newType.value,
       priority: newPriority.value,
-      target_project: newTargetProject.value || undefined,
+      target_project: newTargetProject.value,
     })
     showNewIssue.value = false
     await load()
