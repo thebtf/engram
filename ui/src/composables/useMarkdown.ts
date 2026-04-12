@@ -9,6 +9,6 @@ marked.use({
 
 export function renderMarkdown(text: string): string {
   if (!text) return ''
-  const html = marked.parseSync(text)
+  const html = marked.parse(text) as string
   return DOMPurify.sanitize(html)
 }
