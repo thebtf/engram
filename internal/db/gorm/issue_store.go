@@ -34,6 +34,9 @@ type IssueWithCount struct {
 	CommentCount int64 `gorm:"column:comment_count" json:"comment_count"`
 }
 
+// validIssueTypes is the allowed set of issue type values.
+var validIssueTypes = map[string]bool{"bug": true, "feature": true, "improvement": true, "task": true}
+
 // CreateIssue inserts a new issue and returns its ID.
 func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, error) {
 	now := time.Now()
@@ -42,6 +45,7 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 		Body:             issue.Body,
 		Status:           issue.Status,
 		Priority:         issue.Priority,
+		Type:             issue.Type,
 		SourceProject:    issue.SourceProject,
 		TargetProject:    issue.TargetProject,
 		SourceAgent:      issue.SourceAgent,
@@ -56,6 +60,9 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 	if created.Priority == "" {
 		created.Priority = "medium"
 	}
+	if created.Type == "" {
+		created.Type = "task"
+	}
 
 	// Validate status and priority before INSERT (avoid cryptic CHECK constraint errors)
 	validStatuses := map[string]bool{"open": true, "acknowledged": true, "resolved": true, "reopened": true, "closed": true, "rejected": true}
@@ -65,6 +72,9 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 	validPriorities := map[string]bool{"critical": true, "high": true, "medium": true, "low": true}
 	if !validPriorities[created.Priority] {
 		return 0, fmt.Errorf("invalid priority %q: must be one of critical, high, medium, low", created.Priority)
+	}
+	if !validIssueTypes[created.Type] {
+		return 0, fmt.Errorf("invalid type %q: must be one of bug, feature, improvement, task", created.Type)
 	}
 
 	if err := s.db.WithContext(ctx).Create(&created).Error; err != nil {
@@ -79,6 +89,7 @@ type IssueListParams struct {
 	SourceProject string
 	Statuses      []string
 	ResolvedSince *time.Time
+	Type          string
 	Limit         int
 	Offset        int
 }
@@ -121,6 +132,9 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	}
 	if params.ResolvedSince != nil {
 		query = query.Where("resolved_at >= ?", *params.ResolvedSince)
+	}
+	if params.Type != "" {
+		query = query.Where("type = ?", params.Type)
 	}
 
 	var total int64
@@ -388,9 +402,9 @@ func (s *IssueStore) DeleteIssue(ctx context.Context, id int64) error {
 	})
 }
 
-// UpdateIssueFields updates mutable fields (title, body, priority, labels) for dashboard editing.
+// UpdateIssueFields updates mutable fields (title, body, priority, labels, type) for dashboard editing.
 // Only non-zero-value fields are updated.
-func (s *IssueStore) UpdateIssueFields(ctx context.Context, id int64, title, body, priority string, labels []string) error {
+func (s *IssueStore) UpdateIssueFields(ctx context.Context, id int64, title, body, priority, issueType string, labels []string) error {
 	updates := map[string]any{
 		"updated_at": time.Now(),
 	}
@@ -406,6 +420,12 @@ func (s *IssueStore) UpdateIssueFields(ctx context.Context, id int64, title, bod
 			return fmt.Errorf("invalid priority %q", priority)
 		}
 		updates["priority"] = priority
+	}
+	if issueType != "" {
+		if !validIssueTypes[issueType] {
+			return fmt.Errorf("invalid type %q: must be one of bug, feature, improvement, task", issueType)
+		}
+		updates["type"] = issueType
 	}
 	if labels != nil {
 		updates["labels"] = labels

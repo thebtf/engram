@@ -431,6 +431,7 @@ type Issue struct {
 	Body             string                 `gorm:"type:text" json:"body"`
 	Status           string                 `gorm:"type:text;not null;default:'open';check:status IN ('open','acknowledged','resolved','reopened');index:idx_issues_target_status,priority:2" json:"status"`
 	Priority         string                 `gorm:"type:text;not null;default:'medium';check:priority IN ('critical','high','medium','low')" json:"priority"`
+	Type             string                 `gorm:"type:text;default:task" json:"type"`
 	SourceProject    string                 `gorm:"type:text;not null;index:idx_issues_source_project" json:"source_project"`
 	TargetProject    string                 `gorm:"type:text;not null;index:idx_issues_target_status,priority:1" json:"target_project"`
 	SourceAgent      string                 `gorm:"type:text" json:"source_agent"`

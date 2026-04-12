@@ -62,6 +62,12 @@ func issuesToolSchema() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "OPTIONAL_FOR: create. Tags like 'bug', 'feature', 'reliability'.",
 			},
+			"type": map[string]any{
+				"type":        "string",
+				"enum":        []string{"bug", "feature", "improvement", "task"},
+				"default":     "task",
+				"description": "OPTIONAL_FOR: create. Issue type. Default: task.",
+			},
 			"source_project": map[string]any{
 				"type":        "string",
 				"description": "OPTIONAL_FOR: list. Filter to show only issues YOU created.",
@@ -193,6 +199,7 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 
 	body := coerceString(m["body"], "")
 	priority := coerceString(m["priority"], "medium")
+	issueType := coerceString(m["type"], "task")
 	targetProject := coerceString(m["target_project"], "")
 	labels := coerceStringSlice(m["labels"])
 
@@ -211,6 +218,7 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 		Title:         title,
 		Body:          body,
 		Priority:      priority,
+		Type:          issueType,
 		SourceProject: sourceProject,
 		TargetProject: targetProject,
 		SourceAgent:   sourceAgent,

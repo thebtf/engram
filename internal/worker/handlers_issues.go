@@ -19,6 +19,7 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	sourceProject := r.URL.Query().Get("source_project")
 	statusParam := r.URL.Query().Get("status")
+	typeParam := r.URL.Query().Get("type")
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
 	resolvedSinceStr := r.URL.Query().Get("resolved_since")
@@ -45,6 +46,7 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		TargetProject: project,
 		SourceProject: sourceProject,
 		Statuses:      statuses,
+		Type:          typeParam,
 		Limit:         limit,
 		Offset:        offset,
 	}
@@ -101,6 +103,7 @@ func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		Title            string   `json:"title"`
 		Body             string   `json:"body"`
 		Priority         string   `json:"priority"`
+		Type             string   `json:"type"`
 		SourceProject    string   `json:"source_project"`
 		TargetProject    string   `json:"target_project"`
 		SourceAgent      string   `json:"source_agent"`
@@ -129,6 +132,7 @@ func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		Title:            req.Title,
 		Body:             req.Body,
 		Priority:         req.Priority,
+		Type:             req.Type,
 		SourceProject:    req.SourceProject,
 		TargetProject:    req.TargetProject,
 		SourceAgent:      req.SourceAgent,
@@ -174,6 +178,7 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 		Title         string   `json:"title"`
 		Body          string   `json:"body"`
 		Priority      string   `json:"priority"`
+		Type          string   `json:"type"`
 		Labels        []string `json:"labels"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -182,8 +187,8 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Field edits (dashboard inline editing)
-	if req.Title != "" || req.Body != "" || req.Priority != "" || req.Labels != nil {
-		if err := s.issueStore.UpdateIssueFields(r.Context(), id, req.Title, req.Body, req.Priority, req.Labels); err != nil {
+	if req.Title != "" || req.Body != "" || req.Priority != "" || req.Type != "" || req.Labels != nil {
+		if err := s.issueStore.UpdateIssueFields(r.Context(), id, req.Title, req.Body, req.Priority, req.Type, req.Labels); err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
 				return
