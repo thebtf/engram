@@ -8,6 +8,7 @@ export function useIssues() {
   const error = ref<string | null>(null)
   const statusFilter = ref('open,acknowledged,resolved,reopened')
   const projectFilter = ref('')
+  const typeFilter = ref('')
 
   let abortController: AbortController | null = null
 
@@ -26,7 +27,8 @@ export function useIssues() {
         statusFilter.value || undefined,
         50,
         0,
-        abortController.signal
+        abortController.signal,
+        typeFilter.value || undefined
       )
       issues.value = result.issues || []
       total.value = result.total || 0
@@ -42,7 +44,7 @@ export function useIssues() {
   }
 
   // Auto-reload when filters change
-  watch([statusFilter, projectFilter], () => {
+  watch([statusFilter, projectFilter, typeFilter], () => {
     load()
   })
 
@@ -53,6 +55,7 @@ export function useIssues() {
     error,
     statusFilter,
     projectFilter,
+    typeFilter,
     load,
   }
 }

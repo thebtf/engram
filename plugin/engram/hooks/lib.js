@@ -596,7 +596,8 @@ function formatIssuesBlock(issues, project) {
       }
     }
 
-    block += `#${issue.id} [${prio}] [${prefix}]${staleTag} ${issue.title}\n`;
+    const type = ((issue.type || '').trim().toUpperCase()) || 'TASK';
+    block += `#${issue.id} [${type}] [${prio}] [${prefix}]${staleTag} ${issue.title}\n`;
 
     if (actionDirective) {
       block += actionDirective;

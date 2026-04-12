@@ -18,6 +18,7 @@ const editing = ref(false)
 const editTitle = ref('')
 const editBody = ref('')
 const editPriority = ref('')
+const editType = ref('')
 
 // Comment form
 const newComment = ref('')
@@ -133,11 +134,22 @@ async function loadIssue() {
   }
 }
 
+function typeColor(type: string): string {
+  switch (type) {
+    case 'bug': return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'
+    case 'feature': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
+    case 'improvement': return 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400'
+    case 'task': return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+    default: return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+  }
+}
+
 function startEdit() {
   if (!issue.value) return
   editTitle.value = issue.value.title
   editBody.value = issue.value.body
   editPriority.value = issue.value.priority
+  editType.value = issue.value.type || 'task'
   editing.value = true
 }
 
@@ -149,6 +161,7 @@ async function saveEdit() {
     if (editTitle.value !== issue.value.title) fields.title = editTitle.value
     if (editBody.value !== issue.value.body) fields.body = editBody.value
     if (editPriority.value !== issue.value.priority) fields.priority = editPriority.value
+    if (editType.value !== (issue.value.type || 'task')) fields.type = editType.value
     if (Object.keys(fields).length > 0) {
       await updateIssue(issue.value.id, fields)
     }
@@ -251,6 +264,7 @@ onMounted(loadIssue)
             <div>
               <div class="flex items-center gap-2 mb-2">
                 <span class="text-gray-400 text-sm">#{{ issue.id }}</span>
+                <span v-if="issue.type" :class="['px-2 py-0.5 text-xs rounded-full', typeColor(issue.type)]">{{ issue.type }}</span>
                 <span :class="['font-bold text-sm uppercase', priorityColor(issue.priority)]">{{ issue.priority }}</span>
                 <span :class="['px-2 py-0.5 text-xs rounded-full', statusColor(issue.status)]">{{ issue.status }}</span>
               </div>
@@ -294,9 +308,17 @@ onMounted(loadIssue)
           <div class="space-y-3">
             <input v-model="editTitle" class="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-lg font-semibold" />
             <textarea v-model="editBody" rows="4" class="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm" />
-            <select v-model="editPriority" class="px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm">
-              <option v-for="p in ['critical', 'high', 'medium', 'low']" :key="p" :value="p">{{ p }}</option>
-            </select>
+            <div class="flex gap-3">
+              <select v-model="editPriority" class="flex-1 px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100">
+                <option v-for="p in ['critical', 'high', 'medium', 'low']" :key="p" :value="p">{{ p }}</option>
+              </select>
+              <select v-model="editType" class="flex-1 px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100">
+                <option value="task">Task</option>
+                <option value="bug">Bug</option>
+                <option value="feature">Feature</option>
+                <option value="improvement">Improvement</option>
+              </select>
+            </div>
             <div class="flex gap-2">
               <button @click="saveEdit" :disabled="actionLoading" class="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50">Save</button>
               <button @click="editing = false" class="px-3 py-1 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">Cancel</button>
