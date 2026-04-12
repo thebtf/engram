@@ -11,12 +11,29 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/thebtf/engram/internal/proxy"
 )
+
+// maxProbeBodySize caps the probe response read so an untrusted server cannot
+// exhaust proxy memory by returning an arbitrarily large body.
+const maxProbeBodySize = 64 * 1024 // 64 KB
+
+// safeRemoteURL strips any embedded userinfo (e.g. tokens in
+// https://token@host/path) before the URL is written to logs.
+func safeRemoteURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		// Not a parseable URL — return as-is rather than hiding it entirely.
+		return raw
+	}
+	u.User = nil
+	return u.String()
+}
 
 // httpClient is used for short-lived requests (probe ping, Streamable HTTP
 // POSTs). A 30 s timeout prevents hanging on an unresponsive server.
@@ -64,7 +81,7 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "[engram] project: %s\n", slug)
 	if remote != "" {
-		fmt.Fprintf(os.Stderr, "[engram] git remote: %s\n", remote)
+		fmt.Fprintf(os.Stderr, "[engram] git remote: %s\n", safeRemoteURL(remote))
 	}
 
 	// T006: try Streamable HTTP first, fall back to SSE
@@ -105,7 +122,7 @@ func tryStreamableHTTP(serverURL, authToken, projectSlug string) bool {
 		return false
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProbeBodySize))
 	if err != nil {
 		return false
 	}
@@ -153,9 +170,8 @@ func runStreamableHTTP(serverURL, authToken, projectSlug string) {
 
 		_, _ = io.Copy(os.Stdout, resp.Body)
 		_ = resp.Body.Close()
-
-		// Ensure newline separator between responses
-		fmt.Fprintln(os.Stdout)
+		// json.NewEncoder on the server side appends a newline after each
+		// JSON document, so no additional separator is needed here.
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -200,6 +216,7 @@ func runSSE(serverURL, authToken, projectSlug string) {
 	currentEvent := ""
 	messageData := ""
 	messageEndpoint := ""
+	var stdinDone chan struct{}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -226,7 +243,8 @@ func runSSE(serverURL, authToken, projectSlug string) {
 		case "endpoint":
 			if messageEndpoint == "" {
 				messageEndpoint = resolveMessageEndpoint(serverURL, data)
-				go forwardStdin(messageEndpoint, authToken, projectSlug)
+				stdinDone = make(chan struct{})
+				go forwardStdin(messageEndpoint, authToken, projectSlug, stdinDone)
 			}
 		case "message":
 			if messageData == "" {
@@ -240,11 +258,22 @@ func runSSE(serverURL, authToken, projectSlug string) {
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
+
+	// Wait for the forwardStdin goroutine to finish so all in-flight POSTs
+	// complete before the process exits.
+	if stdinDone != nil {
+		<-stdinDone
+	}
 	os.Exit(0)
 }
 
 // forwardStdin reads JSON-RPC lines from stdin and POSTs each to the SSE message endpoint.
-func forwardStdin(endpoint, token, projectSlug string) {
+// It signals done on the provided channel when it finishes (EOF or error) so the
+// caller can drain any remaining SSE output before exiting instead of calling
+// os.Exit from a goroutine.
+func forwardStdin(endpoint, token, projectSlug string, done chan<- struct{}) {
+	defer close(done)
+
 	scanner := bufio.NewScanner(os.Stdin)
 	// Increase buffer to 4 MB to accommodate large JSON-RPC messages.
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -253,10 +282,7 @@ func forwardStdin(endpoint, token, projectSlug string) {
 		req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(line))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[engram] forward error: %v\n", err)
-			// Exit 0: forwardStdin runs in a goroutine alongside the SSE reader.
-			// A non-zero exit here would be misleading — the primary stream may
-			// still be healthy. The SSE reader goroutine owns process lifetime.
-			os.Exit(0)
+			return
 		}
 
 		req.Header.Set("Content-Type", "application/json")
@@ -271,15 +297,11 @@ func forwardStdin(endpoint, token, projectSlug string) {
 		resp, err := sseClient.Do(req)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[engram] forward failed: %v\n", err)
-			// Exit 0: same rationale as above — network failure on the POST
-			// path should not mask a healthy SSE session with a non-zero code.
-			os.Exit(0)
+			return
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}
-
-	os.Exit(0)
 }
 
 // resolveMessageEndpoint converts a relative SSE endpoint path to an absolute URL.
