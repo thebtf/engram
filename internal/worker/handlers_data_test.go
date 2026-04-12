@@ -1,65 +1,72 @@
 package worker
 
 import (
-	"fmt"
+	"strings"
 	"testing"
 )
 
-func TestParseHitRateAnalyticsTextPreservesTitleSpacesAndFlags(t *testing.T) {
-	sampleText := `## Hit Rate Analytics (2 observations)
-
-### Noise Candidates (injected 10+ times, never cited)
-- [101] Multi Word Noise Title (guidance)
-
-### High Value (injected 5+ times, >50% citation rate)
-- [202] High Value Title With Spaces (decision)`
-
-	observations, err := parseHitRateAnalyticsText(sampleText)
-	if err != nil {
-		t.Fatalf("parseHitRateAnalyticsText returned error: %v", err)
+func TestBuildHitRateAnalyticsResponsePreservesTitleSpacesFlagsAndTypes(t *testing.T) {
+	rows := []hitRateAnalyticsRow{
+		{ID: 101, Title: "Multi Word Noise Title", Type: "guidance", Flag: "noise_candidate"},
+		{ID: 202, Title: "High Value Title With Spaces", Type: "decision", Flag: "high_value"},
 	}
 
+	response := buildHitRateAnalyticsResponse(rows)
+
+	if response["noise_candidates"] != 1 {
+		t.Fatalf("expected noise_candidates=1, got %v", response["noise_candidates"])
+	}
+	if response["high_value"] != 1 {
+		t.Fatalf("expected high_value=1, got %v", response["high_value"])
+	}
+	if response["total"] != 2 {
+		t.Fatalf("expected total=2, got %v", response["total"])
+	}
+
+	observations, ok := response["observations"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected observations to be []map[string]any, got %T", response["observations"])
+	}
 	if len(observations) != 2 {
 		t.Fatalf("expected 2 observations, got %d", len(observations))
 	}
 
-	noiseCount := 0
-	highValueCount := 0
-	var noiseObs, highValueObs map[string]any
-
-	for _, obs := range observations {
-		flag := fmt.Sprintf("%v", obs["flag"])
-		switch flag {
-		case "noise_candidate":
-			noiseCount++
-			noiseObs = obs
-		case "high_value":
-			highValueCount++
-			highValueObs = obs
-		}
+	if observations[0]["title"] != "Multi Word Noise Title" {
+		t.Fatalf("expected first title to preserve spaces, got %q", observations[0]["title"])
+	}
+	if observations[0]["flag"] != "noise_candidate" {
+		t.Fatalf("expected first flag noise_candidate, got %q", observations[0]["flag"])
+	}
+	if observations[0]["type"] != "guidance" {
+		t.Fatalf("expected first type guidance, got %q", observations[0]["type"])
 	}
 
-	if noiseCount != 1 {
-		t.Fatalf("expected exactly 1 noise_candidate, got %d", noiseCount)
+	if observations[1]["title"] != "High Value Title With Spaces" {
+		t.Fatalf("expected second title to preserve spaces, got %q", observations[1]["title"])
+	}
+	if observations[1]["flag"] != "high_value" {
+		t.Fatalf("expected second flag high_value, got %q", observations[1]["flag"])
+	}
+	if observations[1]["type"] != "decision" {
+		t.Fatalf("expected second type decision, got %q", observations[1]["type"])
+	}
+}
+
+func TestFormatHitRateAnalyticsMarkdownRendersFromStructuredRows(t *testing.T) {
+	rows := []hitRateAnalyticsRow{
+		{ID: 101, Title: "Multi Word Noise Title", Type: "guidance", Flag: "noise_candidate"},
+		{ID: 202, Title: "High Value Title With Spaces", Type: "decision", Flag: "high_value"},
 	}
 
-	if highValueCount != 1 {
-		t.Fatalf("expected exactly 1 high_value, got %d", highValueCount)
-	}
+	text := formatHitRateAnalyticsMarkdown(rows)
 
-	if fmt.Sprintf("%v", noiseObs["title"]) != "Multi Word Noise Title" {
-		t.Fatalf("expected noise candidate title 'Multi Word Noise Title', got %q", noiseObs["title"])
+	if !strings.Contains(text, "## Hit Rate Analytics (2 observations)") {
+		t.Fatalf("expected markdown header with observation count, got %q", text)
 	}
-
-	if fmt.Sprintf("%v", highValueObs["title"]) != "High Value Title With Spaces" {
-		t.Fatalf("expected high value title 'High Value Title With Spaces', got %q", highValueObs["title"])
+	if !strings.Contains(text, "- [101] Multi Word Noise Title (guidance)") {
+		t.Fatalf("expected markdown to include noise candidate row, got %q", text)
 	}
-
-	if fmt.Sprintf("%v", noiseObs["type"]) != "guidance" {
-		t.Fatalf("expected noise candidate type 'guidance', got %q", noiseObs["type"])
-	}
-
-	if fmt.Sprintf("%v", highValueObs["type"]) != "decision" {
-		t.Fatalf("expected high value type 'decision', got %q", highValueObs["type"])
+	if !strings.Contains(text, "- [202] High Value Title With Spaces (decision)") {
+		t.Fatalf("expected markdown to include high value row, got %q", text)
 	}
 }

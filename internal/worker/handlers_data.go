@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -995,28 +994,22 @@ func (s *Service) handleBulkScopeChange(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleGetSimilarityTelemetry godoc
-// @Summary Get similarity telemetry
-// @Description Returns the latest similarity telemetry data. Optionally filter by project to get a single snapshot.
-// @Tags Analytics
-// @Produce json
-// @Security ApiKeyAuth
-// @Param project query string false "Filter by project"
-// @Success 200 {object} map[string]interface{}
-// @Failure 500 {string} string "internal error"
-// @Router /api/telemetry/similarity [get]
-func (s *Service) handleMCPHitRateAnalytics(ctx context.Context, project string, limit int) (string, error) {
+const noHitRateAnalyticsDataMessage = "No hit rate analytics data yet. Hit rate flags are computed during maintenance cycles and require 50+ injection_log entries."
+
+type hitRateAnalyticsRow struct {
+	ID    int64  `gorm:"column:id"`
+	Title string `gorm:"column:title"`
+	Type  string `gorm:"column:type"`
+	Flag  string `gorm:"column:flag"`
+}
+
+func (s *Service) queryHitRateAnalyticsRows(ctx context.Context, project string, limit int) ([]hitRateAnalyticsRow, error) {
 	if s.observationStore == nil {
-		return "", nil
+		return nil, nil
 	}
+
 	db := s.observationStore.GetDB().WithContext(ctx)
-	type hitRateObs struct {
-		ID    int64  `gorm:"column:id"`
-		Title string `gorm:"column:title"`
-		Type  string `gorm:"column:type"`
-		Flag  string `gorm:"column:flag"`
-	}
-	var results []hitRateObs
+	var results []hitRateAnalyticsRow
 	sql := `
 		SELECT id, COALESCE(title, '') as title, type,
 			CASE
@@ -1034,94 +1027,78 @@ func (s *Service) handleMCPHitRateAnalytics(ctx context.Context, project string,
 	sql += " ORDER BY importance_score DESC LIMIT ?"
 	params = append(params, limit)
 	if err := db.Raw(sql, params...).Scan(&results).Error; err != nil {
-		return "", fmt.Errorf("hit_rate query: %w", err)
+		return nil, fmt.Errorf("hit_rate query: %w", err)
 	}
-	if len(results) == 0 {
-		return "No hit rate analytics data yet. Hit rate flags are computed during maintenance cycles and require 50+ injection_log entries.", nil
+	return results, nil
+}
+
+func formatHitRateAnalyticsMarkdown(rows []hitRateAnalyticsRow) string {
+	if len(rows) == 0 {
+		return noHitRateAnalyticsDataMessage
 	}
+
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## Hit Rate Analytics (%d observations)\n\n", len(results)))
+	sb.WriteString(fmt.Sprintf("## Hit Rate Analytics (%d observations)\n\n", len(rows)))
 	noiseCount, starCount := 0, 0
 	sb.WriteString("### Noise Candidates (injected 10+ times, never cited)\n")
-	for _, r := range results {
-		if r.Flag == "noise_candidate" {
-			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", r.ID, r.Title, r.Type))
+	for _, row := range rows {
+		if row.Flag == "noise_candidate" {
+			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", row.ID, row.Title, row.Type))
 			noiseCount++
 		}
 	}
 	if noiseCount == 0 {
 		sb.WriteString("None found.\n")
 	}
+
 	sb.WriteString("\n### High Value (injected 5+ times, >50% citation rate)\n")
-	for _, r := range results {
-		if r.Flag == "high_value" {
-			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", r.ID, r.Title, r.Type))
+	for _, row := range rows {
+		if row.Flag == "high_value" {
+			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", row.ID, row.Title, row.Type))
 			starCount++
 		}
 	}
 	if starCount == 0 {
 		sb.WriteString("None found.\n")
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
-func parseHitRateAnalyticsText(text string) ([]map[string]any, error) {
-	observations := make([]map[string]any, 0)
-	section := ""
+func buildHitRateAnalyticsResponse(rows []hitRateAnalyticsRow) map[string]any {
+	observations := make([]map[string]any, 0, len(rows))
+	noiseCount := 0
+	valueCount := 0
 
-	lines := strings.Split(text, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "### Noise Candidates"):
-			section = "noise_candidate"
-			continue
-		case strings.HasPrefix(line, "### High Value"):
-			section = "high_value"
-			continue
-		case !strings.HasPrefix(line, "- ["):
-			continue
+	for _, row := range rows {
+		if row.Flag == "noise_candidate" {
+			noiseCount++
 		}
-
-		if section != "noise_candidate" && section != "high_value" {
-			continue
-		}
-
-		tail := strings.TrimPrefix(line, "- ")
-		opening := strings.Index(tail, "[")
-		closing := strings.Index(tail, "]")
-		if opening != 0 || closing <= opening+1 {
-			continue
-		}
-
-		idText := strings.TrimSpace(tail[opening+1 : closing])
-		id, err := strconv.Atoi(idText)
-		if err != nil {
-			continue
-		}
-
-		rest := tail[closing+1:]
-		openParen := strings.LastIndex(rest, "(")
-		closeParen := strings.LastIndex(rest, ")")
-		if openParen == -1 || closeParen <= openParen {
-			continue
-		}
-
-		title := strings.TrimSpace(rest[:openParen])
-		typeVal := strings.TrimSpace(rest[openParen+1 : closeParen])
-		if title == "" || typeVal == "" {
-			continue
+		if row.Flag == "high_value" {
+			valueCount++
 		}
 
 		observations = append(observations, map[string]any{
-			"id":    id,
-			"title": title,
-			"type":  typeVal,
-			"flag":  section,
+			"id":    row.ID,
+			"title": row.Title,
+			"type":  row.Type,
+			"flag":  row.Flag,
 		})
 	}
 
-	return observations, nil
+	return map[string]any{
+		"high_value":       valueCount,
+		"noise_candidates": noiseCount,
+		"observations":     observations,
+		"total":            len(observations),
+	}
+}
+
+func (s *Service) handleMCPHitRateAnalytics(ctx context.Context, project string, limit int) (string, error) {
+	rows, err := s.queryHitRateAnalyticsRows(ctx, project, limit)
+	if err != nil {
+		return "", err
+	}
+	return formatHitRateAnalyticsMarkdown(rows), nil
 }
 
 func (s *Service) handleGetHitRateAnalytics(w http.ResponseWriter, r *http.Request) {
@@ -1130,35 +1107,13 @@ func (s *Service) handleGetHitRateAnalytics(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	text, err := s.handleMCPHitRateAnalytics(r.Context(), r.URL.Query().Get("project"), 50)
+	rows, err := s.queryHitRateAnalyticsRows(r.Context(), r.URL.Query().Get("project"), 50)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	observations, parseErr := parseHitRateAnalyticsText(text)
-	if parseErr != nil {
-		http.Error(w, parseErr.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	noiseCount := 0
-	valueCount := 0
-	for _, obs := range observations {
-		switch obs["flag"] {
-		case "noise_candidate":
-			noiseCount++
-		case "high_value":
-			valueCount++
-		}
-	}
-
-	writeJSON(w, map[string]any{
-		"high_value":      valueCount,
-		"noise_candidates": noiseCount,
-		"observations":     observations,
-		"total":           len(observations),
-	})
+	writeJSON(w, buildHitRateAnalyticsResponse(rows))
 }
 
 func (s *Service) handleGetSimilarityTelemetry(w http.ResponseWriter, r *http.Request) {
