@@ -177,7 +177,7 @@ func (j *JSONStringArray) Scan(src interface{}) error {
 // Value implements driver.Valuer for JSONStringArray.
 func (j JSONStringArray) Value() (driver.Value, error) {
 	if j == nil {
-		return nil, nil
+		return json.Marshal([]string{})
 	}
 	return json.Marshal(j)
 }

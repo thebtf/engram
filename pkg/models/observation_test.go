@@ -20,6 +20,13 @@ func TestObservationSuite(t *testing.T) {
 	suite.Run(t, new(ObservationSuite))
 }
 
+func TestJSONStringArray_Value_NilReturnsEmptyJSONArray(t *testing.T) {
+	var arr JSONStringArray
+	val, err := arr.Value()
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(val.([]byte)))
+}
+
 // TestObservationTypeConstants tests observation type constants.
 func (s *ObservationSuite) TestObservationTypeConstants() {
 	s.Equal(ObservationType("discovery"), ObsTypeDiscovery)
