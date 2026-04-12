@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchIssue, updateIssue, deleteIssue, type Issue, type IssueComment } from '@/utils/api'
 import { formatRelativeTime } from '@/utils/formatters'
+import { renderMarkdown } from '@/composables/useMarkdown'
 
 const route = useRoute()
 const router = useRouter()
@@ -354,7 +355,7 @@ onMounted(loadIssue)
               <span v-if="event.agent" class="text-gray-400">({{ event.agent }})</span>
               <span class="text-gray-400 text-xs">{{ formatRelativeTime(event.date) }}</span>
             </div>
-            <div v-if="event.body" class="mt-1 text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">{{ event.body }}</div>
+            <div v-if="event.body" class="markdown-body mt-1 text-sm text-gray-600 dark:text-gray-400 break-words" v-html="renderMarkdown(event.body)" />
           </div>
         </div>
       </div>
@@ -387,3 +388,40 @@ onMounted(loadIssue)
     </template>
   </div>
 </template>
+
+<style scoped>
+.markdown-body :deep(code) {
+  @apply bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-sm font-mono;
+}
+.markdown-body :deep(pre) {
+  @apply bg-gray-100 dark:bg-gray-700 p-3 rounded-lg overflow-x-auto my-2;
+}
+.markdown-body :deep(pre code) {
+  @apply bg-transparent p-0;
+}
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  @apply pl-5 my-1;
+}
+.markdown-body :deep(ul) {
+  @apply list-disc;
+}
+.markdown-body :deep(ol) {
+  @apply list-decimal;
+}
+.markdown-body :deep(a) {
+  @apply text-blue-500 hover:underline;
+}
+.markdown-body :deep(p) {
+  @apply my-1;
+}
+.markdown-body :deep(h1) {
+  @apply text-xl font-bold mt-4 mb-2;
+}
+.markdown-body :deep(h2) {
+  @apply text-lg font-bold mt-3 mb-1;
+}
+.markdown-body :deep(h3) {
+  @apply text-base font-bold mt-2 mb-1;
+}
+</style>
