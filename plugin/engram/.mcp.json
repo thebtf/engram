@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "engram": {
-      "command": "engram",
-      "env": {
-        "ENGRAM_URL": "${ENGRAM_URL}",
-        "ENGRAM_API_TOKEN": "${ENGRAM_API_TOKEN}"
+      "type": "http",
+      "url": "${ENGRAM_URL}",
+      "headers": {
+        "Authorization": "Bearer ${ENGRAM_API_TOKEN}"
       }
     }
   }
