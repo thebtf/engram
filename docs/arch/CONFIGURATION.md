@@ -45,15 +45,15 @@ All keys use the `ENGRAM_` prefix unless noted otherwise.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `ENGRAM_EMBEDDING_MODEL` | string | `bge-v1.5` | ONNX model name for local (builtin) provider |
-| `EMBEDDING_PROVIDER` | string | `builtin` | `builtin` or `onnx` = local ONNX; `openai` = REST API |
+| `ENGRAM_EMBEDDING_MODEL` | string | `bge-v1.5` | Legacy field (unused — OpenAI provider only) |
+| `EMBEDDING_PROVIDER` | string | `openai` | Embedding provider (`openai` = OpenAI-compatible REST API) |
 | `EMBEDDING_BASE_URL` | string | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
 | `EMBEDDING_MODEL_NAME` | string | `text-embedding-3-small` | Model name for `openai` provider |
 | `EMBEDDING_DIMENSIONS` | int | `1536` | Vector dimensions for `openai` provider |
 | `ENGRAM_HUB_THRESHOLD` | int | `5` | Min accesses before storing embedding (hub strategy) |
 | `ENGRAM_VECTOR_STORAGE_STRATEGY` | string | `hub` | Vector storage strategy (`hub` = LEANN-inspired, delay until HubThreshold) |
 
-> Note: `builtin` and `onnx` are equivalent — both select the local ONNX BGE model (384-dim).
+> Note: The ONNX/builtin provider has been removed. Only the `openai` provider is available.
 
 ### Reranking (cross-encoder)
 

@@ -11,11 +11,33 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+func isValidStoreObservationType(obsType models.ObservationType) bool {
+	switch obsType {
+	case models.ObsTypeDecision,
+		models.ObsTypeBugfix,
+		models.ObsTypeFeature,
+		models.ObsTypeRefactor,
+		models.ObsTypeDiscovery,
+		models.ObsTypeChange,
+		models.ObsTypeGuidance,
+		models.ObsTypeCredential,
+		models.ObsTypeEntity,
+		models.ObsTypeWiki,
+		models.ObsTypePitfall,
+		models.ObsTypeOperational,
+		models.ObsTypeTimeline:
+		return true
+	default:
+		return false
+	}
+}
 
 // handleStoreMemory explicitly stores a memory/observation.
 func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (string, error) {
@@ -29,26 +51,39 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 
 	var params struct {
-		Tags       []string
-		Content    string
-		Title      string
-		Type       string
-		Scope      string
-		Project    string
-		Importance *float64
+		Tags         []string
+		Rejected     []string
+		Content      string
+		Title        string
+		Type         string
+		Scope        string
+		Project      string
+		AgentSource  string
+		Importance   *float64
+		TtlDays      *int
+		AlwaysInject bool
 	}
 	params.Tags = coerceStringSlice(m["tags"])
+	params.Rejected = coerceStringSlice(m["rejected"])
 	params.Content = coerceString(m["content"], "")
 	params.Title = coerceString(m["title"], "")
 	params.Type = coerceString(m["type"], "")
 	params.Scope = coerceString(m["scope"], "")
 	params.Project = coerceString(m["project"], "")
+	params.AgentSource = coerceString(m["agent_source"], "")
+	params.AlwaysInject = coerceBool(m["always_inject"], false)
 	if v, ok := m["importance"]; ok && v != nil {
 		f := coerceFloat64(v, 0)
 		params.Importance = &f
 	}
+	if v, ok := m["ttl_days"]; ok && v != nil {
+		d := coerceInt(v, 0)
+		if d > 0 {
+			params.TtlDays = &d
+		}
+	}
 	if params.Content == "" {
-		return "", fmt.Errorf("content is required")
+		return "", fmt.Errorf("content is required for store_memory")
 	}
 	if params.Importance != nil && (*params.Importance < 0 || *params.Importance > 1) {
 		return "", fmt.Errorf("importance must be between 0 and 1")
@@ -67,6 +102,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if dedupThreshold <= 0 {
 		dedupThreshold = 0.92
 	}
+	storePathSupersessionEnabled := cfg.StorePathSupersessionEnabled
 
 	if utf8.RuneCountInString(params.Content) > hardLimit {
 		return "", fmt.Errorf("content exceeds maximum length of %d characters", hardLimit)
@@ -102,6 +138,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 	obsType := models.ObservationType(obsTypeStr)
+	if !isValidStoreObservationType(obsType) {
+		return "", fmt.Errorf("invalid type %q: must be one of decision, bugfix, feature, refactor, discovery, change, guidance, credential, entity, wiki, pitfall, operational, timeline", obsTypeStr)
+	}
 
 	// Expand hierarchical tags: "lang:go:concurrency" -> ["lang", "lang:go", "lang:go:concurrency"]
 	seen := make(map[string]bool)
@@ -113,6 +152,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				concepts = append(concepts, part)
 			}
 		}
+	}
+
+	// Add always-inject concept when requested — observations with this concept
+	// are injected into every agent context regardless of query relevance.
+	if params.AlwaysInject && !seen["always-inject"] {
+		concepts = append(concepts, "always-inject")
+		seen["always-inject"] = true
 	}
 
 	// Determine scope from explicit param or auto-detect from concepts.
@@ -129,21 +175,44 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			Msg("store_memory: storing global-scoped observation")
 	}
 
-	// Dedup check: skip if very similar observation already exists.
-	// includeGlobal=true so that global observations are considered during dedup.
-	if s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, true)
-		similar, err := s.vectorClient.Query(ctx, params.Content, 1, where)
-		if err == nil && len(similar) > 0 && similar[0].Similarity >= dedupThreshold {
-			existingID := vector.ExtractRowID(similar[0].Metadata)
+	// Contradiction detection + dedup check (Learning Memory v3 FR-7, Mem0 Algorithm 1).
+	// Shared implementation in internal/dedup/checker.go.
+	var contradictionAction string
+	var supersededID int64
+	dedupResult, dedupErr := dedup.CheckDuplicate(ctx, s.vectorClient, s.observationStore.GetDB(), params.Project, params.Content, dedupThreshold)
+	if dedupErr != nil {
+		log.Warn().Err(dedupErr).Msg("store_memory: dedup check failed, proceeding with ADD")
+	}
+	if dedupResult != nil {
+		contradictionAction = string(dedupResult.Action)
+		if dedupResult.Action == dedup.ActionNoop {
 			result := map[string]any{
-				"id":        existingID,
+				"id":        dedupResult.ExistingID,
+				"action":    "NOOP",
 				"duplicate": true,
-				"message":   fmt.Sprintf("Similar observation already exists (similarity: %.2f)", similar[0].Similarity),
+				"message":   fmt.Sprintf("Near-duplicate observation exists (similarity: %.2f)", dedupResult.Similarity),
 			}
 			out, _ := json.MarshalIndent(result, "", "  ")
 			return string(out), nil
 		}
+		if dedupResult.Action == dedup.ActionUpdate {
+			if storePathSupersessionEnabled {
+				supersededID = dedupResult.ExistingID
+				log.Info().
+					Int64("superseded_id", dedupResult.ExistingID).
+					Float64("similarity", dedupResult.Similarity).
+					Msg("store_memory: superseding existing observation (contradiction zone)")
+			} else {
+				contradictionAction = "ADD"
+				log.Info().
+					Int64("existing_id", dedupResult.ExistingID).
+					Float64("similarity", dedupResult.Similarity).
+					Msg("store_memory: store-path supersession disabled; keeping existing observation active")
+			}
+		}
+	}
+	if contradictionAction == "" {
+		contradictionAction = "ADD"
 	}
 
 	title := params.Title
@@ -151,13 +220,26 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		title = truncateTitle(params.Content, 80)
 	}
 
+	// Validate agent_source: coerce to 'unknown' if unrecognized
+	agentSource := models.AgentUnknown
+	if params.AgentSource != "" {
+		if models.IsValidAgentSource(params.AgentSource) {
+			agentSource = models.AgentSource(params.AgentSource)
+		} else {
+			return "", fmt.Errorf("invalid agent_source %q: must be one of claude-code, codex, gemini, other, unknown", params.AgentSource)
+		}
+	}
+
 	obs := &models.ParsedObservation{
-		Type:       obsType,
-		SourceType: models.SourceManual,
-		Title:      title,
-		Narrative:  params.Content,
-		Concepts:   concepts,
-		Scope:      scope,
+		Type:        obsType,
+		SourceType:  models.SourceManual,
+		MemoryType:  models.ClassifyMemoryType(&models.ParsedObservation{Type: obsType, Narrative: params.Content, Concepts: concepts}),
+		Title:       title,
+		Narrative:   params.Content,
+		Concepts:    concepts,
+		Rejected:    params.Rejected,
+		Scope:       scope,
+		AgentSource: agentSource,
 	}
 
 	// Generate a unique session ID for manual memories to avoid
@@ -175,18 +257,124 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
+	// Contradiction resolution: if UPDATE action, mark old observation as superseded (Learning Memory v3 FR-7)
+	if contradictionAction == "UPDATE" && supersededID > 0 {
+		if err := s.observationStore.MarkAsSuperseded(ctx, supersededID); err != nil {
+			log.Warn().Err(err).Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: failed to mark old observation superseded")
+		} else {
+			// Create EVOLVES_FROM relation
+			if s.relationStore != nil {
+				_, _ = s.relationStore.StoreRelation(ctx, &models.ObservationRelation{
+					SourceID:     id,
+					TargetID:     supersededID,
+					RelationType: models.RelationEvolvesFrom,
+					Confidence:   1.0,
+				})
+			}
+			log.Info().Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: superseded old observation with EVOLVES_FROM")
+		}
+	}
+
+	// Write-time supersession: if storing a decision and a very similar decision exists,
+	// mark the old one as superseded (new decision replaces old).
+	// Skip if contradiction detection already handled supersession (avoid double-supersede).
+	if contradictionAction != "UPDATE" && s.vectorClient != nil && s.vectorClient.IsConnected() && obsType == models.ObsTypeDecision && config.Get().SupersessionEnabled {
+		threshold := config.Get().SupersessionThreshold
+		if threshold <= 0 {
+			threshold = 0.9
+		}
+		where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, false, nil)
+		similar, err := s.vectorClient.Query(ctx, params.Content, 3, where)
+		if err == nil {
+			for _, result := range similar {
+				if result.Similarity >= threshold {
+					oldID := vector.ExtractRowID(result.Metadata)
+					if oldID > 0 && oldID != id {
+						oldObs, err := s.observationStore.GetObservationByID(ctx, oldID)
+						if err == nil && oldObs != nil && oldObs.Type == models.ObsTypeDecision && oldObs.Project == params.Project {
+							if err := s.observationStore.MarkAsSuperseded(ctx, oldID); err != nil {
+								log.Warn().Err(err).Int64("old_id", oldID).Int64("new_id", id).Msg("supersession: failed to mark old decision")
+							} else {
+								log.Info().Int64("old_id", oldID).Int64("new_id", id).Float64("similarity", result.Similarity).Msg("supersession: old decision marked superseded")
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Apply TTL for verified facts.
+	ttlDays := computeTTLDays(params.TtlDays, concepts)
+	ttlApplied := false
+	if ttlDays > 0 {
+		if err := s.observationStore.SetObservationTTL(ctx, id, ttlDays); err != nil {
+			log.Warn().Err(err).Int64("id", id).Int("ttl_days", ttlDays).Msg("failed to set observation TTL")
+		} else {
+			ttlApplied = true
+		}
+	}
+
 	result := map[string]any{
 		"id":      id,
 		"title":   title,
 		"type":    string(obsType),
 		"scope":   string(scope),
+		"action":  contradictionAction,
 		"message": "Memory stored successfully",
+	}
+	if supersededID > 0 {
+		result["superseded_id"] = supersededID
+	}
+	if ttlApplied {
+		result["ttl_days"] = ttlDays
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal result: %w", err)
 	}
 	return string(out), nil
+}
+
+// computeTTLDays determines the TTL for an observation based on explicit override or auto-TTL from tags.
+// Returns 0 if no TTL should be applied.
+func computeTTLDays(explicit *int, concepts []string) int {
+	// 1. Explicit override takes priority
+	if explicit != nil && *explicit > 0 {
+		return *explicit
+	}
+
+	// 2. Auto-TTL only applies to observations with "verified" tag
+	hasVerified := false
+	for _, c := range concepts {
+		if c == "verified" {
+			hasVerified = true
+			break
+		}
+	}
+	if !hasVerified {
+		return 0
+	}
+
+	// 3. Auto-TTL by concept tags (exact match) — use minimum TTL from all matching tags
+	autoTTL := map[string]int{
+		"api": 7, "endpoint": 7,
+		"library": 30, "framework": 30,
+		"language-feature": 90,
+		"architecture":     180, "pattern": 180,
+	}
+	minTTL := 0
+	for _, c := range concepts {
+		if days, ok := autoTTL[c]; ok && (minTTL == 0 || days < minTTL) {
+			minTTL = days
+		}
+	}
+	if minTTL > 0 {
+		return minTTL
+	}
+
+	// 4. Default for verified facts with no matching tag
+	return 30
 }
 
 // truncateTitle creates a short title from content, truncating at a word boundary.
@@ -327,4 +515,73 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		}
 		return sb.String(), nil
 	}
+}
+
+// handleRateMemory allows agents to rate observation usefulness.
+// A "useful" rating increments user_feedback by 1; "not_useful" decrements by 1.
+func (s *Server) handleRateMemory(ctx context.Context, args json.RawMessage) (string, error) {
+	if s.observationStore == nil {
+		return "", fmt.Errorf("observation store not available")
+	}
+
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
+	id := coerceInt64(m["id"], 0)
+	rating := coerceString(m["rating"], "")
+	if rating == "" {
+		if usefulRaw, ok := m["useful"]; ok && usefulRaw != nil {
+			if coerceBool(usefulRaw, false) {
+				rating = "useful"
+			} else {
+				rating = "not_useful"
+			}
+		}
+	}
+
+	if id == 0 {
+		return "", fmt.Errorf("id required")
+	}
+	if rating != "useful" && rating != "not_useful" {
+		return "", fmt.Errorf("rating must be 'useful' or 'not_useful'")
+	}
+
+	delta := 1
+	if rating == "not_useful" {
+		delta = -1
+	}
+
+	if err := s.observationStore.GetDB().WithContext(ctx).
+		Exec("UPDATE observations SET user_feedback = COALESCE(user_feedback, 0) + ? WHERE id = ?", delta, id).Error; err != nil {
+		return "", fmt.Errorf("update feedback: %w", err)
+	}
+
+	return fmt.Sprintf("Rated observation %d as %s", id, rating), nil
+}
+
+// handleSuppressMemory marks an observation as suppressed, excluding it from future search results.
+// The observation remains in the database but is hidden from all FTS and LIKE search queries.
+func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage) (string, error) {
+	if s.observationStore == nil {
+		return "", fmt.Errorf("observation store not available")
+	}
+
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
+	id := coerceInt64(m["id"], 0)
+	if id == 0 {
+		return "", fmt.Errorf("id required")
+	}
+
+	if err := s.observationStore.GetDB().WithContext(ctx).
+		Exec("UPDATE observations SET is_suppressed = TRUE WHERE id = ?", id).Error; err != nil {
+		return "", fmt.Errorf("suppress: %w", err)
+	}
+
+	return fmt.Sprintf("Observation %d suppressed", id), nil
 }

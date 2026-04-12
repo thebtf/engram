@@ -2,14 +2,13 @@
 package sdk
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,12 +16,14 @@ import (
 
 	json "github.com/goccy/go-json"
 
+	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/learning"
+	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/similarity"
-	"github.com/rs/zerolog/log"
 )
 
 // CircuitBreaker implements a simple circuit breaker pattern for CLI calls.
@@ -61,6 +62,7 @@ func (cb *CircuitBreaker) Allow() bool {
 		if time.Now().Unix()-lastFail > cb.resetTimeout {
 			// Transition to half-open
 			atomic.CompareAndSwapInt32(&cb.state, circuitOpen, circuitHalfOpen)
+			log.Info().Msg("Circuit breaker entering half-open state — testing with next request")
 			return true
 		}
 		return false
@@ -72,8 +74,12 @@ func (cb *CircuitBreaker) Allow() bool {
 
 // RecordSuccess records a successful call.
 func (cb *CircuitBreaker) RecordSuccess() {
+	prevState := atomic.LoadInt32(&cb.state)
 	atomic.StoreInt64(&cb.failures, 0)
 	atomic.StoreInt32(&cb.state, circuitClosed)
+	if prevState != circuitClosed {
+		log.Info().Msg("Circuit breaker recovered — LLM calls re-enabled")
+	}
 }
 
 // RecordFailure records a failed call.
@@ -214,7 +220,9 @@ const MaxVectorSyncWorkers = 8
 type Processor struct {
 	observationStore         *gorm.ObservationStore
 	summaryStore             *gorm.SummaryStore
+	reasoningStore           *gorm.ReasoningTraceStore
 	llmClient                learning.LLMClient
+	vectorClient             vector.Client
 	broadcastFunc            BroadcastFunc
 	syncObservationFunc      SyncObservationFunc
 	syncSummaryFunc          SyncSummaryFunc
@@ -223,7 +231,6 @@ type Processor struct {
 	vectorSyncChan           chan *models.Observation
 	vectorSyncDone           chan struct{}
 	sem                      chan struct{}
-	claudePath               string
 	model                    string
 	dedupSimilarityThreshold float64
 	dedupWindowSize          int
@@ -238,6 +245,11 @@ func (p *Processor) SetBroadcastFunc(fn BroadcastFunc) {
 // SetSyncObservationFunc sets the callback for syncing observations to vector DB.
 func (p *Processor) SetSyncObservationFunc(fn SyncObservationFunc) {
 	p.syncObservationFunc = fn
+}
+
+// SetReasoningStore sets the reasoning trace store for System 2 memory extraction.
+func (p *Processor) SetReasoningStore(store *gorm.ReasoningTraceStore) {
+	p.reasoningStore = store
 }
 
 // SetSyncSummaryFunc sets the callback for syncing summaries to vector DB.
@@ -262,6 +274,21 @@ func (p *Processor) broadcast(event map[string]any) {
 	}
 }
 
+func (p *Processor) enqueueObservationSync(obs *models.Observation) {
+	if p.syncObservationFunc == nil || obs == nil {
+		return
+	}
+	if p.vectorSyncChan != nil {
+		select {
+		case p.vectorSyncChan <- obs:
+			return
+		default:
+			log.Debug().Int64("obs_id", obs.ID).Msg("Vector sync channel full, using fallback goroutine")
+		}
+	}
+	go p.syncObservationFunc(obs)
+}
+
 // DefaultConcurrentLLMCalls is the default number of concurrent LLM calls.
 // Override with ENGRAM_LLM_CONCURRENCY env var.
 const DefaultConcurrentLLMCalls = 4
@@ -269,7 +296,7 @@ const DefaultConcurrentLLMCalls = 4
 // NewProcessor creates a new SDK processor.
 // It requires at least one LLM backend: either an OpenAI-compatible API (ENGRAM_LLM_URL)
 // or a local Claude CLI binary. If neither is available, it returns an error.
-func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.SummaryStore) (*Processor, error) {
+func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.SummaryStore, vectorClient vector.Client) (*Processor, error) {
 	cfg := config.Get()
 
 	// Initialize LLM client (OpenAI-compatible API — works in Docker)
@@ -285,31 +312,11 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 		Bool("llm_configured", llmClient != nil).
 		Str("llm_url", llmCfg.BaseURL).
 		Str("llm_model", llmCfg.Model).
-		Bool("local_verification", cfg.LocalVerificationEnabled).
 		Msg("SDK processor backend summary")
 
-	// Find Claude Code CLI (optional fallback — only in local mode)
-	var claudePath string
-	if cfg.LocalVerificationEnabled {
-		cliPath := cfg.ClaudeCodePath
-		if cliPath == "" {
-			if path, err := exec.LookPath("claude"); err == nil {
-				cliPath = path
-			}
-		}
-		if cliPath != "" {
-			if _, err := os.Stat(cliPath); err == nil {
-				claudePath = cliPath
-				log.Info().Str("path", claudePath).Msg("SDK processor has Claude CLI fallback")
-			}
-		}
-	} else {
-		log.Info().Msg("SDK processor: local verification disabled (set LOCAL_VERIFICATION_ENABLED=true for local dev)")
-	}
-
-	// Require at least one backend
-	if llmClient == nil && claudePath == "" {
-		return nil, fmt.Errorf("no LLM backend available: set ENGRAM_LLM_URL for API access, or install Claude CLI")
+	// Require LLM backend
+	if llmClient == nil {
+		return nil, fmt.Errorf("no LLM backend available: set ENGRAM_LLM_URL for API access")
 	}
 
 	// Configurable concurrency
@@ -323,11 +330,11 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 	}
 
 	return &Processor{
-		claudePath:               claudePath,
 		model:                    cfg.Model,
 		llmClient:                llmClient,
 		observationStore:         observationStore,
 		summaryStore:             summaryStore,
+		vectorClient:             vectorClient,
 		sem:                      make(chan struct{}, concurrency),
 		circuitBreaker:           NewCircuitBreaker(5, 60),                               // Open after 5 failures, reset after 60s
 		deduplicator:             NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
@@ -380,11 +387,6 @@ func (p *Processor) vectorSyncWorker() {
 	}
 }
 
-// CircuitBreakerState returns the current state of the circuit breaker.
-func (p *Processor) CircuitBreakerState() string {
-	return p.circuitBreaker.State()
-}
-
 // CircuitBreakerMetrics returns detailed metrics about the circuit breaker.
 func (p *Processor) CircuitBreakerMetrics() CircuitBreakerMetrics {
 	return p.circuitBreaker.Metrics()
@@ -392,18 +394,190 @@ func (p *Processor) CircuitBreakerMetrics() CircuitBreakerMetrics {
 
 // IsAvailable checks if an LLM backend (API or CLI) is available for processing.
 func (p *Processor) IsAvailable() bool {
-	if p.llmClient != nil {
-		return true
+	return p.llmClient != nil
+}
+
+const writeMergeSimilarityThreshold = 0.75
+
+func unionStrings(parts ...[]string) []string {
+	seen := make(map[string]struct{})
+	merged := make([]string, 0)
+	for _, part := range parts {
+		for _, item := range part {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			seen[item] = struct{}{}
+			merged = append(merged, item)
+		}
 	}
-	if p.claudePath != "" {
-		_, err := os.Stat(p.claudePath)
-		return err == nil
+	return merged
+}
+
+func mergeNarrative(existing, incoming string) string {
+	existing = strings.TrimSpace(existing)
+	incoming = strings.TrimSpace(incoming)
+	switch {
+	case existing == "":
+		return incoming
+	case incoming == "":
+		return existing
+	case existing == incoming:
+		return existing
+	case strings.Contains(existing, incoming):
+		return existing
+	case strings.Contains(incoming, existing):
+		return incoming
+	default:
+		return existing + "\n\n" + incoming
 	}
-	return false
+}
+
+func mergeFileMtimes(existing models.JSONInt64Map, incoming map[string]int64) map[string]int64 {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	merged := make(map[string]int64, len(existing)+len(incoming))
+	for path, mtime := range existing {
+		merged[path] = mtime
+	}
+	for path, mtime := range incoming {
+		merged[path] = mtime
+	}
+	return merged
+}
+
+func (p *Processor) queryWriteMergeCandidateIDs(ctx context.Context, project string, obs *models.ParsedObservation) []int64 {
+	if p.vectorClient == nil || !p.vectorClient.IsConnected() || obs == nil {
+		return nil
+	}
+	queryText := strings.TrimSpace(strings.Join([]string{obs.Title, obs.Narrative, strings.Join(obs.Facts, " ")}, " "))
+	if queryText == "" {
+		return nil
+	}
+	results, err := p.vectorClient.Query(ctx, queryText, 5, vector.BuildWhereFilter(vector.DocTypeObservation, project, false, nil))
+	if err != nil {
+		log.Warn().Err(err).Str("project", project).Msg("write-merge: vector candidate lookup failed")
+		return nil
+	}
+	candidateIDs := make([]int64, 0, len(results))
+	for _, result := range results {
+		if result.Similarity < writeMergeSimilarityThreshold {
+			continue
+		}
+		candidateIDs = append(candidateIDs, vector.ExtractObservationIDs([]vector.QueryResult{result}, project)...)
+	}
+	return candidateIDs
+}
+
+func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, project string, obs *models.ParsedObservation, promptNumber int) (*models.Observation, bool, string, error) {
+	if obs == nil || !config.Get().WriteMergeEnabled || p.llmClient == nil {
+		return nil, false, "", nil
+	}
+	candidateIDs := p.queryWriteMergeCandidateIDs(ctx, project, obs)
+	if len(candidateIDs) == 0 {
+		return nil, false, "", nil
+	}
+	fetchedCandidates, err := p.observationStore.GetObservationsByIDs(ctx, candidateIDs, "default", len(candidateIDs))
+	if err != nil {
+		return nil, false, "", err
+	}
+	candidates := make([]*models.Observation, 0, len(fetchedCandidates))
+	for _, candidate := range fetchedCandidates {
+		if candidate == nil || candidate.ID <= 0 || candidate.Type != obs.Type || candidate.IsSuperseded || candidate.Project != project {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) == 0 {
+		return nil, false, "", nil
+	}
+	newObs := models.NewObservation(sdkSessionID, project, obs, promptNumber, 0)
+	decision, err := learning.DecideMerge(ctx, p.llmClient, newObs, candidates)
+	if err != nil {
+		return nil, false, "", nil
+	}
+	if decision.Action == learning.MergeActionCreateNew {
+		return nil, false, "", nil
+	}
+	if decision.TargetID <= 0 {
+		log.Warn().Str("action", decision.Action).Msg("write-merge: missing target_id, falling back to create")
+		return nil, false, "", nil
+	}
+	var target *models.Observation
+	for _, candidate := range candidates {
+		if candidate != nil && candidate.ID == decision.TargetID {
+			target = candidate
+			break
+		}
+	}
+	if target == nil {
+		log.Warn().Int64("target_id", decision.TargetID).Msg("write-merge: target_id not in candidate set, falling back to create")
+		return nil, false, "", nil
+	}
+
+	switch decision.Action {
+	case learning.MergeActionSkip:
+		log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: skipped new observation")
+		return nil, true, learning.MergeActionSkip, nil
+	case learning.MergeActionSupersede:
+		if !config.Get().ContradictionDetectionEnabled {
+			log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: contradiction detection disabled; falling back to create path")
+			return nil, false, "", nil
+		}
+		// Keep old observation active until the caller successfully creates the replacement row.
+		// This avoids the lossy state where the old row is superseded but the new insert fails.
+		return target, false, learning.MergeActionSupersede, nil
+	case learning.MergeActionUpdate:
+		title := target.Title.String
+		if title == "" {
+			title = obs.Title
+		}
+		subtitle := target.Subtitle.String
+		if subtitle == "" {
+			subtitle = obs.Subtitle
+		}
+		narrative := mergeNarrative(target.Narrative.String, obs.Narrative)
+		facts := unionStrings([]string(target.Facts), obs.Facts)
+		concepts := unionStrings([]string(target.Concepts), obs.Concepts)
+		filesRead := unionStrings([]string(target.FilesRead), obs.FilesRead)
+		filesModified := unionStrings([]string(target.FilesModified), obs.FilesModified)
+		commandsRun := unionStrings([]string(target.CommandsRun), obs.CommandsRun)
+		fileMtimes := mergeFileMtimes(target.FileMtimes, obs.FileMtimes)
+		updated, err := p.observationStore.UpdateObservation(ctx, target.ID, &gorm.ObservationUpdate{
+			Title:         &title,
+			Subtitle:      &subtitle,
+			Narrative:     &narrative,
+			Facts:         &facts,
+			Concepts:      &concepts,
+			FilesRead:     &filesRead,
+			FilesModified: &filesModified,
+			CommandsRun:   &commandsRun,
+			FileMtimes:    &fileMtimes,
+		})
+		if err != nil {
+			return nil, false, "", err
+		}
+		p.enqueueObservationSync(updated)
+		p.broadcast(map[string]any{
+			"type":    "observation",
+			"action":  "updated",
+			"id":      target.ID,
+			"project": project,
+		})
+		log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: updated existing observation")
+		return updated, false, learning.MergeActionUpdate, nil
+	default:
+		return nil, false, "", nil
+	}
 }
 
 // ProcessObservation processes a single tool observation and extracts insights.
-func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, project string, toolName string, toolInput, toolResponse any, promptNumber int, cwd string) error {
+func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, project string, toolName string, toolInput, toolResponse any, promptNumber int, cwd string, userPrompt ...string) error {
 	// Skip certain tools that aren't worth processing
 	if shouldSkipTool(toolName) {
 		log.Info().Str("tool", toolName).Msg("Skipping tool (not interesting for memory)")
@@ -438,12 +612,17 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 	// Record this request to prevent duplicates
 	p.deduplicator.Record(reqHash)
 
-	// Build the prompt
+	// Build the prompt with optional user intent context (Learning Memory v3 FR-4)
+	var userIntent string
+	if len(userPrompt) > 0 && userPrompt[0] != "" {
+		userIntent = userPrompt[0]
+	}
 	exec := ToolExecution{
 		ToolName:   toolName,
 		ToolInput:  inputStr,
 		ToolOutput: outputStr,
 		CWD:        cwd,
+		UserIntent: userIntent,
 	}
 	prompt := BuildObservationPrompt(exec)
 
@@ -479,7 +658,7 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 	}
 
 	// Store each observation (with deduplication check)
-	var storedCount, skippedCount int
+	var storedCount, skippedCount, mergeEvaluatedCount, mergeSkipCount int
 
 	for _, obs := range observations {
 		// Capture file modification times for staleness detection
@@ -498,12 +677,51 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 			continue
 		}
 
+		mergeEvaluatedCount++
+		mergedObs, mergeSkipped, mergeAction, mergeErr := p.applyWriteMergeDecision(ctx, sdkSessionID, project, obs, promptNumber)
+		if mergeErr != nil {
+			log.Warn().Err(mergeErr).Msg("write-merge: failed to apply merge decision, falling back to create path")
+		}
+		if mergeSkipped {
+			mergeSkipCount++
+			skippedCount++
+			continue
+		}
+		if mergedObs != nil && mergedObs.ID > 0 {
+			if existingObs != nil {
+				replaced := false
+				for i, existing := range existingObs {
+					if existing != nil && existing.ID == mergedObs.ID {
+						existingObs[i] = mergedObs
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					existingObs = append(existingObs, mergedObs)
+				}
+			}
+			if mergeAction == learning.MergeActionUpdate {
+				storedCount++
+				continue
+			}
+		}
+
 		id, createdAtEpoch, err := p.observationStore.StoreObservation(ctx, sdkSessionID, project, obs, promptNumber, 0)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to store observation")
 			continue
 		}
-
+		if mergedObs != nil && mergedObs.ID > 0 && !mergedObs.IsSuperseded {
+			if err := p.observationStore.MarkAsSuperseded(ctx, mergedObs.ID); err != nil {
+				rollbackErr := p.observationStore.DeleteObservation(ctx, id)
+				if rollbackErr != nil {
+					log.Error().Err(rollbackErr).Int64("new_id", id).Msg("write-merge: failed to rollback replacement observation after supersede failure")
+					return fmt.Errorf("write-merge: failed to supersede target %d after replacement insert: %w (rollback failed: %v)", mergedObs.ID, err, rollbackErr)
+				}
+				return fmt.Errorf("write-merge: failed to supersede target %d after replacement insert: %w", mergedObs.ID, err)
+			}
+		}
 		storedCount++
 		log.Info().
 			Int64("id", id).
@@ -513,21 +731,11 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 			Msg("Observation stored")
 
 		// Sync to vector DB via bounded worker pool (non-blocking to reduce latency)
-		if p.syncObservationFunc != nil && p.vectorSyncChan != nil {
+		if p.syncObservationFunc != nil {
 			fullObs := models.NewObservation(sdkSessionID, project, obs, promptNumber, 0)
 			fullObs.ID = id
 			fullObs.CreatedAtEpoch = createdAtEpoch
-			// Non-blocking send to worker pool - drops if channel is full
-			select {
-			case p.vectorSyncChan <- fullObs:
-				// Sent to worker pool
-			default:
-				// Channel full, fall back to direct sync in goroutine (bounded by channel buffer)
-				log.Debug().Int64("obs_id", id).Msg("Vector sync channel full, using fallback goroutine")
-				go func(obsToSync *models.Observation) {
-					p.syncObservationFunc(obsToSync)
-				}(fullObs)
-			}
+			p.enqueueObservationSync(fullObs)
 		}
 
 		// Broadcast new observation event for dashboard refresh
@@ -550,8 +758,90 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 			Int("skipped", skippedCount).
 			Msg("Observation processing complete (duplicates skipped)")
 	}
+	if mergeEvaluatedCount > 0 {
+		log.Info().
+			Str("project", project).
+			Int("merge_evaluated", mergeEvaluatedCount).
+			Int("merge_skipped", mergeSkipCount).
+			Float64("merge_skip_rate", float64(mergeSkipCount)/float64(mergeEvaluatedCount)).
+			Msg("write-merge telemetry")
+	}
+
+	// Asynchronously extract reasoning traces from the LLM response (System 2 memory).
+	// Only runs when a reasoning store is configured and the response contains
+	// enough multi-step reasoning indicators.
+	if p.reasoningStore != nil && storedCount > 0 && DetectReasoning(response) {
+		go p.extractAndStoreReasoning(context.Background(), sdkSessionID, project, response)
+	}
 
 	return nil
+}
+
+// extractAndStoreReasoning extracts a reasoning trace from LLM output and
+// stores it if quality is sufficient. Runs asynchronously — errors are logged,
+// never propagated to the caller.
+func (p *Processor) extractAndStoreReasoning(ctx context.Context, sdkSessionID, project, response string) {
+	traceJSON, err := p.callLLM(ctx, reasoningExtractionPrompt+response)
+	if err != nil {
+		log.Debug().Err(err).Msg("Reasoning extraction LLM call failed")
+		return
+	}
+
+	var trace ReasoningTrace
+	if err := json.Unmarshal([]byte(traceJSON), &trace); err != nil || len(trace.Steps) == 0 {
+		log.Debug().Msg("No reasoning steps extracted")
+		return
+	}
+
+	// Evaluate quality via LLM
+	qualityStr, err := p.callLLM(ctx, reasoningQualityPrompt+traceJSON)
+	if err == nil {
+		qualityStr = strings.TrimSpace(qualityStr)
+		if q, parseErr := strconv.ParseFloat(qualityStr, 64); parseErr == nil {
+			trace.QualityScore = q
+		}
+	}
+
+	// Only persist traces with quality >= 0.5
+	if trace.QualityScore < 0.5 {
+		log.Debug().
+			Float64("quality", trace.QualityScore).
+			Int("steps", len(trace.Steps)).
+			Msg("Reasoning trace below quality threshold, discarding")
+		return
+	}
+
+	// Marshal steps and task_context back to JSON strings for DB storage
+	stepsJSON, err := json.Marshal(trace.Steps)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to marshal reasoning steps")
+		return
+	}
+	taskCtxJSON, err := json.Marshal(trace.TaskContext)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to marshal reasoning task context")
+		return
+	}
+
+	dbTrace := &gorm.ReasoningTrace{
+		SDKSessionID: sdkSessionID,
+		Project:      project,
+		Steps:        string(stepsJSON),
+		QualityScore: trace.QualityScore,
+		TaskContext:  string(taskCtxJSON),
+	}
+
+	id, err := p.reasoningStore.Create(ctx, dbTrace)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to store reasoning trace")
+		return
+	}
+
+	log.Info().
+		Int64("id", id).
+		Float64("quality", trace.QualityScore).
+		Int("steps", len(trace.Steps)).
+		Msg("Reasoning trace extracted and stored")
 }
 
 // ProcessSummary processes a session summary request.
@@ -563,13 +853,53 @@ func (p *Processor) ProcessSummary(ctx context.Context, sessionDBID int64, sdkSe
 		Str("lastAssistantMsgPreview", truncate(lastAssistantMsg, 200)).
 		Msg("ProcessSummary called")
 
-	// Skip summary generation if there's no meaningful assistant response
-	// This prevents generic "initial session setup" summaries
+	// If no assistant message provided, build content from stored observations for this session
+	if !hasMeaningfulContent(lastAssistantMsg) && p.observationStore != nil {
+		type obsRow struct {
+			Type      string `gorm:"column:type"`
+			Title     string `gorm:"column:title"`
+			Narrative string `gorm:"column:narrative"`
+		}
+		var rows []obsRow
+		if err := p.observationStore.GetDB().WithContext(ctx).
+			Raw(`SELECT type, COALESCE(title, '') as title, COALESCE(narrative, '') as narrative
+				FROM observations WHERE sdk_session_id = ? ORDER BY created_at_epoch DESC LIMIT 10`, sdkSessionID).
+			Scan(&rows).Error; err == nil && len(rows) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Session observations:\n")
+			for _, o := range rows {
+				sb.WriteString("- [")
+				sb.WriteString(o.Type)
+				sb.WriteString("] ")
+				sb.WriteString(o.Title)
+				if o.Narrative != "" {
+					sb.WriteString(": ")
+					sb.WriteString(o.Narrative)
+				}
+				sb.WriteString("\n")
+			}
+			lastAssistantMsg = sb.String()
+			log.Debug().
+				Int64("sessionId", sessionDBID).
+				Int("observations", len(rows)).
+				Msg("Built summary content from session observations")
+		}
+	}
+
+	// Third fallback: use the session's initial user prompt
+	if !hasMeaningfulContent(lastAssistantMsg) && userPrompt != "" && len(strings.TrimSpace(userPrompt)) >= 10 {
+		lastAssistantMsg = "Session started with user request: " + userPrompt
+		log.Debug().
+			Int64("sessionId", sessionDBID).
+			Msg("Using userPrompt as summary fallback")
+	}
+
+	// Skip summary generation if there's still no meaningful content
 	if !hasMeaningfulContent(lastAssistantMsg) {
 		log.Info().
 			Int64("sessionId", sessionDBID).
 			Int("msgLen", len(lastAssistantMsg)).
-			Msg("Skipping summary - no meaningful assistant response")
+			Msg("Skipping summary - no meaningful content available")
 		return nil
 	}
 
@@ -681,7 +1011,8 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 			response, err := p.llmClient.Complete(llmCtx, systemPrompt, prompt)
 			cancel()
 			if err == nil {
-				return response, nil
+				// Constitution P9: RedactSecrets on LLM output before returning
+				return privacy.RedactSecrets(response), nil
 			}
 			lastErr = err
 			errStr := err.Error()
@@ -703,60 +1034,14 @@ func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) 
 			break
 		}
 		if lastErr != nil {
-			log.Warn().Err(lastErr).Msg("LLM API call failed after retries, trying CLI fallback")
+			log.Warn().Err(lastErr).Msg("LLM API call failed after retries")
 		}
 	}
 
-	// Fall back to Claude CLI if available
-	if p.claudePath != "" {
-		return p.callClaudeCLI(ctx, prompt)
-	}
-
 	if lastErr != nil {
-		return "", fmt.Errorf("no LLM backend available: llm_configured=%v, claude_cli=%q, last_error=%w",
-			p.llmClient != nil, p.claudePath, lastErr)
+		return "", fmt.Errorf("LLM call failed after retries: %w", lastErr)
 	}
-	return "", fmt.Errorf("no LLM backend available: llm_configured=%v, claude_cli=%q",
-		p.llmClient != nil, p.claudePath)
-}
-
-// callClaudeCLI calls the Claude Code CLI with the given prompt (fallback for when LLM API is unavailable).
-func (p *Processor) callClaudeCLI(ctx context.Context, prompt string) (string, error) {
-	fullPrompt := systemPrompt + "\n\n" + prompt
-
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, p.claudePath,
-		"--print",
-		"--tools", "",
-		"--strict-mcp-config",
-		"--disable-slash-commands",
-		"-p", fullPrompt) // #nosec G204 -- claudePath is from config, fullPrompt is internal
-
-	if p.model != "" {
-		cmd.Args = append([]string{cmd.Args[0], "--model", p.model}, cmd.Args[1:]...)
-	} else {
-		cmd.Args = append([]string{cmd.Args[0], "--model", "haiku"}, cmd.Args[1:]...)
-	}
-
-	cmd.Dir = os.TempDir()
-	cmd.Env = append(os.Environ(), "ENGRAM_INTERNAL=1")
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("stderr", stderr.String()).
-			Msg("Claude CLI execution failed")
-		return "", fmt.Errorf("claude CLI failed: %w (stderr: %s)", err, stderr.String())
-	}
-
-	return stdout.String(), nil
+	return "", fmt.Errorf("no LLM backend available (llmClient=%v)", p.llmClient != nil)
 }
 
 // shouldSkipTool returns true for tools that aren't worth processing.
@@ -801,72 +1086,54 @@ func shouldSkipTool(toolName string) bool {
 // shouldSkipTrivialOperation performs local pre-filtering to skip trivial operations
 // without making a Haiku API call. Returns true if the operation is too trivial to process.
 func shouldSkipTrivialOperation(toolName, inputStr, outputStr string) bool {
-	// Skip if output is too small to be meaningful (less than 50 chars)
-	// Reduced from 100 to capture more meaningful small operations
+	// Skip if output is too small to be meaningful
 	if len(outputStr) < 50 {
 		return true
 	}
 
-	// Pre-compute lowercase strings once to avoid repeated allocations
-	lowerOutput := strings.ToLower(outputStr)
+	// WHITELIST approach: only process tool outputs that are likely to contain
+	// meaningful insights. Skip everything else. This inverted logic prevents
+	// garbage observations (PowerShell errors, auth failures, etc.) from
+	// polluting the knowledge base and degrading agent performance.
 	lowerInput := strings.ToLower(inputStr)
 
-	// Skip if output indicates an error or empty result
-	trivialOutputs := []string{
-		"no matches found",
-		"file not found",
-		"directory not found",
-		"permission denied",
-		"command not found",
-		"no such file",
-		"is a directory",
-		"[]", // Empty array result
-		"{}", // Empty object result
-	}
-	for _, trivial := range trivialOutputs {
-		if strings.Contains(lowerOutput, trivial) || outputStr == trivial {
-			return true
-		}
-	}
-
-	// Tool-specific pre-filtering
 	switch toolName {
-	case "Read":
-		// Skip reading config files that rarely contain project-specific insights
-		boringFiles := []string{
-			"package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-			"go.sum", "cargo.lock", "gemfile.lock", "poetry.lock",
-			".gitignore", ".dockerignore", ".eslintignore",
-			"tsconfig.json", "jsconfig.json", "vite.config",
-			"tailwind.config", "postcss.config",
-		}
-		for _, boring := range boringFiles {
-			if strings.Contains(lowerInput, boring) {
-				return true
-			}
-		}
-
-	case "Grep":
-		// Skip grep results with too many matches (likely generic search)
-		if strings.Count(outputStr, "\n") > 50 {
-			return true
-		}
+	case "Edit", "Write":
+		// Code modifications — always interesting (architecture, decisions)
+		return false
 
 	case "Bash":
-		// Skip simple status commands (use pre-computed lowerInput)
-		boringCommands := []string{
-			"git status", "git diff", "git log", "git branch",
-			"ls ", "pwd", "echo ", "cat ", "which ", "type ",
-			"npm list", "npm outdated", "npm audit",
+		// Only process build/test results — they reveal project state
+		interestingCommands := []string{
+			// Go
+			"go build", "go test", "go vet",
+			// Node/JS
+			"npm run build", "npm test", "npx tsc",
+			// Rust
+			"cargo build", "cargo test", "cargo clippy",
+			// .NET
+			"dotnet build", "dotnet test", "dotnet publish",
+			// Make/Docker
+			"make ", "docker build", "docker compose",
+			// Python
+			"pytest", "python -m pytest",
+			// JS test runners
+			"jest", "vitest",
 		}
-		for _, boring := range boringCommands {
-			if strings.Contains(lowerInput, boring) {
-				return true
+		for _, cmd := range interestingCommands {
+			if strings.Contains(lowerInput, cmd) {
+				return false
 			}
 		}
-	}
+		// All other Bash outputs: skip (git, ls, curl, echo, etc.)
+		return true
 
-	return false
+	default:
+		// All other tools (Read, Grep, Agent, WebFetch, etc.): skip
+		// These produce high-volume, low-insight observations.
+		// Valuable knowledge should be saved explicitly via store_memory.
+		return true
+	}
 }
 
 // toJSONString converts an interface to a JSON string.
@@ -1020,21 +1287,14 @@ func captureFileMtimesParallel(paths map[string]struct{}, cwd string) map[string
 
 // GetFileMtimes returns current modification times for a list of file paths.
 // This is used for staleness checking when injecting context.
-// Returns empty map when local verification is disabled (Docker/remote mode).
+// In Docker/remote mode, os.Stat on client paths returns error → empty map (no-op).
 func GetFileMtimes(paths []string, cwd string) map[string]int64 {
-	if !config.Get().LocalVerificationEnabled {
-		return map[string]int64{}
-	}
 	return captureFileMtimes(paths, nil, cwd)
 }
 
 // GetFileContent reads file content for verification purposes.
-// Returns content and ok status.
-// Returns empty when local verification is disabled (Docker/remote mode).
+// Returns content and ok status. In Docker/remote mode, files don't exist → ("", false).
 func GetFileContent(path, cwd string) (string, bool) {
-	if !config.Get().LocalVerificationEnabled {
-		return "", false
-	}
 
 	absPath, ok := safeResolvePath(path, cwd)
 	if !ok {
@@ -1278,29 +1538,42 @@ func hasMeaningfulContent(assistantMsg string) bool {
 	return matchCount >= 2
 }
 
+// systemPrompt is the extraction system prompt for the live SDK processor.
+// It uses the same category taxonomy as the backfill extractor, adapted for
+// single tool-execution analysis (one exchange rather than multi-exchange chunks).
+const systemPrompt = `You are a coding session analyst. Analyze this single tool execution and extract ONLY observations matching these categories. If none match, output <no_observations_found/>.
 
-const systemPrompt = `You are a memory extraction agent for Claude Code sessions. Your job is to analyze tool executions and extract meaningful observations that would be useful for future sessions.
+CATEGORY 1 — DECISION: Agent or user explicitly chose between alternatives.
+CATEGORY 2 — CORRECTION: User told the agent it was wrong.
+CATEGORY 3 — DEBUGGING ARC: Error appeared, was investigated, and resolved.
+CATEGORY 4 — GOTCHA: Something behaved unexpectedly.
+CATEGORY 5 — PATTERN: A reusable approach that worked well.
+CATEGORY 6 — USER_BEHAVIOR: User corrected agent's approach or revealed a workflow preference. Extract as TRIGGER/RULE/REASON.
 
-GUIDELINES:
-1. Create observations for any meaningful learnings - be generous, not restrictive
-2. Focus on: decisions made, bugs fixed, patterns discovered, project structure, code changes, refactoring
-3. Even small changes can be worth remembering if they reveal something about the codebase
-4. Be concise but informative in your observations
-5. Use appropriate type tags: decision, bugfix, feature, refactor, discovery, change
+DO NOT EXTRACT: File reads without decisions, routine commits, tool invocations without meaningful output, status checks, version bumps, generic descriptions.
 
-CONCEPT TAGS (use 1-3 of these):
-- how-it-works, why-it-exists, what-changed, problem-solution, gotcha
-- pattern, trade-off, best-practice, anti-pattern, architecture
-- security, performance, testing, debugging, workflow, tooling
-- refactoring, api, database, configuration, error-handling
+RULES:
+- Maximum 1 observation per tool execution.
+- Maximum 150 words per narrative.
+- Do NOT include any text before or after the XML. Output ONLY the XML.
+
+EXAMPLES:
+
+Example 1 (user_behavior):
+"USER: you have tavily for this, FYI"
+<observation><category>user_behavior</category><type>decision</type><title>Rule: Use Tavily for doc research</title><narrative>TRIGGER: When studying external library docs. RULE: Use Tavily not manual WebFetch. REASON: Manual wastes 10+ calls.</narrative><concepts><concept>workflow</concept></concepts></observation>
+
+Example 2 (no_observations_found):
+"ASSISTANT: [tool: Read] Reading config.go."
+<no_observations_found/>
 
 OUTPUT FORMAT:
-When you find something worth remembering, output:
 <observation>
+<category>decision|correction|debugging|gotcha|pattern|user_behavior</category>
 <type>decision|bugfix|feature|refactor|discovery|change</type>
-<title>Short descriptive title</title>
+<title>Short descriptive title (max 60 chars)</title>
 <subtitle>One-line summary</subtitle>
-<narrative>Detailed explanation</narrative>
+<narrative>Context → What happened → Why it matters. Max 150 words.</narrative>
 <facts>
 <fact>Specific fact 1</fact>
 </facts>
@@ -1315,7 +1588,10 @@ When you find something worth remembering, output:
 </files_modified>
 </observation>
 
-If the tool execution is truly trivial (just a directory listing, empty result, etc.), respond with:
-<skip reason="trivial"/>
+Valid concepts (use ONLY these values in <concept> tags):
+how-it-works, why-it-exists, what-changed, problem-solution, gotcha, pattern,
+trade-off, best-practice, anti-pattern, architecture, security, performance,
+testing, debugging, workflow, tooling, refactoring, api, database,
+configuration, error-handling
 
-Prefer creating observations over skipping - memories are valuable for future context!`
+Do NOT invent new concept names. If no concept fits, omit the <concepts> section.`

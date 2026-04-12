@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"time"
 
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -28,6 +29,10 @@ type GraphStore interface {
 	// SyncFromRelations bulk-loads relations from PostgreSQL into the graph.
 	SyncFromRelations(ctx context.Context, relations []*models.ObservationRelation) error
 
+	// GetCluster returns observation IDs in the same cluster as the given node.
+	// Uses BFS traversal up to maxNodes results.
+	GetCluster(ctx context.Context, nodeID int64, maxNodes int) ([]int64, error)
+
 	// Stats returns graph store statistics.
 	Stats(ctx context.Context) (GraphStoreStats, error)
 
@@ -41,6 +46,8 @@ type RelationEdge struct {
 	TargetID     int64
 	RelationType models.RelationType // string: "causes", "fixes", etc.
 	Confidence   float64
+	ValidFrom    *time.Time // Temporal validity start (nil = always valid)
+	ValidTo      *time.Time // Temporal validity end (nil = still valid)
 }
 
 // Neighbor represents a graph neighbor found via multi-hop traversal.

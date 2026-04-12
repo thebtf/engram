@@ -1,15 +1,24 @@
 package sdk
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/thebtf/engram/pkg/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/config"
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/learning"
+	"github.com/thebtf/engram/internal/vector"
+	"github.com/thebtf/engram/pkg/models"
+	"gorm.io/gorm/logger"
 )
 
 func TestIsSelfReferentialSummary(t *testing.T) {
@@ -255,13 +264,13 @@ func TestShouldSkipTrivialOperation(t *testing.T) {
 			outputStr: "total 123\ndrwxr-xr-x some long listing that is at least 50 chars",
 			expected:  true,
 		},
-		// Valid operations that should NOT be skipped
+		// Read is skipped by design — high-volume, low-insight (whitelist approach)
 		{
 			name:      "valid_read",
 			toolName:  "Read",
 			inputStr:  `{"file_path": "/project/main.go"}`,
 			outputStr: "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "valid_edit",
@@ -512,12 +521,10 @@ func TestObservationConcepts(t *testing.T) {
 // TestProcessorStruct tests processor struct initialization and methods.
 func TestProcessorStruct(t *testing.T) {
 	p := &Processor{
-		claudePath: "/path/to/claude",
-		model:      "haiku",
-		sem:        make(chan struct{}, DefaultConcurrentLLMCalls),
+		model: "haiku",
+		sem:   make(chan struct{}, DefaultConcurrentLLMCalls),
 	}
 
-	assert.Equal(t, "/path/to/claude", p.claudePath)
 	assert.Equal(t, "haiku", p.model)
 	assert.NotNil(t, p.sem)
 }
@@ -590,30 +597,10 @@ func TestBroadcast_NilFunc(t *testing.T) {
 	p.broadcast(map[string]interface{}{"type": "test"})
 }
 
-// TestIsAvailable_NonexistentPath tests IsAvailable with non-existent path.
-func TestIsAvailable_NonexistentPath(t *testing.T) {
-	p := &Processor{
-		claudePath: "/nonexistent/path/to/claude",
-	}
-
+// TestIsAvailable tests IsAvailable requires LLM client.
+func TestIsAvailable(t *testing.T) {
+	p := &Processor{}
 	assert.False(t, p.IsAvailable())
-}
-
-// TestIsAvailable_ExistingPath tests IsAvailable with existing path.
-func TestIsAvailable_ExistingPath(t *testing.T) {
-	// Create a temp file to simulate claude binary
-	tmpFile, err := os.CreateTemp("", "claude-test-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
-
-	p := &Processor{
-		claudePath: tmpFile.Name(),
-	}
-
-	assert.True(t, p.IsAvailable())
 }
 
 // TestShouldSkipTrivialOperation_EdgeCases tests edge cases for trivial operation detection.
@@ -700,7 +687,7 @@ func TestShouldSkipTrivialOperation_EdgeCases(t *testing.T) {
 			toolName:  "Grep",
 			inputStr:  `{"pattern": "func main"}`,
 			outputStr: "main.go:10:func main() {\nmain.go:11:    fmt.Println(\"Hello\")\n}",
-			expected:  false,
+			expected:  true, // Grep falls into default → skipped (whitelist: only Edit/Write/interesting Bash)
 		},
 		{
 			name:      "valid_bash_build",
@@ -891,9 +878,9 @@ func TestToJSONString_ComplexTypes(t *testing.T) {
 // TestSystemPrompt tests that the system prompt is defined.
 func TestSystemPrompt(t *testing.T) {
 	assert.NotEmpty(t, systemPrompt)
-	assert.Contains(t, systemPrompt, "memory extraction agent")
 	assert.Contains(t, systemPrompt, "observation")
-	assert.Contains(t, systemPrompt, "GUIDELINES")
+	assert.Contains(t, systemPrompt, "CATEGORY")
+	assert.Contains(t, systemPrompt, "user_behavior")
 }
 
 // TestProcessorSemaphore tests the semaphore behavior.
@@ -1449,24 +1436,6 @@ func TestHashRequest_OutputTruncation(t *testing.T) {
 // TESTS FOR Processor methods
 // =============================================================================
 
-func TestProcessor_CircuitBreakerState(t *testing.T) {
-	p := &Processor{
-		circuitBreaker: NewCircuitBreaker(2, 60),
-	}
-
-	// Initially closed
-	assert.Equal(t, "closed", p.CircuitBreakerState())
-
-	// After enough failures, open
-	p.circuitBreaker.RecordFailure()
-	p.circuitBreaker.RecordFailure()
-	assert.Equal(t, "open", p.CircuitBreakerState())
-
-	// After success, closed
-	p.circuitBreaker.RecordSuccess()
-	assert.Equal(t, "closed", p.CircuitBreakerState())
-}
-
 func TestProcessor_CircuitBreakerMetrics(t *testing.T) {
 	p := &Processor{
 		circuitBreaker: NewCircuitBreaker(5, 120),
@@ -1731,7 +1700,6 @@ func TestProcessObservation_SkipDuplicate(t *testing.T) {
 		circuitBreaker: NewCircuitBreaker(5, 60),
 		deduplicator:   NewRequestDeduplicator(300, 1000),
 		sem:            make(chan struct{}, 4),
-		claudePath:     "/nonexistent/path", // Will fail at CLI call stage
 	}
 
 	ctx := context.Background()
@@ -1741,12 +1709,12 @@ func TestProcessObservation_SkipDuplicate(t *testing.T) {
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
 	// First call should try to process (will fail because claudePath doesn't exist)
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
 	// Expect error because claudePath doesn't exist
 	assert.Error(t, err)
 
 	// Second call with same input should be skipped as duplicate
-	err = p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
+	err = p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
 	assert.NoError(t, err) // No error because it was skipped as duplicate
 }
 
@@ -1761,11 +1729,12 @@ func TestProcessObservation_CircuitBreakerOpen(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Valid input that would be processed
+	// Use "Edit" tool — bypasses shouldSkipTrivialOperation (Edit always proceeds)
+	// so the circuit breaker check is actually reached.
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "circuit breaker open")
 }
@@ -1775,7 +1744,6 @@ func TestProcessObservation_ContextCancel(t *testing.T) {
 		circuitBreaker: NewCircuitBreaker(5, 60),
 		deduplicator:   NewRequestDeduplicator(300, 1000),
 		sem:            make(chan struct{}, 1), // Small semaphore
-		claudePath:     "/fake/claude",
 	}
 
 	// Fill the semaphore
@@ -1789,7 +1757,9 @@ func TestProcessObservation_ContextCancel(t *testing.T) {
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Bash", input, output, 1, "/test/cwd")
+	// Use "Edit" tool — bypasses shouldSkipTrivialOperation so the semaphore
+	// and context cancellation checks are actually reached.
+	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
@@ -1819,7 +1789,6 @@ func TestProcessSummary_CircuitBreakerOpen(t *testing.T) {
 		circuitBreaker: cb,
 		deduplicator:   NewRequestDeduplicator(300, 1000),
 		sem:            make(chan struct{}, 4),
-		claudePath:     "/nonexistent/path",
 	}
 
 	ctx := context.Background()
@@ -1831,40 +1800,377 @@ I've added a check for the exp claim and implemented proper error handling.
 The changes have been tested and the build passes successfully.
 Here's the implementation details and code review.`
 
-	// Valid request but circuit breaker is open
+	// Valid request but no LLM client → should fail
 	err := p.ProcessSummary(ctx, 1, "session-1", "project-1",
 		"Implement authentication", "User message", assistantMsg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "claude CLI failed")
 }
 
-// =============================================================================
-// TESTS FOR callClaudeCLI Error Paths
-// =============================================================================
-
-func TestCallClaudeCLI_PromptTooLarge(t *testing.T) {
-	p := &Processor{
-		claudePath: "/fake/claude",
-	}
-
-	ctx := context.Background()
-
-	// Create a prompt that exceeds MaxPromptSize
-	largePrompt := string(make([]byte, MaxPromptSize+1))
-
-	_, err := p.callClaudeCLI(ctx, largePrompt)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "prompt exceeds maximum size")
+type testVectorClient struct {
+	results []vector.QueryResult
 }
 
-func TestCallClaudeCLI_BinaryNotFound(t *testing.T) {
-	p := &Processor{
-		claudePath: "/nonexistent/path/to/claude",
+func (c *testVectorClient) AddDocuments(context.Context, []vector.Document) error { return nil }
+func (c *testVectorClient) DeleteDocuments(context.Context, []string) error       { return nil }
+func (c *testVectorClient) Query(context.Context, string, int, vector.WhereFilter) ([]vector.QueryResult, error) {
+	return c.results, nil
+}
+func (c *testVectorClient) IsConnected() bool                           { return true }
+func (c *testVectorClient) Close() error                                { return nil }
+func (c *testVectorClient) Count(context.Context) (int64, error)        { return 0, nil }
+func (c *testVectorClient) ModelVersion() string                        { return "test" }
+func (c *testVectorClient) NeedsRebuild(context.Context) (bool, string) { return false, "" }
+func (c *testVectorClient) GetStaleVectors(context.Context) ([]vector.StaleVectorInfo, error) {
+	return nil, nil
+}
+func (c *testVectorClient) GetHealthStats(context.Context) (*vector.HealthStats, error) {
+	return nil, nil
+}
+func (c *testVectorClient) GetCacheStats() vector.CacheStatsSnapshot {
+	return vector.CacheStatsSnapshot{}
+}
+func (c *testVectorClient) GetMetrics(context.Context) vector.VectorMetricsSnapshot {
+	return vector.VectorMetricsSnapshot{}
+}
+func (c *testVectorClient) DeleteByObservationID(context.Context, int64) error { return nil }
+
+type testMergeLLMClient struct {
+	observationXML string
+	mergeResponse  string
+	calls          int
+}
+
+func (m *testMergeLLMClient) Complete(_ context.Context, systemPrompt, _ string) (string, error) {
+	m.calls++
+	if systemPrompt == learning.MergeSystemPrompt {
+		return m.mergeResponse, nil
+	}
+	return m.observationXML, nil
+}
+
+func testProcessorObservationStore(t *testing.T) (*dbgorm.ObservationStore, func()) {
+	t.Helper()
+
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
 	}
 
-	ctx := context.Background()
+	store, err := dbgorm.NewStore(dbgorm.Config{
+		DSN:      dsn,
+		MaxConns: 4,
+		LogLevel: logger.Silent,
+	})
+	require.NoError(t, err)
 
-	_, err := p.callClaudeCLI(ctx, "test prompt")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "claude CLI failed")
+	obsStore := dbgorm.NewObservationStore(store, nil)
+	cleanup := func() {
+		obsStore.Close()
+		require.NoError(t, store.Close())
+	}
+	return obsStore, cleanup
+}
+
+func seedProcessorObservation(t *testing.T, ctx context.Context, store *dbgorm.ObservationStore, project string, parsed *models.ParsedObservation) int64 {
+	t.Helper()
+	id, _, err := store.StoreObservation(ctx, "seed-session", project, parsed, 1, 0)
+	require.NoError(t, err)
+	return id
+}
+
+func setEnvForTest(t *testing.T, key, value string) {
+	t.Helper()
+	original, hadOriginal := os.LookupEnv(key)
+	require.NoError(t, os.Setenv(key, value))
+	_, _, err := config.Reload()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		var restoreErr error
+		if hadOriginal {
+			restoreErr = os.Setenv(key, original)
+		} else {
+			restoreErr = os.Unsetenv(key)
+		}
+		if restoreErr != nil {
+			t.Errorf("failed to restore %s: %v", key, restoreErr)
+		}
+		_, _, reloadErr := config.Reload()
+		if reloadErr != nil {
+			t.Errorf("failed to reload config: %v", reloadErr)
+		}
+	})
+}
+
+func setWriteMergeEnabledForTest(t *testing.T, enabled bool) {
+	t.Helper()
+	setEnvForTest(t, "ENGRAM_WRITE_MERGE_ENABLED", fmt.Sprintf("%t", enabled))
+}
+
+func testObservationXML(title, narrative string, facts, concepts, filesRead, filesModified, commands []string) string {
+	escape := func(value string) string {
+		var buf bytes.Buffer
+		if err := xml.EscapeText(&buf, []byte(value)); err != nil {
+			return value
+		}
+		return buf.String()
+	}
+
+	appendList := func(tag, itemTag string, values []string) string {
+		var buf bytes.Buffer
+		buf.WriteString("<" + tag + ">")
+		for _, value := range values {
+			buf.WriteString("<" + itemTag + ">")
+			buf.WriteString(escape(value))
+			buf.WriteString("</" + itemTag + ">")
+		}
+		buf.WriteString("</" + tag + ">")
+		return buf.String()
+	}
+
+	return "<observation>" +
+		"<type>decision</type>" +
+		"<title>" + escape(title) + "</title>" +
+		"<narrative>" + escape(narrative) + "</narrative>" +
+		appendList("facts", "fact", facts) +
+		appendList("concepts", "concept", concepts) +
+		appendList("files_read", "file", filesRead) +
+		appendList("files_modified", "file", filesModified) +
+		appendList("commands_run", "command", commands) +
+		"</observation>"
+}
+
+func makeVectorResult(id int64, project string, similarity float64) vector.QueryResult {
+	return vector.QueryResult{
+		Similarity: similarity,
+		Metadata: map[string]any{
+			"sqlite_id": float64(id),
+			"doc_type":  string(vector.DocTypeObservation),
+			"project":   project,
+			"scope":     string(models.ScopeProject),
+		},
+	}
+}
+
+func TestProcessObservation_WriteMergeSkipPreventsInsertion(t *testing.T) {
+	setWriteMergeEnabledForTest(t, true)
+	ctx := context.Background()
+	obsStore, cleanup := testProcessorObservationStore(t)
+	defer cleanup()
+	project := fmt.Sprintf("project-skip-%d", time.Now().UnixNano())
+
+	existingID := seedProcessorObservation(t, ctx, obsStore, project, &models.ParsedObservation{
+		Type:          models.ObsTypeDecision,
+		Title:         "Existing decision",
+		Narrative:     "Old baseline narrative",
+		Facts:         []string{"existing fact"},
+		Concepts:      []string{"pattern"},
+		FilesModified: []string{"existing.go"},
+	})
+
+	llm := &testMergeLLMClient{
+		observationXML: testObservationXML("Fresh decision", "Fresh narrative", []string{"new fact"}, []string{"debugging"}, []string{"new-read.go"}, []string{"fresh.go"}, nil),
+		mergeResponse:  fmt.Sprintf(`{"action":"SKIP","target_id":%d}`, existingID),
+	}
+	p := &Processor{
+		observationStore: obsStore,
+		llmClient:        llm,
+		vectorClient:     &testVectorClient{results: []vector.QueryResult{makeVectorResult(existingID, project, 0.91)}},
+		circuitBreaker:   NewCircuitBreaker(5, 60),
+		deduplicator:     NewRequestDeduplicator(300, 1000),
+		sem:              make(chan struct{}, 1),
+	}
+
+	err := p.ProcessObservation(ctx, "session-1", project, "Bash", map[string]string{"command": "go test ./..."}, "ok   github.com/thebtf/engram/internal/worker/sdk 0.123s", 1, "/test/cwd")
+	require.NoError(t, err)
+	require.Equal(t, 2, llm.calls)
+
+	var count int64
+	require.NoError(t, obsStore.GetDB().WithContext(ctx).Model(&dbgorm.Observation{}).Where("project = ?", project).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestProcessObservation_WriteMergeUpdateReusesExistingObservation(t *testing.T) {
+	setWriteMergeEnabledForTest(t, true)
+	ctx := context.Background()
+	obsStore, cleanup := testProcessorObservationStore(t)
+	defer cleanup()
+	project := fmt.Sprintf("project-update-%d", time.Now().UnixNano())
+
+	existingID := seedProcessorObservation(t, ctx, obsStore, project, &models.ParsedObservation{
+		Type:          models.ObsTypeDecision,
+		Title:         "Existing decision",
+		Narrative:     "Old baseline narrative",
+		Facts:         []string{"existing fact"},
+		Concepts:      []string{"pattern"},
+		FilesRead:     []string{"old-read.go"},
+		FilesModified: []string{"old.go"},
+		CommandsRun:   []string{"old command"},
+		FileMtimes:    map[string]int64{"old.go": 1},
+	})
+
+	llm := &testMergeLLMClient{
+		observationXML: testObservationXML("Fresh decision", "Fresh narrative", []string{"new fact"}, []string{"debugging"}, []string{"new-read.go"}, []string{"fresh.go"}, []string{"go test ./..."}),
+		mergeResponse:  fmt.Sprintf(`{"action":"UPDATE","target_id":%d}`, existingID),
+	}
+	p := &Processor{
+		observationStore: obsStore,
+		llmClient:        llm,
+		vectorClient:     &testVectorClient{results: []vector.QueryResult{makeVectorResult(existingID, project, 0.91)}},
+		circuitBreaker:   NewCircuitBreaker(5, 60),
+		deduplicator:     NewRequestDeduplicator(300, 1000),
+		sem:              make(chan struct{}, 1),
+	}
+
+	err := p.ProcessObservation(ctx, "session-1", project, "Bash", map[string]string{"command": "go test ./..."}, "ok   github.com/thebtf/engram/internal/worker/sdk 0.123s", 1, "/test/cwd")
+	require.NoError(t, err)
+	require.Equal(t, 2, llm.calls)
+
+	var count int64
+	require.NoError(t, obsStore.GetDB().WithContext(ctx).Model(&dbgorm.Observation{}).Where("project = ?", project).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+
+	updated, err := obsStore.GetObservationByID(ctx, existingID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "Existing decision", updated.Title.String)
+	assert.Contains(t, updated.Narrative.String, "Old baseline narrative")
+	assert.Contains(t, updated.Narrative.String, "Fresh narrative")
+	assert.ElementsMatch(t, []string{"existing fact", "new fact"}, []string(updated.Facts))
+	assert.ElementsMatch(t, []string{"pattern", "debugging"}, []string(updated.Concepts))
+	assert.ElementsMatch(t, []string{"old-read.go", "new-read.go"}, []string(updated.FilesRead))
+	assert.ElementsMatch(t, []string{"old.go", "fresh.go"}, []string(updated.FilesModified))
+	assert.ElementsMatch(t, []string{"old command", "go test ./..."}, []string(updated.CommandsRun))
+	assert.Equal(t, int64(1), updated.FileMtimes["old.go"])
+}
+
+func TestProcessObservation_WriteMergeSupersedeCreatesNewObservation(t *testing.T) {
+	setWriteMergeEnabledForTest(t, true)
+	ctx := context.Background()
+	obsStore, cleanup := testProcessorObservationStore(t)
+	defer cleanup()
+	project := fmt.Sprintf("project-supersede-%d", time.Now().UnixNano())
+
+	existingID := seedProcessorObservation(t, ctx, obsStore, project, &models.ParsedObservation{
+		Type:      models.ObsTypeDecision,
+		Title:     "Existing decision",
+		Narrative: "Old baseline narrative",
+		Facts:     []string{"existing fact"},
+		Concepts:  []string{"pattern"},
+	})
+
+	llm := &testMergeLLMClient{
+		observationXML: testObservationXML("Fresh decision", "Fresh superseding narrative", []string{"new fact"}, []string{"debugging"}, []string{"new-read.go"}, []string{"fresh.go"}, nil),
+		mergeResponse:  fmt.Sprintf(`{"action":"SUPERSEDE","target_id":%d}`, existingID),
+	}
+	p := &Processor{
+		observationStore: obsStore,
+		llmClient:        llm,
+		vectorClient:     &testVectorClient{results: []vector.QueryResult{makeVectorResult(existingID, project, 0.91)}},
+		circuitBreaker:   NewCircuitBreaker(5, 60),
+		deduplicator:     NewRequestDeduplicator(300, 1000),
+		sem:              make(chan struct{}, 1),
+	}
+
+	err := p.ProcessObservation(ctx, "session-1", project, "Bash", map[string]string{"command": "go test ./..."}, "ok   github.com/thebtf/engram/internal/worker/sdk 0.123s", 1, "/test/cwd")
+	require.NoError(t, err)
+	require.Equal(t, 2, llm.calls)
+
+	var count int64
+	require.NoError(t, obsStore.GetDB().WithContext(ctx).Model(&dbgorm.Observation{}).Where("project = ?", project).Count(&count).Error)
+	assert.Equal(t, int64(2), count)
+
+	existing, err := obsStore.GetObservationByID(ctx, existingID)
+	require.NoError(t, err)
+	require.NotNil(t, existing)
+	assert.True(t, existing.IsSuperseded)
+}
+
+func TestProcessObservation_MixedTypeCandidatesStillFindSameTypeTarget(t *testing.T) {
+	setWriteMergeEnabledForTest(t, true)
+	ctx := context.Background()
+	obsStore, cleanup := testProcessorObservationStore(t)
+	defer cleanup()
+	project := fmt.Sprintf("project-mixed-type-%d", time.Now().UnixNano())
+
+	featureID := seedProcessorObservation(t, ctx, obsStore, project, &models.ParsedObservation{
+		Type:      models.ObsTypeFeature,
+		Title:     "Feature candidate",
+		Narrative: "Irrelevant feature candidate",
+		Facts:     []string{"feature fact"},
+	})
+	decisionID := seedProcessorObservation(t, ctx, obsStore, project, &models.ParsedObservation{
+		Type:      models.ObsTypeDecision,
+		Title:     "Decision candidate",
+		Narrative: "Decision baseline narrative",
+		Facts:     []string{"decision fact"},
+		Concepts:  []string{"pattern"},
+	})
+
+	llm := &testMergeLLMClient{
+		observationXML: testObservationXML("Fresh decision", "Fresh narrative", []string{"new fact"}, []string{"debugging"}, []string{"new-read.go"}, []string{"fresh.go"}, nil),
+		mergeResponse:  fmt.Sprintf(`{"action":"UPDATE","target_id":%d}`, decisionID),
+	}
+	p := &Processor{
+		observationStore: obsStore,
+		llmClient:        llm,
+		vectorClient: &testVectorClient{results: []vector.QueryResult{
+			makeVectorResult(featureID, project, 0.99),
+			makeVectorResult(decisionID, project, 0.91),
+		}},
+		circuitBreaker: NewCircuitBreaker(5, 60),
+		deduplicator:   NewRequestDeduplicator(300, 1000),
+		sem:            make(chan struct{}, 1),
+	}
+
+	err := p.ProcessObservation(ctx, "session-1", project, "Bash", map[string]string{"command": "go test ./..."}, "ok   github.com/thebtf/engram/internal/worker/sdk 0.123s", 1, "/test/cwd")
+	require.NoError(t, err)
+	require.Equal(t, 2, llm.calls)
+
+	updated, err := obsStore.GetObservationByID(ctx, decisionID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Contains(t, updated.Narrative.String, "Fresh narrative")
+}
+
+func TestProcessObservation_ContradictionDetectionDisabledKeepsCreateNewPath(t *testing.T) {
+	setWriteMergeEnabledForTest(t, true)
+	setEnvForTest(t, "ENGRAM_CONTRADICTION_DETECTION_ENABLED", "false")
+
+	ctx := context.Background()
+	obsStore, cleanup := testProcessorObservationStore(t)
+	defer cleanup()
+	project := fmt.Sprintf("project-contradiction-off-%d", time.Now().UnixNano())
+
+	existingID := seedProcessorObservation(t, ctx, obsStore, project, &models.ParsedObservation{
+		Type:      models.ObsTypeDecision,
+		Title:     "Rule: X",
+		Narrative: "Original unrelated narrative",
+		Facts:     []string{"existing fact"},
+		Concepts:  []string{"pattern"},
+	})
+
+	llm := &testMergeLLMClient{
+		observationXML: testObservationXML("Rule: Y", "Semantically unrelated narrative", []string{"new fact"}, []string{"debugging"}, []string{"new-read.go"}, []string{"fresh.go"}, nil),
+		mergeResponse:  fmt.Sprintf(`{"action":"SUPERSEDE","target_id":%d}`, existingID),
+	}
+	p := &Processor{
+		observationStore: obsStore,
+		llmClient:        llm,
+		vectorClient:     &testVectorClient{results: []vector.QueryResult{makeVectorResult(existingID, project, 0.91)}},
+		circuitBreaker:   NewCircuitBreaker(5, 60),
+		deduplicator:     NewRequestDeduplicator(300, 1000),
+		sem:              make(chan struct{}, 1),
+	}
+
+	err := p.ProcessObservation(ctx, "session-1", project, "Bash", map[string]string{"command": "go test ./..."}, "ok   github.com/thebtf/engram/internal/worker/sdk 0.123s", 1, "/test/cwd")
+	require.NoError(t, err)
+
+	var count int64
+	require.NoError(t, obsStore.GetDB().WithContext(ctx).Model(&dbgorm.Observation{}).Where("project = ?", project).Count(&count).Error)
+	assert.Equal(t, int64(2), count)
+
+	existing, err := obsStore.GetObservationByID(ctx, existingID)
+	require.NoError(t, err)
+	require.NotNil(t, existing)
+	assert.False(t, existing.IsSuperseded)
 }

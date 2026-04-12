@@ -513,6 +513,7 @@ func TestValidObsTypes(t *testing.T) {
 		"change":    true,
 		"discovery": true,
 		"decision":  true,
+		"guidance":  true,
 	}
 	assert.Equal(t, expected, validObsTypes)
 }

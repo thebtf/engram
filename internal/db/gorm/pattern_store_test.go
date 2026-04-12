@@ -199,7 +199,7 @@ func TestPatternStore_GetActivePatterns(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get active patterns
-	patterns, err := patternStore.GetActivePatterns(ctx, 10)
+	patterns, err := patternStore.GetActivePatterns(ctx, 10, 0, "")
 	require.NoError(t, err)
 	assert.Len(t, patterns, 3) // Only active patterns
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,18 +21,20 @@ type LLMClient interface {
 
 // OpenAIClient implements LLMClient using an OpenAI-compatible API.
 type OpenAIClient struct {
-	baseURL string
-	apiKey  string
-	model   string
-	client  *http.Client
+	baseURL   string
+	apiKey    string
+	model     string
+	maxTokens int
+	client    *http.Client
 }
 
 // OpenAIConfig holds configuration for the OpenAI-compatible client.
 type OpenAIConfig struct {
-	BaseURL string        // ENGRAM_LLM_URL (default: reuse ENGRAM_EMBEDDING_URL base)
-	APIKey  string        // ENGRAM_LLM_API_KEY
-	Model   string        // ENGRAM_LLM_MODEL (default: gpt-4o-mini)
-	Timeout time.Duration // HTTP client timeout (default: 120s)
+	BaseURL   string        // ENGRAM_LLM_URL (default: reuse ENGRAM_EMBEDDING_URL base)
+	APIKey    string        // ENGRAM_LLM_API_KEY
+	Model     string        // ENGRAM_LLM_MODEL (default: gpt-4o-mini)
+	MaxTokens int           // ENGRAM_LLM_MAX_TOKENS (default: 4096)
+	Timeout   time.Duration // HTTP client timeout (default: 120s)
 }
 
 // DefaultOpenAIConfig returns config from environment variables.
@@ -49,8 +52,21 @@ func DefaultOpenAIConfig() OpenAIConfig {
 		}
 	}
 
+	if cfg.APIKey == "" {
+		// Fall back to embedding API key if LLM-specific key not set
+		if embKey := os.Getenv("ENGRAM_EMBEDDING_API_KEY"); embKey != "" {
+			cfg.APIKey = embKey
+		}
+	}
+
 	if cfg.Model == "" {
 		cfg.Model = "gpt-4o-mini"
+	}
+
+	if v := os.Getenv("ENGRAM_LLM_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxTokens = n
+		}
 	}
 
 	return cfg
@@ -62,19 +78,25 @@ func NewOpenAIClient(cfg OpenAIConfig) *OpenAIClient {
 	if cfg.Timeout > 0 {
 		timeout = cfg.Timeout
 	}
+	maxTokens := cfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096 // Sensible default for thinking models
+	}
 	return &OpenAIClient{
-		baseURL: cfg.BaseURL,
-		apiKey:  cfg.APIKey,
-		model:   cfg.Model,
-		client:  &http.Client{Timeout: timeout},
+		baseURL:   cfg.BaseURL,
+		apiKey:    cfg.APIKey,
+		model:     cfg.Model,
+		maxTokens: maxTokens,
+		client:    &http.Client{Timeout: timeout},
 	}
 }
 
 // chatRequest is the OpenAI chat completion request format.
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Timeout  int           `json:"timeout,omitempty"` // LiteLLM: override proxy→backend timeout (seconds)
+	Model     string        `json:"model"`
+	Messages  []chatMessage `json:"messages"`
+	MaxTokens int           `json:"max_tokens,omitempty"` // Max output tokens (reasoning + content). Default 4096 for thinking models.
+	Timeout   int           `json:"timeout,omitempty"`    // LiteLLM: override proxy→backend timeout (seconds)
 }
 
 // chatMessage is a single message in the chat completion request.
@@ -107,7 +129,8 @@ func (c *OpenAIClient) Complete(ctx context.Context, systemPrompt, userPrompt st
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Timeout: 300, // Override LiteLLM proxy→backend timeout for slow local models
+		MaxTokens: c.maxTokens,
+		Timeout:   300,  // Override LiteLLM proxy→backend timeout for slow local models
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

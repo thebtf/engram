@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -14,55 +15,91 @@ import (
 type ObservationType string
 
 const (
-	ObsTypeDecision  ObservationType = "decision"
-	ObsTypeBugfix    ObservationType = "bugfix"
-	ObsTypeFeature   ObservationType = "feature"
-	ObsTypeRefactor  ObservationType = "refactor"
-	ObsTypeDiscovery ObservationType = "discovery"
-	ObsTypeChange    ObservationType = "change"
+	ObsTypeDecision    ObservationType = "decision"
+	ObsTypeBugfix      ObservationType = "bugfix"
+	ObsTypeFeature     ObservationType = "feature"
+	ObsTypeRefactor    ObservationType = "refactor"
+	ObsTypeDiscovery   ObservationType = "discovery"
+	ObsTypeChange      ObservationType = "change"
 	ObsTypeGuidance    ObservationType = "guidance"
 	ObsTypeCredential  ObservationType = "credential"
+	ObsTypeEntity      ObservationType = "entity"
+	ObsTypeWiki        ObservationType = "wiki"
+	ObsTypePitfall     ObservationType = "pitfall"
+	ObsTypeOperational ObservationType = "operational"
+	ObsTypeTimeline    ObservationType = "timeline"
 )
 
 // MemoryType represents the classification for memory storage and retrieval.
 type MemoryType string
 
 const (
-        MemTypeDecision   MemoryType = "decision"
-        MemTypePattern    MemoryType = "pattern"
-        MemTypePreference MemoryType = "preference"
-        MemTypeStyle      MemoryType = "style"
-        MemTypeHabit      MemoryType = "habit"
-        MemTypeInsight    MemoryType = "insight"
-        MemTypeContext    MemoryType = "context"
-        MemTypeGuidance   MemoryType = "guidance"
+	MemTypeDecision   MemoryType = "decision"
+	MemTypePattern    MemoryType = "pattern"
+	MemTypePreference MemoryType = "preference"
+	MemTypeStyle      MemoryType = "style"
+	MemTypeHabit      MemoryType = "habit"
+	MemTypeInsight    MemoryType = "insight"
+	MemTypeContext    MemoryType = "context"
+	MemTypeGuidance   MemoryType = "guidance"
 )
 
 var AllMemoryTypes = []MemoryType{
-        MemTypeDecision,
-        MemTypePattern,
-        MemTypePreference,
-        MemTypeStyle,
-        MemTypeHabit,
-        MemTypeInsight,
-        MemTypeContext,
-        MemTypeGuidance,
+	MemTypeDecision,
+	MemTypePattern,
+	MemTypePreference,
+	MemTypeStyle,
+	MemTypeHabit,
+	MemTypeInsight,
+	MemTypeContext,
+	MemTypeGuidance,
 }
 
 // SourceType represents the provenance of an observation — where the data came from.
 type SourceType string
 
 const (
-	SourceToolVerified SourceType = "tool_verified"
-	SourceToolRead     SourceType = "tool_read"
-	SourceWebFetch     SourceType = "web_fetch"
-	SourceTodoWrite    SourceType = "todo_write"
-	SourceLLMDerived       SourceType = "llm_derived"
-	SourceInstinctImport   SourceType = "instinct_import"
-	SourceBackfill         SourceType = "backfill"
-	SourceUnknown          SourceType = "unknown"
-	SourceManual           SourceType = "manual"
+	SourceToolVerified   SourceType = "tool_verified"
+	SourceToolRead       SourceType = "tool_read"
+	SourceWebFetch       SourceType = "web_fetch"
+	SourceTodoWrite      SourceType = "todo_write"
+	SourceLLMDerived     SourceType = "llm_derived"
+	SourceInstinctImport SourceType = "instinct_import"
+	SourceBackfill       SourceType = "backfill"
+	SourceUnknown        SourceType = "unknown"
+	SourceManual         SourceType = "manual"
+	SourceCrossModel     SourceType = "cross_model"
 )
+
+// AgentSource represents which AI tool created an observation.
+type AgentSource string
+
+const (
+	AgentClaude  AgentSource = "claude-code"
+	AgentCodex   AgentSource = "codex"
+	AgentGemini  AgentSource = "gemini"
+	AgentOther   AgentSource = "other"
+	AgentUnknown AgentSource = "unknown"
+)
+
+// ValidAgentSources contains all valid agent source values for validation.
+var ValidAgentSources = []AgentSource{
+	AgentClaude,
+	AgentCodex,
+	AgentGemini,
+	AgentOther,
+	AgentUnknown,
+}
+
+// IsValidAgentSource checks if a string is a recognized agent source value.
+func IsValidAgentSource(s string) bool {
+	for _, v := range ValidAgentSources {
+		if string(v) == s {
+			return true
+		}
+	}
+	return false
+}
 
 // ClassifySourceType maps a Claude Code tool name to its source type.
 func ClassifySourceType(toolName string) SourceType {
@@ -183,38 +220,49 @@ func (j JSONInt64Map) Value() (driver.Value, error) {
 
 // Observation represents a learning extracted from a Claude Code session.
 type Observation struct {
-	FileMtimes      JSONInt64Map     `db:"file_mtimes" json:"file_mtimes,omitempty"`
-	SDKSessionID    string           `db:"sdk_session_id" json:"sdk_session_id"`
-	Project         string           `db:"project" json:"project"`
-	Scope           ObservationScope `db:"scope" json:"scope"`
-	AgentID         string           `db:"agent_id" json:"agent_id,omitempty"`
-	Type            ObservationType  `db:"type" json:"type"`
-	MemoryType      MemoryType       `db:"memory_type" json:"memory_type"`
-	SourceType      SourceType       `db:"source_type" json:"source_type,omitempty"`
-	CreatedAt       string           `db:"created_at" json:"created_at"`
-	Subtitle        sql.NullString   `db:"subtitle" json:"subtitle,omitempty"`
-	Title           sql.NullString   `db:"title" json:"title,omitempty"`
-	Narrative       sql.NullString   `db:"narrative" json:"narrative,omitempty"`
-	Concepts        JSONStringArray  `db:"concepts" json:"concepts,omitempty"`
-	FilesRead       JSONStringArray  `db:"files_read" json:"files_read,omitempty"`
-	FilesModified   JSONStringArray  `db:"files_modified" json:"files_modified,omitempty"`
-	Facts           JSONStringArray  `db:"facts" json:"facts,omitempty"`
-	PromptNumber    sql.NullInt64    `db:"prompt_number" json:"prompt_number,omitempty"`
-	LastRetrievedAt sql.NullInt64    `db:"last_retrieved_at_epoch" json:"last_retrieved_at_epoch,omitempty"`
-	ScoreUpdatedAt  sql.NullInt64    `db:"score_updated_at_epoch" json:"score_updated_at_epoch,omitempty"`
-	DiscoveryTokens int64            `db:"discovery_tokens" json:"discovery_tokens"`
-	ID              int64            `db:"id" json:"id"`
-	CreatedAtEpoch  int64            `db:"created_at_epoch" json:"created_at_epoch"`
-	ImportanceScore float64          `db:"importance_score" json:"importance_score"`
-	UtilityScore    float64          `db:"utility_score" json:"utility_score"`
-	UserFeedback    int              `db:"user_feedback" json:"user_feedback"`
-	RetrievalCount  int              `db:"retrieval_count" json:"retrieval_count"`
-	InjectionCount  int              `db:"injection_count" json:"injection_count"`
-	IsStale         bool             `db:"-" json:"is_stale,omitempty"`
-	IsSuperseded    bool             `db:"is_superseded" json:"is_superseded,omitempty"`
-	EnrichmentLevel int              `db:"enrichment_level" json:"enrichment_level"`
-	SourceEventIDs  JSONInt64Array   `db:"source_event_ids" json:"source_event_ids,omitempty"`
-	RawContent      sql.NullString   `db:"raw_content" json:"raw_content,omitempty"`
+	FileMtimes              JSONInt64Map     `db:"file_mtimes" json:"file_mtimes,omitempty"`
+	SDKSessionID            string           `db:"sdk_session_id" json:"sdk_session_id"`
+	Project                 string           `db:"project" json:"project"`
+	Scope                   ObservationScope `db:"scope" json:"scope"`
+	AgentID                 string           `db:"agent_id" json:"agent_id,omitempty"`
+	AgentSource             AgentSource      `db:"agent_source" json:"agent_source,omitempty"`
+	Type                    ObservationType  `db:"type" json:"type"`
+	MemoryType              MemoryType       `db:"memory_type" json:"memory_type"`
+	SourceType              SourceType       `db:"source_type" json:"source_type,omitempty"`
+	CreatedAt               string           `db:"created_at" json:"created_at"`
+	Subtitle                sql.NullString   `db:"subtitle" json:"subtitle,omitempty"`
+	Title                   sql.NullString   `db:"title" json:"title,omitempty"`
+	Narrative               sql.NullString   `db:"narrative" json:"narrative,omitempty"`
+	Concepts                JSONStringArray  `db:"concepts" json:"concepts,omitempty"`
+	FilesRead               JSONStringArray  `db:"files_read" json:"files_read,omitempty"`
+	FilesModified           JSONStringArray  `db:"files_modified" json:"files_modified,omitempty"`
+	CommandsRun             JSONStringArray  `db:"commands_run" json:"commands_run,omitempty"`
+	Facts                   JSONStringArray  `db:"facts" json:"facts,omitempty"`
+	Rejected                JSONStringArray  `db:"rejected" json:"rejected,omitempty"`
+	PromptNumber            sql.NullInt64    `db:"prompt_number" json:"prompt_number,omitempty"`
+	LastRetrievedAt         sql.NullInt64    `db:"last_retrieved_at_epoch" json:"last_retrieved_at_epoch,omitempty"`
+	ScoreUpdatedAt          sql.NullInt64    `db:"score_updated_at_epoch" json:"score_updated_at_epoch,omitempty"`
+	DiscoveryTokens         int64            `db:"discovery_tokens" json:"discovery_tokens"`
+	ID                      int64            `db:"id" json:"id"`
+	CreatedAtEpoch          int64            `db:"created_at_epoch" json:"created_at_epoch"`
+	ImportanceScore         float64          `db:"importance_score" json:"importance_score"`
+	UtilityScore            float64          `db:"utility_score" json:"utility_score"`
+	UserFeedback            int              `db:"user_feedback" json:"user_feedback"`
+	RetrievalCount          int              `db:"retrieval_count" json:"retrieval_count"`
+	InjectionCount          int              `db:"injection_count" json:"injection_count"`
+	IsStale                 bool             `db:"-" json:"is_stale,omitempty"`
+	IsSuperseded            bool             `db:"is_superseded" json:"is_superseded,omitempty"`
+	EnrichmentLevel         int              `db:"enrichment_level" json:"enrichment_level"`
+	SourceEventIDs          JSONInt64Array   `db:"source_event_ids" json:"source_event_ids,omitempty"`
+	RawContent              sql.NullString   `db:"raw_content" json:"raw_content,omitempty"`
+	ExpiresAt               sql.NullTime     `db:"expires_at" json:"expires_at,omitempty"`
+	TtlDays                 sql.NullInt32    `db:"ttl_days" json:"ttl_days,omitempty"`
+	IsExpired               bool             `db:"-" json:"is_expired,omitempty"`
+	Status                  string           `db:"status" json:"status,omitempty"`
+	StatusReason            sql.NullString   `db:"status_reason" json:"status_reason,omitempty"`
+	EffectivenessScore      float64          `db:"effectiveness_score" json:"effectiveness_score"`
+	EffectivenessInjections int              `db:"effectiveness_injections" json:"effectiveness_injections"`
+	EffectivenessSuccesses  int              `db:"effectiveness_successes" json:"effectiveness_successes"`
 }
 
 // ParsedObservation represents an observation parsed from SDK response XML.
@@ -228,12 +276,15 @@ type ParsedObservation struct {
 	Narrative                string
 	Scope                    ObservationScope
 	AgentID                  string
+	AgentSource              AgentSource
 	Facts                    []string
 	Concepts                 []string
 	FilesRead                []string
 	FilesModified            []string
-	EncryptedSecret          []byte // set for credential observations
-	EncryptionKeyFingerprint string // SHA-256(key)[:16] hex
+	CommandsRun              []string
+	Rejected                 []string // Alternatives that were considered and dismissed (for decisions)
+	EncryptedSecret          []byte   // set for credential observations
+	EncryptionKeyFingerprint string   // SHA-256(key)[:16] hex
 }
 
 // ToStoredObservation converts a ParsedObservation to the stored Observation format.
@@ -246,12 +297,15 @@ func (p *ParsedObservation) ToStoredObservation() *Observation {
 		Title:         sql.NullString{String: p.Title, Valid: p.Title != ""},
 		Subtitle:      sql.NullString{String: p.Subtitle, Valid: p.Subtitle != ""},
 		Facts:         p.Facts,
+		Rejected:      p.Rejected,
 		Narrative:     sql.NullString{String: p.Narrative, Valid: p.Narrative != ""},
 		Concepts:      p.Concepts,
 		FilesRead:     p.FilesRead,
 		FilesModified: p.FilesModified,
+		CommandsRun:   p.CommandsRun,
 		FileMtimes:    p.FileMtimes,
 		AgentID:       p.AgentID,
+		AgentSource:   p.AgentSource,
 	}
 }
 
@@ -266,6 +320,45 @@ func DetermineScope(concepts []string) ObservationScope {
 		}
 	}
 	return ScopeProject
+}
+
+// scopePatterns maps regex patterns to scope tags for file path classification.
+var scopePatterns = []struct {
+	pattern *regexp.Regexp
+	scope   string
+}{
+	{regexp.MustCompile(`(?i)\.(tsx|jsx|vue|svelte|css|scss|less)$`), "scope:frontend"},
+	{regexp.MustCompile(`(?i)^(internal|cmd|pkg)/`), "scope:backend"},
+	{regexp.MustCompile(`(?i)(prompt|generation)`), "scope:prompts"},
+	{regexp.MustCompile(`(?i)(_test\.go|\.test\.[jt]sx?|_test\.py)$`), "scope:tests"},
+	{regexp.MustCompile(`(?i)(\.md$|^docs/)`), "scope:docs"},
+	{regexp.MustCompile(`(?i)\.(yaml|yml|toml)$`), "scope:config"},
+	{regexp.MustCompile(`(?i)(migration|migrate)`), "scope:migrations"},
+	{regexp.MustCompile(`(?i)(/api/|[/_]api[/_.]|handler|route)`), "scope:api"},
+	{regexp.MustCompile(`(?i)(/auth/|[/_]auth[/_.]|jwt|oauth)`), "scope:auth"},
+}
+
+// classifyFileScopes analyzes file paths and returns matching scope tags.
+func classifyFileScopes(filePaths []string) []string {
+	if len(filePaths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var scopes []string
+	for _, fp := range filePaths {
+		if fp == "" {
+			continue
+		}
+		for _, sp := range scopePatterns {
+			if sp.pattern.MatchString(fp) {
+				if _, ok := seen[sp.scope]; !ok {
+					seen[sp.scope] = struct{}{}
+					scopes = append(scopes, sp.scope)
+				}
+			}
+		}
+	}
+	return scopes
 }
 
 // ClassifyMemoryType classifies an observation into a memory bucket.
@@ -296,35 +389,46 @@ func ClassifyMemoryType(obs *ParsedObservation) MemoryType {
 // ObservationJSON is a JSON-friendly representation of Observation.
 // It converts sql.NullString to plain strings for clean JSON output.
 type ObservationJSON struct {
-	FileMtimes      map[string]int64 `json:"file_mtimes,omitempty"`
-	Subtitle        string           `json:"subtitle,omitempty"`
-	SDKSessionID    string           `json:"sdk_session_id"`
-	Scope           ObservationScope `json:"scope"`
-	AgentID         string           `json:"agent_id,omitempty"`
-	Type            ObservationType  `json:"type"`
-	MemoryType      string           `json:"memory_type"`
-	SourceType      string           `json:"source_type,omitempty"`
-	Title           string           `json:"title,omitempty"`
-	CreatedAt       string           `json:"created_at"`
-	Narrative       string           `json:"narrative,omitempty"`
-	Project         string           `json:"project"`
-	Concepts        []string         `json:"concepts,omitempty"`
-	Facts           []string         `json:"facts,omitempty"`
-	FilesRead       []string         `json:"files_read,omitempty"`
-	FilesModified   []string         `json:"files_modified,omitempty"`
-	CreatedAtEpoch  int64            `json:"created_at_epoch"`
-	DiscoveryTokens int64            `json:"discovery_tokens"`
-	ID              int64            `json:"id"`
-	PromptNumber    int64            `json:"prompt_number,omitempty"`
-	ImportanceScore float64          `json:"importance_score"`
-	UtilityScore    float64          `json:"utility_score"`
-	UserFeedback    int              `json:"user_feedback"`
-	RetrievalCount  int              `json:"retrieval_count"`
-	InjectionCount  int              `json:"injection_count"`
-	LastRetrievedAt int64            `json:"last_retrieved_at_epoch,omitempty"`
-	ScoreUpdatedAt  int64            `json:"score_updated_at_epoch,omitempty"`
-	IsStale         bool             `json:"is_stale,omitempty"`
-	IsSuperseded    bool             `json:"is_superseded,omitempty"`
+	FileMtimes              map[string]int64 `json:"file_mtimes,omitempty"`
+	Subtitle                string           `json:"subtitle,omitempty"`
+	SDKSessionID            string           `json:"sdk_session_id"`
+	Scope                   ObservationScope `json:"scope"`
+	AgentID                 string           `json:"agent_id,omitempty"`
+	AgentSource             string           `json:"agent_source,omitempty"`
+	Type                    ObservationType  `json:"type"`
+	MemoryType              string           `json:"memory_type"`
+	SourceType              string           `json:"source_type,omitempty"`
+	Title                   string           `json:"title,omitempty"`
+	CreatedAt               string           `json:"created_at"`
+	Narrative               string           `json:"narrative,omitempty"`
+	Project                 string           `json:"project"`
+	Concepts                []string         `json:"concepts,omitempty"`
+	Facts                   []string         `json:"facts,omitempty"`
+	Rejected                []string         `json:"rejected,omitempty"`
+	FilesRead               []string         `json:"files_read,omitempty"`
+	FilesModified           []string         `json:"files_modified,omitempty"`
+	CommandsRun             []string         `json:"commands_run,omitempty"`
+	CreatedAtEpoch          int64            `json:"created_at_epoch"`
+	DiscoveryTokens         int64            `json:"discovery_tokens"`
+	ID                      int64            `json:"id"`
+	PromptNumber            int64            `json:"prompt_number,omitempty"`
+	ImportanceScore         float64          `json:"importance_score"`
+	UtilityScore            float64          `json:"utility_score"`
+	UserFeedback            int              `json:"user_feedback"`
+	RetrievalCount          int              `json:"retrieval_count"`
+	InjectionCount          int              `json:"injection_count"`
+	LastRetrievedAt         int64            `json:"last_retrieved_at_epoch,omitempty"`
+	ScoreUpdatedAt          int64            `json:"score_updated_at_epoch,omitempty"`
+	IsStale                 bool             `json:"is_stale,omitempty"`
+	IsSuperseded            bool             `json:"is_superseded,omitempty"`
+	Status                  string           `json:"status,omitempty"`
+	StatusReason            string           `json:"status_reason,omitempty"`
+	EffectivenessScore      float64          `json:"effectiveness_score"`
+	EffectivenessInjections int              `json:"effectiveness_injections"`
+	EffectivenessSuccesses  int              `json:"effectiveness_successes"`
+	ExpiresAt               *time.Time       `json:"expires_at,omitempty"`
+	TtlDays                 *int32           `json:"ttl_days,omitempty"`
+	IsExpired               bool             `json:"is_expired,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler for Observation.
@@ -336,13 +440,16 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		Project:         o.Project,
 		Scope:           o.Scope,
 		AgentID:         o.AgentID,
+		AgentSource:     string(o.AgentSource),
 		Type:            o.Type,
 		MemoryType:      string(o.MemoryType),
 		SourceType:      string(o.SourceType),
 		Facts:           o.Facts,
+		Rejected:        o.Rejected,
 		Concepts:        o.Concepts,
 		FilesRead:       o.FilesRead,
 		FilesModified:   o.FilesModified,
+		CommandsRun:     o.CommandsRun,
 		FileMtimes:      o.FileMtimes,
 		DiscoveryTokens: o.DiscoveryTokens,
 		CreatedAt:       o.CreatedAt,
@@ -356,6 +463,21 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		InjectionCount:  o.InjectionCount,
 		// Conflict detection fields
 		IsSuperseded: o.IsSuperseded,
+		// Status lifecycle
+		Status:                  o.Status,
+		EffectivenessScore:      o.EffectivenessScore,
+		EffectivenessInjections: o.EffectivenessInjections,
+		EffectivenessSuccesses:  o.EffectivenessSuccesses,
+		// TTL fields
+		IsExpired: o.IsExpired,
+	}
+	if o.ExpiresAt.Valid {
+		t := o.ExpiresAt.Time.UTC()
+		j.ExpiresAt = &t
+	}
+	if o.TtlDays.Valid {
+		d := o.TtlDays.Int32
+		j.TtlDays = &d
 	}
 	if o.Title.Valid {
 		j.Title = o.Title.String
@@ -371,6 +493,9 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 	}
 	if o.LastRetrievedAt.Valid {
 		j.LastRetrievedAt = o.LastRetrievedAt.Int64
+	}
+	if o.StatusReason.Valid {
+		j.StatusReason = o.StatusReason.String
 	}
 	if o.ScoreUpdatedAt.Valid {
 		j.ScoreUpdatedAt = o.ScoreUpdatedAt.Int64
@@ -388,21 +513,39 @@ func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, pro
 		scope = DetermineScope(parsed.Concepts)
 	}
 
+	// Auto-add diff-scope tags based on file paths (gstack-insights FR-7)
+	concepts := parsed.Concepts
+	allFiles := append(append([]string{}, parsed.FilesRead...), parsed.FilesModified...)
+	if scopeTags := classifyFileScopes(allFiles); len(scopeTags) > 0 {
+		seen := make(map[string]struct{}, len(concepts))
+		for _, c := range concepts {
+			seen[c] = struct{}{}
+		}
+		for _, tag := range scopeTags {
+			if _, exists := seen[tag]; !exists {
+				concepts = append(concepts, tag)
+			}
+		}
+	}
+
 	return &Observation{
 		SDKSessionID:    sdkSessionID,
 		Project:         project,
 		Scope:           scope,
 		AgentID:         parsed.AgentID,
+		AgentSource:     parsed.AgentSource,
 		Type:            parsed.Type,
 		MemoryType:      ClassifyMemoryType(parsed),
 		SourceType:      parsed.SourceType,
 		Title:           sql.NullString{String: parsed.Title, Valid: parsed.Title != ""},
 		Subtitle:        sql.NullString{String: parsed.Subtitle, Valid: parsed.Subtitle != ""},
 		Facts:           parsed.Facts,
+		Rejected:        parsed.Rejected,
 		Narrative:       sql.NullString{String: parsed.Narrative, Valid: parsed.Narrative != ""},
-		Concepts:        parsed.Concepts,
+		Concepts:        concepts,
 		FilesRead:       parsed.FilesRead,
 		FilesModified:   parsed.FilesModified,
+		CommandsRun:     parsed.CommandsRun,
 		FileMtimes:      parsed.FileMtimes,
 		PromptNumber:    sql.NullInt64{Int64: int64(promptNumber), Valid: promptNumber > 0},
 		DiscoveryTokens: discoveryTokens,

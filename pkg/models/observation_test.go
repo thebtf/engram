@@ -29,6 +29,65 @@ func (s *ObservationSuite) TestObservationTypeConstants() {
 	s.Equal(ObservationType("refactor"), ObsTypeRefactor)
 	s.Equal(ObservationType("change"), ObsTypeChange)
 	s.Equal(ObservationType("guidance"), ObsTypeGuidance)
+	s.Equal(ObservationType("pitfall"), ObsTypePitfall)
+	s.Equal(ObservationType("operational"), ObsTypeOperational)
+	s.Equal(ObservationType("timeline"), ObsTypeTimeline)
+}
+
+// TestAgentSourceConstants tests agent source type constants and validation.
+func (s *ObservationSuite) TestAgentSourceConstants() {
+	s.Equal(AgentSource("claude-code"), AgentClaude)
+	s.Equal(AgentSource("codex"), AgentCodex)
+	s.Equal(AgentSource("gemini"), AgentGemini)
+	s.Equal(AgentSource("other"), AgentOther)
+	s.Equal(AgentSource("unknown"), AgentUnknown)
+
+	// Validation
+	s.True(IsValidAgentSource("claude-code"))
+	s.True(IsValidAgentSource("codex"))
+	s.True(IsValidAgentSource("gemini"))
+	s.True(IsValidAgentSource("other"))
+	s.True(IsValidAgentSource("unknown"))
+	s.False(IsValidAgentSource("gpt-4"))
+	s.False(IsValidAgentSource(""))
+}
+
+// TestSourceCrossModel tests the cross_model source type constant.
+func (s *ObservationSuite) TestSourceCrossModel() {
+	s.Equal(SourceType("cross_model"), SourceCrossModel)
+}
+
+// TestClassifyFileScopes tests diff-scope auto-tagging from file paths.
+func (s *ObservationSuite) TestClassifyFileScopes() {
+	// Frontend files
+	scopes := classifyFileScopes([]string{"src/App.tsx", "styles.css"})
+	s.Contains(scopes, "scope:frontend")
+
+	// Backend files
+	scopes = classifyFileScopes([]string{"internal/mcp/server.go", "cmd/worker/main.go"})
+	s.Contains(scopes, "scope:backend")
+
+	// Test files
+	scopes = classifyFileScopes([]string{"internal/scoring/calculator_test.go"})
+	s.Contains(scopes, "scope:tests")
+	s.Contains(scopes, "scope:backend")
+
+	// Multiple scopes from single file
+	scopes = classifyFileScopes([]string{"internal/api/auth_handler_test.go"})
+	s.Contains(scopes, "scope:backend")
+	s.Contains(scopes, "scope:api")  // /api/ path segment
+	s.Contains(scopes, "scope:auth") // /auth/ in path
+	s.Contains(scopes, "scope:tests")
+
+	// Avoid false positives on partial matches
+	scopes = classifyFileScopes([]string{"internal/mcp/tools_memory.go"})
+	s.NotContains(scopes, "scope:api")  // "mcp" doesn't match /api/
+	s.NotContains(scopes, "scope:auth") // "memory" doesn't match /auth/
+
+	// Empty/nil input
+	s.Empty(classifyFileScopes(nil))
+	s.Empty(classifyFileScopes([]string{}))
+	s.Empty(classifyFileScopes([]string{""}))
 }
 
 // TestScopeConstants tests scope constants.
@@ -132,6 +191,25 @@ func (s *ObservationSuite) TestTypeBaseScore_Guidance() {
 			s.GreaterOrEqual(score, otherScore, "guidance should have highest or equal base score")
 		}
 	}
+}
+
+// TestTypeBaseScore_NewTypes tests scoring for pitfall, operational, and timeline types.
+func (s *ObservationSuite) TestTypeBaseScore_NewTypes() {
+	s.Equal(1.3, TypeBaseScore(ObsTypePitfall))
+	s.Equal(1.0, TypeBaseScore(ObsTypeOperational))
+	s.Equal(0.1, TypeBaseScore(ObsTypeTimeline))
+}
+
+// TestDefaultScoringConfig_SourceHalfLives tests that SourceHalfLives is populated.
+func (s *ObservationSuite) TestDefaultScoringConfig_SourceHalfLives() {
+	cfg := DefaultScoringConfig()
+	s.NotNil(cfg.SourceHalfLives)
+	s.Equal(30.0, cfg.SourceHalfLives[SourceManual])
+	s.Equal(7.0, cfg.SourceHalfLives[SourceUnknown])
+	s.Equal(90.0, cfg.SourceHalfLives[SourceLLMDerived])
+	s.Equal(60.0, cfg.SourceHalfLives[SourceCrossModel])
+	s.Equal(14.0, cfg.SourceHalfLives[SourceToolRead])
+	s.Len(cfg.SourceHalfLives, 10) // All 10 source types mapped
 }
 
 // TestParsedObservation_FileMtimesJSON tests FileMtimes JSON serialization.

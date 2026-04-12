@@ -40,7 +40,7 @@ func testObservationStore(t *testing.T) (*ObservationStore, *Store, func()) {
 		t.Fatalf("NewStore failed: %v", err)
 	}
 
-	observationStore := NewObservationStore(store, nil, nil, nil)
+	observationStore := NewObservationStore(store, nil)
 
 	cleanup := func() {
 		store.Close()
@@ -604,6 +604,57 @@ func TestObservationStore_DeleteObservations(t *testing.T) {
 	deleted, err := observationStore.GetObservationsByIDs(ctx, ids[:3], "default", 10)
 	require.NoError(t, err)
 	assert.Empty(t, deleted)
+}
+
+func TestObservationStore_GetProjectBriefingObservation(t *testing.T) {
+	observationStore, _, cleanup := testObservationStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	_, _, err := observationStore.StoreObservation(ctx, "claude-1", "project-alpha", &models.ParsedObservation{
+		Type:      models.ObsTypeWiki,
+		Title:     "Project Briefing: project-alpha",
+		Narrative: "Alpha briefing",
+		Concepts:  []string{"project-briefing", "wiki"},
+		Scope:     models.ScopeProject,
+	}, 1, 10)
+	require.NoError(t, err)
+
+	_, _, err = observationStore.StoreObservation(ctx, "claude-1", "project-alpha", &models.ParsedObservation{
+		Type:      models.ObsTypeWiki,
+		Title:     "Wiki: unrelated",
+		Narrative: "Other wiki",
+		Concepts:  []string{"wiki"},
+		Scope:     models.ScopeProject,
+	}, 2, 10)
+	require.NoError(t, err)
+
+	briefing, err := observationStore.GetProjectBriefingObservation(ctx, "project-alpha")
+	require.NoError(t, err)
+	require.NotNil(t, briefing)
+	assert.Equal(t, models.ObsTypeWiki, briefing.Type)
+	assert.Equal(t, "Alpha briefing", briefing.Narrative.String)
+}
+
+func TestObservationStore_GetProjectBriefingObservation_ReturnsNilWhenMissing(t *testing.T) {
+	observationStore, _, cleanup := testObservationStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	_, _, err := observationStore.StoreObservation(ctx, "claude-1", "project-alpha", &models.ParsedObservation{
+		Type:      models.ObsTypeWiki,
+		Title:     "Wiki: unrelated",
+		Narrative: "Other wiki",
+		Concepts:  []string{"wiki"},
+		Scope:     models.ScopeProject,
+	}, 1, 10)
+	require.NoError(t, err)
+
+	briefing, err := observationStore.GetProjectBriefingObservation(ctx, "project-alpha")
+	require.NoError(t, err)
+	assert.Nil(t, briefing)
 }
 
 // Note: TestObservationStore_MarkObservationsSuperseded is omitted because

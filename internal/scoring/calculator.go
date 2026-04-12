@@ -47,11 +47,19 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 	typeWeight := models.TypeBaseScore(obs.Type)
 
 	// 2. Calculate recency decay: 0.5^(age_days / half_life_days)
+	// Source-aware: look up half-life by observation's source_type, fall back to global default.
 	ageDays := now.Sub(time.UnixMilli(obs.CreatedAtEpoch)).Hours() / 24.0
 	if ageDays < 0 {
 		ageDays = 0 // Handle future timestamps gracefully
 	}
-	recencyDecay := math.Pow(0.5, ageDays/c.config.RecencyHalfLifeDays)
+	halfLifeDays := c.config.RecencyHalfLifeDays // fallback
+	if hl, ok := c.config.SourceHalfLives[obs.SourceType]; ok && hl > 0 {
+		halfLifeDays = hl
+	}
+	if halfLifeDays <= 0 {
+		halfLifeDays = 7.0 // safety fallback to default
+	}
+	recencyDecay := math.Pow(0.5, ageDays/halfLifeDays)
 
 	// Core score = 1.0 × type_weight × recency_decay
 	coreScore := 1.0 * typeWeight * recencyDecay
@@ -101,38 +109,47 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 	// 6. Utility contribution: (utility_score - 0.5) × weight, centered around neutral
 	utilityContrib := (obs.UtilityScore - 0.5) * c.config.UtilityWeight
 
+	// 7. Effectiveness contribution: closed-loop signal from injection outcomes.
+	// Requires at least 10 injections for statistical significance; otherwise treated as neutral (0.5).
+	effectivenessContrib := 0.0
+	if obs.EffectivenessInjections >= 10 {
+		effectivenessContrib = (obs.EffectivenessScore - 0.5) * c.config.EffectivenessWeight
+	}
+
 	// Final score with minimum threshold
-	finalScore := coreScore + feedbackContrib + conceptContrib + retrievalContrib + utilityContrib
+	finalScore := coreScore + feedbackContrib + conceptContrib + retrievalContrib + utilityContrib + effectivenessContrib
 	if finalScore < c.config.MinScore {
 		finalScore = c.config.MinScore
 	}
 
 	return ScoreComponents{
-		TypeWeight:       typeWeight,
-		RecencyDecay:     recencyDecay,
-		SourcePenalty:    sourcePenalty,
-		CoreScore:        coreScore,
-		FeedbackContrib:  feedbackContrib,
-		ConceptContrib:   conceptContrib,
-		RetrievalContrib: retrievalContrib,
-		UtilityContrib:   utilityContrib,
-		FinalScore:       finalScore,
-		AgeDays:          ageDays,
+		TypeWeight:           typeWeight,
+		RecencyDecay:         recencyDecay,
+		SourcePenalty:        sourcePenalty,
+		CoreScore:            coreScore,
+		FeedbackContrib:      feedbackContrib,
+		ConceptContrib:       conceptContrib,
+		RetrievalContrib:     retrievalContrib,
+		UtilityContrib:       utilityContrib,
+		EffectivenessContrib: effectivenessContrib,
+		FinalScore:           finalScore,
+		AgeDays:              ageDays,
 	}
 }
 
 // ScoreComponents contains the breakdown of an importance score calculation.
 type ScoreComponents struct {
-	TypeWeight       float64 `json:"type_weight"`
-	RecencyDecay     float64 `json:"recency_decay"`
-	SourcePenalty    float64 `json:"source_penalty"`
-	CoreScore        float64 `json:"core_score"`
-	FeedbackContrib  float64 `json:"feedback_contrib"`
-	ConceptContrib   float64 `json:"concept_contrib"`
-	RetrievalContrib float64 `json:"retrieval_contrib"`
-	UtilityContrib   float64 `json:"utility_contrib"`
-	FinalScore       float64 `json:"final_score"`
-	AgeDays          float64 `json:"age_days"`
+	TypeWeight           float64 `json:"type_weight"`
+	RecencyDecay         float64 `json:"recency_decay"`
+	SourcePenalty        float64 `json:"source_penalty"`
+	CoreScore            float64 `json:"core_score"`
+	FeedbackContrib      float64 `json:"feedback_contrib"`
+	ConceptContrib       float64 `json:"concept_contrib"`
+	RetrievalContrib     float64 `json:"retrieval_contrib"`
+	UtilityContrib       float64 `json:"utility_contrib"`
+	EffectivenessContrib float64 `json:"effectiveness_contrib"`
+	FinalScore           float64 `json:"final_score"`
+	AgeDays              float64 `json:"age_days"`
 }
 
 // BatchCalculate computes scores for multiple observations.

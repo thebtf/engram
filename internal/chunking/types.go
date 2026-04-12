@@ -35,12 +35,6 @@ type Language string
 const (
 	// LanguageGo represents the Go programming language.
 	LanguageGo Language = "go"
-	// LanguagePython represents the Python programming language.
-	LanguagePython Language = "python"
-	// LanguageTypeScript represents the TypeScript programming language.
-	LanguageTypeScript Language = "typescript"
-	// LanguageJavaScript represents the JavaScript programming language.
-	LanguageJavaScript Language = "javascript"
 )
 
 // Chunk represents a semantic code chunk with AST-derived boundaries.

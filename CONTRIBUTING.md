@@ -15,7 +15,7 @@ Engram is persistent shared memory infrastructure for Claude Code workstations. 
 - Go 1.25+
 - PostgreSQL 17 with pgvector extension
 - Docker and Docker Compose (optional, for local PostgreSQL)
-- CGO enabled (required for ONNX embedding models)
+- CGO enabled (required for test build tags)
 
 ### Getting Started
 
@@ -111,8 +111,8 @@ cmd/
 internal/
   search/          -- search and retrieval logic
   scoring/         -- observation scoring and ranking
-  embedding/       -- vector embedding (ONNX BGE model)
-  reranking/       -- result reranking (ONNX model)
+  embedding/       -- vector embedding (OpenAI-compatible REST API)
+  reranking/       -- result reranking (API-based cross-encoder)
   mcp/             -- MCP protocol implementation and tool handlers
   worker/          -- HTTP handlers, middleware, server setup
   consolidation/   -- observation merging and maintenance

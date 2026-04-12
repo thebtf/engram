@@ -40,6 +40,43 @@ function getWorkerStats(project) {
   return lib.requestGet(base, 100).catch(() => null);
 }
 
+let cachedEffectiveness = null;
+let effectivenessCacheTime = 0;
+const EFFECTIVENESS_CACHE_MS = 60000;
+
+async function getEffectivenessLabel() {
+  const now = Date.now();
+  if (now - effectivenessCacheTime < EFFECTIVENESS_CACHE_MS && cachedEffectiveness !== null) {
+    return cachedEffectiveness;
+  }
+  try {
+    const dist = await lib.requestGet('/api/learning/effectiveness-distribution', 3000);
+    if (!dist || typeof dist !== 'object') {
+      cachedEffectiveness = '';
+      effectivenessCacheTime = now;
+      return '';
+    }
+    const tiers = dist.tiers || dist;
+    const high = safeNumber(tiers.high);
+    const medium = safeNumber(tiers.medium);
+    const low = safeNumber(tiers.low);
+    const total = high + medium + low;
+    if (total === 0) {
+      cachedEffectiveness = 'eff:--';
+      effectivenessCacheTime = now;
+      return cachedEffectiveness;
+    }
+    const highPct = Math.round((high / total) * 100);
+    cachedEffectiveness = `eff:${highPct}%`;
+    effectivenessCacheTime = now;
+    return cachedEffectiveness;
+  } catch {
+    cachedEffectiveness = '';
+    effectivenessCacheTime = now;
+    return '';
+  }
+}
+
 function formatOfflineColored(useColors) {
   const projectText = colorize('[engram]', colorGray, useColors);
   const dot = colorize('\u25CB', colorGray, useColors);
@@ -52,7 +89,7 @@ function formatStartingColored(useColors) {
   return `${projectText} ${dot} starting...`;
 }
 
-function formatDefault(stats, useColors) {
+function formatDefault(stats, useColors, effLabel) {
   const retrieval = stats && stats.retrieval ? stats.retrieval : {};
 
   const served = safeNumber(retrieval.ObservationsServed);
@@ -72,6 +109,9 @@ function formatDefault(stats, useColors) {
   }
   if (projectObservations > 0) {
     parts.push(`project:${projectObservations} memories`);
+  }
+  if (typeof effLabel === 'string' && effLabel.length > 0) {
+    parts.push(effLabel);
   }
 
   const prefix = colorize('[engram]', colorGreen, useColors);
@@ -108,7 +148,7 @@ function formatMinimal(stats, useColors) {
   return `${prefix} engram ready`;
 }
 
-function formatStatusLine(stats) {
+function formatStatusLine(stats, effLabel) {
   const useColors = useColorsSetting();
 
   if (!stats) {
@@ -128,7 +168,7 @@ function formatStatusLine(stats) {
     return formatMinimal(stats, useColors);
   }
 
-  return formatDefault(stats, useColors);
+  return formatDefault(stats, useColors, effLabel);
 }
 
 function formatNotConfigured(useColors) {
@@ -156,8 +196,11 @@ async function handleStatusline(input) {
     asString(input.cwd);
 
   const project = projectDir ? lib.ProjectIDWithName(projectDir) : '';
-  const stats = await getWorkerStats(project);
-  return formatStatusLine(stats);
+  const [stats, effLabel] = await Promise.all([
+    getWorkerStats(project),
+    getEffectivenessLabel(),
+  ]);
+  return formatStatusLine(stats, effLabel);
 }
 
 (async () => {

@@ -4,6 +4,7 @@ package gorm
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -387,6 +388,31 @@ func (s *RelationStore) GetTotalRelationCount(ctx context.Context) (int, error) 
 	return int(count), err
 }
 
+// GetDistinctNodeCount returns the count of unique observation IDs participating in relations.
+func (s *RelationStore) GetDistinctNodeCount(ctx context.Context) (int, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Raw(
+		`SELECT COUNT(*) FROM (SELECT source_id AS id FROM observation_relations UNION SELECT target_id FROM observation_relations) AS nodes`,
+	).Scan(&count).Error
+	return int(count), err
+}
+
+// GetMaxDegree returns the maximum node degree (combined in+out edges) in the relation graph.
+func (s *RelationStore) GetMaxDegree(ctx context.Context) (int, error) {
+	var maxDeg int64
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT COALESCE(MAX(degree), 0) FROM (
+			SELECT id, COUNT(*) AS degree FROM (
+				SELECT source_id AS id FROM observation_relations
+				UNION ALL
+				SELECT target_id AS id FROM observation_relations
+			) AS all_nodes
+			GROUP BY id
+		) AS degrees
+	`).Scan(&maxDeg).Error
+	return int(maxDeg), err
+}
+
 // GetHighConfidenceRelations retrieves relations with confidence above threshold.
 func (s *RelationStore) GetHighConfidenceRelations(ctx context.Context, minConfidence float64, limit int) ([]*models.ObservationRelation, error) {
 	var relations []ObservationRelation
@@ -441,6 +467,8 @@ func toModelRelation(r *ObservationRelation) *models.ObservationRelation {
 		DetectionSource: r.DetectionSource,
 		CreatedAt:       r.CreatedAt,
 		CreatedAtEpoch:  r.CreatedAtEpoch,
+		ValidFrom:       r.ValidFrom,
+		ValidTo:         r.ValidTo,
 	}
 
 	if r.Reason.Valid {
@@ -457,4 +485,32 @@ func toModelRelations(relations []ObservationRelation) []*models.ObservationRela
 		result[i] = toModelRelation(&r)
 	}
 	return result
+}
+
+// InvalidateRelation sets valid_to = now() on a relation, making it temporally bounded.
+// The relation remains in the database but is filtered out by as-of queries.
+func (s *RelationStore) InvalidateRelation(ctx context.Context, relationID int64) error {
+	return s.db.WithContext(ctx).
+		Table("observation_relations").
+		Where("id = ? AND valid_to IS NULL", relationID).
+		Update("valid_to", time.Now()).Error
+}
+
+// GetRelationsAsOf returns relations valid at a specific point in time.
+// Relations without valid_from are treated as always-valid from creation.
+// Relations without valid_to are treated as still-valid (open-ended).
+func (s *RelationStore) GetRelationsAsOf(ctx context.Context, obsID int64, asOf time.Time) ([]*models.ObservationRelation, error) {
+	var relations []ObservationRelation
+
+	err := s.db.WithContext(ctx).
+		Where("(source_id = ? OR target_id = ?)", obsID, obsID).
+		Where("(valid_from IS NULL OR valid_from <= ?)", asOf).
+		Where("(valid_to IS NULL OR valid_to >= ?)", asOf).
+		Order("confidence DESC").
+		Find(&relations).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return toModelRelations(relations), nil
 }

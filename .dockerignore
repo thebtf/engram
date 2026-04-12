@@ -10,7 +10,14 @@ bin/
 # Agent and planning files
 .agent/
 continuity.txt
-docs/
+
+# Website docs (not the generated OpenAPI docs)
+docs/node_modules/
+docs/dist/
+docs/src/
+docs/.vitepress/
+docs/package.json
+docs/package-lock.json
 
 # IDE and OS
 .vscode/
@@ -26,7 +33,6 @@ docs/
 
 # Node modules (will be installed fresh in Docker)
 ui/node_modules/
-docs/node_modules/
 
 # Test artifacts
 coverage.out

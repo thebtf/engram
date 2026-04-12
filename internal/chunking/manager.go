@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Manager dispatches files to appropriate language-specific chunkers.
@@ -57,8 +59,7 @@ func (m *Manager) ChunkFile(ctx context.Context, filePath string) ([]Chunk, erro
 
 		// Filter by maximum chunk size
 		if m.options.MaxChunkSize > 0 && len(chunk.Content) > m.options.MaxChunkSize {
-			// TODO: Consider splitting large chunks intelligently
-			// For now, skip chunks that are too large
+			log.Warn().Str("file", chunk.FilePath).Int("size", len(chunk.Content)).Int("max", m.options.MaxChunkSize).Msg("Chunk exceeds MaxChunkSize, skipping")
 			continue
 		}
 

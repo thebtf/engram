@@ -405,63 +405,64 @@ func TestHandleToolsList(t *testing.T) {
 	require.True(t, ok)
 	assert.NotEmpty(t, tools)
 
-	// Default response (no cursor) should return only T1+T2 tools
+	// Default response (no cursor) should return only primary consolidated tools
 	toolNames := make(map[string]bool)
 	for _, tool := range tools {
 		toolNames[tool.Name] = true
 	}
 
-	// T1 (core) tools must be present
-	t1Tools := []string{
+	// Primary consolidated tools must be present
+	primaryTools := []string{
+		"recall", "store", "feedback", "vault", "docs", "admin", "issues", "check_system_health",
+	}
+	for _, name := range primaryTools {
+		assert.True(t, toolNames[name], "expected primary tool %s to be present", name)
+	}
+	assert.Equal(t, len(primaryTools), len(tools), "default tools/list should return exactly %d tools", len(primaryTools))
+
+	// Legacy tools must NOT be present in default listing
+	legacyTools := []string{
 		"search", "decisions", "find_by_file",
-		"how_it_works", "check_system_health",
-	}
-	for _, name := range t1Tools {
-		assert.True(t, toolNames[name], "expected T1 tool %s to be present", name)
-	}
-
-	// T2 (useful) tools must be present
-	t2Tools := []string{
-		"changes", "find_by_type", "find_by_concept",
-		"find_similar_observations", "get_recent_context", "timeline",
-	}
-	for _, name := range t2Tools {
-		assert.True(t, toolNames[name], "expected T2 tool %s to be present", name)
-	}
-
-	// T3 (admin) tools must NOT be present in default listing
-	t3Tools := []string{
-		"get_context_timeline", "get_timeline_by_query",
 		"bulk_delete_observations", "trigger_maintenance",
 	}
-	for _, name := range t3Tools {
-		assert.False(t, toolNames[name], "T3 tool %s should not be in default listing", name)
+	for _, name := range legacyTools {
+		assert.False(t, toolNames[name], "legacy tool %s should not be in default listing", name)
 	}
 
-	// Verify nextCursor is returned
-	nextCursor, ok := result["nextCursor"].(string)
-	assert.True(t, ok, "nextCursor should be present")
-	assert.Equal(t, "all", nextCursor)
+	// No nextCursor — only primary tools returned, no pagination needed
 
-	// Verify cursor: "all" returns ALL tools
+	// include_all=true should return primary + secondary tools
 	reqAll := &Request{
 		JSONRPC: "2.0",
 		ID:      2,
 		Method:  "tools/list",
-		Params:  json.RawMessage(`{"cursor":"all"}`),
+		Params:  json.RawMessage(`{"include_all": true}`),
 	}
 	respAll := server.handleToolsList(reqAll)
-	resultAll, _ := respAll.Result.(map[string]any)
-	allTools, _ := resultAll["tools"].([]Tool)
-	assert.Greater(t, len(allTools), len(tools), "cursor=all should return more tools than default")
+	resultAll := respAll.Result.(map[string]any)
+	allTools := resultAll["tools"].([]Tool)
+	assert.Greater(t, len(allTools), len(primaryTools), "include_all should return more tools than primary")
 
-	// T3 tools should now be present
 	allToolNames := make(map[string]bool)
 	for _, tool := range allTools {
 		allToolNames[tool.Name] = true
 	}
-	for _, name := range t3Tools {
-		assert.True(t, allToolNames[name], "T3 tool %s should be present with cursor=all", name)
+	// Legacy tools should now be present
+	for _, name := range legacyTools {
+		assert.True(t, allToolNames[name], "legacy tool %s should be present with include_all=true", name)
+	}
+
+	// Anthropic API rejects oneOf/allOf/anyOf at the top level of input_schema.
+	// Verify EVERY tool (primary + secondary) has a compliant top-level schema.
+	forbiddenKeys := []string{"oneOf", "allOf", "anyOf"}
+	for _, tool := range allTools {
+		schema := tool.InputSchema
+		for _, key := range forbiddenKeys {
+			_, present := schema[key]
+			assert.False(t, present,
+				"tool %q has forbidden top-level key %q — Anthropic API will reject with 400. Move into nested properties or use server-side validation.",
+				tool.Name, key)
+		}
 	}
 }
 
@@ -1690,45 +1691,14 @@ func TestCallTool_ToolNameRecognition(t *testing.T) {
 	result := resp.Result.(map[string]any)
 	tools := result["tools"].([]Tool)
 
-	// Verify all expected tools are registered
-	expectedTools := map[string]bool{
-		"search":                            true,
-		"timeline":                          true,
-		"decisions":                         true,
-		"changes":                           true,
-		"how_it_works":                      true,
-		"find_by_concept":                   true,
-		"find_by_file":                      true,
-		"find_by_type":                      true,
-		"get_recent_context":                true,
-		"get_context_timeline":              true,
-		"get_timeline_by_query":             true,
-		"find_related_observations":         true,
-		"find_similar_observations":         true,
-		"get_patterns":                      true,
-		"get_memory_stats":                  true,
-		"bulk_delete_observations":          true,
-		"bulk_mark_superseded":              true,
-		"bulk_boost_observations":           true,
-		"trigger_maintenance":               true,
-		"get_maintenance_stats":             true,
-		"merge_observations":                true,
-		"get_observation":                   true,
-		"edit_observation":                  true,
-		"get_observation_quality":           true,
-		"suggest_consolidations":            true,
-		"tag_observation":                   true,
-		"get_observations_by_tag":           true,
-		"get_temporal_trends":               true,
-		"get_data_quality_report":           true,
-		"batch_tag_by_pattern":              true,
-		"explain_search_ranking":            true,
-		"export_observations":               true,
-		"check_system_health":               true,
-		"analyze_search_patterns":           true,
-		"get_observation_relationships":     true,
-		"get_observation_scoring_breakdown": true,
-		"analyze_observation_importance":    true,
+	// Verify primary consolidated tools are registered
+	primaryExpected := []string{
+		"recall", "store", "feedback", "vault", "docs", "admin", "check_system_health",
+	}
+	// Only primary tools in tools/list — no aliases
+	expectedTools := make(map[string]bool)
+	for _, name := range primaryExpected {
+		expectedTools[name] = true
 	}
 
 	foundTools := make(map[string]bool)
@@ -1913,6 +1883,46 @@ func TestToolInputSchema(t *testing.T) {
 		_, hasProperties := schema["properties"]
 		assert.True(t, hasProperties, "tool %s should have properties", tool.Name)
 	}
+}
+
+func TestPrimaryToolSchemas_FeedbackAndStore(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	resp := server.handleToolsList(&Request{JSONRPC: "2.0", ID: 1, Method: "tools/list"})
+	result := resp.Result.(map[string]any)
+	tools := result["tools"].([]Tool)
+
+	var feedbackTool *Tool
+	var storeTool *Tool
+	for i := range tools {
+		switch tools[i].Name {
+		case "feedback":
+			feedbackTool = &tools[i]
+		case "store":
+			storeTool = &tools[i]
+		}
+	}
+
+	require.NotNil(t, feedbackTool)
+	require.NotNil(t, storeTool)
+
+	feedbackProps := feedbackTool.InputSchema["properties"].(map[string]any)
+	_, hasUseful := feedbackProps["useful"]
+	assert.False(t, hasUseful, "feedback schema should advertise rating enum, not useful boolean")
+	_, hasRating := feedbackProps["rating"]
+	assert.True(t, hasRating, "feedback schema should expose rating field")
+	_, hasSessionID := feedbackProps["session_id"]
+	assert.True(t, hasSessionID, "feedback schema should expose session_id for outcome action")
+
+	storeProps := storeTool.InputSchema["properties"].(map[string]any)
+	typeSchema := storeProps["type"].(map[string]any)
+	enumValues := typeSchema["enum"].([]string)
+	assert.Contains(t, enumValues, "decision")
+	assert.Contains(t, enumValues, "discovery")
+	assert.Contains(t, enumValues, "pitfall")
+	assert.Contains(t, enumValues, "timeline")
+	assert.NotContains(t, enumValues, "insight")
 }
 
 // TestCallTool_UnknownToolName tests callTool with various unknown tool names.

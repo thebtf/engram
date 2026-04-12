@@ -23,6 +23,10 @@ type Client struct {
 	Flusher http.Flusher
 	Done    chan struct{}
 	ID      string
+	// WriteMu serializes writes to Writer/Flusher. Both the broadcast goroutine
+	// and the keepalive ticker write to the same ResponseWriter concurrently;
+	// without this lock, interleaved bytes would corrupt the SSE stream.
+	WriteMu sync.Mutex
 }
 
 // Broadcaster manages SSE client connections and message broadcasting.
@@ -163,6 +167,8 @@ func (b *Broadcaster) writeToClient(client *Client, message string, deadCh chan<
 
 	go func() {
 		defer close(done)
+		client.WriteMu.Lock()
+		defer client.WriteMu.Unlock()
 		_, err := client.Writer.Write([]byte(message))
 		if err != nil {
 			log.Debug().
@@ -197,12 +203,21 @@ func (b *Broadcaster) ClientCount() int {
 }
 
 // HandleSSE handles an SSE connection request.
+// KeepaliveInterval is how often the SSE handler sends a comment-line keepalive
+// to each connected client. Without this, HTTP WriteTimeout (60s) will close
+// idle SSE connections, causing the dashboard banner to flap. 25s keeps well
+// under any reasonable write timeout while being invisible to the client.
+const KeepaliveInterval = 25 * time.Second
+
 func (b *Broadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Disable proxy buffering — nginx and similar reverse proxies will buffer
+	// SSE responses by default, causing the stream to appear stuck.
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	client, err := b.AddClient(w)
 	if err != nil {
@@ -212,9 +227,28 @@ func (b *Broadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	defer b.RemoveClient(client)
 
 	// Send initial connection message
+	client.WriteMu.Lock()
 	fmt.Fprintf(w, "data: {\"type\":\"connected\",\"clientId\":\"%s\"}\n\n", client.ID)
 	client.Flusher.Flush()
+	client.WriteMu.Unlock()
 
-	// Wait for client disconnect
-	<-r.Context().Done()
+	// Keepalive ticker: SSE comment lines (`: ping\n\n`) are ignored by clients
+	// but keep the HTTP write path active, preventing WriteTimeout-driven closes.
+	ticker := time.NewTicker(KeepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			client.WriteMu.Lock()
+			if _, werr := fmt.Fprint(w, ": keepalive\n\n"); werr != nil {
+				client.WriteMu.Unlock()
+				return
+			}
+			client.Flusher.Flush()
+			client.WriteMu.Unlock()
+		}
+	}
 }

@@ -13,13 +13,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/strutil"
-	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -119,25 +119,204 @@ func (m *SearchMetrics) GetStats() map[string]any {
 	}
 }
 
+// ApplyCompositeScoring re-ranks observations using multi-signal scoring.
+// Formula: score = similarity × recencyDecay × typeWeight × max(importance, 0.3) × sourceBoost × feedbackBoost
+// This ensures that recent, high-importance decisions rank above old generic discoveries.
+// Explicit saves (store_memory) never decay and receive a source boost.
+func ApplyCompositeScoring(observations []*models.Observation, similarityScores map[int64]float64) {
+	now := time.Now()
+
+	// Type weights: behavioral rules and decisions have highest impact.
+	typeWeights := map[models.ObservationType]float64{
+		"wiki":      2.0, // Synthesized knowledge — highest value (pre-computed summaries)
+		"guidance":  1.8, // Behavioral rules — user corrections, workflow preferences
+		"decision":  1.4,
+		"bugfix":    1.3,
+		"feature":   1.2,
+		"pattern":   1.2,
+		"entity":    1.0, // Structured entities — neutral weight (navigational, not content)
+		"refactor":  0.9,
+		"discovery": 0.8,
+		"change":    0.7,
+	}
+
+	// Per-type half-life in days. Longer = slower decay = more persistent.
+	// Guidance rules are near-permanent — they represent user preferences that rarely change.
+	typeHalfLife := map[models.ObservationType]float64{
+		"guidance":  365, // Behavioral rules — near-permanent (user preferences evolve slowly)
+		"entity":    90,  // Structured entities — persist longer than raw observations
+		"decision":  30,
+		"pattern":   30,
+		"bugfix":    14,
+		"feature":   14,
+		"discovery": 7,
+		"change":    7,
+		"refactor":  7,
+		// "wiki" not listed — wiki observations bypass half-life entirely (recency=1.0)
+	}
+
+	for _, obs := range observations {
+		sim := similarityScores[obs.ID]
+		if sim == 0 {
+			sim = 0.5 // default if no similarity score
+		}
+
+		// Recency decay: per-type half-life; manual saves and wiki never decay
+		var recency float64
+		if obs.SourceType == models.SourceManual || obs.Type == "wiki" {
+			// Explicit saves and wiki summaries are permanent until superseded — no decay
+			recency = 1.0
+		} else {
+			halfLife := 7.0 // default half-life in days for unknown types
+			if hl, ok := typeHalfLife[obs.Type]; ok {
+				halfLife = hl
+			}
+			ageDays := now.Sub(time.Unix(obs.CreatedAtEpoch/1000, 0)).Hours() / 24.0
+			recency = math.Pow(0.5, ageDays/halfLife)
+			// Floor at 0.05 so old but very important observations don't disappear
+			if recency < 0.05 {
+				recency = 0.05
+			}
+		}
+
+		// Type weight
+		tw := 1.0
+		if w, ok := typeWeights[obs.Type]; ok {
+			tw = w
+		}
+
+		// Importance (floor at 0.3 so unscored observations aren't penalized to zero)
+		imp := obs.ImportanceScore
+		if imp < 0.3 {
+			imp = 0.3
+		}
+
+		// Source type boost: explicit saves and behavioral rules are higher value
+		sourceBoost := 1.0
+		if obs.SourceType == models.SourceManual {
+			sourceBoost = 1.5
+		}
+		// Guidance observations from LLM extraction also get a boost
+		if obs.Type == "guidance" && sourceBoost < 1.3 {
+			sourceBoost = 1.3
+		}
+
+		// User feedback boost: +1 = useful, -1 = not useful
+		feedbackBoost := 1.0 + float64(obs.UserFeedback)*0.1
+		if feedbackBoost < 0.5 {
+			feedbackBoost = 0.5
+		}
+		if feedbackBoost > 2.0 {
+			feedbackBoost = 2.0
+		}
+
+		// Effectiveness multiplier: Bayesian trust score from injection outcomes.
+		// Formula: (successes + α) / (injections + α + β) with neutral prior α=1, β=1.
+		// New observations (0 injections) score 0.5 (neutral). Well-used observations
+		// converge toward their true success rate. No minimum injection gate needed.
+		effectivenessMultiplier := 1.0
+		if obs.EffectivenessInjections > 0 {
+			bayesian := (float64(obs.EffectivenessSuccesses) + 1.0) / (float64(obs.EffectivenessInjections) + 2.0)
+			// Scale: 0.5 = neutral (no effect), >0.5 = boost, <0.5 = penalize
+			effectivenessMultiplier = 0.5 + bayesian
+		}
+
+		// Composite score replaces raw similarity
+		compositeScore := sim * recency * tw * imp * sourceBoost * feedbackBoost * effectivenessMultiplier
+		similarityScores[obs.ID] = compositeScore
+	}
+}
+
+// ApplySessionBoost multiplies composite scores for observations that belong to recently active sessions.
+// recentSessionIDs is a map[sdk_session_id]bool built once per search call (see ObservationStore.GetRecentSessionIDs).
+// boostFactor should be > 1.0 (e.g. 1.3).
+func ApplySessionBoost(observations []*models.Observation, scores map[int64]float64, recentSessionIDs map[string]bool, boostFactor float64) {
+	if len(recentSessionIDs) == 0 || boostFactor <= 1.0 {
+		return
+	}
+	for _, obs := range observations {
+		if obs.SDKSessionID != "" && recentSessionIDs[obs.SDKSessionID] {
+			if current, exists := scores[obs.ID]; exists {
+				scores[obs.ID] = current * boostFactor
+			}
+		}
+	}
+}
+
+// ApplyLaneWeights multiplies composite scores by per-type reranker weights.
+// Used by typed retrieval lanes (FR-8 / T027).
+func ApplyLaneWeights(observations []*models.Observation, scores map[int64]float64, laneWeights map[models.ObservationType]float64) {
+	if len(laneWeights) == 0 {
+		return
+	}
+	defaultWeight := 1.0
+	if defaultLane, hasDefault := laneWeights[models.ObservationType("default")]; hasDefault {
+		defaultWeight = defaultLane
+	}
+	for _, obs := range observations {
+		weight, ok := laneWeights[obs.Type]
+		if !ok {
+			weight = defaultWeight
+		}
+		if weight <= 0 {
+			continue
+		}
+		if current, exists := scores[obs.ID]; exists {
+			scores[obs.ID] = current * weight
+		}
+	}
+}
+
+// ApplyDiversityPenalty adjusts scores based on injection diversity.
+// High diversity (observation injected across many projects) = generic = penalty.
+// Scope=global observations are exempt (they are intentionally cross-project).
+// Only scope=project observations with diversity > 0.5 are penalized.
+// Penalty formula: score *= 1.0 - (diversity - 0.5) * 0.4, floored at multiplier 0.8.
+func ApplyDiversityPenalty(observations []*models.Observation, scores map[int64]float64, diversityScores map[int64]float64) {
+	if len(diversityScores) == 0 {
+		return
+	}
+	for _, obs := range observations {
+		// Exempt global-scope observations
+		if obs.Scope == models.ScopeGlobal {
+			continue
+		}
+		diversity, ok := diversityScores[obs.ID]
+		if !ok || diversity <= 0.5 {
+			continue
+		}
+		// Apply penalty: the more generic (high diversity), the lower the score.
+		// Cap multiplier floor at 0.8 to avoid over-penalizing.
+		multiplier := 1.0 - (diversity-0.5)*0.4
+		if multiplier < 0.8 {
+			multiplier = 0.8
+		}
+		if current, exists := scores[obs.ID]; exists {
+			scores[obs.ID] = current * multiplier
+		}
+	}
+}
+
 // Manager provides unified search across PostgreSQL and pgvector.
 type Manager struct {
-	ctx              context.Context
-	searchGroup      singleflight.Group
-	cancel           context.CancelFunc
-	vectorClient     vector.Client
-	metrics          *SearchMetrics
-	promptStore      *gorm.PromptStore
-	observationStore *gorm.ObservationStore
-	summaryStore     *gorm.SummaryStore
-	graphStore       graphpkg.GraphStore
-	documentStore    *gorm.DocumentStore
-	embedSvc         *embedding.Service
-	resultCache      map[string]*cachedResult
-	queryFrequency   map[string]*queryFrequencyInfo
-	cacheTTL         time.Duration
-	cacheMaxSize     int
-	resultCacheMu    sync.RWMutex
-	queryFrequencyMu sync.RWMutex
+	ctx                  context.Context
+	searchGroup          singleflight.Group
+	cancel               context.CancelFunc
+	vectorClient         vector.Client
+	metrics              *SearchMetrics
+	promptStore          *gorm.PromptStore
+	observationStore     *gorm.ObservationStore
+	summaryStore         *gorm.SummaryStore
+	graphStore           graphpkg.GraphStore
+	documentStore        *gorm.DocumentStore
+	embedSvc             *embedding.Service
+	projectSettingsStore *gorm.ProjectSettingsStore
+	resultCache          map[string]*cachedResult
+	queryFrequency       map[string]*queryFrequencyInfo
+	cacheTTL             time.Duration
+	cacheMaxSize         int
+	resultCacheMu        sync.RWMutex
+	queryFrequencyMu     sync.RWMutex
 }
 
 // queryFrequencyInfo tracks how often a query is used.
@@ -191,6 +370,29 @@ func (m *Manager) SetGraphStore(gs graphpkg.GraphStore) {
 func (m *Manager) SetDocumentStore(ds *gorm.DocumentStore, es *embedding.Service) {
 	m.documentStore = ds
 	m.embedSvc = es
+}
+
+// SetProjectSettingsStore sets the project settings store for per-project adaptive thresholds.
+func (m *Manager) SetProjectSettingsStore(ps *gorm.ProjectSettingsStore) {
+	m.projectSettingsStore = ps
+}
+
+// GetProjectThreshold returns the per-project relevance threshold.
+// Falls back to globalDefault if no project-specific setting exists.
+func (m *Manager) GetProjectThreshold(ctx context.Context, project string, globalDefault float64) float64 {
+	if m.projectSettingsStore == nil {
+		return globalDefault
+	}
+	threshold, err := m.projectSettingsStore.GetThreshold(ctx, project)
+	if err != nil {
+		return globalDefault
+	}
+	// If the stored threshold equals the default (0.3), honor globalDefault
+	// in case the operator configured a higher global threshold.
+	if threshold == 0.3 {
+		return globalDefault
+	}
+	return threshold
 }
 
 // Close stops background goroutines and cleans up resources.
@@ -920,11 +1122,11 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 	var where vector.WhereFilter
 	switch params.Scope {
 	case "global":
-		where = vector.BuildWhereFilter(docType, "", true)
+		where = vector.BuildWhereFilter(docType, "", true, nil)
 	case "project":
-		where = vector.BuildWhereFilter(docType, params.Project, false)
+		where = vector.BuildWhereFilter(docType, params.Project, false, nil)
 	default:
-		where = vector.BuildWhereFilter(docType, params.Project, params.IncludeGlobal)
+		where = vector.BuildWhereFilter(docType, params.Project, params.IncludeGlobal, nil)
 	}
 
 	vectorResults, err := m.vectorClient.Query(ctx, params.Query, params.Limit*2, where)
@@ -978,7 +1180,7 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 	}
 
 	// --- Graph expansion (optional) ---
-	fused = m.expandViaGraph(ctx, fused, params.Limit)
+	fused = m.ExpandViaGraph(ctx, fused, params.Limit)
 
 	// Collect IDs by type.
 	var obsIDs, summaryIDs, promptIDs []int64
@@ -999,117 +1201,118 @@ func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*Unifi
 	// Create a map to lookup original RRF scores
 	rrfScores := make(map[string]float64)
 	for _, item := range fused {
-	        key := item.DocType + ":" + strconv.FormatInt(item.ID, 10)
-	        rrfScores[key] = item.Score
+		key := item.DocType + ":" + strconv.FormatInt(item.ID, 10)
+		rrfScores[key] = item.Score
 	}
 
 	if len(obsIDs) > 0 && (params.Type == "" || params.Type == "observations") {
-	        obs, err := m.observationStore.GetObservationsByIDs(ctx, obsIDs, params.OrderBy, 0)
-	        if err != nil {
-	                log.Warn().Err(err).Msg("hybridSearch: failed to fetch observations by IDs")
-	        } else {
-	                for _, o := range obs {
-	                        if params.ExcludeSuperseded && o.IsSuperseded {
-	                                continue
-	                        }
-	                        res := m.observationToResult(o, params.Format)
-	                        key := "observation:" + strconv.FormatInt(o.ID, 10)
-	                        if score, ok := rrfScores[key]; ok {
-	                                res.Score = score
-	                        }
-	                        results = append(results, res)
-	                }
-	        }
+		obs, err := m.observationStore.GetObservationsByIDs(ctx, obsIDs, params.OrderBy, 0)
+		if err != nil {
+			log.Warn().Err(err).Msg("hybridSearch: failed to fetch observations by IDs")
+		} else {
+			for _, o := range obs {
+				if params.ExcludeSuperseded && o.IsSuperseded {
+					continue
+				}
+				res := m.observationToResult(o, params.Format)
+				key := "observation:" + strconv.FormatInt(o.ID, 10)
+				if score, ok := rrfScores[key]; ok {
+					res.Score = score
+				}
+				results = append(results, res)
+			}
+		}
 	}
 
 	if len(summaryIDs) > 0 && (params.Type == "" || params.Type == "sessions") {
-	        summaries, err := m.summaryStore.GetSummariesByIDs(ctx, summaryIDs, params.OrderBy, 0)
-	        if err != nil {
-	                log.Warn().Err(err).Msg("hybridSearch: failed to fetch summaries by IDs")
-	        } else {
-	                for _, s := range summaries {
-	                        res := m.summaryToResult(s, params.Format)
-	                        key := "session:" + strconv.FormatInt(s.ID, 10)
-	                        if score, ok := rrfScores[key]; ok {
-	                                res.Score = score
-	                        }
-	                        results = append(results, res)
-	                }
-	        }
+		summaries, err := m.summaryStore.GetSummariesByIDs(ctx, summaryIDs, params.OrderBy, 0)
+		if err != nil {
+			log.Warn().Err(err).Msg("hybridSearch: failed to fetch summaries by IDs")
+		} else {
+			for _, s := range summaries {
+				res := m.summaryToResult(s, params.Format)
+				key := "session:" + strconv.FormatInt(s.ID, 10)
+				if score, ok := rrfScores[key]; ok {
+					res.Score = score
+				}
+				results = append(results, res)
+			}
+		}
 	}
 
 	if len(promptIDs) > 0 && (params.Type == "" || params.Type == "prompts") {
-	        prompts, err := m.promptStore.GetPromptsByIDs(ctx, promptIDs, params.OrderBy, 0)
-	        if err != nil {
-	                log.Warn().Err(err).Msg("hybridSearch: failed to fetch prompts by IDs")
-	        } else {
-	                for _, p := range prompts {
-	                        res := m.promptToResult(p, params.Format)
-	                        key := "prompt:" + strconv.FormatInt(p.ID, 10)
-	                        if score, ok := rrfScores[key]; ok {
-	                                res.Score = score
-	                        }
-	                        results = append(results, res)
-	                }
-	        }
+		prompts, err := m.promptStore.GetPromptsByIDs(ctx, promptIDs, params.OrderBy, 0)
+		if err != nil {
+			log.Warn().Err(err).Msg("hybridSearch: failed to fetch prompts by IDs")
+		} else {
+			for _, p := range prompts {
+				res := m.promptToResult(p, params.Format)
+				key := "prompt:" + strconv.FormatInt(p.ID, 10)
+				if score, ok := rrfScores[key]; ok {
+					res.Score = score
+				}
+				results = append(results, res)
+			}
+		}
 	}
 
 	// Sort results by original RRF score to restore ranking
 	sort.Slice(results, func(i, j int) bool {
-	        return results[i].Score > results[j].Score
+		return results[i].Score > results[j].Score
 	})
 
 	// --- Shadow Scoring Engine ---
 	if len(results) > 0 {
-	        // Calculate shadow scores
-	        type shadowResult struct {
-	                originalIdx int
-	                shadowScore float64
-	                res         SearchResult
-	        }
+		// Calculate shadow scores
+		type shadowResult struct {
+			originalIdx int
+			shadowScore float64
+			res         SearchResult
+		}
 
-	        shadowRanked := make([]shadowResult, len(results))
-	        for i, r := range results {
-	                importanceContrib := 0.0
-	                if r.Type == "observation" {
-	                        if importance, ok := r.Metadata["importance_score"].(float64); ok {
-	                                importanceContrib = importance * 0.05
-	                        }
-	                }
-	                shadowRanked[i] = shadowResult{
-	                        originalIdx: i,
-	                        shadowScore: r.Score + importanceContrib,
-	                        res:         r,
-	                }
-	        }
+		shadowRanked := make([]shadowResult, len(results))
+		for i, r := range results {
+			importanceContrib := 0.0
+			if r.Type == "observation" {
+				if importance, ok := r.Metadata["importance_score"].(float64); ok {
+					importanceContrib = importance * 0.05
+				}
+			}
+			shadowRanked[i] = shadowResult{
+				originalIdx: i,
+				shadowScore: r.Score + importanceContrib,
+				res:         r,
+			}
+		}
 
-	        // Sort by shadow score
-	        sort.Slice(shadowRanked, func(i, j int) bool {
-	                return shadowRanked[i].shadowScore > shadowRanked[j].shadowScore
-	        })
+		// Sort by shadow score
+		sort.Slice(shadowRanked, func(i, j int) bool {
+			return shadowRanked[i].shadowScore > shadowRanked[j].shadowScore
+		})
 
-	        // Calculate differential (shift)
-	        shifts := 0
-	        for shadowIdx, sr := range shadowRanked {
-	                if shadowIdx != sr.originalIdx {
-	                        shifts++
-	                }
-	        }
+		// Calculate differential (shift)
+		shifts := 0
+		for shadowIdx, sr := range shadowRanked {
+			if shadowIdx != sr.originalIdx {
+				shifts++
+			}
+		}
 
-	        if shifts > 0 {
-	                log.Debug().
-	                        Int("shifts", shifts).
-	                        Int("total", len(results)).
-	                        Msg("Shadow scoring produced differential ranking")
-	        }
+		if shifts > 0 {
+			log.Debug().
+				Int("shifts", shifts).
+				Int("total", len(results)).
+				Msg("Shadow scoring produced differential ranking")
+		}
 	}
 	// -----------------------------
 
 	return &UnifiedSearchResult{
-	        Results:    results,
-	        TotalCount: len(results),
-	        Query:      params.Query,
-	}, nil}
+		Results:    results,
+		TotalCount: len(results),
+		Query:      params.Query,
+	}, nil
+}
 
 // buildResultFromFTS constructs a UnifiedSearchResult from pre-fetched FTS observations.
 func (m *Manager) buildResultFromFTS(ftsResults []gorm.ScoredObservation, params SearchParams) (*UnifiedSearchResult, error) {
@@ -1220,30 +1423,31 @@ func (m *Manager) HowItWorks(ctx context.Context, params SearchParams) (*Unified
 // Helper methods
 
 func (m *Manager) observationToResult(obs *models.Observation, format string) SearchResult {
-        result := SearchResult{
-                Type:      "observation",
-                ID:        obs.ID,
-                Project:   obs.Project,
-                Scope:     string(obs.Scope),
-                CreatedAt: obs.CreatedAtEpoch,
-                Metadata: map[string]any{
-                        "obs_type":         string(obs.Type),
-                        "scope":            string(obs.Scope),
-                        "memory_type":      string(obs.MemoryType),
-                        "facts":            obs.Facts,
-                        "importance_score": obs.ImportanceScore,
-                },
-        }
+	result := SearchResult{
+		Type:      "observation",
+		ID:        obs.ID,
+		Project:   obs.Project,
+		Scope:     string(obs.Scope),
+		CreatedAt: obs.CreatedAtEpoch,
+		Metadata: map[string]any{
+			"obs_type":         string(obs.Type),
+			"scope":            string(obs.Scope),
+			"memory_type":      string(obs.MemoryType),
+			"facts":            obs.Facts,
+			"rejected":         obs.Rejected,
+			"importance_score": obs.ImportanceScore,
+		},
+	}
 
-        if obs.Title.Valid {
-                result.Title = obs.Title.String
-        }
+	if obs.Title.Valid {
+		result.Title = obs.Title.String
+	}
 
-        if format == "full" && obs.Narrative.Valid {
-                result.Content = obs.Narrative.String
-        }
+	if format == "full" && obs.Narrative.Valid {
+		result.Content = obs.Narrative.String
+	}
 
-        return result
+	return result
 }
 func (m *Manager) summaryToResult(summary *models.SessionSummary, format string) SearchResult {
 	result := SearchResult{
@@ -1290,11 +1494,11 @@ const (
 	graphExpansionDecay   = 0.7
 )
 
-// expandViaGraph takes the top-N fused results and expands them via graph neighbors.
+// ExpandViaGraph takes the top-N fused results and expands them via graph neighbors.
 // Neighbor scores decay as 0.7^hops relative to the parent's score.
 // Only observation-type results are expanded. New neighbors are merged into the
 // fused list, re-sorted by score, and capped at the original limit.
-func (m *Manager) expandViaGraph(ctx context.Context, fused []ScoredID, limit int) []ScoredID {
+func (m *Manager) ExpandViaGraph(ctx context.Context, fused []ScoredID, limit int) []ScoredID {
 	if m.graphStore == nil {
 		return fused
 	}

@@ -10,8 +10,7 @@ This document captures non-obvious behaviors, operational risks, and integration
 
 The `vectors` and `content_chunks` tables are created with `vector(384)` in migration `006` and `017` respectively. This dimension is hardcoded as DDL — GORM cannot change it without dropping and recreating the table.
 
-- Default ONNX provider (BGE-v1.5): produces **384-dim** vectors — compatible.
-- OpenAI `text-embedding-3-small`: produces **1536-dim** vectors — **incompatible**.
+- OpenAI `text-embedding-3-small` (default): produces **1536-dim** vectors — **incompatible** with the hardcoded `vector(384)` schema.
 
 If you switch `EMBEDDING_PROVIDER=openai` after initial setup without recreating the tables, all vector upserts will fail with a pgvector dimension error.
 
@@ -162,7 +161,7 @@ if len(ftsList) >= 2 &&
 
 The Makefile builds with `-tags "fts5"` and `CGO_ENABLED=1`. These were required for SQLite FTS5 in the upstream version. The PostgreSQL fork still uses these flags because `internal/db/gorm/sqlite_build.go` conditionally compiles some SQLite-related code.
 
-**Effect:** The build still requires CGO and ONNX runtime libraries (downloaded by `make setup-libs`). Build without CGO will fail.
+**Effect:** The build still uses these flags for compatibility with test files that carry the `fts5` build tag. CGO is required for tests but not for the main build.
 
 ---
 
@@ -195,6 +194,32 @@ CREATE EXTENSION IF NOT EXISTS vector
 This requires either SUPERUSER privilege or the `vector` extension to be pre-installed and trusted. On managed PostgreSQL services (RDS, Cloud SQL, Supabase), you may need to enable pgvector through the control plane before running the service.
 
 **Workaround:** Run `CREATE EXTENSION IF NOT EXISTS vector` as a superuser before starting the service, or ensure the database user has `SUPERUSER` or extension creation rights.
+
+---
+
+## Injection Silence Is Now Correct Behavior
+
+**Severity: BEHAVIORAL CHANGE**
+
+Since learning-memory-v4, `InjectionFloor` defaults to `0` and the inject path no longer force-fills empty result sets with top-importance observations. If no candidate survives relevance filtering, Engram returns silence.
+
+**Effect:** An empty relevant-memory section is no longer a bug by itself. It often means the retrieval path correctly rejected noise.
+
+**Migration path:**
+- Keep the v4 behavior (recommended): leave `ENGRAM_INJECTION_FLOOR` unset or set it to `0`
+- Restore legacy always-fill behavior temporarily: set `ENGRAM_INJECTION_FLOOR=3`
+
+---
+
+## Inject Uses Unified Retrieval By Default
+
+**Severity: BEHAVIORAL CHANGE**
+
+`ENGRAM_INJECT_UNIFIED` now defaults to `true`, which means inject uses the same retrieval path as search. This unifies score thresholds, freshness filtering, typed lanes, file filters, BFS expansion, and later retrieval improvements under one code path.
+
+**Effect:** Inject behavior may change immediately when search-path ranking changes — by design. This reduces drift between “what search finds” and “what inject surfaces”.
+
+**Rollback path:** Set `ENGRAM_INJECT_UNIFIED=false` only as an emergency kill-switch to temporarily reactivate the legacy inject path.
 
 ---
 
@@ -235,10 +260,8 @@ The worker serves MCP over both SSE (`/sse`) and Streamable HTTP (`/mcp`) transp
 
 ---
 
-## ONNX Runtime Libraries Required at Build Time
+## Embedding Provider Is OpenAI-Only
 
-**Severity: BUILD CONCERN**
+**Severity: INFORMATIONAL**
 
-Local embeddings (`EMBEDDING_PROVIDER=builtin`) require platform-specific ONNX runtime shared libraries. The Makefile downloads these via `make setup-libs` before building. If the download fails or the libraries are not present in the expected path, the build will fail.
-
-The libraries are platform-specific (darwin_amd64, darwin_arm64, linux_amd64, linux_arm64, windows_amd64) and must match the target platform.
+The ONNX/builtin embedding provider has been removed. Only the OpenAI-compatible REST API provider (`EMBEDDING_PROVIDER=openai`) is available. The `ENGRAM_EMBEDDING_MODEL` config field and `DefaultEmbeddingModel` constant are legacy remnants and are not used by the embedding service.

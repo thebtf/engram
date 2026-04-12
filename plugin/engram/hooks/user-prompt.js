@@ -14,25 +14,58 @@ function escapeXmlTags(value) {
     .replace(/>/g, '&gt;');
 }
 
+function buildSearchRequest(project, prompt, cwd, filesBeingEdited) {
+  const request = {
+    project,
+    query: prompt,
+    cwd,
+  };
+  if (Array.isArray(filesBeingEdited) && filesBeingEdited.length > 0) {
+    request.files_being_edited = filesBeingEdited.filter((entry) => typeof entry === 'string' && entry !== '');
+  }
+  return request;
+}
+
 async function handleUserPrompt(ctx, input) {
   const prompt = asString(input.prompt) || asString(input.Prompt);
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
   const cwd = typeof ctx.CWD === 'string' ? ctx.CWD : '';
 
+  // Skip system-generated messages and non-Claude-Code prompts
+  if (prompt && (
+    prompt.includes('<task-notification>') ||
+    prompt.includes('<command-name>') ||
+    prompt.includes('HEARTBEAT.md') ||
+    prompt.startsWith('Read HEARTBEAT') ||
+    prompt.includes('Conversation info (untrusted metadata)') ||
+    prompt.includes('Sender (untrusted metadata)')
+  )) {
+    return '';
+  }
+
   let contextToInject = '';
+  let behaviorRulesBlock = '';
+  let injectedRulesCount = 0;
   let observationCount = 0;
+  let matchedCount = 0;
   const searchIds = [];
+  const filesBeingEdited = ctx.SessionID ? lib.getSessionFiles(ctx.SessionID) : [];
 
   try {
-    const searchResult = await lib.requestPost('/api/context/search', {
-      project,
-      query: prompt,
-      cwd,
-    });
+    const searchResult = await lib.requestPost('/api/context/search', buildSearchRequest(project, prompt, cwd, filesBeingEdited));
 
     const observations = Array.isArray(searchResult.observations)
       ? searchResult.observations
       : [];
+
+    // total_results reflects how many observations matched before the server-side
+    // max_results cap was applied. When present and larger than the returned array,
+    // it means the server truncated the results. Fall back to the array length only
+    // when total_results is absent (older server versions).
+    const totalResults =
+      typeof searchResult.total_results === 'number'
+        ? searchResult.total_results
+        : observations.length;
 
     // Filter out credentials from context injection (leak prevention).
     // Credentials are only accessible via the dedicated get_credential MCP tool.
@@ -41,13 +74,94 @@ async function handleUserPrompt(ctx, input) {
       return t !== 'credential';
     });
 
-    if (safeObservations.length > 0) {
+    // Always-inject tier: unconditional rules from server (FR-1, FR-6).
+    // These are separate from similarity-matched results — tagged with concept "always-inject".
+    const alwaysInjectRules = Array.isArray(searchResult.always_inject)
+      ? searchResult.always_inject
+      : [];
+
+    // Split: behavioral rules (concept: user-preference) vs technical observations.
+    // Rules are injected as <user-behavior-rules> BEFORE <relevant-memory>.
+    const behaviorRules = [];
+    const technicalObs = [];
+    for (const obs of safeObservations) {
+      const concepts = Array.isArray(obs.concepts) ? obs.concepts : [];
+      if (concepts.includes('user-preference')) {
+        behaviorRules.push(obs);
+      } else {
+        technicalObs.push(obs);
+      }
+    }
+
+    // Behavioral rules: inject compact titles only (not full narrative).
+    // Session-start injects full rules once. After compaction, those may be lost.
+    // This lightweight reminder (~300-500 tokens) ensures rules survive compaction.
+    //
+    // Exception: when PostCompact sets a "compacted" signal, we inject FULL rules
+    // (title + narrative) instead of compact titles. PostCompact cannot inject
+    // context directly (hookSpecificOutput is a discriminated union that rejects
+    // non-PreToolUse/UserPromptSubmit/PostToolUse hooks), so it delegates to us
+    // via session signals.
+    const allBehaviorRules = [...alwaysInjectRules, ...behaviorRules];
+    const seenRuleIds = new Set();
+    const uniqueRules = [];
+    for (const rule of allBehaviorRules) {
+      const ruleId = rule && typeof rule.id === 'number' ? rule.id : null;
+      if (ruleId !== null && seenRuleIds.has(ruleId)) continue;
+      if (ruleId !== null) seenRuleIds.add(ruleId);
+      uniqueRules.push(rule);
+    }
+
+    // Check if PostCompact signaled that context was compacted
+    const signals = lib.getSessionSignals(ctx.SessionID);
+    const wasCompacted = signals && signals.compacted > 0;
+    if (wasCompacted) {
+      // Reset compacted signal so subsequent prompts use compact format
+      lib.incrementSessionSignals(ctx.SessionID, { compacted: -(signals.compacted || 0) });
+    }
+
+    injectedRulesCount = uniqueRules.length;
+    if (injectedRulesCount > 0) {
+      if (wasCompacted) {
+        // Full rules after compaction (title + narrative, ~2-3K tokens)
+        behaviorRulesBlock = '<user-behavior-rules>\n';
+        behaviorRulesBlock += '# Behavioral Rules (Re-injected After Compaction)\n';
+        behaviorRulesBlock += 'These rules were originally injected at session start. Re-injected because context was compacted.\n\n';
+        for (const rule of uniqueRules.slice(0, 20)) {
+          if (!rule || typeof rule !== 'object') continue;
+          behaviorRulesBlock += `## ${escapeXmlTags(asString(rule.title))}\n`;
+          const narrative = escapeXmlTags(asString(rule.narrative));
+          if (narrative !== '') {
+            behaviorRulesBlock += `${narrative}\n`;
+          }
+          behaviorRulesBlock += '\n';
+        }
+        behaviorRulesBlock += '</user-behavior-rules>\n';
+      } else {
+        // Compact titles for regular prompts (~300-500 tokens)
+        behaviorRulesBlock = '<behavioral-rules>\n';
+        for (const rule of uniqueRules.slice(0, 20)) {
+          behaviorRulesBlock += `- ${escapeXmlTags(asString(rule.title))}\n`;
+        }
+        behaviorRulesBlock += '</behavioral-rules>\n';
+      }
+    }
+
+    // Filter out observations with negligible similarity (noise from global scope leak).
+    // Preserve observations without a similarity score (e.g., always-inject tagged).
+    const MIN_SIMILARITY = 0.10;
+    const relevantObs = technicalObs.filter(obs => {
+      if (typeof obs.similarity !== 'number') return true; // no score = keep (always-inject)
+      return obs.similarity >= MIN_SIMILARITY;
+    });
+
+    if (relevantObs.length > 0) {
       // Sort by similarity score (highest first)
-      safeObservations.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+      relevantObs.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
 
       // Dedup by title word overlap (>80% Jaccard = near-duplicate)
       const dedupedObs = [];
-      for (const obs of safeObservations) {
+      for (const obs of relevantObs) {
         const title = asString(obs.title).toLowerCase();
         const words = new Set(title.split(/\s+/).filter(w => w.length > 2));
         let isDup = false;
@@ -65,14 +179,29 @@ async function handleUserPrompt(ctx, input) {
         if (!isDup) dedupedObs.push(obs);
       }
 
-      // Group by type
+      // Separate wiki and entity observations from regular observations
+      const wikiObs = [];
+      const entityObs = [];
+      const regularObs = [];
+      for (const obs of dedupedObs) {
+        const t = asString(obs.type).toLowerCase();
+        if (t === 'wiki') {
+          wikiObs.push(obs);
+        } else if (t === 'entity') {
+          entityObs.push(obs);
+        } else {
+          regularObs.push(obs);
+        }
+      }
+
+      // Group regular observations by type
       const groups = {
         decisions: [],
         patterns: [],
         changes: [],
         general: [],
       };
-      for (const obs of dedupedObs) {
+      for (const obs of regularObs) {
         const t = asString(obs.type).toLowerCase();
         if (t === 'decision') {
           groups.decisions.push(obs);
@@ -146,7 +275,37 @@ async function handleUserPrompt(ctx, input) {
         }
       }
 
-      observationCount = budgetObs.length;
+      // observationCount tracks injected (post-trim) count for deciding whether
+      // to return context. matchedCount is the true total matched count from the
+      // server (pre-max_results-cap), so the badge shows meaningful signal.
+      matchedCount = totalResults - (observations.length - technicalObs.length);
+      observationCount = budgetObs.length + wikiObs.length + entityObs.length;
+
+      // Build wiki knowledge section (before relevant-memory)
+      let wikiBlock = '';
+      if (wikiObs.length > 0) {
+        const wikiCap = Math.min(wikiObs.length, 3); // Cap at 3 wiki results
+        wikiBlock = '<wiki-knowledge>\n';
+        for (let i = 0; i < wikiCap; i++) {
+          const w = wikiObs[i];
+          wikiBlock += `## ${escapeXmlTags(asString(w.title))}\n`;
+          const narrative = escapeXmlTags(asString(w.narrative));
+          if (narrative) wikiBlock += `${narrative}\n`;
+          wikiBlock += '\n';
+          if (w && typeof w.id === 'number' && w.id > 0) searchIds.push(w.id);
+        }
+        wikiBlock += '</wiki-knowledge>\n';
+      }
+
+      // Entity references as one-liners (after wiki, before relevant-memory)
+      if (entityObs.length > 0) {
+        for (const e of entityObs.slice(0, 5)) {
+          wikiBlock += `[ENTITY] ${escapeXmlTags(asString(e.title))} — ${escapeXmlTags(asString(e.subtitle || e.narrative))}\n`;
+          if (e && typeof e.id === 'number' && e.id > 0) searchIds.push(e.id);
+        }
+        if (entityObs.length > 0) wikiBlock += '\n';
+      }
+
       let contextBuilder = '<relevant-memory>\n';
       contextBuilder += '# Relevant Knowledge From Previous Sessions\n';
       contextBuilder +=
@@ -195,11 +354,8 @@ async function handleUserPrompt(ctx, input) {
         }
       }
 
-      contextBuilder += '\n---\n';
-      contextBuilder += 'REMINDER: Before modifying any file mentioned above, call `find_by_file(files="path")` to check for additional context. ';
-      contextBuilder += 'Before architectural decisions, call `decisions(query="...")`. These engram MCP tools are available and MUST be used.\n';
       contextBuilder += '</relevant-memory>\n';
-      contextToInject = contextBuilder;
+      contextToInject = wikiBlock + contextBuilder;
     }
   } catch (error) {
     console.error(`[engram] context search failed: ${error.message}`);
@@ -211,7 +367,7 @@ async function handleUserPrompt(ctx, input) {
       claudeSessionId: ctx.SessionID,
       project: ctx.Project,
       prompt,
-      matchedObservations: observationCount,
+      matchedObservations: matchedCount,
     });
   } catch (error) {
     console.error(`[user-prompt] Failed to initialize session: ${error.message}`);
@@ -243,7 +399,7 @@ async function handleUserPrompt(ctx, input) {
   }
 
   lib
-    .requestPost(`/sessions/${sessionID}/init`, {
+    .requestPost(`/api/sessions/${sessionID}/init`, {
       userPrompt: prompt,
       promptNumber: promptNo,
     })
@@ -251,14 +407,23 @@ async function handleUserPrompt(ctx, input) {
       console.error(`[user-prompt] Failed to notify session start: ${error.message}`);
     });
 
-  if (observationCount > 0) {
-    console.error(`[engram] Found ${observationCount} relevant memories for this prompt`);
-    return contextToInject;
+  // Combine: compact behavioral rule titles + technical observations
+  const output = behaviorRulesBlock + contextToInject;
+  if (output) {
+    console.error(`[engram] Injecting: ${behaviorRulesBlock ? injectedRulesCount + ' rules + ' : ''}${observationCount} observations`);
+    return output;
   }
 
   return '';
 }
 
-(async () => {
-  await lib.RunHook('UserPromptSubmit', handleUserPrompt);
-})();
+if (require.main === module) {
+  (async () => {
+    await lib.RunHook('UserPromptSubmit', handleUserPrompt);
+  })();
+}
+
+module.exports = {
+  buildSearchRequest,
+  handleUserPrompt,
+};

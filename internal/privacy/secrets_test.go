@@ -1,6 +1,7 @@
 package privacy
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -124,14 +125,14 @@ func TestRedactSecrets(t *testing.T) {
 			expected: "This is safe text",
 		},
 		{
-			name:     "API key gets redacted",
+			name:     "API key gets redacted with hash",
 			input:    "api_key=abc123def456ghi789jkl012mno345pqr678",
-			expected: "api_key=[REDACTED]",
+			expected: "api_key=[REDACTED:586f23e7]",
 		},
 		{
-			name:     "OpenAI key gets redacted",
+			name:     "OpenAI key gets redacted with hash",
 			input:    "The key is sk-abc123def456ghi789jkl012mno345pqr678",
-			expected: "The key is sk-a...[REDACTED]",
+			expected: "The key is sk-a...[REDACTED:c99e03e4]",
 		},
 	}
 
@@ -145,50 +146,109 @@ func TestRedactSecrets(t *testing.T) {
 	}
 }
 
-func TestSanitizeObservation(t *testing.T) {
+
+func TestRedactSecretsHashMatchesExtract(t *testing.T) {
+	inputs := []string{
+		"api_key=abc123def456ghi789jkl012mno345pqr678",
+		"sk-abc123def456ghi789jkl012mno345pqr678",
+		"ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+		`password="super_secret_password_123"`,
+		`secret_key="my_super_secret_token_here_now"`,
+	}
+
+	for _, input := range inputs {
+		name := input
+		if len(name) > 20 {
+			name = name[:20]
+		}
+		t.Run(name, func(t *testing.T) {
+			extracted := ExtractSecrets(input)
+			if len(extracted) == 0 {
+				t.Fatalf("ExtractSecrets(%q) returned no secrets", input)
+			}
+			redacted := RedactSecrets(input)
+
+			// The hash in [REDACTED:{hash}] must match the auto:{hash} name from ExtractSecrets
+			for _, secret := range extracted {
+				hashFromName := strings.TrimPrefix(secret.Name, "auto:")
+				marker := "[REDACTED:" + hashFromName + "]"
+				if !strings.Contains(redacted, marker) {
+					t.Errorf("redacted output %q does not contain expected marker %q (from ExtractSecrets name %q)",
+						redacted, marker, secret.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractSecrets(t *testing.T) {
 	tests := []struct {
-		name      string
-		narrative string
-		facts     []string
-		expected  bool
+		name          string
+		input         string
+		expectedCount int
+		expectedNames []string // subset of names to verify
 	}{
 		{
-			name:      "clean observation",
-			narrative: "Fixed a bug in the login flow",
-			facts:     []string{"Users can now log in", "Session management improved"},
-			expected:  false,
+			name:          "empty string",
+			input:         "",
+			expectedCount: 0,
 		},
 		{
-			name:      "secret in narrative",
-			narrative: "Set API key api_key=abc123def456ghi789jkl012mno345",
-			facts:     []string{"Configuration updated"},
-			expected:  true,
+			name:          "no secrets",
+			input:         "This is just regular text",
+			expectedCount: 0,
 		},
 		{
-			name:      "secret in facts",
-			narrative: "Updated configuration",
-			facts:     []string{"Added api_key=abc123def456ghi789jkl012mno345"},
-			expected:  true,
+			name:          "single OpenAI key",
+			input:         "key is sk-abc123def456ghi789jkl012mno345pqr678",
+			expectedCount: 1,
 		},
 		{
-			name:      "empty facts",
-			narrative: "Clean narrative",
-			facts:     []string{},
-			expected:  false,
+			name:          "duplicate same secret",
+			input:         "sk-abc123def456ghi789jkl012mno345pqr678 and again sk-abc123def456ghi789jkl012mno345pqr678",
+			expectedCount: 1, // deduped by hash
 		},
 		{
-			name:      "nil facts",
-			narrative: "Clean narrative",
-			facts:     nil,
-			expected:  false,
+			name:          "two different secrets",
+			input:         "sk-abc123def456ghi789jkl012mno345pqr678 and ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+			expectedCount: 2,
+		},
+		{
+			name:          "API key with prefix",
+			input:         "api_key=" + strings.Repeat("a", 36), // generated to avoid secret scanner false positives
+			expectedCount: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := SanitizeObservation(tt.narrative, tt.facts)
-			if result != tt.expected {
-				t.Errorf("SanitizeObservation() = %v, want %v", result, tt.expected)
+			results := ExtractSecrets(tt.input)
+			if len(results) != tt.expectedCount {
+				t.Errorf("ExtractSecrets() returned %d secrets, want %d", len(results), tt.expectedCount)
+				for _, s := range results {
+					t.Logf("  name=%s value=%s", s.Name, s.Value)
+				}
+			}
+			// Verify all names start with "auto:"
+			for _, s := range results {
+				if len(s.Name) < 5 || s.Name[:5] != "auto:" {
+					t.Errorf("secret name %q does not start with 'auto:'", s.Name)
+				}
+				if s.Value == "" {
+					t.Error("secret value is empty")
+				}
+			}
+			// Verify deterministic: same input = same names
+			if tt.expectedCount > 0 {
+				results2 := ExtractSecrets(tt.input)
+				if len(results) != len(results2) {
+					t.Fatalf("non-deterministic: got %d then %d", len(results), len(results2))
+				}
+				for i := range results {
+					if results[i].Name != results2[i].Name {
+						t.Errorf("non-deterministic names: %q vs %q", results[i].Name, results2[i].Name)
+					}
+				}
 			}
 		})
 	}

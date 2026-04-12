@@ -18,7 +18,7 @@ func IsDuplicate(ctx context.Context, vectorClient vector.Client, title string, 
 	}
 
 	// Filter to observation vectors only to avoid false matches from prompts or summaries
-	filter := vector.BuildWhereFilter(vector.DocTypeObservation, "", false)
+	filter := vector.BuildWhereFilter(vector.DocTypeObservation, "", false, nil)
 
 	results, err := vectorClient.Query(ctx, title, 1, filter)
 	if err != nil {

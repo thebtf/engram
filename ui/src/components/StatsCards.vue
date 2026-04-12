@@ -5,7 +5,7 @@ import { computed } from 'vue'
 
 const props = defineProps<{
   stats: Stats | null
-  queueDepth: number
+  observationCount: number
 }>()
 
 const uptime = computed(() => {
@@ -13,9 +13,16 @@ const uptime = computed(() => {
   return formatUptime(props.stats.uptime)
 })
 
+// Use the total count from the stats API when available (reflects actual DB total,
+// not the page size fetched by the timeline). Fall back to the timeline prop when
+// the stats endpoint hasn't returned yet.
+const displayObservationCount = computed(() =>
+  props.stats?.observationCount ?? props.observationCount
+)
+
 const status = computed(() => {
   if (!props.stats) return 'Loading'
-  if (props.queueDepth > 0) return 'Processing'
+  if (props.stats.isProcessing) return 'Processing'
   if (props.stats.activeSessions > 0) return 'Active'
   return 'Idle'
 })
@@ -28,7 +35,7 @@ const statusColor = computed(() => {
 </script>
 
 <template>
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
     <!-- Uptime -->
     <div class="glass rounded-xl p-4 border border-white/10">
       <div class="flex items-center justify-between">
@@ -46,8 +53,8 @@ const statusColor = computed(() => {
     <div class="glass rounded-xl p-4 border border-white/10">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-xs text-slate-400 uppercase tracking-wide">Active Sessions</p>
-          <p class="text-2xl font-bold text-blue-400">{{ stats?.activeSessions ?? 0 }}</p>
+          <p class="text-xs text-slate-400 uppercase tracking-wide">Sessions Today</p>
+          <p class="text-2xl font-bold text-blue-400">{{ stats?.sessionsToday ?? stats?.activeSessions ?? 0 }}</p>
         </div>
         <div class="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
           <i class="fas fa-terminal text-blue-400" />
@@ -55,15 +62,15 @@ const statusColor = computed(() => {
       </div>
     </div>
 
-    <!-- Queue Depth -->
+    <!-- Observations -->
     <div class="glass rounded-xl p-4 border border-white/10">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-xs text-slate-400 uppercase tracking-wide">Queue Depth</p>
-          <p class="text-2xl font-bold text-purple-400">{{ queueDepth }}</p>
+          <p class="text-xs text-slate-400 uppercase tracking-wide">Observations</p>
+          <p class="text-2xl font-bold text-purple-400">{{ displayObservationCount }}</p>
         </div>
         <div class="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-          <i class="fas fa-layer-group text-purple-400" />
+          <i class="fas fa-database text-purple-400" />
         </div>
       </div>
     </div>

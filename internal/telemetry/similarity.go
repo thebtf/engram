@@ -92,7 +92,7 @@ func (st *SimilarityTelemetry) analyzeProject(ctx context.Context, project strin
 		return &SimilaritySnapshot{SampleSize: len(observations)}, nil
 	}
 
-	where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false)
+	where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false, nil)
 
 	highSimPairs := 0
 	veryHighSimPairs := 0

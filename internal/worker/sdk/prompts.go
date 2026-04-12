@@ -30,6 +30,7 @@ type ToolExecution struct {
 	ToolInput      string
 	ToolOutput     string
 	CWD            string
+	UserIntent     string // User's prompt that preceded this tool call (Learning Memory v3 FR-4)
 	ID             int64
 	CreatedAtEpoch int64
 }
@@ -55,6 +56,9 @@ func BuildObservationPrompt(exec ToolExecution) string {
 
 	var sb strings.Builder
 	sb.WriteString("<observed_from_primary_session>\n")
+	if exec.UserIntent != "" {
+		sb.WriteString(fmt.Sprintf("  <user_intent>%s</user_intent>\n", truncate(exec.UserIntent, 500)))
+	}
 	sb.WriteString(fmt.Sprintf("  <what_happened>%s</what_happened>\n", exec.ToolName))
 	sb.WriteString(fmt.Sprintf("  <occurred_at>%s</occurred_at>\n", timestamp))
 	if exec.CWD != "" {
@@ -111,3 +115,44 @@ Thank you, this summary will be very useful for keeping track of our progress!`)
 }
 
 var truncate = strutil.Truncate
+
+// reasoningExtractionPrompt is sent to the LLM to extract a structured
+// reasoning chain from agent output that passed DetectReasoning.
+const reasoningExtractionPrompt = `Extract the reasoning chain from this text. Identify each step the agent took.
+
+Output valid JSON only:
+{
+  "steps": [
+    {"type": "thought", "content": "Initial analysis..."},
+    {"type": "observation", "content": "Found that..."},
+    {"type": "decision", "content": "Chose to..."},
+    {"type": "conclusion", "content": "Result was..."}
+  ],
+  "task_context": {
+    "goal": "Brief goal description",
+    "domain": "domain area",
+    "complexity": "low|medium|high"
+  }
+}
+
+Step types: thought (analysis), action (what was done), observation (what was found),
+decision (choice made), conclusion (final result).
+Maximum 10 steps. Each step content max 100 words.
+If no clear reasoning chain exists, return {"steps": []}.
+
+Text to extract from:
+`
+
+// reasoningQualityPrompt is sent to the LLM to evaluate extracted reasoning quality.
+const reasoningQualityPrompt = `Evaluate this reasoning trace quality on a 0-1 scale.
+
+Criteria:
+- Logical coherence: steps follow from each other (0-0.3)
+- Evidence-based: decisions reference observations/facts (0-0.3)
+- Completeness: has both analysis AND conclusion (0-0.2)
+- Clarity: steps are understandable in isolation (0-0.2)
+
+Output a single number between 0 and 1. Nothing else.
+
+Reasoning trace:
+`

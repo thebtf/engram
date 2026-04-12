@@ -41,6 +41,26 @@ export function formatUptime(uptimeStr: string): string {
 }
 
 /**
+ * Safely format a date as relative time, returning "—" for null/undefined/invalid values.
+ */
+export function safeDateFormat(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '' || value === 0) return '\u2014'
+  const date = new Date(typeof value === 'number' ? value : value)
+  if (isNaN(date.getTime())) return '\u2014'
+  return formatRelativeTime(date.getTime())
+}
+
+/**
+ * Safely format a date as an absolute date string, returning "—" for null/undefined/invalid values.
+ */
+export function safeAbsoluteDate(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '' || value === 0) return '\u2014'
+  const date = new Date(typeof value === 'number' ? value : value)
+  if (isNaN(date.getTime())) return '\u2014'
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+/**
  * Truncate text to a maximum length with ellipsis
  */
 export function truncate(text: string, maxLength: number): string {

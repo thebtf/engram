@@ -29,12 +29,9 @@ type QueryResult struct {
 
 // StaleVectorInfo contains information about a vector that needs rebuilding.
 type StaleVectorInfo struct {
-	DocID     string
-	DocType   string
-	FieldType string
-	Project   string
-	Scope     string
-	SQLiteID  int64
+	DocID    string
+	DocType  string
+	SQLiteID int64
 }
 
 // HealthStats contains comprehensive health information about the vector store.
@@ -44,6 +41,16 @@ type HealthStats struct {
 	CurrentModel  string `json:"current_model"`
 	NeedsRebuild  bool   `json:"needs_rebuild"`
 	RebuildReason string `json:"rebuild_reason"`
+}
+
+// VectorMetricsSnapshot contains real query instrumentation data.
+type VectorMetricsSnapshot struct {
+	QueryCount   int64   `json:"query_count"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	P50LatencyMs float64 `json:"p50_latency_ms"`
+	P95LatencyMs float64 `json:"p95_latency_ms"`
+	P99LatencyMs float64 `json:"p99_latency_ms"`
+	TotalDocs    int64   `json:"total_documents"`
 }
 
 // CacheStatsSnapshot is an exported snapshot of cache performance metrics.
@@ -91,32 +98,49 @@ type WhereFilter struct {
 	Clauses []WhereClause
 }
 
-// WhereClause is a single filter condition (equality or OR group).
+// WhereClause is a single filter condition.
 type WhereClause struct {
-	OrGroup []WhereClause
-	Column  string
-	Value   any
+	OrGroup  []WhereClause
+	Column   string
+	Operator string
+	Value    any
 }
 
 // BuildWhereFilter creates a filter for vector queries.
 // When includeGlobal is true and project is non-empty, results include
 // both project-specific AND global-scoped observations.
-func BuildWhereFilter(docType DocType, project string, includeGlobal bool) WhereFilter {
+//
+// filePaths is optional for backwards compatibility with existing call sites.
+// When provided and non-empty, a JSONB any match filter is appended for
+// files_modified/files_read using the `?|` operator.
+func BuildWhereFilter(docType DocType, project string, includeGlobal bool, filePaths ...[]string) WhereFilter {
 	var filter WhereFilter
 	if docType != "" {
-		filter.Clauses = append(filter.Clauses, WhereClause{Column: "doc_type", Value: string(docType)})
+		filter.Clauses = append(filter.Clauses, WhereClause{Column: "doc_type", Operator: "=", Value: string(docType)})
 	}
 	if project != "" {
 		if includeGlobal {
 			filter.Clauses = append(filter.Clauses, WhereClause{
 				OrGroup: []WhereClause{
-					{Column: "project", Value: project},
-					{Column: "scope", Value: "global"},
+					{Column: "project", Operator: "=", Value: project},
+					{Column: "scope", Operator: "=", Value: "global"},
 				},
 			})
 		} else {
-			filter.Clauses = append(filter.Clauses, WhereClause{Column: "project", Value: project})
+			filter.Clauses = append(filter.Clauses, WhereClause{Column: "project", Operator: "=", Value: project})
 		}
+	}
+	var paths []string
+	if len(filePaths) > 0 {
+		paths = filePaths[0]
+	}
+	if len(paths) > 0 {
+		filter.Clauses = append(filter.Clauses, WhereClause{
+			OrGroup: []WhereClause{
+				{Column: "files_modified", Operator: "?|", Value: paths},
+				{Column: "files_read", Operator: "?|", Value: paths},
+			},
+		})
 	}
 	return filter
 }

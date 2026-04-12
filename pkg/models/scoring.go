@@ -52,24 +52,44 @@ var DefaultConceptWeights = map[string]float64{
 // TypeBaseScores contains the base importance multipliers for each observation type.
 // These are multiplied with the core score to weight different observation types.
 var TypeBaseScores = map[ObservationType]float64{
-	ObsTypeBugfix:    1.3, // Bugfixes are valuable - prevent regressions
-	ObsTypeFeature:   1.2, // New features expand capabilities
-	ObsTypeDiscovery: 1.1, // Discoveries inform future work
-	ObsTypeDecision:  1.1, // Architectural decisions guide development
-	ObsTypeRefactor:  1.0, // Refactoring is neutral
-	ObsTypeChange:    0.9, // Minor changes are slightly less important
-	ObsTypeGuidance:  1.4, // Guidance is most actionable - behavioral corrections
+	ObsTypeBugfix:      1.3, // Bugfixes are valuable - prevent regressions
+	ObsTypeFeature:     1.2, // New features expand capabilities
+	ObsTypeDiscovery:   1.1, // Discoveries inform future work
+	ObsTypeDecision:    1.1, // Architectural decisions guide development
+	ObsTypeRefactor:    1.0, // Refactoring is neutral
+	ObsTypeChange:      0.9, // Minor changes are slightly less important
+	ObsTypeGuidance:    1.4, // Guidance is most actionable - behavioral corrections
+	ObsTypePitfall:     1.3, // Pitfalls prevent repeated mistakes (same as bugfix)
+	ObsTypeOperational: 1.0, // Operational knowledge is neutral
+	ObsTypeTimeline:    0.1, // Timeline events are structural metadata, not knowledge
+}
+
+// DefaultSourceHalfLives contains the default half-life in days for each source type.
+// Used by the scoring calculator for source-aware importance decay.
+var DefaultSourceHalfLives = map[SourceType]float64{
+	SourceManual:         30.0, // Explicit user knowledge decays slowly
+	SourceToolVerified:   21.0, // Verified by tool execution (Edit, Write, Bash)
+	SourceToolRead:       14.0, // Read-only observation (Read, Grep, Glob)
+	SourceWebFetch:       14.0, // External data (WebFetch, WebSearch)
+	SourceTodoWrite:       7.0, // Task context, ephemeral
+	SourceLLMDerived:     90.0, // Synthesized/curated knowledge
+	SourceCrossModel:     60.0, // Multi-model consensus, high confidence
+	SourceInstinctImport: 30.0, // Imported from prior system
+	SourceBackfill:        7.0, // Already has separate penalty in calculator
+	SourceUnknown:         7.0, // Conservative default
 }
 
 // ScoringConfig contains all scoring weights and parameters.
 type ScoringConfig struct {
-	ConceptWeights      map[string]float64 `json:"concept_weights"`
-	RecencyHalfLifeDays float64            `json:"recency_half_life_days"`
-	FeedbackWeight      float64            `json:"feedback_weight"`
-	ConceptWeight       float64            `json:"concept_weight"`
-	RetrievalWeight     float64            `json:"retrieval_weight"`
-	UtilityWeight       float64            `json:"utility_weight"`
-	MinScore            float64            `json:"min_score"`
+	ConceptWeights      map[string]float64     `json:"concept_weights"`
+	SourceHalfLives     map[SourceType]float64 `json:"source_half_lives"`
+	RecencyHalfLifeDays float64                `json:"recency_half_life_days"`
+	FeedbackWeight      float64                `json:"feedback_weight"`
+	ConceptWeight       float64                `json:"concept_weight"`
+	RetrievalWeight     float64                `json:"retrieval_weight"`
+	UtilityWeight       float64                `json:"utility_weight"`
+	EffectivenessWeight float64                `json:"effectiveness_weight"`
+	MinScore            float64                `json:"min_score"`
 }
 
 // DefaultScoringConfig returns the default scoring configuration.
@@ -79,13 +99,20 @@ func DefaultScoringConfig() *ScoringConfig {
 		conceptWeights[k] = v
 	}
 
+	sourceHalfLives := make(map[SourceType]float64, len(DefaultSourceHalfLives))
+	for k, v := range DefaultSourceHalfLives {
+		sourceHalfLives[k] = v
+	}
+
 	return &ScoringConfig{
-		RecencyHalfLifeDays: 7.0,  // Score halves every 7 days
+		RecencyHalfLifeDays: 7.0,  // Score halves every 7 days (fallback for unknown sources)
 		FeedbackWeight:      0.30, // Feedback has moderate impact
 		ConceptWeight:       0.20, // Concept weights have smaller impact
 		RetrievalWeight:     0.15, // Retrieval has smallest impact
 		UtilityWeight:       0.20, // Utility tracking has moderate impact
+		EffectivenessWeight: 0.30, // Effectiveness from closed-loop learning has moderate impact
 		ConceptWeights:      conceptWeights,
+		SourceHalfLives:     sourceHalfLives,
 		MinScore:            0.01, // Never completely disappear
 	}
 }

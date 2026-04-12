@@ -93,6 +93,8 @@ type ObservationRelation struct {
 	TargetID        int64                   `db:"target_id" json:"target_id"`
 	Confidence      float64                 `db:"confidence" json:"confidence"`
 	CreatedAtEpoch  int64                   `db:"created_at_epoch" json:"created_at_epoch"`
+	ValidFrom       *time.Time              `db:"valid_from" json:"valid_from,omitempty"`
+	ValidTo         *time.Time              `db:"valid_to" json:"valid_to,omitempty"`
 }
 
 // NewObservationRelation creates a new observation relation.

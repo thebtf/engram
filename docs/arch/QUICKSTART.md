@@ -11,7 +11,7 @@ Get engram running locally and integrated with Claude Code.
 | Go | 1.24+ | Build from source |
 | PostgreSQL | 15+ | Primary data store |
 | pgvector extension | latest | Vector similarity search |
-| CGO | enabled | ONNX runtime for local embeddings |
+| CGO | enabled | Required for test build tags |
 | make | any | Build system |
 | jq | any | Used by install scripts |
 | curl | any | Health check and install scripts |
@@ -45,7 +45,7 @@ Set the database connection string (required — never stored in config file):
 export DATABASE_DSN="postgres://user:password@localhost:5432/engram?sslmode=disable"
 ```
 
-Optional: OpenAI-compatible embeddings instead of local ONNX:
+Configure embeddings (OpenAI-compatible REST API):
 ```bash
 export EMBEDDING_PROVIDER=openai
 export EMBEDDING_API_KEY=sk-...
@@ -67,9 +67,6 @@ Persist these in your shell profile or a `.env` file sourced at startup.
 ```bash
 git clone https://github.com/YOUR_USER/engram.git
 cd engram
-
-# Download ONNX runtime libraries for local embeddings (required even if using OpenAI)
-make setup-libs
 
 # Build all binaries (worker, mcp-server) + Vue dashboard
 make build

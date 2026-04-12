@@ -40,6 +40,15 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 		}
 	}
 
+	// Mutual exclusivity: exactly one of files/path is required.
+	// (Previously enforced via JSON Schema anyOf, but Anthropic API rejects that at top level.)
+	if len(params.Files) == 0 && params.Path == "" {
+		return "", fmt.Errorf("import_instincts: one of 'files' (array of {name, content}) or 'path' (directory) is required")
+	}
+	if len(params.Files) > 0 && params.Path != "" {
+		return "", fmt.Errorf("import_instincts: provide EITHER 'files' OR 'path', not both")
+	}
+
 	var result *instincts.ImportResult
 
 	if len(params.Files) > 0 {

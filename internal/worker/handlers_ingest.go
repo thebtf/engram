@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/config"
+	dedupPkg "github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/pipeline"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/models"
@@ -74,10 +77,18 @@ func (c *deduplicationCache) cleanup() {
 	}
 }
 
-// handleIngestEvent handles POST /api/events/ingest.
-// Receives raw tool events from Claude Code hooks, stores them in raw_events,
-// runs the deterministic Level 0 pipeline, creates an observation, and
-// triggers asynchronous embedding via vectorSync.
+// handleIngestEvent godoc
+// @Summary Ingest tool event
+// @Description Receives raw tool events from Claude Code hooks. Stores in raw_events, runs deterministic Level 0 pipeline, creates an observation, and triggers async embedding.
+// @Tags Events
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body IngestRequest true "Tool event data"
+// @Success 202 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
+// @Failure 500 {string} string "internal error"
+// @Router /api/events/ingest [post]
 func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 	var req IngestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -174,12 +185,51 @@ func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	parsed.SourceType = models.ClassifySourceType(req.ToolName)
 
+	// Semantic dedup: skip near-duplicates via vector similarity (shared Mem0 Algorithm 1).
+	// Complements the hash-based TTL dedup above with semantic similarity detection.
+	var ingestDedupResult *dedupPkg.Result
+	dedupContent := parsed.Title + " " + strings.Join(parsed.Facts, " ")
+	if dedupContent != "" && s.vectorClient != nil {
+		ingestDedupResult, _ = dedupPkg.CheckDuplicate(r.Context(), s.vectorClient, s.observationStore.GetDB(), req.Project, dedupContent, 0)
+		if ingestDedupResult != nil && ingestDedupResult.Action == dedupPkg.ActionNoop {
+			// Mark raw event processed even on NOOP to avoid reprocessing.
+			if markErr := s.rawEventStore.MarkProcessed(r.Context(), eventID); markErr != nil {
+				log.Warn().Err(markErr).Int64("eventId", eventID).Msg("Failed to mark raw event as processed (dedup noop)")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "skipped", "reason": "semantic_duplicate",
+				"existing_id": ingestDedupResult.ExistingID, "similarity": ingestDedupResult.Similarity,
+			})
+			return
+		}
+	}
+
 	// Store observation using the existing store interface
 	obsID, _, err := s.observationStore.StoreObservation(r.Context(), req.SessionID, req.Project, parsed, 0, 0)
 	if err != nil {
 		log.Error().Err(err).Str("tool", req.ToolName).Msg("Failed to store observation")
 		http.Error(w, "failed to store observation", http.StatusInternalServerError)
 		return
+	}
+
+	// Handle UPDATE: supersede existing observation if dedup detected contradiction.
+	if ingestDedupResult != nil && ingestDedupResult.Action == dedupPkg.ActionUpdate && ingestDedupResult.ExistingID > 0 {
+		if config.Get().StorePathSupersessionEnabled {
+			if err := s.observationStore.MarkAsSuperseded(r.Context(), ingestDedupResult.ExistingID); err != nil {
+				log.Warn().
+					Err(err).
+					Int64("existing_id", ingestDedupResult.ExistingID).
+					Float64("similarity", ingestDedupResult.Similarity).
+					Msg("ingest: failed to supersede existing observation")
+			}
+		} else {
+			log.Info().
+				Int64("existing_id", ingestDedupResult.ExistingID).
+				Float64("similarity", ingestDedupResult.Similarity).
+				Msg("ingest: store-path supersession disabled; keeping existing observation active")
+		}
 	}
 
 	// Mark raw event as processed
