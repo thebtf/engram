@@ -315,20 +315,25 @@ onMounted(loadIssue)
       <!-- Comment form -->
       <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
         <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Add Comment (as operator)</h3>
-        <div class="flex gap-2">
-          <input
+        <div class="flex flex-col gap-2">
+          <textarea
             v-model="newComment"
-            @keydown.enter="submitComment"
-            placeholder="Write a comment..."
-            class="flex-1 px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm"
-          />
-          <button
-            @click="submitComment"
-            :disabled="commenting || !newComment.trim()"
-            class="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
-          >
-            {{ commenting ? '...' : 'Send' }}
-          </button>
+            @keydown.ctrl.enter="submitComment"
+            @keydown.meta.enter="submitComment"
+            placeholder="Write a comment... (Ctrl+Enter to send)"
+            rows="4"
+            class="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm resize-y"
+            style="min-height: 80px; max-height: 400px"
+          ></textarea>
+          <div class="flex justify-end">
+            <button
+              @click="submitComment"
+              :disabled="commenting || !newComment.trim()"
+              class="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
+            >
+              {{ commenting ? '...' : 'Send' }}
+            </button>
+          </div>
         </div>
       </div>
 
