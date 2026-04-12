@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/config"
 )
 
 // issuesToolSchema returns the flat JSON Schema for the issues tool.
@@ -183,8 +184,16 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	labels := coerceStringSlice(m["labels"])
 
 	// Auto-fill from session context
-	sourceProject := coerceString(m["project"], "")
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
+	var sourceProject string
+	if config.Get().EnforceSourceProject {
+		sourceProject = projectFromContext(ctx)
+		if sourceProject == "" {
+			sourceProject = coerceString(m["project"], "")
+		}
+	} else {
+		sourceProject = coerceString(m["project"], "")
+	}
 
 	if targetProject == "" {
 		targetProject = sourceProject
@@ -318,7 +327,15 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 	}
 
 	if comment != "" {
-		sourceProject := coerceString(m["project"], "")
+		var sourceProject string
+		if config.Get().EnforceSourceProject {
+			sourceProject = projectFromContext(ctx)
+			if sourceProject == "" {
+				sourceProject = coerceString(m["project"], "")
+			}
+		} else {
+			sourceProject = coerceString(m["project"], "")
+		}
 		sourceAgent := coerceString(m["agent_source"], "claude-code")
 		_, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
 			AuthorProject: sourceProject,
@@ -348,7 +365,15 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 		return "", fmt.Errorf("body is required for issues comment")
 	}
 
-	sourceProject := coerceString(m["project"], "")
+	var sourceProject string
+	if config.Get().EnforceSourceProject {
+		sourceProject = projectFromContext(ctx)
+		if sourceProject == "" {
+			sourceProject = coerceString(m["project"], "")
+		}
+	} else {
+		sourceProject = coerceString(m["project"], "")
+	}
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
 
 	commentID, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
@@ -370,7 +395,15 @@ func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (strin
 	}
 
 	comment := coerceString(m["comment"], "")
-	sourceProject := coerceString(m["project"], "")
+	var sourceProject string
+	if config.Get().EnforceSourceProject {
+		sourceProject = projectFromContext(ctx)
+		if sourceProject == "" {
+			sourceProject = coerceString(m["project"], "")
+		}
+	} else {
+		sourceProject = coerceString(m["project"], "")
+	}
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
 
 	if err := s.issueStore.ReopenIssue(ctx, id, comment, sourceProject, sourceAgent); err != nil {
@@ -386,7 +419,15 @@ func (s *Server) handleIssueClose(ctx context.Context, m map[string]any) (string
 		return "", fmt.Errorf("id is required for issues close")
 	}
 
-	sourceProject := coerceString(m["project"], "")
+	var sourceProject string
+	if config.Get().EnforceSourceProject {
+		sourceProject = projectFromContext(ctx)
+		if sourceProject == "" {
+			sourceProject = coerceString(m["project"], "")
+		}
+	} else {
+		sourceProject = coerceString(m["project"], "")
+	}
 
 	if err := s.issueStore.CloseIssue(ctx, id, sourceProject); err != nil {
 		return "", err

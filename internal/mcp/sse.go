@@ -164,7 +164,9 @@ func (h *SSEHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := h.server.handleRequest(r.Context(), &req)
+	project := extractProjectFromHeader(r)
+	ctx := contextWithProject(r.Context(), project)
+	response := h.server.handleRequest(ctx, &req)
 
 	// Notifications return nil — no response to send, return 204 No Content.
 	if response == nil {

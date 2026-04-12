@@ -69,8 +69,15 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	params.Title = coerceString(m["title"], "")
 	params.Type = coerceString(m["type"], "")
 	params.Scope = coerceString(m["scope"], "")
-	params.Project = coerceString(m["project"], "")
 	params.AgentSource = coerceString(m["agent_source"], "")
+	if config.Get().EnforceSourceProject {
+		params.Project = projectFromContext(ctx)
+		if params.Project == "" {
+			params.Project = coerceString(m["project"], "")
+		}
+	} else {
+		params.Project = coerceString(m["project"], "")
+	}
 	params.AlwaysInject = coerceBool(m["always_inject"], false)
 	if v, ok := m["importance"]; ok && v != nil {
 		f := coerceFloat64(v, 0)

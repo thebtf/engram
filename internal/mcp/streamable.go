@@ -84,7 +84,9 @@ func (h *StreamableHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}()
-		response = h.server.handleRequest(r.Context(), &req)
+		project := extractProjectFromHeader(r)
+		ctx := contextWithProject(r.Context(), project)
+		response = h.server.handleRequest(ctx, &req)
 	}()
 
 	h.writeCORS(w)
