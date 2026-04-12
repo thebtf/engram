@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.1] - 2026-04-12
+
+Post-MVP stabilization: hotfixes, reconciliation, and feedback import.
+
+### Fixed
+
+- **Session outcome identity handling**: finalize canonical session ID resolution for outcome propagation (`21c7f69`)
+- **Context by-file project scoping**: enforce project parameter in `/api/context/by-file` to prevent cross-project observation leakage (`c166179`)
+- **Hit-rate markdown reparsing**: remove unnecessary markdown parsing in learning hit-rate analytics (`c5f1e81`)
+- **Nil command arrays serialization**: serialize nil command arrays as empty JSON arrays instead of null (`3d9178d`)
+- **Missing commands_run migration**: add migration for commands_run column in observations table (`213e562`)
+
+### Added
+
+- **Server-side feedback import**: new `POST /api/import/feedback` endpoint + CLI HTTP client for bulk importing historical feedback data. New `cmd/engram-import/main.go` entry point. (`3ab74d6`, `e5a7e60`)
+
 ## [v4.x-in-progress] - 2026-04-11
 
 Learning Memory v4 post-MVP feature wave. This entry tracks the FRs shipped after the v3.7.0 MVP foundation and before the final v4 polish/staging sign-off.

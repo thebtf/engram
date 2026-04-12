@@ -483,7 +483,7 @@ async function handleStop(ctx, input) {
     }
 
     await lib.requestPost(
-      `/api/sessions/${claudeSessionID}/outcome`,
+      `/api/sessions/${encodeURIComponent(claudeSessionID)}/outcome`,
       { outcome, reason },
       5000
     );
