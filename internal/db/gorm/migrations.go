@@ -2219,6 +2219,44 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`ALTER TABLE issues DROP COLUMN IF EXISTS type`).Error
 			},
 		},
+		// Migration 076: Multilingual FTS — combine english + simple dictionaries.
+		{
+			ID: "076_observations_fts_multilang",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					`ALTER TABLE observations DROP COLUMN IF EXISTS search_vector`,
+					`ALTER TABLE observations ADD COLUMN search_vector tsvector
+					 GENERATED ALWAYS AS (
+					   to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(subtitle, '') || ' ' || COALESCE(narrative, ''))
+					   || to_tsvector('simple',  COALESCE(title, '') || ' ' || COALESCE(subtitle, '') || ' ' || COALESCE(narrative, ''))
+					 ) STORED`,
+					`CREATE INDEX IF NOT EXISTS idx_observations_search_vector ON observations USING GIN (search_vector)`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				sqls := []string{
+					`DROP INDEX IF EXISTS idx_observations_search_vector`,
+					`ALTER TABLE observations DROP COLUMN IF EXISTS search_vector`,
+					`ALTER TABLE observations ADD COLUMN search_vector tsvector
+					 GENERATED ALWAYS AS (
+					   to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(subtitle, '') || ' ' || COALESCE(narrative, ''))
+					 ) STORED`,
+					`CREATE INDEX IF NOT EXISTS idx_observations_fts ON observations USING GIN (search_vector)`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						continue
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

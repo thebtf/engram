@@ -894,16 +894,16 @@ func (s *ObservationStore) SearchObservationsFTS(ctx context.Context, query, pro
 		       COALESCE(o.is_superseded, 0) as is_superseded,
 		       o.expires_at, o.ttl_days
 		FROM observations o
-		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
-		  AND (o.project = $2 OR o.scope = 'global')
+		WHERE o.search_vector @@ (websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $2))
+		  AND (o.project = $3 OR o.scope = 'global')
 		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
 		  AND COALESCE(o.status, 'active') = 'active'
-		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) DESC,
+		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $2)) DESC,
 		         COALESCE(o.importance_score, 1.0) DESC
-		LIMIT $3
+		LIMIT $4
 	`
 
-	rows, err := s.rawDB.QueryContext(ctx, ftsQuery, query, project, limit)
+	rows, err := s.rawDB.QueryContext(ctx, ftsQuery, query, query, project, limit)
 	if err != nil {
 		// FTS failed, try LIKE fallback
 		return s.searchObservationsLike(ctx, keywords, project, limit)
@@ -951,16 +951,16 @@ func (s *ObservationStore) SearchObservationsFTSFiltered(ctx context.Context, qu
 		       COALESCE(o.is_superseded, 0) as is_superseded,
 		       o.expires_at, o.ttl_days
 		FROM observations o
-		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
-		  AND (o.scope = 'global' OR (o.scope = 'project' AND o.project = $2) OR (o.scope = 'agent' AND o.agent_id = $3))
+		WHERE o.search_vector @@ (websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $2))
+		  AND (o.scope = 'global' OR (o.scope = 'project' AND o.project = $3) OR (o.scope = 'agent' AND o.agent_id = $4))
 		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
 		  AND COALESCE(o.status, 'active') = 'active'
-		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) DESC,
+		ORDER BY ts_rank(o.search_vector, websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $2)) DESC,
 		         COALESCE(o.importance_score, 1.0) DESC
-		LIMIT $4
+		LIMIT $5
 	`
 
-	rows, err := s.rawDB.QueryContext(ctx, ftsQuery, query, f.Project, f.AgentID, limit)
+	rows, err := s.rawDB.QueryContext(ctx, ftsQuery, query, query, f.Project, f.AgentID, limit)
 	if err != nil {
 		return s.searchObservationsLikeFiltered(ctx, keywords, f, limit)
 	}
@@ -1003,17 +1003,17 @@ func (s *ObservationStore) SearchObservationsFTSScored(ctx context.Context, quer
 		       o.last_retrieved_at_epoch, o.score_updated_at_epoch,
 		       COALESCE(o.is_superseded, 0) as is_superseded,
 		       o.expires_at, o.ttl_days,
-		       ts_rank(o.search_vector, websearch_to_tsquery('english', $1)) AS rank_score
+		       ts_rank(o.search_vector, websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $2)) AS rank_score
 		FROM observations o
-		WHERE o.search_vector @@ websearch_to_tsquery('english', $1)
-		  AND (o.project = $2 OR o.scope = 'global')
+		WHERE o.search_vector @@ (websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $2))
+		  AND (o.project = $3 OR o.scope = 'global')
 		  AND COALESCE(o.is_suppressed, FALSE) = FALSE
 		  AND COALESCE(o.status, 'active') = 'active'
 		ORDER BY rank_score DESC
-		LIMIT $3
+		LIMIT $4
 	`
 
-	rows, err := s.rawDB.QueryContext(ctx, ftsQuery, query, project, limit)
+	rows, err := s.rawDB.QueryContext(ctx, ftsQuery, query, query, project, limit)
 	if err != nil {
 		return nil, nil // FTS unavailable; caller falls back to vector-only
 	}
