@@ -2,6 +2,7 @@ package worker
 
 import (
 	"net/http"
+	"os"
 )
 
 // handleGetConfig returns the current runtime configuration, grouped by category.
@@ -18,7 +19,8 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 
 	response := map[string]any{
 		"llm": map[string]any{
-			"model":          cfg.Model,
+			"url":            os.Getenv("ENGRAM_LLM_URL"),
+			"model":          os.Getenv("ENGRAM_LLM_MODEL"),
 			"max_tokens":     cfg.LLMMaxTokens,
 			"filter_enabled": cfg.LLMFilterEnabled,
 			"filter_model":   cfg.LLMFilterModel,
@@ -54,6 +56,7 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 		},
 		"search": map[string]any{
 			"hyde_enabled":                cfg.HyDEEnabled,
+			"hyde_url":                    cfg.HyDEAPIURL,
 			"hyde_model":                  cfg.HyDEModel,
 			"type_lanes_enabled":          cfg.TypeLanesEnabled,
 			"query_expansion_timeout_ms":  cfg.QueryExpansionTimeoutMS,
