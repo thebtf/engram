@@ -35,8 +35,8 @@ ARG VERSION=dev
 # Build server binary (worker with integrated MCP SSE)
 RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram-server ./cmd/worker
 
-# Build client-side binaries: MCP stdio proxy
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/mcp-stdio-proxy ./cmd/mcp-stdio-proxy
+# Build client-side binaries: engram local proxy
+RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram ./cmd/engram
 RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram-mcp ./cmd/mcp
 
 # --- Server image: worker + MCP SSE ---
@@ -65,7 +65,7 @@ FROM debian:bookworm-slim AS client
 
 WORKDIR /app
 
-COPY --from=builder /out/mcp-stdio-proxy /app/mcp-stdio-proxy
+COPY --from=builder /out/engram /app/engram
 COPY --from=builder /out/engram-mcp /app/engram-mcp
 COPY plugin/engram/hooks/ /app/hooks/
 COPY plugin/engram/commands/ /app/commands/
