@@ -5,8 +5,11 @@ package gorm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -225,6 +228,149 @@ func TestSessionStore_GetAllProjects(t *testing.T) {
 	projects, err = sessionStore.GetAllProjects(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"project-a", "project-b"}, projects)
+}
+
+func TestSessionStore_UpdateSessionOutcome_ByClaudeSessionID(t *testing.T) {
+	sessionStore, _, cleanup := testSessionStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	id, err := sessionStore.CreateSDKSession(ctx, "claude-outcome-1", "test-project", "prompt")
+	require.NoError(t, err)
+
+	err = sessionStore.UpdateSessionOutcome(ctx, "claude-outcome-1", "success", "done")
+	require.NoError(t, err)
+
+	sess, err := sessionStore.GetSessionByID(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.True(t, sess.Outcome.Valid)
+	assert.Equal(t, "success", sess.Outcome.String)
+	require.True(t, sess.OutcomeReason.Valid)
+	assert.Equal(t, "done", sess.OutcomeReason.String)
+	require.True(t, sess.OutcomeRecordedAt.Valid)
+	assert.NotEmpty(t, sess.OutcomeRecordedAt.String)
+}
+
+func TestSessionStore_UpdateSessionOutcome_ByNumericDBIDString(t *testing.T) {
+	sessionStore, _, cleanup := testSessionStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	id, err := sessionStore.CreateSDKSession(ctx, "claude-outcome-2", "test-project", "prompt")
+	require.NoError(t, err)
+
+	err = sessionStore.UpdateSessionOutcome(ctx, strconv.FormatInt(id, 10), "partial", "some progress")
+	require.NoError(t, err)
+
+	canonicalID, err := sessionStore.ResolveClaudeSessionID(ctx, strconv.FormatInt(id, 10))
+	require.NoError(t, err)
+	assert.Equal(t, "claude-outcome-2", canonicalID)
+
+	sess, err := sessionStore.GetSessionByID(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.True(t, sess.Outcome.Valid)
+	assert.Equal(t, "partial", sess.Outcome.String)
+	require.True(t, sess.OutcomeReason.Valid)
+	assert.Equal(t, "some progress", sess.OutcomeReason.String)
+}
+
+func TestSessionStore_UpdateSessionOutcome_AutoCreatesMissingClaudeSession(t *testing.T) {
+	sessionStore, _, cleanup := testSessionStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	const claudeSessionID = "claude-missing-1"
+
+	err := sessionStore.UpdateSessionOutcome(ctx, claudeSessionID, "failure", "init missing")
+	require.NoError(t, err)
+
+	sess, err := sessionStore.FindAnySDKSession(ctx, claudeSessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, claudeSessionID, sess.ClaudeSessionID)
+	assert.Equal(t, "", sess.Project)
+	assert.False(t, sess.UserPrompt.Valid)
+	require.True(t, sess.Outcome.Valid)
+	assert.Equal(t, "failure", sess.Outcome.String)
+	require.True(t, sess.OutcomeReason.Valid)
+	assert.Equal(t, "init missing", sess.OutcomeReason.String)
+	require.True(t, sess.OutcomeRecordedAt.Valid)
+}
+
+func TestSessionStore_UpdateSessionOutcome_AutoCreateConcurrentFirstWrite(t *testing.T) {
+	sessionStore, store, cleanup := testSessionStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	const claudeSessionID = "claude-missing-race-1"
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- sessionStore.UpdateSessionOutcome(ctx, claudeSessionID, "success", "race")
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	var rows []SDKSession
+	err := store.DB.WithContext(ctx).
+		Where("claude_session_id = ?", claudeSessionID).
+		Find(&rows).Error
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].Outcome.Valid)
+	assert.Equal(t, "success", rows[0].Outcome.String)
+}
+
+func TestSessionStore_UpdateSessionOutcome_IdempotentRepeatedWrite(t *testing.T) {
+	sessionStore, _, cleanup := testSessionStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	id, err := sessionStore.CreateSDKSession(ctx, "claude-outcome-3", "test-project", "prompt")
+	require.NoError(t, err)
+
+	err = sessionStore.UpdateSessionOutcome(ctx, "claude-outcome-3", "success", "first reason")
+	require.NoError(t, err)
+	err = sessionStore.UpdateSessionOutcome(ctx, "claude-outcome-3", "success", "second reason ignored")
+	require.NoError(t, err)
+
+	sess, err := sessionStore.GetSessionByID(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.True(t, sess.Outcome.Valid)
+	assert.Equal(t, "success", sess.Outcome.String)
+	// Idempotent repeated write should not overwrite original reason.
+	require.True(t, sess.OutcomeReason.Valid)
+	assert.Equal(t, "first reason", sess.OutcomeReason.String)
+}
+
+func TestSessionStore_UpdateSessionOutcome_ConflictingSecondOutcome(t *testing.T) {
+	sessionStore, _, cleanup := testSessionStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	_, err := sessionStore.CreateSDKSession(ctx, "claude-outcome-4", "test-project", "prompt")
+	require.NoError(t, err)
+
+	err = sessionStore.UpdateSessionOutcome(ctx, "claude-outcome-4", "partial", "first")
+	require.NoError(t, err)
+
+	err = sessionStore.UpdateSessionOutcome(ctx, "claude-outcome-4", "success", "conflict")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrSessionOutcomeConflict), "expected ErrSessionOutcomeConflict, got %v", err)
+	assert.Contains(t, err.Error(), "existing=partial")
+	assert.Contains(t, err.Error(), "requested=success")
 }
 
 func TestSessionStore_SessionFields(t *testing.T) {

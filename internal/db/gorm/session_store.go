@@ -4,7 +4,9 @@ package gorm
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -17,6 +19,13 @@ import (
 type SessionStore struct {
 	db *gorm.DB
 }
+
+var (
+	// ErrSessionNotFound indicates that no matching session row exists for the provided identifier.
+	ErrSessionNotFound = errors.New("session not found")
+	// ErrSessionOutcomeConflict indicates that a different outcome was already recorded for the session.
+	ErrSessionOutcomeConflict = errors.New("session outcome conflict")
+)
 
 // NewSessionStore creates a new session store.
 func NewSessionStore(store *Store) *SessionStore {
@@ -116,6 +125,19 @@ func (s *SessionStore) FindAnySDKSession(ctx context.Context, claudeSessionID st
 		return nil, err
 	}
 	return toModelSDKSession(&sess), nil
+}
+
+// ResolveClaudeSessionID resolves a session identifier to its canonical Claude session ID.
+// Accepts either a Claude session ID or a numeric DB ID string.
+func (s *SessionStore) ResolveClaudeSessionID(ctx context.Context, sessionIdentifier string) (string, error) {
+	sess, _, err := resolveSessionForOutcome(s.db.WithContext(ctx), sessionIdentifier)
+	if err != nil {
+		return "", err
+	}
+	if sess == nil {
+		return "", fmt.Errorf("%w: %s", ErrSessionNotFound, sessionIdentifier)
+	}
+	return sess.ClaudeSessionID, nil
 }
 
 // IncrementPromptCounter increments the prompt counter and returns the new value.
@@ -238,26 +260,126 @@ func (s *SessionStore) ListSDKSessions(ctx context.Context, project string, limi
 	return result, total, nil
 }
 
-// UpdateSessionOutcome records the outcome of a session identified by its Claude session ID.
-// Sets outcome, outcome_reason, and outcome_recorded_at in a single UPDATE.
-func (s *SessionStore) UpdateSessionOutcome(ctx context.Context, claudeSessionID, outcome, reason string) error {
-	now := time.Now()
-	// Only set outcome if not already recorded (explicit engram_outcome tool takes priority over heuristic)
-	result := s.db.WithContext(ctx).
-		Model(&SDKSession{}).
-		Where("claude_session_id = ? AND (outcome IS NULL OR outcome = '')", claudeSessionID).
-		Updates(map[string]interface{}{
-			"outcome":             outcome,
-			"outcome_reason":      reason,
-			"outcome_recorded_at": now,
-		})
-	if result.Error != nil {
-		return result.Error
+// UpdateSessionOutcome records the outcome of a session identified by Claude session ID or numeric DB ID.
+// If a Claude session row does not exist yet, it is auto-created with empty project/user prompt before recording outcome.
+func (s *SessionStore) UpdateSessionOutcome(ctx context.Context, sessionIdentifier, outcome, reason string) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		sess, isNumericIDInput, err := resolveSessionForOutcome(tx, sessionIdentifier)
+		if err != nil {
+			return err
+		}
+
+		if sess == nil {
+			if isNumericIDInput {
+				return fmt.Errorf("%w: %s", ErrSessionNotFound, sessionIdentifier)
+			}
+
+			now := time.Now()
+			sess = &SDKSession{
+				ClaudeSessionID: sessionIdentifier,
+				SDKSessionID: sql.NullString{
+					String: sessionIdentifier,
+					Valid:  true,
+				},
+				Project:        "",
+				UserPrompt:     sql.NullString{Valid: false},
+				Status:         "active",
+				StartedAt:      now.Format(time.RFC3339),
+				StartedAtEpoch: now.UnixMilli(),
+			}
+			createResult := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "claude_session_id"}},
+				DoNothing: true,
+			}).Create(sess)
+			if createResult.Error != nil {
+				return createResult.Error
+			}
+			if createResult.RowsAffected == 0 {
+				var existing SDKSession
+				err := tx.WithContext(ctx).
+					Where("claude_session_id = ?", sessionIdentifier).
+					First(&existing).Error
+				if err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return fmt.Errorf("%w: %s", ErrSessionNotFound, sessionIdentifier)
+					}
+					return err
+				}
+				sess = &existing
+			}
+		}
+
+		existingOutcome := ""
+		if sess.Outcome.Valid {
+			existingOutcome = sess.Outcome.String
+		}
+		if existingOutcome != "" {
+			if existingOutcome == outcome {
+				return nil // idempotent repeated write
+			}
+			return fmt.Errorf("%w: session=%s existing=%s requested=%s", ErrSessionOutcomeConflict, sess.ClaudeSessionID, existingOutcome, outcome)
+		}
+
+		result := tx.Model(&SDKSession{}).
+			Where("id = ? AND (outcome IS NULL OR outcome = '')", sess.ID).
+			Updates(map[string]interface{}{
+				"outcome":             outcome,
+				"outcome_reason":      reason,
+				"outcome_recorded_at": time.Now(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected > 0 {
+			return nil
+		}
+
+		// Concurrent writer may have set the outcome between our read and update.
+		var latest SDKSession
+		err = tx.WithContext(ctx).
+			Select("id", "claude_session_id", "outcome").
+			Where("id = ?", sess.ID).
+			First(&latest).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: %s", ErrSessionNotFound, sessionIdentifier)
+		}
+		if err != nil {
+			return err
+		}
+		if latest.Outcome.Valid && latest.Outcome.String != "" {
+			if latest.Outcome.String == outcome {
+				return nil
+			}
+			return fmt.Errorf("%w: session=%s existing=%s requested=%s", ErrSessionOutcomeConflict, latest.ClaudeSessionID, latest.Outcome.String, outcome)
+		}
+
+		return fmt.Errorf("%w: %s", ErrSessionNotFound, sessionIdentifier)
+	})
+}
+
+func resolveSessionForOutcome(tx *gorm.DB, sessionIdentifier string) (*SDKSession, bool, error) {
+	isNumericIDInput := false
+	if numericID, err := strconv.ParseInt(sessionIdentifier, 10, 64); err == nil && numericID > 0 {
+		isNumericIDInput = true
+		var byID SDKSession
+		err = tx.Where("id = ?", numericID).First(&byID).Error
+		if err == nil {
+			return &byID, true, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, true, err
+		}
 	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("session not found: %s", claudeSessionID)
+
+	var byClaudeID SDKSession
+	err := tx.Where("claude_session_id = ?", sessionIdentifier).First(&byClaudeID).Error
+	if err == nil {
+		return &byClaudeID, isNumericIDInput, nil
 	}
-	return nil
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, isNumericIDInput, nil
+	}
+	return nil, isNumericIDInput, err
 }
 
 // UpdateUtilityPropagatedAt records when utility propagation was last triggered for a session.
@@ -361,7 +483,7 @@ func (s *SessionStore) GetLearningCurve(ctx context.Context, days int, project s
 	q := s.db.WithContext(ctx).
 		Model(&SDKSession{}).
 		Select("DATE(outcome_recorded_at) AS date, COUNT(*) AS sessions, COUNT(CASE WHEN outcome = 'success' THEN 1 END) AS successes").
-		Where("outcome IS NOT NULL AND outcome_recorded_at >= NOW() - "+intervalExpr).
+		Where("outcome IS NOT NULL AND outcome_recorded_at >= NOW() - " + intervalExpr).
 		Group("DATE(outcome_recorded_at)").
 		Order("date ASC")
 
@@ -446,18 +568,18 @@ func (s *SessionStore) UpdateInjectionStrategy(ctx context.Context, claudeSessio
 // toModelSDKSession converts a GORM SDKSession to pkg/models.SDKSession.
 func toModelSDKSession(sess *SDKSession) *models.SDKSession {
 	return &models.SDKSession{
-		ID:               sess.ID,
-		ClaudeSessionID:  sess.ClaudeSessionID,
-		SDKSessionID:     sess.SDKSessionID,
-		Project:          sess.Project,
-		UserPrompt:       sess.UserPrompt,
-		WorkerPort:       sess.WorkerPort,
-		PromptCounter:    int64(sess.PromptCounter),
-		Status:           models.SessionStatus(sess.Status),
-		StartedAt:        sess.StartedAt,
-		StartedAtEpoch:   sess.StartedAtEpoch,
-		CompletedAt:       sess.CompletedAt,
-		CompletedAtEpoch:  sess.CompletedAtEpoch,
+		ID:                  sess.ID,
+		ClaudeSessionID:     sess.ClaudeSessionID,
+		SDKSessionID:        sess.SDKSessionID,
+		Project:             sess.Project,
+		UserPrompt:          sess.UserPrompt,
+		WorkerPort:          sess.WorkerPort,
+		PromptCounter:       int64(sess.PromptCounter),
+		Status:              models.SessionStatus(sess.Status),
+		StartedAt:           sess.StartedAt,
+		StartedAtEpoch:      sess.StartedAtEpoch,
+		CompletedAt:         sess.CompletedAt,
+		CompletedAtEpoch:    sess.CompletedAtEpoch,
 		Outcome:             sess.Outcome,
 		OutcomeReason:       sess.OutcomeReason,
 		OutcomeRecordedAt:   sess.OutcomeRecordedAt,

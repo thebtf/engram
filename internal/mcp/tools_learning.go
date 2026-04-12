@@ -3,10 +3,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	gormstorage "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/learning"
 )
 
@@ -40,11 +42,19 @@ func (s *Server) handleSetSessionOutcomeMCP(ctx context.Context, args json.RawMe
 	reason := coerceString(m["reason"], "")
 
 	if err := s.sessionStore.UpdateSessionOutcome(ctx, sessionID, outcomeStr, reason); err != nil {
+		if errors.Is(err, gormstorage.ErrSessionOutcomeConflict) {
+			return "", fmt.Errorf("session outcome already recorded with a different value: %w", err)
+		}
 		return "", fmt.Errorf("failed to update session outcome: %w", err)
 	}
 
+	canonicalSessionID, err := s.sessionStore.ResolveClaudeSessionID(ctx, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve canonical session id: %w", err)
+	}
+
 	if s.injectionStore != nil && s.observationStore != nil {
-		capturedSessionID := sessionID
+		capturedSessionID := canonicalSessionID
 		capturedOutcome := outcome
 		capturedInjStore := s.injectionStore
 		capturedObsStore := s.observationStore
@@ -58,13 +68,11 @@ func (s *Server) handleSetSessionOutcomeMCP(ctx context.Context, args json.RawMe
 			}
 			// Update utility_propagated_at so the maintenance guard sees this propagation
 			// and does not double-run for this session.
-			if capturedSessionStore != nil {
-				if err := capturedSessionStore.UpdateUtilityPropagatedAt(bgCtx, capturedSessionID); err != nil {
-					log.Warn().Err(err).Str("session", capturedSessionID).Msg("MCP set_session_outcome: failed to update utility_propagated_at")
-				}
+			if err := capturedSessionStore.UpdateUtilityPropagatedAt(bgCtx, capturedSessionID); err != nil {
+				log.Warn().Err(err).Str("session", capturedSessionID).Msg("MCP set_session_outcome: failed to update utility_propagated_at")
 			}
 		}()
 	}
 
-	return fmt.Sprintf("Session outcome recorded: %s (session: %s)", outcomeStr, sessionID), nil
+	return fmt.Sprintf("Session outcome recorded: %s (session: %s)", outcomeStr, canonicalSessionID), nil
 }

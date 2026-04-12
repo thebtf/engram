@@ -249,22 +249,27 @@ async function handleStop(ctx, input) {
 
   // Diagnostic: leave a trace in server access log to prove hook was called
   lib.requestGet('/api/health').catch(() => {});
-  console.error(`[stop] Hook invoked for session=${ctx.SessionID || 'unknown'}`);
+  const claudeSessionID = typeof ctx.SessionID === 'string' ? ctx.SessionID : '';
+  console.error(`[stop] Hook invoked for session=${claudeSessionID || 'unknown'}`);
 
-  let sessionResult;
-  try {
-    sessionResult = await lib.requestGet(
-      `/api/sessions?claudeSessionId=${encodeURIComponent(ctx.SessionID)}`
-    );
-  } catch (error) {
-    console.error(`[stop] Session lookup failed: ${error.message} (sessionId=${ctx.SessionID})`);
+  if (!claudeSessionID) {
+    console.error('[stop] Missing Claude session ID, skipping stop hook actions');
     return '';
   }
 
-  const sessionID = Number(sessionResult && sessionResult.id);
-  if (!Number.isFinite(sessionID)) {
-    console.error(`[stop] No valid session found for claudeSessionId=${ctx.SessionID} (result=${JSON.stringify(sessionResult)})`);
-    return '';
+  let sessionID = null;
+  try {
+    const sessionResult = await lib.requestGet(
+      `/api/sessions?claudeSessionId=${encodeURIComponent(claudeSessionID)}`
+    );
+    const candidateSessionID = Number(sessionResult && sessionResult.id);
+    if (Number.isFinite(candidateSessionID) && candidateSessionID > 0) {
+      sessionID = candidateSessionID;
+    } else {
+      console.error(`[stop] No valid numeric DB session found for claudeSessionId=${claudeSessionID} (result=${JSON.stringify(sessionResult)})`);
+    }
+  } catch (error) {
+    console.error(`[stop] Session lookup failed: ${error.message} (sessionId=${claudeSessionID}); continuing with Claude session keyed endpoints`);
   }
 
   const transcriptPath =
@@ -283,36 +288,40 @@ async function handleStop(ctx, input) {
     console.error(`[stop] Last assistant preview: ${String(lastAssistant).slice(0, 300)}...`);
   }
 
-  console.error(
-    `[stop] Requesting summary for session ${sessionID} (transcript: ${
-      transcriptPath !== ''
-    })`
-  );
+  if (sessionID !== null) {
+    console.error(
+      `[stop] Requesting summary for session ${sessionID} (transcript: ${
+        transcriptPath !== ''
+      })`
+    );
 
-  try {
-    await lib.requestPost(`/api/sessions/${sessionID}/summarize`, {
-      lastUserMessage: lastUser,
-      lastAssistantMessage: lastAssistant,
-    });
-  } catch (error) {
-    console.error(`[stop] Warning: summary request failed: ${error.message}`);
-  }
-
-  // Extract learnings from session transcript (LLM-based, may take seconds)
-  if (messages.length > 0) {
-    const project = typeof ctx.Project === 'string' ? ctx.Project : '';
     try {
-      const learnResult = await lib.requestPost(
-        `/api/sessions/${sessionID}/extract-learnings`,
-        { messages, project },
-        30000
-      );
-      const count = (learnResult && learnResult.count) || 0;
-      const status = (learnResult && learnResult.status) || 'unknown';
-      console.error(`[stop] extract-learnings: status=${status}, count=${count}`);
+      await lib.requestPost(`/api/sessions/${sessionID}/summarize`, {
+        lastUserMessage: lastUser,
+        lastAssistantMessage: lastAssistant,
+      });
     } catch (error) {
-      console.error(`[stop] Warning: extract-learnings failed: ${error.message}`);
+      console.error(`[stop] Warning: summary request failed: ${error.message}`);
     }
+
+    // Extract learnings from session transcript (LLM-based, may take seconds)
+    if (messages.length > 0) {
+      const project = typeof ctx.Project === 'string' ? ctx.Project : '';
+      try {
+        const learnResult = await lib.requestPost(
+          `/api/sessions/${sessionID}/extract-learnings`,
+          { messages, project },
+          30000
+        );
+        const count = (learnResult && learnResult.count) || 0;
+        const status = (learnResult && learnResult.status) || 'unknown';
+        console.error(`[stop] extract-learnings: status=${status}, count=${count}`);
+      } catch (error) {
+        console.error(`[stop] Warning: extract-learnings failed: ${error.message}`);
+      }
+    }
+  } else {
+    console.error('[stop] Skipping summarize/extract-learnings: numeric DB session ID unavailable');
   }
 
   // Index session transcript for full-text search
@@ -323,7 +332,7 @@ async function handleStop(ctx, input) {
       if (stat.size > 0 && stat.size <= 5 * 1024 * 1024) {
         const transcriptContent = fs.readFileSync(expandedPath, 'utf8');
         const wsId = lib.WorkstationID();
-        const endpoint = `/api/sessions/index?workstation_id=${encodeURIComponent(wsId)}&session_id=${encodeURIComponent(ctx.SessionID)}`;
+        const endpoint = `/api/sessions/index?workstation_id=${encodeURIComponent(wsId)}&session_id=${encodeURIComponent(claudeSessionID)}`;
         const indexResult = await lib.requestUpload(endpoint, transcriptContent, 15000);
         console.error(`[stop] session indexed: status=${indexResult.status || 'unknown'}, exchanges=${indexResult.exchange_count || 0}`);
       } else if (stat.size > 5 * 1024 * 1024) {
@@ -337,7 +346,7 @@ async function handleStop(ctx, input) {
   // Detect utility signals using retrospective injection API (single enriched call)
   try {
     const injectionsResp = await lib.requestGet(
-      `/api/sessions/${sessionID}/injections`
+      `/api/sessions/${encodeURIComponent(claudeSessionID)}/injections`
     );
     const injectedObs = Array.isArray(injectionsResp && injectionsResp.injections)
       ? injectionsResp.injections
@@ -374,7 +383,7 @@ async function handleStop(ctx, input) {
 
       // Send citation data to mark-cited endpoint (Learning Memory v3)
       if (allInjectedIds.length > 0) {
-        lib.requestPost(`/api/sessions/${sessionID}/mark-cited`, {
+        lib.requestPost(`/api/sessions/${encodeURIComponent(claudeSessionID)}/mark-cited`, {
           cited_ids: citedIds,
           all_injected_ids: allInjectedIds,
         }, 5000).catch((err) => {
@@ -411,7 +420,7 @@ async function handleStop(ctx, input) {
         const project = typeof ctx.Project === 'string' ? ctx.Project : '';
         lib
           .requestPost('/api/observations/feedback/insufficient-injection', {
-            session_id: sessionID,
+            session_id: claudeSessionID,
             project: project,
             signal: 'insufficient_injection',
           }, 3000)
@@ -434,7 +443,7 @@ async function handleStop(ctx, input) {
     let reason = 'no observations stored during session';
 
     // Read signal counters accumulated by post-tool-use hook during this session
-    const signals = lib.getSessionSignals(ctx.SessionID);
+    const signals = lib.getSessionSignals(claudeSessionID);
     const commitCount = signals.commits || 0;
     const prCount = signals.prs || 0;
     const errorCount = signals.errors || 0;
@@ -474,7 +483,7 @@ async function handleStop(ctx, input) {
     }
 
     await lib.requestPost(
-      `/api/sessions/${sessionID}/outcome`,
+      `/api/sessions/${claudeSessionID}/outcome`,
       { outcome, reason },
       5000
     );
@@ -484,27 +493,34 @@ async function handleStop(ctx, input) {
   }
 
   // Clean up signal file now that the session is complete
-  lib.clearSessionSignals(ctx.SessionID);
+  lib.clearSessionSignals(claudeSessionID);
 
   // Record session completion timeline event (gstack-insights FR-4, fire-and-forget)
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
-  if (project && ctx.SessionID) {
+  if (project && claudeSessionID) {
     lib.requestPost('/api/store', {
       action: 'create',
       content: `Session completed on ${project}`,
       type: 'timeline',
       project,
-      tags: ['event:completed', `session:${ctx.SessionID}`, `outcome:${outcome || 'unknown'}`],
+      tags: ['event:completed', `session:${claudeSessionID}`, `outcome:${outcome || 'unknown'}`],
       agent_source: 'claude-code',
     }, 3000).catch(() => {});
   }
 
   // Delete pending marker (gstack-insights FR-8)
-  lib.deletePendingMarker(ctx.SessionID);
+  lib.deletePendingMarker(claudeSessionID);
 
   return '';
 }
 
-(async () => {
-  await lib.RunHook('Stop', handleStop);
-})();
+if (require.main === module) {
+  (async () => {
+    await lib.RunHook('Stop', handleStop);
+  })();
+}
+
+module.exports = {
+  detectUtilitySignal,
+  handleStop,
+};

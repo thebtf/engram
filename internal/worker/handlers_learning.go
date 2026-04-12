@@ -4,6 +4,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -92,7 +93,17 @@ func (s *Service) handleSetSessionOutcome(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := sessionStore.UpdateSessionOutcome(r.Context(), sessionID, req.Outcome, req.Reason); err != nil {
+		if errors.Is(err, gormstorage.ErrSessionOutcomeConflict) {
+			http.Error(w, "session outcome already recorded with a different value", http.StatusConflict)
+			return
+		}
 		http.Error(w, "failed to update session outcome: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	canonicalSessionID, err := sessionStore.ResolveClaudeSessionID(r.Context(), sessionID)
+	if err != nil {
+		http.Error(w, "failed to resolve canonical session id: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -104,7 +115,7 @@ func (s *Service) handleSetSessionOutcome(w http.ResponseWriter, r *http.Request
 
 	var injectedCount int64
 	if injStore != nil {
-		injectedCount, _ = injStore.CountInjectionsBySession(r.Context(), sessionID)
+		injectedCount, _ = injStore.CountInjectionsBySession(r.Context(), canonicalSessionID)
 	}
 
 	// Launch outcome propagation asynchronously — updates utility and effectiveness scores.
@@ -113,16 +124,14 @@ func (s *Service) handleSetSessionOutcome(w http.ResponseWriter, r *http.Request
 		agentStatsStore := s.agentStatsStore
 		s.initMu.RUnlock()
 
-		capturedSessionID := sessionID
+		capturedSessionID := canonicalSessionID
 		capturedOutcome := learning.Outcome(req.Outcome)
 
 		// Resolve agent_id from the session record so agent-specific stats can be updated.
 		// The session's Project field stores the agent_id when no explicit project was provided.
 		var capturedAgentID string
-		if sessionStore != nil {
-			if sess, err := sessionStore.FindAnySDKSession(r.Context(), sessionID); err == nil && sess != nil {
-				capturedAgentID = sess.Project
-			}
+		if sess, err := sessionStore.FindAnySDKSession(r.Context(), canonicalSessionID); err == nil && sess != nil {
+			capturedAgentID = sess.Project
 		}
 
 		go func() {
@@ -144,7 +153,7 @@ func (s *Service) handleSetSessionOutcome(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, map[string]interface{}{
-		"session_id":            sessionID,
+		"session_id":            canonicalSessionID,
 		"outcome":               req.Outcome,
 		"observations_affected": injectedCount,
 	})
