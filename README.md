@@ -25,17 +25,18 @@ Since learning-memory-v4, context injection treats **silence as valid**: when no
 ---
 
 <!-- redoc:start:whats-new -->
-## What's New in v2.4.0
+## What's New in v4.0.0
 
 | Version | Highlight |
 |---------|-----------|
-| **v2.4.0** | LLM-Driven Memory Extraction — `store(action="extract")` from raw content (ADR-005) |
-| **v2.3.1** | Embedding Resilience Layer — 4-state circuit breaker with auto-recovery (ADR-004) |
-| **v2.3.0** | Reasoning Traces / System 2 Memory — structured reasoning chains with quality scores (ADR-003) |
-| **v2.2.0** | Server-side periodic summarizer — no client dependency for consolidation |
-| **v2.1.6** | Knowledge graph UX — local mode, search, visual styling |
-| **v2.1.4** | Config hot-reload without restart |
-| **v2.1.2** | User commands — `/retro`, `/stats`, `/cleanup`, `/export` |
+| **v4.0.0** | Daemon Architecture — muxcore engine, gRPC transport, local persistent daemon, auto-binary plugin |
+| **v3.8.0** | Maintenance Observability — Monitor page with real-time progress, SSE events, Configuration panel |
+| **v3.7.1** | Issue types, multilingual FTS, markdown rendering, operator issue creation |
+| **v3.6.0** | Learning Memory v4 — unified retrieval pipeline, adaptive thresholds, typed search lanes |
+| **v3.5.0** | Hit rate analytics, file staleness detection, entity extraction, wiki generation |
+| **v3.4.0** | Cross-project issue tracker — agents file bugs against other agents |
+| **v3.0.0** | Write-merge — LLM-powered observation deduplication on store path |
+| **v2.4.0** | LLM-Driven Memory Extraction — `store(action="extract")` from raw content |
 | **v2.1.0** | MCP tool consolidation — 61 to 7 primary tools, >80% context window reduction |
 
 See [Releases](https://github.com/thebtf/engram/releases) for full changelog.
@@ -46,7 +47,7 @@ See [Releases](https://github.com/thebtf/engram/releases) for full changelog.
 <!-- redoc:start:architecture -->
 ## Architecture
 
-Single server on port `37777` serves the HTTP REST API, MCP transports, Vue 3 dashboard, and background workers. Multiple workstations connect via hooks and the MCP plugin.
+Single server on port `37777` serves the HTTP REST API, gRPC MCP service (via cmux), Vue 3 dashboard, and background workers. Each workstation runs a local daemon that connects to the server via gRPC. Multiple Claude Code sessions share one daemon.
 
 ```mermaid
 graph TB
@@ -62,8 +63,8 @@ graph TB
         CC_B --> H_B
     end
 
-    H_A -- "Streamable HTTP / SSE" --> Server
-    H_B -- "Streamable HTTP / SSE" --> Server
+    H_A -- "stdio / gRPC" --> Server
+    H_B -- "stdio / gRPC" --> Server
 
     subgraph "Engram Server :37777"
         Server[Worker]
