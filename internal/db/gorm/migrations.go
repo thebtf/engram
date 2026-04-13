@@ -2257,6 +2257,23 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		{
+			ID: "077_relations_constraints_update",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					// Add modifies/reads to relation_type constraint (used by file-relation detector)
+					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_relation_type`,
+					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_relation_type CHECK (relation_type IN ('causes','fixes','supersedes','depends_on','relates_to','evolves_from','modifies','reads'))`,
+					// Add creative_association back to detection_source constraint (used by consolidation)
+					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_detection_source`,
+					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_detection_source CHECK (detection_source IN ('file_overlap','embedding_similarity','temporal_proximity','narrative_mention','concept_overlap','type_progression','creative_association'))`,
+				}
+				for _, s := range sqls {
+					_ = tx.Exec(s).Error
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

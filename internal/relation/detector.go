@@ -296,10 +296,11 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 		// Use file path hash as a pseudo node ID (negative to avoid collision with observation IDs)
 		fileNodeID := -int64(hashString(filePath))
 		rel := &models.ObservationRelation{
-			SourceID:     obsID,
-			TargetID:     fileNodeID,
-			RelationType: "modifies",
-			Confidence:   1.0,
+			SourceID:        obsID,
+			TargetID:        fileNodeID,
+			RelationType:    "modifies",
+			Confidence:      1.0,
+			DetectionSource: models.DetectionSourceFileOverlap,
 		}
 		if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
 			log.Debug().Err(storeErr).Str("file", filePath).Int64("obs_id", obsID).Msg("Failed to store modifies relation")
@@ -311,10 +312,11 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 		}
 		fileNodeID := -int64(hashString(filePath))
 		rel := &models.ObservationRelation{
-			SourceID:     obsID,
-			TargetID:     fileNodeID,
-			RelationType: "reads",
-			Confidence:   1.0,
+			SourceID:        obsID,
+			TargetID:        fileNodeID,
+			RelationType:    "reads",
+			Confidence:      1.0,
+			DetectionSource: models.DetectionSourceFileOverlap,
 		}
 		if _, storeErr := d.relationStore.StoreRelation(ctx, rel); storeErr != nil {
 			log.Debug().Err(storeErr).Str("file", filePath).Int64("obs_id", obsID).Msg("Failed to store reads relation")
