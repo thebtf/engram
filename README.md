@@ -225,48 +225,43 @@ DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
   docker compose up -d server
 ```
 
+### Binary Installation (v4+)
+
+Download the engram daemon binary from [GitHub Releases](https://github.com/thebtf/engram/releases):
+
+```bash
+# Linux (amd64)
+curl -L https://github.com/thebtf/engram/releases/latest/download/engram-linux-amd64 -o engram
+chmod +x engram && sudo mv engram /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/thebtf/engram/releases/latest/download/engram-darwin-arm64 -o engram
+chmod +x engram && sudo mv engram /usr/local/bin/
+
+# Windows (amd64) — download engram-windows-amd64.exe, add to PATH
+```
+
+Set environment variables:
+```bash
+export ENGRAM_URL=http://your-server:37777
+export ENGRAM_API_TOKEN=your-token
+```
+
+Verify: `echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | engram`
+
+The daemon starts automatically on first use. Multiple Claude Code sessions share one daemon.
+
 ### Manual MCP Configuration
 
 If not using the plugin, configure MCP directly in `~/.claude/settings.json`:
 
-#### Streamable HTTP (recommended)
+#### Stdio (v4+ recommended)
 
 ```json
 {
   "mcpServers": {
     "engram": {
-      "type": "url",
-      "url": "http://your-server:37777/mcp",
-      "headers": {
-        "Authorization": "Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-Claude Code expands `${VAR}` from your environment at runtime.
-
-**CLI shortcut:**
-
-```bash
-claude mcp add-json engram '{"type":"http","url":"http://your-server:37777/mcp","headers":{"Authorization":"Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"}}' -s user
-```
-
-#### SSE Transport
-
-Use `http://your-server:37777/sse` as the URL (same JSON structure as above).
-
-#### Stdio Proxy (legacy)
-
-For clients that only support stdio:
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "command": "/path/to/mcp-stdio-proxy",
-      "args": ["--url", "http://your-server:37777", "--token", "your-api-token"]
+      "command": "engram"
     }
   }
 }
