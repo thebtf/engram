@@ -148,8 +148,6 @@ type Service struct {
 	scoreCalculator        *scoring.Calculator
 	recalculator           *scoring.Recalculator
 	consolidationScheduler *consolidation.Scheduler
-	mcpSSEHandler          *mcp.SSEHandler
-	mcpStreamableHandler   *mcp.StreamableHandler
 	mcpHealth              *mcp.MCPHealth
 	searchMgr              *search.Manager
 	collectionRegistry     *collections.Registry
@@ -383,7 +381,6 @@ done:
 }
 
 // setupVectorSyncCallbacks configures all vector sync related callbacks on stores and processors.
-// This is extracted to avoid duplication between initializeAsync and reinitializeDatabase.
 func (s *Service) setupVectorSyncCallbacks(
 	patternDetector *pattern.Detector,
 	patternStore *gorm.PatternStore,
@@ -1123,20 +1120,13 @@ func (s *Service) initializeAsync() {
 	searchMgr.SetProjectSettingsStore(projectSettingsStore)
 	s.projectSettingsStore = projectSettingsStore
 
-	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
-	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer, s.mcpHealth)
-
 	s.initMu.Lock()
 	s.searchMgr = searchMgr
 	s.collectionRegistry = collectionRegistry
 	s.sessionIdxStore = sessionIdxStore
 	s.searchQueryLogStore = searchQueryLogStore
 	s.retrievalStatsLogStore = retrievalStatsLogStore
-	s.mcpSSEHandler = mcpSSEHandler
-	s.mcpStreamableHandler = mcpStreamableHandler
 	s.initMu.Unlock()
-
-	log.Info().Msg("MCP handlers integrated into worker (SSE + Streamable HTTP)")
 
 	// Mark as ready
 	s.ready.Store(true)
@@ -1196,195 +1186,6 @@ func (s *Service) startWatchers() {
 			log.Info().Str("path", configPath).Msg("Config file watcher started")
 		}
 	}
-}
-
-// reinitializeDatabase recreates the database after deletion.
-func (s *Service) reinitializeDatabase() {
-	// Block new requests
-	s.ready.Store(false)
-	log.Info().Msg("Database reinitialization starting...")
-
-	// Get old store references
-	s.initMu.Lock()
-	oldStore := s.store
-	oldSessionManager := s.sessionManager
-	oldEmbedSvc := s.embedSvc
-	s.initMu.Unlock()
-
-	// Close old embedding service
-	if oldEmbedSvc != nil {
-		if err := oldEmbedSvc.Close(); err != nil {
-			log.Warn().Err(err).Msg("Error closing old embedding service")
-		}
-	}
-	if oldStore != nil {
-		if err := oldStore.Close(); err != nil {
-			log.Warn().Err(err).Msg("Error closing old database")
-		}
-	}
-
-	// Clear in-memory sessions (they reference old DB IDs)
-	if oldSessionManager != nil {
-		oldSessionManager.ShutdownAll(s.ctx)
-	}
-
-	// Ensure data directory and settings exist (may have been deleted)
-	if err := config.EnsureAll(); err != nil {
-		s.setInitError(fmt.Errorf("ensure data dir on reinit: %w", err))
-		return
-	}
-
-	// Reconnect to PostgreSQL
-	store, err := gorm.NewStore(gorm.Config{
-		DSN:      s.config.DatabaseDSN,
-		MaxConns: s.config.DatabaseMaxConns,
-	})
-	if err != nil {
-		s.setInitError(fmt.Errorf("reinit database: %w", err))
-		return
-	}
-
-	// Create new store wrappers
-	sessionStore := gorm.NewSessionStore(store)
-	summaryStore := gorm.NewSummaryStore(store)
-	promptStore := gorm.NewPromptStore(store, nil)
-	conflictStore := gorm.NewConflictStore(store)
-	patternStore := gorm.NewPatternStore(store)
-	relationStore := gorm.NewRelationStore(store)
-
-	// Re-wire graph writer callback if active
-	if s.graphWriter != nil {
-		relationStore.SetCallback(s.graphWriter.Enqueue)
-	}
-
-	// Create observation store
-	observationStore := gorm.NewObservationStore(store, nil)
-
-	// Create new session manager
-	sessionManager := session.NewManager(sessionStore)
-
-	// Recreate embedding service and pgvector client
-	var embedSvc *embedding.Service
-	var vectorClient vector.Client
-	var vectorSync *pgvector.Sync
-
-	var reranker reranking.Reranker
-
-	emb, err := embedding.NewServiceFromConfig()
-	if err != nil {
-		log.Warn().Err(err).Msg("Embedding service creation failed after reinit")
-	} else {
-		embedSvc = emb
-
-		// Stop old resilient embedder health-check goroutine before replacing
-		if s.resilientEmbedder != nil {
-			s.resilientEmbedder.Stop()
-		}
-		s.resilientEmbedder = embedding.NewResilientEmbedder(embedSvc)
-
-		client, err := pgvector.NewClient(pgvector.Config{
-			DB:       store.DB,
-			EmbedSvc: embedSvc,
-		})
-		if err != nil {
-			log.Warn().Err(err).Msg("pgvector client creation failed after reinit")
-		} else {
-			vectorClient = client
-			vectorSync = pgvector.NewSync(client)
-			log.Info().Msg("pgvector reconnected after reinit")
-		}
-
-		// Recreate reranking service if enabled
-		if s.config.RerankingEnabled {
-			reranker = s.createReranker()
-		}
-
-		// Recreate query expander
-		s.queryExpander = expansion.NewExpander(embedSvc, s.createHyDEGenerator())
-		log.Info().Msg("Query expansion reconnected after reinit")
-	}
-
-	// Close old reranker if exists
-	s.initMu.RLock()
-	oldReranker := s.reranker
-	s.initMu.RUnlock()
-	if oldReranker != nil {
-		_ = oldReranker.Close()
-	}
-
-	// Recreate SDK processor with new stores
-	var processor *sdk.Processor
-	proc, err := sdk.NewProcessor(observationStore, summaryStore, vectorClient)
-	if err != nil {
-		log.Warn().Err(err).Msg("SDK processor not available after reinit — set ENGRAM_LLM_URL")
-	} else {
-		processor = proc
-		processor.SetBroadcastFunc(func(event map[string]any) {
-			s.sseBroadcaster.Broadcast(event)
-		})
-		// Wire reasoning trace store for System 2 memory
-		processor.SetReasoningStore(gorm.NewReasoningTraceStore(store))
-	}
-
-	// Stop old pattern detector if it exists
-	if s.patternDetector != nil {
-		s.patternDetector.Stop()
-	}
-
-	// Create new pattern detector
-	patternDetector := pattern.NewDetector(patternStore, observationStore, pattern.DefaultConfig())
-
-	// Create raw event store for reinit path
-	rawEventStore := gorm.NewRawEventStore(store)
-
-	// Atomically swap all components
-	s.initMu.Lock()
-	s.store = store
-	s.sessionStore = sessionStore
-	s.rawEventStore = rawEventStore
-	s.injectionStore = gorm.NewInjectionStore(store.GetDB())
-	s.issueStore = gorm.NewIssueStore(store.GetDB())
-	s.agentStatsStore = gorm.NewAgentStatsStore(store.GetDB())
-	s.versionStore = gorm.NewVersionStore(store.GetDB())
-	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
-	if s.retrievalStatsLogStore != nil {
-		s.retrievalStatsLogStore.Close()
-	}
-	s.retrievalStatsLogStore = gorm.NewRetrievalStatsLogStore(store.GetDB())
-	s.observationStore = observationStore
-	s.summaryStore = summaryStore
-	s.promptStore = promptStore
-	s.conflictStore = conflictStore
-	s.patternStore = patternStore
-	s.relationStore = relationStore
-	s.patternDetector = patternDetector
-	s.sessionManager = sessionManager
-	s.processor = processor
-	if processor != nil {
-		processor.SetDedupConfig(s.config.DedupSimilarityThreshold, s.config.DedupWindowSize)
-	}
-	s.embedSvc = embedSvc
-	s.vectorClient = vectorClient
-	s.vectorSync = vectorSync
-	s.reranker = reranker
-	s.initError = nil
-	s.initMu.Unlock()
-
-	// Start pattern detector
-	patternDetector.Start()
-
-	// Setup all vector sync callbacks using the extracted helper (avoids code duplication)
-	s.setupVectorSyncCallbacks(patternDetector, patternStore, observationStore, promptStore, processor, sessionManager, vectorSync)
-
-	// Mark as ready again
-	s.ready.Store(true)
-	log.Info().Msg("Database reinitialization complete")
-
-	// Broadcast status update
-	s.sseBroadcaster.Broadcast(map[string]any{
-		"type":    "database_reinitialized",
-		"message": "Database was recreated after deletion",
-	})
 }
 
 // reloadConfig hot-reloads configuration from disk without process restart.
@@ -1872,14 +1673,6 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/import/feedback", s.handleImportFeedback)
 	})
 
-	// MCP routes (require DB ready, no timeout — long-lived SSE connections)
-	s.router.Group(func(r chi.Router) {
-		r.Use(s.requireReady)
-		r.Handle("/sse", http.HandlerFunc(s.handleMCPSSE))
-		r.Handle("/message", http.HandlerFunc(s.handleMCPSSE))
-		r.Handle("/mcp", http.HandlerFunc(s.handleMCPStreamable))
-	})
-
 	// OpenAI-compatible model list endpoint. Intentionally outside requireReady group:
 	// the model registry is populated at init() time (before DB is ready), so this
 	// endpoint is always available and useful for LiteLLM proxy configuration.
@@ -2062,34 +1855,6 @@ func (s *Service) setupRoutes() {
 	})
 }
 
-// handleMCPSSE delegates /sse and /message requests to the integrated MCP SSE handler.
-func (s *Service) handleMCPSSE(w http.ResponseWriter, r *http.Request) {
-	s.initMu.RLock()
-	handler := s.mcpSSEHandler
-	s.initMu.RUnlock()
-
-	if handler == nil {
-		http.Error(w, "MCP SSE not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// handleMCPStreamable delegates POST /mcp requests to the Streamable HTTP handler.
-func (s *Service) handleMCPStreamable(w http.ResponseWriter, r *http.Request) {
-	s.initMu.RLock()
-	handler := s.mcpStreamableHandler
-	s.initMu.RUnlock()
-
-	if handler == nil {
-		http.Error(w, "MCP Streamable HTTP not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // recordRetrievalStatsExtended records retrieval stats including staleness metrics.
 func (s *Service) recordRetrievalStatsExtended(project string, served, verified, deleted, staleExcluded, freshCount, duplicatesRemoved int64, isSearch bool) {
 	now := time.Now().Unix()
@@ -2230,55 +1995,6 @@ func (s *Service) trackSearchQuery(query, project, queryType string, results int
 	if s.recentQueriesLen < maxRecentQueries {
 		s.recentQueriesLen++
 	}
-}
-
-// getRecentSearchQueries returns recent search queries, optionally filtered by project.
-// Returns newest first.
-func (s *Service) getRecentSearchQueries(project string, limit int) []RecentSearchQuery {
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > maxRecentQueries {
-		limit = maxRecentQueries
-	}
-
-	s.recentQueriesMu.RLock()
-	defer s.recentQueriesMu.RUnlock()
-
-	if s.recentQueriesLen == 0 {
-		return nil
-	}
-
-	if project == "" {
-		// Return all queries up to limit (newest first from circular buffer)
-		count := s.recentQueriesLen
-		if count > limit {
-			count = limit
-		}
-		result := make([]RecentSearchQuery, count)
-		for i := 0; i < count; i++ {
-			idx := (s.recentQueriesHead + i) % maxRecentQueries
-			result[i] = s.recentQueriesBuf[idx]
-		}
-		return result
-	}
-
-	// Filter by project (iterate from newest to oldest)
-	// Use constant capacity to prevent excessive allocation from user input
-	// limit is already bounded to maxRecentQueries above, but we use the constant
-	// directly here to satisfy static analysis tools
-	result := make([]RecentSearchQuery, 0, maxRecentQueries)
-	for i := 0; i < s.recentQueriesLen; i++ {
-		idx := (s.recentQueriesHead + i) % maxRecentQueries
-		q := s.recentQueriesBuf[idx]
-		if q.Project == project {
-			result = append(result, q)
-			if len(result) >= limit {
-				break
-			}
-		}
-	}
-	return result
 }
 
 // getCachedObservationCount returns observation count for a project, using cache if available.
@@ -2569,14 +2285,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		if err := s.server.Shutdown(ctx); err != nil {
 			collectError("http_server", err)
 		}
-	}
-
-	// Phase 1b: Close MCP SSE sessions
-	s.initMu.RLock()
-	sseHandler := s.mcpSSEHandler
-	s.initMu.RUnlock()
-	if sseHandler != nil {
-		sseHandler.Close()
 	}
 
 	// Phase 2: Stop file watchers (prevent new DB recreation)
