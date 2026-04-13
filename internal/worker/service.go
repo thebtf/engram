@@ -1115,9 +1115,12 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetIssueStore(issueStore)
 
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
+	// initMu protects s.grpcServer — the cmux goroutine polls for it.
 	adapter := &mcpHandlerAdapter{mcpServer: mcpServer}
 	grpcSrv, _ := grpcserver.New(adapter)
+	s.initMu.Lock()
 	s.grpcServer = grpcSrv
+	s.initMu.Unlock()
 
 	// TODO: Document embedding will be triggered on doc_create/doc_update via vectorSync.SyncDocument()
 	// when the full embedding pipeline integration is implemented.
@@ -2192,18 +2195,26 @@ func (s *Service) Start() error {
 		m := cmux.New(ln)
 
 		// gRPC connections carry HTTP/2 with the application/grpc content-type header.
-		// Only add gRPC matcher if the gRPC server is available.
-		// Closing a cmux sub-listener cascades to the parent — so we must NOT
-		// create a matcher and then close it, as that kills the entire mux.
-		if s.grpcServer != nil {
-			grpcL := m.Match(cmux.HTTP2HeaderFieldPrefix("content-type", "application/grpc"))
-			go func() {
-				if err := s.grpcServer.Serve(grpcL); err != nil {
-					log.Error().Err(err).Msg("gRPC server error")
-				}
-			}()
-			log.Info().Msg("gRPC server registered on cmux")
-		}
+		// Always register the matcher so gRPC connections don't fall through to HTTP.
+		// The gRPC server may not be ready yet (initializeAsync sets s.grpcServer),
+		// so we start Serve() in a goroutine that waits for the server to appear.
+		grpcL := m.Match(cmux.HTTP2HeaderFieldPrefix("content-type", "application/grpc"))
+		go func() {
+			// Wait for initializeAsync to create the gRPC server.
+			s.initMu.RLock()
+			for s.grpcServer == nil {
+				s.initMu.RUnlock()
+				time.Sleep(100 * time.Millisecond)
+				s.initMu.RLock()
+			}
+			grpcSrv := s.grpcServer
+			s.initMu.RUnlock()
+
+			log.Info().Msg("gRPC server ready, serving on cmux")
+			if err := grpcSrv.Serve(grpcL); err != nil {
+				log.Error().Err(err).Msg("gRPC server error")
+			}
+		}()
 
 		// All other connections (HTTP/1.1, HTTP/2 non-gRPC) go to the HTTP server.
 		httpL := m.Match(cmux.Any())
