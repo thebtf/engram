@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package engram.v1;
+
+option go_package = "github.com/thebtf/engram/proto/engram/v1;engramv1";
+
+// EngramService provides MCP tool access via gRPC.
+// The daemon connects to this service and translates MCP JSON-RPC to gRPC calls.
+service EngramService {
+  // CallTool dispatches a single MCP tool call.
+  // Generic: tool_name + JSON args, matching the MCP tools/call pattern.
+  rpc CallTool(CallToolRequest) returns (CallToolResponse);
+
+  // Initialize returns server info and the list of available tools.
+  rpc Initialize(InitializeRequest) returns (InitializeResponse);
+
+  // Ping is a lightweight health check.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+// CallToolRequest carries an MCP tool invocation.
+message CallToolRequest {
+  // MCP tool name (e.g., "store_memory", "recall", "search").
+  string tool_name = 1;
+  // Tool arguments as JSON bytes (same as MCP JSON-RPC params.arguments).
+  bytes arguments_json = 2;
+  // Project identity for scope isolation (from git-derived slug).
+  string project = 3;
+  // Claude session ID for tracking and outcome propagation.
+  string session_id = 4;
+}
+
+// CallToolResponse carries the result of an MCP tool call.
+message CallToolResponse {
+  // True if the tool returned an error result.
+  bool is_error = 1;
+  // Tool result as JSON bytes (MCP content array serialized).
+  bytes content_json = 2;
+}
+
+// InitializeRequest is the handshake from daemon to server.
+message InitializeRequest {
+  string client_name = 1;
+  string client_version = 2;
+  string project = 3;
+}
+
+// InitializeResponse carries server capabilities and tool definitions.
+message InitializeResponse {
+  string server_name = 1;
+  string server_version = 2;
+  repeated ToolDefinition tools = 3;
+}
+
+// ToolDefinition describes a single MCP tool.
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  // JSON Schema for the tool's input parameters.
+  bytes input_schema_json = 3;
+}
+
+message PingRequest {}
+
+message PingResponse {
+  string status = 1;
+}

@@ -133,6 +133,48 @@ func (s *Server) SetIssueStore(is *gorm.IssueStore) {
 	s.issueStore = is
 }
 
+// HandleRequest dispatches a JSON-RPC request and returns the response.
+// This is the public wrapper for the private handleRequest method,
+// enabling the gRPC adapter to invoke tool calls without duplicating dispatch logic.
+func (s *Server) HandleRequest(ctx context.Context, req *Request) *Response {
+	return s.handleRequest(ctx, req)
+}
+
+// ListTools returns all available tool definitions (primary + secondary).
+// Used by the gRPC adapter to populate the Initialize response.
+func (s *Server) ListTools() []Tool {
+	// Build tools list identical to handleToolsList with include_all=true.
+	// We construct a synthetic request to reuse the existing tool-list logic.
+	req := &Request{
+		JSONRPC: "2.0",
+		ID:      float64(0),
+		Method:  "tools/list",
+		Params:  json.RawMessage(`{"include_all":true}`),
+	}
+	resp := s.handleToolsList(req)
+	if resp == nil || resp.Error != nil {
+		return nil
+	}
+	result, ok := resp.Result.(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, ok := result["tools"]
+	if !ok {
+		return nil
+	}
+	tools, ok := raw.([]Tool)
+	if !ok {
+		return nil
+	}
+	return tools
+}
+
+// Version returns the server version string.
+func (s *Server) Version() string {
+	return s.version
+}
+
 // Request represents a JSON-RPC request.
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`

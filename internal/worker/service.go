@@ -3,7 +3,10 @@ package worker
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
+	"github.com/soheilhy/cmux"
 	httpSwagger "github.com/swaggo/http-swagger"
 	"github.com/thebtf/engram/internal/chunking"
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
@@ -26,6 +30,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/graph/falkordb"
+	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/maintenance"
@@ -46,6 +51,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/pkg/models"
+	googlegrpc "google.golang.org/grpc"
 )
 
 // Service configuration constants
@@ -148,8 +154,6 @@ type Service struct {
 	scoreCalculator        *scoring.Calculator
 	recalculator           *scoring.Recalculator
 	consolidationScheduler *consolidation.Scheduler
-	mcpSSEHandler          *mcp.SSEHandler
-	mcpStreamableHandler   *mcp.StreamableHandler
 	mcpHealth              *mcp.MCPHealth
 	searchMgr              *search.Manager
 	collectionRegistry     *collections.Registry
@@ -175,6 +179,7 @@ type Service struct {
 	expensiveOpLimiter     *ExpensiveOperationLimiter
 	logBuffer              *logbuf.RingBuffer
 	backfillTracker        *backfillTracker
+	grpcServer             *googlegrpc.Server
 	searchQueryLogStore    *gorm.SearchQueryLogStore
 	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
 	injectionStore         *gorm.InjectionStore
@@ -383,7 +388,6 @@ done:
 }
 
 // setupVectorSyncCallbacks configures all vector sync related callbacks on stores and processors.
-// This is extracted to avoid duplication between initializeAsync and reinitializeDatabase.
 func (s *Service) setupVectorSyncCallbacks(
 	patternDetector *pattern.Detector,
 	patternStore *gorm.PatternStore,
@@ -1110,6 +1114,11 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetReasoningStore(reasoningStore)
 	mcpServer.SetIssueStore(issueStore)
 
+	// Wire gRPC server: create adapter over mcpServer and register with the server.
+	adapter := &mcpHandlerAdapter{mcpServer: mcpServer}
+	grpcSrv, _ := grpcserver.New(adapter)
+	s.grpcServer = grpcSrv
+
 	// TODO: Document embedding will be triggered on doc_create/doc_update via vectorSync.SyncDocument()
 	// when the full embedding pipeline integration is implemented.
 
@@ -1123,20 +1132,13 @@ func (s *Service) initializeAsync() {
 	searchMgr.SetProjectSettingsStore(projectSettingsStore)
 	s.projectSettingsStore = projectSettingsStore
 
-	mcpSSEHandler := mcp.NewSSEHandler(mcpServer)
-	mcpStreamableHandler := mcp.NewStreamableHandler(mcpServer, s.mcpHealth)
-
 	s.initMu.Lock()
 	s.searchMgr = searchMgr
 	s.collectionRegistry = collectionRegistry
 	s.sessionIdxStore = sessionIdxStore
 	s.searchQueryLogStore = searchQueryLogStore
 	s.retrievalStatsLogStore = retrievalStatsLogStore
-	s.mcpSSEHandler = mcpSSEHandler
-	s.mcpStreamableHandler = mcpStreamableHandler
 	s.initMu.Unlock()
-
-	log.Info().Msg("MCP handlers integrated into worker (SSE + Streamable HTTP)")
 
 	// Mark as ready
 	s.ready.Store(true)
@@ -1196,195 +1198,6 @@ func (s *Service) startWatchers() {
 			log.Info().Str("path", configPath).Msg("Config file watcher started")
 		}
 	}
-}
-
-// reinitializeDatabase recreates the database after deletion.
-func (s *Service) reinitializeDatabase() {
-	// Block new requests
-	s.ready.Store(false)
-	log.Info().Msg("Database reinitialization starting...")
-
-	// Get old store references
-	s.initMu.Lock()
-	oldStore := s.store
-	oldSessionManager := s.sessionManager
-	oldEmbedSvc := s.embedSvc
-	s.initMu.Unlock()
-
-	// Close old embedding service
-	if oldEmbedSvc != nil {
-		if err := oldEmbedSvc.Close(); err != nil {
-			log.Warn().Err(err).Msg("Error closing old embedding service")
-		}
-	}
-	if oldStore != nil {
-		if err := oldStore.Close(); err != nil {
-			log.Warn().Err(err).Msg("Error closing old database")
-		}
-	}
-
-	// Clear in-memory sessions (they reference old DB IDs)
-	if oldSessionManager != nil {
-		oldSessionManager.ShutdownAll(s.ctx)
-	}
-
-	// Ensure data directory and settings exist (may have been deleted)
-	if err := config.EnsureAll(); err != nil {
-		s.setInitError(fmt.Errorf("ensure data dir on reinit: %w", err))
-		return
-	}
-
-	// Reconnect to PostgreSQL
-	store, err := gorm.NewStore(gorm.Config{
-		DSN:      s.config.DatabaseDSN,
-		MaxConns: s.config.DatabaseMaxConns,
-	})
-	if err != nil {
-		s.setInitError(fmt.Errorf("reinit database: %w", err))
-		return
-	}
-
-	// Create new store wrappers
-	sessionStore := gorm.NewSessionStore(store)
-	summaryStore := gorm.NewSummaryStore(store)
-	promptStore := gorm.NewPromptStore(store, nil)
-	conflictStore := gorm.NewConflictStore(store)
-	patternStore := gorm.NewPatternStore(store)
-	relationStore := gorm.NewRelationStore(store)
-
-	// Re-wire graph writer callback if active
-	if s.graphWriter != nil {
-		relationStore.SetCallback(s.graphWriter.Enqueue)
-	}
-
-	// Create observation store
-	observationStore := gorm.NewObservationStore(store, nil)
-
-	// Create new session manager
-	sessionManager := session.NewManager(sessionStore)
-
-	// Recreate embedding service and pgvector client
-	var embedSvc *embedding.Service
-	var vectorClient vector.Client
-	var vectorSync *pgvector.Sync
-
-	var reranker reranking.Reranker
-
-	emb, err := embedding.NewServiceFromConfig()
-	if err != nil {
-		log.Warn().Err(err).Msg("Embedding service creation failed after reinit")
-	} else {
-		embedSvc = emb
-
-		// Stop old resilient embedder health-check goroutine before replacing
-		if s.resilientEmbedder != nil {
-			s.resilientEmbedder.Stop()
-		}
-		s.resilientEmbedder = embedding.NewResilientEmbedder(embedSvc)
-
-		client, err := pgvector.NewClient(pgvector.Config{
-			DB:       store.DB,
-			EmbedSvc: embedSvc,
-		})
-		if err != nil {
-			log.Warn().Err(err).Msg("pgvector client creation failed after reinit")
-		} else {
-			vectorClient = client
-			vectorSync = pgvector.NewSync(client)
-			log.Info().Msg("pgvector reconnected after reinit")
-		}
-
-		// Recreate reranking service if enabled
-		if s.config.RerankingEnabled {
-			reranker = s.createReranker()
-		}
-
-		// Recreate query expander
-		s.queryExpander = expansion.NewExpander(embedSvc, s.createHyDEGenerator())
-		log.Info().Msg("Query expansion reconnected after reinit")
-	}
-
-	// Close old reranker if exists
-	s.initMu.RLock()
-	oldReranker := s.reranker
-	s.initMu.RUnlock()
-	if oldReranker != nil {
-		_ = oldReranker.Close()
-	}
-
-	// Recreate SDK processor with new stores
-	var processor *sdk.Processor
-	proc, err := sdk.NewProcessor(observationStore, summaryStore, vectorClient)
-	if err != nil {
-		log.Warn().Err(err).Msg("SDK processor not available after reinit — set ENGRAM_LLM_URL")
-	} else {
-		processor = proc
-		processor.SetBroadcastFunc(func(event map[string]any) {
-			s.sseBroadcaster.Broadcast(event)
-		})
-		// Wire reasoning trace store for System 2 memory
-		processor.SetReasoningStore(gorm.NewReasoningTraceStore(store))
-	}
-
-	// Stop old pattern detector if it exists
-	if s.patternDetector != nil {
-		s.patternDetector.Stop()
-	}
-
-	// Create new pattern detector
-	patternDetector := pattern.NewDetector(patternStore, observationStore, pattern.DefaultConfig())
-
-	// Create raw event store for reinit path
-	rawEventStore := gorm.NewRawEventStore(store)
-
-	// Atomically swap all components
-	s.initMu.Lock()
-	s.store = store
-	s.sessionStore = sessionStore
-	s.rawEventStore = rawEventStore
-	s.injectionStore = gorm.NewInjectionStore(store.GetDB())
-	s.issueStore = gorm.NewIssueStore(store.GetDB())
-	s.agentStatsStore = gorm.NewAgentStatsStore(store.GetDB())
-	s.versionStore = gorm.NewVersionStore(store.GetDB())
-	s.searchQueryLogStore = gorm.NewSearchQueryLogStore(store.GetDB())
-	if s.retrievalStatsLogStore != nil {
-		s.retrievalStatsLogStore.Close()
-	}
-	s.retrievalStatsLogStore = gorm.NewRetrievalStatsLogStore(store.GetDB())
-	s.observationStore = observationStore
-	s.summaryStore = summaryStore
-	s.promptStore = promptStore
-	s.conflictStore = conflictStore
-	s.patternStore = patternStore
-	s.relationStore = relationStore
-	s.patternDetector = patternDetector
-	s.sessionManager = sessionManager
-	s.processor = processor
-	if processor != nil {
-		processor.SetDedupConfig(s.config.DedupSimilarityThreshold, s.config.DedupWindowSize)
-	}
-	s.embedSvc = embedSvc
-	s.vectorClient = vectorClient
-	s.vectorSync = vectorSync
-	s.reranker = reranker
-	s.initError = nil
-	s.initMu.Unlock()
-
-	// Start pattern detector
-	patternDetector.Start()
-
-	// Setup all vector sync callbacks using the extracted helper (avoids code duplication)
-	s.setupVectorSyncCallbacks(patternDetector, patternStore, observationStore, promptStore, processor, sessionManager, vectorSync)
-
-	// Mark as ready again
-	s.ready.Store(true)
-	log.Info().Msg("Database reinitialization complete")
-
-	// Broadcast status update
-	s.sseBroadcaster.Broadcast(map[string]any{
-		"type":    "database_reinitialized",
-		"message": "Database was recreated after deletion",
-	})
 }
 
 // reloadConfig hot-reloads configuration from disk without process restart.
@@ -1770,6 +1583,66 @@ func (s *Service) verifyStaleObservation(req staleVerifyRequest) {
 	}
 }
 
+// mcpHandlerAdapter wraps mcp.Server to implement grpcserver.MCPHandler.
+// It translates gRPC tool-call requests into MCP JSON-RPC requests and back.
+type mcpHandlerAdapter struct {
+	mcpServer *mcp.Server
+}
+
+// HandleToolCall implements grpcserver.MCPHandler.
+func (a *mcpHandlerAdapter) HandleToolCall(ctx context.Context, toolName string, argsJSON []byte) ([]byte, bool, error) {
+	params := map[string]any{
+		"name":      toolName,
+		"arguments": json.RawMessage(argsJSON),
+	}
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to marshal tool call params: %w", err)
+	}
+
+	req := &mcp.Request{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(paramsJSON),
+	}
+
+	resp := a.mcpServer.HandleRequest(ctx, req)
+	if resp == nil {
+		return nil, false, fmt.Errorf("no response from MCP server")
+	}
+	if resp.Error != nil {
+		errJSON, _ := json.Marshal(resp.Error)
+		return errJSON, true, nil
+	}
+
+	resultJSON, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to marshal MCP result: %w", err)
+	}
+	return resultJSON, false, nil
+}
+
+// ToolDefinitions implements grpcserver.MCPHandler.
+func (a *mcpHandlerAdapter) ToolDefinitions() []grpcserver.ToolDef {
+	tools := a.mcpServer.ListTools()
+	defs := make([]grpcserver.ToolDef, len(tools))
+	for i, t := range tools {
+		schemaJSON, _ := json.Marshal(t.InputSchema)
+		defs[i] = grpcserver.ToolDef{
+			Name:            t.Name,
+			Description:     t.Description,
+			InputSchemaJSON: schemaJSON,
+		}
+	}
+	return defs
+}
+
+// ServerInfo implements grpcserver.MCPHandler.
+func (a *mcpHandlerAdapter) ServerInfo() (string, string) {
+	return "engram", a.mcpServer.Version()
+}
+
 // setupMiddleware configures HTTP middleware.
 func (s *Service) setupMiddleware() {
 	// Add request ID first so all subsequent logs can include it
@@ -1870,14 +1743,6 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/backfill/session", s.handleBackfillSession)
 		r.Get("/api/backfill/status", s.handleBackfillStatus)
 		r.Post("/api/import/feedback", s.handleImportFeedback)
-	})
-
-	// MCP routes (require DB ready, no timeout — long-lived SSE connections)
-	s.router.Group(func(r chi.Router) {
-		r.Use(s.requireReady)
-		r.Handle("/sse", http.HandlerFunc(s.handleMCPSSE))
-		r.Handle("/message", http.HandlerFunc(s.handleMCPSSE))
-		r.Handle("/mcp", http.HandlerFunc(s.handleMCPStreamable))
 	})
 
 	// OpenAI-compatible model list endpoint. Intentionally outside requireReady group:
@@ -2062,34 +1927,6 @@ func (s *Service) setupRoutes() {
 	})
 }
 
-// handleMCPSSE delegates /sse and /message requests to the integrated MCP SSE handler.
-func (s *Service) handleMCPSSE(w http.ResponseWriter, r *http.Request) {
-	s.initMu.RLock()
-	handler := s.mcpSSEHandler
-	s.initMu.RUnlock()
-
-	if handler == nil {
-		http.Error(w, "MCP SSE not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// handleMCPStreamable delegates POST /mcp requests to the Streamable HTTP handler.
-func (s *Service) handleMCPStreamable(w http.ResponseWriter, r *http.Request) {
-	s.initMu.RLock()
-	handler := s.mcpStreamableHandler
-	s.initMu.RUnlock()
-
-	if handler == nil {
-		http.Error(w, "MCP Streamable HTTP not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // recordRetrievalStatsExtended records retrieval stats including staleness metrics.
 func (s *Service) recordRetrievalStatsExtended(project string, served, verified, deleted, staleExcluded, freshCount, duplicatesRemoved int64, isSearch bool) {
 	now := time.Now().Unix()
@@ -2232,55 +2069,6 @@ func (s *Service) trackSearchQuery(query, project, queryType string, results int
 	}
 }
 
-// getRecentSearchQueries returns recent search queries, optionally filtered by project.
-// Returns newest first.
-func (s *Service) getRecentSearchQueries(project string, limit int) []RecentSearchQuery {
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > maxRecentQueries {
-		limit = maxRecentQueries
-	}
-
-	s.recentQueriesMu.RLock()
-	defer s.recentQueriesMu.RUnlock()
-
-	if s.recentQueriesLen == 0 {
-		return nil
-	}
-
-	if project == "" {
-		// Return all queries up to limit (newest first from circular buffer)
-		count := s.recentQueriesLen
-		if count > limit {
-			count = limit
-		}
-		result := make([]RecentSearchQuery, count)
-		for i := 0; i < count; i++ {
-			idx := (s.recentQueriesHead + i) % maxRecentQueries
-			result[i] = s.recentQueriesBuf[idx]
-		}
-		return result
-	}
-
-	// Filter by project (iterate from newest to oldest)
-	// Use constant capacity to prevent excessive allocation from user input
-	// limit is already bounded to maxRecentQueries above, but we use the constant
-	// directly here to satisfy static analysis tools
-	result := make([]RecentSearchQuery, 0, maxRecentQueries)
-	for i := 0; i < s.recentQueriesLen; i++ {
-		idx := (s.recentQueriesHead + i) % maxRecentQueries
-		q := s.recentQueriesBuf[idx]
-		if q.Project == project {
-			result = append(result, q)
-			if len(result) >= limit {
-				break
-			}
-		}
-	}
-	return result
-}
-
 // getCachedObservationCount returns observation count for a project, using cache if available.
 // Falls back to database query if cache is expired or missing.
 func (s *Service) getCachedObservationCount(ctx context.Context, project string) (int, error) {
@@ -2364,8 +2152,10 @@ func (s *Service) Start() error {
 	}
 
 	host := config.GetWorkerHost()
+	addr := fmt.Sprintf("%s:%d", host, port)
+
 	s.server = &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", host, port),
+		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -2376,31 +2166,82 @@ func (s *Service) Start() error {
 	// Check if we're in restart mode (after update)
 	isRestart := os.Getenv("ENGRAM_RESTART") == "1"
 
+	// startWithListener binds a TCP listener and launches HTTP + optional gRPC via cmux.
+	// Extracted so the retry loop can re-bind on a new listener each attempt.
+	startWithListener := func() error {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
+
+		// Optional TLS: wrap listener if cert + key are provided.
+		tlsCert := os.Getenv("ENGRAM_TLS_CERT")
+		tlsKey := os.Getenv("ENGRAM_TLS_KEY")
+		if tlsCert != "" && tlsKey != "" {
+			cert, tlsErr := tls.LoadX509KeyPair(tlsCert, tlsKey)
+			if tlsErr != nil {
+				_ = ln.Close()
+				return fmt.Errorf("failed to load TLS keypair: %w", tlsErr)
+			}
+			ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}})
+			log.Info().Str("cert", tlsCert).Msg("TLS enabled")
+		} else {
+			log.Warn().Msg("TLS not configured (ENGRAM_TLS_CERT / ENGRAM_TLS_KEY unset) — serving plaintext")
+		}
+
+		m := cmux.New(ln)
+
+		// gRPC connections carry HTTP/2 with the application/grpc content-type header.
+		grpcL := m.Match(cmux.HTTP2HeaderFieldPrefix("content-type", "application/grpc"))
+		// All other connections go to the HTTP/1.1 server.
+		httpL := m.Match(cmux.Any())
+
+		// Serve gRPC if the server is wired up (available after initializeAsync completes).
+		if s.grpcServer != nil {
+			go func() {
+				if err := s.grpcServer.Serve(grpcL); err != nil {
+					log.Error().Err(err).Msg("gRPC server error")
+				}
+			}()
+		} else {
+			// No gRPC server yet — drain the grpcL so cmux does not stall.
+			go func() { _ = grpcL.Close() }()
+		}
+
+		go func() {
+			if err := s.server.Serve(httpL); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("HTTP server error")
+			}
+		}()
+
+		// m.Serve() blocks until the listener is closed (i.e. on shutdown).
+		if err := m.Serve(); err != nil {
+			// cmux returns an error when the underlying listener is closed during shutdown.
+			// Treat that the same as http.ErrServerClosed — not a real error.
+			log.Debug().Err(err).Msg("cmux serve returned (expected on shutdown)")
+		}
+		return nil
+	}
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 
-		var lastErr error
 		maxRetries := 1
 		if isRestart {
 			maxRetries = 10 // Retry up to 10 times during restart
 		}
 
 		for i := 0; i < maxRetries; i++ {
-			lastErr = s.server.ListenAndServe()
-			if lastErr == http.ErrServerClosed {
-				return // Normal shutdown
+			if err := startWithListener(); err != nil {
+				if i < maxRetries-1 && isRestart {
+					log.Warn().Err(err).Int("retry", i+1).Msg("Port not ready, retrying...")
+					time.Sleep(500 * time.Millisecond)
+					continue
+				}
+				log.Error().Err(err).Msg("Failed to start listener")
 			}
-
-			if i < maxRetries-1 && isRestart {
-				log.Warn().Err(lastErr).Int("retry", i+1).Msg("Port not ready, retrying...")
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
-		}
-
-		if lastErr != nil {
-			log.Error().Err(lastErr).Msg("HTTP server error")
+			return
 		}
 	}()
 
@@ -2563,20 +2404,15 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Phase 1: Stop accepting new work (HTTP server shutdown first)
-	log.Debug().Msg("Phase 1: Stopping HTTP server...")
+	// Phase 1: Stop accepting new work (HTTP server and gRPC server shutdown first)
+	log.Debug().Msg("Phase 1: Stopping HTTP and gRPC servers...")
 	if s.server != nil {
 		if err := s.server.Shutdown(ctx); err != nil {
 			collectError("http_server", err)
 		}
 	}
-
-	// Phase 1b: Close MCP SSE sessions
-	s.initMu.RLock()
-	sseHandler := s.mcpSSEHandler
-	s.initMu.RUnlock()
-	if sseHandler != nil {
-		sseHandler.Close()
+	if s.grpcServer != nil {
+		s.grpcServer.GracefulStop()
 	}
 
 	// Phase 2: Stop file watchers (prevent new DB recreation)
