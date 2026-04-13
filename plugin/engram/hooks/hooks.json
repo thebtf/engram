@@ -6,6 +6,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-binary.js",
+            "timeout": 60
+          },
+          {
+            "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js",
             "timeout": 30
           }

@@ -1,11 +1,23 @@
 {
   "name": "engram",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Persistent memory for Claude Code — captures observations, stores knowledge across sessions, injects relevant context automatically",
   "author": {
     "name": "thebtf"
   },
   "homepage": "https://github.com/thebtf/engram",
   "repository": "https://github.com/thebtf/engram",
-  "license": "MIT"
+  "license": "MIT",
+  "userConfig": {
+    "server_url": {
+      "description": "Engram server URL (e.g. http://192.168.1.100:37777)",
+      "required": true,
+      "sensitive": false
+    },
+    "api_token": {
+      "description": "API authentication token for your engram server",
+      "required": true,
+      "sensitive": true
+    }
+  }
 }
