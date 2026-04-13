@@ -14,9 +14,15 @@ GOARCH ?= $(shell go env GOARCH)
 export CGO_ENABLED=1
 BUILD_TAGS := -tags "fts5"
 
-.PHONY: all build clean test install lint worker mcp stop-worker start-worker restart-worker dashboard website dev-website setup-libs
+.PHONY: all build clean test install lint worker mcp stop-worker start-worker restart-worker dashboard website dev-website setup-libs proto
 
 all: build
+
+# Generate protobuf Go code
+proto:
+	protoc --go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		proto/engram/v1/engram.proto
 
 # Legacy target (ONNX runtime libraries no longer required)
 setup-libs:
