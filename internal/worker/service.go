@@ -1648,7 +1648,7 @@ func (s *Service) setupMiddleware() {
 	// Add request ID first so all subsequent logs can include it
 	s.router.Use(RequestID)
 
-	s.router.Use(middleware.Logger)
+	s.router.Use(debugRequestLogger)
 	s.router.Use(middleware.Recoverer)
 	s.router.Use(middleware.RealIP)
 

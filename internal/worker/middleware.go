@@ -18,8 +18,9 @@ import (
 	"sync"
 	"time"
 
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -444,6 +445,24 @@ func GetRequestID(ctx context.Context) string {
 		return id
 	}
 	return ""
+}
+
+// debugRequestLogger logs HTTP requests at DEBUG level using zerolog.
+// Replaces chi's middleware.Logger which uses Go's log package at INFO level.
+func debugRequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+		log.Debug().
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Int("status", ww.Status()).
+			Int("bytes", ww.BytesWritten()).
+			Dur("duration", time.Since(start)).
+			Str("from", r.RemoteAddr).
+			Msg("HTTP request")
+	})
 }
 
 // RequireJSONContentType middleware validates that POST/PUT/PATCH requests
