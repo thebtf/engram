@@ -136,7 +136,7 @@ function download(url, destPath) {
         file.close(resolve);
       });
       file.on("error", (err) => {
-        fs.unlinkSync(destPath);
+        try { fs.unlinkSync(destPath); } catch {}
         reject(err);
       });
     }).on("error", reject);
