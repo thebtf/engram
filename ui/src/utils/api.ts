@@ -1064,10 +1064,12 @@ export async function fetchIssues(
   limit?: number,
   offset?: number,
   signal?: AbortSignal,
-  type?: string
+  type?: string,
+  sourceProject?: string
 ): Promise<IssueListResponse> {
   const params = new URLSearchParams()
   if (project) params.set('project', project)
+  if (sourceProject) params.set('source_project', sourceProject)
   if (status) params.set('status', status)
   if (limit) params.set('limit', String(limit))
   if (offset) params.set('offset', String(offset))

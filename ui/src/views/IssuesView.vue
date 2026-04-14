@@ -7,7 +7,13 @@ import { formatRelativeTime } from '@/utils/formatters'
 import EmptyState from '@/components/layout/EmptyState.vue'
 
 const router = useRouter()
-const { issues, total, loading, error, statusFilter, typeFilter, load } = useIssues()
+const { issues, total, loading, error, statusFilter, sourceProjectFilter, typeFilter, load } = useIssues()
+const myIssuesOnly = ref(false)
+
+function toggleMyIssues() {
+  myIssuesOnly.value = !myIssuesOnly.value
+  sourceProjectFilter.value = myIssuesOnly.value ? 'dashboard' : ''
+}
 
 // --- New Issue modal state ---
 const showNewIssue = ref(false)
@@ -131,6 +137,17 @@ const typeLabel = (t: string) => t === '' ? 'All' : t.charAt(0).toUpperCase() + 
       <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">Issues</h1>
       <div class="flex items-center gap-3">
         <span class="text-sm text-gray-500">{{ total }} total</span>
+        <button
+          @click="toggleMyIssues"
+          :class="[
+            'px-3 py-1.5 text-sm rounded-md transition-colors',
+            myIssuesOnly
+              ? 'bg-purple-600 text-white hover:bg-purple-500'
+              : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+          ]"
+        >
+          <i class="fas fa-user mr-1" />My Issues
+        </button>
         <button
           @click="openNewIssue"
           class="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
