@@ -3,19 +3,19 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -24,28 +24,28 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-func main() {
-	// Resolve project identity before engine starts.
-	// The shim runs in the user's repo directory so "." is the project root.
-	slug, remote, err := proxy.ResolveProjectSlug(".")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[engram] warning: git identity failed: %v\n", err)
-	}
-	if slug != "" {
-		os.Setenv("ENGRAM_PROJECT", slug)
-		fmt.Fprintf(os.Stderr, "[engram] project: %s\n", slug)
-		if remote != "" {
-			fmt.Fprintf(os.Stderr, "[engram] git remote: %s\n", safeRemoteURL(remote))
-		}
-	}
+// engramHandler implements muxcore.SessionHandler and muxcore.ProjectLifecycle.
+// It holds a pool of gRPC connections (keyed by address+TLS mode) and a cache
+// of resolved project slugs (keyed by ProjectContext.ID).
+type engramHandler struct {
+	grpcConns sync.Map // connKey → *grpc.ClientConn
+	slugCache sync.Map // ProjectContext.ID → string (resolved slug)
+}
 
+// connKey is the cache key for gRPC connections.
+type connKey struct {
+	addr    string
+	tlsMode string // "custom-ca", "system-tls", "plaintext"
+}
+
+func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	eng, err := engine.New(engine.Config{
-		Name:       "engram",
-		Persistent: true,
-		Handler:    mcpHandler,
+		Name:           "engram",
+		Persistent:     true,
+		SessionHandler: &engramHandler{},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[engram] engine error: %v\n", err)
@@ -58,32 +58,124 @@ func main() {
 	}
 }
 
-// mcpHandler is called by muxcore for each MCP session with per-session
-// stdin/stdout. It reads config from env (forwarded by muxcore from the shim),
-// dials the engram gRPC server, and runs the JSON-RPC ↔ gRPC translation loop.
-func mcpHandler(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
-	serverURL := os.Getenv("ENGRAM_URL")
-	if serverURL == "" {
-		return fmt.Errorf("ENGRAM_URL not set")
-	}
-	token := os.Getenv("ENGRAM_API_TOKEN")
-	project := os.Getenv("ENGRAM_PROJECT")
+// ---------------------------------------------------------------------------
+// SessionHandler implementation
+// ---------------------------------------------------------------------------
 
+// HandleRequest processes one MCP JSON-RPC request per session.
+// Implements muxcore.SessionHandler.
+func (h *engramHandler) HandleRequest(ctx context.Context, p muxcore.ProjectContext, request []byte) ([]byte, error) {
+	serverURL := envOrDefault(p.Env, "ENGRAM_URL")
+	if serverURL == "" {
+		return nil, fmt.Errorf("ENGRAM_URL not set")
+	}
+	token := envOrDefault(p.Env, "ENGRAM_API_TOKEN")
+	project := h.resolveProject(p)
+
+	conn, err := h.getOrDialGRPC(serverURL, token)
+	if err != nil {
+		return nil, fmt.Errorf("gRPC connect: %w", err)
+	}
+
+	client := pb.NewEngramServiceClient(conn)
+
+	var req jsonrpcRequest
+	if err := json.Unmarshal(request, &req); err != nil {
+		resp := jsonrpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &jsonrpcError{Code: -32700, Message: "Parse error"},
+		}
+		return json.Marshal(resp)
+	}
+
+	resp := handleJSONRPC(ctx, client, &req, project)
+	return json.Marshal(resp)
+}
+
+// OnProjectConnect is called when a CC session connects.
+// Implements muxcore.ProjectLifecycle.
+func (h *engramHandler) OnProjectConnect(p muxcore.ProjectContext) {
+	slug := h.resolveProject(p)
+	fmt.Fprintf(os.Stderr, "[engram] session connected: project=%s, cwd=%s\n", slug, p.Cwd)
+}
+
+// OnProjectDisconnect is called when a CC session disconnects.
+// Implements muxcore.ProjectLifecycle.
+func (h *engramHandler) OnProjectDisconnect(projectID string) {
+	fmt.Fprintf(os.Stderr, "[engram] session disconnected: project=%s\n", projectID)
+}
+
+// ---------------------------------------------------------------------------
+// Helper methods
+// ---------------------------------------------------------------------------
+
+// envOrDefault returns the value from the session env map if present,
+// falling back to os.Getenv. Session env takes priority (per-project config).
+func envOrDefault(env map[string]string, key string) string {
+	if env != nil {
+		if v, ok := env[key]; ok && v != "" {
+			return v
+		}
+	}
+	return os.Getenv(key)
+}
+
+// resolveProject returns the engram project slug for the given session.
+// Result is cached per ProjectContext.ID to avoid repeated git operations.
+func (h *engramHandler) resolveProject(p muxcore.ProjectContext) string {
+	if cached, ok := h.slugCache.Load(p.ID); ok {
+		return cached.(string)
+	}
+	slug, remote, err := proxy.ResolveProjectSlug(p.Cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[engram] warning: project identity failed for %s: %v\n", p.Cwd, err)
+		slug = p.ID // fallback to muxcore's ProjectContext.ID
+	}
+	if remote != "" {
+		fmt.Fprintf(os.Stderr, "[engram] project: %s (remote: %s)\n", slug, safeRemoteURL(remote))
+	}
+	h.slugCache.Store(p.ID, slug)
+	return slug
+}
+
+// getOrDialGRPC returns a pooled gRPC connection for the given server URL.
+// Connections are created on first use and shared across sessions.
+func (h *engramHandler) getOrDialGRPC(serverURL, token string) (*grpc.ClientConn, error) {
 	grpcAddr, err := parseGRPCAddr(serverURL)
 	if err != nil {
-		return fmt.Errorf("parse ENGRAM_URL: %w", err)
+		return nil, fmt.Errorf("parse server URL: %w", err)
+	}
+
+	tlsMode := "plaintext"
+	if os.Getenv("ENGRAM_TLS_CA") != "" {
+		tlsMode = "custom-ca"
+	} else if strings.HasPrefix(serverURL, "https") {
+		tlsMode = "system-tls"
+	}
+
+	key := connKey{addr: grpcAddr, tlsMode: tlsMode}
+	if existing, ok := h.grpcConns.Load(key); ok {
+		return existing.(*grpc.ClientConn), nil
 	}
 
 	conn, err := dialGRPC(grpcAddr, serverURL, token)
 	if err != nil {
-		return fmt.Errorf("gRPC connect: %w", err)
+		return nil, err
 	}
-	defer conn.Close()
 
-	client := pb.NewEngramServiceClient(conn)
-
-	return runTranslator(ctx, stdin, stdout, client, project)
+	actual, loaded := h.grpcConns.LoadOrStore(key, conn)
+	if loaded {
+		// Another goroutine created the connection first — close ours.
+		conn.Close()
+		return actual.(*grpc.ClientConn), nil
+	}
+	return conn, nil
 }
+
+// ---------------------------------------------------------------------------
+// gRPC transport helpers
+// ---------------------------------------------------------------------------
 
 // parseGRPCAddr extracts host:port from a URL.
 // Example: "http://unleashed.lan:37777" → "unleashed.lan:37777".
@@ -188,45 +280,8 @@ type jsonrpcError struct {
 }
 
 // ---------------------------------------------------------------------------
-// Translation loop
+// JSON-RPC dispatch
 // ---------------------------------------------------------------------------
-
-// runTranslator reads JSON-RPC lines from stdin, dispatches each to gRPC, and
-// writes responses to stdout. It exits cleanly when ctx is cancelled or stdin
-// reaches EOF.
-func runTranslator(ctx context.Context, stdin io.Reader, stdout io.Writer, client pb.EngramServiceClient, project string) error {
-	scanner := bufio.NewScanner(stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024) // 4 MB max line
-	encoder := json.NewEncoder(stdout)
-
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		var req jsonrpcRequest
-		if err := json.Unmarshal([]byte(line), &req); err != nil {
-			_ = encoder.Encode(jsonrpcResponse{
-				JSONRPC: "2.0",
-				ID:      req.ID,
-				Error:   &jsonrpcError{Code: -32700, Message: "Parse error"},
-			})
-			continue
-		}
-
-		resp := handleJSONRPC(ctx, client, &req, project)
-		_ = encoder.Encode(resp)
-	}
-
-	return scanner.Err()
-}
 
 // handleJSONRPC dispatches a single JSON-RPC request to the appropriate handler.
 func handleJSONRPC(ctx context.Context, client pb.EngramServiceClient, req *jsonrpcRequest, project string) jsonrpcResponse {
