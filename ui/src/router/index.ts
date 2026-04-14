@@ -3,6 +3,19 @@ import { useAuth } from '@/composables/useAuth'
 
 const routes = [
   {
+    path: '/setup',
+    name: 'setup',
+    component: () => import('@/views/SetupView.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/register',
+    name: 'register',
+    // Placeholder — full implementation in T016-T017
+    component: () => import('@/views/LoginView.vue'),
+    meta: { public: true },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginView.vue'),
@@ -99,19 +112,32 @@ const router = createRouter({
   routes,
 })
 
-// Navigation guard: redirect to login when not authenticated
+// Navigation guard: check setup-needed, then enforce auth
 router.beforeEach(async (to) => {
-  const { authenticated, loading, checkAuth } = useAuth()
+  const { authenticated, loading, checkAuth, checkSetupNeeded } = useAuth()
 
   if (loading.value) {
     await checkAuth()
   }
 
+  // Always allow /setup itself to prevent redirect loops
+  if (to.name === 'setup') {
+    return
+  }
+
+  // Check if first-time setup is required
+  const setupNeeded = await checkSetupNeeded()
+  if (setupNeeded) {
+    return { name: 'setup' }
+  }
+
+  // Redirect unauthenticated users to login (skip public routes)
   if (!to.meta.public && !authenticated.value) {
     return { name: 'login' }
   }
 
-  if (to.name === 'login' && authenticated.value) {
+  // Redirect already-authenticated users away from login/register
+  if ((to.name === 'login' || to.name === 'register') && authenticated.value) {
     return { name: 'home' }
   }
 })
