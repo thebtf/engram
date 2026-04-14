@@ -20,17 +20,42 @@ const trackedProjects = ref<string[]>([])
 const creating = ref(false)
 const createError = ref<string | null>(null)
 
+// Restore last-used type and target project from localStorage (priority always resets to 'medium').
+const STORAGE_KEY = 'engram:newIssueDefaults'
+
+function loadDefaults() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+    const saved = JSON.parse(raw)
+    if (saved.type) newType.value = saved.type
+    if (saved.targetProject) newTargetProject.value = saved.targetProject
+  } catch { /* ignore corrupt localStorage */ }
+}
+
+function saveDefaults() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    type: newType.value,
+    targetProject: newTargetProject.value,
+  }))
+}
+
 onMounted(async () => {
   load()
   trackedProjects.value = await fetchTrackedProjects()
+  loadDefaults()
+  // If saved target project is not in the list, fall back to first
+  if (newTargetProject.value && !trackedProjects.value.includes(newTargetProject.value)) {
+    newTargetProject.value = trackedProjects.value[0] || ''
+  }
 })
 
 async function openNewIssue() {
   newTitle.value = ''
   newBody.value = ''
-  newType.value = 'task'
+  // Keep type and targetProject from last submission (loaded from localStorage).
+  // Priority always resets to 'medium' per issue #61 requirement.
   newPriority.value = 'medium'
-  newTargetProject.value = trackedProjects.value[0] || ''
   createError.value = null
   showNewIssue.value = true
 }
@@ -47,6 +72,7 @@ async function submitNewIssue() {
       priority: newPriority.value,
       target_project: newTargetProject.value,
     })
+    saveDefaults()
     showNewIssue.value = false
     await load()
   } catch (err: any) {
