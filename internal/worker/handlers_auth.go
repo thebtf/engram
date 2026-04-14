@@ -164,7 +164,7 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check cookie manually (since middleware was bypassed)
+	// Check HMAC session cookie (legacy token-based login)
 	if s.tokenAuth != nil {
 		s.tokenAuth.mu.RLock()
 		cookieKey := s.tokenAuth.cookieKey
@@ -181,6 +181,23 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 						"authenticated": true,
 						"role":          "admin",
 						"auth_disabled": authDisabled,
+					})
+					return
+				}
+			}
+		}
+	}
+
+	// Check DB-backed auth session cookie (user/pass login)
+	if s.authHandlers != nil {
+		if cookie, err := r.Cookie("engram_auth"); err == nil && cookie.Value != "" {
+			if sess, err := s.authHandlers.sessions.GetSession(cookie.Value); err == nil {
+				if user, err := s.authHandlers.users.GetUserByID(sess.UserID); err == nil && !user.Disabled {
+					writeJSON(w, map[string]any{
+						"authenticated": true,
+						"role":          user.Role,
+						"auth_disabled": authDisabled,
+						"user":          map[string]any{"id": user.ID, "email": user.Email, "role": user.Role},
 					})
 					return
 				}
