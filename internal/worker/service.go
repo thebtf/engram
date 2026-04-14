@@ -2195,10 +2195,14 @@ func (s *Service) Start() error {
 		m := cmux.New(ln)
 
 		// gRPC connections carry HTTP/2 with the application/grpc content-type header.
-		// Always register the matcher so gRPC connections don't fall through to HTTP.
+		// For h2c (plaintext HTTP/2), we must use MatchWithWriters + SendSettings
+		// so cmux sends the server SETTINGS frame before the client sends HEADERS.
+		// Without this, the gRPC client blocks waiting for the server preface and
+		// the connection times out. For TLS, ALPN handles HTTP/2 negotiation, but
+		// SendSettings is harmless there — it works correctly for both modes.
 		// The gRPC server may not be ready yet (initializeAsync sets s.grpcServer),
 		// so we start Serve() in a goroutine that waits for the server to appear.
-		grpcL := m.Match(cmux.HTTP2HeaderFieldPrefix("content-type", "application/grpc"))
+		grpcL := m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldPrefixSendSettings("content-type", "application/grpc"))
 		go func() {
 			// Wait for initializeAsync to create the gRPC server.
 			s.initMu.RLock()
