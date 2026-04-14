@@ -120,6 +120,8 @@ github.com/thebtf/mcp-mux/muxcore v0.15.0 h1:dElXcNaV8ILqODuvP0bq6bqbWADNaS76JV8
 github.com/thebtf/mcp-mux/muxcore v0.15.0/go.mod h1:y7XcVEo6g9mYpbZogClriDmOoNk0E/Efzd69CYdjFlY=
 github.com/thebtf/mcp-mux/muxcore v0.17.0 h1:RptITJP13cR9qvzPRtfDQWJJFQI1LKPCz59CYlp3B18=
 github.com/thebtf/mcp-mux/muxcore v0.17.0/go.mod h1:y7XcVEo6g9mYpbZogClriDmOoNk0E/Efzd69CYdjFlY=
+github.com/thebtf/mcp-mux/muxcore v0.18.1 h1:xrB+f/YjcEpmc89EgifOtykc5rs0Y7Y43lYssxIZ4vA=
+github.com/thebtf/mcp-mux/muxcore v0.18.1/go.mod h1:y7XcVEo6g9mYpbZogClriDmOoNk0E/Efzd69CYdjFlY=
 github.com/thejerf/suture/v4 v4.0.6 h1:QsuCEsCqb03xF9tPAsWAj8QOAJBgQI1c0VqJNaingg8=
 github.com/thejerf/suture/v4 v4.0.6/go.mod h1:gu9Y4dXNUWFrByqRt30Rm9/UZ0wzRSt9AJS6xu/ZGxU=
 github.com/tiktoken-go/tokenizer v0.7.0 h1:VMu6MPT0bXFDHr7UPh9uii7CNItVt3X9K90omxL54vw=

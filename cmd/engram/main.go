@@ -107,11 +107,10 @@ func parseGRPCAddr(serverURL string) (string, error) {
 
 // dialGRPC creates a gRPC client connection with keepalive and TLS settings.
 //
-// TLS selection order:
-//  1. ENGRAM_TLS_CA set → use custom CA file
-//  2. ENGRAM_URL starts with "https" → use system CA pool
-//  3. ENGRAM_INSECURE=1 → plaintext (no TLS)
-//  4. Default → system CA pool (works with Let's Encrypt / public CAs)
+// TLS is determined by the URL scheme:
+//  1. ENGRAM_TLS_CA set → TLS with custom CA file (overrides scheme)
+//  2. https:// → TLS with system CA pool
+//  3. http:// or no scheme → plaintext (no TLS)
 func dialGRPC(addr, serverURL, token string) (*grpc.ClientConn, error) {
 	opts := []grpc.DialOption{
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
@@ -126,8 +125,6 @@ func dialGRPC(addr, serverURL, token string) (*grpc.ClientConn, error) {
 	}
 
 	tlsCA := os.Getenv("ENGRAM_TLS_CA")
-	insecureMode := os.Getenv("ENGRAM_INSECURE") == "1"
-	isHTTPS := strings.HasPrefix(serverURL, "https")
 
 	switch {
 	case tlsCA != "":
@@ -138,21 +135,15 @@ func dialGRPC(addr, serverURL, token string) (*grpc.ClientConn, error) {
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 		fmt.Fprintf(os.Stderr, "[engram] gRPC: TLS with custom CA\n")
 
-	case insecureMode:
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		fmt.Fprintf(os.Stderr, "[engram] gRPC: insecure (plaintext)\n")
-
-	case isHTTPS:
-		// Explicit https → system CA pool
-		creds := credentials.NewClientTLSFromCert(nil, "")
-		opts = append(opts, grpc.WithTransportCredentials(creds))
-		fmt.Fprintf(os.Stderr, "[engram] gRPC: TLS with system CA (https)\n")
-
-	default:
-		// Default: try system CA pool (works with Let's Encrypt)
+	case strings.HasPrefix(serverURL, "https"):
 		creds := credentials.NewClientTLSFromCert(nil, "")
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 		fmt.Fprintf(os.Stderr, "[engram] gRPC: TLS with system CA\n")
+
+	default:
+		// http:// or no scheme → plaintext
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		fmt.Fprintf(os.Stderr, "[engram] gRPC: plaintext\n")
 	}
 
 	if token != "" {
