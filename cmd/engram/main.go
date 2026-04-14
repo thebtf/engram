@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -104,8 +105,12 @@ func (h *engramHandler) HandleRequest(ctx context.Context, p muxcore.ProjectCont
 // OnProjectConnect is called when a CC session connects.
 // Implements muxcore.ProjectLifecycle.
 func (h *engramHandler) OnProjectConnect(p muxcore.ProjectContext) {
-	slug := h.resolveProject(p)
-	fmt.Fprintf(os.Stderr, "[engram] session connected: project=%s, cwd=%s\n", slug, p.Cwd)
+	id, displayName, _, _ := proxy.ResolveProjectSlug(p.Cwd)
+	if id == "" {
+		id = p.ID
+		displayName = filepath.Base(p.Cwd)
+	}
+	fmt.Fprintf(os.Stderr, "[engram] session connected: project=%s (%s), cwd=%s\n", displayName, id, p.Cwd)
 }
 
 // OnProjectDisconnect is called when a CC session disconnects.
@@ -129,22 +134,25 @@ func envOrDefault(env map[string]string, key string) string {
 	return os.Getenv(key)
 }
 
-// resolveProject returns the engram project slug for the given session.
+// resolveProject returns the engram project ID for the given session.
 // Result is cached per ProjectContext.ID to avoid repeated git operations.
 func (h *engramHandler) resolveProject(p muxcore.ProjectContext) string {
 	if cached, ok := h.slugCache.Load(p.ID); ok {
 		return cached.(string)
 	}
-	slug, remote, err := proxy.ResolveProjectSlug(p.Cwd)
+	id, displayName, remote, err := proxy.ResolveProjectSlug(p.Cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[engram] warning: project identity failed for %s: %v\n", p.Cwd, err)
-		slug = p.ID // fallback to muxcore's ProjectContext.ID
+		id = p.ID
+		displayName = filepath.Base(p.Cwd)
 	}
 	if remote != "" {
-		fmt.Fprintf(os.Stderr, "[engram] project: %s (remote: %s)\n", slug, safeRemoteURL(remote))
+		fmt.Fprintf(os.Stderr, "[engram] project: %s (%s, remote: %s)\n", displayName, id, safeRemoteURL(remote))
+	} else {
+		fmt.Fprintf(os.Stderr, "[engram] project: %s (%s)\n", displayName, id)
 	}
-	h.slugCache.Store(p.ID, slug)
-	return slug
+	h.slugCache.Store(p.ID, id)
+	return id
 }
 
 // getOrDialGRPC returns a pooled gRPC connection for the given server URL.

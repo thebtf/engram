@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,32 +24,30 @@ func findRepoRoot(t *testing.T) string {
 }
 
 // TestResolveProjectSlug_GitRepo verifies that a directory that is a git repo
-// with a remote produces a slug of the form "engram_<8hexchars>" and a non-empty
-// gitRemote.
+// with a remote produces a pure 8-hex-char id, a non-empty gitRemote, and
+// displayName equal to the directory base name.
 func TestResolveProjectSlug_GitRepo(t *testing.T) {
 	t.Parallel()
 
 	repoDir := findRepoRoot(t)
 
-	slug, gitRemote, err := proxy.ResolveProjectSlug(repoDir)
+	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(repoDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	t.Logf("slug=%s  gitRemote=%s", slug, gitRemote)
+	t.Logf("id=%s  displayName=%s  gitRemote=%s", id, displayName, gitRemote)
 
-	// The slug prefix must equal the base name of the directory passed in.
-	dirName := filepath.Base(repoDir)
-	expectedPrefix := dirName + "_"
-	if !strings.HasPrefix(slug, expectedPrefix) {
-		t.Errorf("slug %q does not start with %q", slug, expectedPrefix)
+	// ID must be exactly 8 lowercase hex characters — no dirName prefix.
+	matched, _ := regexp.MatchString(`^[0-9a-f]{8}$`, id)
+	if !matched {
+		t.Errorf("id %q is not 8 hex chars", id)
 	}
 
-	// Suffix must be exactly 8 lowercase hex characters.
-	suffix := strings.TrimPrefix(slug, expectedPrefix)
-	matched, _ := regexp.MatchString(`^[0-9a-f]{8}$`, suffix)
-	if !matched {
-		t.Errorf("slug suffix %q is not 8 hex chars", suffix)
+	// displayName must equal the base name of the directory.
+	dirName := filepath.Base(repoDir)
+	if displayName != dirName {
+		t.Errorf("displayName %q does not match directory base name %q", displayName, dirName)
 	}
 
 	if gitRemote == "" {
@@ -57,27 +56,32 @@ func TestResolveProjectSlug_GitRepo(t *testing.T) {
 }
 
 // TestResolveProjectSlug_NonGitDir verifies that a directory without a git repo
-// falls back to a path-based slug of the form "<dirName>_<6hexchars>" with an
-// empty gitRemote. os.TempDir() is a reliable non-git directory.
+// falls back to a pure 6-hex-char id with an empty gitRemote.
+// Uses a fresh temp dir to avoid .engram-project side effects from other tests.
 func TestResolveProjectSlug_NonGitDir(t *testing.T) {
 	t.Parallel()
 
-	dir := os.TempDir()
-	slug, gitRemote, err := proxy.ResolveProjectSlug(dir)
+	dir := t.TempDir()
+	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	t.Logf("slug=%s  gitRemote=%s", slug, gitRemote)
+	t.Logf("id=%s  displayName=%s  gitRemote=%s", id, displayName, gitRemote)
 
 	if gitRemote != "" {
 		t.Errorf("expected empty gitRemote for non-git dir, got %q", gitRemote)
 	}
 
-	// Slug must end with exactly 6 lowercase hex characters after an underscore.
-	matched, _ := regexp.MatchString(`^.+_[0-9a-f]{6}$`, slug)
+	// ID must be exactly 6 lowercase hex characters — no dirName prefix.
+	matched, _ := regexp.MatchString(`^[0-9a-f]{6}$`, id)
 	if !matched {
-		t.Errorf("slug %q does not match <dirName>_<6hexchars>", slug)
+		t.Errorf("id %q is not 6 hex chars", id)
+	}
+
+	// displayName must equal the directory base name.
+	if displayName != filepath.Base(dir) {
+		t.Errorf("displayName %q does not match directory base name %q", displayName, filepath.Base(dir))
 	}
 }
 
@@ -88,18 +92,21 @@ func TestResolveProjectSlug_ConsistentAcrossCalls(t *testing.T) {
 
 	repoDir := findRepoRoot(t)
 
-	slug1, remote1, err1 := proxy.ResolveProjectSlug(repoDir)
+	id1, dn1, remote1, err1 := proxy.ResolveProjectSlug(repoDir)
 	if err1 != nil {
 		t.Fatalf("first call error: %v", err1)
 	}
 
-	slug2, remote2, err2 := proxy.ResolveProjectSlug(repoDir)
+	id2, dn2, remote2, err2 := proxy.ResolveProjectSlug(repoDir)
 	if err2 != nil {
 		t.Fatalf("second call error: %v", err2)
 	}
 
-	if slug1 != slug2 {
-		t.Errorf("slugs differ across calls: %q vs %q", slug1, slug2)
+	if id1 != id2 {
+		t.Errorf("ids differ across calls: %q vs %q", id1, id2)
+	}
+	if dn1 != dn2 {
+		t.Errorf("displayNames differ across calls: %q vs %q", dn1, dn2)
 	}
 	if remote1 != remote2 {
 		t.Errorf("gitRemotes differ across calls: %q vs %q", remote1, remote2)
@@ -107,7 +114,7 @@ func TestResolveProjectSlug_ConsistentAcrossCalls(t *testing.T) {
 }
 
 // TestResolveProjectSlug_WorktreeMatchesMain verifies that a worktree of the
-// same repository produces the same slug as the main checkout. Skipped when no
+// same repository produces the same id as the main checkout. Skipped when no
 // worktree is present.
 func TestResolveProjectSlug_WorktreeMatchesMain(t *testing.T) {
 	t.Parallel()
@@ -137,36 +144,109 @@ func TestResolveProjectSlug_WorktreeMatchesMain(t *testing.T) {
 		t.Skip("no additional worktrees found, skipping")
 	}
 
-	mainSlug, _, err := proxy.ResolveProjectSlug(mainRepo)
+	mainID, _, _, err := proxy.ResolveProjectSlug(mainRepo)
 	if err != nil {
-		t.Fatalf("main repo slug error: %v", err)
+		t.Fatalf("main repo id error: %v", err)
 	}
 
-	// The slug format is "<dirName>_<hash8>". A worktree checked out under a
-	// different directory name will have a different dirName prefix, but the
-	// hash suffix encodes the repo identity (remoteURL + relativePath) and MUST
-	// be identical across worktrees of the same repo.
-	mainParts := strings.SplitN(mainSlug, "_", 2)
-	if len(mainParts) != 2 {
-		t.Fatalf("unexpected main slug format: %q", mainSlug)
-	}
-	mainHash := mainParts[1]
-
+	// The id is a pure 8-hex hash of (remoteURL + relativePath).
+	// A worktree checked out under a different directory name will have a different
+	// displayName but the SAME id (same remote, same relative path from repo root).
 	for _, wt := range worktreePaths {
-		wtSlug, _, wtErr := proxy.ResolveProjectSlug(wt)
+		wtID, _, _, wtErr := proxy.ResolveProjectSlug(wt)
 		if wtErr != nil {
-			t.Errorf("worktree %s slug error: %v", wt, wtErr)
+			t.Errorf("worktree %s id error: %v", wt, wtErr)
 			continue
 		}
-		wtParts := strings.SplitN(wtSlug, "_", 2)
-		if len(wtParts) != 2 {
-			t.Errorf("unexpected worktree slug format: %q", wtSlug)
-			continue
+		if wtID != mainID {
+			t.Errorf("worktree %s id %q != main id %q", wt, wtID, mainID)
 		}
-		wtHash := wtParts[1]
-		if wtHash != mainHash {
-			t.Errorf("worktree %s hash suffix %q != main hash suffix %q (full slugs: %q vs %q)",
-				wt, wtHash, mainHash, wtSlug, mainSlug)
-		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T006: .engram-project anchor file tests
+// ---------------------------------------------------------------------------
+
+// TestResolveProjectSlug_AnchorFile_CustomName verifies that a .engram-project
+// file with {"name": "custom-name"} overrides displayName.
+func TestResolveProjectSlug_AnchorFile_CustomName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	anchor := map[string]string{"name": "custom-name"}
+	data, _ := json.Marshal(anchor)
+	if err := os.WriteFile(filepath.Join(dir, ".engram-project"), data, 0644); err != nil {
+		t.Fatalf("write anchor: %v", err)
+	}
+
+	_, displayName, _, err := proxy.ResolveProjectSlug(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if displayName != "custom-name" {
+		t.Errorf("expected displayName %q, got %q", "custom-name", displayName)
+	}
+}
+
+// TestResolveProjectSlug_AnchorFile_AutoCreated verifies that calling
+// ResolveProjectSlug on a non-git dir without an anchor file creates one.
+func TestResolveProjectSlug_AnchorFile_AutoCreated(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	id, displayName, _, err := proxy.ResolveProjectSlug(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	anchorPath := filepath.Join(dir, ".engram-project")
+	data, readErr := os.ReadFile(anchorPath)
+	if readErr != nil {
+		t.Fatalf(".engram-project not auto-created: %v", readErr)
+	}
+
+	var anchor struct {
+		Name string `json:"name"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &anchor); err != nil {
+		t.Fatalf("anchor file JSON invalid: %v", err)
+	}
+
+	if anchor.Name != displayName {
+		t.Errorf("anchor name %q != displayName %q", anchor.Name, displayName)
+	}
+	if anchor.ID != id {
+		t.Errorf("anchor id %q != id %q", anchor.ID, id)
+	}
+}
+
+// TestResolveProjectSlug_AnchorFile_NonGitStoredID verifies that a non-git project
+// reads its stable ID from the .engram-project anchor file.
+func TestResolveProjectSlug_AnchorFile_NonGitStoredID(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	anchor := map[string]string{"name": "notes", "id": "abc123"}
+	data, _ := json.Marshal(anchor)
+	if err := os.WriteFile(filepath.Join(dir, ".engram-project"), data, 0644); err != nil {
+		t.Fatalf("write anchor: %v", err)
+	}
+
+	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if id != "abc123" {
+		t.Errorf("expected id %q from anchor, got %q", "abc123", id)
+	}
+	if displayName != "notes" {
+		t.Errorf("expected displayName %q from anchor, got %q", "notes", displayName)
+	}
+	if gitRemote != "" {
+		t.Errorf("expected empty gitRemote for non-git dir, got %q", gitRemote)
 	}
 }
