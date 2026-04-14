@@ -38,6 +38,7 @@ async function loadUsers() {
 }
 
 async function updateUser(id: number, patch: { disabled?: boolean; role?: string }) {
+  usersError.value = null
   try {
     const res = await fetch(`/api/admin/users/${id}`, {
       method: 'PUT',
@@ -51,7 +52,7 @@ async function updateUser(id: number, patch: { disabled?: boolean; role?: string
     }
     await loadUsers()
   } catch (err) {
-    alert(err instanceof Error ? err.message : 'Failed to update user')
+    usersError.value = err instanceof Error ? err.message : 'Failed to update user'
   }
 }
 
@@ -109,7 +110,7 @@ async function generateCode() {
     }
     await loadInvitations()
   } catch (err) {
-    alert(err instanceof Error ? err.message : 'Failed to generate invitation code')
+    invitationsError.value = err instanceof Error ? err.message : 'Failed to generate invitation code'
   } finally {
     generatingCode.value = false
   }

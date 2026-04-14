@@ -435,9 +435,19 @@ func (h *AuthHandlers) handleUpdateUser(w http.ResponseWriter, r *http.Request) 
 	updates := map[string]any{}
 	if req.Disabled != nil {
 		if *req.Disabled {
-			adminCount, _ := h.users.CountAdmins()
-			targetUser, _ := h.users.GetUserByID(id)
-			if targetUser != nil && targetUser.Role == "admin" && adminCount <= 1 {
+			adminCount, err := h.users.CountAdmins()
+			if err != nil {
+				log.Error().Err(err).Msg("auth: failed to count admins for disable check")
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			targetUser, err := h.users.GetUserByID(id)
+			if err != nil {
+				log.Error().Err(err).Int64("user_id", id).Msg("auth: failed to get user for disable check")
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			if targetUser.Role == "admin" && adminCount <= 1 {
 				http.Error(w, `{"error":"cannot disable the last admin"}`, http.StatusBadRequest)
 				return
 			}
@@ -456,9 +466,19 @@ func (h *AuthHandlers) handleUpdateUser(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if *req.Role != "admin" {
-			adminCount, _ := h.users.CountAdmins()
-			targetUser, _ := h.users.GetUserByID(id)
-			if targetUser != nil && targetUser.Role == "admin" && adminCount <= 1 {
+			adminCount, err := h.users.CountAdmins()
+			if err != nil {
+				log.Error().Err(err).Msg("auth: failed to count admins for demote check")
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			targetUser, err := h.users.GetUserByID(id)
+			if err != nil {
+				log.Error().Err(err).Int64("user_id", id).Msg("auth: failed to get user for demote check")
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			if targetUser.Role == "admin" && adminCount <= 1 {
 				http.Error(w, `{"error":"cannot demote the last admin"}`, http.StatusBadRequest)
 				return
 			}
