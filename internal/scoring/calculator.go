@@ -3,6 +3,7 @@ package scoring
 
 import (
 	"math"
+	"strings"
 	"time"
 
 	"github.com/thebtf/engram/pkg/models"
@@ -73,6 +74,14 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 		coreScore *= sourcePenalty
 	}
 
+	// Narrative quality multiplier: penalize thin narratives without reasoning.
+	// Only applied when a narrative is explicitly set (Valid=true).
+	narrativeMultiplier := 1.0
+	if obs.Narrative.Valid {
+		narrativeMultiplier = narrativeQualityMultiplier(obs.Narrative.String)
+		coreScore *= narrativeMultiplier
+	}
+
 	// 3. User feedback contribution: feedback × weight
 	feedbackContrib := float64(obs.UserFeedback) * c.config.FeedbackWeight
 
@@ -126,6 +135,7 @@ func (c *Calculator) CalculateComponents(obs *models.Observation, now time.Time)
 		TypeWeight:           typeWeight,
 		RecencyDecay:         recencyDecay,
 		SourcePenalty:        sourcePenalty,
+		NarrativeMultiplier:  narrativeMultiplier,
 		CoreScore:            coreScore,
 		FeedbackContrib:      feedbackContrib,
 		ConceptContrib:       conceptContrib,
@@ -142,6 +152,7 @@ type ScoreComponents struct {
 	TypeWeight           float64 `json:"type_weight"`
 	RecencyDecay         float64 `json:"recency_decay"`
 	SourcePenalty        float64 `json:"source_penalty"`
+	NarrativeMultiplier  float64 `json:"narrative_multiplier"`
 	CoreScore            float64 `json:"core_score"`
 	FeedbackContrib      float64 `json:"feedback_contrib"`
 	ConceptContrib       float64 `json:"concept_contrib"`
@@ -182,4 +193,35 @@ func (c *Calculator) UpdateConfig(config *models.ScoringConfig) {
 // GetConfig returns the current scoring configuration.
 func (c *Calculator) GetConfig() *models.ScoringConfig {
 	return c.config
+}
+
+// reasoningMarkers are words/phrases that indicate an observation contains
+// actual reasoning rather than just a description of what happened.
+var reasoningMarkers = []string{
+	"because", "chose", "decided", "instead of", "rather than",
+	"tradeoff", "trade-off", "alternative", "reason", "why",
+}
+
+// narrativeQualityMultiplier returns a scoring multiplier based on narrative depth.
+// Thin narratives without reasoning get penalized to reduce injection noise.
+//   - has reasoning markers → 1.0 (explicit reasoning overrides length penalty)
+//   - <5 words → 0.5 (very thin, likely auto-generated)
+//   - <20 words → 0.7 (description without explanation)
+//   - otherwise → 1.0 (full score)
+func narrativeQualityMultiplier(narrative string) float64 {
+	// Reasoning markers rescue any narrative regardless of length.
+	lower := strings.ToLower(narrative)
+	for _, marker := range reasoningMarkers {
+		if strings.Contains(lower, marker) {
+			return 1.0
+		}
+	}
+	words := len(strings.Fields(narrative))
+	if words < 5 {
+		return 0.5
+	}
+	if words < 20 {
+		return 0.7
+	}
+	return 1.0
 }
