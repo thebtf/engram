@@ -104,7 +104,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 		"hasMore":      int64(pagination.Offset)+int64(len(observations)) < total,
 	}
 	if project != "" {
-		resp["project_display_name"] = s.getProjectDisplayName(project)
+		resp["project_display_name"] = s.getProjectDisplayName(r.Context(), project)
 	}
 	writeJSON(w, resp)
 }
@@ -761,9 +761,12 @@ func (s *Service) handleGetObservationByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	writeJSON(w, map[string]any{
-		"observation":          obs,
-		"project_display_name": s.getProjectDisplayName(obs.Project),
+	writeJSON(w, struct {
+		*models.Observation
+		ProjectDisplayName string `json:"project_display_name,omitempty"`
+	}{
+		Observation:        obs,
+		ProjectDisplayName: s.getProjectDisplayName(r.Context(), obs.Project),
 	})
 }
 
@@ -1166,14 +1169,17 @@ func (s *Service) handleGetSimilarityTelemetry(w http.ResponseWriter, r *http.Re
 // getProjectDisplayName looks up the display_name for a project ID from the projects table.
 // It checks both the primary ID and the legacy_ids array.
 // Returns the display name if found, or falls back to the raw project ID.
-func (s *Service) getProjectDisplayName(projectID string) string {
+// Returns empty string (triggering caller fallback) on DB error.
+func (s *Service) getProjectDisplayName(ctx context.Context, projectID string) string {
 	if projectID == "" || s.store == nil {
 		return projectID
 	}
 	var displayName string
-	s.store.GetDB().
+	if err := s.store.GetDB().WithContext(ctx).
 		Raw("SELECT display_name FROM projects WHERE id = ? OR ? = ANY(COALESCE(legacy_ids, ARRAY[]::TEXT[]))", projectID, projectID).
-		Scan(&displayName)
+		Scan(&displayName).Error; err != nil {
+		return ""
+	}
 	if displayName == "" {
 		return projectID
 	}

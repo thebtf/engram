@@ -924,7 +924,7 @@ onUnmounted(() => {
             <span v-if="obs.project" class="flex items-center gap-1">
               <span class="text-slate-600">|</span>
               <i class="fas fa-folder text-slate-600 text-[10px]" />
-              <span class="text-amber-600/80 font-mono">{{ shortProject(obs.project) }}</span>
+              <span class="text-amber-600/80 font-mono">{{ shortProject(obs.project, obs.project === currentProject ? currentProjectDisplayName : null) }}</span>
             </span>
           </div>
         </div>

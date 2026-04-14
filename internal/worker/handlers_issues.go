@@ -63,14 +63,18 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect unique project IDs to avoid redundant lookups.
+	// Collect unique project IDs to avoid redundant lookups (check map before querying).
 	projectNames := make(map[string]string)
 	for _, iss := range issues {
 		if iss.SourceProject != "" {
-			projectNames[iss.SourceProject] = s.getProjectDisplayName(iss.SourceProject)
+			if _, ok := projectNames[iss.SourceProject]; !ok {
+				projectNames[iss.SourceProject] = s.getProjectDisplayName(r.Context(), iss.SourceProject)
+			}
 		}
 		if iss.TargetProject != "" {
-			projectNames[iss.TargetProject] = s.getProjectDisplayName(iss.TargetProject)
+			if _, ok := projectNames[iss.TargetProject]; !ok {
+				projectNames[iss.TargetProject] = s.getProjectDisplayName(r.Context(), iss.TargetProject)
+			}
 		}
 	}
 
@@ -106,8 +110,8 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		"issue":                        issue,
 		"comments":                     comments,
 		"comment_count":                len(comments),
-		"source_project_display_name":  s.getProjectDisplayName(issue.SourceProject),
-		"target_project_display_name":  s.getProjectDisplayName(issue.TargetProject),
+		"source_project_display_name":  s.getProjectDisplayName(r.Context(), issue.SourceProject),
+		"target_project_display_name":  s.getProjectDisplayName(r.Context(), issue.TargetProject),
 	})
 }
 

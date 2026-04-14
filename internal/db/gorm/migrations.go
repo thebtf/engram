@@ -2658,6 +2658,10 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
+				// Partial rollback: drops the display_name column only.
+				// The project ID normalisation (UUID generation, legacy_ids population)
+				// is intentionally not reversed — doing so would require storing the
+				// original IDs before the migration ran, which we did not persist.
 				tx.Exec("ALTER TABLE projects DROP COLUMN IF EXISTS display_name")
 				return nil
 			},
