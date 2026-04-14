@@ -110,18 +110,25 @@ var readOnlyAllowedPosts = map[string]bool{
 }
 
 // TokenAuth provides token-based authentication for the worker HTTP API.
-// Supports three auth methods:
+// Supports four auth methods:
 //  1. Master token (ENGRAM_API_TOKEN env var) via X-Auth-Token or Authorization: Bearer header -> admin
 //  2. Client API tokens (engram_* prefix, bcrypt-hashed in DB) via same headers -> scoped access
 //  3. HMAC-signed session cookie (engram_session) -> admin (dashboard)
+//  4. DB-backed auth session cookie (engram_auth) -> role from users table
+//  5. Authentik forward-auth header (X-Authentik-Email) from trusted proxy -> role from users table
 type TokenAuth struct {
-	ExemptPaths map[string]bool
-	token       string
-	cookieKey   []byte
-	tokenStore  *gormdb.TokenStore
-	statsCh     chan string // buffered channel for async stats increment
-	mu          sync.RWMutex
-	enabled     bool
+	ExemptPaths             map[string]bool
+	token                   string
+	cookieKey               []byte
+	tokenStore              *gormdb.TokenStore
+	authSessionStore        *gormdb.AuthSessionStore
+	userStore               *gormdb.UserStore
+	statsCh                 chan string // buffered channel for async stats increment
+	mu                      sync.RWMutex
+	enabled                 bool
+	authentikEnabled        bool
+	authentikAutoProvision  bool
+	authentikTrustedProxies []string
 }
 
 // NewTokenAuth creates a new TokenAuth using a provided token.
@@ -143,14 +150,18 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 		cookieKey: cookieKey,
 		statsCh:   make(chan string, 256),
 		ExemptPaths: map[string]bool{
-			"/":                true, // SPA index.html (dashboard handles auth client-side)
-			"/health":          true,
-			"/api/health":      true,
-			"/api/ready":       true,
-			"/api/version":     true,
-			"/api/auth/login":  true,
-			"/api/auth/logout": true,
-			"/api/auth/me":     true, // Must be accessible to check auth status (returns 401 if not authed)
+			"/":                         true, // SPA index.html (dashboard handles auth client-side)
+			"/health":                   true,
+			"/api/health":               true,
+			"/api/ready":                true,
+			"/api/version":              true,
+			"/api/auth/login":           true,
+			"/api/auth/logout":          true,
+			"/api/auth/me":              true, // Must be accessible to check auth status (returns 401 if not authed)
+			"/api/auth/setup-needed":    true,
+			"/api/auth/setup":           true,
+			"/api/auth/user-login":      true,
+			"/api/auth/register":        true,
 		},
 	}
 
@@ -191,13 +202,49 @@ func (ta *TokenAuth) SetTokenStore(store *gormdb.TokenStore) {
 	ta.tokenStore = store
 }
 
+// SetAuthStores injects the user and auth-session stores used for
+// email/password session cookie validation (engram_auth cookie).
+// Called after DB initialization completes.
+func (ta *TokenAuth) SetAuthStores(userStore *gormdb.UserStore, authSessionStore *gormdb.AuthSessionStore) {
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+	ta.userStore = userStore
+	ta.authSessionStore = authSessionStore
+}
+
+// SetAuthentikConfig configures Authentik forward-auth integration.
+// When enabled, requests with X-Authentik-Email header from a trusted proxy
+// are automatically authenticated (and optionally provisioned).
+func (ta *TokenAuth) SetAuthentikConfig(enabled, autoProvision bool, trustedProxies []string) {
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+	ta.authentikEnabled = enabled
+	ta.authentikAutoProvision = autoProvision
+	ta.authentikTrustedProxies = trustedProxies
+}
+
+// isTrustedProxy checks whether the request originated from a trusted proxy IP.
+// Returns false if no trusted proxies are configured (deny-by-default).
+func isTrustedProxy(r *http.Request, trustedProxies []string) bool {
+	if len(trustedProxies) == 0 {
+		return false // No trusted proxies = don't trust any
+	}
+	remoteIP := strings.Split(r.RemoteAddr, ":")[0]
+	for _, trusted := range trustedProxies {
+		if remoteIP == trusted {
+			return true
+		}
+	}
+	return false
+}
+
 // StatsCh returns the buffered channel for async token stats increment.
 func (ta *TokenAuth) StatsCh() chan string {
 	return ta.statsCh
 }
 
 // Middleware returns HTTP middleware that enforces token authentication.
-// Auth priority: header token (master or client) > session cookie > 401.
+// Auth priority: header token (master or client) > HMAC session cookie > DB auth session cookie > 401.
 func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ta.mu.RLock()
@@ -206,6 +253,11 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		exempt := ta.ExemptPaths[r.URL.Path]
 		cookieKey := ta.cookieKey
 		store := ta.tokenStore
+		authSessStore := ta.authSessionStore
+		uStore := ta.userStore
+		authentikEnabled := ta.authentikEnabled
+		authentikAutoProvision := ta.authentikAutoProvision
+		authentikTrustedProxies := ta.authentikTrustedProxies
 		ta.mu.RUnlock()
 
 		// Skip auth if disabled or path is exempt
@@ -259,7 +311,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 2. Check session cookie
+		// 2. Check HMAC-signed session cookie (master-token login)
 		if cookieKey != nil {
 			cookie, err := r.Cookie(sessionCookieName)
 			if err == nil && cookie.Value != "" {
@@ -271,7 +323,38 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// 3. No valid auth
+		// 3. Check DB-backed auth session cookie (email/password login)
+		if authSessStore != nil && uStore != nil {
+			if authCookie, err := r.Cookie("engram_auth"); err == nil && authCookie.Value != "" {
+				if sess, err := authSessStore.GetSession(authCookie.Value); err == nil {
+					if user, err := uStore.GetUserByID(sess.UserID); err == nil && !user.Disabled {
+						ctx := context.WithValue(r.Context(), authRoleKey{}, user.Role)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+				}
+			}
+		}
+
+		// 4. Authentik forward-auth header check
+		if authentikEnabled && uStore != nil {
+			authentikEmail := r.Header.Get("X-Authentik-Email")
+			if authentikEmail != "" && isTrustedProxy(r, authentikTrustedProxies) {
+				// Auto-login or auto-provision
+				user, err := uStore.GetUserByEmail(authentikEmail)
+				if err != nil && authentikAutoProvision {
+					// Auto-provision new user from Authentik
+					user, err = uStore.CreateUser(authentikEmail, "", "operator")
+				}
+				if err == nil && user != nil && !user.Disabled {
+					ctx := context.WithValue(r.Context(), authRoleKey{}, user.Role)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+		}
+
+		// 5. No valid auth
 		log.Warn().Str("path", r.URL.Path).Str("remote_addr", r.RemoteAddr).Msg("auth: rejected unauthenticated request")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})

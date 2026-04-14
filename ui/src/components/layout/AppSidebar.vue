@@ -8,7 +8,7 @@ import { useHealth } from '@/composables/useHealth'
 
 const route = useRoute()
 const router = useRouter()
-const { logout, authDisabled } = useAuth()
+const { logout, authDisabled, isAdmin } = useAuth()
 const { isConnected } = useSSE()
 const { stats } = useStats()
 const { health } = useHealth()
@@ -113,6 +113,22 @@ async function handleLogout() {
       >
         <i :class="['fas', item.icon, 'w-4 text-center flex-shrink-0']" />
         <span v-if="!collapsed" class="truncate">{{ item.label }}</span>
+      </router-link>
+
+      <!-- Admin link: only visible to admin users -->
+      <router-link
+        v-if="isAdmin"
+        to="/admin"
+        :class="[
+          'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
+          $route.path === '/admin'
+            ? 'bg-claude-500/20 text-claude-400 font-medium'
+            : 'text-slate-400 hover:text-white hover:bg-slate-800/50',
+        ]"
+        title="Admin"
+      >
+        <i class="fas fa-shield-halved w-4 text-center flex-shrink-0" />
+        <span v-if="!collapsed" class="truncate">Admin</span>
       </router-link>
     </nav>
 

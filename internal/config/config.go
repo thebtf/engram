@@ -224,6 +224,14 @@ type Config struct {
 	HalfLifeLLM        float64 `json:"halflife_llm"`         // ENGRAM_HALFLIFE_LLM (default: 90)
 	HalfLifeAlgorithm  float64 `json:"halflife_algorithm"`   // ENGRAM_HALFLIFE_ALGORITHM (default: 14)
 	HalfLifeCrossModel float64 `json:"halflife_cross_model"` // ENGRAM_HALFLIFE_CROSS_MODEL (default: 60)
+
+	// Authentik SSO forward-auth integration
+	// ENGRAM_AUTHENTIK_ENABLED: enable Authentik header detection (default: false)
+	// ENGRAM_AUTHENTIK_AUTO_PROVISION: auto-create users from Authentik headers (default: false)
+	// ENGRAM_AUTHENTIK_TRUSTED_PROXIES: comma-separated list of trusted proxy IPs (default: empty)
+	AuthentikEnabled        bool     `json:"authentik_enabled"`
+	AuthentikAutoProvision  bool     `json:"authentik_auto_provision"`
+	AuthentikTrustedProxies []string `json:"authentik_trusted_proxies"`
 }
 
 var (
@@ -861,6 +869,17 @@ func Load() (*Config, error) {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			cfg.HalfLifeCrossModel = f
 		}
+	}
+
+	// Authentik SSO forward-auth integration
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTHENTIK_ENABLED")); v == "true" || v == "1" {
+		cfg.AuthentikEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTHENTIK_AUTO_PROVISION")); v == "true" || v == "1" {
+		cfg.AuthentikAutoProvision = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTHENTIK_TRUSTED_PROXIES")); v != "" {
+		cfg.AuthentikTrustedProxies = splitTrim(v)
 	}
 
 	return cfg, nil

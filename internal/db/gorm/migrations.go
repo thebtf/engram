@@ -2477,6 +2477,47 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return fmt.Errorf("migration 079 rollback: irreversible")
 			},
 		},
+		{
+			ID: "080_create_auth_tables",
+			Migrate: func(tx *gorm.DB) error {
+				// Users table
+				if err := tx.Exec(`CREATE TABLE IF NOT EXISTS users (
+					id SERIAL PRIMARY KEY,
+					email VARCHAR(255) NOT NULL UNIQUE,
+					password_hash VARCHAR(255) NOT NULL DEFAULT '',
+					role VARCHAR(20) NOT NULL DEFAULT 'operator',
+					disabled BOOLEAN NOT NULL DEFAULT false,
+					created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+					last_login_at TIMESTAMP
+				)`).Error; err != nil {
+					return err
+				}
+				// Invitations table
+				if err := tx.Exec(`CREATE TABLE IF NOT EXISTS invitations (
+					id SERIAL PRIMARY KEY,
+					code VARCHAR(64) NOT NULL UNIQUE,
+					created_by INTEGER NOT NULL REFERENCES users(id),
+					used_by INTEGER REFERENCES users(id),
+					used_at TIMESTAMP,
+					created_at TIMESTAMP NOT NULL DEFAULT NOW()
+				)`).Error; err != nil {
+					return err
+				}
+				// Sessions table
+				return tx.Exec(`CREATE TABLE IF NOT EXISTS sessions (
+					id VARCHAR(64) PRIMARY KEY,
+					user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+					expires_at TIMESTAMP NOT NULL
+				)`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				tx.Exec("DROP TABLE IF EXISTS sessions")
+				tx.Exec("DROP TABLE IF EXISTS invitations")
+				tx.Exec("DROP TABLE IF EXISTS users")
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
