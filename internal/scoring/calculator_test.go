@@ -2,6 +2,7 @@
 package scoring
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -779,5 +780,28 @@ func TestCalculator_UtilityScore_Components(t *testing.T) {
 	// Utility contrib: (0.8 - 0.5) * 0.20 = 0.06
 	assert.InDelta(t, 0.06, components.UtilityContrib, 0.01, "utility contrib should be 0.06")
 	assert.InDelta(t, 1.36, components.FinalScore, 0.01, "final score should include utility")
+}
+
+func TestNarrativeQualityMultiplier(t *testing.T) {
+	tests := []struct {
+		name      string
+		narrative string
+		want      float64
+	}{
+		{"very thin", "Marked T015 complete", 0.5},
+		{"thin with marker", "Chose sync.Map because read-heavy", 1.0},
+		{"medium no marker", "Updated the configuration file with new settings for the deployment pipeline across environments", 0.7},
+		{"long narrative", strings.Repeat("word ", 50), 1.0},
+		{"empty", "", 0.5},
+		{"short with reason", "Changed approach because the original design had a fundamental flaw in concurrency handling", 1.0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := narrativeQualityMultiplier(tt.narrative)
+			if got != tt.want {
+				t.Errorf("narrativeQualityMultiplier(%q) = %v, want %v", tt.narrative, got, tt.want)
+			}
+		})
+	}
 }
 
