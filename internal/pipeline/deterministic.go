@@ -12,9 +12,34 @@ import (
 	"github.com/thebtf/engram/pkg/strutil"
 )
 
+// checkboxToggleRe matches checkbox state changes in task lists.
+var checkboxToggleRe = regexp.MustCompile(`-\s*\[[ x]\]\s`)
+
+// taskFileRe matches common task/checklist file names.
+var taskFileRe = regexp.MustCompile(`(?i)(tasks\.md|todo\.md|checklist\.md)`)
+
+// IsCheckboxToggle detects task checkbox toggle edits ([ ]→[x] or [x]→[ ]).
+// These are routine progress tracking, not meaningful decisions.
+func IsCheckboxToggle(toolName, toolInput string) bool {
+	if toolName != "Edit" {
+		return false
+	}
+	// Check if file is a task/checklist file
+	if !taskFileRe.MatchString(toolInput) {
+		return false
+	}
+	// Check for checkbox pattern in old_string or new_string
+	return checkboxToggleRe.MatchString(toolInput)
+}
+
 // ClassifyEvent determines the observation type from a raw tool event.
 // Rule-based classification achieving ~80% accuracy vs LLM.
 func ClassifyEvent(toolName, toolInput, toolResult string) models.ObservationType {
+	// Checkbox toggles in task files are routine progress, not decisions.
+	if IsCheckboxToggle(toolName, toolInput) {
+		return models.ObsTypeChange
+	}
+
 	lowerInput := strings.ToLower(toolInput)
 	lowerResult := strings.ToLower(toolResult)
 

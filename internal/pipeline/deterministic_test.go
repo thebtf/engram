@@ -1356,3 +1356,28 @@ func TestShouldSkipTrivial(t *testing.T) {
 		})
 	}
 }
+
+func TestIsCheckboxToggle(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		input    string
+		want     bool
+	}{
+		{"checkbox toggle in tasks.md", "Edit", `{"file_path":"tasks.md","old_string":"- [ ] T015","new_string":"- [x] T015"}`, true},
+		{"uncheck in tasks.md", "Edit", `{"file_path":"tasks.md","old_string":"- [x] T015","new_string":"- [ ] T015"}`, true},
+		{"normal edit in main.go", "Edit", `{"file_path":"main.go","old_string":"foo","new_string":"bar"}`, false},
+		{"checkbox in non-task file", "Edit", `{"file_path":"README.md","old_string":"- [ ] item","new_string":"- [x] item"}`, false},
+		{"Read tool", "Read", `{"file_path":"tasks.md"}`, false},
+		{"checkbox in TODO.md", "Edit", `{"file_path":"TODO.md","old_string":"- [ ] Fix bug","new_string":"- [x] Fix bug"}`, true},
+		{"nested path tasks.md", "Edit", `{"file_path":".agent/specs/feature/tasks.md","old_string":"- [ ] T001","new_string":"- [x] T001"}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsCheckboxToggle(tt.toolName, tt.input)
+			if got != tt.want {
+				t.Errorf("IsCheckboxToggle(%q, input) = %v, want %v", tt.toolName, got, tt.want)
+			}
+		})
+	}
+}

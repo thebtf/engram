@@ -1550,7 +1550,7 @@ CATEGORY 4 — GOTCHA: Something behaved unexpectedly.
 CATEGORY 5 — PATTERN: A reusable approach that worked well.
 CATEGORY 6 — USER_BEHAVIOR: User corrected agent's approach or revealed a workflow preference. Extract as TRIGGER/RULE/REASON.
 
-DO NOT EXTRACT: File reads without decisions, routine commits, tool invocations without meaningful output, status checks, version bumps, generic descriptions.
+DO NOT EXTRACT: File reads without decisions, routine commits, tool invocations without meaningful output, status checks, version bumps, generic descriptions, task checkbox toggles (changing [ ] to [x] or [x] to [ ] in tasks.md, TODO.md, or checklists — these are routine progress tracking, not decisions).
 
 RULES:
 - Maximum 1 observation per tool execution.
