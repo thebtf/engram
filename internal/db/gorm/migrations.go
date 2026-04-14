@@ -2395,6 +2395,88 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return fmt.Errorf("migration 078 rollback: irreversible — observations already reassociated")
 			},
 		},
+		{
+			// Follow-up: missed pairs from 078 + stale project table rows.
+			ID: "079_merge_duplicate_projects_followup",
+			Migrate: func(tx *gorm.DB) error {
+				// Missed merge pairs
+				pairs := [][2]string{
+					{"novascript_d219e203", "novascript"},
+					{"nvmd-ai-kg_76a6d364", "media-scripts-parser"},
+					{"nvmd-devops_01be8f28", "nvmd-devops"},
+				}
+				for _, p := range pairs {
+					oldSlug, canonical := p[0], p[1]
+					tx.Exec("UPDATE observations SET project = ? WHERE project = ?", canonical, oldSlug)
+					tx.Exec("UPDATE issues SET source_project = ? WHERE source_project = ?", canonical, oldSlug)
+					tx.Exec("UPDATE issues SET target_project = ? WHERE target_project = ?", canonical, oldSlug)
+					tx.Exec(`UPDATE projects SET legacy_ids = array_append(legacy_ids, ?)
+					          WHERE id = ? AND NOT (COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])`,
+						oldSlug, canonical, oldSlug)
+				}
+
+				// Safe-delete stale project rows: only delete hash-slug row
+				// if the canonical row exists (prevents orphaning).
+				// Format: [hash-slug, canonical] — delete hash-slug only if canonical exists.
+				safeDeletions := [][2]string{
+					{"aimux_16b1f601", "aimux"},
+					{"novascript_d219e203", "novascript"},
+					{"nvmd-ai-kg_76a6d364", "media-scripts-parser"},
+					{"nvmd-devops_01be8f28", "nvmd-devops"},
+					{"engram_67e398f8", "engram"},
+					{"mcp-mux_a1777ae2", "mcp-mux"},
+					{"mcp-aimux_f5ee22ee", "mcp-aimux"},
+					{"nvmd-ai-kit_a01eaad6", "nvmd-ai-kit"},
+					{"nvmd-devops_4a8aca29", "nvmd-devops"},
+					{"pr-review-mcp_b0213bae", "pr-review-mcp"},
+					{"media-scripts-parser_0c4985f2", "media-scripts-parser"},
+					{"netcoredbg-mcp_9c2553be", "netcoredbg-mcp"},
+					{"nvmd-transcoder_8786eaaa", "nvmd-transcoder"},
+					{"openclaw_9e472fe0", "openclaw"},
+					{"blueprint-any_fd95fb72", "blueprint-any"},
+					{"amneziawg-scripts_dd197c", "amneziawg-scripts"},
+					{"awg-mesh_67aca97d", "awg-mesh"},
+					{"awg-mesh_689ee718", "awg-mesh"},
+					{"awg-mesh_7918ee58", "awg-mesh"},
+					{"phase-1-awg_7918ee58", "awg-mesh"},
+					{"transport-overlay_7918ee58", "awg-mesh"},
+					{"nvmdfs_dcce5a1a", "nvmdfs"},
+					{"v08-all-driver-splits_dcce5a1a", "nvmdfs"},
+					{"v10-e2e-infra-p1_dcce5a1a", "nvmdfs"},
+					{"v10-e2e-phase2_dcce5a1a", "nvmdfs"},
+					{"ui_f307f9b6", "engram"},
+					{"parser_522ebee5", "media-scripts-parser"},
+					{"parser_eeb282", "media-scripts-parser"},
+					{"terraform_3db7e669", "nvmd-devops"},
+					{"v10-e2e-phase3_288a1664", "nvmdfs"},
+				}
+				for _, p := range safeDeletions {
+					stale, canonical := p[0], p[1]
+					// Only delete stale row if canonical row exists
+					tx.Exec(`DELETE FROM projects WHERE id = ? AND EXISTS (SELECT 1 FROM projects p2 WHERE p2.id = ?)`,
+						stale, canonical)
+				}
+
+				// Orphan rows where no canonical exists: rename in-place (strip hash).
+				// These have no clean counterpart — the row IS the only record.
+				orphanRenames := [][2]string{
+					{"simulation_4680c737", "simulation"},
+					{"skills_658c5076", "skills"},
+					{"talos_d9ce186e", "talos"},
+					{"workspace_af2a6d", "workspace"},
+				}
+				for _, p := range orphanRenames {
+					oldID, newID := p[0], p[1]
+					// Rename project row (UPDATE id) — only if newID doesn't already exist
+					tx.Exec(`UPDATE projects SET id = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM projects p2 WHERE p2.id = ?)`,
+						newID, oldID, newID)
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return fmt.Errorf("migration 079 rollback: irreversible")
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
