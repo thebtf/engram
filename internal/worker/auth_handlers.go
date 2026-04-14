@@ -222,6 +222,121 @@ func (h *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleCreateInvitation generates a new invitation code (admin only).
+func (h *AuthHandlers) handleCreateInvitation(w http.ResponseWriter, r *http.Request) {
+	role, _ := r.Context().Value(authRoleKey{}).(string)
+	if role != "admin" {
+		http.Error(w, `{"error":"admin access required"}`, http.StatusForbidden)
+		return
+	}
+
+	code, err := h.invitations.GenerateCode()
+	if err != nil {
+		log.Error().Err(err).Msg("auth: failed to generate invitation code")
+		http.Error(w, `{"error":"failed to generate code"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Get user ID from session for created_by
+	cookie, err := r.Cookie(authSessionCookieName)
+	if err != nil || cookie.Value == "" {
+		http.Error(w, `{"error":"not authenticated"}`, http.StatusUnauthorized)
+		return
+	}
+	sess, err := h.sessions.GetSession(cookie.Value)
+	if err != nil {
+		http.Error(w, `{"error":"session expired"}`, http.StatusUnauthorized)
+		return
+	}
+
+	inv, err := h.invitations.CreateInvitation(code, sess.UserID)
+	if err != nil {
+		log.Error().Err(err).Msg("auth: failed to create invitation")
+		http.Error(w, `{"error":"failed to create invitation"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(map[string]any{"code": inv.Code, "id": inv.ID}); err != nil {
+		log.Error().Err(err).Msg("auth: failed to encode create-invitation response")
+	}
+}
+
+// handleListInvitations returns all invitation codes (admin only).
+func (h *AuthHandlers) handleListInvitations(w http.ResponseWriter, r *http.Request) {
+	role, _ := r.Context().Value(authRoleKey{}).(string)
+	if role != "admin" {
+		http.Error(w, `{"error":"admin access required"}`, http.StatusForbidden)
+		return
+	}
+
+	invitations, err := h.invitations.ListInvitations()
+	if err != nil {
+		log.Error().Err(err).Msg("auth: failed to list invitations")
+		http.Error(w, `{"error":"failed to list invitations"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"invitations": invitations}); err != nil {
+		log.Error().Err(err).Msg("auth: failed to encode list-invitations response")
+	}
+}
+
+// handleRegister creates a new user account using an invitation code.
+func (h *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email      string `json:"email"`
+		Password   string `json:"password"`
+		Invitation string `json:"invitation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || req.Password == "" || req.Invitation == "" {
+		http.Error(w, `{"error":"email, password, and invitation code required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Password) < 8 {
+		http.Error(w, `{"error":"password must be at least 8 characters"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Validate invitation
+	if _, err := h.invitations.GetValidInvitation(req.Invitation); err != nil {
+		http.Error(w, `{"error":"invalid or used invitation code"}`, http.StatusForbidden)
+		return
+	}
+
+	// Hash password
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
+	if err != nil {
+		log.Error().Err(err).Msg("auth: bcrypt failed during register")
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Create user
+	user, err := h.users.CreateUser(req.Email, string(hash), "operator")
+	if err != nil {
+		log.Error().Err(err).Str("email", req.Email).Msg("auth: failed to create user during register")
+		http.Error(w, `{"error":"email already registered"}`, http.StatusConflict)
+		return
+	}
+
+	// Consume invitation — user already created; log but don't fail if this step errors.
+	if err := h.invitations.ConsumeInvitation(req.Invitation, user.ID); err != nil {
+		log.Warn().Err(err).Str("code", req.Invitation).Int64("user_id", user.ID).Msg("auth: failed to consume invitation after registration")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"user": map[string]any{"id": user.ID, "email": user.Email, "role": user.Role},
+	}); err != nil {
+		log.Error().Err(err).Msg("auth: failed to encode register response")
+	}
+}
+
 // checkRateLimit allows at most 5 login attempts per minute per IP.
 // Returns true when the attempt is permitted.
 func (h *AuthHandlers) checkRateLimit(ip string) bool {
@@ -302,4 +417,37 @@ func (s *Service) handleUserLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.handleLogout(w, r)
+}
+
+func (s *Service) handleUserRegister(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	h := s.authHandlers
+	s.initMu.RUnlock()
+	if h == nil {
+		http.Error(w, `{"error":"not ready"}`, http.StatusServiceUnavailable)
+		return
+	}
+	h.handleRegister(w, r)
+}
+
+func (s *Service) handleAdminCreateInvitation(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	h := s.authHandlers
+	s.initMu.RUnlock()
+	if h == nil {
+		http.Error(w, `{"error":"not ready"}`, http.StatusServiceUnavailable)
+		return
+	}
+	h.handleCreateInvitation(w, r)
+}
+
+func (s *Service) handleAdminListInvitations(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	h := s.authHandlers
+	s.initMu.RUnlock()
+	if h == nil {
+		http.Error(w, `{"error":"not ready"}`, http.StatusServiceUnavailable)
+		return
+	}
+	h.handleListInvitations(w, r)
 }

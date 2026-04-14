@@ -1711,6 +1711,15 @@ func (s *Service) setupRoutes() {
 	s.router.Post("/api/auth/user-login", s.handleUserLogin)
 	s.router.Post("/api/auth/user-logout", s.handleUserLogout)
 
+	// Registration (public, requires valid invitation code)
+	s.router.Post("/api/auth/register", s.handleUserRegister)
+
+	// Admin invitation management (requires authenticated admin session)
+	s.router.Route("/api/admin", func(r chi.Router) {
+		r.Post("/invitations", s.handleAdminCreateInvitation)
+		r.Get("/invitations", s.handleAdminListInvitations)
+	})
+
 	// Health check (both root and API-prefixed for compatibility)
 	// Returns 200 immediately so hooks can connect quickly during init
 	// Also returns version for stale worker detection

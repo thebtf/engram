@@ -157,6 +157,7 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 			"/api/auth/setup-needed":    true,
 			"/api/auth/setup":           true,
 			"/api/auth/user-login":      true,
+			"/api/auth/register":        true,
 		},
 	}
 

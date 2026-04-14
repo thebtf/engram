@@ -11,8 +11,7 @@ const routes = [
   {
     path: '/register',
     name: 'register',
-    // Placeholder — full implementation in T016-T017
-    component: () => import('@/views/LoginView.vue'),
+    component: () => import('@/views/RegisterView.vue'),
     meta: { public: true },
   },
   {
