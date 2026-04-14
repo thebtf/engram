@@ -12,24 +12,33 @@ import (
 	"github.com/thebtf/engram/pkg/strutil"
 )
 
-// checkboxToggleRe matches checkbox state changes in task lists.
-var checkboxToggleRe = regexp.MustCompile(`-\s*\[[ x]\]\s`)
+// checkboxUncheckedRe matches an unchecked checkbox: - [ ]
+var checkboxUncheckedRe = regexp.MustCompile(`(?i)-\s*\[\s\]`)
+
+// checkboxCheckedRe matches a checked checkbox: - [x] or - [X]
+var checkboxCheckedRe = regexp.MustCompile(`(?i)-\s*\[[xX]\]`)
 
 // taskFileRe matches common task/checklist file names.
-var taskFileRe = regexp.MustCompile(`(?i)(tasks\.md|todo\.md|checklist\.md)`)
+var taskFileRe = regexp.MustCompile(`(?i)(^|[/\\])(tasks|todo|checklist)\.md$`)
 
 // IsCheckboxToggle detects task checkbox toggle edits ([ ]→[x] or [x]→[ ]).
-// These are routine progress tracking, not meaningful decisions.
+// Returns true only when the edit actually changes checkbox state (not just
+// any edit containing a checkbox pattern). Matches against the extracted file
+// path, not the raw JSON, to avoid false positives.
 func IsCheckboxToggle(toolName, toolInput string) bool {
 	if toolName != "Edit" {
 		return false
 	}
-	// Check if file is a task/checklist file
-	if !taskFileRe.MatchString(toolInput) {
+	// Extract and validate file path against task file pattern
+	path := extractFilePath(toolInput)
+	if path == "" || !taskFileRe.MatchString(filepath.ToSlash(path)) {
 		return false
 	}
-	// Check for checkbox pattern in old_string or new_string
-	return checkboxToggleRe.MatchString(toolInput)
+	// Detect actual state change: one side has unchecked, other has checked.
+	// old_string contains one state, new_string contains the other.
+	hasUnchecked := checkboxUncheckedRe.MatchString(toolInput)
+	hasChecked := checkboxCheckedRe.MatchString(toolInput)
+	return hasUnchecked && hasChecked
 }
 
 // ClassifyEvent determines the observation type from a raw tool event.
