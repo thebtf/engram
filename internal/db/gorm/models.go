@@ -199,7 +199,7 @@ func (c *ObservationConflict) BeforeCreate(tx *gorm.DB) error {
 
 // ObservationRelation tracks relationships between observations.
 type ObservationRelation struct {
-	RelationType    models.RelationType            `gorm:"type:text;check:relation_type IN ('causes', 'fixes', 'supersedes', 'depends_on', 'relates_to', 'evolves_from', 'leads_to', 'similar_to', 'contradicts', 'reinforces', 'invalidated_by', 'explains', 'shares_theme', 'parallel_context', 'summarizes', 'part_of', 'prefers_over');index:idx_relations_type;uniqueIndex:idx_relations_unique,priority:3;not null"`
+	RelationType    models.RelationType            `gorm:"type:text;check:relation_type IN ('causes', 'fixes', 'supersedes', 'depends_on', 'relates_to', 'evolves_from', 'leads_to', 'similar_to', 'contradicts', 'reinforces', 'invalidated_by', 'explains', 'shares_theme', 'parallel_context', 'summarizes', 'part_of', 'prefers_over', 'modifies', 'reads', 'follows', 'prompted_by', 'references', 'referenced_by');index:idx_relations_type;uniqueIndex:idx_relations_unique,priority:3;not null"`
 	DetectionSource models.RelationDetectionSource `gorm:"type:text;check:detection_source IN ('file_overlap', 'embedding_similarity', 'temporal_proximity', 'narrative_mention', 'concept_overlap', 'type_progression', 'creative_association');not null"`
 	CreatedAt       string                         `gorm:"not null"`
 	Reason          sql.NullString                 `gorm:"type:text"`

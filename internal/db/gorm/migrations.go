@@ -2278,20 +2278,19 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
-				sqls := []string{
-					// Restore migration 019 relation_type constraint (remove modifies, reads, follows, prompted_by, references, referenced_by)
-					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_relation_type`,
-					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_relation_type CHECK (relation_type IN ('causes','fixes','supersedes','depends_on','relates_to','evolves_from','leads_to','similar_to','contradicts','reinforces','invalidated_by','explains','shares_theme','parallel_context','summarizes','part_of','prefers_over'))`,
-					// Restore detection_source constraint without creative_association
-					`ALTER TABLE observation_relations DROP CONSTRAINT IF EXISTS chk_observation_relations_detection_source`,
-					`ALTER TABLE observation_relations ADD CONSTRAINT chk_observation_relations_detection_source CHECK (detection_source IN ('file_overlap','embedding_similarity','temporal_proximity','narrative_mention','concept_overlap','type_progression'))`,
-				}
-				for _, s := range sqls {
-					if err := tx.Exec(s).Error; err != nil {
-						return fmt.Errorf("migration 077 rollback: %w", err)
-					}
-				}
-				return nil
+				// Migration 077 is intentionally irreversible.
+				//
+				// Restoring the narrower CHECK constraints requires that no rows in
+				// observation_relations use the new relation_type values
+				// ('modifies', 'reads', 'follows', 'prompted_by', 'references',
+				// 'referenced_by') or the detection_source value 'creative_association'.
+				// Once the server has run with migration 077 applied, such rows may
+				// exist, and ALTER TABLE … ADD CONSTRAINT would fail on real data.
+				//
+				// To roll back manually:
+				//   1. DELETE / UPDATE rows using the new types.
+				//   2. Re-run the ALTER TABLE statements from the original migration 019.
+				return fmt.Errorf("migration 077 rollback: irreversible — rows with expanded relation_type or detection_source values may exist; manual data migration required before restoring constraints")
 			},
 		},
 	})

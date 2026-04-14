@@ -39,9 +39,30 @@ const (
 	RelationSummarizes    RelationType = "summarizes"
 	RelationPartOf        RelationType = "part_of"
 	RelationPrefersOver   RelationType = "prefers_over"
+	// RelationModifies means source observation modifies a file also touched by target.
+	// Added in migration 077 — file-relation detector.
+	RelationModifies RelationType = "modifies"
+	// RelationReads means source observation reads a file modified by target.
+	// Added in migration 077 — file-relation detector.
+	RelationReads RelationType = "reads"
+	// RelationFollows means source observation temporally follows target in the same thread.
+	// Added in migration 077 — detector FR-4.
+	RelationFollows RelationType = "follows"
+	// RelationPromptedBy means source observation was explicitly prompted by target.
+	// Added in migration 077 — detector FR-5.
+	RelationPromptedBy RelationType = "prompted_by"
+	// RelationReferences means source observation explicitly references target.
+	// Added in migration 077 — detector FR-36.
+	RelationReferences RelationType = "references"
+	// RelationReferencedBy means source observation is referenced by target.
+	// Added in migration 077 — detector FR-36 (inverse).
+	RelationReferencedBy RelationType = "referenced_by"
 )
 
 // AllRelationTypes is the list of all valid relation types.
+// This is the single source of truth — keep in sync with:
+//   - migration 077 CHECK constraint in internal/db/gorm/migrations.go
+//   - GORM struct tag in internal/db/gorm/models.go (ObservationRelation.RelationType)
 var AllRelationTypes = []RelationType{
 	RelationCauses,
 	RelationFixes,
@@ -60,6 +81,13 @@ var AllRelationTypes = []RelationType{
 	RelationSummarizes,
 	RelationPartOf,
 	RelationPrefersOver,
+	// Added in migration 077
+	RelationModifies,
+	RelationReads,
+	RelationFollows,
+	RelationPromptedBy,
+	RelationReferences,
+	RelationReferencedBy,
 }
 
 // RelationDetectionSource indicates how a relationship was detected.
