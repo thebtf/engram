@@ -61,5 +61,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250324211829-b45e905df463 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
-
-replace github.com/thebtf/mcp-mux/muxcore v0.18.2 => D:\Dev\mcp-mux\muxcore
