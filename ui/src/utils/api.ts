@@ -95,6 +95,7 @@ interface ObservationsResponse {
   limit: number
   offset: number
   hasMore: boolean
+  project_display_name?: string
 }
 
 export interface ObservationsResult {
@@ -1050,12 +1051,16 @@ export interface IssueComment {
 export interface IssueListResponse {
   issues: Issue[]
   total: number
+  /** Map from project ID to human-readable display name */
+  project_names?: Record<string, string>
 }
 
 export interface IssueDetailResponse {
   issue: Issue
   comments: IssueComment[]
   comment_count: number
+  source_project_display_name?: string
+  target_project_display_name?: string
 }
 
 export async function fetchIssues(

@@ -7,7 +7,7 @@ import { formatRelativeTime } from '@/utils/formatters'
 import EmptyState from '@/components/layout/EmptyState.vue'
 
 const router = useRouter()
-const { issues, total, loading, error, statusFilter, sourceProjectFilter, typeFilter, load } = useIssues()
+const { issues, total, loading, error, statusFilter, sourceProjectFilter, typeFilter, projectNames, load } = useIssues()
 const myIssuesOnly = ref(false)
 
 function toggleMyIssues() {
@@ -123,6 +123,7 @@ function typeColor(type: string): string {
 
 function shortProject(project: string): string {
   if (!project) return '?'
+  if (projectNames.value[project]) return projectNames.value[project]
   const parts = project.split('/')
   return parts[parts.length - 1] || project
 }

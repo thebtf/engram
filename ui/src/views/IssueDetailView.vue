@@ -12,6 +12,8 @@ const issue = ref<Issue | null>(null)
 const comments = ref<IssueComment[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
+const sourceProjectDisplayName = ref<string | null>(null)
+const targetProjectDisplayName = ref<string | null>(null)
 
 // Edit mode
 const editing = ref(false)
@@ -54,6 +56,14 @@ function priorityColor(priority: string): string {
 
 function shortProject(project: string): string {
   if (!project) return '?'
+  if (issue.value) {
+    if (project === issue.value.source_project && sourceProjectDisplayName.value) {
+      return sourceProjectDisplayName.value
+    }
+    if (project === issue.value.target_project && targetProjectDisplayName.value) {
+      return targetProjectDisplayName.value
+    }
+  }
   const parts = project.split('/')
   return parts[parts.length - 1] || project
 }
@@ -127,6 +137,8 @@ async function loadIssue() {
     const result = await fetchIssue(id)
     issue.value = result.issue
     comments.value = result.comments || []
+    sourceProjectDisplayName.value = result.source_project_display_name ?? null
+    targetProjectDisplayName.value = result.target_project_display_name ?? null
   } catch (err: any) {
     error.value = err.message || 'Failed to load issue'
   } finally {

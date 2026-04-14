@@ -27,6 +27,7 @@ const PAGE_SIZE = 20
 
 // Filter state
 const currentProject = ref<string | null>(null)
+const currentProjectDisplayName = ref<string | null>(null)
 const currentType = ref<ObservationType | null>(null)
 const currentConcept = ref('')
 const currentStatus = ref<'active' | 'resolved' | null>(null)
@@ -275,6 +276,7 @@ async function fetchPage() {
     )
     observations.value = result.observations || []
     total.value = result.total
+    currentProjectDisplayName.value = result.project_display_name ?? null
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
     error.value = err instanceof Error ? err.message : 'Failed to load observations'
@@ -323,8 +325,9 @@ function getTypeConfig(type: string) {
   return TYPE_CONFIG[type as ObservationType] || TYPE_CONFIG.change
 }
 
-// Extract short project name
-function shortProject(project: string): string {
+// Extract short project name, preferring display name over raw hash.
+function shortProject(project: string, displayName?: string | null): string {
+  if (displayName) return displayName
   const parts = project.split('/')
   return parts[parts.length - 1] || project
 }
@@ -802,7 +805,7 @@ onUnmounted(() => {
               <span v-if="obs.project" class="flex items-center gap-1">
                 <span class="text-slate-600">|</span>
                 <i class="fas fa-folder text-slate-600 text-[10px]" />
-                <span class="text-amber-600/80 font-mono">{{ shortProject(obs.project) }}</span>
+                <span class="text-amber-600/80 font-mono">{{ shortProject(obs.project, obs.project === currentProject ? currentProjectDisplayName : null) }}</span>
               </span>
             </div>
           </div>

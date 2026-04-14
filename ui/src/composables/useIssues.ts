@@ -10,6 +10,8 @@ export function useIssues() {
   const projectFilter = ref('')
   const sourceProjectFilter = ref('')
   const typeFilter = ref('')
+  /** Map from project ID to human-readable display name, populated by last fetch. */
+  const projectNames = ref<Record<string, string>>({})
 
   let abortController: AbortController | null = null
 
@@ -34,6 +36,7 @@ export function useIssues() {
       )
       issues.value = result.issues || []
       total.value = result.total || 0
+      projectNames.value = result.project_names || {}
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         error.value = err.message || 'Failed to load issues'
@@ -59,6 +62,7 @@ export function useIssues() {
     projectFilter,
     sourceProjectFilter,
     typeFilter,
+    projectNames,
     load,
   }
 }

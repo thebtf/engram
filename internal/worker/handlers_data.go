@@ -96,13 +96,17 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Return paginated response
-	writeJSON(w, map[string]any{
+	resp := map[string]any{
 		"observations": observations,
 		"total":        total,
 		"limit":        pagination.Limit,
 		"offset":       pagination.Offset,
 		"hasMore":      int64(pagination.Offset)+int64(len(observations)) < total,
-	})
+	}
+	if project != "" {
+		resp["project_display_name"] = s.getProjectDisplayName(project)
+	}
+	writeJSON(w, resp)
 }
 
 // handleGetSummaries godoc
@@ -757,7 +761,10 @@ func (s *Service) handleGetObservationByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	writeJSON(w, obs)
+	writeJSON(w, map[string]any{
+		"observation":          obs,
+		"project_display_name": s.getProjectDisplayName(obs.Project),
+	})
 }
 
 // handleGraphStats godoc
@@ -1154,4 +1161,21 @@ func (s *Service) handleGetSimilarityTelemetry(w http.ResponseWriter, r *http.Re
 		"enabled":   true,
 		"snapshots": snapshots,
 	})
+}
+
+// getProjectDisplayName looks up the display_name for a project ID from the projects table.
+// It checks both the primary ID and the legacy_ids array.
+// Returns the display name if found, or falls back to the raw project ID.
+func (s *Service) getProjectDisplayName(projectID string) string {
+	if projectID == "" || s.store == nil {
+		return projectID
+	}
+	var displayName string
+	s.store.GetDB().
+		Raw("SELECT display_name FROM projects WHERE id = ? OR ? = ANY(COALESCE(legacy_ids, ARRAY[]::TEXT[]))", projectID, projectID).
+		Scan(&displayName)
+	if displayName == "" {
+		return projectID
+	}
+	return displayName
 }

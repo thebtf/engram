@@ -63,10 +63,22 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Collect unique project IDs to avoid redundant lookups.
+	projectNames := make(map[string]string)
+	for _, iss := range issues {
+		if iss.SourceProject != "" {
+			projectNames[iss.SourceProject] = s.getProjectDisplayName(iss.SourceProject)
+		}
+		if iss.TargetProject != "" {
+			projectNames[iss.TargetProject] = s.getProjectDisplayName(iss.TargetProject)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issues": issues,
-		"total":  total,
+		"issues":        issues,
+		"total":         total,
+		"project_names": projectNames,
 	})
 }
 
@@ -91,9 +103,11 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issue":         issue,
-		"comments":      comments,
-		"comment_count": len(comments),
+		"issue":                        issue,
+		"comments":                     comments,
+		"comment_count":                len(comments),
+		"source_project_display_name":  s.getProjectDisplayName(issue.SourceProject),
+		"target_project_display_name":  s.getProjectDisplayName(issue.TargetProject),
 	})
 }
 
