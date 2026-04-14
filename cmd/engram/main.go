@@ -17,6 +17,7 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
+	"github.com/thebtf/mcp-mux/muxcore/upgrade"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -39,6 +40,13 @@ type connKey struct {
 }
 
 func main() {
+	// Clean stale binaries from previous upgrades (.old.* files).
+	if exePath, err := os.Executable(); err == nil {
+		if cleaned := upgrade.CleanStale(exePath); cleaned > 0 {
+			fmt.Fprintf(os.Stderr, "[engram] cleaned %d stale binary file(s)\n", cleaned)
+		}
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
