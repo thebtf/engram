@@ -28,6 +28,12 @@ func NewIssueStore(db *gorm.DB) *IssueStore {
 	return &IssueStore{db: db}
 }
 
+// ResolveProject normalizes a project slug through the legacy_ids lookup.
+// Returns the canonical project ID, or the input unchanged if no alias found.
+func (s *IssueStore) ResolveProject(ctx context.Context, projectID string) string {
+	return ResolveProjectID(ctx, s.db, projectID)
+}
+
 // IssueWithCount extends Issue with a computed comment count for list views.
 type IssueWithCount struct {
 	Issue

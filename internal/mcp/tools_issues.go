@@ -178,17 +178,28 @@ func (s *Server) handleIssues(ctx context.Context, args json.RawMessage) (string
 	}
 }
 
-// resolveSourceProject returns the source project for a request. When
-// EnforceSourceProject is enabled the header value (from context) takes
+// resolveSourceProject returns the canonical source project for a request.
+// When EnforceSourceProject is enabled the header value (from context) takes
 // precedence over the explicit "project" parameter; when the header is absent
 // the parameter is used as fallback so that clients without a proxy still work.
-func resolveSourceProject(ctx context.Context, m map[string]any) string {
+//
+// The result is passed through ResolveProjectID to normalize legacy slugs
+// (e.g. "mcp-mux_a1777ae2" → "mcp-mux") so that issue ownership checks
+// work across sessions that generate different slug formats.
+func (s *Server) resolveSourceProject(ctx context.Context, m map[string]any) string {
+	var raw string
 	if config.Get().EnforceSourceProject {
 		if p := projectFromContext(ctx); p != "" {
-			return p
+			raw = p
 		}
 	}
-	return coerceString(m["project"], "")
+	if raw == "" {
+		raw = coerceString(m["project"], "")
+	}
+	if raw == "" {
+		return ""
+	}
+	return s.issueStore.ResolveProject(ctx,raw)
 }
 
 func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (string, error) {
@@ -201,11 +212,14 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	priority := coerceString(m["priority"], "medium")
 	issueType := coerceString(m["type"], "task")
 	targetProject := coerceString(m["target_project"], "")
+	if targetProject != "" {
+		targetProject = s.issueStore.ResolveProject(ctx,targetProject)
+	}
 	labels := coerceStringSlice(m["labels"])
 
 	// Auto-fill from session context
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
-	sourceProject := resolveSourceProject(ctx, m)
+	sourceProject := s.resolveSourceProject(ctx, m)
 
 	if targetProject == "" {
 		targetProject = sourceProject
@@ -235,7 +249,13 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 
 func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string, error) {
 	project := coerceString(m["project"], "")
+	if project != "" {
+		project = s.issueStore.ResolveProject(ctx,project)
+	}
 	sourceProject := coerceString(m["source_project"], "")
+	if sourceProject != "" {
+		sourceProject = s.issueStore.ResolveProject(ctx,sourceProject)
+	}
 	statusParam := coerceString(m["status"], "open,reopened")
 	limit := coerceInt(m["limit"], 20)
 	resolvedSinceMs := int64(coerceInt(m["resolved_since"], 0))
@@ -340,7 +360,7 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 	}
 
 	if comment != "" {
-		sourceProject := resolveSourceProject(ctx, m)
+		sourceProject := s.resolveSourceProject(ctx, m)
 		sourceAgent := coerceString(m["agent_source"], "claude-code")
 		_, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
 			AuthorProject: sourceProject,
@@ -370,7 +390,7 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 		return "", fmt.Errorf("body is required for issues comment")
 	}
 
-	sourceProject := resolveSourceProject(ctx, m)
+	sourceProject := s.resolveSourceProject(ctx, m)
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
 
 	commentID, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
@@ -392,7 +412,7 @@ func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (strin
 	}
 
 	comment := coerceString(m["comment"], "")
-	sourceProject := resolveSourceProject(ctx, m)
+	sourceProject := s.resolveSourceProject(ctx, m)
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
 
 	if err := s.issueStore.ReopenIssue(ctx, id, comment, sourceProject, sourceAgent); err != nil {
@@ -408,7 +428,7 @@ func (s *Server) handleIssueClose(ctx context.Context, m map[string]any) (string
 		return "", fmt.Errorf("id is required for issues close")
 	}
 
-	sourceProject := resolveSourceProject(ctx, m)
+	sourceProject := s.resolveSourceProject(ctx, m)
 
 	if err := s.issueStore.CloseIssue(ctx, id, sourceProject); err != nil {
 		return "", err
