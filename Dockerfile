@@ -69,6 +69,6 @@ COPY --from=builder /out/engram /app/engram
 COPY --from=builder /out/engram-mcp /app/engram-mcp
 COPY plugin/engram/hooks/ /app/hooks/
 COPY plugin/engram/commands/ /app/commands/
-COPY plugin/.claude-plugin/ /app/.claude-plugin/
+COPY plugin/engram/.claude-plugin/ /app/.claude-plugin/
 
 ENTRYPOINT ["/bin/bash"]
