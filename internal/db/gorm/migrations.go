@@ -2293,6 +2293,108 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return fmt.Errorf("migration 077 rollback: irreversible — rows with expanded relation_type or detection_source values may exist; manual data migration required before restoring constraints")
 			},
 		},
+		{
+			// Hotfix: merge duplicate project slugs.
+			// Full audit 2026-04-14: filesystem scan + hash verification.
+			// Three categories: confirmed merges, worktree merges, orphans.
+			ID: "078_merge_duplicate_project_slugs",
+			Migrate: func(tx *gorm.DB) error {
+				// Category 1: Simple duplicates (dirName_hash → dirName, both exist)
+				// Category 2: Worktree/subdir slugs → canonical repo name
+				// Category 3: Renamed repos → current name
+				pairs := [][2]string{
+					// Simple duplicates (confirmed via filesystem + hash match)
+					{"aimux_16b1f601", "aimux"},
+					{"engram_67e398f8", "engram"},
+					{"mcp-mux_a1777ae2", "mcp-mux"},
+					{"mcp-aimux_f5ee22ee", "mcp-aimux"},
+					{"nvmd-ai-kit_a01eaad6", "nvmd-ai-kit"},
+					{"nvmd-devops_4a8aca29", "nvmd-devops"},
+					{"pr-review-mcp_b0213bae", "pr-review-mcp"},
+					{"media-scripts-parser_0c4985f2", "media-scripts-parser"},
+					{"netcoredbg-mcp_9c2553be", "netcoredbg-mcp"},
+					{"nvmd-transcoder_8786eaaa", "nvmd-transcoder"},
+					{"openclaw_9e472fe0", "openclaw"},
+					{"blueprint-any_fd95fb72", "blueprint-any"},
+					{"amneziawg-scripts_dd197c", "amneziawg-scripts"},
+
+					// awg-mesh: 3 different remote hashes, all same repo
+					{"awg-mesh_67aca97d", "awg-mesh"},
+					{"awg-mesh_689ee718", "awg-mesh"},
+					{"awg-mesh_7918ee58", "awg-mesh"},
+
+					// awg-mesh worktrees (hash 7918ee58 = thebtf/awg-mesh.git)
+					{"phase-1-awg_7918ee58", "awg-mesh"},
+					{"transport-overlay_7918ee58", "awg-mesh"},
+
+					// nvmdfs worktrees (hash dcce5a1a = thebtf/nvmdfs.git)
+					{"nvmdfs_dcce5a1a", "nvmdfs"},
+					{"v08-all-driver-splits_dcce5a1a", "nvmdfs"},
+					{"v10-e2e-infra-p1_dcce5a1a", "nvmdfs"},
+					{"v10-e2e-phase2_dcce5a1a", "nvmdfs"},
+
+					// engram ui/ subdir (hash f307f9b6 = engram.git + ui/)
+					{"ui_f307f9b6", "engram"},
+
+					// Renamed repos: nvmd-ai-kg → media-scripts-parser
+					{"parser_522ebee5", "media-scripts-parser"},
+					{"parser_eeb282", "media-scripts-parser"},
+
+					// terraform worktree/subdir of nvmd-devops
+					{"terraform_3db7e669", "nvmd-devops"},
+
+					// v10-e2e-phase3: likely nvmdfs worktree (different hash = different remote era)
+					{"v10-e2e-phase3_288a1664", "nvmdfs"},
+				}
+				for _, p := range pairs {
+					oldSlug, canonical := p[0], p[1]
+
+					// Observations
+					if err := tx.Exec("UPDATE observations SET project = ? WHERE project = ?", canonical, oldSlug).Error; err != nil {
+						return fmt.Errorf("migration 078: observations %s→%s: %w", oldSlug, canonical, err)
+					}
+					// Issues: source_project, target_project
+					if err := tx.Exec("UPDATE issues SET source_project = ? WHERE source_project = ?", canonical, oldSlug).Error; err != nil {
+						return fmt.Errorf("migration 078: issues.source %s→%s: %w", oldSlug, canonical, err)
+					}
+					if err := tx.Exec("UPDATE issues SET target_project = ? WHERE target_project = ?", canonical, oldSlug).Error; err != nil {
+						return fmt.Errorf("migration 078: issues.target %s→%s: %w", oldSlug, canonical, err)
+					}
+					// Projects: add old slug to legacy_ids of canonical, then remove duplicate row
+					tx.Exec(`UPDATE projects SET legacy_ids = array_append(legacy_ids, ?)
+					          WHERE id = ? AND NOT (COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])`,
+						oldSlug, canonical, oldSlug)
+					tx.Exec("DELETE FROM projects WHERE id = ?", oldSlug)
+				}
+				// Orphans: repos deleted or on other machines. Strip hash, keep dirName.
+				// No canonical to merge into — just clean the slug.
+				orphans := []string{
+					"simulation_4680c737",
+					"skills_658c5076",
+					"talos_d9ce186e",
+					"workspace_af2a6d",
+				}
+				for _, slug := range orphans {
+					// Extract dirName (everything before last _hexhash)
+					clean := slug
+					for i := len(slug) - 1; i >= 0; i-- {
+						if slug[i] == '_' {
+							clean = slug[:i]
+							break
+						}
+					}
+					tx.Exec("UPDATE observations SET project = ? WHERE project = ?", clean, slug)
+					tx.Exec("UPDATE issues SET source_project = ? WHERE source_project = ?", clean, slug)
+					tx.Exec("UPDATE issues SET target_project = ? WHERE target_project = ?", clean, slug)
+					tx.Exec("DELETE FROM projects WHERE id = ?", slug)
+				}
+
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return fmt.Errorf("migration 078 rollback: irreversible — observations already reassociated")
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
