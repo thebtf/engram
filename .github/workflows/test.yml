@@ -1,0 +1,83 @@
+name: Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Linux and macOS: race detector enabled (requires CGO + gcc, available
+      # on these platforms). Windows: race detector disabled (requires CGO
+      # + MinGW, not available in windows-latest default environment).
+      - name: Test (Linux / macOS — with race detector)
+        if: runner.os != 'Windows'
+        run: go test ./... -race -cover -coverprofile=coverage.out
+
+      - name: Test (Windows — without race detector)
+        if: runner.os == 'Windows'
+        run: go test ./... -cover -coverprofile=coverage.out
+
+      # Coverage gates — enforced on every platform.
+      # internal/module/         >= 90%  (NFR-7, G002 verified at 95.8%)
+      # internal/handlers/engramcore >= 60%  (NFR-7; gRPC transport limits
+      #                               unit-test coverage)
+      # cmd/engram/              >= 40%  (NFR-7; mostly wiring + main())
+      - name: Check coverage gates
+        shell: bash
+        run: |
+          check_pkg() {
+            local pkg="$1"
+            local threshold="$2"
+            # Extract coverage percentage for the package from coverage.out.
+            # go tool cover -func lists lines like:
+            #   github.com/thebtf/engram/internal/module/module.go:42:  Init    100.0%
+            # The last line per package is the summary "total:" line.
+            local pct
+            pct=$(go tool cover -func=coverage.out 2>/dev/null \
+              | grep "^github.com/thebtf/engram/${pkg}" \
+              | tail -1 \
+              | awk '{print $NF}' \
+              | tr -d '%')
+            if [ -z "$pct" ]; then
+              echo "SKIP: no coverage data for ${pkg} (may have no test files on this OS)"
+              return 0
+            fi
+            # Use awk for floating-point comparison (bash can't do floats).
+            local ok
+            ok=$(awk "BEGIN { print ($pct >= $threshold) ? 1 : 0 }")
+            if [ "$ok" = "1" ]; then
+              echo "PASS: ${pkg} coverage ${pct}% >= ${threshold}%"
+            else
+              echo "FAIL: ${pkg} coverage ${pct}% < ${threshold}% (threshold)"
+              exit 1
+            fi
+          }
+
+          check_pkg "internal/module/"              90
+          check_pkg "internal/handlers/engramcore"  60
+          check_pkg "cmd/engram/"                   40

@@ -1,5 +1,40 @@
 # Migration Guide
 
+## v4.2.0 → v4.3.0: Modular Daemon Refactor
+
+### ZERO user-visible change — no migration steps required
+
+Engram v4.3.0 introduces an internal modular daemon framework that wraps the
+existing MCP→gRPC routing as its first tenant (`engramcore` module). There are
+**no breaking changes** to any external interface:
+
+- Plugin `.mcp.json` — **unchanged**, no config edits required
+- MCP tool names, descriptions, and input schemas — **unchanged** (all 68
+  tools work identically per NFR-5)
+- Hook scripts (`session-start`, `user-prompt`, `post-tool-use`, `stop`) —
+  **unchanged**
+- engram-server gRPC and HTTP APIs — **unchanged**
+- PostgreSQL schema — **unchanged**
+- Dashboard URL, project identity hash, SessionStart hook output — **unchanged**
+
+### What changed internally
+
+| Improvement | Details |
+|---|---|
+| Graceful restart | Issue #71 closed. Plugin auto-upgrade via `ensure-binary.js` now triggers a clean drain → snapshot → shutdown → binary swap → re-exec cycle. Active CC sessions reconnect transparently. |
+| Snapshot persistence | Each module persists opaque state across restarts via versioned `SnapshotEnvelope` files. Forward-compat: unknown future versions degrade to empty-state restore with a WARN log rather than aborting startup. |
+| OpenTelemetry metrics | `engram_handletool_duration_ms` histogram, `engram_handletool_errors_total` counter, and `engram_module_init_duration_ms` histogram are exported when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. No-op by default. |
+| Structured logging | JSON by default; `ENGRAM_LOG_FORMAT=text` for development. Canonical fields: `module`, `tool`, `session_id`, `project_id`, `duration_ms`, `error_code`. |
+
+### Reference links
+
+- Full spec: `.agent/specs/modular-daemon/spec.md`
+- Architecture decisions (D1–D22): `.agent/specs/modular-daemon/design.md`
+- Module author guide: `docs/modules/README.md`
+- Closed issue: [#71 — graceful restart on plugin auto-upgrade](../../issues/71)
+
+---
+
 ## v4.0.0 — MCP Transport Change (HTTP → gRPC)
 
 ### What changed
