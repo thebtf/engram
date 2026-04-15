@@ -8,8 +8,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/worker/projectevents"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
@@ -36,7 +38,9 @@ type ToolDef struct {
 type Server struct {
 	pb.UnimplementedEngramServiceServer
 	handler MCPHandler
-	token   string // from ENGRAM_API_TOKEN; empty means auth disabled
+	token   string             // from ENGRAM_API_TOKEN; empty means auth disabled
+	db      *gorm.DB           // injected by worker after DB is ready
+	bus     *projectevents.Bus // in-process project lifecycle event bus
 }
 
 // New creates a new gRPC server with an optional auth interceptor.
@@ -61,6 +65,19 @@ func New(handler MCPHandler) (*grpc.Server, *Server) {
 	gs := grpc.NewServer(opts...)
 	pb.RegisterEngramServiceServer(gs, srv)
 	return gs, srv
+}
+
+// SetDB wires the database connection into the gRPC server after async initialization
+// completes. It is safe to call from a different goroutine than New, but callers must
+// ensure SetDB is called before SyncProjectState can be reached by clients.
+func (s *Server) SetDB(db *gorm.DB) {
+	s.db = db
+}
+
+// SetBus wires the in-process project event bus so that the ProjectEvents stream
+// handler can forward lifecycle events to connected daemons.
+func (s *Server) SetBus(bus *projectevents.Bus) {
+	s.bus = bus
 }
 
 // Ping is a lightweight health check. Auth is intentionally skipped for Ping.
