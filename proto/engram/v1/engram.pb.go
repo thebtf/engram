@@ -21,6 +21,341 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ProjectEventType int32
+
+const (
+	ProjectEventType_PROJECT_EVENT_TYPE_UNSPECIFIED ProjectEventType = 0
+	ProjectEventType_PROJECT_EVENT_TYPE_REMOVED     ProjectEventType = 1
+	ProjectEventType_PROJECT_EVENT_TYPE_CREATED     ProjectEventType = 2 // reserved for v0.2.0
+	ProjectEventType_PROJECT_EVENT_TYPE_RENAMED     ProjectEventType = 3 // reserved for v0.2.0
+)
+
+// Enum value maps for ProjectEventType.
+var (
+	ProjectEventType_name = map[int32]string{
+		0: "PROJECT_EVENT_TYPE_UNSPECIFIED",
+		1: "PROJECT_EVENT_TYPE_REMOVED",
+		2: "PROJECT_EVENT_TYPE_CREATED",
+		3: "PROJECT_EVENT_TYPE_RENAMED",
+	}
+	ProjectEventType_value = map[string]int32{
+		"PROJECT_EVENT_TYPE_UNSPECIFIED": 0,
+		"PROJECT_EVENT_TYPE_REMOVED":     1,
+		"PROJECT_EVENT_TYPE_CREATED":     2,
+		"PROJECT_EVENT_TYPE_RENAMED":     3,
+	}
+)
+
+func (x ProjectEventType) Enum() *ProjectEventType {
+	p := new(ProjectEventType)
+	*p = x
+	return p
+}
+
+func (x ProjectEventType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ProjectEventType) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_engram_v1_engram_proto_enumTypes[0].Descriptor()
+}
+
+func (ProjectEventType) Type() protoreflect.EnumType {
+	return &file_proto_engram_v1_engram_proto_enumTypes[0]
+}
+
+func (x ProjectEventType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ProjectEventType.Descriptor instead.
+func (ProjectEventType) EnumDescriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{0}
+}
+
+type SyncProjectStateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// local_project_ids is the set of ProjectContext.ID values the daemon
+	// currently tracks (one entry per connected CC session). Order is not
+	// significant. Max 10 000 entries (server enforces the cap via
+	// INVALID_ARGUMENT).
+	LocalProjectIds []string `protobuf:"bytes,1,rep,name=local_project_ids,json=localProjectIds,proto3" json:"local_project_ids,omitempty"`
+	// client_id uniquely identifies this daemon instance for audit logging.
+	// Typically `${daemon_pid}-${daemon_start_unix}`.
+	ClientId      string `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncProjectStateRequest) Reset() {
+	*x = SyncProjectStateRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncProjectStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncProjectStateRequest) ProtoMessage() {}
+
+func (x *SyncProjectStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncProjectStateRequest.ProtoReflect.Descriptor instead.
+func (*SyncProjectStateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *SyncProjectStateRequest) GetLocalProjectIds() []string {
+	if x != nil {
+		return x.LocalProjectIds
+	}
+	return nil
+}
+
+func (x *SyncProjectStateRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+type SyncProjectStateResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// removed lists project IDs that the daemon has locally but the server
+	// has no record of (removed_at IS NOT NULL or not in table). The daemon
+	// fans these out to every registered ProjectRemovalAware module.
+	Removed []string `protobuf:"bytes,1,rep,name=removed,proto3" json:"removed,omitempty"`
+	// unknown lists project IDs that the server HAS a record of but that
+	// look orphaned (last heartbeat > 24h ago AND removed_at IS NULL). The
+	// daemon MAY log these for operator attention but does NOT fan them out
+	// — only `removed` is authoritative.
+	Unknown []string `protobuf:"bytes,2,rep,name=unknown,proto3" json:"unknown,omitempty"`
+	// server_time_unix_ms is the server's wall clock at the time the
+	// response was built. The daemon uses it for clock-skew detection.
+	ServerTimeUnixMs int64 `protobuf:"varint,3,opt,name=server_time_unix_ms,json=serverTimeUnixMs,proto3" json:"server_time_unix_ms,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SyncProjectStateResponse) Reset() {
+	*x = SyncProjectStateResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncProjectStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncProjectStateResponse) ProtoMessage() {}
+
+func (x *SyncProjectStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncProjectStateResponse.ProtoReflect.Descriptor instead.
+func (*SyncProjectStateResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SyncProjectStateResponse) GetRemoved() []string {
+	if x != nil {
+		return x.Removed
+	}
+	return nil
+}
+
+func (x *SyncProjectStateResponse) GetUnknown() []string {
+	if x != nil {
+		return x.Unknown
+	}
+	return nil
+}
+
+func (x *SyncProjectStateResponse) GetServerTimeUnixMs() int64 {
+	if x != nil {
+		return x.ServerTimeUnixMs
+	}
+	return 0
+}
+
+type ProjectEventsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// client_id uniquely identifies this daemon instance for audit logging.
+	// Same format as SyncProjectStateRequest.client_id.
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// since_event_id allows the daemon to resume from a specific event after
+	// reconnection. Empty string means "start from now; no replay".
+	//
+	// In v0.1.0 the server is NOT required to persist events for replay —
+	// this field is reserved for forward compatibility. A v0.1.0 server
+	// that receives a non-empty since_event_id MUST return OUT_OF_RANGE.
+	SinceEventId  string `protobuf:"bytes,2,opt,name=since_event_id,json=sinceEventId,proto3" json:"since_event_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProjectEventsRequest) Reset() {
+	*x = ProjectEventsRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectEventsRequest) ProtoMessage() {}
+
+func (x *ProjectEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectEventsRequest.ProtoReflect.Descriptor instead.
+func (*ProjectEventsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ProjectEventsRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *ProjectEventsRequest) GetSinceEventId() string {
+	if x != nil {
+		return x.SinceEventId
+	}
+	return ""
+}
+
+type ProjectEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// event_id is a monotonically increasing server-side identifier for this
+	// event. Opaque to the daemon; used only for since_event_id replay.
+	EventId string `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// event_type is the canonical event category. v0.1.0 only emits
+	// PROJECT_EVENT_TYPE_REMOVED; the field is forward-compatible via the
+	// ProjectEventType enum below.
+	EventType ProjectEventType `protobuf:"varint,2,opt,name=event_type,json=eventType,proto3,enum=engram.v1.ProjectEventType" json:"event_type,omitempty"`
+	// project_id is the canonical muxcore ProjectContext.ID value.
+	ProjectId string `protobuf:"bytes,3,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	// timestamp_unix_ms is the server-side wall clock when the event was
+	// generated.
+	TimestampUnixMs int64 `protobuf:"varint,4,opt,name=timestamp_unix_ms,json=timestampUnixMs,proto3" json:"timestamp_unix_ms,omitempty"`
+	// reason is a free-form server-provided explanation (e.g. "dashboard
+	// operator removed", "retention policy expired").
+	Reason string `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
+	// metadata is a key-value map for forward-compatible extension. v0.1.0
+	// does NOT define any required keys.
+	Metadata      map[string]string `protobuf:"bytes,6,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProjectEvent) Reset() {
+	*x = ProjectEvent{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectEvent) ProtoMessage() {}
+
+func (x *ProjectEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectEvent.ProtoReflect.Descriptor instead.
+func (*ProjectEvent) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ProjectEvent) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *ProjectEvent) GetEventType() ProjectEventType {
+	if x != nil {
+		return x.EventType
+	}
+	return ProjectEventType_PROJECT_EVENT_TYPE_UNSPECIFIED
+}
+
+func (x *ProjectEvent) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *ProjectEvent) GetTimestampUnixMs() int64 {
+	if x != nil {
+		return x.TimestampUnixMs
+	}
+	return 0
+}
+
+func (x *ProjectEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ProjectEvent) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
 // CallToolRequest carries an MCP tool invocation.
 type CallToolRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -38,7 +373,7 @@ type CallToolRequest struct {
 
 func (x *CallToolRequest) Reset() {
 	*x = CallToolRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[0]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -50,7 +385,7 @@ func (x *CallToolRequest) String() string {
 func (*CallToolRequest) ProtoMessage() {}
 
 func (x *CallToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[0]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -63,7 +398,7 @@ func (x *CallToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallToolRequest.ProtoReflect.Descriptor instead.
 func (*CallToolRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{0}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CallToolRequest) GetToolName() string {
@@ -107,7 +442,7 @@ type CallToolResponse struct {
 
 func (x *CallToolResponse) Reset() {
 	*x = CallToolResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[1]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -119,7 +454,7 @@ func (x *CallToolResponse) String() string {
 func (*CallToolResponse) ProtoMessage() {}
 
 func (x *CallToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[1]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -132,7 +467,7 @@ func (x *CallToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallToolResponse.ProtoReflect.Descriptor instead.
 func (*CallToolResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{1}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CallToolResponse) GetIsError() bool {
@@ -161,7 +496,7 @@ type InitializeRequest struct {
 
 func (x *InitializeRequest) Reset() {
 	*x = InitializeRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[2]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -173,7 +508,7 @@ func (x *InitializeRequest) String() string {
 func (*InitializeRequest) ProtoMessage() {}
 
 func (x *InitializeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[2]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -186,7 +521,7 @@ func (x *InitializeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializeRequest.ProtoReflect.Descriptor instead.
 func (*InitializeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{2}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *InitializeRequest) GetClientName() string {
@@ -222,7 +557,7 @@ type InitializeResponse struct {
 
 func (x *InitializeResponse) Reset() {
 	*x = InitializeResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[3]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -234,7 +569,7 @@ func (x *InitializeResponse) String() string {
 func (*InitializeResponse) ProtoMessage() {}
 
 func (x *InitializeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[3]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -247,7 +582,7 @@ func (x *InitializeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializeResponse.ProtoReflect.Descriptor instead.
 func (*InitializeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{3}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *InitializeResponse) GetServerName() string {
@@ -284,7 +619,7 @@ type ToolDefinition struct {
 
 func (x *ToolDefinition) Reset() {
 	*x = ToolDefinition{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[4]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -296,7 +631,7 @@ func (x *ToolDefinition) String() string {
 func (*ToolDefinition) ProtoMessage() {}
 
 func (x *ToolDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[4]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -309,7 +644,7 @@ func (x *ToolDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDefinition.ProtoReflect.Descriptor instead.
 func (*ToolDefinition) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{4}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ToolDefinition) GetName() string {
@@ -341,7 +676,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[5]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -353,7 +688,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[5]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -366,7 +701,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{5}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{9}
 }
 
 type PingResponse struct {
@@ -378,7 +713,7 @@ type PingResponse struct {
 
 func (x *PingResponse) Reset() {
 	*x = PingResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[6]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -390,7 +725,7 @@ func (x *PingResponse) String() string {
 func (*PingResponse) ProtoMessage() {}
 
 func (x *PingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[6]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -403,7 +738,7 @@ func (x *PingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
 func (*PingResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{6}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PingResponse) GetStatus() string {
@@ -417,7 +752,29 @@ var File_proto_engram_v1_engram_proto protoreflect.FileDescriptor
 
 const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\n" +
-	"\x1cproto/engram/v1/engram.proto\x12\tengram.v1\"\x8e\x01\n" +
+	"\x1cproto/engram/v1/engram.proto\x12\tengram.v1\"b\n" +
+	"\x17SyncProjectStateRequest\x12*\n" +
+	"\x11local_project_ids\x18\x01 \x03(\tR\x0flocalProjectIds\x12\x1b\n" +
+	"\tclient_id\x18\x02 \x01(\tR\bclientId\"}\n" +
+	"\x18SyncProjectStateResponse\x12\x18\n" +
+	"\aremoved\x18\x01 \x03(\tR\aremoved\x12\x18\n" +
+	"\aunknown\x18\x02 \x03(\tR\aunknown\x12-\n" +
+	"\x13server_time_unix_ms\x18\x03 \x01(\x03R\x10serverTimeUnixMs\"Y\n" +
+	"\x14ProjectEventsRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12$\n" +
+	"\x0esince_event_id\x18\x02 \x01(\tR\fsinceEventId\"\xc8\x02\n" +
+	"\fProjectEvent\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12:\n" +
+	"\n" +
+	"event_type\x18\x02 \x01(\x0e2\x1b.engram.v1.ProjectEventTypeR\teventType\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x03 \x01(\tR\tprojectId\x12*\n" +
+	"\x11timestamp_unix_ms\x18\x04 \x01(\x03R\x0ftimestampUnixMs\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\x12A\n" +
+	"\bmetadata\x18\x06 \x03(\v2%.engram.v1.ProjectEvent.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8e\x01\n" +
 	"\x0fCallToolRequest\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12%\n" +
 	"\x0earguments_json\x18\x02 \x01(\fR\rargumentsJson\x12\x18\n" +
@@ -443,12 +800,19 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x11input_schema_json\x18\x03 \x01(\fR\x0finputSchemaJson\"\r\n" +
 	"\vPingRequest\"&\n" +
 	"\fPingResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status2\xd8\x01\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status*\x96\x01\n" +
+	"\x10ProjectEventType\x12\"\n" +
+	"\x1ePROJECT_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aPROJECT_EVENT_TYPE_REMOVED\x10\x01\x12\x1e\n" +
+	"\x1aPROJECT_EVENT_TYPE_CREATED\x10\x02\x12\x1e\n" +
+	"\x1aPROJECT_EVENT_TYPE_RENAMED\x10\x032\x82\x03\n" +
 	"\rEngramService\x12C\n" +
 	"\bCallTool\x12\x1a.engram.v1.CallToolRequest\x1a\x1b.engram.v1.CallToolResponse\x12I\n" +
 	"\n" +
 	"Initialize\x12\x1c.engram.v1.InitializeRequest\x1a\x1d.engram.v1.InitializeResponse\x127\n" +
-	"\x04Ping\x12\x16.engram.v1.PingRequest\x1a\x17.engram.v1.PingResponseB3Z1github.com/thebtf/engram/proto/engram/v1;engramv1b\x06proto3"
+	"\x04Ping\x12\x16.engram.v1.PingRequest\x1a\x17.engram.v1.PingResponse\x12[\n" +
+	"\x10SyncProjectState\x12\".engram.v1.SyncProjectStateRequest\x1a#.engram.v1.SyncProjectStateResponse\x12K\n" +
+	"\rProjectEvents\x12\x1f.engram.v1.ProjectEventsRequest\x1a\x17.engram.v1.ProjectEvent0\x01B3Z1github.com/thebtf/engram/proto/engram/v1;engramv1b\x06proto3"
 
 var (
 	file_proto_engram_v1_engram_proto_rawDescOnce sync.Once
@@ -462,29 +826,42 @@ func file_proto_engram_v1_engram_proto_rawDescGZIP() []byte {
 	return file_proto_engram_v1_engram_proto_rawDescData
 }
 
-var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_proto_engram_v1_engram_proto_goTypes = []any{
-	(*CallToolRequest)(nil),    // 0: engram.v1.CallToolRequest
-	(*CallToolResponse)(nil),   // 1: engram.v1.CallToolResponse
-	(*InitializeRequest)(nil),  // 2: engram.v1.InitializeRequest
-	(*InitializeResponse)(nil), // 3: engram.v1.InitializeResponse
-	(*ToolDefinition)(nil),     // 4: engram.v1.ToolDefinition
-	(*PingRequest)(nil),        // 5: engram.v1.PingRequest
-	(*PingResponse)(nil),       // 6: engram.v1.PingResponse
+	(ProjectEventType)(0),            // 0: engram.v1.ProjectEventType
+	(*SyncProjectStateRequest)(nil),  // 1: engram.v1.SyncProjectStateRequest
+	(*SyncProjectStateResponse)(nil), // 2: engram.v1.SyncProjectStateResponse
+	(*ProjectEventsRequest)(nil),     // 3: engram.v1.ProjectEventsRequest
+	(*ProjectEvent)(nil),             // 4: engram.v1.ProjectEvent
+	(*CallToolRequest)(nil),          // 5: engram.v1.CallToolRequest
+	(*CallToolResponse)(nil),         // 6: engram.v1.CallToolResponse
+	(*InitializeRequest)(nil),        // 7: engram.v1.InitializeRequest
+	(*InitializeResponse)(nil),       // 8: engram.v1.InitializeResponse
+	(*ToolDefinition)(nil),           // 9: engram.v1.ToolDefinition
+	(*PingRequest)(nil),              // 10: engram.v1.PingRequest
+	(*PingResponse)(nil),             // 11: engram.v1.PingResponse
+	nil,                              // 12: engram.v1.ProjectEvent.MetadataEntry
 }
 var file_proto_engram_v1_engram_proto_depIdxs = []int32{
-	4, // 0: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
-	0, // 1: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
-	2, // 2: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
-	5, // 3: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
-	1, // 4: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
-	3, // 5: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
-	6, // 6: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
-	4, // [4:7] is the sub-list for method output_type
-	1, // [1:4] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0,  // 0: engram.v1.ProjectEvent.event_type:type_name -> engram.v1.ProjectEventType
+	12, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
+	9,  // 2: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
+	5,  // 3: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
+	7,  // 4: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
+	10, // 5: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
+	1,  // 6: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
+	3,  // 7: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
+	6,  // 8: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
+	8,  // 9: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
+	11, // 10: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
+	2,  // 11: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
+	4,  // 12: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
+	8,  // [8:13] is the sub-list for method output_type
+	3,  // [3:8] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_proto_engram_v1_engram_proto_init() }
@@ -497,13 +874,14 @@ func file_proto_engram_v1_engram_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_engram_v1_engram_proto_rawDesc), len(file_proto_engram_v1_engram_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   7,
+			NumEnums:      1,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_proto_engram_v1_engram_proto_goTypes,
 		DependencyIndexes: file_proto_engram_v1_engram_proto_depIdxs,
+		EnumInfos:         file_proto_engram_v1_engram_proto_enumTypes,
 		MessageInfos:      file_proto_engram_v1_engram_proto_msgTypes,
 	}.Build()
 	File_proto_engram_v1_engram_proto = out.File

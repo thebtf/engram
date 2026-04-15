@@ -19,9 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EngramService_CallTool_FullMethodName   = "/engram.v1.EngramService/CallTool"
-	EngramService_Initialize_FullMethodName = "/engram.v1.EngramService/Initialize"
-	EngramService_Ping_FullMethodName       = "/engram.v1.EngramService/Ping"
+	EngramService_CallTool_FullMethodName         = "/engram.v1.EngramService/CallTool"
+	EngramService_Initialize_FullMethodName       = "/engram.v1.EngramService/Initialize"
+	EngramService_Ping_FullMethodName             = "/engram.v1.EngramService/Ping"
+	EngramService_SyncProjectState_FullMethodName = "/engram.v1.EngramService/SyncProjectState"
+	EngramService_ProjectEvents_FullMethodName    = "/engram.v1.EngramService/ProjectEvents"
 )
 
 // EngramServiceClient is the client API for EngramService service.
@@ -38,6 +40,16 @@ type EngramServiceClient interface {
 	Initialize(ctx context.Context, in *InitializeRequest, opts ...grpc.CallOption) (*InitializeResponse, error)
 	// Ping is a lightweight health check.
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+	// SyncProjectState reconciles the daemon's local project registry
+	// against the server's authoritative list. Called by the daemon every
+	// 60 s as a heartbeat. The response drives ProjectRemovalAware fan-out
+	// for any project the daemon tracks locally but the server no longer
+	// knows about. Idempotent — multiple daemons can call concurrently.
+	SyncProjectState(ctx context.Context, in *SyncProjectStateRequest, opts ...grpc.CallOption) (*SyncProjectStateResponse, error)
+	// ProjectEvents pushes project-lifecycle events in real time. Server-
+	// streaming RPC; the stream stays open for the daemon's lifetime.
+	// Delivery is at-least-once; the daemon is responsible for dedup.
+	ProjectEvents(ctx context.Context, in *ProjectEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProjectEvent], error)
 }
 
 type engramServiceClient struct {
@@ -78,6 +90,35 @@ func (c *engramServiceClient) Ping(ctx context.Context, in *PingRequest, opts ..
 	return out, nil
 }
 
+func (c *engramServiceClient) SyncProjectState(ctx context.Context, in *SyncProjectStateRequest, opts ...grpc.CallOption) (*SyncProjectStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncProjectStateResponse)
+	err := c.cc.Invoke(ctx, EngramService_SyncProjectState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) ProjectEvents(ctx context.Context, in *ProjectEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProjectEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EngramService_ServiceDesc.Streams[0], EngramService_ProjectEvents_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ProjectEventsRequest, ProjectEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngramService_ProjectEventsClient = grpc.ServerStreamingClient[ProjectEvent]
+
 // EngramServiceServer is the server API for EngramService service.
 // All implementations must embed UnimplementedEngramServiceServer
 // for forward compatibility.
@@ -92,6 +133,16 @@ type EngramServiceServer interface {
 	Initialize(context.Context, *InitializeRequest) (*InitializeResponse, error)
 	// Ping is a lightweight health check.
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
+	// SyncProjectState reconciles the daemon's local project registry
+	// against the server's authoritative list. Called by the daemon every
+	// 60 s as a heartbeat. The response drives ProjectRemovalAware fan-out
+	// for any project the daemon tracks locally but the server no longer
+	// knows about. Idempotent — multiple daemons can call concurrently.
+	SyncProjectState(context.Context, *SyncProjectStateRequest) (*SyncProjectStateResponse, error)
+	// ProjectEvents pushes project-lifecycle events in real time. Server-
+	// streaming RPC; the stream stays open for the daemon's lifetime.
+	// Delivery is at-least-once; the daemon is responsible for dedup.
+	ProjectEvents(*ProjectEventsRequest, grpc.ServerStreamingServer[ProjectEvent]) error
 	mustEmbedUnimplementedEngramServiceServer()
 }
 
@@ -110,6 +161,12 @@ func (UnimplementedEngramServiceServer) Initialize(context.Context, *InitializeR
 }
 func (UnimplementedEngramServiceServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedEngramServiceServer) SyncProjectState(context.Context, *SyncProjectStateRequest) (*SyncProjectStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SyncProjectState not implemented")
+}
+func (UnimplementedEngramServiceServer) ProjectEvents(*ProjectEventsRequest, grpc.ServerStreamingServer[ProjectEvent]) error {
+	return status.Error(codes.Unimplemented, "method ProjectEvents not implemented")
 }
 func (UnimplementedEngramServiceServer) mustEmbedUnimplementedEngramServiceServer() {}
 func (UnimplementedEngramServiceServer) testEmbeddedByValue()                       {}
@@ -186,6 +243,35 @@ func _EngramService_Ping_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngramService_SyncProjectState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncProjectStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).SyncProjectState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_SyncProjectState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).SyncProjectState(ctx, req.(*SyncProjectStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_ProjectEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ProjectEventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(EngramServiceServer).ProjectEvents(m, &grpc.GenericServerStream[ProjectEventsRequest, ProjectEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngramService_ProjectEventsServer = grpc.ServerStreamingServer[ProjectEvent]
+
 // EngramService_ServiceDesc is the grpc.ServiceDesc for EngramService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -205,7 +291,17 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Ping",
 			Handler:    _EngramService_Ping_Handler,
 		},
+		{
+			MethodName: "SyncProjectState",
+			Handler:    _EngramService_SyncProjectState_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ProjectEvents",
+			Handler:       _EngramService_ProjectEvents_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "proto/engram/v1/engram.proto",
 }
