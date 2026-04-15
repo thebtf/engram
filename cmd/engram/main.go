@@ -189,7 +189,7 @@ func handleGracefulRestart(
 	currentExe, err := os.Executable()
 	if err != nil {
 		logger.Error("os.Executable failed — cannot swap binary", "error", err)
-		os.Exit(0) // Let supervisor restart.
+		os.Exit(1) // Signal failure to supervisor.
 		return
 	}
 	newExe := currentExe + ".new"
@@ -210,7 +210,7 @@ func handleGracefulRestart(
 			"new", newExe,
 			"error", swapErr,
 		)
-		os.Exit(0)
+		os.Exit(1) // Signal failure to supervisor.
 		return
 	}
 	logger.Info("binary swapped",
@@ -224,7 +224,7 @@ func handleGracefulRestart(
 			"binary", currentExe,
 			"error", err,
 		)
-		os.Exit(0)
+		os.Exit(1) // Signal failure to supervisor.
 	}
 }
 

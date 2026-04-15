@@ -154,19 +154,9 @@ func (p *Pipeline) SnapshotAll(ctx context.Context, storageDir string, daemonVer
 // The temporary file is created with the given permissions.
 // On failure the temporary file is removed if possible.
 func writeFileAtomic(tmpPath, finalPath string, data []byte, perm os.FileMode) error {
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
-	if err != nil {
-		return fmt.Errorf("open tmp file %q: %w", tmpPath, err)
-	}
-	_, writeErr := f.Write(data)
-	closeErr := f.Close()
-	if writeErr != nil {
+	if err := os.WriteFile(tmpPath, data, perm); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("write tmp file %q: %w", tmpPath, writeErr)
-	}
-	if closeErr != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close tmp file %q: %w", tmpPath, closeErr)
+		return fmt.Errorf("write tmp file %q: %w", tmpPath, err)
 	}
 	if renameErr := os.Rename(tmpPath, finalPath); renameErr != nil {
 		_ = os.Remove(tmpPath)

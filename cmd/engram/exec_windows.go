@@ -30,7 +30,7 @@ func execReplace(exePath string, logger *slog.Logger) error {
 	cmd.Env = os.Environ()
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("os.StartProcess %q: %w", exePath, err)
+		return fmt.Errorf("cmd.Start %q: %w", exePath, err)
 	}
 
 	logger.Info("replacement process started, exiting parent", "pid", cmd.Process.Pid)
