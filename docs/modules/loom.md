@@ -13,7 +13,8 @@ scoped to an authenticated project, cross-project access is silently blocked,
 and all task state survives daemon restarts via crash recovery.
 
 Canonical source: `internal/handlers/loom/`
-Loom library: `github.com/thebtf/aimux/loom@v0.1.0` — see `D:\Dev\aimux\loom\CONTRACT.md`
+Loom library: `github.com/thebtf/aimux/loom@v0.1.0` — see
+[CONTRACT.md](https://github.com/thebtf/aimux/blob/main/loom/CONTRACT.md)
 for the authoritative Worker interface semantics.
 
 ## Architecture

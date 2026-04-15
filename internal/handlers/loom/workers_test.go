@@ -43,17 +43,19 @@ func echoBinary(t *testing.T) string {
 func TestCliWorker_HappyPath(t *testing.T) {
 	t.Parallel()
 
-	// Use "echo" with a direct argument to produce deterministic stdout.
-	// We bypass stdin here by using a binary that ignores stdin.
-	if _, err := exec.LookPath("echo"); err != nil {
-		t.Skip("echo not in PATH")
+	if runtime.GOOS == "windows" {
+		t.Skip("happy path test requires a POSIX shell (cat reads stdin)")
+	}
+	if _, err := exec.LookPath("cat"); err != nil {
+		t.Skip("cat not in PATH")
 	}
 
-	w := loomhandler.NewCLIWorkerWithAllowlist([]string{"echo"})
+	// cat reads stdin and writes it back — verifies the stdin delivery path.
+	w := loomhandler.NewCLIWorkerWithAllowlist([]string{"cat"})
 	task := &loomlib.Task{
 		ID:     "t1",
 		Status: loomlib.TaskStatusRunning,
-		CLI:    "echo",
+		CLI:    "cat",
 		Prompt: "hello world",
 	}
 
@@ -64,9 +66,8 @@ func TestCliWorker_HappyPath(t *testing.T) {
 	if result == nil {
 		t.Fatal("result is nil")
 	}
-	// echo outputs its args, not stdin; result is platform-dependent but non-empty.
-	if result.Content == "" {
-		t.Error("expected non-empty content from echo")
+	if result.Content != "hello world" {
+		t.Errorf("expected %q, got %q", "hello world", result.Content)
 	}
 }
 
@@ -164,45 +165,25 @@ func TestCliWorker_EnvMerge(t *testing.T) {
 func TestCliWorker_Timeout(t *testing.T) {
 	t.Parallel()
 
-	var sleepBin string
-	var sleepArgs []string
 	if runtime.GOOS == "windows" {
-		// Use timeout /T on Windows
-		if _, err := exec.LookPath("timeout"); err != nil {
-			t.Skip("timeout not in PATH on Windows")
-		}
-		sleepBin = "timeout"
-		sleepArgs = []string{"/T", "10", "/NOBREAK"}
-	} else {
-		if _, err := exec.LookPath("sleep"); err != nil {
-			t.Skip("sleep not in PATH")
-		}
-		sleepBin = "sleep"
-		sleepArgs = []string{"10"}
+		t.Skip("timeout test requires a POSIX shell")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not in PATH")
 	}
 
-	w := loomhandler.NewCLIWorkerWithAllowlist([]string{sleepBin})
-
-	// Build a task that sets timeout via the binary args by using CWD trick
-	// is not possible — we rely on ctx timeout instead.
+	w := loomhandler.NewCLIWorkerWithAllowlist([]string{"sh"})
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
+	// "exec sleep 10" uses the exec builtin to replace the shell process with
+	// sleep, ensuring exec.CommandContext kills the sleeping process directly
+	// (not just the shell wrapper) when the context deadline fires.
 	task := &loomlib.Task{
 		ID:     "t5",
 		Status: loomlib.TaskStatusRunning,
-		CLI:    sleepBin,
-		Prompt: strings.Join(sleepArgs, " "),
-	}
-	// Note: worker uses task.Role/Model/Effort for args, not Prompt args.
-	// To pass args we set Role or Model or use a wrapper. Since we need to
-	// pass positional args to sleep, and cliWorker doesn't forward arbitrary
-	// args, we use a shell wrapper on Unix. On Windows timeout's default with
-	// no args should work.
-	if runtime.GOOS != "windows" {
-		w = loomhandler.NewCLIWorkerWithAllowlist([]string{"sh"})
-		task.CLI = "sh"
-		task.Prompt = "sleep 10"
+		CLI:    "sh",
+		Prompt: "exec sleep 10",
 	}
 
 	start := time.Now()
@@ -302,11 +283,14 @@ func TestCliWorker_ContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
+	// "exec sleep 30" uses the exec builtin to replace the shell process with
+	// sleep, ensuring exec.CommandContext kills the sleeping process directly
+	// (not just the shell wrapper) when the context is cancelled.
 	task := &loomlib.Task{
 		ID:     "t8",
 		Status: loomlib.TaskStatusRunning,
 		CLI:    "sh",
-		Prompt: "sleep 30",
+		Prompt: "exec sleep 30",
 	}
 
 	start := time.Now()

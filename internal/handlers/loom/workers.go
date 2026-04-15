@@ -1,9 +1,11 @@
 package loom
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -13,6 +15,10 @@ import (
 	loom "github.com/thebtf/aimux/loom"
 	"github.com/thebtf/engram/internal/module"
 )
+
+// maxOutputBytes caps the stdout read from a CLI worker to prevent a
+// runaway subprocess from exhausting daemon memory (DoS protection).
+const maxOutputBytes = 10 * 1024 * 1024 // 10 MiB
 
 // defaultAllowlist contains the CLI binaries that the cliWorker is permitted
 // to invoke. Callers cannot override this list at runtime; operator extension
@@ -109,8 +115,14 @@ func (w *cliWorker) Execute(ctx context.Context, task *loom.Task) (*loom.WorkerR
 	}
 	cmd.Env = env
 
+	// Capture stdout up to maxOutputBytes to prevent memory exhaustion from
+	// a runaway subprocess. Stderr is captured separately for error reporting.
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &limitedWriter{w: &stdoutBuf, n: maxOutputBytes}
+	cmd.Stderr = &stderrBuf
+
 	start := time.Now()
-	stdout, err := cmd.Output()
+	err := cmd.Run()
 	durationMS := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -121,7 +133,7 @@ func (w *cliWorker) Execute(ctx context.Context, task *loom.Task) (*loom.WorkerR
 		// exec.ExitError: process exited non-zero; include stderr in message.
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			stderr := strings.TrimSpace(stderrBuf.String())
 			if stderr != "" {
 				return nil, fmt.Errorf("loom: cli worker: %s exited with code %d: %s",
 					task.CLI, exitErr.ExitCode(), stderr)
@@ -133,7 +145,7 @@ func (w *cliWorker) Execute(ctx context.Context, task *loom.Task) (*loom.WorkerR
 	}
 
 	// Empty stdout → return empty WorkerResult so loom's quality gate retries.
-	content := strings.TrimSpace(string(stdout))
+	content := strings.TrimSpace(stdoutBuf.String())
 	return &loom.WorkerResult{
 		Content:    content,
 		DurationMS: durationMS,
@@ -157,4 +169,23 @@ var _ loom.Worker = (*cliWorker)(nil)
 // It registers every built-in worker with the engine.
 func registerWorkers(eng loomEngine, _ module.ModuleDeps) {
 	eng.RegisterWorker(loom.WorkerTypeCLI, newCLIWorker())
+}
+
+// limitedWriter wraps an io.Writer and silently discards bytes beyond the
+// limit n. Used to cap subprocess stdout and prevent memory exhaustion.
+type limitedWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (l *limitedWriter) Write(p []byte) (int, error) {
+	if l.n <= 0 {
+		return len(p), nil // discard
+	}
+	if int64(len(p)) > l.n {
+		p = p[:l.n]
+	}
+	n, err := l.w.Write(p)
+	l.n -= int64(n)
+	return len(p), err // report full len to avoid short-write errors
 }

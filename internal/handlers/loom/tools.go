@@ -24,7 +24,7 @@ const (
 var (
 	schemaLoomSubmit = json.RawMessage(`{
   "type": "object",
-  "required": ["worker_type", "prompt"],
+  "required": ["worker_type", "prompt", "cli"],
   "additionalProperties": false,
   "properties": {
     "worker_type": {

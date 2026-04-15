@@ -158,9 +158,9 @@ func (m *Module) Init(ctx context.Context, deps module.ModuleDeps) error {
 
 	// Register built-in workers after crash recovery so any worker registered
 	// here cannot accidentally dispatch into a half-recovered state.
-	// Order: NewEngine → RecoverCrashed → registerWorkers → Events().Subscribe
-	// Note: Subscribe is called above (before RecoverCrashed) to forward
-	// crash-recovery events. Worker registration is intentionally AFTER.
+	// Order: NewEngine → Events().Subscribe → RecoverCrashed → registerWorkers
+	// Subscribe is called before RecoverCrashed to forward crash-recovery
+	// events. Worker registration is intentionally AFTER recovery completes.
 	registerWorkers(eng, deps)
 
 	return nil

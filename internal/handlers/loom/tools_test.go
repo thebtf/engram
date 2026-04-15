@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
 	loomlib "github.com/thebtf/aimux/loom"
@@ -390,9 +389,18 @@ func TestLoomList_EmptyResultIsArray(t *testing.T) {
 		t.Fatalf("loom_list: unexpected error: %v", err)
 	}
 
-	// Must be {"tasks": []} not {"tasks": null}
-	if !strings.Contains(string(raw), `"tasks":[]`) {
-		t.Errorf("expected empty array in output, got: %s", raw)
+	// Must be {"tasks": []} not {"tasks": null} — unmarshal to avoid whitespace brittleness.
+	var out struct {
+		Tasks []*loomlib.Task `json:"tasks"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Tasks == nil {
+		t.Error("expected non-nil tasks slice (JSON array), got nil (JSON null)")
+	}
+	if len(out.Tasks) != 0 {
+		t.Errorf("expected 0 tasks, got %d", len(out.Tasks))
 	}
 }
 
@@ -576,13 +584,7 @@ func TestSubmitGet_E2E(t *testing.T) {
 // Compile-time assertion
 // ---------------------------------------------------------------------------
 
-// TestToolProvider_CompileTimeAssertion verifies at compile time (not runtime)
-// that *loomhandler.Module satisfies module.ToolProvider.
-func TestToolProvider_CompileTimeAssertion(t *testing.T) {
-	t.Parallel()
-	// The compile-time assertion is in module.go:
-	//   var _ module.ToolProvider = (*Module)(nil)
-	// If that line compiles, this test passes by definition.
-	// We include it as an explicit test to signal intent.
-	var _ module.ToolProvider = (*loomhandler.Module)(nil)
-}
+// The compile-time assertion that *Module satisfies module.ToolProvider lives
+// in module.go as a package-level var. No test function needed here — if that
+// line fails to compile the whole test binary will fail to build.
+// var _ module.ToolProvider = (*Module)(nil)
