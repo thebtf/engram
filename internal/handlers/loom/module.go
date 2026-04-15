@@ -15,6 +15,7 @@ import (
 
 	loom "github.com/thebtf/aimux/loom"
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/module/obs"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 
 	// Register the pure-Go SQLite driver so sql.Open("sqlite", ...) works.
@@ -115,7 +116,11 @@ func (m *Module) Init(ctx context.Context, deps module.ModuleDeps) error {
 			}
 		}
 
-		loomEng, err := loom.NewEngine(db, loom.WithLogger(deps.Logger))
+		loomEng, err := loom.NewEngine(db,
+			loom.WithLogger(deps.Logger),
+			loom.WithMeter(obs.MeterFor(moduleName)),
+			loom.WithMaxRetries(2),
+		)
 		if err != nil {
 			_ = db.Close()
 			return fmt.Errorf("loom: create engine: %w", err)
