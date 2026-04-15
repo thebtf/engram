@@ -189,6 +189,10 @@ func (b *Bridge) Stop() {
 // runEventStream maintains a persistent ProjectEvents gRPC stream.
 // On recv error it restarts the stream with exponential backoff.
 // On context cancellation it exits cleanly.
+//
+// Backoff is reset to backoffMin after every successful stream open so that
+// a momentary disconnect after a long stable period does not inherit the
+// large backoff left over from an earlier reconnect storm.
 func (b *Bridge) runEventStream(ctx context.Context) {
 	backoff := backoffMin
 
@@ -197,7 +201,12 @@ func (b *Bridge) runEventStream(ctx context.Context) {
 			return
 		}
 
-		err := b.consumeStream(ctx)
+		opened, err := b.consumeStream(ctx)
+		if opened {
+			// Fresh connection succeeded — any earlier inflation of the
+			// backoff window is no longer relevant.
+			backoff = backoffMin
+		}
 		if ctx.Err() != nil {
 			// Context cancelled — clean shutdown, not an error.
 			return
@@ -222,27 +231,30 @@ func (b *Bridge) runEventStream(ctx context.Context) {
 }
 
 // consumeStream opens a single ProjectEvents stream and reads events until
-// an error occurs or ctx is cancelled. Returns the first error (or nil on
-// clean ctx cancellation).
-func (b *Bridge) consumeStream(ctx context.Context) error {
+// an error occurs or ctx is cancelled. Returns (opened, err):
+//   - opened reports whether the stream RPC itself succeeded at least once
+//     (used by runEventStream to reset the backoff window).
+//   - err carries the first stream failure or nil on clean ctx cancellation.
+func (b *Bridge) consumeStream(ctx context.Context) (bool, error) {
 	callCtx := b.outgoingContext(ctx)
 
 	stream, err := b.client.ProjectEvents(callCtx, &pb.ProjectEventsRequest{
 		ClientId: b.clientID,
 	})
 	if err != nil {
-		return fmt.Errorf("open ProjectEvents stream: %w", err)
+		return false, fmt.Errorf("open ProjectEvents stream: %w", err)
 	}
 
 	b.logger.Info("serverevents stream connected")
+	opened := true
 
 	for {
 		ev, err := stream.Recv()
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return opened, nil
 			}
-			return fmt.Errorf("recv: %w", err)
+			return opened, fmt.Errorf("recv: %w", err)
 		}
 
 		b.handleEvent(ev)
@@ -331,6 +343,12 @@ func (b *Bridge) syncProjectState(ctx context.Context) {
 	}
 
 	for _, projectID := range resp.GetRemoved() {
+		// Mirror the guard in handleEvent — a malformed or partial server
+		// response that includes an empty ID must not fan out
+		// OnProjectRemoved("") to every module.
+		if projectID == "" {
+			continue
+		}
 		if b.dedup.Mark("removed", projectID) {
 			b.logger.Debug("serverevents bridge: heartbeat dedup suppressed",
 				"project_id", projectID,
@@ -350,9 +368,21 @@ func (b *Bridge) syncProjectState(ctx context.Context) {
 // ---------------------------------------------------------------------------
 
 // fanOutRemoval calls OnProjectRemoved on every ProjectRemovalAware module
-// in registration order.
+// in registration order. Each handler runs under defer+recover so that a
+// panic inside one module cannot crash the bridge or interrupt fan-out to
+// the remaining modules. This matches the panic-isolation discipline the
+// dispatcher applies to lifecycle callbacks (FR-15).
 func (b *Bridge) fanOutRemoval(projectID string) {
 	b.reg.ForEachProjectRemovalAware(func(h module.ProjectRemovalAware) {
+		defer func() {
+			if r := recover(); r != nil {
+				b.logger.Error("serverevents bridge: removal handler panicked",
+					"project_id", projectID,
+					"handler", fmt.Sprintf("%T", h),
+					"panic", r,
+				)
+			}
+		}()
 		h.OnProjectRemoved(projectID)
 	})
 }
