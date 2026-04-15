@@ -87,7 +87,7 @@ func ResolveProjectID(ctx context.Context, db *gorm.DB, projectID string) string
 	}
 	var canonicalID string
 	if err := db.WithContext(ctx).
-		Raw(`SELECT id FROM projects WHERE COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[] LIMIT 1`, projectID).
+		Raw(`SELECT id FROM projects WHERE removed_at IS NULL AND COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[] LIMIT 1`, projectID).
 		Scan(&canonicalID).Error; err != nil || canonicalID == "" {
 		return projectID
 	}

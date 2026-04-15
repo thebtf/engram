@@ -1176,7 +1176,7 @@ func (s *Service) getProjectDisplayName(ctx context.Context, projectID string) s
 	}
 	var displayName string
 	if err := s.store.GetDB().WithContext(ctx).
-		Raw("SELECT display_name FROM projects WHERE id = ? OR ? = ANY(COALESCE(legacy_ids, ARRAY[]::TEXT[]))", projectID, projectID).
+		Raw("SELECT display_name FROM projects WHERE removed_at IS NULL AND (id = ? OR ? = ANY(COALESCE(legacy_ids, ARRAY[]::TEXT[])))", projectID, projectID).
 		Scan(&displayName).Error; err != nil {
 		return ""
 	}
