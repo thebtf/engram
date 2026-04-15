@@ -2,9 +2,9 @@ package serverevents
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -44,6 +44,20 @@ func (f *fakeModule) OnProjectRemoved(projectID string) {
 	case f.removals <- projectID:
 	default: // buffer full — test will time out on receive
 	}
+}
+
+// panicModule is a ProjectRemovalAware that always panics in
+// OnProjectRemoved. Used to verify that fanOutRemoval isolates panics per
+// handler so one crashy module cannot block fan-out to the rest.
+type panicModule struct {
+	name string
+}
+
+func (p *panicModule) Name() string                                      { return p.name }
+func (p *panicModule) Init(_ context.Context, _ module.ModuleDeps) error { return nil }
+func (p *panicModule) Shutdown(_ context.Context) error                  { return nil }
+func (p *panicModule) OnProjectRemoved(_ string) {
+	panic("panicModule: simulated handler crash")
 }
 
 // buildRegistry registers the given modules and freezes the registry.
@@ -219,9 +233,10 @@ func startFakeServer(t *testing.T, srv *fakeEngramServer) (EventsClient, func())
 	return client, cleanup
 }
 
-// testLogger returns a discard logger for test isolation.
+// testLogger returns a true discard logger for test isolation — parallel
+// tests would otherwise interleave debug output on stderr.
 func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +480,51 @@ func TestBridge_HeartbeatCatchesMissed(t *testing.T) {
 	if !srv.syncSawProject("proj-missed") {
 		t.Error("server never received proj-missed in local_project_ids — bridge did not query tracker")
 	}
+}
+
+// TestBridge_FanOutRemoval_PanicIsolation verifies FR-15 semantics for the
+// bridge: if one ProjectRemovalAware module panics in OnProjectRemoved,
+// the bridge must recover + log and continue to fan out to the remaining
+// modules registered after the panicking one.
+func TestBridge_FanOutRemoval_PanicIsolation(t *testing.T) {
+	t.Parallel()
+
+	srv := newFakeServer()
+	panicker := &panicModule{name: "panicker"}
+	survivor := newFakeModule("survivor")
+	// Registration order matters: panicker must come BEFORE survivor so
+	// that fan-out reaches it first. If the bridge did not recover the
+	// panic, survivor would never see the event.
+	reg := buildRegistry(panicker, survivor)
+
+	client, cleanup := startFakeServer(t, srv)
+	defer cleanup()
+
+	logger := testLogger()
+	bridge := NewBridge(logger, reg, newFakeTracker(), client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bridge.Start(ctx)
+
+	srv.eventCh <- &pb.ProjectEvent{
+		EventId:         "evt-panic-isolation",
+		EventType:       pb.ProjectEventType_PROJECT_EVENT_TYPE_REMOVED,
+		ProjectId:       "proj-panic-ok",
+		TimestampUnixMs: time.Now().UnixMilli(),
+	}
+
+	select {
+	case pid := <-survivor.removals:
+		if pid != "proj-panic-ok" {
+			t.Errorf("expected proj-panic-ok, got %s", pid)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("survivor module did not receive OnProjectRemoved after panic — recovery missing")
+	}
+
+	bridge.Stop()
 }
 
 // TestBridge_StopExitsCleanly verifies that Stop() unblocks within 5 s (NFR-9

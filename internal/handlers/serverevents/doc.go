@@ -15,8 +15,12 @@
 //     Under normal conditions the daemon reconnects within 30 s (NFR-3).
 //
 //  2. Heartbeat (runSyncTicker): Every 60 s ± 5 s jitter the bridge calls
-//     [EngramService.SyncProjectState] with the set of project IDs currently
-//     tracked by the bridge's own connection-aware tracker. Any project ID
+//     [EngramService.SyncProjectState] with the set of project IDs returned
+//     by a [ProjectTracker]. In production the tracker is the
+//     [dispatcher.Dispatcher], which exposes its live session set via
+//     ConnectedProjectIDs() — populated by OnProjectConnect /
+//     OnProjectDisconnect callbacks from the muxcore lifecycle. Tests
+//     inject a fake tracker to seed arbitrary project sets. Any project ID
 //     that the server returns in the "removed" list triggers the same
 //     fan-out as path 1. This catches events that may have been emitted while
 //     the stream was down (NFR-4, eventually-consistent safety net).
