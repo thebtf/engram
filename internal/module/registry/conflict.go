@@ -32,6 +32,7 @@ func (r *Registry) ToolByName(name string) (*Entry, *module.ToolDef, bool) {
 				Lifecycle:    me.Lifecycle,
 				RemovalAware: me.RemovalAware,
 				ToolProv:     me.ToolProv,
+				ProxyTool:    me.ProxyTool,
 			}
 			return e, &def, true
 		}

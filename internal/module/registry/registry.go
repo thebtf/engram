@@ -12,6 +12,12 @@ import (
 // read-only-after-freeze for the lifetime of the daemon.
 var ErrRegistryFrozen = errors.New("registry is frozen: Register called after Freeze")
 
+// ErrMultipleProxyToolProviders is returned by Register when a second module
+// implementing module.ProxyToolProvider is registered. Per FR-11a: at most
+// ONE proxy tool provider is allowed in the registry to prevent ambiguous
+// routing when a tool name falls through the static ToolProvider lookup.
+var ErrMultipleProxyToolProviders = errors.New("only one module may implement ProxyToolProvider")
+
 // Registry is the frozen-after-boot module container. It stores modules in
 // registration order and caches capability references discovered at Register
 // time, enabling zero-allocation, zero-type-assertion reads during runtime.
@@ -26,13 +32,18 @@ var ErrRegistryFrozen = errors.New("registry is frozen: Register called after Fr
 type Registry struct {
 	entries   []moduleEntry
 	toolIndex map[string]int // tool name → index into entries slice
-	frozen    bool
+	// proxyIdx is the entries[] index of the registered ProxyToolProvider, or
+	// -1 if none. Only one proxy provider is allowed per FR-11a. Cached here
+	// for O(1) lookup by the dispatcher on every tools/call fallthrough.
+	proxyIdx int
+	frozen   bool
 }
 
 // New returns an empty, unfrozen Registry.
 func New() *Registry {
 	return &Registry{
 		toolIndex: make(map[string]int),
+		proxyIdx:  -1,
 	}
 }
 
@@ -57,7 +68,7 @@ func (r *Registry) Register(m module.EngramModule) error {
 		}
 	}
 
-	// Capability discovery — four type assertions, results cached in entry.
+	// Capability discovery — five type assertions, results cached in entry.
 	entry := moduleEntry{Module: m}
 	if s, ok := m.(module.Snapshotter); ok {
 		entry.Snap = s
@@ -70,6 +81,20 @@ func (r *Registry) Register(m module.EngramModule) error {
 	}
 	if tp, ok := m.(module.ToolProvider); ok {
 		entry.ToolProv = tp
+	}
+	if ptp, ok := m.(module.ProxyToolProvider); ok {
+		// Single-instance enforcement — FR-11a. Reject the second proxy
+		// provider before mutating any registry state so partial-registration
+		// bugs are impossible.
+		if r.proxyIdx >= 0 {
+			return fmt.Errorf(
+				"%w: module %q conflicts with already-registered proxy %q",
+				ErrMultipleProxyToolProviders,
+				m.Name(),
+				r.entries[r.proxyIdx].Module.Name(),
+			)
+		}
+		entry.ProxyTool = ptp
 	}
 
 	// Tool-name conflict detection — iterate new module's tools before appending.
@@ -88,10 +113,17 @@ func (r *Registry) Register(m module.EngramModule) error {
 		for _, td := range entry.ToolProv.Tools() {
 			r.toolIndex[td.Name] = idx
 		}
+		if entry.ProxyTool != nil {
+			r.proxyIdx = idx
+		}
 		return nil
 	}
 
+	idx := len(r.entries)
 	r.entries = append(r.entries, entry)
+	if entry.ProxyTool != nil {
+		r.proxyIdx = idx
+	}
 	return nil
 }
 
@@ -158,6 +190,20 @@ func (r *Registry) ForEachSnapshotter(fn func(name string, s module.Snapshotter)
 	}
 }
 
+// GetProxyToolProvider returns the registered proxy tool provider and its
+// owning module name, or (nil, "", false) if none is registered.
+//
+// Called by the dispatcher on every tools/list (to append dynamic tools) and
+// on every tools/call fallthrough (to route tools not found in any static
+// ToolProvider). O(1) — uses the cached proxyIdx.
+func (r *Registry) GetProxyToolProvider() (module.ProxyToolProvider, string, bool) {
+	if r.proxyIdx < 0 {
+		return nil, "", false
+	}
+	e := r.entries[r.proxyIdx]
+	return e.ProxyTool, e.Module.Name(), true
+}
+
 // Entry is an exported view of a registered module with cached capability
 // references. It is returned by Entries for use by the lifecycle pipeline.
 // Callers MUST NOT mutate any field.
@@ -175,6 +221,8 @@ type Entry struct {
 	RemovalAware module.ProjectRemovalAware
 	// ToolProv is non-nil if Module implements module.ToolProvider.
 	ToolProv module.ToolProvider
+	// ProxyTool is non-nil if Module implements module.ProxyToolProvider.
+	ProxyTool module.ProxyToolProvider
 }
 
 // ListLifecycleHandlers returns a slice of all modules that implement
@@ -229,6 +277,7 @@ func (r *Registry) Entries() []Entry {
 			Lifecycle:    e.Lifecycle,
 			RemovalAware: e.RemovalAware,
 			ToolProv:     e.ToolProv,
+			ProxyTool:    e.ProxyTool,
 		}
 	}
 	return result

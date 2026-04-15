@@ -65,15 +65,55 @@ func callToolWithTimeout(
 	projectID string,
 	logger *slog.Logger,
 ) (result json.RawMessage, outErr error) {
+	return callWithTimeout(ctx, p, toolName, projectID, logger, func(tctx context.Context) (json.RawMessage, error) {
+		return provider.HandleTool(tctx, p, name, args)
+	})
+}
+
+// callProxyToolWithTimeout wraps a module.ProxyToolProvider.ProxyHandleTool
+// call under the same 30 s cap + panic recovery contract as the static
+// ToolProvider path. Kept as a separate function so the two paths remain
+// greppable and the dispatcher_test coverage can exercise them independently.
+//
+// Design reference: FR-11a (ProxyToolProvider) and design.md Section 5.2.
+func callProxyToolWithTimeout(
+	ctx context.Context,
+	proxy module.ProxyToolProvider,
+	p muxcore.ProjectContext,
+	name string,
+	args json.RawMessage,
+	toolName string,
+	projectID string,
+	logger *slog.Logger,
+) (result json.RawMessage, outErr error) {
+	return callWithTimeout(ctx, p, toolName, projectID, logger, func(tctx context.Context) (json.RawMessage, error) {
+		return proxy.ProxyHandleTool(tctx, p, name, args)
+	})
+}
+
+// callWithTimeout is the shared 30 s cap + panic recovery + dispatcherTimeoutError
+// sentinel injection used by both the static and proxy tool-call paths.
+//
+// fn MUST NOT capture tctx as a long-lived reference — tctx is cancelled by
+// the defer below. fn receives tctx as an argument so it can pass it straight
+// through to the module's HandleTool / ProxyHandleTool.
+func callWithTimeout(
+	ctx context.Context,
+	p muxcore.ProjectContext,
+	toolName string,
+	projectID string,
+	logger *slog.Logger,
+	fn func(tctx context.Context) (json.RawMessage, error),
+) (result json.RawMessage, outErr error) {
 	tctx, cancel := context.WithTimeout(ctx, defaultToolTimeout)
 	defer cancel()
 
 	// Panic recovery: deferred before the actual call so it wraps the call.
 	defer recoverHandleTool(toolName, p.ID, logger, &outErr)
 
-	result, outErr = provider.HandleTool(tctx, p, name, args)
+	result, outErr = fn(tctx)
 
-	// If HandleTool returned an error AND our own 30 s cap fired, that is an
+	// If the call returned an error AND our own 30 s cap fired, that is an
 	// INTERNAL safety-net tripped by the dispatcher — not a voluntary module
 	// error. Surface via dispatcherTimeoutError sentinel so content.go emits
 	// JSON-RPC -32603 per the spec edge case. If tctx.Err() is set for a

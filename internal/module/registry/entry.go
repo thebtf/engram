@@ -31,4 +31,9 @@ type moduleEntry struct {
 
 	// ToolProv is non-nil if Module implements module.ToolProvider.
 	ToolProv module.ToolProvider
+
+	// ProxyTool is non-nil if Module implements module.ProxyToolProvider.
+	// At most one module in the registry may have a non-nil ProxyTool —
+	// enforced at Register time via [ErrMultipleProxyToolProviders].
+	ProxyTool module.ProxyToolProvider
 }

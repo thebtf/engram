@@ -11,14 +11,38 @@ import (
 
 // handleToolsList processes the MCP "tools/list" request.
 //
-// Aggregates tool definitions from all ToolProvider modules via
-// registry.aggregateTools — the list is built in module registration order.
-// This is a hot path: the aggregated slice is rebuilt on each call in v0.1.0.
-// Caching deferred to v0.2+ (YAGNI until measured).
+// Aggregates tool definitions from all static ToolProvider modules via
+// registry.AggregateTools — the list is built in module registration order —
+// then appends the dynamic tool list from the single registered
+// ProxyToolProvider (if any) per FR-11a.
 //
-// Design reference: FR-4 (Dispatcher) and design.md Section 5.1.
-func (d *Dispatcher) handleToolsList(_ context.Context, _ muxcore.ProjectContext, req *jsonrpcRequest) ([]byte, error) {
+// This is a hot path: the aggregated slice is rebuilt on each call in v0.1.0.
+// Static aggregation is O(n) across ~1-5 modules. The proxy call may block on
+// network I/O (typically a gRPC Initialize handshake) — this is accepted
+// because tools/list is low-frequency (once per session open).
+//
+// Graceful degradation: if ProxyTools returns an error, the dispatcher logs a
+// warning and returns ONLY the static tools. A network blip MUST NOT break
+// tools/list — this is explicit in the FR-11a contract.
+//
+// Design reference: FR-4 (Dispatcher) + FR-11a (ProxyToolProvider) and
+// design.md Section 5.1.
+func (d *Dispatcher) handleToolsList(ctx context.Context, p muxcore.ProjectContext, req *jsonrpcRequest) ([]byte, error) {
 	tools := d.reg.AggregateTools()
+
+	if proxy, proxyName, ok := d.reg.GetProxyToolProvider(); ok {
+		proxyTools, err := proxy.ProxyTools(ctx, p)
+		if err != nil {
+			// FR-11a graceful degradation: log + fall through to static-only.
+			d.logger.Warn("proxy tool provider ProxyTools failed, returning static tools only",
+				"module", proxyName,
+				"project_id", p.ID,
+				"error", err,
+			)
+		} else {
+			tools = append(tools, proxyTools...)
+		}
+	}
 
 	type toolEntry struct {
 		Name        string          `json:"name"`
@@ -61,14 +85,33 @@ func (d *Dispatcher) handleToolsCall(ctx context.Context, p muxcore.ProjectConte
 		return marshalError(req.ID, -32602, "invalid params: tool name is required"), nil
 	}
 
+	// Priority A: static ToolProvider lookup. O(1) hash hit.
 	entry, _, ok := d.reg.ToolByName(params.Name)
-	if !ok {
-		return marshalError(req.ID, -32601, fmt.Sprintf("tool not found: %s", params.Name)), nil
-	}
 
-	// callWithPanicRecovery calls HandleTool under 30 s cap + panic recovery.
-	raw, callErr := callToolWithTimeout(ctx, entry.ToolProv, p, params.Name, params.Arguments,
-		params.Name, p.ID, d.logger)
+	var (
+		raw     json.RawMessage
+		callErr error
+	)
+	if ok {
+		// Static path: call module.ToolProvider.HandleTool under 30 s cap +
+		// panic recovery.
+		raw, callErr = callToolWithTimeout(ctx, entry.ToolProv, p, params.Name, params.Arguments,
+			params.Name, p.ID, d.logger)
+	} else {
+		// Priority B: ProxyToolProvider fallthrough per FR-11a. At most one
+		// proxy is registered so ambiguity is impossible.
+		proxy, _, hasProxy := d.reg.GetProxyToolProvider()
+		if !hasProxy {
+			return marshalError(req.ID, -32601, fmt.Sprintf("tool not found: %s", params.Name)), nil
+		}
+		// Proxy path: call ProxyHandleTool under the same 30 s cap + panic
+		// recovery contract. An unknown-tool result from the proxy is NOT
+		// re-mapped to -32601 here — the proxy itself is responsible for
+		// surfacing tool-not-found via *module.ModuleError (result-level
+		// isError:true) or JSON-RPC error (-32603) as appropriate.
+		raw, callErr = callProxyToolWithTimeout(ctx, proxy, p, params.Name, params.Arguments,
+			params.Name, p.ID, d.logger)
+	}
 
 	if callErr != nil {
 		// Priority 1: dispatcher-injected 30 s timeout → -32603 per spec edge case.

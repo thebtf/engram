@@ -127,3 +127,59 @@ type ToolProvider interface {
 	// progress notifications are FORBIDDEN in v0.1.0.
 	HandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error)
 }
+
+// ProxyToolProvider is implemented by modules whose tool list cannot be
+// declared at compile time because it is owned by a backend system and
+// fetched at runtime (e.g. the engramcore module which proxies 68+ tools
+// from engram-server via a gRPC Initialize handshake).
+//
+// This is an ADDITIVE capability — it supplements ToolProvider rather than
+// replacing it. A single daemon may have both static ToolProvider modules and
+// a single ProxyToolProvider module simultaneously. The dispatcher merges
+// their tool lists at tools/list time and routes tools/call requests to
+// whichever owns the requested name.
+//
+// CONTRACT RULE (FR-11a): at most ONE module in the registry may implement
+// ProxyToolProvider. Registering a second one MUST fail fast at Register time
+// with [registry.ErrMultipleProxyToolProviders]. This single-instance rule
+// prevents ambiguous routing when a tool name is not found in any static
+// ToolProvider.
+//
+// Routing precedence (dispatcher):
+//  1. Look up tool name in static ToolProvider registry.
+//  2. If not found AND a ProxyToolProvider is registered, forward the call
+//     via ProxyHandleTool.
+//  3. If still not found, return JSON-RPC -32601 method not found.
+type ProxyToolProvider interface {
+	// ProxyTools returns the dynamic tool list fetched from the backend for a
+	// specific project context. Called by the dispatcher on every tools/list
+	// request because the backend tool set MAY vary by project (different
+	// projects can have different enabled tool sets on the server).
+	//
+	// The call is synchronous but MAY block on network I/O (typically a gRPC
+	// Initialize handshake to engram-server). A reasonable timeout (configured
+	// by the module implementer, not the framework) MUST be applied internally.
+	//
+	// Returning an error means the tool list is temporarily unavailable; the
+	// dispatcher logs a warning and returns ONLY the static tool list. This is
+	// graceful degradation — a network blip MUST NOT break tools/list.
+	ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]ToolDef, error)
+
+	// ProxyHandleTool forwards a tools/call request to the backend when the
+	// tool name is not found in any static ToolProvider. Called concurrently
+	// from multiple session goroutines — implementations MUST be thread-safe.
+	//
+	// The same <1s soft contract from ToolProvider.HandleTool applies to the
+	// synchronous portion of ProxyHandleTool. Long-running operations MUST be
+	// submitted as background tasks and return a task reference immediately.
+	//
+	// ctx carries the dispatcher's 30s hard cap. p is the originating session's
+	// project context. name is the tool name as received from the client
+	// (guaranteed not to match any static ToolProvider tool). args is the raw
+	// JSON "arguments" field from the request.
+	//
+	// The return value is the MCP "result" field; a *module.ModuleError is
+	// mapped to result-level isError:true per FR-12; any other error maps to
+	// JSON-RPC -32603.
+	ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error)
+}
