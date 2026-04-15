@@ -1,8 +1,23 @@
-// Package loom is the loom tenant of the engram modular daemon framework.
-// v4.4.0 is a plumbing-only landing: the module coexists with engramcore as a
-// second registered tenant, opens tasks.db, wires the EventBus, and performs
-// crash recovery. No MCP tools are exposed and no workers are registered in
-// this release; those land in a follow-up PR.
+// Package loom is the second EngramModule tenant of the engram modular daemon
+// framework, exposing 4 MCP tools (loom_submit, loom_get, loom_list,
+// loom_cancel) backed by a CLI worker that shells out to allowlisted binaries.
+//
+// The module coexists with engramcore, owns a SQLite task store at
+// ${StorageDir}/tasks.db, and delegates all task lifecycle work to the
+// embedded github.com/thebtf/aimux/loom engine.
+//
+// # Architecture
+//
+// Init opens tasks.db, wires the EventBus, runs crash recovery, and registers
+// the built-in WorkerTypeCLI worker. The 4 MCP tools are exposed via the
+// module.ToolProvider interface. For the full loom v0.1.0 API reconciliation
+// see .agent/specs/loom-integration/design.md §9.
+//
+// # Extension
+//
+// Additional worker types (WorkerTypeThinker, WorkerTypeInvestigator, etc.)
+// can be added in follow-up PRs by calling engine.RegisterWorker inside
+// a dedicated registerWorkers call, or by extending registerWorkers in workers.go.
 package loom
 
 import (
@@ -28,17 +43,16 @@ var (
 	_ module.ProjectLifecycle    = (*Module)(nil)
 	_ module.ProjectRemovalAware = (*Module)(nil)
 	_ module.Snapshotter         = (*Module)(nil)
+	_ module.ToolProvider        = (*Module)(nil)
 )
 
 const moduleName = "loom"
 
 // Module is the loom tenant of the engram modular daemon framework.
 // It owns a SQLite DB at ${StorageDir}/tasks.db, delegates all task work to
-// the embedded loom engine, and forwards task lifecycle events to connected
-// sessions as JSON-RPC notifications.
-//
-// v4.4.0 constraints: no MCP tools exposed, no workers registered.
-// Full tools + workers land in the follow-up PR.
+// the embedded loom engine, forwards task lifecycle events to connected
+// sessions as JSON-RPC notifications, and exposes 4 MCP tools:
+// loom_submit, loom_get, loom_list, loom_cancel.
 type Module struct {
 	engine   loomEngine
 	db       *sql.DB
@@ -141,6 +155,13 @@ func (m *Module) Init(ctx context.Context, deps module.ModuleDeps) error {
 			"recovered", n,
 		)
 	}
+
+	// Register built-in workers after crash recovery so any worker registered
+	// here cannot accidentally dispatch into a half-recovered state.
+	// Order: NewEngine → RecoverCrashed → registerWorkers → Events().Subscribe
+	// Note: Subscribe is called above (before RecoverCrashed) to forward
+	// crash-recovery events. Worker registration is intentionally AFTER.
+	registerWorkers(eng, deps)
 
 	return nil
 }
