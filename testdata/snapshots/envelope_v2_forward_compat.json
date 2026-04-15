@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "data": {
+    "counter": 77,
+    "items": ["x", "y", "z"],
+    "new_field": "present"
+  }
+}

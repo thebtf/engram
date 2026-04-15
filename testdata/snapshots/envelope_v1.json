@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "data": {
+    "counter": 42,
+    "items": ["a", "b"]
+  }
+}
