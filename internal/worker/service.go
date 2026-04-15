@@ -47,6 +47,8 @@ import (
 	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/internal/vector/pgvector"
 	"github.com/thebtf/engram/internal/watcher"
+	"github.com/thebtf/engram/internal/worker/projectevents"
+	"github.com/thebtf/engram/internal/worker/reaper"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/internal/worker/sse"
@@ -210,6 +212,8 @@ type Service struct {
 	vaultOnce              sync.Once
 	vaultErr               error
 	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
+	eventBus               *projectevents.Bus
+	projectReaper          *reaper.Reaper
 }
 
 // promptCacheEntry stores a user prompt with a timestamp for eviction.
@@ -557,6 +561,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		ingestDedup:        newDeduplicationCache(5 * time.Minute),
 		mcpHealth:          mcp.NewMCPHealth(),
 		strategySelector:   learning.NewStrategySelector(cfg.InjectionStrategies, cfg.InjectionStrategyMode, cfg.DefaultStrategy),
+		eventBus:           &projectevents.Bus{},
 	}
 
 	// Setup middleware and routes (health endpoint works immediately)
@@ -1134,7 +1139,9 @@ func (s *Service) initializeAsync() {
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
 	// initMu protects s.grpcServer — the cmux goroutine polls for it.
 	adapter := &mcpHandlerAdapter{mcpServer: mcpServer}
-	grpcSrv, _ := grpcserver.New(adapter)
+	grpcSrv, grpcInternalSrv := grpcserver.New(adapter)
+	grpcInternalSrv.SetDB(store.DB)
+	grpcInternalSrv.SetBus(s.eventBus)
 	s.initMu.Lock()
 	s.grpcServer = grpcSrv
 	s.initMu.Unlock()
@@ -1163,6 +1170,11 @@ func (s *Service) initializeAsync() {
 	// Mark as ready
 	s.ready.Store(true)
 	log.Info().Msg("Async initialization complete - service ready")
+
+	// Start project reaper (hourly cleanup of hard-expired soft-deleted projects).
+	projectReaper := reaper.New(store.DB)
+	s.projectReaper = projectReaper
+	projectReaper.Start(s.ctx)
 
 	// Start queue processor if SDK processor is available
 	if processor != nil {
@@ -1827,6 +1839,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/summaries", s.handleGetSummaries)
 		r.Get("/api/prompts", s.handleGetPrompts)
 		r.Get("/api/projects", s.handleGetProjects)
+		r.Delete("/api/projects/{id}", s.handleDeleteProject)
 		r.Get("/api/stats", s.handleGetStats)
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)
 		r.Post("/api/graph/sync", s.handleGraphSync)
