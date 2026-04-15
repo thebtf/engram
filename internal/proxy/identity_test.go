@@ -12,9 +12,13 @@ import (
 	"github.com/thebtf/engram/internal/proxy"
 )
 
-// findRepoRoot returns the absolute path of the current git repository root.
-// It fails the test immediately if the git command fails.
-func findRepoRoot(t *testing.T) string {
+// findRealRepoRoot returns the absolute path of the current git repository
+// root. It exists solely for TestResolveProjectSlug_WorktreeMatchesMain,
+// which MUST inspect a real engram repo because its purpose is to verify
+// worktree-vs-main-checkout id stability in a real git environment. All
+// other tests in this file use initSyntheticGitRepo for full isolation
+// from the running checkout's git state.
+func findRealRepoRoot(t *testing.T) string {
 	t.Helper()
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -23,13 +27,46 @@ func findRepoRoot(t *testing.T) string {
 	return filepath.Clean(strings.TrimSpace(string(out)))
 }
 
-// TestResolveProjectSlug_GitRepo verifies that a directory that is a git repo
-// with a remote produces a pure 8-hex-char id, a non-empty gitRemote, and
-// displayName equal to the directory base name.
+// initSyntheticGitRepo creates a fresh, isolated git repository inside
+// t.TempDir() with a fixed remote URL. This replaces the previous
+// findRepoRoot helper, which was brittle when the test ran inside a git
+// worktree checkout of the engram repo — git rev-parse --show-toplevel
+// would return the worktree path, but proxy.ResolveProjectSlug would
+// follow the gitdir pointer up to the main checkout and compute the hash
+// over the MAIN repo's remote + relative path, producing mismatches with
+// the worktree's directory basename. A self-contained test repo with a
+// known remote eliminates that coupling entirely.
+//
+// Returns the absolute path of the new repo.
+func initSyntheticGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.invalid")
+	run("config", "user.name", "identity-test")
+	run("remote", "add", "origin", "https://example.invalid/test/engram-identity-fixture.git")
+	return filepath.Clean(dir)
+}
+
+// TestResolveProjectSlug_GitRepo verifies that a directory that is a git
+// repo with a remote produces a pure 8-hex-char id, a non-empty gitRemote,
+// and displayName equal to the directory base name.
+//
+// Isolation: creates a synthetic git repo in t.TempDir() with a known
+// remote. The test does NOT depend on the running process's cwd git state,
+// eliminating the worktree-vs-main-checkout brittleness flagged as engram
+// issue #74.
 func TestResolveProjectSlug_GitRepo(t *testing.T) {
 	t.Parallel()
 
-	repoDir := findRepoRoot(t)
+	repoDir := initSyntheticGitRepo(t)
 
 	id, displayName, gitRemote, err := proxy.ResolveProjectSlug(repoDir)
 	if err != nil {
@@ -52,6 +89,12 @@ func TestResolveProjectSlug_GitRepo(t *testing.T) {
 
 	if gitRemote == "" {
 		t.Error("gitRemote should be non-empty for a git repo with a remote")
+	}
+
+	// The remote URL must match exactly what we set in initSyntheticGitRepo.
+	const expectedRemote = "https://example.invalid/test/engram-identity-fixture.git"
+	if gitRemote != expectedRemote {
+		t.Errorf("gitRemote %q, expected %q", gitRemote, expectedRemote)
 	}
 }
 
@@ -87,10 +130,12 @@ func TestResolveProjectSlug_NonGitDir(t *testing.T) {
 
 // TestResolveProjectSlug_ConsistentAcrossCalls verifies that calling
 // ResolveProjectSlug twice with the same cwd produces identical results.
+// Uses the synthetic git repo helper so the test does not depend on the
+// real engram repo's git state.
 func TestResolveProjectSlug_ConsistentAcrossCalls(t *testing.T) {
 	t.Parallel()
 
-	repoDir := findRepoRoot(t)
+	repoDir := initSyntheticGitRepo(t)
 
 	id1, dn1, remote1, err1 := proxy.ResolveProjectSlug(repoDir)
 	if err1 != nil {
@@ -119,7 +164,7 @@ func TestResolveProjectSlug_ConsistentAcrossCalls(t *testing.T) {
 func TestResolveProjectSlug_WorktreeMatchesMain(t *testing.T) {
 	t.Parallel()
 
-	mainRepo := findRepoRoot(t)
+	mainRepo := findRealRepoRoot(t)
 
 	out, err := exec.Command("git", "-C", mainRepo, "worktree", "list", "--porcelain").Output()
 	if err != nil {
