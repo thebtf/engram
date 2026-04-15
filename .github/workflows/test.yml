@@ -46,16 +46,28 @@ jobs:
       # internal/module/         >= 90%  (NFR-7, G002 verified at 95.8%)
       # internal/handlers/engramcore >= 60%  (NFR-7; gRPC transport limits
       #                               unit-test coverage)
+      # internal/handlers/loom   >= 80%  (Phase B-1 plumbing landing)
       # cmd/engram/              >= 0%   (NFR-7; main + wiring + exec_*.go are
       #                               not meaningfully unit-testable, kept as
       #                               documentation of the package set)
       #
-      # The check averages function-level coverage across all functions whose
-      # file path begins with the given prefix. This is approximately a
-      # function-count weighted average (not statement-weighted) but it is
-      # correct enough as a guard against unintended regressions and avoids
-      # the "tail -1" bug that previously sampled a single function's coverage
-      # and called it the package's total.
+      # The check computes a TRUE statement-weighted coverage for a package
+      # prefix by parsing the raw coverage.out file directly. Each non-header
+      # line in coverage.out has the form:
+      #   path:start.col,end.col numStatements covered(0/1)
+      # The script sums numStatements per package prefix, sums numStatements
+      # of lines where covered > 0, and reports hit/total. This matches the
+      # standard Go coverage metric reported by `go test -cover` summary line
+      # for the package — which is what Phase A NFR-7 was measuring.
+      #
+      # History:
+      # - v1 (Phase A): used `go tool cover -func ... | tail -1`. Sampled ONE
+      #   function and called it the package coverage. Reported 0% for
+      #   cmd/engram/ on every run — Phase A merged with this gate red.
+      # - v2 (PR #167 first attempt): function-count-weighted average via awk.
+      #   Better than v1 but not the same metric Phase A claimed.
+      # - v3 (this version): statement-weighted from raw coverage.out.
+      #   Matches the standard Go metric.
       - name: Check coverage gates
         shell: bash
         run: |
@@ -63,17 +75,20 @@ jobs:
             local pkg="$1"
             local threshold="$2"
             local pct
-            pct=$(go tool cover -func=coverage.out 2>/dev/null \
-              | grep "^github.com/thebtf/engram/${pkg}" \
-              | grep -v "^total:" \
-              | awk '{
-                  gsub(/%/, "", $NF)
-                  sum += $NF
-                  n++
-                } END {
-                  if (n > 0) printf "%.1f\n", sum / n
-                  else print ""
-                }')
+            pct=$(awk -v pkg="github.com/thebtf/engram/${pkg}" '
+              $1 ~ ("^" pkg) {
+                n = split($0, parts, " ")
+                if (n < 3) next
+                stmts = parts[n-1]
+                hit   = parts[n]
+                total += stmts
+                if (hit + 0 > 0) covered += stmts
+              }
+              END {
+                if (total > 0) printf "%.1f\n", (covered / total) * 100
+                else print ""
+              }
+            ' coverage.out)
             if [ -z "$pct" ]; then
               echo "SKIP: no coverage data for ${pkg} (no test files or all functions excluded)"
               return 0
@@ -81,9 +96,9 @@ jobs:
             local ok
             ok=$(awk "BEGIN { print ($pct >= $threshold) ? 1 : 0 }")
             if [ "$ok" = "1" ]; then
-              echo "PASS: ${pkg} avg coverage ${pct}% >= ${threshold}%"
+              echo "PASS: ${pkg} stmt coverage ${pct}% >= ${threshold}%"
             else
-              echo "FAIL: ${pkg} avg coverage ${pct}% < ${threshold}% (threshold)"
+              echo "FAIL: ${pkg} stmt coverage ${pct}% < ${threshold}% (threshold)"
               exit 1
             fi
           }
