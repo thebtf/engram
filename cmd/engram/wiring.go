@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/thebtf/engram/internal/handlers/engramcore"
+	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
 	"github.com/thebtf/engram/internal/module/registry"
 )
 
@@ -27,6 +28,9 @@ import (
 func registerModules(reg *registry.Registry) error {
 	if err := reg.Register(engramcore.NewModule()); err != nil {
 		return fmt.Errorf("register engramcore: %w", err)
+	}
+	if err := reg.Register(loomhandler.NewModule()); err != nil {
+		return fmt.Errorf("register loom: %w", err)
 	}
 	return nil
 }
