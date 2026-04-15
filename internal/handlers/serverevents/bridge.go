@@ -313,7 +313,7 @@ func (b *Bridge) syncProjectState(ctx context.Context) {
 	defer cancel()
 
 	resp, err := b.client.SyncProjectState(callCtx, &pb.SyncProjectStateRequest{
-		ClientId:       b.clientID,
+		ClientId:        b.clientID,
 		LocalProjectIds: localIDs,
 	})
 	if err != nil {

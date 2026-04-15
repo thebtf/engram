@@ -20,13 +20,13 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakeMod struct {
-	name       string
-	tools      []module.ToolDef
-	handleFn   func(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error)
+	name        string
+	tools       []module.ToolDef
+	handleFn    func(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error)
 	callsToTool *int32 // atomic
 }
 
-func (f *fakeMod) Name() string                                       { return f.name }
+func (f *fakeMod) Name() string                                      { return f.name }
 func (f *fakeMod) Init(_ context.Context, _ module.ModuleDeps) error { return nil }
 func (f *fakeMod) Shutdown(_ context.Context) error                  { return nil }
 func (f *fakeMod) Tools() []module.ToolDef                           { return f.tools }
@@ -47,7 +47,7 @@ type panicMod struct {
 	message string
 }
 
-func (f *panicMod) Name() string                                       { return f.name }
+func (f *panicMod) Name() string                                      { return f.name }
 func (f *panicMod) Init(_ context.Context, _ module.ModuleDeps) error { return nil }
 func (f *panicMod) Shutdown(_ context.Context) error                  { return nil }
 func (f *panicMod) Tools() []module.ToolDef                           { return f.tools }
@@ -61,7 +61,7 @@ type slowMod struct {
 	tools []module.ToolDef
 }
 
-func (f *slowMod) Name() string                                       { return f.name }
+func (f *slowMod) Name() string                                      { return f.name }
 func (f *slowMod) Init(_ context.Context, _ module.ModuleDeps) error { return nil }
 func (f *slowMod) Shutdown(_ context.Context) error                  { return nil }
 func (f *slowMod) Tools() []module.ToolDef                           { return f.tools }
