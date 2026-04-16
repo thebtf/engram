@@ -37,8 +37,6 @@ RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w
 
 # Build client-side binaries: engram local proxy
 RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram ./cmd/engram
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram-mcp ./cmd/mcp
-
 # --- Server image ---
 FROM debian:bookworm-slim AS server
 
@@ -59,16 +57,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:37777/health || exit 1
 
 ENTRYPOINT ["engram-server"]
-
-# --- Client image: hooks + MCP proxy (for extracting binaries) ---
-FROM debian:bookworm-slim AS client
-
-WORKDIR /app
-
-COPY --from=builder /out/engram /app/engram
-COPY --from=builder /out/engram-mcp /app/engram-mcp
-COPY plugin/engram/hooks/ /app/hooks/
-COPY plugin/engram/commands/ /app/commands/
-COPY plugin/engram/.claude-plugin/ /app/.claude-plugin/
-
-ENTRYPOINT ["/bin/bash"]

@@ -74,10 +74,8 @@ function Install-Release {
         New-Item -ItemType Directory -Path "$InstallDir\.claude-plugin" -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\commands" -Force | Out-Null
 
-        # Copy binaries (goreleaser names: engram-server, engram-mcp, engram-mcp-stdio-proxy)
+        # Copy binaries
         Copy-Item "$TempDir\engram-server.exe" "$InstallDir\" -Force -ErrorAction SilentlyContinue
-        Copy-Item "$TempDir\engram-mcp.exe" "$InstallDir\" -Force -ErrorAction SilentlyContinue
-        Copy-Item "$TempDir\engram-mcp-stdio-proxy.exe" "$InstallDir\" -Force -ErrorAction SilentlyContinue
         # Copy JS hooks (required for plugin — stop on error)
         Copy-Item "$TempDir\hooks\*.js" "$InstallDir\hooks\" -Force -ErrorAction Stop
         Copy-Item "$TempDir\hooks\hooks.json" "$InstallDir\hooks\" -Force -ErrorAction Stop
