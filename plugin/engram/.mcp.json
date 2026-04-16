@@ -6,6 +6,7 @@
       "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js"],
       "env": {
         "ENGRAM_URL": "${user_config.server_url}",
+        "ENGRAM_URL_LEGACY": "${ENGRAM_URL}",
         "ENGRAM_API_TOKEN": "${user_config.api_token}"
       }
     }

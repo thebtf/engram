@@ -22,6 +22,21 @@ if (!fs.existsSync(binaryPath)) {
   process.exit(1);
 }
 
+// Fallback: when CC plugin update doesn't migrate user_config, ENGRAM_URL is empty.
+// Pick up the legacy system env value if present.
+if (!process.env.ENGRAM_URL && process.env.ENGRAM_URL_LEGACY) {
+  process.env.ENGRAM_URL = process.env.ENGRAM_URL_LEGACY;
+}
+
+// Visible diagnostic: warn to stderr if both ended up empty so the user has a signal,
+// not a silent gRPC dial failure on every tool call.
+if (!process.env.ENGRAM_URL) {
+  process.stderr.write(
+    "[engram] WARN: ENGRAM_URL is empty. Run /engram:setup to configure server URL, " +
+    "or set the ENGRAM_URL env var in your shell.\n"
+  );
+}
+
 // Replace this process with the engram binary
 try {
   const { spawnSync } = require("child_process");

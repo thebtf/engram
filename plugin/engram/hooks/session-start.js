@@ -112,6 +112,8 @@ async function handleSessionStart(ctx, input) {
     filesBeingEdited,
   );
 
+  // NOTE: inject GET is still performed — result.always_inject is needed for behavioral rules.
+  // Noisy fields (observations, full_count, project_briefing, guidance) are fetched but NOT rendered.
   let result = {};
   try {
     result = await lib.requestGet(injectURL);
@@ -120,22 +122,7 @@ async function handleSessionStart(ctx, input) {
     return '';
   }
 
-  const observations = Array.isArray(result.results)
-    ? result.results
-    : Array.isArray(result.observations)
-      ? result.observations
-      : [];
-  let fullCount = 25;
-  const fullCountCandidate = Number(result.full_count);
-  if (Number.isFinite(fullCountCandidate) && fullCountCandidate > 0) {
-    fullCount = Math.floor(fullCountCandidate);
-  }
-
-  const detailedCount = Math.min(fullCount, observations.length);
-  const condensedCount = Math.max(0, observations.length - fullCount);
-  console.error(
-    `[engram] Injecting ${observations.length} observations from project memory (${detailedCount} detailed, ${condensedCount} condensed)`
-  );
+  // Log strategy for diagnostics only (not rendered)
   if (result && result.strategy) {
     console.error(`[session-start] Injection strategy: ${result.strategy}`);
   }
@@ -206,78 +193,16 @@ async function handleSessionStart(ctx, input) {
     console.error(`[engram] Injected ${alwaysInject.length} always-inject behavioral rules`);
   }
 
-  contextBuilder += '<engram-context>\n';
-  contextBuilder += `# Project Memory (${observations.length} observations)\n`;
-  contextBuilder +=
-    'Use this knowledge to answer questions without re-exploring the codebase.\n\n';
+  // NOTE: <engram-context>, <project-briefing>, and <engram-guidance> sections are intentionally
+  // disabled (v4.4.1 tactical fix #16). They produced noise rather than relevant context.
+  // The inject GET above is kept because result.always_inject still needs it.
+  // Re-enable by restoring the rendering blocks once inject pipeline is redesigned (Phase 2).
 
-  for (let i = 0; i < observations.length; i++) {
-    const observation = observations[i];
-    if (!observation || typeof observation !== 'object') {
-      continue;
-    }
-
-    const obsType = escapeXmlTags(getString(observation.type));
-    const title = escapeXmlTags(getString(observation.title));
-    const typeLabel = obsType.toUpperCase();
-    const scopeTag = (typeof observation.scope === 'string' && observation.scope === 'global') ? ' [GLOBAL]' : '';
-
-    if (i < fullCount) {
-      const narrative = escapeXmlTags(getString(observation.narrative));
-      contextBuilder += `## ${i + 1}. [${typeLabel}] ${title}${scopeTag} (id:${observation.id || '?'})\n`;
-      if (narrative !== '') {
-        contextBuilder += `${narrative}\n`;
-      }
-      contextBuilder += formatFactsLine(observation.facts);
-      contextBuilder += '\n';
-    } else {
-      const subtitle = escapeXmlTags(getString(observation.subtitle));
-      if (subtitle !== '') {
-        contextBuilder += `- [${typeLabel}] ${title}${scopeTag}: ${subtitle}\n`;
-      } else {
-        contextBuilder += `- [${typeLabel}] ${title}${scopeTag}\n`;
-      }
-    }
-  }
-
-  contextBuilder += '</engram-context>\n';
-
-  const projectBriefingBlock = formatProjectBriefingBlock(result.project_briefing);
-  if (projectBriefingBlock) {
-    contextBuilder += projectBriefingBlock;
-  }
-
-  // Render guidance block if server provides guidance observations
-  const guidance = Array.isArray(result.guidance) ? result.guidance : [];
-  if (guidance.length > 0) {
-    contextBuilder += '<engram-guidance>\n';
-    contextBuilder += '# Learned Behavioral Guidance\n';
-    contextBuilder += 'These are patterns learned from previous sessions. Follow them unless context demands otherwise.\n\n';
-
-    for (let i = 0; i < guidance.length; i++) {
-      const g = guidance[i];
-      if (!g || typeof g !== 'object') continue;
-
-      const gType = escapeXmlTags(getString(g.type)).toUpperCase();
-      const gTitle = escapeXmlTags(getString(g.title));
-      const gNarrative = escapeXmlTags(getString(g.narrative));
-
-      contextBuilder += `${i + 1}. [${gType}] ${gTitle}\n`;
-      if (gNarrative !== '') {
-        contextBuilder += `${gNarrative}\n`;
-      }
-      contextBuilder += formatFactsLine(g.facts);
-      contextBuilder += '\n';
-    }
-
-    contextBuilder += '</engram-guidance>\n';
-  }
-
-  // Mark all injected observation IDs (fire-and-forget).
-  // Use per-session endpoint when possible so stop hook can detect utility signals.
-  const allObs = [...observations, ...guidance];
+  // Mark injected IDs — scoped to always_inject ONLY (fire-and-forget).
+  // observations and guidance are not rendered so must not be logged as injected
+  // (would produce false positives in citation tracking).
   const ids = [];
-  for (const obs of allObs) {
+  for (const obs of alwaysInject) {
     if (obs && typeof obs === 'object' && typeof obs.id === 'number' && obs.id > 0) {
       ids.push(obs.id);
     }
