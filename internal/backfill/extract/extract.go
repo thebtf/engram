@@ -184,16 +184,6 @@ func ValidateXML(raw string) ValidationResult {
 	return result
 }
 
-// BuildUserPrompt constructs the user prompt for LLM extraction.
-// Transcript content is sanitized to prevent XML tag injection (AG06-005).
-func BuildUserPrompt(projectPath, gitBranch string, durationMin, exchangeCount int, chunkInfo, alreadyExtracted, transcript string) string {
-	// Replace XML tags that could break prompt boundaries with bracketed equivalents
-	sanitized := xmlTagRe.ReplaceAllStringFunc(transcript, func(tag string) string {
-		return strings.ReplaceAll(strings.ReplaceAll(tag, "<", "["), ">", "]")
-	})
-	return fmt.Sprintf(UserPromptTemplate, projectPath, gitBranch, durationMin, exchangeCount, chunkInfo, alreadyExtracted, sanitized)
-}
-
 // BuildChunkUserPrompt constructs the user prompt using ChunkExtractionUserTemplate.
 // Transcript content is sanitized to prevent XML tag injection (AG06-005).
 func BuildChunkUserPrompt(projectPath string, exchangeCount int, chunkInfo, transcript string) string {
@@ -236,20 +226,6 @@ func ParseSingleObservation(raw string) *XMLObservation {
 		return nil
 	}
 	return &obs
-}
-
-// BuildAlreadyExtracted builds the <already_extracted> context block for multi-chunk dedup.
-func BuildAlreadyExtracted(titles []string) string {
-	if len(titles) == 0 {
-		return ""
-	}
-	var buf strings.Builder
-	buf.WriteString("\n<already_extracted>\nDo NOT re-extract these topics (already covered in previous chunks):\n")
-	for _, t := range titles {
-		buf.WriteString("- " + t + "\n")
-	}
-	buf.WriteString("</already_extracted>\n")
-	return buf.String()
 }
 
 // typeToObservationType maps XML type strings to models.ObservationType.

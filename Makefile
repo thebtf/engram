@@ -14,7 +14,7 @@ GOARCH ?= $(shell go env GOARCH)
 export CGO_ENABLED=1
 BUILD_TAGS := -tags "fts5"
 
-.PHONY: all build clean test install lint worker mcp stop-worker start-worker restart-worker dashboard website dev-website setup-libs proto
+.PHONY: all build clean test install lint worker stop-worker start-worker restart-worker dashboard website dev-website setup-libs proto
 
 all: build
 
@@ -29,7 +29,7 @@ setup-libs:
 	@echo "ONNX runtime libraries are no longer required. Skipping."
 
 # Build all binaries
-build: dashboard worker mcp
+build: dashboard worker
 
 # Build Vue dashboard
 dashboard:
@@ -48,12 +48,6 @@ worker:
 	swag init -g cmd/worker/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
 	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/worker
 
-# Build MCP server
-mcp:
-	@echo "Building MCP server..."
-	@mkdir -p $(BUILD_DIR)
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-mcp ./cmd/mcp
-
 # Build for all platforms
 build-all: build-linux build-darwin build-windows
 
@@ -61,21 +55,17 @@ build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(BUILD_DIR)/linux-amd64
 	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/engram-server ./cmd/worker
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/engram-mcp ./cmd/mcp
 
 build-darwin:
 	@echo "Building for macOS..."
 	@mkdir -p $(BUILD_DIR)/darwin-amd64 $(BUILD_DIR)/darwin-arm64
 	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/engram-server ./cmd/worker
 	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/engram-server ./cmd/worker
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/engram-mcp ./cmd/mcp
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/engram-mcp ./cmd/mcp
 
 build-windows:
 	@echo "Building for Windows..."
 	@mkdir -p $(BUILD_DIR)/windows-amd64
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/engram-server.exe ./cmd/worker
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/engram-mcp.exe ./cmd/mcp
 
 # Stop any running worker
 stop-worker:
@@ -112,7 +102,6 @@ install: build stop-worker
 	@mkdir -p $(HOME)/.claude/plugins/marketplaces/engram/.claude-plugin
 	@mkdir -p $(HOME)/.claude/plugins/marketplaces/engram/commands
 	cp $(BUILD_DIR)/engram-server $(HOME)/.claude/plugins/marketplaces/engram/
-	cp $(BUILD_DIR)/engram-mcp $(HOME)/.claude/plugins/marketplaces/engram/
 	cp $(PLUGIN_DIR)/engram/hooks/* $(HOME)/.claude/plugins/marketplaces/engram/hooks/
 	@# Copy slash commands if they exist
 	@if [ -d "$(PLUGIN_DIR)/commands" ]; then cp -r $(PLUGIN_DIR)/commands/* $(HOME)/.claude/plugins/marketplaces/engram/commands/ 2>/dev/null || true; fi
@@ -185,7 +174,6 @@ help:
 	@echo "Usage:"
 	@echo "  make build          - Build all binaries"
 	@echo "  make worker         - Build worker service only"
-	@echo "  make mcp            - Build MCP server only"
 	@echo "  make build-all      - Build for all platforms"
 	@echo "  make install        - Install to Claude plugins directory (restarts worker)"
 	@echo "  make uninstall      - Remove from Claude plugins directory"

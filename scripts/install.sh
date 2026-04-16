@@ -186,9 +186,6 @@ download_release() {
     if [[ "$INSTALL_MODE" == "full" ]]; then
         cp "$tmp_dir/engram-server" "$INSTALL_DIR/" 2>/dev/null || true
     fi
-    cp "$tmp_dir/engram-mcp" "$INSTALL_DIR/" 2>/dev/null || true
-    cp "$tmp_dir/engram-mcp-stdio-proxy" "$INSTALL_DIR/" 2>/dev/null || true
-
     # Copy JS hooks (required for plugin — fail loudly if missing)
     if ! cp "$tmp_dir/hooks/"*.js "$INSTALL_DIR/hooks/" 2>/dev/null; then
         error "Failed to copy JS hooks from $tmp_dir/hooks/ to $INSTALL_DIR/hooks/"
@@ -220,9 +217,6 @@ download_release() {
     if [[ "$INSTALL_MODE" == "full" ]]; then
         chmod +x "$INSTALL_DIR/engram-server" 2>/dev/null || true
     fi
-    chmod +x "$INSTALL_DIR/engram-mcp" 2>/dev/null || true
-    chmod +x "$INSTALL_DIR/engram-mcp-stdio-proxy" 2>/dev/null || true
-
     success "Binaries installed to ${INSTALL_DIR}"
 }
 

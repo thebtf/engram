@@ -64,20 +64,3 @@ jobs:
             VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # Build and push client image (hooks + MCP proxy)
-      - name: Build and push client image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: client
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-client:${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-client:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-client:${{ github.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.value }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

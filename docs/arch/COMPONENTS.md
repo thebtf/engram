@@ -12,26 +12,6 @@ This document maps all runtime binaries and internal Go components for `engram`.
 
 ## Binaries
 
-### `bin/mcp-server` (`cmd/mcp/main.go`)
-
-- **Role**: MCP stdio server exposing all `nia` tools to Claude Code.
-- **Transport**: MCP JSON-RPC over `stdin`/`stdout`.
-- **Flags**: `--project PROJECT` (required), `--debug`.
-- **Startup order**:
-  - Load config
-  - Load collections YAML
-  - Init `gorm.Store` (auto-migrates DB)
-  - Init stores: `ObservationStore`, `SummaryStore`, `PromptStore`, `PatternStore`, `RelationStore`, `SessionStore`
-  - Init `SessionIndexer` (background) on `~/.claude/projects/` JSONL
-  - Init embedding service (OpenAI-compatible REST API)
-  - Init `pgvector.Client`
-  - Init `ScoreCalculator` and `Recalculator`
-  - Init `SearchManager`
-  - Start watcher on `~/.engram/settings.json`; file change triggers `os.Exit(0)`
-  - Run `mcp.Server.Run(ctx)`
-- **Important note**: `maintenanceService=nil` and `consolidationScheduler=nil`; worker owns these.
-- **Logging**: `stderr` only
-
 ### `bin/engram-server` (`cmd/engram-server/main.go`)
 
 - **Role**: Persistent HTTP worker daemon, API for hooks, indexing, consolidation, dashboard.
@@ -40,12 +20,6 @@ This document maps all runtime binaries and internal Go components for `engram`.
 - **Startup**: delegates to `internal/worker.NewService(Version)`.
 - **Services started**: consolidation scheduler, maintenance service, SSE event bus.
 - **Shutdown**: graceful with 30s timeout.
-
-### `bin/mcp-stdio-proxy` (`cmd/mcp-stdio-proxy/`)
-
-- **Role**: stdio-to-SSE bridge.
-- **Behavior**: reads MCP JSON-RPC from `stdin`, `POST`s to remote SSE endpoint, returns response via `stdout`.
-- **Use**: remote machines that connect to centralized MCP-SSE worker.
 
 ## Hooks (`plugin/engram/hooks/`)
 
@@ -293,8 +267,6 @@ Claude Code
   +-- post-tool-use.js --> POST /api/hooks/post-tool-use --> Worker
   +-- stop.js -----------> POST /api/hooks/stop -----------> Worker
   +-- statusline.js -----> GET /api/status ----------------> Worker
-  |
-  +-- (remote) mcp-stdio-proxy --> SSE POST --> mcp-sse :37778 --> PostgreSQL
 
 Worker :37777
   +-> ConsolidationScheduler (daily/weekly/quarterly)

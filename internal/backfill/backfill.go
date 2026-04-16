@@ -81,25 +81,6 @@ func NewRunner(llm learning.LLMClient, cfg Config) *Runner {
 	return &Runner{llm: llm, cfg: cfg}
 }
 
-// Run processes a list of .jsonl session files sequentially.
-// It returns a Result containing all extracted observations and accumulated metrics.
-// Errors from individual sessions are logged but do not abort the run.
-func (r *Runner) Run(ctx context.Context, files []string) (*Result, error) {
-	m := &metrics.Metrics{}
-	var observations []ExtractedObservation
-
-	for _, file := range files {
-		if err := ctx.Err(); err != nil {
-			return &Result{Observations: observations, Metrics: m}, fmt.Errorf("context cancelled: %w", err)
-		}
-
-		extracted := r.processFile(ctx, file, m)
-		observations = append(observations, extracted...)
-	}
-
-	return &Result{Observations: observations, Metrics: m}, nil
-}
-
 // ProcessSession processes a pre-parsed session and returns extracted observations.
 // This is the server-side entry point — the caller provides a parsed SessionMeta
 // (e.g. from ParseSessionReader) instead of a file path.
@@ -107,19 +88,6 @@ func (r *Runner) ProcessSession(ctx context.Context, sess *sessions.SessionMeta)
 	m := &metrics.Metrics{}
 	observations, summary := r.processSession(ctx, sess, "", m)
 	return &Result{Observations: observations, Summary: summary, Metrics: m}, nil
-}
-
-// processFile processes a single session file and returns extracted observations.
-func (r *Runner) processFile(ctx context.Context, file string, m *metrics.Metrics) []ExtractedObservation {
-	m.Add("total_sessions", 1)
-
-	sess, err := sessions.ParseSession(file)
-	if err != nil {
-		return nil
-	}
-
-	observations, _ := r.processSession(ctx, sess, file, m)
-	return observations
 }
 
 // processSession is the shared extraction logic for both file-based and content-based processing.
