@@ -2728,6 +2728,76 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`ALTER TABLE search_query_log ADD COLUMN IF NOT EXISTS used_vector BOOL NOT NULL DEFAULT false`).Error
 			},
 		},
+
+		// Migration 087: create dedicated credentials table (US3 — vault location correction).
+		//
+		// Background (spec.md §C5 / §S16): pre-v5 vault credentials were stored as rows
+		// in the observations table (type='credential') using two special columns added by
+		// migrations 1078–1079 (encrypted_secret BYTEA + encryption_key_fingerprint TEXT).
+		// v5 splits observations into purpose-built tables; this migration creates the
+		// credentials table that will receive those rows in a later migration (088+).
+		//
+		// NOTE on migration ID: spec.md text says "077_credentials" but that ID is already
+		// taken (077_relations_constraints_update). US1+US2 consumed 083–086 (bumped from
+		// original 081–084 because 081+082 were also taken). This PR uses 087 as the
+		// next-free ID. Downstream migrations (data migration, observations drop) use 088+.
+		//
+		// Schema source: spec.md §Data Model §credentials (authoritative).
+		// Column names match existing observations.encrypted_secret /
+		// observations.encryption_key_fingerprint verbatim so the future data migration
+		// (088) can COPY the bytes directly without re-encryption.
+		{
+			ID: "087_credentials",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					// Main table — UNIQUE(project, key) prevents duplicate credential names
+					// per project. deleted_at NULL = active row; soft-delete sets it to NOW().
+					`CREATE TABLE IF NOT EXISTS credentials (
+						id                        BIGSERIAL PRIMARY KEY,
+						project                   TEXT NOT NULL,
+						key                       TEXT NOT NULL,
+						encrypted_secret          BYTEA NOT NULL,
+						encryption_key_fingerprint TEXT NOT NULL,
+						scope                     TEXT,
+						version                   INTEGER NOT NULL DEFAULT 1,
+						edited_by                 TEXT,
+						created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						deleted_at                TIMESTAMPTZ,
+						UNIQUE(project, key)
+					)`,
+					// Partial index on project — only active rows (deleted_at IS NULL).
+					// Supports per-project list queries efficiently.
+					`CREATE INDEX IF NOT EXISTS idx_credentials_project
+						ON credentials (project)
+						WHERE deleted_at IS NULL`,
+					// Partial index on fingerprint — supports vault key rotation checks
+					// (count / delete rows whose fingerprint differs from the current key).
+					`CREATE INDEX IF NOT EXISTS idx_credentials_fingerprint
+						ON credentials (encryption_key_fingerprint)
+						WHERE deleted_at IS NULL`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 087_credentials: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				sqls := []string{
+					`DROP INDEX IF EXISTS idx_credentials_fingerprint`,
+					`DROP INDEX IF EXISTS idx_credentials_project`,
+					`DROP TABLE IF EXISTS credentials`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 087_credentials rollback: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

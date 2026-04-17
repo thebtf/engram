@@ -462,3 +462,23 @@ type IssueComment struct {
 }
 
 func (IssueComment) TableName() string { return "issue_comments" }
+
+// Credential represents a vault-stored encrypted credential.
+// Created by migration 087 as a dedicated static-entity table.
+// Pre-v5: credentials lived as rows in observations (type='credential').
+// Post-v5 (US3): credentials are migrated here and observations is dropped.
+type Credential struct {
+	Project                  string     `gorm:"type:text;not null;index:idx_credentials_project,where:deleted_at IS NULL;uniqueIndex:idx_credentials_project_key,priority:1" json:"project"`
+	Key                      string     `gorm:"type:text;not null;uniqueIndex:idx_credentials_project_key,priority:2" json:"key"`
+	EncryptedSecret          []byte     `gorm:"type:bytea;not null" json:"encrypted_secret"`
+	EncryptionKeyFingerprint string     `gorm:"type:text;not null;index:idx_credentials_fingerprint,where:deleted_at IS NULL" json:"encryption_key_fingerprint"`
+	Scope                    string     `gorm:"type:text" json:"scope,omitempty"`
+	EditedBy                 string     `gorm:"type:text" json:"edited_by,omitempty"`
+	CreatedAt                time.Time  `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
+	UpdatedAt                time.Time  `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
+	DeletedAt                *time.Time `gorm:"type:timestamptz" json:"deleted_at,omitempty"`
+	ID                       int64      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Version                  int        `gorm:"not null;default:1" json:"version"`
+}
+
+func (Credential) TableName() string { return "credentials" }
