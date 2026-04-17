@@ -115,8 +115,10 @@ func (s *SearchQueryLogStore) GetAnalytics(ctx context.Context, since time.Time)
 		analytics.ZeroResultRate = float64(zeroCount) / float64(analytics.TotalSearches)
 	}
 
-	// In v5 FTS-only mode, every logged search is a filter search.
+	// In v5 FTS-only mode, every logged search is a filter search, so the
+	// filter latency equals the overall avg latency.
 	analytics.FilterSearches = analytics.TotalSearches
+	analytics.AvgFilterLatencyMs = analytics.AvgLatencyMs
 
 	return &analytics, nil
 }
