@@ -2798,6 +2798,133 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+
+		// Migration 088: memories table (CREATE TABLE only — data migration from
+		// observations happens in a later commit per US3 scope boundary).
+		//
+		// NOTE on migration ID: spec.md text says "078_memories" but that ID is already
+		// taken. Commit A (087_credentials) consumed the next-free slot after US1+US2.
+		// This PR uses 088 as the next-free ID. 089 is behavioral_rules.
+		//
+		// Schema source: spec.md §Data Model §memories (authoritative — Option C extended).
+		// Dual-dictionary search_vector (english + simple) per migration 076 pattern.
+		// No importance_score / effectiveness_* / inject_count — per S1 (scoring dropped).
+		{
+			ID: "088_memories",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					// Main table — project-scoped, soft-delete via deleted_at.
+					// search_vector is a GENERATED ALWAYS AS STORED tsvector using dual
+					// dictionary (english + simple) for multilingual support.
+					`CREATE TABLE IF NOT EXISTS memories (
+						id            BIGSERIAL PRIMARY KEY,
+						project       TEXT NOT NULL,
+						content       TEXT NOT NULL,
+						tags          JSONB NOT NULL DEFAULT '[]',
+						source_agent  TEXT,
+						version       INTEGER NOT NULL DEFAULT 1,
+						edited_by     TEXT,
+						created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						deleted_at    TIMESTAMPTZ,
+						search_vector tsvector GENERATED ALWAYS AS (
+							to_tsvector('english', COALESCE(content, '')) ||
+							to_tsvector('simple',  COALESCE(content, ''))
+						) STORED
+					)`,
+					// Partial composite index on (project, created_at DESC) — only active rows.
+					// Supports per-project recency queries efficiently (session-start top-N).
+					`CREATE INDEX IF NOT EXISTS idx_memories_project_created
+						ON memories (project, created_at DESC)
+						WHERE deleted_at IS NULL`,
+					// GIN index on search_vector for full-text search.
+					`CREATE INDEX IF NOT EXISTS idx_memories_fts
+						ON memories USING GIN (search_vector)`,
+					// GIN index on tags JSONB for tag-based filtering.
+					`CREATE INDEX IF NOT EXISTS idx_memories_tags
+						ON memories USING GIN (tags)`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 088_memories: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				sqls := []string{
+					`DROP INDEX IF EXISTS idx_memories_tags`,
+					`DROP INDEX IF EXISTS idx_memories_fts`,
+					`DROP INDEX IF EXISTS idx_memories_project_created`,
+					`DROP TABLE IF EXISTS memories`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 088_memories rollback: %w", err)
+					}
+				}
+				return nil
+			},
+		},
+
+		// Migration 089: behavioral_rules table (CREATE TABLE only — data migration from
+		// observations happens in a later commit per US3 scope boundary).
+		//
+		// NOTE on migration ID: spec.md text says "079_behavioral_rules" but that ID is
+		// taken. Uses 089 as the next-free ID after 088_memories.
+		//
+		// Schema source: spec.md §Data Model §behavioral_rules (authoritative — Option C extended).
+		// project is NULLable: NULL = global rule (applies to every session regardless of project).
+		// priority determines order in session-start inject (higher first); default 0 = unordered.
+		// No FTS — rules are pushed unconditionally at session-start, not searched.
+		{
+			ID: "089_behavioral_rules",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					// Main table — project NULLable (NULL = global), soft-delete via deleted_at.
+					`CREATE TABLE IF NOT EXISTS behavioral_rules (
+						id         BIGSERIAL PRIMARY KEY,
+						project    TEXT,
+						content    TEXT NOT NULL,
+						priority   INTEGER NOT NULL DEFAULT 0,
+						version    INTEGER NOT NULL DEFAULT 1,
+						edited_by  TEXT,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						deleted_at TIMESTAMPTZ
+					)`,
+					// Partial composite index on (project, priority DESC, created_at DESC)
+					// for active project-scoped rules — supports session-start inject ordering.
+					`CREATE INDEX IF NOT EXISTS idx_behavioral_rules_project_priority
+						ON behavioral_rules (project, priority DESC, created_at DESC)
+						WHERE deleted_at IS NULL`,
+					// Partial index on global rules (project IS NULL) — supports
+					// cross-project inject of rules that apply to every session.
+					`CREATE INDEX IF NOT EXISTS idx_behavioral_rules_global
+						ON behavioral_rules (priority DESC, created_at DESC)
+						WHERE project IS NULL AND deleted_at IS NULL`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 089_behavioral_rules: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				sqls := []string{
+					`DROP INDEX IF EXISTS idx_behavioral_rules_global`,
+					`DROP INDEX IF EXISTS idx_behavioral_rules_project_priority`,
+					`DROP TABLE IF EXISTS behavioral_rules`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 089_behavioral_rules rollback: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
