@@ -2741,6 +2741,11 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`DROP TABLE IF EXISTS injection_log`).Error
 			},
 			Rollback: func(tx *gorm.DB) error {
+				// Recreate the final-state schema (migration 046 baseline + migration 066 additions).
+				// Migration 066 added `cited BOOLEAN` column + `idx_injection_log_session_cited` index
+				// for Learning Memory v3 citation-based effectiveness tracking. Rollback must restore
+				// both — otherwise a post-rollback database would be missing schema that existed
+				// immediately before DROP, breaking downstream migration replay.
 				sqls := []string{
 					`CREATE TABLE IF NOT EXISTS injection_log (
 						id BIGSERIAL PRIMARY KEY,
@@ -2748,11 +2753,13 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						project TEXT NOT NULL DEFAULT '',
 						task_context TEXT NOT NULL DEFAULT '',
 						session_id TEXT NOT NULL DEFAULT '',
-						created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+						created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						cited BOOLEAN DEFAULT false
 					)`,
 					`CREATE INDEX IF NOT EXISTS idx_injection_log_observation_id ON injection_log(observation_id)`,
 					`CREATE INDEX IF NOT EXISTS idx_injection_log_project ON injection_log(project)`,
 					`CREATE INDEX IF NOT EXISTS idx_injection_log_created_at ON injection_log(created_at)`,
+					`CREATE INDEX IF NOT EXISTS idx_injection_log_session_cited ON injection_log(session_id, cited)`,
 				}
 				for _, s := range sqls {
 					if err := tx.Exec(s).Error; err != nil {
