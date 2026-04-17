@@ -482,3 +482,39 @@ type Credential struct {
 }
 
 func (Credential) TableName() string { return "credentials" }
+
+// Memory is the GORM row struct for the memories table (migration 088).
+// Tags are stored as JSONB using models.JSONStringArray.
+// search_vector is a GENERATED ALWAYS AS STORED column — it must NOT appear in INSERT/UPDATE
+// statements.  GORM will only write columns that are present in the struct, so omitting the
+// search_vector field here is the correct approach.
+type Memory struct {
+	Project     string                 `gorm:"type:text;not null;index:idx_memories_project_created,priority:1,where:deleted_at IS NULL" json:"project"`
+	Content     string                 `gorm:"type:text;not null" json:"content"`
+	Tags        models.JSONStringArray `gorm:"type:jsonb;not null;default:'[]'" json:"tags"`
+	SourceAgent string                 `gorm:"type:text" json:"source_agent,omitempty"`
+	EditedBy    string                 `gorm:"type:text" json:"edited_by,omitempty"`
+	CreatedAt   time.Time              `gorm:"type:timestamptz;not null;default:now();index:idx_memories_project_created,priority:2,sort:desc" json:"created_at"`
+	UpdatedAt   time.Time              `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
+	DeletedAt   *time.Time             `gorm:"type:timestamptz" json:"deleted_at,omitempty"`
+	ID          int64                  `gorm:"primaryKey;autoIncrement" json:"id"`
+	Version     int                    `gorm:"not null;default:1" json:"version"`
+}
+
+func (Memory) TableName() string { return "memories" }
+
+// BehavioralRule is the GORM row struct for the behavioral_rules table (migration 089).
+// Project is a pointer because the column is NULLable: NULL = global rule.
+type BehavioralRule struct {
+	Project   *string    `gorm:"type:text" json:"project,omitempty"`
+	Content   string     `gorm:"type:text;not null" json:"content"`
+	EditedBy  string     `gorm:"type:text" json:"edited_by,omitempty"`
+	CreatedAt time.Time  `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
+	UpdatedAt time.Time  `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
+	DeletedAt *time.Time `gorm:"type:timestamptz" json:"deleted_at,omitempty"`
+	ID        int64      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Priority  int        `gorm:"not null;default:0" json:"priority"`
+	Version   int        `gorm:"not null;default:1" json:"version"`
+}
+
+func (BehavioralRule) TableName() string { return "behavioral_rules" }

@@ -546,6 +546,11 @@ func (s *Service) initializeAsync() {
 		processor.SetReasoningStore(reasoningStore)
 	}
 
+	// Create memory + behavioral rules stores for US3 observations split.
+	// Stores are available now; handler switch happens in Commit E (T021).
+	memoryStore := gorm.NewMemoryStore(store)
+	behavioralRulesStore := gorm.NewBehavioralRulesStore(store)
+
 	// Set all the initialized components
 	s.initMu.Lock()
 	s.store = store
@@ -837,6 +842,13 @@ func (s *Service) initializeAsync() {
 	// Wire reasoning trace store into MCP server for System 2 memory recall.
 	mcpServer.SetReasoningStore(reasoningStore)
 	mcpServer.SetIssueStore(issueStore)
+
+	// Wire memory + behavioral rules stores (US3 Commit C).
+	// These power the new static-entity MCP tools store_rule / list_rules and
+	// will be used by Commit E when handleStoreMemory / handleRecall are
+	// switched from observations to memories/behavioral_rules.
+	mcpServer.SetMemoryStore(memoryStore)
+	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
 	// initMu protects s.grpcServer — the cmux goroutine polls for it.
