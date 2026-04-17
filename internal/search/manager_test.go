@@ -23,12 +23,11 @@ func TestManagerSuite(t *testing.T) {
 // TestNewManager tests manager creation.
 func (s *ManagerSuite) TestNewManager() {
 	// Test with nil stores (valid use case for testing)
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 	s.NotNil(m)
 	s.Nil(m.observationStore)
 	s.Nil(m.summaryStore)
 	s.Nil(m.promptStore)
-	s.Nil(m.vectorClient)
 }
 
 // TestSearchParams tests SearchParams defaults.
@@ -145,7 +144,7 @@ func TestTruncate(t *testing.T) {
 
 // TestObservationToResult tests observation to result conversion.
 func TestObservationToResult(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	tests := []struct {
 		obs      *models.Observation
@@ -237,7 +236,7 @@ func TestObservationToResult(t *testing.T) {
 
 // TestSummaryToResult tests summary to result conversion.
 func TestSummaryToResult(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	tests := []struct {
 		summary  *models.SessionSummary
@@ -319,7 +318,7 @@ func TestSummaryToResult(t *testing.T) {
 
 // TestPromptToResult tests prompt to result conversion.
 func TestPromptToResult(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	tests := []struct {
 		prompt   *models.UserPromptWithSession
@@ -609,7 +608,7 @@ func TestFilterSearchWithObservations(t *testing.T) {
 		CreatedAtEpoch: 1704067200000,
 	}
 
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 	result := m.observationToResult(obs, "full")
 
 	assert.Equal(t, "observation", result.Type)
@@ -622,17 +621,16 @@ func TestFilterSearchWithObservations(t *testing.T) {
 
 // TestManagerStoreReferences tests that Manager stores references correctly.
 func TestManagerStoreReferences(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	assert.Nil(t, m.observationStore)
 	assert.Nil(t, m.summaryStore)
 	assert.Nil(t, m.promptStore)
-	assert.Nil(t, m.vectorClient)
 }
 
 // TestObservationToResultWithMetadata tests metadata inclusion in results.
 func TestObservationToResultWithMetadata(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	tests := []struct {
 		name    string
@@ -668,7 +666,7 @@ func TestObservationToResultWithMetadata(t *testing.T) {
 
 // TestSummaryToResultTruncation tests title truncation in summary results.
 func TestSummaryToResultTruncation(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	tests := []struct {
 		name        string
@@ -704,7 +702,7 @@ func TestSummaryToResultTruncation(t *testing.T) {
 
 // TestPromptToResultFormats tests prompt to result conversion with different formats.
 func TestPromptToResultFormats(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	prompt := &models.UserPromptWithSession{
 		UserPrompt: models.UserPrompt{
@@ -882,7 +880,7 @@ func TestSearchParamsAllFields(t *testing.T) {
 
 // TestObservationToResultWithNullFields tests handling of null fields.
 func TestObservationToResultWithNullFields(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	obs := &models.Observation{
 		ID:             1,
@@ -902,7 +900,7 @@ func TestObservationToResultWithNullFields(t *testing.T) {
 
 // TestSummaryToResultWithNullFields tests handling of null fields in summary.
 func TestSummaryToResultWithNullFields(t *testing.T) {
-	m := NewManager(nil, nil, nil, nil)
+	m := NewManager(nil, nil, nil)
 
 	summary := &models.SessionSummary{
 		ID:             1,

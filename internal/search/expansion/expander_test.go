@@ -20,16 +20,14 @@ func TestExpanderSuite(t *testing.T) {
 }
 
 func (s *ExpanderSuite) SetupTest() {
-	// Create expander without embedding service for basic tests
-	s.expander = NewExpander(nil, nil)
+	s.expander = NewExpander(nil)
 }
 
 // TestNewExpander tests expander creation.
 func (s *ExpanderSuite) TestNewExpander() {
-	e := NewExpander(nil, nil)
+	e := NewExpander(nil)
 	s.NotNil(e)
 	s.NotNil(e.intentPatterns)
-	s.Nil(e.embedSvc)
 }
 
 // TestDetectIntent tests intent detection.
@@ -273,73 +271,6 @@ func TestDeduplicateExpansions(t *testing.T) {
 	assert.Equal(t, "user auth", result[1].Query)
 }
 
-// TestCosineSimilarity tests cosine similarity calculation.
-func TestCosineSimilarity(t *testing.T) {
-	tests := []struct {
-		name     string
-		a        []float32
-		b        []float32
-		expected float64
-		delta    float64
-	}{
-		{
-			name:     "identical_vectors",
-			a:        []float32{1, 0, 0},
-			b:        []float32{1, 0, 0},
-			expected: 1.0,
-			delta:    0.001,
-		},
-		{
-			name:     "orthogonal_vectors",
-			a:        []float32{1, 0, 0},
-			b:        []float32{0, 1, 0},
-			expected: 0.0,
-			delta:    0.001,
-		},
-		{
-			name:     "opposite_vectors",
-			a:        []float32{1, 0, 0},
-			b:        []float32{-1, 0, 0},
-			expected: -1.0,
-			delta:    0.001,
-		},
-		{
-			name:     "similar_vectors",
-			a:        []float32{1, 1, 0},
-			b:        []float32{1, 0, 0},
-			expected: 0.707,
-			delta:    0.01,
-		},
-		{
-			name:     "empty_vectors",
-			a:        []float32{},
-			b:        []float32{},
-			expected: 0.0,
-			delta:    0.001,
-		},
-		{
-			name:     "different_lengths",
-			a:        []float32{1, 0},
-			b:        []float32{1, 0, 0},
-			expected: 0.0,
-			delta:    0.001,
-		},
-		{
-			name:     "zero_vector",
-			a:        []float32{0, 0, 0},
-			b:        []float32{1, 1, 1},
-			expected: 0.0,
-			delta:    0.001,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := cosineSimilarity(tt.a, tt.b)
-			assert.InDelta(t, tt.expected, result, tt.delta)
-		})
-	}
-}
 
 // TestDefaultConfig tests default configuration.
 func TestDefaultConfig(t *testing.T) {
@@ -409,28 +340,6 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
-// TestSqrt tests the sqrt helper.
-func TestSqrt(t *testing.T) {
-	tests := []struct {
-		input    float64
-		expected float64
-		delta    float64
-	}{
-		{4.0, 2.0, 0.001},
-		{9.0, 3.0, 0.001},
-		{16.0, 4.0, 0.001},
-		{2.0, 1.414, 0.01},
-		{0.0, 0.0, 0.001},
-		{-1.0, 0.0, 0.001},
-	}
-
-	for _, tt := range tests {
-		t.Run("", func(t *testing.T) {
-			result := sqrt(tt.input)
-			assert.InDelta(t, tt.expected, result, tt.delta)
-		})
-	}
-}
 
 // TestExpandByIntentError tests error intent expansion.
 func (s *ExpanderSuite) TestExpandByIntentError() {
