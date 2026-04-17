@@ -197,7 +197,7 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 }
 
 func (s *Server) storeExtractedObservation(ctx context.Context, project string, parsedObs *models.ParsedObservation) (dedup.Action, int64, error) {
-	dedupResult, dedupErr := dedup.CheckDuplicate(ctx, s.vectorClient, s.observationStore.GetDB(), project, parsedObs.Narrative, 0)
+	dedupResult, dedupErr := dedup.CheckDuplicate()
 	if dedupErr != nil {
 		log.Debug().Err(dedupErr).Str("title", parsedObs.Title).Msg("extract: dedup check failed, proceeding with ADD")
 	}

@@ -14,7 +14,6 @@ import (
 	"github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/search"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -105,10 +104,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if softLimit <= 0 {
 		softLimit = 1000
 	}
-	dedupThreshold := cfg.StoreMemoryDedupThreshold
-	if dedupThreshold <= 0 {
-		dedupThreshold = 0.92
-	}
 	storePathSupersessionEnabled := cfg.StorePathSupersessionEnabled
 
 	if utf8.RuneCountInString(params.Content) > hardLimit {
@@ -186,7 +181,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// Shared implementation in internal/dedup/checker.go.
 	var contradictionAction string
 	var supersededID int64
-	dedupResult, dedupErr := dedup.CheckDuplicate(ctx, s.vectorClient, s.observationStore.GetDB(), params.Project, params.Content, dedupThreshold)
+	dedupResult, dedupErr := dedup.CheckDuplicate()
 	if dedupErr != nil {
 		log.Warn().Err(dedupErr).Msg("store_memory: dedup check failed, proceeding with ADD")
 	}
@@ -279,35 +274,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				})
 			}
 			log.Info().Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: superseded old observation with EVOLVES_FROM")
-		}
-	}
-
-	// Write-time supersession: if storing a decision and a very similar decision exists,
-	// mark the old one as superseded (new decision replaces old).
-	// Skip if contradiction detection already handled supersession (avoid double-supersede).
-	if contradictionAction != "UPDATE" && s.vectorClient != nil && s.vectorClient.IsConnected() && obsType == models.ObsTypeDecision && config.Get().SupersessionEnabled {
-		threshold := config.Get().SupersessionThreshold
-		if threshold <= 0 {
-			threshold = 0.9
-		}
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, false, nil)
-		similar, err := s.vectorClient.Query(ctx, params.Content, 3, where)
-		if err == nil {
-			for _, result := range similar {
-				if result.Similarity >= threshold {
-					oldID := vector.ExtractRowID(result.Metadata)
-					if oldID > 0 && oldID != id {
-						oldObs, err := s.observationStore.GetObservationByID(ctx, oldID)
-						if err == nil && oldObs != nil && oldObs.Type == models.ObsTypeDecision && oldObs.Project == params.Project {
-							if err := s.observationStore.MarkAsSuperseded(ctx, oldID); err != nil {
-								log.Warn().Err(err).Int64("old_id", oldID).Int64("new_id", id).Msg("supersession: failed to mark old decision")
-							} else {
-								log.Info().Int64("old_id", oldID).Int64("new_id", id).Float64("similarity", result.Similarity).Msg("supersession: old decision marked superseded")
-							}
-						}
-					}
-				}
-			}
 		}
 	}
 

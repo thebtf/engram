@@ -29,7 +29,7 @@ func TestServerSuite(t *testing.T) {
 
 // TestNewServer tests server creation.
 func (s *ServerSuite) TestNewServer() {
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	s.NotNil(server)
 	s.Nil(server.searchMgr)
 	s.Equal("1.0.0", server.version)
@@ -356,7 +356,7 @@ func TestTimelineParams(t *testing.T) {
 func TestHandleInitialize(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.2.3", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.2.3", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := &Request{
 		JSONRPC: "2.0",
@@ -385,7 +385,7 @@ func TestHandleInitialize(t *testing.T) {
 func TestHandleToolsList(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := &Request{
 		JSONRPC: "2.0",
@@ -471,7 +471,7 @@ func TestHandleToolsList(t *testing.T) {
 func TestHandleRequest(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -536,7 +536,7 @@ func TestHandleRequest(t *testing.T) {
 func TestHandleToolsCall_InvalidParams(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	req := &Request{
@@ -557,7 +557,7 @@ func TestHandleToolsCall_InvalidParams(t *testing.T) {
 func TestCallTool_UnknownTool(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	_, err := server.callTool(ctx, "nonexistent_tool", json.RawMessage(`{}`))
@@ -569,7 +569,7 @@ func TestCallTool_UnknownTool(t *testing.T) {
 func TestCallTool_InvalidArgs(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	_, err := server.callTool(ctx, "search", json.RawMessage(`invalid json`))
@@ -742,7 +742,7 @@ func TestRunMixedRequests(t *testing.T) {
 func TestHandleFindRelatedObservations_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -785,7 +785,7 @@ func TestHandleFindRelatedObservations_Validation(t *testing.T) {
 func TestHandleFindSimilarObservations_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -805,12 +805,6 @@ func TestHandleFindSimilarObservations_Validation(t *testing.T) {
 			args:        `{invalid`,
 			wantErr:     true,
 			errContains: "invalid arguments",
-		},
-		{
-			name:        "nil vector client",
-			args:        `{"query": "test"}`,
-			wantErr:     true,
-			errContains: "vector search not available",
 		},
 	}
 
@@ -834,7 +828,7 @@ func TestHandleFindSimilarObservations_Validation(t *testing.T) {
 func TestHandleGetPatterns_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -871,7 +865,7 @@ func TestHandleGetPatterns_Validation(t *testing.T) {
 func TestHandleBulkDeleteObservations_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -926,7 +920,7 @@ func TestHandleBulkDeleteObservations_Validation(t *testing.T) {
 func TestHandleBulkMarkSuperseded_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -975,7 +969,7 @@ func TestHandleBulkMarkSuperseded_Validation(t *testing.T) {
 func TestHandleBulkBoostObservations_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1030,7 +1024,7 @@ func TestHandleBulkBoostObservations_Validation(t *testing.T) {
 func TestHandleTriggerMaintenance_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	_, err := server.handleTriggerMaintenance(ctx)
@@ -1042,7 +1036,7 @@ func TestHandleTriggerMaintenance_Validation(t *testing.T) {
 func TestHandleGetMaintenanceStats_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	_, err := server.handleGetMaintenanceStats(ctx)
@@ -1054,7 +1048,7 @@ func TestHandleGetMaintenanceStats_Validation(t *testing.T) {
 func TestHandleMergeObservations_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1109,7 +1103,7 @@ func TestHandleMergeObservations_Validation(t *testing.T) {
 func TestHandleGetObservation_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1152,7 +1146,7 @@ func TestHandleGetObservation_Validation(t *testing.T) {
 func TestHandleEditObservation_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1201,7 +1195,7 @@ func TestHandleEditObservation_Validation(t *testing.T) {
 func TestHandleGetObservationQuality_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1244,7 +1238,7 @@ func TestHandleGetObservationQuality_Validation(t *testing.T) {
 func TestHandleSuggestConsolidations_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1293,7 +1287,7 @@ func TestHandleSuggestConsolidations_Validation(t *testing.T) {
 func TestHandleTagObservation_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1342,7 +1336,7 @@ func TestHandleTagObservation_Validation(t *testing.T) {
 func TestHandleGetObservationsByTag_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1385,7 +1379,7 @@ func TestHandleGetObservationsByTag_Validation(t *testing.T) {
 func TestHandleBatchTagByPattern_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1428,7 +1422,7 @@ func TestHandleBatchTagByPattern_Validation(t *testing.T) {
 func TestHandleExplainSearchRanking_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1471,7 +1465,7 @@ func TestHandleExplainSearchRanking_Validation(t *testing.T) {
 func TestHandleGetObservationRelationships_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1520,7 +1514,7 @@ func TestHandleGetObservationRelationships_Validation(t *testing.T) {
 func TestHandleGetObservationScoringBreakdown_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1563,7 +1557,7 @@ func TestHandleGetObservationScoringBreakdown_Validation(t *testing.T) {
 func TestHandleTimelineByQuery_EmptyQuery(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Empty query should error
@@ -1576,7 +1570,7 @@ func TestHandleTimelineByQuery_EmptyQuery(t *testing.T) {
 func TestHandleTimeline_NoAnchorNoQuery(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// No anchor_id and no query should return empty result
@@ -1590,7 +1584,7 @@ func TestHandleTimeline_NoAnchorNoQuery(t *testing.T) {
 func TestHandleTimeline_WithDefaults(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// With anchor_id = 0, should return empty result
@@ -1630,7 +1624,7 @@ func TestJSONRPCErrorCodes(t *testing.T) {
 func TestToolListContainsExpectedSchemas(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := &Request{
 		JSONRPC: "2.0",
@@ -1658,7 +1652,7 @@ func TestToolListContainsExpectedSchemas(t *testing.T) {
 func TestHandleToolsCall_UnknownTool(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	req := &Request{
@@ -1678,7 +1672,7 @@ func TestHandleToolsCall_UnknownTool(t *testing.T) {
 func TestCallTool_ToolNameRecognition(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	// Use cursor: "all" to get complete tool list
 	req := &Request{
@@ -1802,7 +1796,7 @@ func TestResponseIDTypes(t *testing.T) {
 func TestServerFields(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "2.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "2.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	assert.Equal(t, "2.0.0", server.version)
 	assert.Nil(t, server.searchMgr)
@@ -1862,7 +1856,7 @@ func TestErrorWithNilData(t *testing.T) {
 func TestToolInputSchema(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := &Request{
 		JSONRPC: "2.0",
@@ -1889,7 +1883,7 @@ func TestToolInputSchema(t *testing.T) {
 func TestPrimaryToolSchemas_FeedbackAndStore(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	resp := server.handleToolsList(&Request{JSONRPC: "2.0", ID: 1, Method: "tools/list"})
 	result := resp.Result.(map[string]any)
 	tools := result["tools"].([]Tool)
@@ -1930,7 +1924,7 @@ func TestPrimaryToolSchemas_FeedbackAndStore(t *testing.T) {
 func TestCallTool_UnknownToolName(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	unknownTools := []string{
@@ -1985,7 +1979,7 @@ func TestTimelineParams_Validation(t *testing.T) {
 func TestHandleToolsCall_EmptyParams(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	req := &Request{
@@ -2065,7 +2059,7 @@ func TestToolCallParamsWithComplexArgs(t *testing.T) {
 func TestHandleToolsCall_UnknownToolNameError(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	req := &Request{
@@ -2115,7 +2109,7 @@ func TestHandleTimeline_Defaults(t *testing.T) {
 func TestHandleGetTemporalTrends_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -2150,7 +2144,7 @@ func TestHandleGetTemporalTrends_Validation(t *testing.T) {
 func TestHandleGetDataQualityReport_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -2185,7 +2179,7 @@ func TestHandleGetDataQualityReport_Validation(t *testing.T) {
 func TestHandleExportObservations_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -2220,7 +2214,7 @@ func TestHandleExportObservations_Validation(t *testing.T) {
 func TestHandleAnalyzeSearchPatterns_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -2255,7 +2249,7 @@ func TestHandleAnalyzeSearchPatterns_Validation(t *testing.T) {
 func TestHandleAnalyzeObservationImportance_Validation(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -2290,7 +2284,7 @@ func TestHandleAnalyzeObservationImportance_Validation(t *testing.T) {
 func TestHandleGetMemoryStats_NilStores(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Should not panic with nil stores
@@ -2308,7 +2302,7 @@ func TestHandleGetMemoryStats_NilStores(t *testing.T) {
 func TestHandleCheckSystemHealth_NilStores(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Should not panic with nil stores
@@ -2334,7 +2328,7 @@ func TestHandleCheckSystemHealth_NilStores(t *testing.T) {
 func TestCallTool_AllSpecialTools(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Tests for tools that can work without stores or have nil guards
@@ -2601,7 +2595,7 @@ func TestCallTool_AllSpecialTools(t *testing.T) {
 func TestCallTool_SearchTools(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// All search tools should fail with invalid JSON or when searchMgr is nil
@@ -2632,7 +2626,7 @@ func TestCallTool_SearchTools(t *testing.T) {
 func TestHandleFindByFileContext_ProjectRequired(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", &dbgorm.ObservationStore{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", &dbgorm.ObservationStore{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	_, err := server.handleFindByFileContext(context.Background(), json.RawMessage(`{"file_path":"internal/auth/service.go"}`))
 	require.Error(t, err)
@@ -2643,7 +2637,7 @@ func TestHandleFindByFileContext_ProjectRequired(t *testing.T) {
 func TestHandleTriggerMaintenance_NilService(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Should return error when maintenanceService is nil
@@ -2656,7 +2650,7 @@ func TestHandleTriggerMaintenance_NilService(t *testing.T) {
 func TestHandleGetMaintenanceStats_NilService(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Should return error when maintenanceService is nil
@@ -2669,7 +2663,7 @@ func TestHandleGetMaintenanceStats_NilService(t *testing.T) {
 func TestHandleTimeline_EmptyMap(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	result, err := server.handleTimeline(ctx, map[string]any{})
@@ -2681,7 +2675,7 @@ func TestHandleTimeline_EmptyMap(t *testing.T) {
 func TestHandleTimelineByQuery_ValidationExtended(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Missing query should error
@@ -2694,7 +2688,7 @@ func TestHandleTimelineByQuery_ValidationExtended(t *testing.T) {
 func TestHandleSuggestConsolidations_ValidationExtended(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -2725,24 +2719,25 @@ func TestHandleSuggestConsolidations_ValidationExtended(t *testing.T) {
 // NIL GUARD HANDLER TESTS
 // =============================================================================
 
-// TestHandleFindSimilarObservations_NilVectorClient tests nil vector client handling.
-func TestHandleFindSimilarObservations_NilVectorClient(t *testing.T) {
+// TestHandleFindSimilarObservations_ReturnsEmptyInV5 verifies that find_similar_observations
+// returns an empty result set now that vector storage is removed in v5.
+func TestHandleFindSimilarObservations_ReturnsEmptyInV5(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	// Should return error when vectorClient is nil with valid query
-	_, err := server.handleFindSimilarObservations(ctx, json.RawMessage(`{"query": "test query"}`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "vector search not available")
+	// Vector search removed in v5: should return empty observations without error.
+	result, err := server.handleFindSimilarObservations(ctx, json.RawMessage(`{"query": "test query"}`))
+	require.NoError(t, err)
+	assert.Contains(t, result, `"count":0`)
 }
 
 // TestHandleGetObservationRelationships_NilRelationStore tests nil relation store handling.
 func TestHandleGetObservationRelationships_NilRelationStore(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Should return error when relationStore is nil with valid params
@@ -2759,7 +2754,7 @@ func TestHandleGetObservationRelationships_NilRelationStore(t *testing.T) {
 func TestHandleBulkBoostObservations_TooManyIDs(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// Create array with 1001 IDs
@@ -2779,7 +2774,7 @@ func TestHandleBulkBoostObservations_TooManyIDs(t *testing.T) {
 func TestHandleMergeObservations_SameID(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// source_id and target_id cannot be the same
@@ -2792,7 +2787,7 @@ func TestHandleMergeObservations_SameID(t *testing.T) {
 func TestHandleMergeObservations_InvalidBoost(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "1.0.0", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	// boost must be between 0 and 0.5

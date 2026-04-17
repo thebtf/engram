@@ -7,12 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
-	pgvec "github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/internal/db/gorm"
 )
 
 // handleListCollections returns all configured collections with document counts.
@@ -193,13 +189,12 @@ func (s *Server) handleRemoveDocument(ctx context.Context, args json.RawMessage)
 	return fmt.Sprintf("Document %s/%s deactivated.", params.Collection, params.Path), nil
 }
 
-// handleIngestDocument ingests a document: upserts content, chunks, embeds, stores chunks.
+// handleIngestDocument ingests a document into a collection.
+// Embedding/chunk storage removed in v5 (content_chunks table dropped).
+// In v5, only document metadata is upserted; chunk-level search is unavailable.
 func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.documentStore == nil {
 		return "", fmt.Errorf("document store not available")
-	}
-	if s.embedSvc == nil {
-		return "", fmt.Errorf("embedding service not available")
 	}
 
 	m, err := parseArgs(args)
@@ -221,106 +216,20 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("collection, path, and content are required")
 	}
 
-	// Upsert document (content-addressable via SHA-256)
-	doc, err := s.documentStore.UpsertDocument(ctx, params.Collection, params.Path, params.Title, params.Content)
+	// Upsert document metadata only (embedding pipeline removed in v5).
+	_, err = s.documentStore.UpsertDocument(ctx, params.Collection, params.Path, params.Title, params.Content)
 	if err != nil {
 		return "", fmt.Errorf("upsert document: %w", err)
 	}
 
-	// Check if content hash changed — skip re-chunking if same
 	hashBytes := sha256.Sum256([]byte(params.Content))
 	newHash := hex.EncodeToString(hashBytes[:])
-	if doc.Hash.Valid && doc.Hash.String == newHash {
-		// Check if chunks already exist for this exact content hash
-		exists, err := s.documentStore.ChunksExist(ctx, newHash)
-		if err == nil && exists {
-			return fmt.Sprintf("Document %s/%s already up-to-date (hash %s).", params.Collection, params.Path, newHash[:12]), nil
-		}
-	}
-
-	// Chunk the content using markdown chunker (works for most text content)
-	var textChunks []string
-	if s.chunkManager != nil {
-		// Write to temp file for chunker (chunkers expect file paths)
-		ext := filepath.Ext(params.Path)
-		if ext == "" {
-			ext = ".md" // default to markdown
-		}
-		tmpFile, err := os.CreateTemp("", "engram-ingest-*"+ext)
-		if err != nil {
-			return "", fmt.Errorf("create temp file: %w", err)
-		}
-		tmpPath := tmpFile.Name()
-		defer os.Remove(tmpPath)
-
-		if _, err := tmpFile.WriteString(params.Content); err != nil {
-			_ = tmpFile.Close()
-			return "", fmt.Errorf("write temp file: %w", err)
-		}
-		if err := tmpFile.Close(); err != nil {
-			return "", fmt.Errorf("close temp file: %w", err)
-		}
-
-		if s.chunkManager.SupportsFile(tmpPath) {
-			chunks, chunkErr := s.chunkManager.ChunkFile(ctx, tmpPath)
-			if chunkErr != nil {
-				log.Warn().Err(chunkErr).Str("path", params.Path).Msg("Chunking failed, using full content")
-				textChunks = []string{params.Content}
-			} else {
-				for _, c := range chunks {
-					text := c.SearchableContent()
-					if text != "" {
-						textChunks = append(textChunks, text)
-					}
-				}
-			}
-		} else {
-			// No chunker available — use full content as single chunk
-			textChunks = []string{params.Content}
-		}
-	} else {
-		textChunks = []string{params.Content}
-	}
-
-	if len(textChunks) == 0 {
-		return fmt.Sprintf("Document %s/%s ingested but produced no chunks.", params.Collection, params.Path), nil
-	}
-
-	// Generate embeddings and create chunk records
-	dbChunks := make([]gorm.ContentChunk, 0, len(textChunks))
-	for i, text := range textChunks {
-		emb, err := s.embedSvc.Embed(text)
-		if err != nil {
-			log.Warn().Err(err).Int("chunk", i).Msg("Embedding failed for chunk, skipping")
-			continue
-		}
-
-		dbChunks = append(dbChunks, gorm.ContentChunk{
-			Hash:      newHash,
-			Seq:       i,
-			Text:      text,
-			Pos:       i,
-			Model:     s.embedSvc.Version(),
-			Embedding: pgvec.NewVector(emb),
-		})
-	}
-
-	if err := s.documentStore.UpsertChunks(ctx, newHash, dbChunks); err != nil {
-		return "", fmt.Errorf("upsert chunks: %w", err)
-	}
-
-	return fmt.Sprintf("Document %s/%s ingested: %d chunks embedded.", params.Collection, params.Path, len(dbChunks)), nil
+	return fmt.Sprintf("Document %s/%s ingested (metadata only, hash %s; chunk embeddings removed in v5).", params.Collection, params.Path, newHash[:12]), nil
 }
 
 // handleSearchCollection searches document chunks in a collection.
-func (s *Server) handleSearchCollection(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.documentStore == nil {
-		return "", fmt.Errorf("document store not available")
-	}
-	if s.embedSvc == nil {
-		return "", fmt.Errorf("embedding service not available")
-	}
-
+// Chunk-level vector search removed in v5 (content_chunks table dropped).
+func (s *Server) handleSearchCollection(_ context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -329,59 +238,17 @@ func (s *Server) handleSearchCollection(ctx context.Context, args json.RawMessag
 	var params struct {
 		Query      string
 		Collection string
-		Limit      int
 	}
 	params.Query = coerceString(m["query"], "")
 	params.Collection = coerceString(m["collection"], "")
-	params.Limit = coerceInt(m["limit"], 0)
 	if params.Query == "" {
 		return "", fmt.Errorf("query is required")
 	}
-	if params.Limit <= 0 {
-		params.Limit = 10
-	}
-	if params.Limit > 50 {
-		params.Limit = 50
-	}
 
-	// Embed the query
-	queryEmb, err := s.embedSvc.Embed(params.Query)
-	if err != nil {
-		return "", fmt.Errorf("embed query: %w", err)
+	// Vector chunk search removed in v5 (content_chunks table dropped).
+	msg := "Document chunk search removed in v5; use find_relevant_memories for observation-level FTS retrieval"
+	if params.Collection != "" {
+		msg += fmt.Sprintf(" (collection %q)", params.Collection)
 	}
-
-	chunks, err := s.documentStore.SearchChunks(ctx, queryEmb, params.Collection, params.Limit)
-	if err != nil {
-		return "", fmt.Errorf("search chunks: %w", err)
-	}
-
-	if len(chunks) == 0 {
-		msg := "No matching document chunks found"
-		if params.Collection != "" {
-			msg += fmt.Sprintf(" in collection %q", params.Collection)
-		}
-		return msg + ".", nil
-	}
-
-	type chunkResult struct {
-		Hash string `json:"hash"`
-		Seq  int    `json:"seq"`
-		Text string `json:"text"`
-	}
-
-	results := make([]chunkResult, 0, len(chunks))
-	for _, c := range chunks {
-		results = append(results, chunkResult{
-			Hash: c.Hash[:12],
-			Seq:  c.Seq,
-			Text: c.Text,
-		})
-	}
-
-	out, err := json.MarshalIndent(results, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal results: %w", err)
-	}
-
-	return string(out), nil
+	return msg + ".", nil
 }
