@@ -53,7 +53,7 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 
 	if len(params.Files) > 0 {
 		// Client-server mode: content sent over the wire
-		result, err = instincts.ImportFromContent(ctx, params.Files, nil, s.observationStore)
+		result, err = instincts.ImportFromContent(ctx, params.Files, s.observationStore)
 	} else {
 		// Legacy mode: read from local filesystem (deprecated)
 		log.Warn().Str("path", params.Path).Msg("import_instincts: using deprecated path-based import; 'path' parameter will be removed. Use 'files' with content instead.")
@@ -67,7 +67,7 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 			return "", fmt.Errorf("instincts directory not found: %s (hint: use 'files' parameter to send content directly)", dir)
 		}
 
-		result, err = instincts.Import(ctx, dir, nil, s.observationStore)
+		result, err = instincts.Import(ctx, dir, s.observationStore)
 	}
 
 	if err != nil {

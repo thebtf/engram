@@ -51,9 +51,9 @@ type Detector struct {
 }
 
 // NewDetector creates a new relation detector.
-// The vectorClient parameter is accepted for call-site compatibility but ignored in v5.
+// The first parameter is accepted for call-site compatibility but unused in v5.
 func NewDetector(
-	vectorClient any,
+	_ any,
 	relationStore *gorm.RelationStore,
 	conflictStore *gorm.ConflictStore,
 	observationStore *gorm.ObservationStore,
@@ -272,7 +272,7 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 			continue
 		}
 		// Use file path hash as a pseudo node ID (negative to avoid collision with observation IDs)
-		fileNodeID := -int64(hashString(filePath))
+		fileNodeID := -hashString(filePath)
 		rel := &models.ObservationRelation{
 			SourceID:        obsID,
 			TargetID:        fileNodeID,
@@ -288,7 +288,7 @@ func (d *Detector) Detect(ctx context.Context, obsID int64, project string) erro
 		if filePath == "" {
 			continue
 		}
-		fileNodeID := -int64(hashString(filePath))
+		fileNodeID := -hashString(filePath)
 		rel := &models.ObservationRelation{
 			SourceID:        obsID,
 			TargetID:        fileNodeID,

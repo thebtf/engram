@@ -234,6 +234,9 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	observations = fallbackObservations
 	_ = baseSimilarityScores // no vector scores in v5
 
+	// Graph BFS fusion blends graph neighbor hits with the primary retrieval list (FTS in v5,
+	// vector scores in future modes). Building the base list from observations (rank-ordered)
+	// instead of from similarityScores preserves FTS hits that have no numeric score.
 	if s.config != nil && s.config.InjectGraphBFSEnabled {
 		seedIDs := s.ExtractSessionEntitySeeds(ctx, opts.SessionID, project)
 		if len(seedIDs) > 0 {
@@ -248,13 +251,22 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 				}
 			}
 			if len(graphList) > 0 {
-				vectorList := make([]search.ScoredID, 0, len(similarityScores))
-				for id, score := range similarityScores {
-					vectorList = append(vectorList, search.ScoredID{ID: id, DocType: "observation", Score: score})
+				// Base list: prefer explicit scores when we have them (future vector mode),
+				// otherwise rank observations by their current order (FTS result rank).
+				vectorList := make([]search.ScoredID, 0, len(observations)+len(similarityScores))
+				if len(similarityScores) > 0 {
+					for id, score := range similarityScores {
+						vectorList = append(vectorList, search.ScoredID{ID: id, DocType: "observation", Score: score})
+					}
+					sort.Slice(vectorList, func(i, j int) bool {
+						return vectorList[i].Score > vectorList[j].Score
+					})
+				} else {
+					for idx, obs := range observations {
+						// Rank-based score; higher rank → higher score so RRF weights early FTS hits more.
+						vectorList = append(vectorList, search.ScoredID{ID: obs.ID, DocType: "observation", Score: 1.0 / float64(idx+1)})
+					}
 				}
-				sort.Slice(vectorList, func(i, j int) bool {
-					return vectorList[i].Score > vectorList[j].Score
-				})
 				fused := search.RRF(vectorList, graphList)
 				fusedIDs := make([]int64, 0, len(fused))
 				for _, item := range fused {
@@ -379,7 +391,6 @@ func (s *Service) expandQueries(ctx context.Context, query string) ([]expansion.
 	}
 	defer cancel()
 	cfg := expansion.DefaultConfig()
-	cfg.EnableVocabularyExpansion = false
 	if s.config != nil {
 		cfg.EnableHyDE = s.config.HyDEEnabled
 	}

@@ -11,7 +11,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/pkg/models"
@@ -104,8 +103,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if softLimit <= 0 {
 		softLimit = 1000
 	}
-	storePathSupersessionEnabled := cfg.StorePathSupersessionEnabled
-
 	if utf8.RuneCountInString(params.Content) > hardLimit {
 		return "", fmt.Errorf("content exceeds maximum length of %d characters", hardLimit)
 	}
@@ -177,48 +174,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			Msg("store_memory: storing global-scoped observation")
 	}
 
-	// Contradiction detection + dedup check (Learning Memory v3 FR-7, Mem0 Algorithm 1).
-	// Shared implementation in internal/dedup/checker.go.
-	// NOTE: In v5, CheckDuplicate always returns ActionAdd; the NOOP and UPDATE
-	// branches below are currently unreachable (vector dedup removed).
-	// They are preserved so dedup logic is ready to reactivate when vector search is restored.
-	var contradictionAction string
-	var supersededID int64
-	dedupResult, dedupErr := dedup.CheckDuplicate()
-	if dedupErr != nil {
-		log.Warn().Err(dedupErr).Msg("store_memory: dedup check failed, proceeding with ADD")
-	}
-	if dedupResult != nil {
-		contradictionAction = string(dedupResult.Action)
-		if dedupResult.Action == dedup.ActionNoop {
-			result := map[string]any{
-				"id":        dedupResult.ExistingID,
-				"action":    "NOOP",
-				"duplicate": true,
-				"message":   fmt.Sprintf("Near-duplicate observation exists (similarity: %.2f)", dedupResult.Similarity),
-			}
-			out, _ := json.MarshalIndent(result, "", "  ")
-			return string(out), nil
-		}
-		if dedupResult.Action == dedup.ActionUpdate {
-			if storePathSupersessionEnabled {
-				supersededID = dedupResult.ExistingID
-				log.Info().
-					Int64("superseded_id", dedupResult.ExistingID).
-					Float64("similarity", dedupResult.Similarity).
-					Msg("store_memory: superseding existing observation (contradiction zone)")
-			} else {
-				contradictionAction = "ADD"
-				log.Info().
-					Int64("existing_id", dedupResult.ExistingID).
-					Float64("similarity", dedupResult.Similarity).
-					Msg("store_memory: store-path supersession disabled; keeping existing observation active")
-			}
-		}
-	}
-	if contradictionAction == "" {
-		contradictionAction = "ADD"
-	}
+	// Vector-based dedup removed in v5; every store_memory call creates a new observation.
+	const contradictionAction = "ADD"
 
 	title := params.Title
 	if title == "" {
@@ -262,24 +219,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
-	// Contradiction resolution: if UPDATE action, mark old observation as superseded (Learning Memory v3 FR-7)
-	if contradictionAction == "UPDATE" && supersededID > 0 {
-		if err := s.observationStore.MarkAsSuperseded(ctx, supersededID); err != nil {
-			log.Warn().Err(err).Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: failed to mark old observation superseded")
-		} else {
-			// Create EVOLVES_FROM relation
-			if s.relationStore != nil {
-				_, _ = s.relationStore.StoreRelation(ctx, &models.ObservationRelation{
-					SourceID:     id,
-					TargetID:     supersededID,
-					RelationType: models.RelationEvolvesFrom,
-					Confidence:   1.0,
-				})
-			}
-			log.Info().Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: superseded old observation with EVOLVES_FROM")
-		}
-	}
-
 	// Apply TTL for verified facts.
 	ttlDays := computeTTLDays(params.TtlDays, concepts)
 	ttlApplied := false
@@ -298,9 +237,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"scope":   string(scope),
 		"action":  contradictionAction,
 		"message": "Memory stored successfully",
-	}
-	if supersededID > 0 {
-		result["superseded_id"] = supersededID
 	}
 	if ttlApplied {
 		result["ttl_days"] = ttlDays

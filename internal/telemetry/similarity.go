@@ -1,11 +1,10 @@
 // Package telemetry provides measurement tools for engram's belief revision system.
-// In v5, vector storage was removed. Similarity telemetry is a no-op.
+// In v5, vector storage was removed. SimilarityTelemetry.Run clears legacy snapshot rows.
 package telemetry
 
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/thebtf/engram/internal/db/gorm"
@@ -43,22 +42,19 @@ func NewSimilarityTelemetry(
 	}
 }
 
-// Run is a no-op in v5 (vector storage removed).
-func (st *SimilarityTelemetry) Run(_ context.Context) {
-	st.log.Debug().Msg("Similarity telemetry skipped: vector storage removed in v5")
-}
-
-// storeSnapshot persists a similarity snapshot to the telemetry_snapshots table.
-func (st *SimilarityTelemetry) storeSnapshot(ctx context.Context, project string, snapshot *SimilaritySnapshot) error {
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return err
+// Run clears stale similarity snapshots in v5 (vector storage removed).
+// Because the similarity computation pipeline was removed, any rows remaining in
+// telemetry_snapshots with snapshot_type='similarity' are outdated legacy data.
+// Clearing them prevents GetLatestSnapshot/GetAllLatestSnapshots from returning
+// stale results that callers would incorrectly treat as current measurements.
+func (st *SimilarityTelemetry) Run(ctx context.Context) {
+	if err := st.store.GetDB().WithContext(ctx).Exec(
+		`DELETE FROM telemetry_snapshots WHERE snapshot_type = 'similarity'`,
+	).Error; err != nil {
+		st.log.Warn().Err(err).Msg("SimilarityTelemetry.Run: failed to clear legacy snapshots")
+		return
 	}
-
-	return st.store.GetDB().WithContext(ctx).Exec(
-		`INSERT INTO telemetry_snapshots (snapshot_type, project, data, created_at_epoch) VALUES (?, ?, ?, ?)`,
-		"similarity", project, string(data), time.Now().UnixMilli(),
-	).Error
+	st.log.Debug().Msg("SimilarityTelemetry.Run: cleared legacy similarity snapshots (v5)")
 }
 
 // GetLatestSnapshot returns the most recent similarity snapshot for a project.

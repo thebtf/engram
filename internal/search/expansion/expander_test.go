@@ -81,7 +81,6 @@ func (s *ExpanderSuite) TestDetectIntent() {
 func (s *ExpanderSuite) TestExpand() {
 	ctx := context.Background()
 	cfg := DefaultConfig()
-	cfg.EnableVocabularyExpansion = false // Disable for unit test
 
 	tests := []struct {
 		name           string
@@ -124,9 +123,7 @@ func (s *ExpanderSuite) TestExpandWithConfig() {
 	ctx := context.Background()
 
 	cfg := Config{
-		MaxExpansions:             2,
-		MinSimilarity:             0.7,
-		EnableVocabularyExpansion: false,
+		MaxExpansions: 2,
 	}
 
 	expansions := s.expander.Expand(ctx, "how to implement authentication", cfg)
@@ -137,7 +134,6 @@ func (s *ExpanderSuite) TestExpandWithConfig() {
 func (s *ExpanderSuite) TestExpandDeduplication() {
 	ctx := context.Background()
 	cfg := DefaultConfig()
-	cfg.EnableVocabularyExpansion = false
 
 	// Query that might generate duplicate expansions
 	query := "how to fix authentication"
@@ -277,8 +273,6 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
 	assert.Equal(t, 4, cfg.MaxExpansions)
-	assert.Equal(t, 0.5, cfg.MinSimilarity)
-	assert.False(t, cfg.EnableVocabularyExpansion) // intentional v5 default
 }
 
 // TestExpandedQueryStruct tests ExpandedQuery struct.
@@ -294,19 +288,6 @@ func TestExpandedQueryStruct(t *testing.T) {
 	assert.Equal(t, 0.85, eq.Weight)
 	assert.Equal(t, "vocabulary:auth", eq.Source)
 	assert.Equal(t, IntentQuestion, eq.Intent)
-}
-
-// TestVocabEntry tests VocabEntry struct.
-func TestVocabEntry(t *testing.T) {
-	ve := VocabEntry{
-		Term:   "authentication",
-		Weight: 0.9,
-		Source: "concept",
-	}
-
-	assert.Equal(t, "authentication", ve.Term)
-	assert.Equal(t, 0.9, ve.Weight)
-	assert.Equal(t, "concept", ve.Source)
 }
 
 // TestIntentConstants tests intent constant values.
@@ -409,24 +390,6 @@ func (s *ExpanderSuite) TestExpandByIntentArchitecture() {
 func (s *ExpanderSuite) TestExpandByIntentGeneral() {
 	expansions := s.expander.expandByIntent("database", IntentGeneral)
 	s.Empty(expansions) // General intent doesn't add intent-based expansions
-}
-
-// TestEmptyVocabulary tests expansion with empty vocabulary.
-func (s *ExpanderSuite) TestEmptyVocabulary() {
-	ctx := context.Background()
-	expansions := s.expander.expandByVocabulary(ctx, "test query", 0.5)
-	s.Empty(expansions)
-}
-
-// TestNonEmptyVocabularyReturnsNilInV5 tests that expandByVocabulary always
-// returns nil in v5, regardless of query content, because vocabulary expansion
-// required vector embeddings which were removed.
-func (s *ExpanderSuite) TestNonEmptyVocabularyReturnsNilInV5() {
-	ctx := context.Background()
-	// Even with a well-formed query and non-zero threshold, vocabulary expansion
-	// is a no-op in v5 (vector storage removed).
-	expansions := s.expander.expandByVocabulary(ctx, "database connection pooling", 0.7)
-	s.Nil(expansions, "expandByVocabulary must return nil in v5 — vector storage removed")
 }
 
 // TestIntentPatternsExist tests that all intents have patterns.

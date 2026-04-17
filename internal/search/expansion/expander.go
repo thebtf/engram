@@ -5,7 +5,6 @@ import (
 	"context"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/thebtf/engram/pkg/strutil"
 	"github.com/rs/zerolog/log"
@@ -39,37 +38,20 @@ type ExpandedQuery struct {
 type Expander struct {
 	hydeGen        *HyDEGenerator
 	intentPatterns map[QueryIntent][]*regexp.Regexp
-	vocabulary     []VocabEntry
-	vocabMu        sync.RWMutex
-}
-
-// VocabEntry represents a vocabulary term from observations.
-type VocabEntry struct {
-	Term   string
-	Source string
-	Weight float64
 }
 
 // Config holds expander configuration.
 type Config struct {
 	// MaxExpansions limits the number of expanded queries returned
 	MaxExpansions int
-	// MinSimilarity is the minimum similarity score for vocabulary expansion
-	MinSimilarity float64
-	// EnableVocabularyExpansion enables finding related terms from observations
-	EnableVocabularyExpansion bool
 	// EnableHyDE enables hypothetical document embedding expansion
 	EnableHyDE bool
 }
 
 // DefaultConfig returns sensible default configuration.
-// EnableVocabularyExpansion is intentionally false in v5: vocabulary expansion
-// requires vector embeddings which were removed in the v5 cleanup.
 func DefaultConfig() Config {
 	return Config{
-		MaxExpansions:             4,
-		MinSimilarity:             0.5,
-		EnableVocabularyExpansion: false,
+		MaxExpansions: 4,
 	}
 }
 
@@ -174,12 +156,6 @@ func (e *Expander) Expand(ctx context.Context, query string, cfg Config) []Expan
 		}
 	}
 
-	// Generate vocabulary-based expansions if enabled and we have vocabulary
-	if cfg.EnableVocabularyExpansion && len(e.vocabulary) > 0 {
-		vocabExpansions := e.expandByVocabulary(ctx, query, cfg.MinSimilarity)
-		expansions = append(expansions, vocabExpansions...)
-	}
-
 	// Deduplicate and limit
 	expansions = deduplicateExpansions(expansions)
 	if len(expansions) > cfg.MaxExpansions {
@@ -257,12 +233,6 @@ func (e *Expander) expandByIntent(query string, intent QueryIntent) []ExpandedQu
 	}
 
 	return expansions
-}
-
-// expandByVocabulary is a no-op in v5: vocabulary expansion requires vector
-// embeddings which were removed in the v5 cleanup. Always returns nil.
-func (e *Expander) expandByVocabulary(_ context.Context, _ string, _ float64) []ExpandedQuery {
-	return nil
 }
 
 // Helper functions

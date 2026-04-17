@@ -47,8 +47,7 @@ func ParseContent(name, content string) (*Instinct, error) {
 
 // ImportFromContent imports instincts from file content sent over the wire.
 // This is the client-server counterpart to Import() which reads from disk.
-// The vectorClient parameter is ignored in v5 (vector storage removed).
-func ImportFromContent(ctx context.Context, files []InstinctFile, vectorClient any, obsStore *gorm.ObservationStore) (*ImportResult, error) {
+func ImportFromContent(ctx context.Context, files []InstinctFile, obsStore *gorm.ObservationStore) (*ImportResult, error) {
 	var instincts []*Instinct
 	var parseErrors []error
 
@@ -73,19 +72,6 @@ func ImportFromContent(ctx context.Context, files []InstinctFile, vectorClient a
 	}
 
 	for _, inst := range instincts {
-		// IsDuplicate always returns false in v5 (vector storage removed).
-		// The isDup branch is currently unreachable but kept for when dedup is restored.
-		isDup, err := IsDuplicate(ctx, vectorClient, inst.Trigger, defaultDedupThreshold)
-		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("dedup check for %s: %v", inst.ID, err))
-			continue
-		}
-		if isDup {
-			result.Skipped++
-			log.Debug().Str("id", inst.ID).Str("trigger", inst.Trigger).Msg("Skipping duplicate instinct")
-			continue
-		}
-
 		parsed := ConvertToObservation(inst)
 		obsID, _, err := obsStore.StoreObservation(ctx, instinctSessionID, instinctProject, parsed, 0, 0)
 		if err != nil {

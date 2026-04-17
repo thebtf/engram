@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/models"
@@ -139,7 +138,7 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 	}
 
 	if len(result.Observations) == 0 {
-		return `{"extracted": 0, "stored": 0, "duplicates": 0}`, nil
+		return `{"extracted": 0, "stored": 0}`, nil
 	}
 
 	// Valid observation types for validation.
@@ -149,7 +148,6 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 	}
 
 	stored := 0
-	duplicates := 0
 	var titles []string
 
 	for _, obs := range result.Observations {
@@ -177,13 +175,9 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 			Scope:     models.ObservationScope(scope),
 		}
 
-		action, _, err := s.storeExtractedObservation(ctx, project, parsedObs)
+		_, err := s.storeExtractedObservation(ctx, project, parsedObs)
 		if err != nil {
 			log.Warn().Err(err).Str("title", obs.Title).Msg("Failed to store extracted observation")
-			continue
-		}
-		if action == dedup.ActionNoop {
-			duplicates++
 			continue
 		}
 
@@ -191,56 +185,20 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 		titles = append(titles, obs.Title)
 	}
 
-	summary := fmt.Sprintf(`{"extracted": %d, "stored": %d, "duplicates": %d, "titles": %s}`,
-		len(result.Observations), stored, duplicates, marshalTitles(titles))
+	summary := fmt.Sprintf(`{"extracted": %d, "stored": %d, "titles": %s}`,
+		len(result.Observations), stored, marshalTitles(titles))
 	return summary, nil
 }
 
-func (s *Server) storeExtractedObservation(ctx context.Context, project string, parsedObs *models.ParsedObservation) (dedup.Action, int64, error) {
-	dedupResult, dedupErr := dedup.CheckDuplicate()
-	if dedupErr != nil {
-		log.Debug().Err(dedupErr).Str("title", parsedObs.Title).Msg("extract: dedup check failed, proceeding with ADD")
-	}
-	// NOTE: In v5, CheckDuplicate always returns ActionAdd; the NOOP and UPDATE
-	// branches below are currently unreachable. They are preserved so dedup
-	// logic is ready to reactivate when vector search is restored.
-	if dedupResult != nil && dedupResult.Action == dedup.ActionNoop {
-		return dedup.ActionNoop, 0, nil
-	}
-
+// storeExtractedObservation stores a single LLM-extracted observation.
+// Vector-based dedup was removed in v5; every extracted observation is stored directly.
+func (s *Server) storeExtractedObservation(ctx context.Context, project string, parsedObs *models.ParsedObservation) (int64, error) {
 	extractSessionID := "extract-" + uuid.NewString()
 	obsID, _, err := s.observationStore.StoreObservation(ctx, extractSessionID, project, parsedObs, 0, 0)
 	if err != nil {
-		return dedup.ActionAdd, 0, err
+		return 0, err
 	}
-
-	if dedupResult != nil && dedupResult.Action == dedup.ActionUpdate && dedupResult.ExistingID > 0 {
-		if config.Get().StorePathSupersessionEnabled {
-			if supersErr := s.observationStore.MarkAsSuperseded(ctx, dedupResult.ExistingID); supersErr != nil {
-				log.Warn().Err(supersErr).Int64("id", dedupResult.ExistingID).Msg("extract: failed to mark superseded")
-			}
-			if s.relationStore != nil {
-				_, _ = s.relationStore.StoreRelation(ctx, &models.ObservationRelation{
-					SourceID:        obsID,
-					TargetID:        dedupResult.ExistingID,
-					RelationType:    models.RelationEvolvesFrom,
-					Confidence:      dedupResult.Similarity,
-					DetectionSource: models.DetectionSourceEmbeddingSimilarity,
-				})
-			}
-		} else {
-			log.Info().
-				Int64("existing_id", dedupResult.ExistingID).
-				Float64("similarity", dedupResult.Similarity).
-				Msg("extract: store-path supersession disabled; keeping existing observation active")
-		}
-		return dedup.ActionUpdate, obsID, nil
-	}
-
-	if dedupResult != nil {
-		return dedupResult.Action, obsID, nil
-	}
-	return dedup.ActionAdd, obsID, nil
+	return obsID, nil
 }
 
 // marshalTitles converts a string slice to a JSON array string.

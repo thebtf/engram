@@ -60,9 +60,7 @@ func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Vector client removed in v5 (content_chunks table dropped). Pass nil — IsDuplicate
-	// gracefully skips dedup when no vector backend is available.
-	result, importErr := instincts.Import(r.Context(), dir, nil, obsStore)
+	result, importErr := instincts.Import(r.Context(), dir, obsStore)
 	if importErr != nil {
 		log.Error().Err(importErr).Msg("Instinct import failed")
 		http.Error(w, "Import failed: "+importErr.Error(), http.StatusInternalServerError)
