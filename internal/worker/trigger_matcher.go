@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/thebtf/engram/internal/privacy"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -181,56 +180,9 @@ func (s *Service) matchMemoryTriggers(ctx context.Context, req MemoryTriggerRequ
 	}
 }
 
-func (s *Service) matchEditWriteSemanticTriggers(ctx context.Context, req MemoryTriggerRequest) ([]MemoryTriggerMatch, error) {
-	filePath := extractTriggerFilePath(req.Params)
-	if filePath == "" || !s.hasVectorRetrieval() {
-		return []MemoryTriggerMatch{}, nil
-	}
-
-	where := vector.BuildWhereFilter(vector.DocTypeObservation, req.Project, true)
-	query := buildEditWriteTriggerQuery(req.Tool, filePath, req.Params)
-
-	vectorResults, err := s.runVectorQuery(ctx, query, semanticTriggerCandidateLimit, where)
-	if err != nil {
-		return nil, err
-	}
-	ids := vector.ExtractObservationIDs(vectorResults, req.Project)
-	if len(ids) == 0 {
-		return []MemoryTriggerMatch{}, nil
-	}
-
-	observations, err := s.fetchObservationsByID(ctx, ids, "", 0)
-	if err != nil {
-		return nil, err
-	}
-	if len(observations) == 0 {
-		return []MemoryTriggerMatch{}, nil
-	}
-
-	byID := make(map[int64]*models.Observation, len(observations))
-	for _, observation := range observations {
-		if observation != nil {
-			byID[observation.ID] = observation
-		}
-	}
-
-	matches := make([]MemoryTriggerMatch, 0, semanticTriggerResultLimit)
-	for _, id := range ids {
-		observation, ok := byID[id]
-		if !ok || !isSemanticTriggerType(observation.Type) {
-			continue
-		}
-		matches = append(matches, MemoryTriggerMatch{
-			Kind:          semanticTriggerKind(observation.Type),
-			ObservationID: observation.ID,
-			Blurb:         semanticTriggerBlurb(observation),
-		})
-		if len(matches) >= semanticTriggerResultLimit {
-			break
-		}
-	}
-
-	return matches, nil
+func (s *Service) matchEditWriteSemanticTriggers(_ context.Context, _ MemoryTriggerRequest) ([]MemoryTriggerMatch, error) {
+	// Vector search removed in v5 (content_chunks table dropped). No semantic triggers.
+	return []MemoryTriggerMatch{}, nil
 }
 
 func extractTriggerFilePath(params map[string]any) string {

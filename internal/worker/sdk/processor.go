@@ -21,7 +21,6 @@ import (
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/similarity"
 )
@@ -222,7 +221,6 @@ type Processor struct {
 	summaryStore             *gorm.SummaryStore
 	reasoningStore           *gorm.ReasoningTraceStore
 	llmClient                learning.LLMClient
-	vectorClient             vector.Client
 	broadcastFunc            BroadcastFunc
 	syncObservationFunc      SyncObservationFunc
 	syncSummaryFunc          SyncSummaryFunc
@@ -296,7 +294,7 @@ const DefaultConcurrentLLMCalls = 4
 // NewProcessor creates a new SDK processor.
 // It requires at least one LLM backend: either an OpenAI-compatible API (ENGRAM_LLM_URL)
 // or a local Claude CLI binary. If neither is available, it returns an error.
-func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.SummaryStore, vectorClient vector.Client) (*Processor, error) {
+func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.SummaryStore) (*Processor, error) {
 	cfg := config.Get()
 
 	// Initialize LLM client (OpenAI-compatible API — works in Docker)
@@ -334,7 +332,6 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 		llmClient:                llmClient,
 		observationStore:         observationStore,
 		summaryStore:             summaryStore,
-		vectorClient:             vectorClient,
 		sem:                      make(chan struct{}, concurrency),
 		circuitBreaker:           NewCircuitBreaker(5, 60),                               // Open after 5 failures, reset after 60s
 		deduplicator:             NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
@@ -451,27 +448,9 @@ func mergeFileMtimes(existing models.JSONInt64Map, incoming map[string]int64) ma
 	return merged
 }
 
-func (p *Processor) queryWriteMergeCandidateIDs(ctx context.Context, project string, obs *models.ParsedObservation) []int64 {
-	if p.vectorClient == nil || !p.vectorClient.IsConnected() || obs == nil {
-		return nil
-	}
-	queryText := strings.TrimSpace(strings.Join([]string{obs.Title, obs.Narrative, strings.Join(obs.Facts, " ")}, " "))
-	if queryText == "" {
-		return nil
-	}
-	results, err := p.vectorClient.Query(ctx, queryText, 5, vector.BuildWhereFilter(vector.DocTypeObservation, project, false, nil))
-	if err != nil {
-		log.Warn().Err(err).Str("project", project).Msg("write-merge: vector candidate lookup failed")
-		return nil
-	}
-	candidateIDs := make([]int64, 0, len(results))
-	for _, result := range results {
-		if result.Similarity < writeMergeSimilarityThreshold {
-			continue
-		}
-		candidateIDs = append(candidateIDs, vector.ExtractObservationIDs([]vector.QueryResult{result}, project)...)
-	}
-	return candidateIDs
+func (p *Processor) queryWriteMergeCandidateIDs(_ context.Context, _ string, _ *models.ParsedObservation) []int64 {
+	// Vector search removed in v5 (content_chunks table dropped). No candidate lookup.
+	return nil
 }
 
 func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, project string, obs *models.ParsedObservation, promptNumber int) (*models.Observation, bool, string, error) {

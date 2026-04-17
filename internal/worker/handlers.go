@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/thebtf/engram/internal/embedding"
 	"github.com/rs/zerolog/log"
 )
 
@@ -175,73 +174,6 @@ func (s *Service) handleVersion(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRebuildStatus godoc
-// @Summary Get vector rebuild status
-// @Description Returns the current status of vector rebuild operations, providing visibility into long-running rebuild operations.
-// @Tags Vectors
-// @Produce json
-// @Security ApiKeyAuth
-// @Success 200 {object} map[string]interface{}
-// @Router /api/rebuild-status [get]
-func (s *Service) handleRebuildStatus(w http.ResponseWriter, _ *http.Request) {
-	s.rebuildStatusMu.RLock()
-	status := s.rebuildStatus
-	s.rebuildStatusMu.RUnlock()
-
-	if status == nil {
-		writeJSON(w, map[string]any{
-			"in_progress": false,
-			"message":     "No rebuild operation has been started",
-		})
-		return
-	}
-
-	writeJSON(w, status)
-}
-
-// handleTriggerVectorRebuild godoc
-// @Summary Trigger full vector rebuild
-// @Description Rebuilds all vectors from observations, summaries, and prompts. Returns 409 if already in progress, 429 if called too frequently (5 min cooldown).
-// @Tags Vectors
-// @Produce json
-// @Security ApiKeyAuth
-// @Success 200 {object} map[string]interface{}
-// @Failure 409 {string} string "rebuild already in progress"
-// @Failure 429 {string} string "rebuild requested too recently"
-// @Failure 503 {string} string "vector sync not initialized"
-// @Router /api/vectors/rebuild [post]
-func (s *Service) handleTriggerVectorRebuild(w http.ResponseWriter, _ *http.Request) {
-	// Check rate limiting for expensive operations
-	if s.expensiveOpLimiter != nil && !s.expensiveOpLimiter.CanRebuild() {
-		http.Error(w, "rebuild requested too recently, please wait 5 minutes", http.StatusTooManyRequests)
-		return
-	}
-
-	// Check if rebuild is already in progress
-	s.rebuildStatusMu.RLock()
-	if s.rebuildStatus != nil && s.rebuildStatus.InProgress {
-		s.rebuildStatusMu.RUnlock()
-		http.Error(w, "rebuild already in progress", http.StatusConflict)
-		return
-	}
-	s.rebuildStatusMu.RUnlock()
-
-	// Verify we have the necessary components
-	if s.vectorSync == nil || s.observationStore == nil || s.summaryStore == nil || s.promptStore == nil {
-		http.Error(w, "vector sync not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Start rebuild in background
-	s.wg.Add(1)
-	go s.rebuildAllVectors(s.observationStore, s.summaryStore, s.promptStore, s.vectorSync)
-
-	writeJSON(w, map[string]any{
-		"status":  "started",
-		"message": "Vector rebuild started. Check /api/rebuild-status for progress.",
-	})
-}
-
 // handleReady godoc
 // @Summary Readiness check
 // @Description Returns 200 only when fully initialized, 503 otherwise.
@@ -280,38 +212,15 @@ func (s *Service) requireReady(next http.Handler) http.Handler {
 
 // handleListModels godoc
 // @Summary List embedding models (OpenAI-compatible)
-// @Description Returns available embedding models in OpenAI-compatible format. Compatible with LiteLLM proxy model listing.
+// @Description Returns an empty model list. Embeddings are no longer supported as of v5.
 // @Tags System
 // @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /v1/models [get]
 func (s *Service) handleListModels(w http.ResponseWriter, _ *http.Request) {
-	models := embedding.ListModels()
-
-	type modelData struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Created int64  `json:"created"`
-		OwnedBy string `json:"owned_by"`
-	}
-
 	type response struct {
-		Object string      `json:"object"`
-		Data   []modelData `json:"data"`
+		Object string `json:"object"`
+		Data   []any  `json:"data"`
 	}
-
-	data := make([]modelData, 0, len(models))
-	for _, m := range models {
-		data = append(data, modelData{
-			ID:      m.Version,
-			Object:  "model",
-			Created: 0,
-			OwnedBy: "engram",
-		})
-	}
-
-	writeJSON(w, response{
-		Object: "list",
-		Data:   data,
-	})
+	writeJSON(w, response{Object: "list", Data: []any{}})
 }

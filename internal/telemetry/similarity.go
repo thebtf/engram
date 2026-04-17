@@ -1,4 +1,5 @@
 // Package telemetry provides measurement tools for engram's belief revision system.
+// In v5, vector storage was removed. Similarity telemetry is a no-op.
 package telemetry
 
 import (
@@ -8,7 +9,6 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/vector"
 )
 
 // SimilaritySnapshot holds the results of a similarity analysis run.
@@ -22,151 +22,29 @@ type SimilaritySnapshot struct {
 }
 
 // SimilarityTelemetry measures pairwise similarity overlap among observations.
+// Vector-based analysis removed in v5; Run() is a no-op.
 type SimilarityTelemetry struct {
-	log              zerolog.Logger
-	store            *gorm.Store
-	observationStore *gorm.ObservationStore
-	vectorClient     vector.Client
-	sampleSize       int
+	log   zerolog.Logger
+	store *gorm.Store
 }
 
 // NewSimilarityTelemetry creates a new SimilarityTelemetry instance.
+// The vectorClient parameter is accepted for call-site compatibility but ignored.
 func NewSimilarityTelemetry(
 	store *gorm.Store,
 	observationStore *gorm.ObservationStore,
-	vectorClient vector.Client,
+	vectorClient any,
 	log zerolog.Logger,
 ) *SimilarityTelemetry {
 	return &SimilarityTelemetry{
-		store:            store,
-		observationStore: observationStore,
-		vectorClient:     vectorClient,
-		log:              log.With().Str("component", "telemetry.similarity").Logger(),
-		sampleSize:       50,
+		store: store,
+		log:   log.With().Str("component", "telemetry.similarity").Logger(),
 	}
 }
 
-// Run executes the similarity telemetry analysis for all projects.
-func (st *SimilarityTelemetry) Run(ctx context.Context) {
-	if st.vectorClient == nil || !st.vectorClient.IsConnected() {
-		st.log.Warn().Msg("Vector client not available, skipping similarity telemetry")
-		return
-	}
-
-	projects, err := st.getActiveProjects(ctx)
-	if err != nil {
-		st.log.Error().Err(err).Msg("Failed to get projects for similarity telemetry")
-		return
-	}
-
-	for _, project := range projects {
-		snapshot, err := st.analyzeProject(ctx, project)
-		if err != nil {
-			st.log.Error().Err(err).Str("project", project).Msg("Failed to analyze project similarity")
-			continue
-		}
-
-		if err := st.storeSnapshot(ctx, project, snapshot); err != nil {
-			st.log.Error().Err(err).Str("project", project).Msg("Failed to store similarity snapshot")
-			continue
-		}
-
-		st.log.Info().
-			Str("project", project).
-			Int("sample_size", snapshot.SampleSize).
-			Int("total_pairs", snapshot.TotalPairs).
-			Float64("high_sim_pct", snapshot.HighSimPercent).
-			Float64("very_high_sim_pct", snapshot.VeryHighPercent).
-			Msg("Similarity telemetry completed for project")
-	}
-}
-
-// analyzeProject samples recent observations and measures pairwise similarity.
-func (st *SimilarityTelemetry) analyzeProject(ctx context.Context, project string) (*SimilaritySnapshot, error) {
-	observations, err := st.observationStore.GetRecentObservations(ctx, project, st.sampleSize)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(observations) < 2 {
-		return &SimilaritySnapshot{SampleSize: len(observations)}, nil
-	}
-
-	where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false, nil)
-
-	highSimPairs := 0
-	veryHighSimPairs := 0
-	totalPairs := 0
-
-	for i, obs := range observations {
-		queryText := ""
-		if obs.Title.Valid {
-			queryText = obs.Title.String
-		}
-		if obs.Narrative.Valid {
-			if queryText != "" {
-				queryText += " "
-			}
-			queryText += obs.Narrative.String
-		}
-		if queryText == "" {
-			continue
-		}
-
-		results, err := st.vectorClient.Query(ctx, queryText, st.sampleSize, where)
-		if err != nil {
-			st.log.Debug().Err(err).Int64("obs_id", obs.ID).Msg("Vector query failed for observation")
-			continue
-		}
-
-		for _, result := range results {
-			resultID := vector.ExtractRowID(result.Metadata)
-			if resultID <= obs.ID {
-				continue
-			}
-			// Only count pairs within our sample
-			inSample := false
-			for j := i + 1; j < len(observations); j++ {
-				if observations[j].ID == resultID {
-					inSample = true
-					break
-				}
-			}
-			if !inSample {
-				continue
-			}
-
-			totalPairs++
-			if result.Similarity > 0.85 {
-				highSimPairs++
-			}
-			if result.Similarity > 0.90 {
-				veryHighSimPairs++
-			}
-		}
-	}
-
-	// If vector search returned no pair counts, calculate theoretical maximum
-	if totalPairs == 0 {
-		n := len(observations)
-		totalPairs = n * (n - 1) / 2
-	}
-
-	highSimPct := 0.0
-	veryHighPct := 0.0
-	if totalPairs > 0 {
-		highSimPct = float64(highSimPairs) / float64(totalPairs) * 100
-		veryHighPct = float64(veryHighSimPairs) / float64(totalPairs) * 100
-	}
-
-	return &SimilaritySnapshot{
-		TotalPairs:       totalPairs,
-		HighSimPairs:     highSimPairs,
-		VeryHighSimPairs: veryHighSimPairs,
-		HighSimPercent:   highSimPct,
-		VeryHighPercent:  veryHighPct,
-		SampleSize:       len(observations),
-	}, nil
+// Run is a no-op in v5 (vector storage removed).
+func (st *SimilarityTelemetry) Run(_ context.Context) {
+	st.log.Debug().Msg("Similarity telemetry skipped: vector storage removed in v5")
 }
 
 // storeSnapshot persists a similarity snapshot to the telemetry_snapshots table.
@@ -180,17 +58,6 @@ func (st *SimilarityTelemetry) storeSnapshot(ctx context.Context, project string
 		`INSERT INTO telemetry_snapshots (snapshot_type, project, data, created_at_epoch) VALUES (?, ?, ?, ?)`,
 		"similarity", project, string(data), time.Now().UnixMilli(),
 	).Error
-}
-
-// getActiveProjects returns all projects that have recent observations.
-func (st *SimilarityTelemetry) getActiveProjects(ctx context.Context) ([]string, error) {
-	var projects []string
-	err := st.store.GetDB().WithContext(ctx).
-		Model(&gorm.Observation{}).
-		Distinct("project").
-		Where("project != ''").
-		Pluck("project", &projects).Error
-	return projects, err
 }
 
 // GetLatestSnapshot returns the most recent similarity snapshot for a project.

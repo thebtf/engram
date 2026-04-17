@@ -12,8 +12,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/embedding"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -50,34 +48,15 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	var observations []*models.Observation
 	var total int64
 	var err error
-	var usedVector bool
 	searchStart := time.Now()
 
-	// Use vector search if query is provided and vector client is available
-	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, "", false, nil)
-		vectorResults, vecErr := s.vectorClient.Query(r.Context(), query, pagination.Limit*2, where)
-		if vecErr == nil && len(vectorResults) > 0 {
-			obsIDs := vector.ExtractObservationIDs(vectorResults, project)
-			if len(obsIDs) > 0 {
-				observations, err = s.observationStore.GetObservationsByIDs(r.Context(), obsIDs, "date_desc", pagination.Limit)
-				if err == nil {
-					usedVector = true
-					total = int64(len(observations)) // Vector search doesn't have total, use returned count
-				}
-			}
-		}
-	}
-
-	// Fall back to database query if vector search not used
-	if !usedVector {
-		if project != "" {
-			// Strict project filtering for dashboard - only observations from this project
-			observations, total, err = s.observationStore.GetObservationsByProjectStrictPaginated(r.Context(), project, obsType, status, memoryType, concept, pagination.Limit, pagination.Offset)
-		} else {
-			// All projects
-			observations, total, err = s.observationStore.GetAllRecentObservationsPaginated(r.Context(), obsType, status, memoryType, concept, pagination.Limit, pagination.Offset)
-		}
+	// Use database query (vector search removed in v5)
+	if project != "" {
+		// Strict project filtering for dashboard - only observations from this project
+		observations, total, err = s.observationStore.GetObservationsByProjectStrictPaginated(r.Context(), project, obsType, status, memoryType, concept, pagination.Limit, pagination.Offset)
+	} else {
+		// All projects
+		observations, total, err = s.observationStore.GetAllRecentObservationsPaginated(r.Context(), obsType, status, memoryType, concept, pagination.Limit, pagination.Offset)
 	}
 
 	if err != nil {
@@ -92,7 +71,7 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 
 	// Track search if query was provided
 	if query != "" {
-		s.trackSearchQuery(query, project, "observations", len(observations), usedVector, float32(time.Since(searchStart).Milliseconds()))
+		s.trackSearchQuery(query, project, "observations", len(observations), float32(time.Since(searchStart).Milliseconds()))
 	}
 
 	// Return paginated response
@@ -125,7 +104,6 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultSummariesLimit)
 	project := r.URL.Query().Get("project")
-	query := r.URL.Query().Get("query")
 
 	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
@@ -135,30 +113,12 @@ func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 
 	var summaries []*models.SessionSummary
 	var err error
-	var usedVector bool
 
-	// Use vector search if query is provided and vector client is available
-	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeSessionSummary, "", false, nil)
-		vectorResults, vecErr := s.vectorClient.Query(r.Context(), query, limit*2, where)
-		if vecErr == nil && len(vectorResults) > 0 {
-			summaryIDs := vector.ExtractSummaryIDs(vectorResults, project)
-			if len(summaryIDs) > 0 {
-				summaries, err = s.summaryStore.GetSummariesByIDs(r.Context(), summaryIDs, "date_desc", limit)
-				if err == nil {
-					usedVector = true
-				}
-			}
-		}
-	}
-
-	// Fall back to database query if vector search not used
-	if !usedVector {
-		if project != "" {
-			summaries, err = s.summaryStore.GetRecentSummaries(r.Context(), project, limit)
-		} else {
-			summaries, err = s.summaryStore.GetAllRecentSummaries(r.Context(), limit)
-		}
+	// Use database query (vector search removed in v5)
+	if project != "" {
+		summaries, err = s.summaryStore.GetRecentSummaries(r.Context(), project, limit)
+	} else {
+		summaries, err = s.summaryStore.GetAllRecentSummaries(r.Context(), limit)
 	}
 
 	if err != nil {
@@ -189,7 +149,6 @@ func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleGetPrompts(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultPromptsLimit)
 	project := r.URL.Query().Get("project")
-	query := r.URL.Query().Get("query")
 
 	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
@@ -199,30 +158,12 @@ func (s *Service) handleGetPrompts(w http.ResponseWriter, r *http.Request) {
 
 	var prompts []*models.UserPromptWithSession
 	var err error
-	var usedVector bool
 
-	// Use vector search if query is provided and vector client is available
-	if query != "" && s.vectorClient != nil && s.vectorClient.IsConnected() {
-		where := vector.BuildWhereFilter(vector.DocTypeUserPrompt, "", false, nil)
-		vectorResults, vecErr := s.vectorClient.Query(r.Context(), query, limit*2, where)
-		if vecErr == nil && len(vectorResults) > 0 {
-			promptIDs := vector.ExtractPromptIDs(vectorResults, project)
-			if len(promptIDs) > 0 {
-				prompts, err = s.promptStore.GetPromptsByIDs(r.Context(), promptIDs, "date_desc", limit)
-				if err == nil {
-					usedVector = true
-				}
-			}
-		}
-	}
-
-	// Fall back to database query if vector search not used
-	if !usedVector {
-		if project != "" {
-			prompts, err = s.promptStore.GetRecentUserPromptsByProject(r.Context(), project, limit)
-		} else {
-			prompts, err = s.promptStore.GetAllRecentUserPrompts(r.Context(), limit)
-		}
+	// Use database query (vector search removed in v5)
+	if project != "" {
+		prompts, err = s.promptStore.GetRecentUserPromptsByProject(r.Context(), project, limit)
+	} else {
+		prompts, err = s.promptStore.GetAllRecentUserPrompts(r.Context(), limit)
 	}
 
 	if err != nil {
@@ -287,13 +228,11 @@ func (s *Service) handleGetModels(w http.ResponseWriter, _ *http.Request) {
 	// Cache for 1 hour - model list is static during runtime
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
-	models := embedding.ListModels()
-	defaultModel := embedding.GetDefaultModel()
-
+	// Embedding models removed in v5 (content_chunks table dropped)
 	writeJSON(w, map[string]any{
-		"models":  models,
-		"default": defaultModel,
-		"current": s.embedSvc.Version(),
+		"models":  []any{},
+		"default": nil,
+		"current": "",
 	})
 }
 
@@ -320,16 +259,15 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	sessionsToday, _ := s.sessionStore.GetSessionsToday(r.Context())
 
 	response := map[string]any{
-		"uptime":            time.Since(s.startTime).String(),
-		"uptimeSeconds":     time.Since(s.startTime).Seconds(),
-		"activeSessions":    s.sessionManager.GetActiveSessionCount(),
-		"queueDepth":        s.sessionManager.GetTotalQueueDepth(),
-		"isProcessing":      s.sessionManager.IsAnySessionProcessing(),
-		"connectedClients":  s.sseBroadcaster.ClientCount(),
-		"sessionsToday":     sessionsToday,
-		"retrieval":         retrievalStats,
-		"ready":             s.ready.Load(),
-		"vectorSyncDropped": s.vectorSyncDropped.Load(),
+		"uptime":           time.Since(s.startTime).String(),
+		"uptimeSeconds":    time.Since(s.startTime).Seconds(),
+		"activeSessions":   s.sessionManager.GetActiveSessionCount(),
+		"queueDepth":       s.sessionManager.GetTotalQueueDepth(),
+		"isProcessing":     s.sessionManager.IsAnySessionProcessing(),
+		"connectedClients": s.sseBroadcaster.ClientCount(),
+		"sessionsToday":    sessionsToday,
+		"retrieval":        retrievalStats,
+		"ready":            s.ready.Load(),
 	}
 
 	// Add memory stats
@@ -358,25 +296,6 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add embedding model info
-	if s.embedSvc != nil {
-		response["embeddingModel"] = map[string]any{
-			"name":       s.embedSvc.Name(),
-			"version":    s.embedSvc.Version(),
-			"dimensions": s.embedSvc.Dimensions(),
-		}
-	}
-
-	// Add vector cache stats
-	if s.vectorClient != nil {
-		if count, err := s.vectorClient.Count(r.Context()); err == nil {
-			response["vectorCount"] = count
-		}
-		cacheStats := s.vectorClient.GetCacheStats()
-		response["vectorCache"] = map[string]any{
-			"hit_rate": cacheStats.HitRate(),
-		}
-	}
 
 	// Include total observation count (active, non-archived, non-superseded)
 	if s.observationStore != nil {
@@ -560,70 +479,16 @@ func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Reques
 
 // handleVectorHealth godoc
 // @Summary Get vector database health
-// @Description Returns comprehensive health information about the vector database including health score, warnings, cache hit rate, and rebuild status.
+// @Description Vector storage was removed in v5. Always returns disabled status.
 // @Tags Vectors
 // @Produce json
 // @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{}
-// @Failure 500 {string} string "internal error"
-// @Failure 503 {string} string "vector client not initialized"
 // @Router /api/vectors/health [get]
-func (s *Service) handleVectorHealth(w http.ResponseWriter, r *http.Request) {
-	if s.vectorClient == nil {
-		http.Error(w, "vector client not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
-	stats, err := s.vectorClient.GetHealthStats(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Add additional computed metrics
-	healthScore := 100.0
-	var warnings []string
-
-	// Penalize for stale vectors
-	if stats.TotalVectors > 0 {
-		staleRatio := float64(stats.StaleVectors) / float64(stats.TotalVectors)
-		if staleRatio > 0 {
-			healthScore -= staleRatio * 50 // Up to 50 points off for stale vectors
-			warnings = append(warnings, formatWarning("%.1f%% vectors need rebuild", staleRatio*100))
-		}
-	}
-
-	// Check cache effectiveness
-	cacheStats := s.vectorClient.GetCacheStats()
-	cacheHitRate := cacheStats.HitRate()
-	if cacheHitRate < 20 && (cacheStats.EmbeddingHits+cacheStats.EmbeddingMisses) > 100 {
-		healthScore -= 10
-		warnings = append(warnings, formatWarning("Low cache hit rate: %.1f%%", cacheHitRate))
-	}
-
-	// Penalize if rebuild is needed
-	if stats.NeedsRebuild {
-		healthScore -= 20
-		warnings = append(warnings, "Vector rebuild recommended: "+stats.RebuildReason)
-	}
-
-	if healthScore < 0 {
-		healthScore = 0
-	}
-
-	status := "healthy"
-	if healthScore < 50 {
-		status = "unhealthy"
-	} else if healthScore < 80 {
-		status = "degraded"
-	}
-
+func (s *Service) handleVectorHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
-		"status":         status,
-		"health_score":   healthScore,
-		"warnings":       warnings,
-		"stats":          stats,
-		"cache_hit_rate": cacheHitRate,
+		"enabled": false,
+		"message": "Vector storage removed in v5 (content_chunks table dropped)",
 	})
 }
 
@@ -709,15 +574,6 @@ func (s *Service) handleUpdateObservation(w http.ResponseWriter, r *http.Request
 		}
 		http.Error(w, "failed to update observation: "+err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	// Trigger vector resync for the updated observation
-	if s.vectorSync != nil {
-		s.asyncVectorSync(func() {
-			if err := s.vectorSync.SyncObservation(s.ctx, updatedObs); err != nil {
-				log.Warn().Err(err).Int64("id", id).Msg("Failed to resync observation vectors after update")
-			}
-		})
 	}
 
 	// Broadcast update event
@@ -835,32 +691,16 @@ func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
 
 // handleVectorMetrics godoc
 // @Summary Get vector database metrics
-// @Description Returns vector database metrics for the dashboard including queries, latency, storage, and cache stats. Returns enabled: false if vector features are not available.
+// @Description Vector storage was removed in v5. Always returns disabled status.
 // @Tags Vectors
 // @Produce json
 // @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{}
 // @Router /api/vector/metrics [get]
-func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
-	if s.vectorClient == nil {
-		writeJSON(w, map[string]any{
-			"enabled": false,
-			"message": "Vector database not initialized",
-		})
-		return
-	}
-
-	metrics := s.vectorClient.GetMetrics(r.Context())
-
+func (s *Service) handleVectorMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
-		"enabled":         true,
-		"query_count":     metrics.QueryCount,
-		"avg_latency_ms":  metrics.AvgLatencyMs,
-		"p50_latency_ms":  metrics.P50LatencyMs,
-		"p95_latency_ms":  metrics.P95LatencyMs,
-		"p99_latency_ms":  metrics.P99LatencyMs,
-		"total_documents": metrics.TotalDocs,
-		"uptime":          time.Since(s.startTime).Round(time.Second).String(),
+		"enabled": false,
+		"message": "Vector storage removed in v5 (content_chunks table dropped)",
 	})
 }
 

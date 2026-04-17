@@ -11,21 +11,14 @@ import (
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/search/expansion"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 const (
 	// NoiseFloorScore is the minimum composite score an observation must exceed to count as a
-	// genuine semantic match. In high-dimensional embedding spaces, nearly all observations pass
-	// the raw vector similarity threshold; only scores above 0.05 indicate meaningful relevance.
+	// genuine semantic match. Scores above 0.05 indicate meaningful relevance.
 	NoiseFloorScore = 0.05
-
-	// vectorPreFilterFactor widens the vector similarity filter by 10% below the project threshold.
-	// This preserves borderline-relevant observations so the reranker can re-evaluate them before
-	// they are discarded. A value < 1.0 means "start filtering slightly below the threshold".
-	vectorPreFilterFactor = 0.9
 )
 
 // RetrievalOptions configures shared semantic retrieval.
@@ -58,8 +51,7 @@ type retrievalMetadata struct {
 type retrievalHooks struct {
 	retrieveRelevant              func(ctx context.Context, project, query string, opts RetrievalOptions) ([]*models.Observation, map[int64]float64, error)
 	getProjectThreshold           func(ctx context.Context, project string, globalDefault float64) float64
-	vectorQuery                   func(ctx context.Context, query string, limit int, where vector.WhereFilter) ([]vector.QueryResult, error)
-	getObservationsByIDs          func(ctx context.Context, ids []int64, orderBy string, limit int) ([]*models.Observation, error)
+	getObservationsByIDs func(ctx context.Context, ids []int64, orderBy string, limit int) ([]*models.Observation, error)
 	searchObservationsFTSFiltered func(ctx context.Context, query string, scopeFilter gorm.ScopeFilter, limit int) ([]*models.Observation, error)
 	getRecentObservationsFiltered func(ctx context.Context, scopeFilter gorm.ScopeFilter, limit int) ([]*models.Observation, error)
 	rerank                        func(query string, candidates []reranking.Candidate, limit int) ([]reranking.RerankResult, error)
@@ -232,69 +224,15 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	similarityScores := make(map[int64]float64)
 	baseSimilarityScores := make(map[int64]float64)
 	observations := make([]*models.Observation, 0)
-	usedVector := false
-	vectorSearchFailed := false
-	if s.hasVectorRetrieval() {
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false, opts.FilePaths)
-		allVectorResults := make([]vector.QueryResult, 0, len(expandedQueries)*limit*2)
-		vectorErrors := 0
-		for _, expandedQuery := range expandedQueries {
-			vectorResults, vectorErr := s.runVectorQuery(ctx, expandedQuery.Query, limit*2, where)
-			if vectorErr != nil {
-				vectorErrors++
-				log.Debug().Err(vectorErr).Str("query", expandedQuery.Query).Msg("Vector query failed")
-				continue
-			}
-			for index := range vectorResults {
-				vectorResults[index].Similarity *= expandedQuery.Weight
-			}
-			allVectorResults = append(allVectorResults, vectorResults...)
-		}
-		if vectorErrors > 0 && vectorErrors == len(expandedQueries) {
-			vectorSearchFailed = true
-			log.Warn().Int("errors", vectorErrors).Str("project", project).Msg("All vector queries failed, falling back to FTS")
-		}
-		if len(allVectorResults) > 0 {
-			prefilterThreshold := threshold
-			if s.typeLanesEnabled() {
-				if laneThreshold := s.typedLaneMinScore(); laneThreshold > 0 && laneThreshold < prefilterThreshold {
-					prefilterThreshold = laneThreshold
-				}
-			}
-			filteredResults := vector.FilterByThreshold(allVectorResults, prefilterThreshold*vectorPreFilterFactor, 0)
-			for _, result := range filteredResults {
-				id := vector.ExtractRowID(result.Metadata)
-				if existingScore, exists := similarityScores[id]; !exists || result.Similarity > existingScore {
-					similarityScores[id] = result.Similarity
-				}
-				if existingScore, exists := baseSimilarityScores[id]; !exists || result.Similarity > existingScore {
-					baseSimilarityScores[id] = result.Similarity
-				}
-			}
-			observationIDs := vector.ExtractObservationIDs(filteredResults, project)
-			if len(observationIDs) > 0 {
-				fetched, fetchErr := s.fetchObservationsByID(ctx, observationIDs, "date_desc", limit)
-				if fetchErr != nil {
-					return nil, nil, fetchErr
-				}
-				if len(fetched) > 0 {
-					observations = fetched
-					usedVector = true
-				}
-			}
-		}
+
+	// Vector search removed in v5 (content_chunks table dropped). Use FTS-only retrieval.
+	scopeFilter := gorm.ScopeFilter{Project: project, AgentID: state.agentID}
+	fallbackObservations, fallbackErr := s.searchFallbackObservations(ctx, query, scopeFilter, limit)
+	if fallbackErr != nil {
+		return nil, nil, fallbackErr
 	}
-	if !usedVector || len(observations) == 0 {
-		if vectorSearchFailed {
-			log.Info().Str("project", project).Msg("Using FTS fallback due to vector search failure")
-		}
-		scopeFilter := gorm.ScopeFilter{Project: project, AgentID: state.agentID}
-		fallbackObservations, fallbackErr := s.searchFallbackObservations(ctx, query, scopeFilter, limit)
-		if fallbackErr != nil {
-			return nil, nil, fallbackErr
-		}
-		observations = fallbackObservations
-	}
+	observations = fallbackObservations
+	_ = baseSimilarityScores // no vector scores in v5
 
 	if s.config != nil && s.config.InjectGraphBFSEnabled {
 		seedIDs := s.ExtractSessionEntitySeeds(ctx, opts.SessionID, project)
@@ -337,7 +275,7 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 
 	freshObservations, staleCount := s.filterFreshObservations(ctx, observations, state.cwd)
 	freshCount := len(freshObservations)
-	if usedVector && len(freshObservations) > 0 {
+	if len(freshObservations) > 0 {
 		freshObservations = s.applyReranking(query, freshObservations, similarityScores)
 	}
 
@@ -400,17 +338,13 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 		clusteredObservations = s.applyLLMFilter(ctx, project, query, clusteredObservations)
 	}
 	if metadata != nil {
-		metadata.usedVector = usedVector
+		metadata.usedVector = false // vector search removed in v5
 		metadata.totalResults = totalResults
 		metadata.staleCount = staleCount
 		metadata.freshCount = freshCount
 		metadata.duplicatesRemoved = duplicatesRemoved
 	}
 	return clusteredObservations, similarityScores, nil
-}
-
-func (s *Service) hasVectorRetrieval() bool {
-	return (s.retrievalHooks != nil && s.retrievalHooks.vectorQuery != nil) || (s.vectorClient != nil && s.vectorClient.IsConnected())
 }
 
 func (s *Service) getProjectThreshold(ctx context.Context, project string) float64 {
@@ -447,16 +381,6 @@ func (s *Service) expandQueries(ctx context.Context, query string) ([]expansion.
 		return []expansion.ExpandedQuery{{Query: query, Weight: 1.0, Source: "original"}}, ""
 	}
 	return expandedQueries, string(expandedQueries[0].Intent)
-}
-
-func (s *Service) runVectorQuery(ctx context.Context, query string, limit int, where vector.WhereFilter) ([]vector.QueryResult, error) {
-	if s.retrievalHooks != nil && s.retrievalHooks.vectorQuery != nil {
-		return s.retrievalHooks.vectorQuery(ctx, query, limit, where)
-	}
-	if s.vectorClient == nil {
-		return nil, nil
-	}
-	return s.vectorClient.Query(ctx, query, limit, where)
 }
 
 func (s *Service) fetchObservationsByID(ctx context.Context, ids []int64, orderBy string, limit int) ([]*models.Observation, error) {

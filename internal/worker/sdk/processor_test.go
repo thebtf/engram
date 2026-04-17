@@ -16,7 +16,6 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/learning"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm/logger"
 )
@@ -1806,33 +1805,6 @@ Here's the implementation details and code review.`
 	assert.Error(t, err)
 }
 
-type testVectorClient struct {
-	results []vector.QueryResult
-}
-
-func (c *testVectorClient) AddDocuments(context.Context, []vector.Document) error { return nil }
-func (c *testVectorClient) DeleteDocuments(context.Context, []string) error       { return nil }
-func (c *testVectorClient) Query(context.Context, string, int, vector.WhereFilter) ([]vector.QueryResult, error) {
-	return c.results, nil
-}
-func (c *testVectorClient) IsConnected() bool                           { return true }
-func (c *testVectorClient) Close() error                                { return nil }
-func (c *testVectorClient) Count(context.Context) (int64, error)        { return 0, nil }
-func (c *testVectorClient) ModelVersion() string                        { return "test" }
-func (c *testVectorClient) NeedsRebuild(context.Context) (bool, string) { return false, "" }
-func (c *testVectorClient) GetStaleVectors(context.Context) ([]vector.StaleVectorInfo, error) {
-	return nil, nil
-}
-func (c *testVectorClient) GetHealthStats(context.Context) (*vector.HealthStats, error) {
-	return nil, nil
-}
-func (c *testVectorClient) GetCacheStats() vector.CacheStatsSnapshot {
-	return vector.CacheStatsSnapshot{}
-}
-func (c *testVectorClient) GetMetrics(context.Context) vector.VectorMetricsSnapshot {
-	return vector.VectorMetricsSnapshot{}
-}
-func (c *testVectorClient) DeleteByObservationID(context.Context, int64) error { return nil }
 
 type testMergeLLMClient struct {
 	observationXML string
@@ -1939,17 +1911,6 @@ func testObservationXML(title, narrative string, facts, concepts, filesRead, fil
 		"</observation>"
 }
 
-func makeVectorResult(id int64, project string, similarity float64) vector.QueryResult {
-	return vector.QueryResult{
-		Similarity: similarity,
-		Metadata: map[string]any{
-			"sqlite_id": float64(id),
-			"doc_type":  string(vector.DocTypeObservation),
-			"project":   project,
-			"scope":     string(models.ScopeProject),
-		},
-	}
-}
 
 func TestProcessObservation_WriteMergeSkipPreventsInsertion(t *testing.T) {
 	setWriteMergeEnabledForTest(t, true)
@@ -1974,7 +1935,7 @@ func TestProcessObservation_WriteMergeSkipPreventsInsertion(t *testing.T) {
 	p := &Processor{
 		observationStore: obsStore,
 		llmClient:        llm,
-		vectorClient:     &testVectorClient{results: []vector.QueryResult{makeVectorResult(existingID, project, 0.91)}},
+
 		circuitBreaker:   NewCircuitBreaker(5, 60),
 		deduplicator:     NewRequestDeduplicator(300, 1000),
 		sem:              make(chan struct{}, 1),
@@ -2015,7 +1976,7 @@ func TestProcessObservation_WriteMergeUpdateReusesExistingObservation(t *testing
 	p := &Processor{
 		observationStore: obsStore,
 		llmClient:        llm,
-		vectorClient:     &testVectorClient{results: []vector.QueryResult{makeVectorResult(existingID, project, 0.91)}},
+
 		circuitBreaker:   NewCircuitBreaker(5, 60),
 		deduplicator:     NewRequestDeduplicator(300, 1000),
 		sem:              make(chan struct{}, 1),
@@ -2065,7 +2026,7 @@ func TestProcessObservation_WriteMergeSupersedeCreatesNewObservation(t *testing.
 	p := &Processor{
 		observationStore: obsStore,
 		llmClient:        llm,
-		vectorClient:     &testVectorClient{results: []vector.QueryResult{makeVectorResult(existingID, project, 0.91)}},
+
 		circuitBreaker:   NewCircuitBreaker(5, 60),
 		deduplicator:     NewRequestDeduplicator(300, 1000),
 		sem:              make(chan struct{}, 1),
@@ -2092,7 +2053,7 @@ func TestProcessObservation_MixedTypeCandidatesStillFindSameTypeTarget(t *testin
 	defer cleanup()
 	project := fmt.Sprintf("project-mixed-type-%d", time.Now().UnixNano())
 
-	featureID := seedProcessorObservation(t, ctx, obsStore, project, &models.ParsedObservation{
+	_ = seedProcessorObservation(t, ctx, obsStore, project, &models.ParsedObservation{
 		Type:      models.ObsTypeFeature,
 		Title:     "Feature candidate",
 		Narrative: "Irrelevant feature candidate",
@@ -2113,10 +2074,7 @@ func TestProcessObservation_MixedTypeCandidatesStillFindSameTypeTarget(t *testin
 	p := &Processor{
 		observationStore: obsStore,
 		llmClient:        llm,
-		vectorClient: &testVectorClient{results: []vector.QueryResult{
-			makeVectorResult(featureID, project, 0.99),
-			makeVectorResult(decisionID, project, 0.91),
-		}},
+
 		circuitBreaker: NewCircuitBreaker(5, 60),
 		deduplicator:   NewRequestDeduplicator(300, 1000),
 		sem:            make(chan struct{}, 1),
@@ -2156,7 +2114,7 @@ func TestProcessObservation_ContradictionDetectionDisabledKeepsCreateNewPath(t *
 	p := &Processor{
 		observationStore: obsStore,
 		llmClient:        llm,
-		vectorClient:     &testVectorClient{results: []vector.QueryResult{makeVectorResult(existingID, project, 0.91)}},
+
 		circuitBreaker:   NewCircuitBreaker(5, 60),
 		deduplicator:     NewRequestDeduplicator(300, 1000),
 		sem:              make(chan struct{}, 1),

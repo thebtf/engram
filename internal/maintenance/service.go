@@ -15,8 +15,6 @@ import (
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/pattern"
 	"github.com/thebtf/engram/internal/telemetry"
-	"github.com/thebtf/engram/internal/vector"
-	"github.com/thebtf/engram/internal/vector/pgvector"
 )
 
 // ProgressCallback is called when a maintenance subtask changes state.
@@ -37,7 +35,6 @@ type Service struct {
 	lastRunTime                time.Time
 	promptStore                *gorm.PromptStore
 	store                      *gorm.Store
-	vectorCleanupFn            func(ctx context.Context, deletedIDs []int64)
 	config                     *config.Config
 	summaryStore               *gorm.SummaryStore
 	stopCh                     chan struct{}
@@ -50,8 +47,6 @@ type Service struct {
 	patternStore               *gorm.PatternStore
 	smartGC                    *SmartGC
 	nearDedupFinder            *NearDuplicateFinder
-	vectorClient               vector.Client
-	vectorSync                 *pgvector.Sync
 	relationStore              *gorm.RelationStore
 	graphStore                 graph.GraphStore
 	lastRunDuration            time.Duration
@@ -60,9 +55,7 @@ type Service struct {
 	totalOptimizeRun           int64
 	totalPatternDecay          int64
 	totalNearDedupMerged       int64
-	totalOrphanVectorsCleaned  int64
 	totalStaleRelationsCleaned int64
-	embeddingModelChanged      bool
 	llmClient                  learning.LLMClient
 	mu                         sync.Mutex
 	running                    bool
@@ -82,13 +75,12 @@ func NewService(
 	injectionStore *gorm.InjectionStore,
 	summaryStore *gorm.SummaryStore,
 	promptStore *gorm.PromptStore,
-	vectorCleanupFn func(ctx context.Context, deletedIDs []int64),
 	cfg *config.Config,
 	similarityTelemetry *telemetry.SimilarityTelemetry,
 	smartGC *SmartGC,
 	patternStore *gorm.PatternStore,
-	vectorClient vector.Client,
-	vectorSync *pgvector.Sync,
+	vectorClient any,
+	vectorSync any,
 	relationStore *gorm.RelationStore,
 	graphStore graph.GraphStore,
 	sessionStore *gorm.SessionStore,
@@ -99,7 +91,7 @@ func NewService(
 	svcLog := log.With().Str("component", "maintenance").Logger()
 
 	var nearDedupFinder *NearDuplicateFinder
-	if cfg.ConsolidationEnabled && observationStore != nil && vectorClient != nil {
+	if cfg.ConsolidationEnabled && observationStore != nil {
 		nearDedupFinder = NewNearDuplicateFinder(observationStore, vectorClient, cfg.ConsolidationThreshold, svcLog)
 	}
 
@@ -109,14 +101,11 @@ func NewService(
 		injectionStore:      injectionStore,
 		summaryStore:        summaryStore,
 		promptStore:         promptStore,
-		vectorCleanupFn:     vectorCleanupFn,
 		config:              cfg,
 		similarityTelemetry: similarityTelemetry,
 		smartGC:             smartGC,
 		patternStore:        patternStore,
 		nearDedupFinder:     nearDedupFinder,
-		vectorClient:        vectorClient,
-		vectorSync:          vectorSync,
 		relationStore:       relationStore,
 		graphStore:          graphStore,
 		sessionStore:        sessionStore,
@@ -459,44 +448,13 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "skipped (no store)")
 	}
 
-	// Task 10: Clean orphan vectors (vectors with no matching observation)
+	// Task 10: Clean orphan vectors — skipped (vector storage removed in v5)
 	taskIdx++
-	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "started", "")
-	if s.vectorClient != nil && s.store != nil {
-		cleaned, err := s.cleanOrphanVectors(ctx)
-		if err != nil {
-			s.log.Error().Err(err).Msg("Failed to clean orphan vectors")
-			s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "failed", err.Error())
-		} else {
-			if cleaned > 0 {
-				s.mu.Lock()
-				s.totalOrphanVectorsCleaned += cleaned
-				s.mu.Unlock()
-				s.log.Info().Int64("cleaned", cleaned).Msg("Cleaned orphan vectors")
-			}
-			s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "completed", fmt.Sprintf("cleaned %d", cleaned))
-		}
-	} else {
-		s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "skipped (no vector client)")
-	}
+	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "skipped (vector storage removed in v5)")
 
-	// Task 11: Detect missing vectors (observations without embeddings)
+	// Task 11: Detect missing vectors — skipped (vector storage removed in v5)
 	taskIdx++
-	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "started", "")
-	if s.vectorClient != nil && s.vectorSync != nil && s.store != nil {
-		missing, err := s.detectMissingVectors(ctx)
-		if err != nil {
-			s.log.Error().Err(err).Msg("Failed to detect missing vectors")
-			s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "failed", err.Error())
-		} else {
-			if missing > 0 {
-				s.log.Info().Int64("queued_for_reembedding", missing).Msg("Queued observations with missing vectors for re-embedding")
-			}
-			s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "completed", fmt.Sprintf("queued %d for re-embedding", missing))
-		}
-	} else {
-		s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "skipped (no vector sync)")
-	}
+	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "skipped (vector storage removed in v5)")
 
 	// Task 12: Clean stale relations (relations referencing deleted observations)
 	taskIdx++
@@ -533,19 +491,9 @@ func (s *Service) runMaintenance(ctx context.Context) {
 		s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "skipped (no graph store)")
 	}
 
-	// Task 14: Check embedding model change (T054)
+	// Task 14: Check embedding model change — skipped (vector storage removed in v5)
 	taskIdx++
-	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "started", "")
-	if s.store != nil {
-		if err := s.checkEmbeddingModelChange(ctx); err != nil {
-			s.log.Error().Err(err).Msg("Failed to check embedding model change")
-			s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "failed", err.Error())
-		} else {
-			s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "completed", "")
-		}
-	} else {
-		s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "skipped (no store)")
-	}
+	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "skipped (vector storage removed in v5)")
 
 	// Task 15: Recalculate effectiveness scores from junction table data
 	taskIdx++
@@ -985,10 +933,7 @@ func (s *Service) cleanupOldObservations(ctx context.Context) (int64, error) {
 			return int64(i), err
 		}
 
-		// Sync vector DB deletions
-		if s.vectorCleanupFn != nil {
-			s.vectorCleanupFn(ctx, batch)
-		}
+		// Vector sync removed in v5
 	}
 
 	return int64(len(deletedIDs)), nil
@@ -1022,10 +967,7 @@ func (s *Service) cleanupStaleObservations(ctx context.Context) (int64, error) {
 			return int64(i), err
 		}
 
-		// Sync vector DB deletions
-		if s.vectorCleanupFn != nil {
-			s.vectorCleanupFn(ctx, batch)
-		}
+		// Vector sync removed in v5
 	}
 
 	return int64(len(deletedIDs)), nil
@@ -1064,9 +1006,7 @@ func (s *Service) Stats() map[string]any {
 		"pattern_decay_total":            s.totalPatternDecay,
 		"consolidation_enabled":          s.config.ConsolidationEnabled,
 		"near_dedup_merged_total":        s.totalNearDedupMerged,
-		"orphan_vectors_cleaned_total":   s.totalOrphanVectorsCleaned,
 		"stale_relations_cleaned_total":  s.totalStaleRelationsCleaned,
-		"embedding_model_changed":        s.embeddingModelChanged,
 	}
 }
 
@@ -1146,159 +1086,6 @@ func (s *Service) emitProgress(subtask string, index, total int, status, message
 	}
 }
 
-// cleanOrphanVectors finds vectors with no matching observation and deletes them.
-// An orphan vector is one whose sqlite_id does not correspond to any observation ID.
-// Only observation vectors (doc_type = "observation") are checked; other doc types
-// (summaries, prompts, patterns) are intentionally excluded.
-func (s *Service) cleanOrphanVectors(ctx context.Context) (int64, error) {
-	// Collect all observation-type vector doc_ids and their sqlite_ids from the vectors table.
-	type vectorRow struct {
-		DocID    string `gorm:"column:doc_id"`
-		SQLiteID int64  `gorm:"column:sqlite_id"`
-	}
-	var rows []vectorRow
-	if err := s.store.GetDB().WithContext(ctx).
-		Raw("SELECT doc_id, sqlite_id FROM vectors WHERE doc_type = 'observation'").
-		Scan(&rows).Error; err != nil {
-		return 0, fmt.Errorf("query observation vectors: %w", err)
-	}
-	if len(rows) == 0 {
-		return 0, nil
-	}
-
-	// Build unique set of observation IDs referenced by vectors.
-	obsIDSet := make(map[int64]struct{}, len(rows))
-	for _, r := range rows {
-		obsIDSet[r.SQLiteID] = struct{}{}
-	}
-
-	uniqueObsIDs := make([]int64, 0, len(obsIDSet))
-	for id := range obsIDSet {
-		uniqueObsIDs = append(uniqueObsIDs, id)
-	}
-
-	// Find which observation IDs actually exist in the database.
-	var existingIDs []int64
-	if err := s.store.GetDB().WithContext(ctx).
-		Table("observations").
-		Where("id IN ?", uniqueObsIDs).
-		Pluck("id", &existingIDs).Error; err != nil {
-		return 0, fmt.Errorf("query existing observations: %w", err)
-	}
-
-	existingSet := make(map[int64]struct{}, len(existingIDs))
-	for _, id := range existingIDs {
-		existingSet[id] = struct{}{}
-	}
-
-	// Collect doc_ids for orphan vectors (sqlite_id not in existingSet).
-	orphanDocIDs := make([]string, 0)
-	for _, r := range rows {
-		if _, ok := existingSet[r.SQLiteID]; !ok {
-			orphanDocIDs = append(orphanDocIDs, r.DocID)
-		}
-	}
-
-	if len(orphanDocIDs) == 0 {
-		s.log.Debug().Msg("No orphan vectors found")
-		return 0, nil
-	}
-
-	s.log.Info().
-		Int("orphan_count", len(orphanDocIDs)).
-		Msg("Deleting orphan vectors")
-
-	if err := s.vectorClient.DeleteDocuments(ctx, orphanDocIDs); err != nil {
-		return 0, fmt.Errorf("delete orphan vectors: %w", err)
-	}
-
-	return int64(len(orphanDocIDs)), nil
-}
-
-// detectMissingVectors finds active observations that have no vector embeddings
-// and re-syncs them through the vector sync pipeline.
-func (s *Service) detectMissingVectors(ctx context.Context) (int64, error) {
-	// Get all active (non-superseded) observation IDs.
-	var allObsIDs []int64
-	if err := s.store.GetDB().WithContext(ctx).
-		Table("observations").
-		Where("is_superseded = 0 OR is_superseded IS NULL").
-		Pluck("id", &allObsIDs).Error; err != nil {
-		return 0, fmt.Errorf("query active observation IDs: %w", err)
-	}
-	if len(allObsIDs) == 0 {
-		return 0, nil
-	}
-
-	// Get all observation IDs that already have at least one vector entry.
-	var vectoredIDs []int64
-	if err := s.store.GetDB().WithContext(ctx).
-		Raw("SELECT DISTINCT sqlite_id FROM vectors WHERE doc_type = 'observation' AND sqlite_id IS NOT NULL").
-		Pluck("sqlite_id", &vectoredIDs).Error; err != nil {
-		return 0, fmt.Errorf("query vectored observation IDs: %w", err)
-	}
-
-	vectoredSet := make(map[int64]struct{}, len(vectoredIDs))
-	for _, id := range vectoredIDs {
-		vectoredSet[id] = struct{}{}
-	}
-
-	// Determine which observations are missing vectors.
-	missingIDs := make([]int64, 0)
-	for _, id := range allObsIDs {
-		if _, ok := vectoredSet[id]; !ok {
-			missingIDs = append(missingIDs, id)
-		}
-	}
-
-	if len(missingIDs) == 0 {
-		s.log.Debug().Msg("All active observations have vector embeddings")
-		return 0, nil
-	}
-
-	s.log.Info().
-		Int("missing_count", len(missingIDs)).
-		Msg("Detected observations without vector embeddings; re-syncing")
-
-	// Re-sync observations in batches using ObservationStore to retrieve full models.
-	batchSize := 50
-	var resynced int64
-	for i := 0; i < len(missingIDs); i += batchSize {
-		select {
-		case <-ctx.Done():
-			return resynced, ctx.Err()
-		default:
-		}
-
-		end := min(i+batchSize, len(missingIDs))
-		batch := missingIDs[i:end]
-
-		// Retrieve full observation records for the batch.
-		type obsRow struct {
-			ID int64 `gorm:"column:id"`
-		}
-		_ = batch // used below via raw query
-
-		var observations []gorm.Observation
-		if err := s.store.GetDB().WithContext(ctx).
-			Where("id IN ?", batch).
-			Find(&observations).Error; err != nil {
-			s.log.Warn().Err(err).Int("batch_start", i).Msg("Failed to load observation batch for re-embedding")
-			continue
-		}
-
-		for j := range observations {
-			obs := gorm.ToModelObservation(&observations[j])
-			if syncErr := s.vectorSync.SyncObservation(ctx, obs); syncErr != nil {
-				s.log.Warn().Err(syncErr).Int64("obs_id", obs.ID).Msg("Failed to re-sync observation vector")
-				continue
-			}
-			resynced++
-		}
-	}
-
-	return resynced, nil
-}
 
 // cleanStaleRelations deletes relations where the source or target observation no longer exists.
 func (s *Service) cleanStaleRelations(ctx context.Context) (int64, error) {
@@ -1397,69 +1184,6 @@ func (s *Service) detectGraphDrift(ctx context.Context) error {
 	return nil
 }
 
-// checkEmbeddingModelChange detects if the embedding model has changed since the last run.
-// The current model name is stored in system_config and compared on each maintenance cycle.
-// A mismatch means existing vectors were built with a different model and may need rebuilding.
-func (s *Service) checkEmbeddingModelChange(ctx context.Context) error {
-	if s.vectorClient == nil {
-		return nil
-	}
-
-	currentModel := s.vectorClient.ModelVersion()
-	if currentModel == "" {
-		return nil
-	}
-
-	// Read stored model from system_config.
-	var storedValue string
-	row := s.store.GetDB().WithContext(ctx).
-		Raw("SELECT value FROM system_config WHERE key = 'embedding_model'").
-		Row()
-	scanErr := row.Scan(&storedValue)
-
-	if scanErr != nil {
-		// Row not found: first run — store the current model.
-		upsertSQL := `INSERT INTO system_config (key, value, updated_at)
-		              VALUES ('embedding_model', ?, NOW())
-		              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`
-		if err := s.store.GetDB().WithContext(ctx).Exec(upsertSQL, currentModel).Error; err != nil {
-			return fmt.Errorf("store embedding model in system_config: %w", err)
-		}
-		s.log.Info().Str("model", currentModel).Msg("Stored initial embedding model in system_config")
-		return nil
-	}
-
-	if storedValue != currentModel {
-		s.log.Warn().
-			Str("previous_model", storedValue).
-			Str("current_model", currentModel).
-			Msg("Embedding model changed — existing vectors may need re-embedding")
-
-		s.mu.Lock()
-		s.embeddingModelChanged = true
-		s.mu.Unlock()
-
-		// Update stored model to reflect the change.
-		if err := s.store.GetDB().WithContext(ctx).
-			Exec("UPDATE system_config SET value = ?, updated_at = NOW() WHERE key = 'embedding_model'", currentModel).
-			Error; err != nil {
-			return fmt.Errorf("update embedding model in system_config: %w", err)
-		}
-	} else {
-		s.mu.Lock()
-		s.embeddingModelChanged = false
-		s.mu.Unlock()
-	}
-
-	return nil
-}
-
-// IsEmbeddingModelChanged returns true if the embedding model changed since the last maintenance run.
-func (s *Service) IsEmbeddingModelChanged() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.embeddingModelChanged
-}
 
 // OrphanPatternResult holds the results of an orphan pattern cleanup pass.
 type OrphanPatternResult struct {

@@ -7,7 +7,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/vector"
 	"gopkg.in/yaml.v3"
 )
 
@@ -48,7 +47,8 @@ func ParseContent(name, content string) (*Instinct, error) {
 
 // ImportFromContent imports instincts from file content sent over the wire.
 // This is the client-server counterpart to Import() which reads from disk.
-func ImportFromContent(ctx context.Context, files []InstinctFile, vectorClient vector.Client, obsStore *gorm.ObservationStore) (*ImportResult, error) {
+// The vectorClient parameter is ignored in v5 (vector storage removed).
+func ImportFromContent(ctx context.Context, files []InstinctFile, vectorClient any, obsStore *gorm.ObservationStore) (*ImportResult, error) {
 	var instincts []*Instinct
 	var parseErrors []error
 
