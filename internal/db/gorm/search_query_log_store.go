@@ -16,7 +16,6 @@ type SearchQueryLogEntry struct {
 	Query      string    `gorm:"type:text;not null"`
 	SearchType string    `gorm:"type:text;not null"`
 	Results    int       `gorm:"not null;default:0"`
-	UsedVector bool      `gorm:"not null;default:false"`
 	LatencyMs  float32   `gorm:"type:real"`
 	CreatedAt  time.Time `gorm:"not null;default:NOW()"`
 }
@@ -36,14 +35,13 @@ func NewSearchQueryLogStore(db *gorm.DB) *SearchQueryLogStore {
 
 // LogQuery asynchronously inserts a search query log entry.
 // Fire-and-forget: logs warning on error, never blocks caller.
-func (s *SearchQueryLogStore) LogQuery(project, query, searchType string, results int, usedVector bool, latencyMs float32) {
+func (s *SearchQueryLogStore) LogQuery(project, query, searchType string, results int, latencyMs float32) {
 	go func() {
 		entry := SearchQueryLogEntry{
 			Project:    project,
 			Query:      query,
 			SearchType: searchType,
 			Results:    results,
-			UsedVector: usedVector,
 			LatencyMs:  latencyMs,
 			CreatedAt:  time.Now(),
 		}
@@ -59,11 +57,9 @@ type SearchAnalytics struct {
 	SearchesToday      int64   `json:"searches_today"`
 	AvgLatencyMs       float64 `json:"avg_latency_ms"`
 	ZeroResultRate     float64 `json:"zero_result_rate"`
-	VectorSearches     int64   `json:"vector_searches"`
 	FilterSearches     int64   `json:"filter_searches"`
 	CacheHits          int64   `json:"cache_hits"`
 	SearchErrors       int64   `json:"search_errors"`
-	AvgVectorLatencyMs float64 `json:"avg_vector_latency_ms"`
 	AvgFilterLatencyMs float64 `json:"avg_filter_latency_ms"`
 	CoalescedRequests  int64   `json:"coalesced_requests"`
 }
@@ -119,15 +115,10 @@ func (s *SearchQueryLogStore) GetAnalytics(ctx context.Context, since time.Time)
 		analytics.ZeroResultRate = float64(zeroCount) / float64(analytics.TotalSearches)
 	}
 
-	// Vector vs filter counts
-	vectorQ := s.db.WithContext(ctx).Table("search_query_log")
-	if !since.IsZero() {
-		vectorQ = vectorQ.Where("created_at >= ?", since)
-	}
-	if err := vectorQ.Where("used_vector = true").Count(&analytics.VectorSearches).Error; err != nil {
-		return nil, err
-	}
-	analytics.FilterSearches = analytics.TotalSearches - analytics.VectorSearches
+	// In v5 FTS-only mode, every logged search is a filter search, so the
+	// filter latency equals the overall avg latency.
+	analytics.FilterSearches = analytics.TotalSearches
+	analytics.AvgFilterLatencyMs = analytics.AvgLatencyMs
 
 	return &analytics, nil
 }
@@ -139,7 +130,6 @@ type RecentQueryEntry struct {
 	Project    string    `json:"project,omitempty"`
 	SearchType string    `json:"type,omitempty"`
 	Results    int       `json:"results"`
-	UsedVector bool      `json:"used_vector"`
 }
 
 // GetRecent returns the most recent search queries from the persistent log.
@@ -170,7 +160,6 @@ func (s *SearchQueryLogStore) GetRecent(ctx context.Context, project string, lim
 			Project:    e.Project,
 			SearchType: e.SearchType,
 			Results:    e.Results,
-			UsedVector: e.UsedVector,
 		}
 	}
 	return result, nil

@@ -253,6 +253,10 @@ func (s *Scheduler) RunAssociations(ctx context.Context) error {
 		s.logger.Debug().Msg("Association engine not available, skipping")
 		return nil
 	}
+	if !s.assocEngine.IsEnabled() {
+		s.logger.Info().Msg("Association engine disabled (no embedder in v5), skipping discovery")
+		return nil
+	}
 
 	start := time.Now()
 	halfLimit := 50 // Half of 100 total pool

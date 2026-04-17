@@ -15,13 +15,8 @@ import (
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
-
-// dedupThreshold is the cosine similarity threshold for semantic deduplication.
-// Observations with similarity above this value are considered duplicates and skipped.
-const dedupThreshold = 0.92
 
 // BackfillRequest is the request body for POST /api/backfill.
 type BackfillRequest struct {
@@ -130,7 +125,6 @@ func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 
 	s.initMu.RLock()
 	obsStore := s.observationStore
-	vectorClient := s.vectorClient
 	s.initMu.RUnlock()
 
 	if obsStore == nil {
@@ -165,20 +159,6 @@ func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 		obs := extract.ConvertToObservation(xo, req.Project)
 		obs.Concepts = bo.Concepts
 		obs.FilesRead = bo.Files
-
-		// Semantic dedup: check if a very similar observation already exists
-		if vectorClient != nil && vectorClient.IsConnected() {
-			searchText := obs.Title + " " + obs.Narrative
-			results, qErr := vectorClient.Query(r.Context(), searchText, 1, vector.WhereFilter{})
-			if qErr == nil && len(results) > 0 && results[0].Similarity > dedupThreshold {
-				log.Debug().
-					Str("title", bo.Title).
-					Float64("similarity", results[0].Similarity).
-					Msg("backfill: skipping near-duplicate observation")
-				resp.Skipped++
-				continue
-			}
-		}
 
 		// Add backfill metadata
 		obs.Scope = models.ScopeProject
@@ -331,10 +311,9 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		MetricsReport:         result.Metrics.Report(),
 	}
 
-	// Store observations with semantic dedup (same logic as handleBackfillIngest).
+	// Store observations.
 	s.initMu.RLock()
 	obsStore := s.observationStore
-	vectorClient := s.vectorClient
 	s.initMu.RUnlock()
 
 	if obsStore == nil {
@@ -377,20 +356,6 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 
 	for _, eo := range result.Observations {
 		obs := eo.Observation
-
-		// Semantic dedup: check if a very similar observation already exists.
-		if vectorClient != nil && vectorClient.IsConnected() {
-			searchText := obs.Title + " " + obs.Narrative
-			results, qErr := vectorClient.Query(r.Context(), searchText, 1, vector.WhereFilter{})
-			if qErr == nil && len(results) > 0 && results[0].Similarity > dedupThreshold {
-				log.Debug().
-					Str("title", obs.Title).
-					Float64("similarity", results[0].Similarity).
-					Msg("backfill-session: skipping near-duplicate observation")
-				resp.Skipped++
-				continue
-			}
-		}
 
 		// Add backfill metadata.
 		obs.Scope = models.ScopeProject
@@ -546,26 +511,11 @@ func (s *Service) handleImportFeedback(w http.ResponseWriter, r *http.Request) {
 
 	s.initMu.RLock()
 	obsStore := s.observationStore
-	vectorClient := s.vectorClient
 	s.initMu.RUnlock()
 
 	if obsStore == nil {
 		http.Error(w, "observation store not ready", http.StatusServiceUnavailable)
 		return
-	}
-
-	// Semantic dedup: skip if very similar rule already exists.
-	if vectorClient != nil && vectorClient.IsConnected() {
-		searchText := obs.Title + " " + obs.Narrative
-		results, qErr := vectorClient.Query(r.Context(), searchText, 1, vector.WhereFilter{})
-		if qErr == nil && len(results) > 0 && results[0].Similarity > 0.90 {
-			writeJSON(w, map[string]any{
-				"status":     "duplicate",
-				"similarity": results[0].Similarity,
-				"title":      obs.Title,
-			})
-			return
-		}
 	}
 
 	// Build and store as guidance observation.

@@ -216,53 +216,6 @@ func (s *Service) handleConsistencyCheck(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, result)
 }
 
-// handleBackfillRelations godoc
-// @Summary Backfill relations for existing observations
-// @Description Triggers relation detection for existing observations that were created before the relation detector was enabled. Runs asynchronously in the background.
-// @Tags Maintenance
-// @Produce json
-// @Security ApiKeyAuth
-// @Param project query string false "Project to backfill (all projects if empty)"
-// @Param batch_size query int false "Batch size (default 50)"
-// @Success 200 {object} object
-// @Failure 503 {string} string "relation detector not available"
-// @Router /api/maintenance/backfill-relations [post]
-func (s *Service) handleBackfillRelations(w http.ResponseWriter, r *http.Request) {
-	if s.relationDetector == nil {
-		http.Error(w, "relation detector not available (requires embedding + vector search)", http.StatusServiceUnavailable)
-		return
-	}
-
-	project := r.URL.Query().Get("project")
-	batchSize := 50
-	if bs := r.URL.Query().Get("batch_size"); bs != "" {
-		if parsed, err := strconv.Atoi(bs); err == nil && parsed > 0 && parsed <= 500 {
-			batchSize = parsed
-		}
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-
-		processed, relations, err := s.relationDetector.BackfillRelations(ctx, project, batchSize, func(p, t int) {
-			log.Info().Int("processed", p).Int("total", t).Msg("Relation backfill progress")
-		})
-		if err != nil {
-			log.Error().Err(err).Int("processed", processed).Msg("Relation backfill failed")
-		} else {
-			log.Info().Int("processed", processed).Int("relations", relations).Msg("Relation backfill complete")
-		}
-	}()
-
-	writeJSON(w, map[string]any{
-		"started":    true,
-		"message":    "Relation backfill started in background",
-		"project":    project,
-		"batch_size": batchSize,
-	})
-}
-
 // handlePurgePatterns godoc
 // @Summary Bulk deprecate low-quality patterns
 // @Description Runs pattern quality decay and deprecates patterns with dynamic quality below 0.10. Optionally preview with dry_run.

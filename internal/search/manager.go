@@ -15,9 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/strutil"
 	"golang.org/x/sync/singleflight"
@@ -297,19 +295,17 @@ func ApplyDiversityPenalty(observations []*models.Observation, scores map[int64]
 	}
 }
 
-// Manager provides unified search across PostgreSQL and pgvector.
+// Manager provides unified search across PostgreSQL FTS.
 type Manager struct {
 	ctx                  context.Context
 	searchGroup          singleflight.Group
 	cancel               context.CancelFunc
-	vectorClient         vector.Client
 	metrics              *SearchMetrics
 	promptStore          *gorm.PromptStore
 	observationStore     *gorm.ObservationStore
 	summaryStore         *gorm.SummaryStore
 	graphStore           graphpkg.GraphStore
 	documentStore        *gorm.DocumentStore
-	embedSvc             *embedding.Service
 	projectSettingsStore *gorm.ProjectSettingsStore
 	resultCache          map[string]*cachedResult
 	queryFrequency       map[string]*queryFrequencyInfo
@@ -338,14 +334,12 @@ func NewManager(
 	observationStore *gorm.ObservationStore,
 	summaryStore *gorm.SummaryStore,
 	promptStore *gorm.PromptStore,
-	vectorClient vector.Client,
 ) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		observationStore: observationStore,
 		summaryStore:     summaryStore,
 		promptStore:      promptStore,
-		vectorClient:     vectorClient,
 		metrics:          &SearchMetrics{latencyHistogram: make([]int64, 0, latencyHistogramCap)},
 		ctx:              ctx,
 		cancel:           cancel,
@@ -366,10 +360,9 @@ func (m *Manager) SetGraphStore(gs graphpkg.GraphStore) {
 	m.graphStore = gs
 }
 
-// SetDocumentStore sets the document store and embedding service for document search.
-func (m *Manager) SetDocumentStore(ds *gorm.DocumentStore, es *embedding.Service) {
+// SetDocumentStore sets the document store for document search.
+func (m *Manager) SetDocumentStore(ds *gorm.DocumentStore) {
 	m.documentStore = ds
-	m.embedSvc = es
 }
 
 // SetProjectSettingsStore sets the project settings store for per-project adaptive thresholds.
@@ -975,344 +968,53 @@ func filterCredentials(result *UnifiedSearchResult) *UnifiedSearchResult {
 }
 
 // executeSearch performs the actual search without caching/coalescing.
+// When params.Query is non-empty it routes to FTS-based search so that callers
+// receive semantically-ranked results rather than a plain recency list.
+// When params.Query is empty it falls through to filterSearch (recency/filter mode).
 func (m *Manager) executeSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
-	// Document-only search when type="documents".
-	if params.Type == "documents" {
-		return m.documentSearch(ctx, params)
+	if params.Query != "" {
+		return m.ftsSearch(ctx, params)
 	}
-
-	// Use hybrid search (FTS + vector with RRF fusion) when a query and vector client are available.
-	if params.Query != "" && m.vectorClient != nil && m.vectorClient.IsConnected() {
-		result, err := m.hybridSearch(ctx, params)
-		if err != nil {
-			return nil, err
-		}
-		// Append document results for default (untyped) searches.
-		if params.Type == "" {
-			m.appendDocumentResults(ctx, params, result)
-		}
-		return result, nil
-	}
-
-	// Fall back to structured filter search when no query or vector unavailable.
-	result, err := m.filterSearch(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-	if params.Type == "" {
-		m.appendDocumentResults(ctx, params, result)
-	}
-	return result, nil
+	// No query — fall back to structured filter/recency search.
+	return m.filterSearch(ctx, params)
 }
 
-// documentSearch performs a vector-only search across document chunks.
-func (m *Manager) documentSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
-	if m.documentStore == nil || m.embedSvc == nil || params.Query == "" {
-		return &UnifiedSearchResult{Query: params.Query}, nil
-	}
-
-	queryEmb, err := m.embedSvc.Embed(params.Query)
-	if err != nil {
-		log.Warn().Err(err).Msg("Document search: embedding failed")
-		return &UnifiedSearchResult{Query: params.Query}, nil
-	}
-
-	limit := params.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-
-	chunks, err := m.documentStore.SearchChunks(ctx, queryEmb, "", limit)
-	if err != nil {
-		log.Warn().Err(err).Msg("Document search: query failed")
-		return &UnifiedSearchResult{Query: params.Query}, nil
-	}
-
-	results := make([]SearchResult, 0, len(chunks))
-	for _, c := range chunks {
-		results = append(results, SearchResult{
-			Type:    "document",
-			Title:   c.Hash[:12] + "#" + strconv.Itoa(c.Seq),
-			Content: c.Text,
-		})
-	}
-
-	return &UnifiedSearchResult{
-		Query:      params.Query,
-		Results:    results,
-		TotalCount: len(results),
-	}, nil
-}
-
-// appendDocumentResults appends document chunk results to an existing search result.
-func (m *Manager) appendDocumentResults(ctx context.Context, params SearchParams, result *UnifiedSearchResult) {
-	if m.documentStore == nil || m.embedSvc == nil || params.Query == "" {
-		return
-	}
-
-	docResult, err := m.documentSearch(ctx, SearchParams{
-		Query: params.Query,
-		Limit: 5, // Limit document results in mixed search
-	})
-	if err != nil || len(docResult.Results) == 0 {
-		return
-	}
-
-	result.Results = append(result.Results, docResult.Results...)
-	result.TotalCount += docResult.TotalCount
-}
-
-// hybridSearch combines FTS (tsvector) and pgvector results using RRF fusion.
-func (m *Manager) hybridSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
+// ftsSearch performs full-text search via ObservationStore.SearchObservationsFTSScored.
+// It replaces the former vector-search path that was removed in v5.
+func (m *Manager) ftsSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
 	start := time.Now()
 	defer func() {
 		latency := time.Since(start).Nanoseconds()
-		atomic.AddInt64(&m.metrics.VectorSearches, 1)
-		atomic.AddInt64(&m.metrics.VectorLatencyNs, latency)
+		atomic.AddInt64(&m.metrics.FilterSearches, 1)
+		atomic.AddInt64(&m.metrics.FilterLatencyNs, latency)
 	}()
 
-	// --- FTS path (observations only) ---
-	var ftsList []ScoredID
-	// ftsResultsCache holds FTS results for reuse as vector-error fallback in RRF fusion.
-	var ftsResultsCache []gorm.ScoredObservation
-	if m.observationStore != nil && (params.Type == "" || params.Type == "observations") {
-		ftsResults, err := m.observationStore.SearchObservationsFTSScored(ctx, params.Query, params.Project, params.Limit*2)
-		if err == nil && len(ftsResults) > 0 {
-			ftsResultsCache = ftsResults
-			ftsList = make([]ScoredID, len(ftsResults))
-			for i, r := range ftsResults {
-				ftsList[i] = ScoredID{
-					ID:      r.Observation.ID,
-					DocType: "observation",
-					Score:   BM25Normalize(r.Score),
-				}
-			}
-		}
+	limit := params.Limit
+	if limit <= 0 {
+		limit = defaultQueryLimit
+	}
+	if limit > maxQueryLimit {
+		limit = maxQueryLimit
 	}
 
-	// --- Strong-signal short-circuit ---
-	// If BM25 top score >= 0.85 AND gap to #2 >= 0.15, FTS alone is high confidence.
-	// Skip the expensive vector search entirely for immediate latency win.
-	if len(ftsList) >= 1 && ftsList[0].Score >= 0.85 {
-		gap := ftsList[0].Score
-		if len(ftsList) >= 2 {
-			gap = ftsList[0].Score - ftsList[1].Score
-		}
-		if gap >= 0.15 {
-			log.Debug().
-				Float64("top_score", ftsList[0].Score).
-				Float64("gap", gap).
-				Str("query", truncate(params.Query, queryLogTruncateLen)).
-				Msg("BM25 short-circuit: skipping vector search")
-			atomic.AddInt64(&m.metrics.FTSShortCircuits, 1)
-			return m.buildResultFromFTS(ftsResultsCache, params)
-		}
-	}
-
-	// --- Vector path ---
-	var docType vector.DocType
-	switch params.Type {
-	case "observations":
-		docType = vector.DocTypeObservation
-	case "sessions":
-		docType = vector.DocTypeSessionSummary
-	case "prompts":
-		docType = vector.DocTypeUserPrompt
-	}
-	var where vector.WhereFilter
-	switch params.Scope {
-	case "global":
-		where = vector.BuildWhereFilter(docType, "", true, nil)
-	case "project":
-		where = vector.BuildWhereFilter(docType, params.Project, false, nil)
-	default:
-		where = vector.BuildWhereFilter(docType, params.Project, params.IncludeGlobal, nil)
-	}
-
-	vectorResults, err := m.vectorClient.Query(ctx, params.Query, params.Limit*2, where)
-	if err != nil {
-		atomic.AddInt64(&m.metrics.SearchErrors, 1)
-		if len(ftsList) > 0 {
-			return m.buildResultFromFTS(ftsResultsCache, params)
-		}
-		return m.filterSearch(ctx, params)
-	}
-
-	// Build vector scored list.
-	vectorList := make([]ScoredID, 0, len(vectorResults))
-	for _, r := range vectorResults {
-		var id int64
-		if sid, ok := r.Metadata["sqlite_id"].(float64); ok {
-			id = int64(sid)
-		} else if sid, ok := r.Metadata["sqlite_id"].(int64); ok {
-			id = sid
-		}
-		if id == 0 {
-			continue
-		}
-		dt := "observation"
-		if docType != "" {
-			switch docType {
-			case vector.DocTypeSessionSummary:
-				dt = "session"
-			case vector.DocTypeUserPrompt:
-				dt = "prompt"
-			}
-		} else if dts, ok := r.Metadata["doc_type"].(string); ok {
-			switch dts {
-			case "session_summary":
-				dt = "session"
-			case "user_prompt":
-				dt = "prompt"
-			}
-		}
-		vectorList = append(vectorList, ScoredID{
-			ID:      id,
-			DocType: dt,
-			Score:   r.Similarity,
-		})
-	}
-
-	// --- RRF fusion ---
-	fused := RRF(ftsList, vectorList)
-	if len(fused) > params.Limit {
-		fused = fused[:params.Limit]
-	}
-
-	// --- Graph expansion (optional) ---
-	fused = m.ExpandViaGraph(ctx, fused, params.Limit)
-
-	// Collect IDs by type.
-	var obsIDs, summaryIDs, promptIDs []int64
-	for _, item := range fused {
-		switch item.DocType {
-		case "observation":
-			obsIDs = append(obsIDs, item.ID)
-		case "session":
-			summaryIDs = append(summaryIDs, item.ID)
-		case "prompt":
-			promptIDs = append(promptIDs, item.ID)
-		}
-	}
-
-	// Fetch full records.
-	var results []SearchResult
-
-	// Create a map to lookup original RRF scores
-	rrfScores := make(map[string]float64)
-	for _, item := range fused {
-		key := item.DocType + ":" + strconv.FormatInt(item.ID, 10)
-		rrfScores[key] = item.Score
-	}
-
-	if len(obsIDs) > 0 && (params.Type == "" || params.Type == "observations") {
-		obs, err := m.observationStore.GetObservationsByIDs(ctx, obsIDs, params.OrderBy, 0)
+	if params.Type == "" || params.Type == "observations" {
+		ftsResults, err := m.observationStore.SearchObservationsFTSScored(ctx, params.Query, params.Project, limit)
 		if err != nil {
-			log.Warn().Err(err).Msg("hybridSearch: failed to fetch observations by IDs")
-		} else {
-			for _, o := range obs {
-				if params.ExcludeSuperseded && o.IsSuperseded {
-					continue
-				}
-				res := m.observationToResult(o, params.Format)
-				key := "observation:" + strconv.FormatInt(o.ID, 10)
-				if score, ok := rrfScores[key]; ok {
-					res.Score = score
-				}
-				results = append(results, res)
-			}
+			log.Warn().Err(err).Str("project", params.Project).Str("query", strutil.Truncate(params.Query, queryLogTruncateLen)).Msg("FTS search failed, falling back to filter search")
+			return m.filterSearch(ctx, params)
 		}
+		return m.buildResultFromFTS(ftsResults, params)
 	}
 
-	if len(summaryIDs) > 0 && (params.Type == "" || params.Type == "sessions") {
-		summaries, err := m.summaryStore.GetSummariesByIDs(ctx, summaryIDs, params.OrderBy, 0)
-		if err != nil {
-			log.Warn().Err(err).Msg("hybridSearch: failed to fetch summaries by IDs")
-		} else {
-			for _, s := range summaries {
-				res := m.summaryToResult(s, params.Format)
-				key := "session:" + strconv.FormatInt(s.ID, 10)
-				if score, ok := rrfScores[key]; ok {
-					res.Score = score
-				}
-				results = append(results, res)
-			}
-		}
-	}
-
-	if len(promptIDs) > 0 && (params.Type == "" || params.Type == "prompts") {
-		prompts, err := m.promptStore.GetPromptsByIDs(ctx, promptIDs, params.OrderBy, 0)
-		if err != nil {
-			log.Warn().Err(err).Msg("hybridSearch: failed to fetch prompts by IDs")
-		} else {
-			for _, p := range prompts {
-				res := m.promptToResult(p, params.Format)
-				key := "prompt:" + strconv.FormatInt(p.ID, 10)
-				if score, ok := rrfScores[key]; ok {
-					res.Score = score
-				}
-				results = append(results, res)
-			}
-		}
-	}
-
-	// Sort results by original RRF score to restore ranking
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
-	})
-
-	// --- Shadow Scoring Engine ---
-	if len(results) > 0 {
-		// Calculate shadow scores
-		type shadowResult struct {
-			originalIdx int
-			shadowScore float64
-			res         SearchResult
-		}
-
-		shadowRanked := make([]shadowResult, len(results))
-		for i, r := range results {
-			importanceContrib := 0.0
-			if r.Type == "observation" {
-				if importance, ok := r.Metadata["importance_score"].(float64); ok {
-					importanceContrib = importance * 0.05
-				}
-			}
-			shadowRanked[i] = shadowResult{
-				originalIdx: i,
-				shadowScore: r.Score + importanceContrib,
-				res:         r,
-			}
-		}
-
-		// Sort by shadow score
-		sort.Slice(shadowRanked, func(i, j int) bool {
-			return shadowRanked[i].shadowScore > shadowRanked[j].shadowScore
-		})
-
-		// Calculate differential (shift)
-		shifts := 0
-		for shadowIdx, sr := range shadowRanked {
-			if shadowIdx != sr.originalIdx {
-				shifts++
-			}
-		}
-
-		if shifts > 0 {
-			log.Debug().
-				Int("shifts", shifts).
-				Int("total", len(results)).
-				Msg("Shadow scoring produced differential ranking")
-		}
-	}
-	// -----------------------------
-
-	return &UnifiedSearchResult{
-		Results:    results,
-		TotalCount: len(results),
-		Query:      params.Query,
-	}, nil
+	// For non-observation types (sessions etc.) fall through to filterSearch;
+	// those stores do not yet have FTS support.
+	return m.filterSearch(ctx, params)
 }
+
+
+
+
+
 
 // buildResultFromFTS constructs a UnifiedSearchResult from pre-fetched FTS observations.
 func (m *Manager) buildResultFromFTS(ftsResults []gorm.ScoredObservation, params SearchParams) (*UnifiedSearchResult, error) {

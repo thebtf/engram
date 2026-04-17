@@ -2,7 +2,6 @@
 package gorm
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -13,42 +12,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// vectorIndexSQL returns the CREATE INDEX statement for vectors and content_chunks tables
-// based on embedding dimensions. Uses tiered strategy:
-//   - ≤2000 dims: HNSW (pgvector native, exact recall)
-//   - >2000 dims: DiskANN via pgvectorscale (supports up to 16000 dims)
-//
-// If pgvectorscale is not available for >2000 dims, falls back to IVFFlat with a warning.
-func vectorIndexSQL(dims int, db *gorm.DB) (vectorsIdx, chunksIdx string) {
-	if dims <= 2000 {
-		return "CREATE INDEX idx_vectors_embedding_hnsw ON vectors USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
-			"CREATE INDEX idx_content_chunks_embedding_hnsw ON content_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
-	}
-
-	// >2000 dims: try pgvectorscale DiskANN
-	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vectorscale").Error; err == nil {
-		log.Info().Int("dims", dims).Msg("Using pgvectorscale DiskANN index for high-dimensional vectors")
-		return "CREATE INDEX idx_vectors_embedding_diskann ON vectors USING diskann (embedding vector_cosine_ops)",
-			"CREATE INDEX idx_content_chunks_embedding_diskann ON content_chunks USING diskann (embedding vector_cosine_ops)"
-	}
-
-	// Fallback: IVFFlat (no dimension limit, lower recall)
-	log.Warn().Int("dims", dims).Msg("pgvectorscale not available — falling back to IVFFlat index (lower recall). Install pgvectorscale for DiskANN support.")
-	lists := dims / 10
-	if lists < 100 {
-		lists = 100
-	}
-	return fmt.Sprintf("CREATE INDEX idx_vectors_embedding_ivfflat ON vectors USING ivfflat (embedding vector_cosine_ops) WITH (lists = %d)", lists),
-		fmt.Sprintf("CREATE INDEX idx_content_chunks_embedding_ivfflat ON content_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = %d)", lists)
-}
-
 // runMigrations runs all database migrations using gormigrate.
-func runMigrations(db *gorm.DB, embeddingDims int) error {
-	// Validate embedding dimensions before using in DDL statements.
-	if embeddingDims <= 0 {
-		return fmt.Errorf("invalid embedding dimensions: %d (must be positive)", embeddingDims)
-	}
-
+func runMigrations(db *gorm.DB) error {
 	// Enable pgvector extension before running any migrations.
 	// CREATE EXTENSION IF NOT EXISTS is idempotent.
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
@@ -731,57 +696,16 @@ func runMigrations(db *gorm.DB, embeddingDims int) error {
 			},
 		},
 		// Migration 020: Configure pgvector embedding dimensions.
+		// No-op as of v5: content_chunks is dropped in 085, and the vector
+		// pipeline (internal/embedding, internal/vector) is removed entirely.
+		// This entry is retained so gormigrate does not re-run it on existing DBs.
 		{
 			ID: "020_configurable_vector_dimensions",
 			Migrate: func(tx *gorm.DB) error {
-				// pgvector stores vector(N) dimension count directly in atttypmod.
-			const currentDimQuery = "SELECT atttypmod FROM pg_attribute WHERE attrelid = 'vectors'::regclass AND attname = 'embedding' AND atttypmod > 0"
-				var current int
-				row := tx.Raw(currentDimQuery).Row()
-				if err := row.Scan(&current); err != nil {
-					if err == sql.ErrNoRows {
-						return nil
-					}
-					return fmt.Errorf("read current vector dimension: %w", err)
-				}
-				if current == embeddingDims {
-					return nil
-				}
-
-				log.Warn().Msgf("Embedding dimension changed from %d to %d, truncating vectors and content_chunks", current, embeddingDims)
-
-				colType := fmt.Sprintf("vector(%d)", embeddingDims)
-
-				// Tiered indexing: HNSW for ≤2000 dims, DiskANN (pgvectorscale) for >2000.
-				vectorsIdx, chunksIdx := vectorIndexSQL(embeddingDims, tx)
-
-				sqls := []string{
-					// Drop indexes BEFORE altering column type — PostgreSQL validates
-					// existing indexes against the new vector size during ALTER TABLE.
-					"DROP INDEX IF EXISTS idx_vectors_embedding_hnsw",
-					"DROP INDEX IF EXISTS idx_vectors_embedding_diskann",
-					"DROP INDEX IF EXISTS idx_vectors_embedding_ivfflat",
-					"TRUNCATE vectors",
-					fmt.Sprintf("ALTER TABLE vectors ALTER COLUMN embedding TYPE %s", colType),
-					vectorsIdx,
-					"DROP INDEX IF EXISTS idx_content_chunks_embedding_hnsw",
-					"DROP INDEX IF EXISTS idx_content_chunks_embedding_diskann",
-					"DROP INDEX IF EXISTS idx_content_chunks_embedding_ivfflat",
-					"TRUNCATE content_chunks",
-					fmt.Sprintf("ALTER TABLE content_chunks ALTER COLUMN embedding TYPE %s", colType),
-					chunksIdx,
-				}
-				for _, s := range sqls {
-					if err := tx.Exec(s).Error; err != nil {
-						return fmt.Errorf("migration 020: %w", err)
-					}
-				}
-
 				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
-				// Intentionally irreversible: TRUNCATE destroys data, restore from backup to revert.
-				return fmt.Errorf("migration 020 is irreversible: dimension change truncated vectors; restore from backup")
+				return nil
 			},
 		},
 		// Migration 021: Fix patterns indexes — use status column instead of non-existent is_deprecated.
@@ -2769,27 +2693,45 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+
+		// Migration 085: Drop content_chunks table (US2 — embeddings storage removal).
+		// content_chunks held document chunk embeddings (hash x seq -> vector(384)).
+		// The entire embeddings pipeline (internal/vector, internal/embedding) is dropped in v5.
+		// The content table (and documents table) are PROTECTED INVARIANTS — they remain untouched.
+		// Rollback recreates the DDL-faithful schema from migration 017 + migration 029.
+		{
+			ID: "085_drop_content_chunks",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS content_chunks CASCADE`).Error
+			},
+			// Rollback is intentionally irreversible: the entire embedding pipeline
+			// (internal/vector, internal/embedding, pgvector-go dependency) was removed
+			// in v5. Recreating the DDL would produce a schema that no running code can
+			// populate, and the correct dimension varied per installation (migration 020
+			// allowed overriding it), so vector(384) would be wrong for many deployments.
+			// Downgrading past this migration requires restoring from a pre-v5 backup.
+			Rollback: func(*gorm.DB) error {
+				return fmt.Errorf("migration 085 rollback is not supported: " +
+					"content_chunks table and the embedding pipeline were permanently removed in v5; " +
+					"restore from a pre-v5 backup to downgrade")
+			},
+		},
+		// Migration 086: drop used_vector column from search_query_log.
+		// v5 FTS-only mode means every logged search has used_vector=false; the column
+		// is now pure noise diverging from the in-memory RecentSearchQuery contract.
+		{
+			ID: "086_drop_search_query_log_used_vector",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE search_query_log DROP COLUMN IF EXISTS used_vector`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE search_query_log ADD COLUMN IF NOT EXISTS used_vector BOOL NOT NULL DEFAULT false`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
 	}
 
-	if err := validateEmbeddingDimension(db, embeddingDims); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func validateEmbeddingDimension(db *gorm.DB, expected int) error {
-	var actual int
-	// pgvector stores vector(N) dimension count directly in atttypmod.
-	row := db.Raw("SELECT atttypmod FROM pg_attribute WHERE attrelid = 'vectors'::regclass AND attname = 'embedding' AND atttypmod > 0").Row()
-	if err := row.Scan(&actual); err != nil {
-		return fmt.Errorf("cannot read vector dimension from pg_attribute: %w", err)
-	}
-	if actual != expected {
-		return fmt.Errorf("embedding dimension mismatch: DB has vector(%d) but config says %d", actual, expected)
-	}
 	return nil
 }

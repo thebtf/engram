@@ -6,12 +6,17 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
-	pgvec "github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// ErrChunkStorageUnsupported is returned by chunk methods when content_chunks
+// table has been dropped in v5. Callers should treat this as a graceful
+// "feature removed" signal and degrade accordingly.
+var ErrChunkStorageUnsupported = errors.New("chunk storage unsupported: content_chunks table dropped in v5")
 
 // DocumentStore provides document and chunk persistence for content-addressable storage.
 type DocumentStore struct {
@@ -105,106 +110,23 @@ func (s *DocumentStore) ListDocuments(ctx context.Context, collection string, ac
 	return docs, nil
 }
 
-// UpsertChunks replaces existing chunks for a content hash with new chunk rows.
-// Uses raw SQL to include the pgvector embedding column which is excluded from GORM mapping.
-func (s *DocumentStore) UpsertChunks(ctx context.Context, hash string, chunks []ContentChunk) error {
-	tx, err := s.rawDB.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	if _, err := tx.ExecContext(ctx, "DELETE FROM content_chunks WHERE hash = $1", hash); err != nil {
-		return fmt.Errorf("delete existing chunks: %w", err)
-	}
-
-	if len(chunks) == 0 {
-		return tx.Commit()
-	}
-
-	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO content_chunks (hash, seq, text, pos, model, embedding)
-		 VALUES ($1, $2, $3, $4, $5, $6)`)
-	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, c := range chunks {
-		if len(c.Embedding.Slice()) == 0 {
-			return fmt.Errorf("empty embedding for chunk seq %d (hash %s): chunks without embeddings cannot be searched", c.Seq, c.Hash)
-		}
-		if _, err := stmt.ExecContext(ctx, c.Hash, c.Seq, c.Text, c.Pos, c.Model, c.Embedding); err != nil {
-			return fmt.Errorf("insert chunk %d: %w", c.Seq, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit chunks: %w", err)
-	}
-
-	return nil
+// UpsertChunks returns ErrChunkStorageUnsupported in v5.
+// content_chunks was dropped in migration 085; callers should degrade gracefully.
+func (s *DocumentStore) UpsertChunks(_ context.Context, _ string, _ []ContentChunk) error {
+	return ErrChunkStorageUnsupported
 }
 
-// SearchChunks performs vector similarity search across content chunks.
-// If collection is empty, searches all active documents.
-func (s *DocumentStore) SearchChunks(ctx context.Context, embedding []float32, collection string, limit int) ([]ContentChunk, error) {
-	var query string
-	var args []any
-
-	if collection != "" {
-		query = `
-			SELECT cc.hash, cc.seq, cc.text, cc.pos, cc.model, cc.created_at
-			FROM content_chunks cc
-			JOIN documents d ON d.hash = cc.hash
-			WHERE d.collection = $2
-			  AND d.active = true
-			ORDER BY cc.embedding <=> $1
-			LIMIT $3
-		`
-		args = []any{pgvec.NewVector(embedding), collection, limit}
-	} else {
-		query = `
-			SELECT cc.hash, cc.seq, cc.text, cc.pos, cc.model, cc.created_at
-			FROM content_chunks cc
-			JOIN documents d ON d.hash = cc.hash
-			WHERE d.active = true
-			ORDER BY cc.embedding <=> $1
-			LIMIT $2
-		`
-		args = []any{pgvec.NewVector(embedding), limit}
-	}
-
-	rows, err := s.rawDB.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("search chunks: %w", err)
-	}
-	defer rows.Close()
-
-	chunks := make([]ContentChunk, 0)
-	for rows.Next() {
-		var chunk ContentChunk
-		if err := rows.Scan(&chunk.Hash, &chunk.Seq, &chunk.Text, &chunk.Pos, &chunk.Model, &chunk.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan chunk row: %w", err)
-		}
-
-		chunks = append(chunks, chunk)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate chunk rows: %w", err)
-	}
-
-	return chunks, nil
+// SearchChunks returns ErrChunkStorageUnsupported in v5.
+// content_chunks was dropped in migration 085; callers should treat this as
+// "feature removed", not as "zero results found".
+func (s *DocumentStore) SearchChunks(_ context.Context, _ []float32, _ string, _ int) ([]ContentChunk, error) {
+	return nil, ErrChunkStorageUnsupported
 }
 
-// ChunksExist checks if any chunks exist for a given content hash.
-func (s *DocumentStore) ChunksExist(ctx context.Context, hash string) (bool, error) {
-	var count int64
-	if err := s.db.WithContext(ctx).Model(&ContentChunk{}).Where("hash = ?", hash).Limit(1).Count(&count).Error; err != nil {
-		return false, fmt.Errorf("check chunks existence: %w", err)
-	}
-	return count > 0, nil
+// ChunksExist returns ErrChunkStorageUnsupported in v5.
+// content_chunks was dropped in migration 085.
+func (s *DocumentStore) ChunksExist(_ context.Context, _ string) (bool, error) {
+	return false, ErrChunkStorageUnsupported
 }
 
 // DeactivateDocument marks a document as inactive.

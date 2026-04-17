@@ -11,10 +11,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/search"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -105,12 +103,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if softLimit <= 0 {
 		softLimit = 1000
 	}
-	dedupThreshold := cfg.StoreMemoryDedupThreshold
-	if dedupThreshold <= 0 {
-		dedupThreshold = 0.92
-	}
-	storePathSupersessionEnabled := cfg.StorePathSupersessionEnabled
-
 	if utf8.RuneCountInString(params.Content) > hardLimit {
 		return "", fmt.Errorf("content exceeds maximum length of %d characters", hardLimit)
 	}
@@ -182,45 +174,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			Msg("store_memory: storing global-scoped observation")
 	}
 
-	// Contradiction detection + dedup check (Learning Memory v3 FR-7, Mem0 Algorithm 1).
-	// Shared implementation in internal/dedup/checker.go.
-	var contradictionAction string
-	var supersededID int64
-	dedupResult, dedupErr := dedup.CheckDuplicate(ctx, s.vectorClient, s.observationStore.GetDB(), params.Project, params.Content, dedupThreshold)
-	if dedupErr != nil {
-		log.Warn().Err(dedupErr).Msg("store_memory: dedup check failed, proceeding with ADD")
-	}
-	if dedupResult != nil {
-		contradictionAction = string(dedupResult.Action)
-		if dedupResult.Action == dedup.ActionNoop {
-			result := map[string]any{
-				"id":        dedupResult.ExistingID,
-				"action":    "NOOP",
-				"duplicate": true,
-				"message":   fmt.Sprintf("Near-duplicate observation exists (similarity: %.2f)", dedupResult.Similarity),
-			}
-			out, _ := json.MarshalIndent(result, "", "  ")
-			return string(out), nil
-		}
-		if dedupResult.Action == dedup.ActionUpdate {
-			if storePathSupersessionEnabled {
-				supersededID = dedupResult.ExistingID
-				log.Info().
-					Int64("superseded_id", dedupResult.ExistingID).
-					Float64("similarity", dedupResult.Similarity).
-					Msg("store_memory: superseding existing observation (contradiction zone)")
-			} else {
-				contradictionAction = "ADD"
-				log.Info().
-					Int64("existing_id", dedupResult.ExistingID).
-					Float64("similarity", dedupResult.Similarity).
-					Msg("store_memory: store-path supersession disabled; keeping existing observation active")
-			}
-		}
-	}
-	if contradictionAction == "" {
-		contradictionAction = "ADD"
-	}
+	// Vector-based dedup removed in v5; every store_memory call creates a new observation.
+	const contradictionAction = "ADD"
 
 	title := params.Title
 	if title == "" {
@@ -264,53 +219,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
-	// Contradiction resolution: if UPDATE action, mark old observation as superseded (Learning Memory v3 FR-7)
-	if contradictionAction == "UPDATE" && supersededID > 0 {
-		if err := s.observationStore.MarkAsSuperseded(ctx, supersededID); err != nil {
-			log.Warn().Err(err).Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: failed to mark old observation superseded")
-		} else {
-			// Create EVOLVES_FROM relation
-			if s.relationStore != nil {
-				_, _ = s.relationStore.StoreRelation(ctx, &models.ObservationRelation{
-					SourceID:     id,
-					TargetID:     supersededID,
-					RelationType: models.RelationEvolvesFrom,
-					Confidence:   1.0,
-				})
-			}
-			log.Info().Int64("old_id", supersededID).Int64("new_id", id).Msg("contradiction: superseded old observation with EVOLVES_FROM")
-		}
-	}
-
-	// Write-time supersession: if storing a decision and a very similar decision exists,
-	// mark the old one as superseded (new decision replaces old).
-	// Skip if contradiction detection already handled supersession (avoid double-supersede).
-	if contradictionAction != "UPDATE" && s.vectorClient != nil && s.vectorClient.IsConnected() && obsType == models.ObsTypeDecision && config.Get().SupersessionEnabled {
-		threshold := config.Get().SupersessionThreshold
-		if threshold <= 0 {
-			threshold = 0.9
-		}
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, false, nil)
-		similar, err := s.vectorClient.Query(ctx, params.Content, 3, where)
-		if err == nil {
-			for _, result := range similar {
-				if result.Similarity >= threshold {
-					oldID := vector.ExtractRowID(result.Metadata)
-					if oldID > 0 && oldID != id {
-						oldObs, err := s.observationStore.GetObservationByID(ctx, oldID)
-						if err == nil && oldObs != nil && oldObs.Type == models.ObsTypeDecision && oldObs.Project == params.Project {
-							if err := s.observationStore.MarkAsSuperseded(ctx, oldID); err != nil {
-								log.Warn().Err(err).Int64("old_id", oldID).Int64("new_id", id).Msg("supersession: failed to mark old decision")
-							} else {
-								log.Info().Int64("old_id", oldID).Int64("new_id", id).Float64("similarity", result.Similarity).Msg("supersession: old decision marked superseded")
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
 	// Apply TTL for verified facts.
 	ttlDays := computeTTLDays(params.TtlDays, concepts)
 	ttlApplied := false
@@ -329,9 +237,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"scope":   string(scope),
 		"action":  contradictionAction,
 		"message": "Memory stored successfully",
-	}
-	if supersededID > 0 {
-		result["superseded_id"] = supersededID
 	}
 	if ttlApplied {
 		result["ttl_days"] = ttlDays

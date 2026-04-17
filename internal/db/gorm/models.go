@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/lib/pq"
-	pgvec "github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/pkg/models"
@@ -319,15 +318,16 @@ type Document struct {
 // TableName returns the table name for Document.
 func (Document) TableName() string { return "documents" }
 
-// ContentChunk holds per-chunk embeddings for a content hash.
+// ContentChunk held per-chunk embeddings for a content hash.
+// Removed in v5: content_chunks table dropped (migration 085).
+// This type is retained as a shell so document_store.go compiles without changes.
 type ContentChunk struct {
-	Embedding pgvec.Vector `gorm:"-" json:"-"`
-	Hash      string       `gorm:"type:text;not null;primaryKey" json:"hash"`
-	Seq       int          `gorm:"primaryKey" json:"seq"`
-	Text      string       `gorm:"type:text;not null;default:''" json:"text"`
-	Pos       int          `gorm:"not null" json:"pos"`
-	Model     string       `gorm:"type:text;not null" json:"model"`
-	CreatedAt time.Time    `gorm:"autoCreateTime" json:"created_at"`
+	Hash      string    `gorm:"type:text;not null;primaryKey" json:"hash"`
+	Seq       int       `gorm:"primaryKey" json:"seq"`
+	Text      string    `gorm:"type:text;not null;default:''" json:"text"`
+	Pos       int       `gorm:"not null" json:"pos"`
+	Model     string    `gorm:"type:text;not null" json:"model"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 }
 
 // TableName returns the table name for ContentChunk.

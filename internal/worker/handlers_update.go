@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/internal/embedding"
 )
 
 // handleUpdateCheck godoc
@@ -144,23 +143,6 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	components = append(components, dbStatus)
 
-	// Check Vector DB (pgvector)
-	vectorStatus := ComponentHealth{Name: "Vector DB", Status: "healthy"}
-	if s.vectorClient == nil {
-		vectorStatus.Status = "degraded"
-		vectorStatus.Message = "Not configured"
-		if overall == "healthy" {
-			overall = "degraded"
-		}
-	} else if !s.vectorClient.IsConnected() {
-		vectorStatus.Status = "degraded"
-		vectorStatus.Message = "Not connected"
-		if overall == "healthy" {
-			overall = "degraded"
-		}
-	}
-	components = append(components, vectorStatus)
-
 	// Check SDK Processor
 	sdkStatus := ComponentHealth{Name: "SDK Processor", Status: "healthy"}
 	if s.processor == nil {
@@ -186,41 +168,6 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 		overall = "unhealthy"
 	}
 	components = append(components, sseStatus)
-
-	// Check Embedding Resilience
-	embeddingStatus := ComponentHealth{Name: "Embedding", Status: "healthy"}
-	if s.resilientEmbedder == nil {
-		embeddingStatus.Status = "degraded"
-		embeddingStatus.Message = "Not configured"
-		if overall == "healthy" {
-			overall = "degraded"
-		}
-	} else {
-		status := s.resilientEmbedder.Status()
-		switch status {
-		case embedding.StatusHealthy:
-			embeddingStatus.Message = "OK"
-		case embedding.StatusDegraded:
-			embeddingStatus.Status = "degraded"
-			embeddingStatus.Message = fmt.Sprintf("Degraded (%d consecutive failures)", s.resilientEmbedder.ConsecutiveFailures())
-			if overall == "healthy" {
-				overall = "degraded"
-			}
-		case embedding.StatusDisabled:
-			embeddingStatus.Status = "unhealthy"
-			embeddingStatus.Message = fmt.Sprintf("Disabled (%d consecutive failures)", s.resilientEmbedder.ConsecutiveFailures())
-			if overall == "healthy" || overall == "degraded" {
-				overall = "degraded"
-			}
-		case embedding.StatusRecovering:
-			embeddingStatus.Status = "degraded"
-			embeddingStatus.Message = "Recovering — probe succeeded, awaiting real request"
-			if overall == "healthy" {
-				overall = "degraded"
-			}
-		}
-	}
-	components = append(components, embeddingStatus)
 
 	// Check Cross-Encoder Reranker
 	rerankerStatus := ComponentHealth{Name: "Cross-Encoder Reranker", Status: "healthy"}

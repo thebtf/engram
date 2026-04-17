@@ -27,7 +27,6 @@ import (
 	"github.com/thebtf/engram/internal/consolidation"
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/graph/falkordb"
 	"github.com/thebtf/engram/internal/grpcserver"
@@ -36,7 +35,6 @@ import (
 	"github.com/thebtf/engram/internal/maintenance"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/pattern"
-	"github.com/thebtf/engram/internal/relation"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
@@ -44,8 +42,6 @@ import (
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/update"
-	"github.com/thebtf/engram/internal/vector"
-	"github.com/thebtf/engram/internal/vector/pgvector"
 	"github.com/thebtf/engram/internal/watcher"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	"github.com/thebtf/engram/internal/worker/reaper"
@@ -70,38 +66,8 @@ const (
 	// QueueProcessInterval is how often the background queue processor runs.
 	QueueProcessInterval = 2 * time.Second
 
-	// VectorSyncMaxRetries is the maximum number of retries for vector sync operations.
-	VectorSyncMaxRetries = 3
-
-	// VectorSyncInitialBackoff is the initial backoff duration for retry.
-	VectorSyncInitialBackoff = 100 * time.Millisecond
 )
 
-// retryWithBackoff attempts the given function up to maxRetries times with exponential backoff.
-// Returns nil on success, or the last error after all retries are exhausted.
-func retryWithBackoff(ctx context.Context, maxRetries int, initialBackoff time.Duration, fn func() error) error {
-	var lastErr error
-	backoff := initialBackoff
-
-	for i := 0; i < maxRetries; i++ {
-		if err := fn(); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-
-		// Don't wait after the last attempt
-		if i < maxRetries-1 {
-			select {
-			case <-time.After(backoff):
-				backoff *= 2 // Exponential backoff
-			case <-ctx.Done():
-				return lastErr
-			}
-		}
-	}
-	return lastErr
-}
 
 // RetrievalStats tracks observation retrieval metrics.
 type RetrievalStats struct {
@@ -142,16 +108,9 @@ type Service struct {
 	graphStore             graphpkg.GraphStore
 	graphWriter            *graphpkg.AsyncGraphWriter
 	patternDetector        *pattern.Detector
-	relationDetector       *relation.Detector
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
-	embedSvc               *embedding.Service
-	resilientEmbedder      *embedding.ResilientEmbedder
-	vectorClient           vector.Client
-	vectorSync             *pgvector.Sync
-	vectorSyncSem          chan struct{}
-	pendingVectorSyncs     chan int64
 	queryExpander          *expansion.Expander
 	scoreCalculator        *scoring.Calculator
 	recalculator           *scoring.Recalculator
@@ -170,7 +129,6 @@ type Service struct {
 	cancel                 context.CancelFunc
 	cachedObsCounts        map[string]cachedCount
 	config                 *config.Config
-	rebuildStatus          *RebuildStatus
 	staleQueue             chan staleVerifyRequest
 	configWatcher          *watcher.Watcher
 	updater                *update.Updater
@@ -200,13 +158,11 @@ type Service struct {
 	recentQueriesHead      int
 	statsCacheTTL          time.Duration
 	initMu                 sync.RWMutex
-	rebuildStatusMu        sync.RWMutex
 	retrievalStatsMu       sync.RWMutex
 	recentQueriesMu        sync.RWMutex
 	cachedObsCountsMu      sync.RWMutex
 	staleQueueOnce         sync.Once
 	ready                  atomic.Bool
-	vectorSyncDropped      atomic.Int64
 	vault                  *crypto.Vault
 	issueStore             *gorm.IssueStore
 	vaultOnce              sync.Once
@@ -261,18 +217,6 @@ func (s *Service) getVault() (*crypto.Vault, error) {
 	return s.vault, s.vaultErr
 }
 
-// RebuildStatus tracks the progress of vector rebuild operations.
-type RebuildStatus struct {
-	StartTime    time.Time `json:"start_time,omitempty"`
-	Phase        string    `json:"phase,omitempty"`
-	TotalSynced  int       `json:"total_synced"`
-	TotalErrors  int       `json:"total_errors"`
-	CurrentPhase int       `json:"current_phase"`
-	TotalPhases  int       `json:"total_phases"`
-	ElapsedMs    int64     `json:"elapsed_ms,omitempty"`
-	EstimatedPct float64   `json:"estimated_pct,omitempty"`
-	InProgress   bool      `json:"in_progress"`
-}
 
 // staleVerifyRequest represents a request to verify a stale observation in background
 type staleVerifyRequest struct {
@@ -282,212 +226,42 @@ type staleVerifyRequest struct {
 
 // RecentSearchQuery tracks a search query for analytics.
 type RecentSearchQuery struct {
-	Timestamp  time.Time `json:"timestamp"`
-	Query      string    `json:"query"`
-	Project    string    `json:"project,omitempty"`
-	Type       string    `json:"type,omitempty"`
-	Results    int       `json:"results"`
-	UsedVector bool      `json:"used_vector"`
+	Timestamp time.Time `json:"timestamp"`
+	Query     string    `json:"query"`
+	Project   string    `json:"project,omitempty"`
+	Type      string    `json:"type,omitempty"`
+	Results   int       `json:"results"`
 }
 
-// asyncVectorSync executes a vector sync operation with rate limiting.
-// Uses non-blocking semaphore to prevent goroutine accumulation under load.
-// Dropped syncs are enqueued for reconciliation within 60s.
-func (s *Service) asyncVectorSync(fn func()) {
-	s.asyncVectorSyncWithID(fn, 0)
-}
-
-// asyncVectorSyncWithID executes a vector sync with an observation ID for reconciliation.
-func (s *Service) asyncVectorSyncWithID(fn func(), obsID int64) {
-	if s.vectorSyncSem == nil {
-		log.Warn().Int64("obs_id", obsID).Msg("vector sync dropped: semaphore not initialized")
-		return
-	}
-
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		select {
-		case s.vectorSyncSem <- struct{}{}:
-			defer func() { <-s.vectorSyncSem }()
-			fn()
-		default:
-			s.vectorSyncDropped.Add(1)
-			log.Warn().Int64("obs_id", obsID).Msg("vector sync dropped: semaphore full")
-			// Enqueue for reconciliation if we have an observation ID
-			if obsID > 0 {
-				select {
-				case s.pendingVectorSyncs <- obsID:
-				default:
-					log.Warn().Int64("obs_id", obsID).Msg("reconciliation channel full, vector sync permanently dropped")
-				}
-			}
-		}
-	}()
-}
-
-// startVectorReconciliation starts a background ticker that retries dropped vector syncs.
-func (s *Service) startVectorReconciliation() {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-s.ctx.Done():
-				// Drain remaining on shutdown
-				s.drainPendingVectorSyncs()
-				return
-			case <-ticker.C:
-				s.drainPendingVectorSyncs()
-			}
-		}
-	}()
-}
-
-// drainPendingVectorSyncs processes all pending vector sync reconciliation IDs.
-func (s *Service) drainPendingVectorSyncs() {
-	if s.vectorSync == nil || s.observationStore == nil {
-		return
-	}
-
-	var ids []int64
-	for {
-		select {
-		case id := <-s.pendingVectorSyncs:
-			ids = append(ids, id)
-		default:
-			goto done
-		}
-	}
-done:
-
-	if len(ids) == 0 {
-		return
-	}
-
-	log.Info().Int("count", len(ids)).Msg("reconciling dropped vector syncs")
-
-	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
-	defer cancel()
-
-	observations, err := s.observationStore.GetObservationsByIDs(ctx, ids, "", 0)
-	if err != nil {
-		log.Error().Err(err).Int("count", len(ids)).Msg("failed to fetch observations for vector reconciliation")
-		return
-	}
-
-	var synced, errors int
-	for _, obs := range observations {
-		if syncErr := s.vectorSync.SyncObservation(ctx, obs); syncErr != nil {
-			log.Warn().Err(syncErr).Int64("id", obs.ID).Msg("vector reconciliation sync failed")
-			errors++
-		} else {
-			synced++
-		}
-	}
-
-	log.Info().Int("synced", synced).Int("errors", errors).Int("total", len(ids)).Msg("vector reconciliation complete")
-}
-
-// setupVectorSyncCallbacks configures all vector sync related callbacks on stores and processors.
-func (s *Service) setupVectorSyncCallbacks(
+// setupCallbacks configures callbacks on stores and processors.
+func (s *Service) setupCallbacks(
 	patternDetector *pattern.Detector,
-	patternStore *gorm.PatternStore,
 	observationStore *gorm.ObservationStore,
-	promptStore *gorm.PromptStore,
 	processor *sdk.Processor,
 	sessionManager *session.Manager,
-	vectorSync *pgvector.Sync,
 ) {
-	// Set pattern sync callback if vector sync is available
-	if patternDetector != nil && vectorSync != nil {
-		patternDetector.SetSyncFunc(func(p *models.Pattern) {
-			err := retryWithBackoff(s.ctx, VectorSyncMaxRetries, VectorSyncInitialBackoff, func() error {
-				return vectorSync.SyncPattern(s.ctx, p)
-			})
-			if err != nil {
-				log.Warn().Err(err).Int64("id", p.ID).Msg("Failed to sync pattern to vector store after retries")
-			}
-		})
-	}
-
-	// Set cleanup callback for pattern deletions
-	if patternStore != nil && vectorSync != nil {
-		patternStore.SetCleanupFunc(func(ctx context.Context, deletedIDs []int64) {
-			err := retryWithBackoff(ctx, VectorSyncMaxRetries, VectorSyncInitialBackoff, func() error {
-				return vectorSync.DeletePatterns(ctx, deletedIDs)
-			})
-			if err != nil {
-				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete patterns from vector store after retries")
-			}
-		})
-	}
-
-	// Set vector sync callbacks on processor if both are available
-	if processor != nil && vectorSync != nil {
+	// Set vector sync callbacks on processor if available
+	if processor != nil && patternDetector != nil {
 		processor.SetSyncObservationFunc(func(obs *models.Observation) {
-			err := retryWithBackoff(s.ctx, VectorSyncMaxRetries, VectorSyncInitialBackoff, func() error {
-				return vectorSync.SyncObservation(s.ctx, obs)
-			})
-			if err != nil {
-				log.Warn().Err(err).Int64("id", obs.ID).Msg("Failed to sync observation to vector store after retries")
-			}
 			// Trigger pattern detection for the new observation
-			if patternDetector != nil {
-				s.wg.Add(1) // Track goroutine for graceful shutdown
-				go func(observation *models.Observation) {
-					defer s.wg.Done()
-					detectCtx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-					defer cancel()
-					if result, err := patternDetector.AnalyzeObservation(detectCtx, observation); err != nil {
-						// Don't log context canceled errors during shutdown
-						if s.ctx.Err() == nil {
-							log.Warn().Err(err).Int64("obs_id", observation.ID).Msg("Pattern detection failed")
-						}
-					} else if result.MatchedPattern != nil {
-						log.Debug().
-							Int64("pattern_id", result.MatchedPattern.ID).
-							Str("pattern_name", result.MatchedPattern.Name).
-							Bool("is_new", result.IsNewPattern).
-							Msg("Pattern matched for observation")
+			s.wg.Add(1) // Track goroutine for graceful shutdown
+			go func(observation *models.Observation) {
+				defer s.wg.Done()
+				detectCtx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+				defer cancel()
+				if result, err := patternDetector.AnalyzeObservation(detectCtx, observation); err != nil {
+					// Don't log context canceled errors during shutdown
+					if s.ctx.Err() == nil {
+						log.Warn().Err(err).Int64("obs_id", observation.ID).Msg("Pattern detection failed")
 					}
-				}(obs)
-			}
-		})
-		processor.SetSyncSummaryFunc(func(summary *models.SessionSummary) {
-			err := retryWithBackoff(s.ctx, VectorSyncMaxRetries, VectorSyncInitialBackoff, func() error {
-				return vectorSync.SyncSummary(s.ctx, summary)
-			})
-			if err != nil {
-				log.Warn().Err(err).Int64("id", summary.ID).Msg("Failed to sync summary to vector store after retries")
-			}
-		})
-	}
-
-	// Set cleanup callback on observation store to sync deletes to vector store
-	if observationStore != nil && vectorSync != nil {
-		observationStore.SetCleanupFunc(func(ctx context.Context, deletedIDs []int64) {
-			err := retryWithBackoff(ctx, VectorSyncMaxRetries, VectorSyncInitialBackoff, func() error {
-				return vectorSync.DeleteObservations(ctx, deletedIDs)
-			})
-			if err != nil {
-				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete observations from vector store after retries")
-			}
-		})
-	}
-
-	// Set cleanup callback on prompt store to sync deletes to vector store
-	if promptStore != nil && vectorSync != nil {
-		promptStore.SetCleanupFunc(func(ctx context.Context, deletedIDs []int64) {
-			err := retryWithBackoff(ctx, VectorSyncMaxRetries, VectorSyncInitialBackoff, func() error {
-				return vectorSync.DeleteUserPrompts(ctx, deletedIDs)
-			})
-			if err != nil {
-				log.Warn().Err(err).Ints64("ids", deletedIDs).Msg("Failed to delete prompts from vector store")
-			}
+				} else if result.MatchedPattern != nil {
+					log.Debug().
+						Int64("pattern_id", result.MatchedPattern.ID).
+						Str("pattern_name", result.MatchedPattern.Name).
+						Bool("is_new", result.IsNewPattern).
+						Msg("Pattern matched for observation")
+				}
+			}(obs)
 		})
 	}
 
@@ -555,13 +329,11 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		logBuffer:          logBuffer,
 		backfillTracker:    newBackfillTracker(),
 		cachedObsCounts:    make(map[string]cachedCount),
-		statsCacheTTL:      time.Minute,             // Cache stats for 1 minute
-		vectorSyncSem:      make(chan struct{}, 10), // Limit to 10 concurrent vector syncs
-		pendingVectorSyncs: make(chan int64, 1000),  // Buffer for dropped syncs awaiting reconciliation
-		ingestDedup:        newDeduplicationCache(5 * time.Minute),
-		mcpHealth:          mcp.NewMCPHealth(),
-		strategySelector:   learning.NewStrategySelector(cfg.InjectionStrategies, cfg.InjectionStrategyMode, cfg.DefaultStrategy),
-		eventBus:           &projectevents.Bus{},
+		statsCacheTTL: time.Minute, // Cache stats for 1 minute
+		ingestDedup:   newDeduplicationCache(5 * time.Minute),
+		mcpHealth:        mcp.NewMCPHealth(),
+		strategySelector: learning.NewStrategySelector(cfg.InjectionStrategies, cfg.InjectionStrategyMode, cfg.DefaultStrategy),
+		eventBus:         &projectevents.Bus{},
 	}
 
 	// Setup middleware and routes (health endpoint works immediately)
@@ -725,50 +497,15 @@ func (s *Service) initializeAsync() {
 	// Create session manager
 	sessionManager := session.NewManager(sessionStore)
 
-	// Create embedding service and pgvector client for vector search (optional)
-	var embedSvc *embedding.Service
-	var vectorClient vector.Client
-	var vectorSync *pgvector.Sync
-
+	// Create reranking service if enabled (operates on text, no embedding needed)
 	var reranker reranking.Reranker
-
-	emb, err := embedding.NewServiceFromConfig()
-	if err != nil {
-		log.Warn().Err(err).Msg("Embedding service creation failed - vector search disabled")
-	} else {
-		embedSvc = emb
-
-		// Wrap with resilience layer for circuit breaking and automatic recovery
-		s.resilientEmbedder = embedding.NewResilientEmbedder(embedSvc)
-
-		// Create pgvector client using the GORM DB connection
-		client, err := pgvector.NewClient(pgvector.Config{
-			DB:       store.DB,
-			EmbedSvc: embedSvc,
-		})
-		if err != nil {
-			log.Warn().Err(err).Msg("pgvector client creation failed - vector search disabled")
-		} else {
-			vectorClient = client
-			vectorSync = pgvector.NewSync(client)
-			log.Info().
-				Str("model", embedSvc.Version()).
-				Msg("pgvector vector search enabled")
-		}
-
-		// Create reranking service if enabled
-		if s.config.RerankingEnabled {
-			reranker = s.createReranker()
-		}
-
-		// Create query expander for improved search recall
-		s.queryExpander = expansion.NewExpander(embedSvc, s.createHyDEGenerator())
-		log.Info().Msg("Query expansion enabled")
+	if s.config.RerankingEnabled {
+		reranker = s.createReranker()
 	}
 
 	// Create SDK processor (optional - requires LLM API or Claude CLI)
 	var processor *sdk.Processor
-	proc, err := sdk.NewProcessor(observationStore, summaryStore, vectorClient)
+	proc, err := sdk.NewProcessor(observationStore, summaryStore)
 	if err != nil {
 		log.Warn().Err(err).Msg("SDK processor not available — set ENGRAM_LLM_URL for observation extraction")
 	} else {
@@ -832,9 +569,6 @@ func (s *Service) initializeAsync() {
 	if processor != nil {
 		processor.SetDedupConfig(cfg.DedupSimilarityThreshold, cfg.DedupWindowSize)
 	}
-	s.embedSvc = embedSvc
-	s.vectorClient = vectorClient
-	s.vectorSync = vectorSync
 	s.reranker = reranker
 	s.initMu.Unlock()
 
@@ -857,30 +591,9 @@ func (s *Service) initializeAsync() {
 	// Start buffered token stats flusher (batches DB writes every 5s)
 	s.startTokenStatsFlusher(s.ctx)
 
-	// Initialize similarity telemetry (optional — requires vector client)
-	if vectorClient != nil && store != nil && observationStore != nil {
-		simTelemetry := telemetry.NewSimilarityTelemetry(store, observationStore, vectorClient, log.Logger)
-		s.initMu.Lock()
-		s.similarityTelemetry = simTelemetry
-		s.initMu.Unlock()
-	}
-
 	// Background sync: populate FalkorDB from existing PostgreSQL relations.
 	if _, ok := gs.(*graphpkg.NoopGraphStore); !ok && gs != nil {
 		go s.syncGraphFromRelations()
-	}
-
-	// Initialize async relation detector (requires embedding + vector search)
-	if embedSvc != nil && vectorClient != nil {
-		detector := relation.NewDetector(vectorClient, relationStore, conflictStore, observationStore, promptStore)
-		observationStore.SetRelationDetector(detector)
-		s.relationDetector = detector
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			detector.Start(s.ctx)
-		}()
-		log.Info().Msg("Async relation detector enabled")
 	}
 
 	// Initialize pattern detector
@@ -890,8 +603,8 @@ func (s *Service) initializeAsync() {
 	s.patternDetector = patternDetector
 	s.initMu.Unlock()
 
-	// Setup all vector sync callbacks using the extracted helper (avoids code duplication)
-	s.setupVectorSyncCallbacks(patternDetector, patternStore, observationStore, promptStore, processor, sessionManager, vectorSync)
+	// Setup callbacks on stores and processors
+	s.setupCallbacks(patternDetector, observationStore, processor, sessionManager)
 
 	// Initialize importance scoring system
 	scoringConfig := models.DefaultScoringConfig()
@@ -932,7 +645,7 @@ func (s *Service) initializeAsync() {
 
 	// Start consolidation scheduler
 	relevanceCalc := scoring.NewRelevanceCalculator(nil) // default config
-	assocEngine := consolidation.NewAssociationEngine(s.embedSvc, consolidation.DefaultAssociationConfig(), log.Logger)
+	assocEngine := consolidation.NewAssociationEngine(nil, consolidation.DefaultAssociationConfig(), log.Logger)
 	schedCfg := consolidation.DefaultSchedulerConfig()
 	if v := strings.ToLower(strings.TrimSpace(os.Getenv("ENGRAM_FORGET_ENABLED"))); v == "false" || v == "0" {
 		schedCfg.ForgetEnabled = false
@@ -963,26 +676,17 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Initialize Smart GC and maintenance service
-	// Build a vector cleanup function for maintenance tasks
-	var vectorCleanupFn func(ctx context.Context, deletedIDs []int64)
-	if vectorSync != nil {
-		vectorCleanupFn = func(ctx context.Context, deletedIDs []int64) {
-			if err := vectorSync.DeleteObservations(ctx, deletedIDs); err != nil {
-				log.Warn().Err(err).Msg("Maintenance: failed to delete observations from vector store")
-			}
-		}
-	}
 	var smartGC *maintenance.SmartGC
 	if cfg.SmartGCEnabled {
 		smartGC = maintenance.NewSmartGC(
-			store, observationStore, vectorCleanupFn,
+			store, observationStore, nil,
 			scoreCalculator, cfg, log.Logger,
 		)
 	}
 	maintenanceSvc := maintenance.NewService(
 		store, observationStore, injectionStore, summaryStore, promptStore,
-		vectorCleanupFn, cfg, s.similarityTelemetry, smartGC, patternStore,
-		vectorClient, vectorSync, relationStore, gs,
+		cfg, s.similarityTelemetry, smartGC, patternStore,
+		nil, nil, relationStore, gs,
 		sessionStore, agentStatsStore,
 		s.llmClient,
 		log.Logger,
@@ -1087,7 +791,7 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Initialize search manager for MCP tools
-	searchMgr := search.NewManager(observationStore, summaryStore, promptStore, vectorClient)
+	searchMgr := search.NewManager(observationStore, summaryStore, promptStore)
 
 	// Initialize MCP server and SSE handler (serves /sse and /message on the worker port)
 	// Create document store for collection MCP tools
@@ -1106,7 +810,6 @@ func (s *Service) initializeAsync() {
 		patternStore,
 		relationStore,
 		sessionStore,
-		vectorClient,
 		scoreCalculator,
 		recalculator,
 		maintenanceSvc,
@@ -1114,7 +817,6 @@ func (s *Service) initializeAsync() {
 		sessionIdxStore,
 		consolidationScheduler,
 		documentStore,
-		embedSvc,
 		chunkManager,
 	)
 	mcpServer.SetInjectionStore(injectionStore)
@@ -1146,14 +848,6 @@ func (s *Service) initializeAsync() {
 	s.grpcServer = grpcSrv
 	s.initMu.Unlock()
 
-	// TODO: Document embedding will be triggered on doc_create/doc_update via vectorSync.SyncDocument()
-	// when the full embedding pipeline integration is implemented.
-
-	// Wire document store into search manager for unified document search.
-	if documentStore != nil && embedSvc != nil {
-		searchMgr.SetDocumentStore(documentStore, embedSvc)
-	}
-
 	// Wire project settings store for adaptive per-project thresholds.
 	projectSettingsStore := gorm.NewProjectSettingsStore(store.DB)
 	searchMgr.SetProjectSettingsStore(projectSettingsStore)
@@ -1184,30 +878,6 @@ func (s *Service) initializeAsync() {
 
 	// Start file watchers for auto-recreation on deletion
 	s.startWatchers()
-
-	// Start vector sync reconciliation ticker
-	s.startVectorReconciliation()
-
-	// Check if vectors need rebuilding (empty or model version mismatch) and trigger background rebuild
-	if vectorClient != nil && vectorSync != nil {
-		needsRebuild, reason := vectorClient.NeedsRebuild(s.ctx)
-		if needsRebuild {
-			log.Info().
-				Str("reason", reason).
-				Str("model", vectorClient.ModelVersion()).
-				Msg("Vector rebuild required")
-
-			if reason == "empty" {
-				// Full rebuild - vectors table is empty
-				s.wg.Add(1)
-				go s.rebuildAllVectors(observationStore, summaryStore, promptStore, vectorSync)
-			} else {
-				// Granular rebuild - only rebuild vectors with mismatched model versions
-				s.wg.Add(1)
-				go s.rebuildStaleVectors(observationStore, summaryStore, promptStore, vectorClient, vectorSync)
-			}
-		}
-	}
 }
 
 // startWatchers initializes and starts file watchers for database and config.
@@ -1305,275 +975,6 @@ func (s *Service) processStaleQueue() {
 			s.verifyStaleObservation(req)
 		}
 	}
-}
-
-// rebuildAllVectors rebuilds all vectors from observations, summaries, and prompts.
-// Called when the vectors table is empty (e.g., after migration 20 drops all vectors).
-// Uses batch processing for memory efficiency during large rebuilds.
-// Progress is tracked in s.rebuildStatus for visibility via /api/rebuild-status.
-func (s *Service) rebuildAllVectors(
-	observationStore *gorm.ObservationStore,
-	summaryStore *gorm.SummaryStore,
-	promptStore *gorm.PromptStore,
-	vectorSync *pgvector.Sync,
-) {
-	defer s.wg.Done()
-
-	log.Info().Msg("Starting full vector rebuild with batch processing...")
-	start := time.Now()
-
-	// Initialize rebuild status
-	s.rebuildStatusMu.Lock()
-	s.rebuildStatus = &RebuildStatus{
-		InProgress:   true,
-		StartTime:    start,
-		Phase:        "observations",
-		CurrentPhase: 1,
-		TotalPhases:  3,
-	}
-	s.rebuildStatusMu.Unlock()
-
-	var totalSynced int
-	var syncErrors int
-
-	// Use batch sync config for efficient processing
-	cfg := pgvector.DefaultBatchSyncConfig()
-
-	// Phase 1: Rebuild observations using batch sync
-	observations, err := observationStore.GetAllObservations(s.ctx)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to fetch observations for vector rebuild")
-	} else {
-		synced, errors := vectorSync.BatchSyncObservations(s.ctx, observations, cfg)
-		totalSynced += synced
-		syncErrors += errors
-		log.Info().Int("synced", synced).Int("errors", errors).Int("total", len(observations)).Msg("Rebuilt observation vectors")
-	}
-
-	// Update status for phase 2
-	s.rebuildStatusMu.Lock()
-	s.rebuildStatus.Phase = "summaries"
-	s.rebuildStatus.CurrentPhase = 2
-	s.rebuildStatus.TotalSynced = totalSynced
-	s.rebuildStatus.TotalErrors = syncErrors
-	s.rebuildStatus.ElapsedMs = time.Since(start).Milliseconds()
-	s.rebuildStatus.EstimatedPct = 33.3
-	s.rebuildStatusMu.Unlock()
-
-	// Phase 2: Rebuild summaries using batch sync
-	summaries, err := summaryStore.GetAllSummaries(s.ctx)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to fetch summaries for vector rebuild")
-	} else {
-		synced, errors := vectorSync.BatchSyncSummaries(s.ctx, summaries, cfg)
-		totalSynced += synced
-		syncErrors += errors
-		log.Info().Int("synced", synced).Int("errors", errors).Int("total", len(summaries)).Msg("Rebuilt summary vectors")
-	}
-
-	// Update status for phase 3
-	s.rebuildStatusMu.Lock()
-	s.rebuildStatus.Phase = "prompts"
-	s.rebuildStatus.CurrentPhase = 3
-	s.rebuildStatus.TotalSynced = totalSynced
-	s.rebuildStatus.TotalErrors = syncErrors
-	s.rebuildStatus.ElapsedMs = time.Since(start).Milliseconds()
-	s.rebuildStatus.EstimatedPct = 66.6
-	s.rebuildStatusMu.Unlock()
-
-	// Phase 3: Rebuild user prompts using batch sync
-	prompts, err := promptStore.GetAllPrompts(s.ctx)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to fetch prompts for vector rebuild")
-	} else {
-		synced, errors := vectorSync.BatchSyncPrompts(s.ctx, prompts, cfg)
-		totalSynced += synced
-		syncErrors += errors
-		log.Info().Int("synced", synced).Int("errors", errors).Int("total", len(prompts)).Msg("Rebuilt prompt vectors")
-	}
-
-	elapsed := time.Since(start)
-
-	// Mark rebuild as complete
-	s.rebuildStatusMu.Lock()
-	s.rebuildStatus.InProgress = false
-	s.rebuildStatus.Phase = "complete"
-	s.rebuildStatus.TotalSynced = totalSynced
-	s.rebuildStatus.TotalErrors = syncErrors
-	s.rebuildStatus.ElapsedMs = elapsed.Milliseconds()
-	s.rebuildStatus.EstimatedPct = 100
-	s.rebuildStatusMu.Unlock()
-
-	log.Info().
-		Int("total_synced", totalSynced).
-		Int("errors", syncErrors).
-		Dur("elapsed", elapsed).
-		Msg("Full vector rebuild complete")
-}
-
-// rebuildThrottleDelay is the pause between individual vector sync operations
-// during rebuild to avoid overwhelming the embedding service.
-const rebuildThrottleDelay = 200 * time.Millisecond
-
-// rebuildStaleVectors rebuilds only vectors with mismatched or unknown model versions.
-// Uses upsert (ON CONFLICT DO UPDATE) so stale vectors are overwritten in-place
-// without a dangerous delete-then-recreate cycle. Throttled to avoid overwhelming
-// the embedding service.
-func (s *Service) rebuildStaleVectors(
-	observationStore *gorm.ObservationStore,
-	summaryStore *gorm.SummaryStore,
-	promptStore *gorm.PromptStore,
-	vectorClient vector.Client,
-	vectorSync *pgvector.Sync,
-) {
-	defer s.wg.Done()
-
-	log.Info().Msg("Starting granular vector rebuild for stale vectors...")
-	start := time.Now()
-
-	// Get all stale vectors
-	staleVectors, err := vectorClient.GetStaleVectors(s.ctx)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to get stale vectors")
-		return
-	}
-
-	if len(staleVectors) == 0 {
-		log.Info().Msg("No stale vectors found")
-		return
-	}
-
-	log.Info().Int("stale_count", len(staleVectors)).Msg("Found stale vectors to rebuild")
-
-	// Group stale vectors by doc_type and sqlite_id for efficient lookup
-	staleObsIDs := make(map[int64]bool)
-	staleSummaryIDs := make(map[int64]bool)
-	stalePromptIDs := make(map[int64]bool)
-
-	for _, sv := range staleVectors {
-		switch sv.DocType {
-		case "observation":
-			staleObsIDs[sv.SQLiteID] = true
-		case "summary":
-			staleSummaryIDs[sv.SQLiteID] = true
-		case "prompt":
-			stalePromptIDs[sv.SQLiteID] = true
-		}
-	}
-
-	// NOTE: No pre-delete. AddDocuments uses ON CONFLICT (doc_id) DO UPDATE,
-	// so re-syncing overwrites stale vectors in-place. If sync fails, the old
-	// vector remains intact (stale but searchable) rather than being deleted.
-
-	var totalSynced int
-	var syncErrors int
-
-	// Rebuild sequentially with throttling to avoid overwhelming the embedding service.
-	// Three doc types processed one after another (not in parallel).
-
-	// Phase 1: Observations
-	if len(staleObsIDs) > 0 {
-		ids := make([]int64, 0, len(staleObsIDs))
-		for id := range staleObsIDs {
-			ids = append(ids, id)
-		}
-
-		observations, err := observationStore.GetObservationsByIDs(s.ctx, ids, "date_desc", 0)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to fetch observations for rebuild")
-		} else {
-			for i, obs := range observations {
-				select {
-				case <-s.ctx.Done():
-					log.Warn().Int("synced", totalSynced).Msg("Stale vector rebuild cancelled")
-					return
-				default:
-				}
-
-				if err := vectorSync.SyncObservation(s.ctx, obs); err != nil {
-					log.Warn().Err(err).Int64("id", obs.ID).Msg("Failed to sync observation during rebuild")
-					syncErrors++
-				} else {
-					totalSynced++
-				}
-
-				if i > 0 && i%50 == 0 {
-					log.Info().Int("progress", i).Int("total", len(observations)).Msg("Rebuilding observation vectors...")
-				}
-				time.Sleep(rebuildThrottleDelay)
-			}
-			log.Info().Int("count", len(observations)).Msg("Rebuilt stale observation vectors")
-		}
-	}
-
-	// Phase 2: Summaries
-	if len(staleSummaryIDs) > 0 {
-		ids := make([]int64, 0, len(staleSummaryIDs))
-		for id := range staleSummaryIDs {
-			ids = append(ids, id)
-		}
-
-		summaries, err := summaryStore.GetSummariesByIDs(s.ctx, ids, "date_desc", 0)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to fetch summaries for rebuild")
-		} else {
-			for _, summary := range summaries {
-				select {
-				case <-s.ctx.Done():
-					log.Warn().Int("synced", totalSynced).Msg("Stale vector rebuild cancelled")
-					return
-				default:
-				}
-
-				if err := vectorSync.SyncSummary(s.ctx, summary); err != nil {
-					log.Warn().Err(err).Int64("id", summary.ID).Msg("Failed to sync summary during rebuild")
-					syncErrors++
-				} else {
-					totalSynced++
-				}
-				time.Sleep(rebuildThrottleDelay)
-			}
-			log.Info().Int("count", len(summaries)).Msg("Rebuilt stale summary vectors")
-		}
-	}
-
-	// Phase 3: Prompts
-	if len(stalePromptIDs) > 0 {
-		ids := make([]int64, 0, len(stalePromptIDs))
-		for id := range stalePromptIDs {
-			ids = append(ids, id)
-		}
-
-		prompts, err := promptStore.GetPromptsByIDs(s.ctx, ids, "date_desc", 0)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to fetch prompts for rebuild")
-		} else {
-			for _, prompt := range prompts {
-				select {
-				case <-s.ctx.Done():
-					log.Warn().Int("synced", totalSynced).Msg("Stale vector rebuild cancelled")
-					return
-				default:
-				}
-
-				if err := vectorSync.SyncUserPrompt(s.ctx, prompt); err != nil {
-					log.Warn().Err(err).Int64("id", prompt.ID).Msg("Failed to sync prompt during rebuild")
-					syncErrors++
-				} else {
-					totalSynced++
-				}
-				time.Sleep(rebuildThrottleDelay)
-			}
-			log.Info().Int("count", len(prompts)).Msg("Rebuilt stale prompt vectors")
-		}
-	}
-
-	elapsed := time.Since(start)
-	log.Info().
-		Int("total_synced", totalSynced).
-		Int("errors", syncErrors).
-		Dur("elapsed", elapsed).
-		Msg("Granular vector rebuild complete")
 }
 
 // verifyStaleObservation verifies a single stale observation in the background.
@@ -1758,11 +1159,7 @@ func (s *Service) setupRoutes() {
 	// Admin/management routes — authentication applied globally via setupMiddleware.
 	// Grouped for logical organization; no additional middleware needed.
 	s.router.Group(func(r chi.Router) {
-		// Rebuild status endpoint for visibility into vector rebuild progress
-		r.Get("/api/rebuild-status", s.handleRebuildStatus)
-
-		// Vector management endpoints
-		r.Post("/api/vectors/rebuild", s.handleTriggerVectorRebuild)
+		// Vector metrics/health endpoints (return disabled status since vectors removed in v5)
 		r.Get("/api/vectors/health", s.handleVectorHealth)
 		r.Get("/api/vector/metrics", s.handleVectorMetrics)
 		r.Get("/api/graph/stats", s.handleGraphStats)
@@ -1961,7 +1358,6 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/maintenance/status", s.handleMaintenanceStatus)
 		r.Get("/api/maintenance/logs", s.handleMaintenanceLogs)
 		r.Get("/api/maintenance/consistency", s.handleConsistencyCheck)
-		r.Post("/api/maintenance/backfill-relations", s.handleBackfillRelations)
 		r.Post("/api/maintenance/purge-patterns", s.handlePurgePatterns)
 		r.Post("/api/maintenance/pattern-cleanup", s.handlePatternCleanup)
 		r.Post("/api/maintenance/purge-rebuild", s.handlePurgeRebuild)
@@ -2086,13 +1482,13 @@ func (s *Service) GetRetrievalStats(project string) RetrievalStats {
 // trackSearchQuery records a search query for analytics.
 // Writes to the persistent DB store (fire-and-forget) and the in-memory ring buffer.
 // O(1) insertion for the ring buffer - no memory allocation or copying on each insert.
-func (s *Service) trackSearchQuery(query, project, queryType string, results int, usedVector bool, latencyMs float32) {
+func (s *Service) trackSearchQuery(query, project, queryType string, results int, latencyMs float32) {
 	// Persist to DB asynchronously (fire-and-forget, never blocks caller).
 	s.initMu.RLock()
 	sqlStore := s.searchQueryLogStore
 	s.initMu.RUnlock()
 	if sqlStore != nil {
-		sqlStore.LogQuery(project, query, queryType, results, usedVector, latencyMs)
+		sqlStore.LogQuery(project, query, queryType, results, latencyMs)
 	}
 
 	// Also maintain the in-memory ring buffer for low-latency in-process access.
@@ -2104,12 +1500,11 @@ func (s *Service) trackSearchQuery(query, project, queryType string, results int
 	s.recentQueriesHead = (s.recentQueriesHead - 1 + maxRecentQueries) % maxRecentQueries
 
 	s.recentQueriesBuf[s.recentQueriesHead] = RecentSearchQuery{
-		Query:      query,
-		Project:    project,
-		Type:       queryType,
-		Results:    results,
-		UsedVector: usedVector,
-		Timestamp:  time.Now(),
+		Query:     query,
+		Project:   project,
+		Type:      queryType,
+		Results:   results,
+		Timestamp: time.Now(),
 	}
 
 	// Increase length up to max
@@ -2526,20 +1921,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.reranker != nil {
 		collectError("reranker", s.reranker.Close())
 	}
-	if s.resilientEmbedder != nil {
-		s.resilientEmbedder.Stop()
-	}
-	if s.embedSvc != nil {
-		collectError("embedding_service", s.embedSvc.Close())
-	}
 
-	// Phase 7: Close vector client (no external process)
-	log.Debug().Msg("Phase 7: Closing vector client...")
-	if s.vectorClient != nil {
-		collectError("vector_client", s.vectorClient.Close())
-	}
-
-	// Phase 8: Close database last (other components may need it)
+	// Phase 7: Close database last (other components may need it)
 	log.Debug().Msg("Phase 8: Closing database...")
 	if s.store != nil {
 		collectError("database", s.store.Close())

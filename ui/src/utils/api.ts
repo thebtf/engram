@@ -294,7 +294,6 @@ interface RecentSearchResponse {
     project?: string
     type?: string
     results: number
-    used_vector: boolean
   }>
   count: number
 }

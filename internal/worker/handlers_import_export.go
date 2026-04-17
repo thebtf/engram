@@ -2,7 +2,6 @@
 package worker
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -148,7 +147,7 @@ func (s *Service) handleBulkImport(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Store observation
-		obsID, _, err := s.observationStore.StoreObservation(
+		_, _, err := s.observationStore.StoreObservation(
 			r.Context(),
 			fmt.Sprintf("bulk-import-%d", sessionID),
 			req.Project,
@@ -160,23 +159,6 @@ func (s *Service) handleBulkImport(w http.ResponseWriter, r *http.Request) {
 			failed++
 			errors = append(errors, fmt.Sprintf("observation %d: %v", i, err))
 			continue
-		}
-
-		// Sync to vector DB asynchronously with rate limiting
-		if s.vectorSync != nil {
-			s.asyncVectorSync(func() {
-				// Use service context as parent to respect shutdown signals
-				ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-				defer cancel()
-				obs, err := s.observationStore.GetObservationByID(ctx, obsID)
-				if err == nil && obs != nil {
-					if syncErr := s.vectorSync.SyncObservation(ctx, obs); syncErr != nil {
-						if s.ctx.Err() == nil { // Don't log during shutdown
-							log.Debug().Err(syncErr).Int64("id", obsID).Msg("Failed to sync observation during bulk import")
-						}
-					}
-				}
-			})
 		}
 
 		// Track for deduplication of subsequent observations in this batch

@@ -7,13 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/internal/config"
-	dedupPkg "github.com/thebtf/engram/internal/dedup"
 	"github.com/thebtf/engram/internal/pipeline"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/models"
@@ -175,6 +172,10 @@ func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 	// Classify file paths into read vs modified based on tool semantics
 	filesRead, filesModified := classifyFilesByTool(req.ToolName, filePaths)
 
+	// ParsedObservation for Level 0 storage. All required fields are populated by
+	// the deterministic pipeline above. The removed semantic-dedup path (v4)
+	// compared parsed against existing observations but never added fields to it,
+	// so parsed remains complete after that removal.
 	parsed := &models.ParsedObservation{
 		Type:          obsType,
 		Title:         title,
@@ -185,27 +186,6 @@ func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	parsed.SourceType = models.ClassifySourceType(req.ToolName)
 
-	// Semantic dedup: skip near-duplicates via vector similarity (shared Mem0 Algorithm 1).
-	// Complements the hash-based TTL dedup above with semantic similarity detection.
-	var ingestDedupResult *dedupPkg.Result
-	dedupContent := parsed.Title + " " + strings.Join(parsed.Facts, " ")
-	if dedupContent != "" && s.vectorClient != nil {
-		ingestDedupResult, _ = dedupPkg.CheckDuplicate(r.Context(), s.vectorClient, s.observationStore.GetDB(), req.Project, dedupContent, 0)
-		if ingestDedupResult != nil && ingestDedupResult.Action == dedupPkg.ActionNoop {
-			// Mark raw event processed even on NOOP to avoid reprocessing.
-			if markErr := s.rawEventStore.MarkProcessed(r.Context(), eventID); markErr != nil {
-				log.Warn().Err(markErr).Int64("eventId", eventID).Msg("Failed to mark raw event as processed (dedup noop)")
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "skipped", "reason": "semantic_duplicate",
-				"existing_id": ingestDedupResult.ExistingID, "similarity": ingestDedupResult.Similarity,
-			})
-			return
-		}
-	}
-
 	// Store observation using the existing store interface
 	obsID, _, err := s.observationStore.StoreObservation(r.Context(), req.SessionID, req.Project, parsed, 0, 0)
 	if err != nil {
@@ -214,38 +194,9 @@ func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle UPDATE: supersede existing observation if dedup detected contradiction.
-	if ingestDedupResult != nil && ingestDedupResult.Action == dedupPkg.ActionUpdate && ingestDedupResult.ExistingID > 0 {
-		if config.Get().StorePathSupersessionEnabled {
-			if err := s.observationStore.MarkAsSuperseded(r.Context(), ingestDedupResult.ExistingID); err != nil {
-				log.Warn().
-					Err(err).
-					Int64("existing_id", ingestDedupResult.ExistingID).
-					Float64("similarity", ingestDedupResult.Similarity).
-					Msg("ingest: failed to supersede existing observation")
-			}
-		} else {
-			log.Info().
-				Int64("existing_id", ingestDedupResult.ExistingID).
-				Float64("similarity", ingestDedupResult.Similarity).
-				Msg("ingest: store-path supersession disabled; keeping existing observation active")
-		}
-	}
-
 	// Mark raw event as processed
 	if markErr := s.rawEventStore.MarkProcessed(r.Context(), eventID); markErr != nil {
 		log.Warn().Err(markErr).Int64("eventId", eventID).Msg("Failed to mark raw event as processed")
-	}
-
-	// Async: sync observation to vector store for embedding search
-	if s.vectorSync != nil {
-		obs := models.NewObservation(req.SessionID, req.Project, parsed, 0, 0)
-		obs.ID = obsID
-		s.asyncVectorSync(func() {
-			if syncErr := s.vectorSync.SyncObservation(s.ctx, obs); syncErr != nil {
-				log.Error().Err(syncErr).Int64("obsId", obsID).Msg("Failed to sync observation to vector store")
-			}
-		})
 	}
 
 	log.Debug().

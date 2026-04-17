@@ -173,36 +173,10 @@ func (s *Service) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save user prompt with matched observation count
-	promptID, err := s.promptStore.SaveUserPromptWithMatches(r.Context(), req.ClaudeSessionID, promptNum, cleanedPrompt, req.MatchedObservations)
+	_, err = s.promptStore.SaveUserPromptWithMatches(r.Context(), req.ClaudeSessionID, promptNum, cleanedPrompt, req.MatchedObservations)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to save user prompt")
 		// Non-fatal: continue with session initialization
-	} else if s.vectorSync != nil {
-		// Sync to vector DB asynchronously (non-blocking)
-		now := time.Now()
-		promptWithSession := &models.UserPromptWithSession{
-			UserPrompt: models.UserPrompt{
-				ID:                  promptID,
-				ClaudeSessionID:     req.ClaudeSessionID,
-				PromptNumber:        promptNum,
-				PromptText:          cleanedPrompt,
-				MatchedObservations: req.MatchedObservations,
-				CreatedAt:           now.Format(time.RFC3339),
-				CreatedAtEpoch:      now.UnixMilli(),
-			},
-			Project:      req.Project,
-			SDKSessionID: req.ClaudeSessionID,
-		}
-		s.asyncVectorSync(func() {
-			// Use service context as parent to respect shutdown signals
-			ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
-			defer cancel()
-			if err := s.vectorSync.SyncUserPrompt(ctx, promptWithSession); err != nil {
-				if s.ctx.Err() == nil { // Don't log during shutdown
-					log.Warn().Err(err).Int64("id", promptID).Msg("Failed to sync user prompt to vector store")
-				}
-			}
-		})
 	}
 
 	log.Info().

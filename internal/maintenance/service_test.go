@@ -57,7 +57,7 @@ func TestGenerateProjectBriefing_NoChange(t *testing.T) {
 	cfg := config.Default()
 	cfg.ProjectBriefingEnabled = true
 	llm := &mockBriefingLLM{response: learning.ProjectBriefingNoChange}
-	service := NewService(store, obsStore, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, llm, testLogger())
+	service := NewService(store, obsStore, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, llm, testLogger())
 
 	ctx := context.Background()
 	_, _, err := obsStore.StoreObservation(ctx, "claude-1", "project-alpha", &models.ParsedObservation{
@@ -80,7 +80,7 @@ func TestGenerateProjectBriefing_StoresBriefing(t *testing.T) {
 	cfg := config.Default()
 	cfg.ProjectBriefingEnabled = true
 	llm := &mockBriefingLLM{response: "Active Work\n- Build project briefing\n\nRecent Decisions\n- Enabled project briefings"}
-	service := NewService(store, obsStore, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, llm, testLogger())
+	service := NewService(store, obsStore, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, llm, testLogger())
 
 	ctx := context.Background()
 	_, _, err := obsStore.StoreObservation(ctx, "claude-1", "project-alpha", &models.ParsedObservation{

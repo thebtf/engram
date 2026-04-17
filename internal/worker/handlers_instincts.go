@@ -53,7 +53,6 @@ func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) 
 
 	s.initMu.RLock()
 	obsStore := s.observationStore
-	vectorClient := s.vectorClient
 	s.initMu.RUnlock()
 
 	if obsStore == nil {
@@ -61,7 +60,7 @@ func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	result, importErr := instincts.Import(r.Context(), dir, vectorClient, obsStore)
+	result, importErr := instincts.Import(r.Context(), dir, obsStore)
 	if importErr != nil {
 		log.Error().Err(importErr).Msg("Instinct import failed")
 		http.Error(w, "Import failed: "+importErr.Error(), http.StatusInternalServerError)

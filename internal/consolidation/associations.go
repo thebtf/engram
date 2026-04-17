@@ -3,6 +3,7 @@ package consolidation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -11,6 +12,10 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog"
 )
+
+// ErrAssociationEngineDisabled is returned when DiscoverAssociations is called
+// without a configured embedder (v5 wires nil; feature off until re-enabled).
+var ErrAssociationEngineDisabled = errors.New("association engine disabled (no embedder configured)")
 
 // Embedder produces a vector embedding for the given text.
 type Embedder interface {
@@ -82,9 +87,18 @@ func NewAssociationEngine(embedSvc Embedder, config AssociationConfig, logger ze
 // DiscoverAssociations takes a list of observations and finds creative associations.
 // It samples up to SampleSize observations and checks all pairs for type-pair rule matches.
 // Returns relation detection results for new associations found.
+// IsEnabled reports whether the engine can run discovery. v5 wires a nil embedSvc
+// (embedding package removed), so scheduler should skip DiscoverAssociations entirely.
+func (e *AssociationEngine) IsEnabled() bool {
+	return e != nil && e.embedSvc != nil
+}
+
 func (e *AssociationEngine) DiscoverAssociations(ctx context.Context, observations []*models.Observation) ([]*models.RelationDetectionResult, error) {
 	if len(observations) == 0 {
 		return nil, nil
+	}
+	if !e.IsEnabled() {
+		return nil, ErrAssociationEngineDisabled
 	}
 
 	// Sample if needed

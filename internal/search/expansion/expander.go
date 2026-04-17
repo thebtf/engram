@@ -3,13 +3,9 @@ package expansion
 
 import (
 	"context"
-	"math"
 	"regexp"
-	"sort"
 	"strings"
-	"sync"
 
-	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/pkg/strutil"
 	"github.com/rs/zerolog/log"
 )
@@ -40,29 +36,14 @@ type ExpandedQuery struct {
 
 // Expander provides context-aware query expansion.
 type Expander struct {
-	embedSvc       *embedding.Service
 	hydeGen        *HyDEGenerator
 	intentPatterns map[QueryIntent][]*regexp.Regexp
-	vocabulary     []VocabEntry
-	vocabVectors   [][]float32
-	vocabMu        sync.RWMutex
-}
-
-// VocabEntry represents a vocabulary term from observations.
-type VocabEntry struct {
-	Term   string
-	Source string
-	Weight float64
 }
 
 // Config holds expander configuration.
 type Config struct {
 	// MaxExpansions limits the number of expanded queries returned
 	MaxExpansions int
-	// MinSimilarity is the minimum similarity score for vocabulary expansion
-	MinSimilarity float64
-	// EnableVocabularyExpansion enables finding related terms from observations
-	EnableVocabularyExpansion bool
 	// EnableHyDE enables hypothetical document embedding expansion
 	EnableHyDE bool
 }
@@ -70,17 +51,14 @@ type Config struct {
 // DefaultConfig returns sensible default configuration.
 func DefaultConfig() Config {
 	return Config{
-		MaxExpansions:             4,
-		MinSimilarity:             0.5,
-		EnableVocabularyExpansion: true,
+		MaxExpansions: 4,
 	}
 }
 
 // NewExpander creates a new query expander.
 // The hydeGen parameter is optional (nil disables HyDE expansion).
-func NewExpander(embedSvc *embedding.Service, hydeGen *HyDEGenerator) *Expander {
+func NewExpander(hydeGen *HyDEGenerator) *Expander {
 	e := &Expander{
-		embedSvc:       embedSvc,
 		hydeGen:        hydeGen,
 		intentPatterns: buildIntentPatterns(),
 	}
@@ -178,12 +156,6 @@ func (e *Expander) Expand(ctx context.Context, query string, cfg Config) []Expan
 		}
 	}
 
-	// Generate vocabulary-based expansions if enabled and we have vocabulary
-	if cfg.EnableVocabularyExpansion && e.embedSvc != nil && len(e.vocabulary) > 0 {
-		vocabExpansions := e.expandByVocabulary(ctx, query, cfg.MinSimilarity)
-		expansions = append(expansions, vocabExpansions...)
-	}
-
 	// Deduplicate and limit
 	expansions = deduplicateExpansions(expansions)
 	if len(expansions) > cfg.MaxExpansions {
@@ -258,74 +230,6 @@ func (e *Expander) expandByIntent(query string, intent QueryIntent) []ExpandedQu
 	case IntentGeneral:
 		// For general queries, try noun phrase extraction
 		// No additional expansion - rely on vocabulary expansion
-	}
-
-	return expansions
-}
-
-// expandByVocabulary finds similar terms from the observation vocabulary.
-func (e *Expander) expandByVocabulary(ctx context.Context, query string, minSimilarity float64) []ExpandedQuery {
-	e.vocabMu.RLock()
-	defer e.vocabMu.RUnlock()
-
-	if len(e.vocabulary) == 0 || e.embedSvc == nil {
-		return nil
-	}
-
-	// Embed the query
-	queryEmb, err := e.embedSvc.Embed(query)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to embed query for vocabulary expansion")
-		return nil
-	}
-
-	// Find similar vocabulary terms
-	type scoredTerm struct {
-		entry VocabEntry
-		score float64
-	}
-
-	var similar []scoredTerm
-	for i, entry := range e.vocabulary {
-		if i >= len(e.vocabVectors) {
-			break
-		}
-
-		score := cosineSimilarity(queryEmb, e.vocabVectors[i])
-		if score >= minSimilarity {
-			similar = append(similar, scoredTerm{entry: entry, score: score})
-		}
-	}
-
-	if len(similar) == 0 {
-		return nil
-	}
-
-	// Sort by score (descending) using Go's standard sort - O(n log n)
-	sort.Slice(similar, func(i, j int) bool {
-		return similar[i].score > similar[j].score
-	})
-
-	// Create expansion by combining top similar terms with query
-	var expansions []ExpandedQuery
-	if len(similar) > 0 {
-		// Take top 2 similar terms and combine with original key terms
-		keyTerms := extractKeyTerms(query)
-		for i := 0; i < min(2, len(similar)); i++ {
-			term := similar[i].entry.Term
-			// Don't add if term is already in query
-			if strings.Contains(strings.ToLower(query), strings.ToLower(term)) {
-				continue
-			}
-
-			combinedQuery := strings.Join(keyTerms, " ") + " " + term
-			expansions = append(expansions, ExpandedQuery{
-				Query:  combinedQuery,
-				Weight: 0.7 * similar[i].score * similar[i].entry.Weight,
-				Source: "vocabulary:" + term,
-				Intent: IntentGeneral,
-			})
-		}
 	}
 
 	return expansions
@@ -423,33 +327,5 @@ func deduplicateExpansions(expansions []ExpandedQuery) []ExpandedQuery {
 	return result
 }
 
-// cosineSimilarity computes cosine similarity between two vectors.
-func cosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-
-	return dot / (sqrt(normA) * sqrt(normB))
-}
-
-// sqrt uses the standard math.Sqrt for better performance and accuracy.
-// Returns 0 for non-positive values (original behavior for compatibility).
-func sqrt(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	return math.Sqrt(x)
-}
 
 var truncate = strutil.Truncate

@@ -33,12 +33,13 @@ func TestCheckCrossModelPromotion_EmptySource(t *testing.T) {
 }
 
 func TestCheckCrossModelPromotion_NotUpdateAction(t *testing.T) {
-	// Only UPDATE triggers cross-model, not ADD or NOOP
-	addResult := &Result{Action: ActionAdd}
-	assert.False(t, CheckCrossModelPromotion(addResult, "claude-code", "codex"))
-
+	// Only UPDATE triggers cross-model; any other action (including NOOP) must return false
 	noopResult := &Result{Action: ActionNoop, ExistingID: 1, Similarity: 0.95}
 	assert.False(t, CheckCrossModelPromotion(noopResult, "claude-code", "codex"))
+
+	// Empty/unknown action also returns false
+	emptyResult := &Result{Action: ""}
+	assert.False(t, CheckCrossModelPromotion(emptyResult, "claude-code", "codex"))
 }
 
 func TestCheckCrossModelPromotion_NilResult(t *testing.T) {

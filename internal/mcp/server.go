@@ -19,14 +19,12 @@ import (
 	"github.com/thebtf/engram/internal/consolidation"
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/embedding"
 	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/maintenance"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/sessions"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -41,7 +39,6 @@ type Server struct {
 	relationStore          *gorm.RelationStore
 	sessionStore           *gorm.SessionStore
 	injectionStore         *gorm.InjectionStore
-	vectorClient           vector.Client
 	scoreCalculator        *scoring.Calculator
 	recalculator           *scoring.Recalculator
 	maintenanceService     *maintenance.Service
@@ -50,7 +47,6 @@ type Server struct {
 	consolidationScheduler *consolidation.Scheduler
 	documentStore          *gorm.DocumentStore
 	versionedDocumentStore *gorm.VersionedDocumentStore
-	embedSvc               *embedding.Service
 	chunkManager           *chunking.Manager
 	graphStore             graphpkg.GraphStore
 	reasoningStore         *gorm.ReasoningTraceStore
@@ -70,7 +66,6 @@ func NewServer(
 	patternStore *gorm.PatternStore,
 	relationStore *gorm.RelationStore,
 	sessionStore *gorm.SessionStore,
-	vectorClient vector.Client,
 	scoreCalculator *scoring.Calculator,
 	recalculator *scoring.Recalculator,
 	maintenanceService *maintenance.Service,
@@ -78,7 +73,6 @@ func NewServer(
 	sessionIdxStore *sessions.Store,
 	consolidationScheduler *consolidation.Scheduler,
 	documentStore *gorm.DocumentStore,
-	embedSvc *embedding.Service,
 	chunkManager *chunking.Manager,
 ) *Server {
 	return &Server{
@@ -90,7 +84,6 @@ func NewServer(
 		patternStore:           patternStore,
 		relationStore:          relationStore,
 		sessionStore:           sessionStore,
-		vectorClient:           vectorClient,
 		scoreCalculator:        scoreCalculator,
 		recalculator:           recalculator,
 		maintenanceService:     maintenanceService,
@@ -98,7 +91,6 @@ func NewServer(
 		sessionIdxStore:        sessionIdxStore,
 		consolidationScheduler: consolidationScheduler,
 		documentStore:          documentStore,
-		embedSvc:               embedSvc,
 		chunkManager:           chunkManager,
 	}
 }
@@ -1434,8 +1426,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
-	// Ingest/search require both documentStore and embedSvc
-	if s.documentStore != nil && s.embedSvc != nil {
+	// Document ingest/search tools are document-store gated (embedding removed in v5).
+	if s.documentStore != nil {
 		tools = append(tools,
 			Tool{
 				Name:        "ingest_document",
@@ -2124,64 +2116,12 @@ func (s *Server) handleFindSimilarObservations(ctx context.Context, args json.Ra
 		params.Limit = 50
 	}
 
-	// Use vector search to find similar observations
-	if s.vectorClient == nil {
-		return "", fmt.Errorf("vector search not available")
-	}
-
-	where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, true, nil)
-	results, err := s.vectorClient.Query(ctx, params.Query, params.Limit*2, where)
-	if err != nil {
-		return "", fmt.Errorf("vector search failed: %w", err)
-	}
-
-	// Filter by similarity threshold
-	filtered := vector.FilterByThreshold(results, params.MinSimilarity, params.Limit)
-
-	// Extract observation IDs and build similarity map
-	obsIDs := vector.ExtractObservationIDs(filtered, params.Project)
-	similarityMap := make(map[int64]float64, len(filtered))
-	for _, r := range filtered {
-		if sqliteID, ok := r.Metadata["sqlite_id"].(float64); ok {
-			id := int64(sqliteID)
-			if _, exists := similarityMap[id]; !exists {
-				similarityMap[id] = r.Similarity
-			}
-		}
-	}
-
-	// Fetch full observations in batch (avoids N+1 query problem)
-	observations, err := s.observationStore.GetObservationsByIDsPreserveOrder(ctx, obsIDs)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to batch fetch similar observations, falling back to individual fetch")
-		observations = make([]*models.Observation, 0, len(obsIDs))
-		for _, id := range obsIDs {
-			obs, fetchErr := s.observationStore.GetObservationByID(ctx, id)
-			if fetchErr == nil && obs != nil {
-				observations = append(observations, obs)
-			}
-		}
-	}
-
-	// Build response with similarity scores
-	type SimilarObservation struct {
-		*models.Observation
-		Similarity float64 `json:"similarity"`
-	}
-
-	similarObs := make([]SimilarObservation, 0, len(observations))
-	for _, obs := range observations {
-		sim := similarityMap[obs.ID]
-		similarObs = append(similarObs, SimilarObservation{
-			Observation: obs,
-			Similarity:  sim,
-		})
-	}
-
+	// Vector search removed in v5 (content_chunks table dropped). Return empty result set.
 	response := map[string]any{
-		"observations":   similarObs,
-		"count":          len(similarObs),
+		"observations":   []any{},
+		"count":          0,
 		"min_similarity": params.MinSimilarity,
+		"note":           "Vector similarity search removed in v5; use the 'search' tool for FTS-based retrieval",
 	}
 
 	output, err := json.Marshal(response)
@@ -2255,22 +2195,7 @@ func (s *Server) handleGetPatterns(ctx context.Context, args json.RawMessage) (s
 func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 	stats := make(map[string]any, 8) // Pre-allocate for expected stats keys
 
-	// Get vector count
-	if s.vectorClient != nil {
-		count, err := s.vectorClient.Count(ctx)
-		if err == nil {
-			stats["vector_count"] = count
-		}
-
-		// Cache stats
-		cacheStats := s.vectorClient.GetCacheStats()
-		stats["embedding_cache"] = map[string]any{
-			"hit_rate": cacheStats.HitRate(),
-		}
-
-		// Model version
-		stats["embedding_model"] = s.vectorClient.ModelVersion()
-	}
+	// Vector storage removed in v5; no vector stats available.
 
 	// Get pattern stats
 	if s.patternStore != nil {
@@ -2311,11 +2236,9 @@ func (s *Server) handleBulkDeleteObservations(ctx context.Context, args json.Raw
 	}
 
 	var params struct {
-		IDs           []int64
-		DeleteVectors bool
+		IDs []int64
 	}
 	params.IDs = coerceInt64Slice(m["ids"])
-	params.DeleteVectors = coerceBool(m["delete_vectors"], true)
 
 	if len(params.IDs) == 0 {
 		return "", fmt.Errorf("ids is required")
@@ -2340,11 +2263,7 @@ func (s *Server) handleBulkDeleteObservations(ctx context.Context, args json.Raw
 				continue
 			}
 			deleted++
-
-			// Delete associated vectors if requested
-			if params.DeleteVectors && s.vectorClient != nil {
-				_ = s.vectorClient.DeleteByObservationID(ctx, id)
-			}
+			// Vector storage removed in v5; no vector cleanup needed.
 		}
 	}
 
@@ -2946,108 +2865,13 @@ func (s *Server) handleSuggestConsolidations(ctx context.Context, args json.RawM
 		return string(output), nil
 	}
 
-	// Find similar pairs using vector search if available
-	type consolidationGroup struct {
-		Primary    *models.Observation   `json:"primary"`
-		Reason     string                `json:"reason"`
-		Similar    []*models.Observation `json:"similar"`
-		Similarity float64               `json:"avg_similarity"`
-	}
-
-	groups := []consolidationGroup{}
-	seen := make(map[int64]bool)
-
-	// For each observation, find similar ones
-	for _, primary := range obs {
-		if seen[primary.ID] {
-			continue
-		}
-
-		// Build search text from observation
-		searchText := primary.Title.String
-		if primary.Narrative.Valid {
-			searchText += " " + primary.Narrative.String
-		}
-
-		if searchText == "" || s.vectorClient == nil {
-			continue
-		}
-
-		// Query for similar observations
-		where := vector.BuildWhereFilter(vector.DocTypeObservation, params.Project, true, nil)
-		results, err := s.vectorClient.Query(ctx, searchText, 10, where)
-		if err != nil {
-			continue
-		}
-
-		// Find similar observations above threshold
-		similar := []*models.Observation{}
-		totalSimilarity := 0.0
-
-		for _, r := range results {
-			// Extract observation ID from metadata
-			sqliteID, ok := r.Metadata["sqlite_id"].(float64)
-			if !ok {
-				continue
-			}
-			obsID := int64(sqliteID)
-
-			if obsID == primary.ID || seen[obsID] {
-				continue
-			}
-			if r.Similarity >= params.MinSimilarity {
-				// Fetch the similar observation
-				simObs, err := s.observationStore.GetObservationByID(ctx, obsID)
-				if err != nil || simObs == nil {
-					continue
-				}
-				similar = append(similar, simObs)
-				totalSimilarity += r.Similarity
-				seen[obsID] = true
-			}
-		}
-
-		if len(similar) > 0 {
-			seen[primary.ID] = true
-			avgSimilarity := totalSimilarity / float64(len(similar))
-
-			// Determine consolidation reason
-			reason := "Content similarity detected"
-			if len(primary.Concepts) > 0 && len(similar) > 0 {
-				// Check for concept overlap
-				conceptMap := make(map[string]bool)
-				for _, c := range primary.Concepts {
-					conceptMap[c] = true
-				}
-				for _, sim := range similar {
-					for _, c := range sim.Concepts {
-						if conceptMap[c] {
-							reason = "Similar content with shared concepts"
-							break
-						}
-					}
-				}
-			}
-
-			groups = append(groups, consolidationGroup{
-				Primary:    primary,
-				Similar:    similar,
-				Similarity: avgSimilarity,
-				Reason:     reason,
-			})
-
-			if len(groups) >= params.Limit {
-				break
-			}
-		}
-	}
-
+	// Vector similarity search removed in v5. Return empty consolidation groups.
 	response := map[string]any{
-		"groups":         groups,
+		"groups":         []any{},
 		"total_analyzed": len(obs),
-		"groups_found":   len(groups),
+		"groups_found":   0,
 		"min_similarity": params.MinSimilarity,
-		"recommendation": "Review each group and use merge_observations to consolidate where appropriate",
+		"recommendation": "Vector similarity search removed in v5; manual consolidation via merge_observations is still available",
 	}
 
 	output, err := json.Marshal(response)
@@ -3880,10 +3704,11 @@ func (s *Server) handleBackfillStatus() (string, error) {
 // handleCheckSystemHealth performs comprehensive system health checks.
 func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 	type SubsystemHealth struct {
-		Status   string         `json:"status"` // "healthy", "degraded", "unhealthy"
+		Status   string         `json:"status"`             // "healthy", "degraded", "unhealthy"
 		Message  string         `json:"message,omitempty"`
 		Metrics  map[string]any `json:"metrics,omitempty"`
 		Warnings []string       `json:"warnings,omitempty"`
+		Removed  bool           `json:"removed,omitempty"` // true when the subsystem was intentionally removed (not a fault)
 	}
 
 	type HealthReport struct {
@@ -3938,56 +3763,14 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 	}
 	report.Subsystems["database"] = dbHealth
 
-	// Check vector store health
+	// Vector storage removed in v5 (content_chunks table dropped).
+	// Status is "healthy" (from the system's perspective this is intentional, not a fault).
+	// Removed=true signals clients that enforce the original enum that the subsystem no longer exists.
 	vectorHealth := &SubsystemHealth{
 		Status:  "healthy",
+		Message: "Vector storage permanently removed in v5; FTS-based retrieval is the sole search path",
 		Metrics: make(map[string]any),
-	}
-	if s.vectorClient != nil {
-		stats, err := s.vectorClient.GetHealthStats(ctx)
-		if err != nil {
-			vectorHealth.Status = "degraded"
-			vectorHealth.Message = "Could not get vector stats: " + err.Error()
-			report.HealthScore -= 15
-		} else {
-			vectorHealth.Metrics["total_vectors"] = stats.TotalVectors
-			vectorHealth.Metrics["stale_vectors"] = stats.StaleVectors
-			vectorHealth.Metrics["current_model"] = stats.CurrentModel
-			vectorHealth.Metrics["needs_rebuild"] = stats.NeedsRebuild
-
-			if stats.NeedsRebuild {
-				vectorHealth.Status = "degraded"
-				vectorHealth.Warnings = append(vectorHealth.Warnings, "Vector rebuild recommended: "+stats.RebuildReason)
-				report.Actions = append(report.Actions, "Run vector rebuild to update embeddings")
-				report.HealthScore -= 10
-			}
-
-			// Check stale ratio
-			if stats.TotalVectors > 0 {
-				staleRatio := float64(stats.StaleVectors) / float64(stats.TotalVectors)
-				if staleRatio > 0.2 {
-					vectorHealth.Warnings = append(vectorHealth.Warnings,
-						fmt.Sprintf("%.1f%% of vectors are stale", staleRatio*100))
-					report.HealthScore -= 5
-				}
-			}
-		}
-
-		// Check cache performance
-		cacheStats := s.vectorClient.GetCacheStats()
-		vectorHealth.Metrics["cache_hit_rate"] = fmt.Sprintf("%.1f%%", cacheStats.HitRate())
-		vectorHealth.Metrics["embedding_hits"] = cacheStats.EmbeddingHits
-		vectorHealth.Metrics["embedding_misses"] = cacheStats.EmbeddingMisses
-		vectorHealth.Metrics["result_hits"] = cacheStats.ResultHits
-		vectorHealth.Metrics["result_misses"] = cacheStats.ResultMisses
-
-		if cacheStats.HitRate() < 20 && (cacheStats.EmbeddingHits+cacheStats.EmbeddingMisses) > 100 {
-			vectorHealth.Warnings = append(vectorHealth.Warnings, "Low cache hit rate - consider cache tuning")
-		}
-	} else {
-		vectorHealth.Status = "unhealthy"
-		vectorHealth.Message = "Vector client not initialized"
-		report.HealthScore -= 30
+		Removed: true,
 	}
 	report.Subsystems["vectors"] = vectorHealth
 

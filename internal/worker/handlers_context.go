@@ -6,15 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/search"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -220,7 +217,6 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	threshold := retrievalMeta.threshold
 	expandedQueries := retrievalMeta.expandedQueries
 	detectedIntent := retrievalMeta.detectedIntent
-	usedVector := retrievalMeta.usedVector
 	staleCount := retrievalMeta.staleCount
 	freshCount := retrievalMeta.freshCount
 	duplicatesRemoved := retrievalMeta.duplicatesRemoved
@@ -284,7 +280,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Track this search for analytics
-	s.trackSearchQuery(query, project, "observations", len(clusteredObservations), usedVector, float32(time.Since(searchStart).Milliseconds()))
+	s.trackSearchQuery(query, project, "observations", len(clusteredObservations), float32(time.Since(searchStart).Milliseconds()))
 
 	// Always-inject tier: fetch observations tagged "always-inject" regardless of query (FR-1, FR-6)
 	alwaysInjectLimit := s.config.AlwaysInjectLimit
@@ -347,173 +343,15 @@ func (s *Service) handleFileContext(w http.ResponseWriter, r *http.Request) {
 		files = files[:maxFiles]
 	}
 
-	// Get limit parameter (default 10 per file)
-	limitStr := r.URL.Query().Get("limit")
-	limit := 10
-	if limitStr != "" {
-		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 50 {
-			limit = parsed
-		}
-	}
-
-	// Search for observations related to each file in parallel
-	ctx := r.Context()
-
-	// Check if vector search is available
-	if s.vectorClient == nil || !s.vectorClient.IsConnected() {
-		writeJSON(w, map[string]any{
-			"files":   files,
-			"results": map[string]any{},
-			"count":   0,
-			"error":   "vector search not available",
-		})
-		return
-	}
-
-	// Prepare for parallel execution
-	type fileResult struct {
-		file    string
-		results []map[string]any
-		obsIDs  []int64 // Track observation IDs for deduplication
-	}
-
-	resultsChan := make(chan fileResult, len(files))
-	sem := make(chan struct{}, 5) // Limit concurrency to 5 parallel searches
-	var wg sync.WaitGroup
-
-	for _, file := range files {
-		file = strings.TrimSpace(file)
-		if file == "" {
-			continue
-		}
-
-		wg.Add(1)
-		go func(file string) {
-			defer wg.Done()
-			sem <- struct{}{}        // Acquire semaphore
-			defer func() { <-sem }() // Release semaphore
-
-			// Build search query from file path
-			query := buildFileQuery(file)
-
-			where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false, nil)
-			vectorResults, vecErr := s.vectorClient.Query(ctx, query, limit*2, where)
-			if vecErr != nil {
-				log.Warn().Err(vecErr).Str("file", file).Msg("Vector search failed for file context")
-				return
-			}
-
-			// Extract observation IDs from vector results
-			obsIDs := vector.ExtractObservationIDs(vectorResults, project)
-			if len(obsIDs) == 0 {
-				return
-			}
-
-			// Fetch observations
-			observations, err := s.observationStore.GetObservationsByIDs(ctx, obsIDs, "score_desc", limit*2)
-			if err != nil {
-				log.Warn().Err(err).Str("file", file).Msg("Failed to fetch observations for file context")
-				return
-			}
-
-			// Pre-build score map from vector results (O(n) instead of O(nР’Р†))
-			scoreMap := make(map[int64]float64, len(vectorResults))
-			var avgScore float64
-			for _, vr := range vectorResults {
-				avgScore += vr.Similarity
-				// Parse observation ID from vector result ID (format: obs_{id}_{field})
-				// Use index-based parsing to avoid slice allocation from strings.Split
-				if len(vr.ID) > 4 && vr.ID[:4] == "obs_" {
-					rest := vr.ID[4:] // Skip "obs_"
-					underscoreIdx := strings.IndexByte(rest, '_')
-					var idStr string
-					if underscoreIdx >= 0 {
-						idStr = rest[:underscoreIdx]
-					} else {
-						idStr = rest
-					}
-					if id, parseErr := strconv.ParseInt(idStr, 10, 64); parseErr == nil {
-						// Keep highest score for each observation
-						if existing, exists := scoreMap[id]; !exists || vr.Similarity > existing {
-							scoreMap[id] = vr.Similarity
-						}
-					}
-				}
-			}
-			if len(vectorResults) > 0 {
-				avgScore /= float64(len(vectorResults))
-			}
-
-			fileResults := make([]map[string]any, 0, limit)
-			var usedIDs []int64
-			for _, obs := range observations {
-				// Check project scope
-				if obs.Scope == "project" && obs.Project != project {
-					continue
-				}
-
-				// O(1) score lookup instead of O(n) nested loop
-				score, found := scoreMap[obs.ID]
-				if !found {
-					// Use average score as fallback
-					score = avgScore
-				}
-
-				// Only include if score is above threshold
-				if score < 0.3 {
-					continue
-				}
-
-				fileResults = append(fileResults, map[string]any{
-					"id":        obs.ID,
-					"title":     obs.Title.String,
-					"type":      obs.Type,
-					"narrative": obs.Narrative.String,
-					"facts":     obs.Facts,
-					"score":     score,
-				})
-				usedIDs = append(usedIDs, obs.ID)
-
-				if len(fileResults) >= limit {
-					break
-				}
-			}
-
-			if len(fileResults) > 0 {
-				resultsChan <- fileResult{file: file, results: fileResults, obsIDs: usedIDs}
-			}
-		}(file)
-	}
-
-	// Close channel when all goroutines complete
-	go func() {
-		wg.Wait()
-		close(resultsChan)
-	}()
-
-	// Collect results and deduplicate
-	allResults := make(map[string]any)
-	seenObservationIDs := make(map[int64]bool)
-
-	for res := range resultsChan {
-		// Filter out duplicates that were already seen in other files
-		dedupedResults := make([]map[string]any, 0, len(res.results))
-		for i, r := range res.results {
-			obsID := res.obsIDs[i]
-			if !seenObservationIDs[obsID] {
-				seenObservationIDs[obsID] = true
-				dedupedResults = append(dedupedResults, r)
-			}
-		}
-		if len(dedupedResults) > 0 {
-			allResults[res.file] = dedupedResults
-		}
-	}
-
+	// Vector search removed in v5 (content_chunks table dropped). Return empty results.
+	// "deprecated" and "message" allow clients to distinguish feature-removal
+	// from a genuine empty-result search, preventing silent degradation.
 	writeJSON(w, map[string]any{
-		"files":   files,
-		"results": allResults,
-		"count":   len(allResults),
+		"files":      files,
+		"results":    map[string]any{},
+		"count":      0,
+		"deprecated": true,
+		"message":    "file-context vector search removed in v5; results are intentionally empty",
 	})
 }
 
@@ -884,51 +722,15 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		// Legacy path — active when ENGRAM_INJECT_UNIFIED=false for emergency rollback.
-		// Uses hardcoded query with position-rank + temporal boost instead of hybrid search.
-		if s.vectorClient != nil && s.vectorClient.IsConnected() {
-			legacyQuery := project + " code development"
-			where := vector.BuildWhereFilter(vector.DocTypeObservation, project, false, nil)
-
-			vectorResults, vecErr := s.vectorClient.Query(ctx, legacyQuery, 20, where)
-			if vecErr != nil {
-				log.Debug().Err(vecErr).Str("project", project).Msg("Vector query failed for context inject relevant section (legacy)")
-			} else {
-				obsIDs := vector.ExtractObservationIDs(vectorResults, project)
-				if len(obsIDs) > 0 {
-					fetched, fetchErr := s.observationStore.GetObservationsByIDs(ctx, obsIDs, "score_desc", 10)
-					if fetchErr != nil {
-						log.Debug().Err(fetchErr).Msg("Failed to fetch relevant observations for context inject (legacy)")
-					} else {
-						now := time.Now().UnixMilli()
-						twentyFourHoursAgo := now - 24*60*60*1000
-						type scoredObs struct {
-							obs   *models.Observation
-							score float64
-						}
-						scored := make([]scoredObs, 0, len(fetched))
-						for i, obs := range fetched {
-							if _, alreadyInRecent := recentIDs[obs.ID]; alreadyInRecent {
-								continue
-							}
-							baseScore := 1.0 / float64(i+1)
-							if obs.CreatedAtEpoch > twentyFourHoursAgo {
-								baseScore *= 1.5
-							}
-							scored = append(scored, scoredObs{obs: obs, score: baseScore})
-						}
-						sort.Slice(scored, func(i, j int) bool {
-							return scored[i].score > scored[j].score
-						})
-						maxRelevant := 10
-						if len(scored) < maxRelevant {
-							maxRelevant = len(scored)
-						}
-						relevantObservations = make([]*models.Observation, maxRelevant)
-						for i := 0; i < maxRelevant; i++ {
-							relevantObservations[i] = scored[i].obs
-						}
-					}
+		// Legacy path (ENGRAM_INJECT_UNIFIED=false): vector search removed in v5.
+		// Fall back to FTS-based retrieval.
+		legacyQuery := project + " code development"
+		legacyScopeFilter := gorm.ScopeFilter{Project: project, AgentID: agentID}
+		fetched, fetchErr := s.observationStore.SearchObservationsFTSFiltered(ctx, legacyQuery, legacyScopeFilter, 10)
+		if fetchErr == nil && len(fetched) > 0 {
+			for _, obs := range fetched {
+				if _, alreadyInRecent := recentIDs[obs.ID]; !alreadyInRecent {
+					relevantObservations = append(relevantObservations, obs)
 				}
 			}
 		}

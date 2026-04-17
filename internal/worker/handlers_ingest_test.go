@@ -12,90 +12,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/thebtf/engram/internal/config"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/vector"
 	"github.com/thebtf/engram/pkg/models"
 )
 
-type ingestSupersessionTestVectorClient struct {
-	results []vector.QueryResult
-}
-
-func (c ingestSupersessionTestVectorClient) AddDocuments(context.Context, []vector.Document) error {
-	return nil
-}
-
-func (c ingestSupersessionTestVectorClient) DeleteDocuments(context.Context, []string) error {
-	return nil
-}
-
-func (c ingestSupersessionTestVectorClient) Query(context.Context, string, int, vector.WhereFilter) ([]vector.QueryResult, error) {
-	return c.results, nil
-}
-
-func (c ingestSupersessionTestVectorClient) IsConnected() bool {
-	return true
-}
-
-func (c ingestSupersessionTestVectorClient) Close() error {
-	return nil
-}
-
-func (c ingestSupersessionTestVectorClient) Count(context.Context) (int64, error) {
-	return int64(len(c.results)), nil
-}
-
-func (c ingestSupersessionTestVectorClient) ModelVersion() string {
-	return "test-model"
-}
-
-func (c ingestSupersessionTestVectorClient) NeedsRebuild(context.Context) (bool, string) {
-	return false, ""
-}
-
-func (c ingestSupersessionTestVectorClient) GetStaleVectors(context.Context) ([]vector.StaleVectorInfo, error) {
-	return nil, nil
-}
-
-func (c ingestSupersessionTestVectorClient) GetHealthStats(context.Context) (*vector.HealthStats, error) {
-	return &vector.HealthStats{}, nil
-}
-
-func (c ingestSupersessionTestVectorClient) GetCacheStats() vector.CacheStatsSnapshot {
-	return vector.CacheStatsSnapshot{}
-}
-
-func (c ingestSupersessionTestVectorClient) GetMetrics(context.Context) vector.VectorMetricsSnapshot {
-	return vector.VectorMetricsSnapshot{}
-}
-
-func (c ingestSupersessionTestVectorClient) DeleteByObservationID(context.Context, int64) error {
-	return nil
-}
-
-func disableIngestStorePathSupersession(t *testing.T) {
-	t.Helper()
-
-	original, hadOriginal := os.LookupEnv("ENGRAM_STORE_PATH_SUPERSESSION_ENABLED")
-	require.NoError(t, os.Setenv("ENGRAM_STORE_PATH_SUPERSESSION_ENABLED", "false"))
-	_, _, err := config.Reload()
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		var restoreErr error
-		if hadOriginal {
-			restoreErr = os.Setenv("ENGRAM_STORE_PATH_SUPERSESSION_ENABLED", original)
-		} else {
-			restoreErr = os.Unsetenv("ENGRAM_STORE_PATH_SUPERSESSION_ENABLED")
-		}
-		require.NoError(t, restoreErr)
-		_, _, err := config.Reload()
-		require.NoError(t, err)
-	})
-}
-
-func newIngestSupersessionTestService(t *testing.T, vectorClient vector.Client) (*Service, *dbgorm.ObservationStore) {
+func newIngestTestService(t *testing.T) (*Service, *dbgorm.ObservationStore) {
 	t.Helper()
 
 	dsn := os.Getenv("DATABASE_DSN")
@@ -111,7 +32,6 @@ func newIngestSupersessionTestService(t *testing.T, vectorClient vector.Client) 
 	service := &Service{
 		observationStore: observationStore,
 		rawEventStore:    rawEventStore,
-		vectorClient:     vectorClient,
 	}
 
 	t.Cleanup(func() {
@@ -137,21 +57,11 @@ func seedIngestObservation(t *testing.T, ctx context.Context, observationStore *
 	return id
 }
 
-func TestHandleIngestEvent_DisabledStorePathSupersessionKeepsExistingObservationActive(t *testing.T) {
-	disableIngestStorePathSupersession(t)
-
+func TestHandleIngestEvent_StoresObservationAndReturnsAccepted(t *testing.T) {
 	ctx := context.Background()
 	project := "ingest-" + uuid.NewString()
-	service, observationStore := newIngestSupersessionTestService(t, nil)
-	existingID := seedIngestObservation(t, ctx, observationStore, project)
-	service.vectorClient = ingestSupersessionTestVectorClient{results: []vector.QueryResult{{
-		Similarity: 0.80,
-		Metadata: map[string]any{
-			"sqlite_id": float64(existingID),
-			"doc_type":  string(vector.DocTypeObservation),
-			"project":   project,
-		},
-	}}}
+	service, observationStore := newIngestTestService(t)
+	_ = seedIngestObservation(t, ctx, observationStore, project)
 
 	body, err := json.Marshal(IngestRequest{
 		SessionID:     "session-" + uuid.NewString(),
@@ -173,8 +83,4 @@ func TestHandleIngestEvent_DisabledStorePathSupersessionKeepsExistingObservation
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
 	require.Equal(t, "accepted", result["status"])
 	require.NotZero(t, int64(result["obs_id"].(float64)))
-
-	storedExisting, err := observationStore.GetObservationByID(ctx, existingID)
-	require.NoError(t, err)
-	require.False(t, storedExisting.IsSuperseded)
 }
