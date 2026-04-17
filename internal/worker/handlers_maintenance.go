@@ -136,20 +136,6 @@ func (s *Service) handleRunMaintenance(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Clean up old injection log entries (90-day retention) in the background.
-	go func() {
-		s.initMu.RLock()
-		obsStore := s.observationStore
-		s.initMu.RUnlock()
-
-		if obsStore == nil {
-			return
-		}
-		if err := cleanupInjectionLog(context.Background(), obsStore); err != nil {
-			log.Warn().Err(err).Msg("injection log cleanup failed")
-		}
-	}()
-
 	writeJSON(w, map[string]any{
 		"status":  "triggered",
 		"message": "Maintenance run started in background",
@@ -482,7 +468,6 @@ func (s *Service) handlePurgeRebuild(w http.ResponseWriter, r *http.Request) {
 		"observation_relations",
 		"session_summaries",
 		"user_prompts",
-		"injection_log",
 	}
 	for _, table := range derivedTables {
 		if err := db.Exec("TRUNCATE " + table + " RESTART IDENTITY CASCADE").Error; err != nil {
@@ -596,17 +581,5 @@ func (s *Service) handleMaintenanceLogs(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// cleanupInjectionLog removes injection log entries older than 90 days.
-func cleanupInjectionLog(ctx context.Context, obsStore interface {
-	CleanupInjectionLog(ctx context.Context, retentionDays int) (int64, error)
-}) error {
-	deleted, err := obsStore.CleanupInjectionLog(ctx, 90)
-	if err != nil {
-		return err
-	}
-	if deleted > 0 {
-		log.Info().Int64("deleted", deleted).Msg("cleaned up old injection log entries")
-	}
-	return nil
-}
+
 

@@ -1648,76 +1648,10 @@ func (s *Service) detectAPOCandidates(ctx context.Context) {
 	}
 }
 
-// adjustAdaptiveThresholds reads citation rates per project and adjusts search thresholds.
-// Projects with low citation rate (< 0.2) get raised threshold (+0.05).
-// Projects with high citation rate (> 0.6) get lowered threshold (-0.05).
-// Bounds: [0.15, 0.60]. Window: last 50 sessions per project.
-// Requires >= 10 sessions to avoid noisy adjustment on sparse data.
-func (s *Service) adjustAdaptiveThresholds(ctx context.Context) (int, error) {
-	// Get distinct projects with injection data
-	var projects []string
-	if err := s.observationStore.GetDB().WithContext(ctx).
-		Raw(`SELECT DISTINCT project FROM injection_log WHERE project != '' LIMIT 100`).
-		Pluck("project", &projects).Error; err != nil {
-		return 0, err
-	}
-
-	psStore := gorm.NewProjectSettingsStore(s.observationStore.GetDB())
-	adjusted := 0
-
-	for _, project := range projects {
-		// Minimum session guard: require >= 10 sessions to avoid noisy adjustment
-		var sessionCount int64
-		s.observationStore.GetDB().WithContext(ctx).
-			Raw(`SELECT COUNT(DISTINCT session_id) FROM injection_log WHERE project = ?`, project).
-			Scan(&sessionCount)
-		if sessionCount < 10 {
-			continue
-		}
-
-		citationRate, err := s.observationStore.GetCitationRate(ctx, project, 50)
-		if err != nil {
-			s.log.Debug().Err(err).Str("project", project).Msg("Failed to get citation rate")
-			continue
-		}
-
-		// Skip neutral zone (0.2 - 0.6) — no adjustment needed
-		if citationRate >= 0.2 && citationRate <= 0.6 {
-			continue
-		}
-
-		// Determine delta
-		var delta float64
-		if citationRate < 0.2 {
-			delta = 0.05 // raise threshold (be more selective)
-		} else {
-			delta = -0.05 // lower threshold (be more inclusive)
-		}
-
-		// Check current threshold for bounds enforcement
-		current, threshErr := psStore.GetThreshold(ctx, project)
-		if threshErr != nil {
-			s.log.Debug().Err(threshErr).Str("project", project).Msg("Failed to get current threshold, skipping")
-			continue
-		}
-		newThreshold := current + delta
-		if newThreshold < 0.15 || newThreshold > 0.60 {
-			continue // would exceed bounds, skip
-		}
-
-		if err := psStore.AdjustThreshold(ctx, project, delta); err != nil {
-			s.log.Warn().Err(err).Str("project", project).Float64("delta", delta).Msg("Failed to adjust threshold")
-			continue
-		}
-
-		s.log.Info().
-			Str("project", project).
-			Float64("citation_rate", citationRate).
-			Float64("delta", delta).
-			Float64("new_threshold", newThreshold).
-			Msg("Adjusted project threshold from citation data")
-		adjusted++
-	}
-
-	return adjusted, nil
+// adjustAdaptiveThresholds was driven by injection_log which was dropped in v5 (US1).
+// The function is retained as a no-op so the maintenance scheduler loop compiles
+// without changes to the subtask table. A follow-up task should replace this with an
+// effectiveness_score-based approach.
+func (s *Service) adjustAdaptiveThresholds(_ context.Context) (int, error) {
+	return 0, nil
 }
