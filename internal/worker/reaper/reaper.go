@@ -6,7 +6,7 @@
 // The following tables were audited for foreign-key references to projects.id:
 //   - observations     — project column is TEXT, no FK constraint
 //   - sdk_sessions     — project column is TEXT, no FK constraint
-//   - injection_log    — project column is TEXT, no FK constraint
+//   - injection_log    — dropped in v5 (US1); was TEXT, no FK constraint
 //   - patterns         — no project FK column
 //   - memory_blocks    — not present in migrations (non-existent table)
 //   - collections      — not present in migrations (non-existent table)

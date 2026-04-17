@@ -627,8 +627,9 @@ func (s *Service) runMaintenance(ctx context.Context) {
 	}
 
 	// Task 20: Adaptive threshold adjustment per project (Learning Memory v3 FR-6)
-	// Reads citation rates from injection_log, adjusts per-project thresholds.
+	// NOTE: Currently a no-op — injection_log was dropped in v5 (US1).
 	// Bounds: [0.15, 0.60]. Window: last 50 sessions per project.
+	// A follow-up task (US7) should replace this with an effectiveness_score-based approach.
 	taskIdx++
 	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "started", "")
 	if s.observationStore != nil {
@@ -707,8 +708,9 @@ func (s *Service) runMaintenance(ctx context.Context) {
 	}
 
 	// Task 24: Hit rate analytics (gstack-insights FR-5)
-	// Identifies noise (10+ injections, 0 citations) and star (5+ injections, >50% citation)
-	// observations. Recalculates each cycle; requires 50+ injection_log entries.
+	// NOTE: Currently a no-op — injection_log was dropped in v5 (US1).
+	// Previously identified noise (10+ injections, 0 citations) and star (5+ injections, >50% citation)
+	// observations. Recalculates each cycle; was driven by injection_log data.
 	taskIdx++
 	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "started", "")
 	{
