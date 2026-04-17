@@ -2701,6 +2701,74 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		// Migration 083: Drop session_observation_injections orphan join table.
+		// This table was created by migration 028 for per-session injection tracking but
+		// the citation-tracking code path (S16 arch decision) is dead. The table is never
+		// queried in production and contains only derived data. Safe to drop unconditionally.
+		{
+			ID: "083_drop_session_observation_injections",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS session_observation_injections`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				sqls := []string{
+					`CREATE TABLE IF NOT EXISTS session_observation_injections (
+						id BIGSERIAL PRIMARY KEY,
+						session_id BIGINT NOT NULL REFERENCES sdk_sessions(id) ON DELETE CASCADE,
+						observation_id BIGINT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+						injected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						UNIQUE(session_id, observation_id)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_soi_session_id ON session_observation_injections(session_id)`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 083 rollback: %w", err)
+					}
+				}
+				return nil
+			},
+		},
+
+		// Migration 084: Drop injection_log orphan table.
+		// This table was created by migration 046 for citation-based effectiveness tracking.
+		// The citation-tracking code path is dead (S16 arch decision — effectiveness_score
+		// columns on observations replaced injection_log as the source of truth). The table
+		// is never queried in production and contains only derived data.
+		{
+			ID: "084_drop_injection_log",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS injection_log`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				// Recreate the final-state schema (migration 046 baseline + migration 066 additions).
+				// Migration 066 added `cited BOOLEAN` column + `idx_injection_log_session_cited` index
+				// for Learning Memory v3 citation-based effectiveness tracking. Rollback must restore
+				// both — otherwise a post-rollback database would be missing schema that existed
+				// immediately before DROP, breaking downstream migration replay.
+				sqls := []string{
+					`CREATE TABLE IF NOT EXISTS injection_log (
+						id BIGSERIAL PRIMARY KEY,
+						observation_id BIGINT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+						project TEXT NOT NULL DEFAULT '',
+						task_context TEXT NOT NULL DEFAULT '',
+						session_id TEXT NOT NULL DEFAULT '',
+						created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						cited BOOLEAN DEFAULT false
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_injection_log_observation_id ON injection_log(observation_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_injection_log_project ON injection_log(project)`,
+					`CREATE INDEX IF NOT EXISTS idx_injection_log_created_at ON injection_log(created_at)`,
+					`CREATE INDEX IF NOT EXISTS idx_injection_log_session_cited ON injection_log(session_id, cited)`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 084 rollback: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

@@ -235,21 +235,6 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 		clusteredObservations = filtered
 	}
-	// Async: log which observations were injected into this context
-	if s.observationStore != nil && len(clusteredObservations) > 0 {
-		resultIDs := make([]int64, len(clusteredObservations))
-		for i, obs := range clusteredObservations {
-			resultIDs[i] = obs.ID
-		}
-		go func() {
-			logCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			if err := s.observationStore.LogInjections(logCtx, resultIDs, project, "", ""); err != nil {
-				log.Debug().Err(err).Msg("Failed to log injections")
-			}
-		}()
-	}
-
 	// Record retrieval stats with staleness metrics
 	s.recordRetrievalStatsExtended(project, int64(len(clusteredObservations)), 0, 0,
 		int64(staleCount), int64(freshCount), int64(duplicatesRemoved), true)

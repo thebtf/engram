@@ -55,17 +55,15 @@ func (s *Service) expandGraphNeighbors(ctx context.Context, observations []*mode
 }
 
 func (s *Service) lookupDiversityScores(ctx context.Context, observations []*models.Observation) (map[int64]float64, error) {
-	ids := make([]int64, 0, len(observations))
-	for _, observation := range observations {
-		ids = append(ids, observation.ID)
-	}
 	if s.retrievalHooks != nil && s.retrievalHooks.getDiversityScores != nil {
+		ids := make([]int64, 0, len(observations))
+		for _, observation := range observations {
+			ids = append(ids, observation.ID)
+		}
 		return s.retrievalHooks.getDiversityScores(ctx, ids)
 	}
-	if s.observationStore == nil {
-		return nil, nil
-	}
-	return s.observationStore.GetDiversityScores(ctx, ids)
+	// injection_log table was dropped in v5 (US1); diversity scoring is now a no-op.
+	return nil, nil
 }
 
 func (s *Service) lookupRecentSessionIDs(ctx context.Context, project string, since time.Time) (map[string]bool, error) {

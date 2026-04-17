@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
 )
@@ -658,11 +657,6 @@ func (s *Service) handleSessionMarkInjected(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := observationStore.RecordSessionInjections(r.Context(), sessionID, req.IDs); err != nil {
-		http.Error(w, "failed to record session injections", http.StatusInternalServerError)
-		return
-	}
-
 	if err := observationStore.IncrementInjectionCounts(r.Context(), req.IDs); err != nil {
 		http.Error(w, "failed to increment injection counts", http.StatusInternalServerError)
 		return
@@ -698,78 +692,6 @@ func (s *Service) handleSessionMarkInjected(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, map[string]any{"status": "ok", "count": len(req.IDs)})
 }
 
-// InjectedObservationResponse is the response shape for injected observation data.
-type InjectedObservationResponse struct {
-	ID    int64    `json:"id"`
-	Title string   `json:"title"`
-	Type  string   `json:"type"`
-	Facts []string `json:"facts"`
-}
-
-// handleGetSessionInjectedObservations godoc
-// @Summary Get observations injected into session
-// @Description Returns observations that were injected into a specific session's context.
-// @Tags Scoring
-// @Produce json
-// @Security ApiKeyAuth
-// @Param sessionId path int true "Session database ID"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {string} string "invalid session id"
-// @Failure 500 {string} string "internal error"
-// @Failure 503 {string} string "service not ready"
-// @Router /api/sessions/{sessionId}/injected-observations [get]
-func (s *Service) handleGetSessionInjectedObservations(w http.ResponseWriter, r *http.Request) {
-	sessionIdStr := chi.URLParam(r, "sessionId")
-	sessionID, err := strconv.ParseInt(sessionIdStr, 10, 64)
-	if err != nil {
-		http.Error(w, "invalid session id", http.StatusBadRequest)
-		return
-	}
-
-	s.initMu.RLock()
-	observationStore := s.observationStore
-	s.initMu.RUnlock()
-
-	if observationStore == nil {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	ids, err := observationStore.GetSessionInjectedObservations(r.Context(), sessionID)
-	if err != nil {
-		http.Error(w, "failed to get injected observations", http.StatusInternalServerError)
-		return
-	}
-
-	// Batch fetch all observations in a single query to avoid N+1 DB calls.
-	observations, err := observationStore.GetObservationsByIDsPreserveOrder(r.Context(), ids)
-	if err != nil {
-		log.Warn().Err(err).Int64("sessionID", sessionID).Msg("Failed to load injected observations")
-		http.Error(w, "failed to load injected observations", http.StatusInternalServerError)
-		return
-	}
-
-	result := make([]InjectedObservationResponse, 0, len(observations))
-	for _, obs := range observations {
-		title := ""
-		if obs.Title.Valid {
-			title = obs.Title.String
-		}
-		facts := []string(obs.Facts)
-		if facts == nil {
-			facts = []string{}
-		}
-		result = append(result, InjectedObservationResponse{
-			ID:    obs.ID,
-			Title: title,
-			Type:  string(obs.Type),
-			Facts: facts,
-		})
-	}
-
-	writeJSON(w, map[string]any{"observations": result})
-}
-
 // incrementRetrievalCounts increments retrieval counts for observations.
 // Called after search results are returned to track popularity.
 func (s *Service) incrementRetrievalCounts(ids []int64) {
@@ -802,83 +724,3 @@ func (s *Service) incrementRetrievalCounts(ids []int64) {
 	}()
 }
 
-// handleMarkCited godoc
-// @Summary Mark observations as cited in a session
-// @Description Records which injected observations were actually cited by the agent.
-// Updates injection_log.cited=true for cited observations and propagates citation signal
-// to effectiveness_score via PropagateCitation. Idempotent.
-// @Tags Scoring
-// @Accept json
-// @Produce json
-// @Security ApiKeyAuth
-// @Param sessionId path int true "Session database ID"
-// @Param body body object true "Citation data: {cited_ids: [1,2], all_injected_ids: [1,2,3,4]}"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {string} string "bad request"
-// @Failure 503 {string} string "service not ready"
-// @Router /api/sessions/{sessionId}/mark-cited [post]
-func (s *Service) handleMarkCited(w http.ResponseWriter, r *http.Request) {
-	sessionIdStr := chi.URLParam(r, "sessionId")
-	if sessionIdStr == "" {
-		http.Error(w, "session id required", http.StatusBadRequest)
-		return
-	}
-
-	var req struct {
-		CitedIDs       []int64 `json:"cited_ids"`
-		AllInjectedIDs []int64 `json:"all_injected_ids"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if len(req.AllInjectedIDs) == 0 {
-		writeJSON(w, map[string]any{"status": "ok", "marked": 0, "propagated": 0})
-		return
-	}
-
-	s.initMu.RLock()
-	observationStore := s.observationStore
-	s.initMu.RUnlock()
-
-	if observationStore == nil {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Mark cited observations in injection_log
-	var marked int64
-	if len(req.CitedIDs) > 0 {
-		var err error
-		marked, err = observationStore.MarkCited(r.Context(), sessionIdStr, req.CitedIDs)
-		if err != nil {
-			log.Warn().Err(err).Str("session", sessionIdStr).Msg("Failed to mark cited")
-		}
-	}
-
-	// Propagate citation signal to effectiveness_score (async, non-blocking)
-	capturedCited := req.CitedIDs
-	capturedAll := req.AllInjectedIDs
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		propagated, err := learning.PropagateCitation(bgCtx, observationStore, capturedCited, capturedAll)
-		if err != nil {
-			log.Warn().Err(err).Str("session", sessionIdStr).Msg("Citation propagation failed")
-		} else {
-			log.Info().
-				Str("session", sessionIdStr).
-				Int("cited", len(capturedCited)).
-				Int("total", len(capturedAll)).
-				Int("propagated", propagated).
-				Msg("Citation signal propagated")
-		}
-	}()
-
-	writeJSON(w, map[string]any{
-		"status": "ok",
-		"marked": marked,
-		"queued": len(req.AllInjectedIDs),
-	})
-}

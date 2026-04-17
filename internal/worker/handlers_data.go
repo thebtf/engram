@@ -1004,7 +1004,7 @@ func (s *Service) handleBulkScopeChange(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-const noHitRateAnalyticsDataMessage = "No hit rate analytics data yet. Hit rate flags are computed during maintenance cycles and require 50+ injection_log entries."
+const noHitRateAnalyticsDataMessage = "No hit rate analytics data available. Hit rate analytics is disabled in v5 (injection_log was dropped in US1)."
 
 type hitRateAnalyticsRow struct {
 	ID    int64  `gorm:"column:id"`
