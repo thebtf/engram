@@ -40,7 +40,7 @@ func TestMigrationsIntegration(t *testing.T) {
 	// Use 2000 dims — the target production configuration.
 	const dims = 2000
 
-	if err := runMigrations(db, dims); err != nil {
+	if err := runMigrations(db); err != nil {
 		t.Fatalf("runMigrations(dims=%d): %v", dims, err)
 	}
 	t.Logf("all migrations passed with dims=%d", dims)
@@ -74,11 +74,11 @@ func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
 	require.NoError(t, sqlDB.Ping())
 
 	const dims = 2000
-	require.NoError(t, runMigrations(db, dims))
+	require.NoError(t, runMigrations(db))
 
 	require.NoError(t, db.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS commands_run`).Error)
 	require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, "074_observations_commands_run").Error)
-	require.NoError(t, runMigrations(db, dims))
+	require.NoError(t, runMigrations(db))
 
 	var dataType string
 	err = db.Raw(`

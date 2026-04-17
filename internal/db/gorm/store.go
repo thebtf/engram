@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/thebtf/engram/internal/config"
 	"github.com/rs/zerolog/log"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -75,8 +74,7 @@ func NewStore(cfg Config) (*Store, error) {
 	}
 
 	// 5. Run migrations
-	embeddingDims := config.GetEmbeddingDimensions()
-	if err := runMigrations(db, embeddingDims); err != nil {
+	if err := runMigrations(db); err != nil {
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
