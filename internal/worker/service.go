@@ -35,7 +35,6 @@ import (
 	"github.com/thebtf/engram/internal/maintenance"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/pattern"
-	"github.com/thebtf/engram/internal/relation"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
@@ -109,7 +108,6 @@ type Service struct {
 	graphStore             graphpkg.GraphStore
 	graphWriter            *graphpkg.AsyncGraphWriter
 	patternDetector        *pattern.Detector
-	relationDetector       *relation.Detector
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
@@ -1360,7 +1358,6 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/maintenance/status", s.handleMaintenanceStatus)
 		r.Get("/api/maintenance/logs", s.handleMaintenanceLogs)
 		r.Get("/api/maintenance/consistency", s.handleConsistencyCheck)
-		r.Post("/api/maintenance/backfill-relations", s.handleBackfillRelations)
 		r.Post("/api/maintenance/purge-patterns", s.handlePurgePatterns)
 		r.Post("/api/maintenance/pattern-cleanup", s.handlePatternCleanup)
 		r.Post("/api/maintenance/purge-rebuild", s.handlePurgeRebuild)

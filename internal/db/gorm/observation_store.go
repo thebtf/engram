@@ -42,7 +42,7 @@ var commonWords = map[string]struct{}{
 type CleanupFunc func(ctx context.Context, deletedIDs []int64)
 
 // RelationDetector is the interface for async relation detection.
-// Implemented by relation.Detector; defined here to avoid circular imports.
+// Defined here to avoid circular imports.
 type RelationDetector interface {
 	Enqueue(obsID int64, project string)
 }
