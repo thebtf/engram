@@ -1488,7 +1488,7 @@ func (s *Service) trackSearchQuery(query, project, queryType string, results int
 	sqlStore := s.searchQueryLogStore
 	s.initMu.RUnlock()
 	if sqlStore != nil {
-		sqlStore.LogQuery(project, query, queryType, results, false, latencyMs)
+		sqlStore.LogQuery(project, query, queryType, results, latencyMs)
 	}
 
 	// Also maintain the in-memory ring buffer for low-latency in-process access.

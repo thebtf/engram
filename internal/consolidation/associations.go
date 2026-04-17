@@ -86,6 +86,11 @@ func (e *AssociationEngine) DiscoverAssociations(ctx context.Context, observatio
 	if len(observations) == 0 {
 		return nil, nil
 	}
+	// v5: embedSvc is always nil (embedding package removed); skip embedding-based discovery.
+	// Callers receive (nil, nil) — scheduler treats this as "no associations this cycle".
+	if e.embedSvc == nil {
+		return nil, nil
+	}
 
 	// Sample if needed
 	sample := observations

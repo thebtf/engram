@@ -2716,6 +2716,18 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					"restore from a pre-v5 backup to downgrade")
 			},
 		},
+		// Migration 086: drop used_vector column from search_query_log.
+		// v5 FTS-only mode means every logged search has used_vector=false; the column
+		// is now pure noise diverging from the in-memory RecentSearchQuery contract.
+		{
+			ID: "086_drop_search_query_log_used_vector",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE search_query_log DROP COLUMN IF EXISTS used_vector`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE search_query_log ADD COLUMN IF NOT EXISTS used_vector BOOL NOT NULL DEFAULT false`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
