@@ -171,10 +171,12 @@ VAULT_RESPONSE="$(curl -sf \
 
 GOT_FP="$(echo "${VAULT_RESPONSE}" | jq -r '.fingerprint // empty')"
 GOT_CRED_COUNT="$(echo "${VAULT_RESPONSE}" | jq -r '.credential_count // empty')"
-GOT_MISMATCH="$(echo "${VAULT_RESPONSE}" | jq -r '.mismatch_count // empty')"
+# Vault API (handlers_vault.go) emits `mismatch_count` ONLY when > 0.
+# Treat absent field as 0 (healthy state).
+GOT_MISMATCH="$(echo "${VAULT_RESPONSE}" | jq -r '.mismatch_count // 0')"
 
-if [[ -z "${GOT_FP}" || -z "${GOT_CRED_COUNT}" || -z "${GOT_MISMATCH}" ]]; then
-    echo "SAFETY-GATE ERROR: Unexpected vault response — missing fields" >&2
+if [[ -z "${GOT_FP}" || -z "${GOT_CRED_COUNT}" ]]; then
+    echo "SAFETY-GATE ERROR: Unexpected vault response — missing required fields (fingerprint or credential_count)" >&2
     echo "  Response: ${VAULT_RESPONSE}" >&2
     exit 1
 fi
