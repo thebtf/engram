@@ -1,0 +1,24 @@
+{
+  "captured_at": "2026-04-17",
+  "server_url": "http://unleashed.lan:37777",
+  "vault": {
+    "fingerprint": "aa78e55cf896508c",
+    "credential_count": 13,
+    "mismatch_count_max": 0
+  },
+  "entities": {
+    "issues":              {"exact": 78},
+    "api_tokens":          {"exact": 3},
+    "versioned_documents": {"min": 1},
+    "documents":           {"min": 0},
+    "content":             {"min": 0}
+  },
+  "entities_post_us3": {
+    "credentials":         {"exact": 13}
+  },
+  "postgres": {
+    "container":    "Unleashed-PostgreSQL",
+    "user":         "postgres",
+    "database":     "engram"
+  }
+}

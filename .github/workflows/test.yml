@@ -143,3 +143,43 @@ jobs:
           check_pkg "internal/handlers/engramcore"    60
           check_pkg "internal/handlers/loom"          70
           check_pkg "cmd/engram/"                      0
+
+      # Safety-gate self-check (T007, v5 cleanup).
+      #
+      # Validates the scripts/safety-gate.* toolchain that every cleanup PR MUST
+      # pass before merging. CI cannot reach the LAN production vault endpoint
+      # (`http://unleashed.lan:37777`), so this step only validates the scripts
+      # themselves — NOT production invariants. Live invariant verification is
+      # operator-only and runs manually on the Unraid host before merging
+      # critical PRs (US3 in particular).
+      #
+      # What this step verifies:
+      #   1. scripts/safety-gate-baseline.json is syntactically valid JSON
+      #   2. On Linux/macOS: bash scripts/safety-gate_test.sh passes (5 mock tests)
+      #   3. On Windows: pwsh scripts/safety-gate.ps1 -Help parses + exits 0
+      #
+      # What this step does NOT do:
+      #   - Hit /api/vault/status (unreachable from CI)
+      #   - docker exec on Unraid Postgres (no docker socket)
+      #   - Compare against live entity counts
+      - name: Safety gate self-check (scripts integrity)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Validate baseline JSON ==="
+          if command -v jq >/dev/null 2>&1; then
+            jq . scripts/safety-gate-baseline.json > /dev/null
+          else
+            python -c 'import json,sys; json.load(open("scripts/safety-gate-baseline.json"))'
+          fi
+          echo "baseline JSON: OK"
+
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            echo "=== Windows: pwsh -Help smoke ==="
+            pwsh -NoProfile -File scripts/safety-gate.ps1 -Help
+            echo "safety-gate.ps1: help output OK"
+          else
+            echo "=== Linux/macOS: bash safety-gate_test.sh ==="
+            bash scripts/safety-gate_test.sh
+            echo "safety-gate_test.sh: all tests passed"
+          fi
