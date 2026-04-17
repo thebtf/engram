@@ -2121,7 +2121,7 @@ func (s *Server) handleFindSimilarObservations(ctx context.Context, args json.Ra
 		"observations":   []any{},
 		"count":          0,
 		"min_similarity": params.MinSimilarity,
-		"note":           "Vector similarity search removed in v5; use find_relevant_memories for FTS-based retrieval",
+		"note":           "Vector similarity search removed in v5; use the 'search' tool for FTS-based retrieval",
 	}
 
 	output, err := json.Marshal(response)
@@ -3704,10 +3704,11 @@ func (s *Server) handleBackfillStatus() (string, error) {
 // handleCheckSystemHealth performs comprehensive system health checks.
 func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 	type SubsystemHealth struct {
-		Status   string         `json:"status"` // "healthy", "degraded", "unhealthy"
+		Status   string         `json:"status"`             // "healthy", "degraded", "unhealthy"
 		Message  string         `json:"message,omitempty"`
 		Metrics  map[string]any `json:"metrics,omitempty"`
 		Warnings []string       `json:"warnings,omitempty"`
+		Removed  bool           `json:"removed,omitempty"` // true when the subsystem was intentionally removed (not a fault)
 	}
 
 	type HealthReport struct {
@@ -3763,10 +3764,13 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 	report.Subsystems["database"] = dbHealth
 
 	// Vector storage removed in v5 (content_chunks table dropped).
+	// Status is "healthy" (from the system's perspective this is intentional, not a fault).
+	// Removed=true signals clients that enforce the original enum that the subsystem no longer exists.
 	vectorHealth := &SubsystemHealth{
-		Status:  "removed",
-		Message: "Vector storage removed in v5; FTS-based retrieval is the sole search path",
+		Status:  "healthy",
+		Message: "Vector storage permanently removed in v5; FTS-based retrieval is the sole search path",
 		Metrics: make(map[string]any),
+		Removed: true,
 	}
 	report.Subsystems["vectors"] = vectorHealth
 

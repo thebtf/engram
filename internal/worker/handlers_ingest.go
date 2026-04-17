@@ -172,6 +172,10 @@ func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
 	// Classify file paths into read vs modified based on tool semantics
 	filesRead, filesModified := classifyFilesByTool(req.ToolName, filePaths)
 
+	// ParsedObservation for Level 0 storage. All required fields are populated by
+	// the deterministic pipeline above. The removed semantic-dedup path (v4)
+	// compared parsed against existing observations but never added fields to it,
+	// so parsed remains complete after that removal.
 	parsed := &models.ParsedObservation{
 		Type:          obsType,
 		Title:         title,

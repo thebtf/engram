@@ -3,10 +3,16 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 
 	"github.com/rs/zerolog"
 	"github.com/thebtf/engram/internal/db/gorm"
 )
+
+// ErrNearDedupUnsupported is returned by FindAndMerge when the near-dedup
+// feature is unavailable because the vector storage pipeline was removed in v5.
+// Callers should treat this as a "skipped" condition, not a failure.
+var ErrNearDedupUnsupported = errors.New("near deduplication unsupported in v5: vector storage removed")
 
 // NearDuplicateFinder finds and merges near-duplicate observations during maintenance.
 // Vector-based dedup removed in v5; FindAndMerge is a no-op.
@@ -34,9 +40,10 @@ func NewNearDuplicateFinder(
 	}
 }
 
-// FindAndMerge is a no-op in v5 (vector storage removed). Returns 0, nil.
+// FindAndMerge returns ErrNearDedupUnsupported in v5 (vector storage removed).
+// Callers should treat this error as a "skipped" signal rather than a failure.
 func (f *NearDuplicateFinder) FindAndMerge(ctx context.Context) (int, error) {
 	_ = ctx
 	f.logger.Debug().Msg("near_dedup: vector storage removed in v5, skipping")
-	return 0, nil
+	return 0, ErrNearDedupUnsupported
 }

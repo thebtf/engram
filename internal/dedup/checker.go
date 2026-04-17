@@ -22,6 +22,10 @@ type Result struct {
 // CheckCrossModelPromotion determines if a dedup UPDATE result qualifies for
 // cross-model promotion. Both agent_sources must be known (non-"unknown") and
 // different from each other.
+//
+// NOTE: In v5, CheckDuplicate always returns ActionAdd (vector dedup removed),
+// so this function is currently unreachable in production code paths.
+// It is retained for when dedup is restored and for unit-test coverage.
 func CheckCrossModelPromotion(result *Result, newAgentSource, existingAgentSource string) bool {
 	if result == nil || result.Action != ActionUpdate {
 		return false

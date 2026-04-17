@@ -278,7 +278,7 @@ func TestDefaultConfig(t *testing.T) {
 
 	assert.Equal(t, 4, cfg.MaxExpansions)
 	assert.Equal(t, 0.5, cfg.MinSimilarity)
-	assert.True(t, cfg.EnableVocabularyExpansion)
+	assert.False(t, cfg.EnableVocabularyExpansion) // intentional v5 default
 }
 
 // TestExpandedQueryStruct tests ExpandedQuery struct.
@@ -416,6 +416,17 @@ func (s *ExpanderSuite) TestEmptyVocabulary() {
 	ctx := context.Background()
 	expansions := s.expander.expandByVocabulary(ctx, "test query", 0.5)
 	s.Empty(expansions)
+}
+
+// TestNonEmptyVocabularyReturnsNilInV5 tests that expandByVocabulary always
+// returns nil in v5, regardless of query content, because vocabulary expansion
+// required vector embeddings which were removed.
+func (s *ExpanderSuite) TestNonEmptyVocabularyReturnsNilInV5() {
+	ctx := context.Background()
+	// Even with a well-formed query and non-zero threshold, vocabulary expansion
+	// is a no-op in v5 (vector storage removed).
+	expansions := s.expander.expandByVocabulary(ctx, "database connection pooling", 0.7)
+	s.Nil(expansions, "expandByVocabulary must return nil in v5 — vector storage removed")
 }
 
 // TestIntentPatternsExist tests that all intents have patterns.

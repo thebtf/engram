@@ -968,8 +968,46 @@ func filterCredentials(result *UnifiedSearchResult) *UnifiedSearchResult {
 }
 
 // executeSearch performs the actual search without caching/coalescing.
+// When params.Query is non-empty it routes to FTS-based search so that callers
+// receive semantically-ranked results rather than a plain recency list.
+// When params.Query is empty it falls through to filterSearch (recency/filter mode).
 func (m *Manager) executeSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
-	// Use FTS-based search for all queries (vector/embedding pipeline removed in v5).
+	if params.Query != "" {
+		return m.ftsSearch(ctx, params)
+	}
+	// No query — fall back to structured filter/recency search.
+	return m.filterSearch(ctx, params)
+}
+
+// ftsSearch performs full-text search via ObservationStore.SearchObservationsFTSScored.
+// It replaces the former vector-search path that was removed in v5.
+func (m *Manager) ftsSearch(ctx context.Context, params SearchParams) (*UnifiedSearchResult, error) {
+	start := time.Now()
+	defer func() {
+		latency := time.Since(start).Nanoseconds()
+		atomic.AddInt64(&m.metrics.FilterSearches, 1)
+		atomic.AddInt64(&m.metrics.FilterLatencyNs, latency)
+	}()
+
+	limit := params.Limit
+	if limit <= 0 {
+		limit = defaultQueryLimit
+	}
+	if limit > maxQueryLimit {
+		limit = maxQueryLimit
+	}
+
+	if params.Type == "" || params.Type == "observations" {
+		ftsResults, err := m.observationStore.SearchObservationsFTSScored(ctx, params.Query, params.Project, limit)
+		if err != nil {
+			log.Warn().Err(err).Str("project", params.Project).Str("query", strutil.Truncate(params.Query, queryLogTruncateLen)).Msg("FTS search failed, falling back to filter search")
+			return m.filterSearch(ctx, params)
+		}
+		return m.buildResultFromFTS(ftsResults, params)
+	}
+
+	// For non-observation types (sessions etc.) fall through to filterSearch;
+	// those stores do not yet have FTS support.
 	return m.filterSearch(ctx, params)
 }
 

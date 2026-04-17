@@ -104,10 +104,18 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultSummariesLimit)
 	project := r.URL.Query().Get("project")
+	query := r.URL.Query().Get("query")
 
 	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// The summary store does not support text search. Return 501 so clients
+	// can distinguish "feature not supported" from "search returned nothing".
+	if query != "" {
+		http.Error(w, "search not supported for /api/summaries in v5; vector pipeline removed", http.StatusNotImplemented)
 		return
 	}
 
@@ -149,10 +157,18 @@ func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleGetPrompts(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultPromptsLimit)
 	project := r.URL.Query().Get("project")
+	query := r.URL.Query().Get("query")
 
 	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// The prompt store does not support text search. Return 501 so clients
+	// can distinguish "feature not supported" from "search returned nothing".
+	if query != "" {
+		http.Error(w, "search not supported for /api/prompts in v5; vector pipeline removed", http.StatusNotImplemented)
 		return
 	}
 

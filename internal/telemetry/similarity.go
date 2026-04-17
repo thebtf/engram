@@ -29,11 +29,12 @@ type SimilarityTelemetry struct {
 }
 
 // NewSimilarityTelemetry creates a new SimilarityTelemetry instance.
-// The vectorClient parameter is accepted for call-site compatibility but ignored.
+// Both observationStore and vectorClient are accepted for call-site compatibility
+// but are intentionally unused in v5 (vector pipeline removed).
 func NewSimilarityTelemetry(
 	store *gorm.Store,
-	observationStore *gorm.ObservationStore,
-	vectorClient any,
+	_ *gorm.ObservationStore,
+	_ any,
 	log zerolog.Logger,
 ) *SimilarityTelemetry {
 	return &SimilarityTelemetry{

@@ -125,7 +125,6 @@ func (s *Store) Ping() error {
 // GetRawDB returns the underlying *sql.DB for operations GORM can't handle.
 // Use this for:
 // - tsvector full-text search queries
-// - pgvector operations
 // - Complex raw SQL queries
 func (s *Store) GetRawDB() *sql.DB {
 	return s.sqlDB

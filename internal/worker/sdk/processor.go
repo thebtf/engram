@@ -448,9 +448,64 @@ func mergeFileMtimes(existing models.JSONInt64Map, incoming map[string]int64) ma
 	return merged
 }
 
-func (p *Processor) queryWriteMergeCandidateIDs(_ context.Context, _ string, _ *models.ParsedObservation) []int64 {
-	// Vector search removed in v5 (content_chunks table dropped). No candidate lookup.
-	return nil
+// queryWriteMergeCandidateIDs returns observation IDs that are plausible merge
+// candidates for obs, using FTS as a proxy for the former vector-similarity
+// lookup (removed in v5 when content_chunks was dropped).
+//
+// Strategy: build a short text query from Title + first few Facts/Concepts,
+// run SearchObservationsFTS for the same project, filter by matching Type and
+// non-superseded status, then return up to 5 candidate IDs.
+func (p *Processor) queryWriteMergeCandidateIDs(ctx context.Context, project string, obs *models.ParsedObservation) []int64 {
+	if obs == nil || p.observationStore == nil {
+		return nil
+	}
+
+	// Build a concise query from the most discriminating fields.
+	queryParts := make([]string, 0, 4)
+	if obs.Title != "" {
+		queryParts = append(queryParts, obs.Title)
+	}
+	// Include up to 2 facts and 2 concepts for additional signal.
+	for i, f := range obs.Facts {
+		if i >= 2 {
+			break
+		}
+		if f != "" {
+			queryParts = append(queryParts, f)
+		}
+	}
+	for i, c := range obs.Concepts {
+		if i >= 2 {
+			break
+		}
+		if c != "" {
+			queryParts = append(queryParts, c)
+		}
+	}
+	if len(queryParts) == 0 {
+		return nil
+	}
+	query := strings.Join(queryParts, " ")
+
+	const candidateSearchLimit = 10
+	candidates, err := p.observationStore.SearchObservationsFTS(ctx, query, project, candidateSearchLimit)
+	if err != nil {
+		log.Debug().Err(err).Str("project", project).Msg("write-merge: FTS candidate search failed")
+		return nil
+	}
+
+	const maxCandidates = 5
+	ids := make([]int64, 0, maxCandidates)
+	for _, c := range candidates {
+		if c == nil || c.IsSuperseded || c.Type != obs.Type {
+			continue
+		}
+		ids = append(ids, c.ID)
+		if len(ids) >= maxCandidates {
+			break
+		}
+	}
+	return ids
 }
 
 func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, project string, obs *models.ParsedObservation, promptNumber int) (*models.Observation, bool, string, error) {

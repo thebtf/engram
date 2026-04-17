@@ -6,11 +6,17 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// ErrChunkStorageUnsupported is returned by chunk methods when content_chunks
+// table has been dropped in v5. Callers should treat this as a graceful
+// "feature removed" signal and degrade accordingly.
+var ErrChunkStorageUnsupported = errors.New("chunk storage unsupported: content_chunks table dropped in v5")
 
 // DocumentStore provides document and chunk persistence for content-addressable storage.
 type DocumentStore struct {
@@ -104,20 +110,23 @@ func (s *DocumentStore) ListDocuments(ctx context.Context, collection string, ac
 	return docs, nil
 }
 
-// UpsertChunks is a no-op in v5: content_chunks table dropped (migration 085).
+// UpsertChunks returns ErrChunkStorageUnsupported in v5.
+// content_chunks was dropped in migration 085; callers should degrade gracefully.
 func (s *DocumentStore) UpsertChunks(_ context.Context, _ string, _ []ContentChunk) error {
-	return nil
+	return ErrChunkStorageUnsupported
 }
 
-// SearchChunks is a no-op in v5: content_chunks table dropped (migration 085).
-// Vector similarity search of document chunks is no longer supported.
+// SearchChunks returns ErrChunkStorageUnsupported in v5.
+// content_chunks was dropped in migration 085; callers should treat this as
+// "feature removed", not as "zero results found".
 func (s *DocumentStore) SearchChunks(_ context.Context, _ []float32, _ string, _ int) ([]ContentChunk, error) {
-	return nil, nil
+	return nil, ErrChunkStorageUnsupported
 }
 
-// ChunksExist is a no-op in v5: content_chunks table dropped (migration 085).
+// ChunksExist returns ErrChunkStorageUnsupported in v5.
+// content_chunks was dropped in migration 085.
 func (s *DocumentStore) ChunksExist(_ context.Context, _ string) (bool, error) {
-	return false, nil
+	return false, ErrChunkStorageUnsupported
 }
 
 // DeactivateDocument marks a document as inactive.

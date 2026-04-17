@@ -179,6 +179,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 
 	// Contradiction detection + dedup check (Learning Memory v3 FR-7, Mem0 Algorithm 1).
 	// Shared implementation in internal/dedup/checker.go.
+	// NOTE: In v5, CheckDuplicate always returns ActionAdd; the NOOP and UPDATE
+	// branches below are currently unreachable (vector dedup removed).
+	// They are preserved so dedup logic is ready to reactivate when vector search is restored.
 	var contradictionAction string
 	var supersededID int64
 	dedupResult, dedupErr := dedup.CheckDuplicate()

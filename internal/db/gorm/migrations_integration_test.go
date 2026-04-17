@@ -41,9 +41,9 @@ func TestMigrationsIntegration(t *testing.T) {
 	const dims = 2000
 
 	if err := runMigrations(db); err != nil {
-		t.Fatalf("runMigrations(dims=%d): %v", dims, err)
+		t.Fatalf("runMigrations: %v", err)
 	}
-	t.Logf("all migrations passed with dims=%d", dims)
+	t.Logf("all migrations passed")
 
 	// Verify the embedding column has the expected dimension.
 	var actual int

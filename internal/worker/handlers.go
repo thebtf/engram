@@ -211,11 +211,11 @@ func (s *Service) requireReady(next http.Handler) http.Handler {
 }
 
 // handleListModels godoc
-// @Summary List embedding models (OpenAI-compatible)
-// @Description Returns an empty model list. Embeddings are no longer supported as of v5.
+// @Summary Compatibility: empty models list (no embeddings in v5)
+// @Description OpenAI-compatibility shim. Embedding pipeline removed in v5; always returns {"object":"list","data":[]}.
 // @Tags System
 // @Produce json
-// @Success 200 {object} map[string]interface{}
+// @Success 200 {object} map[string]interface{} "Always returns empty data array; no real model entries"
 // @Router /v1/models [get]
 func (s *Service) handleListModels(w http.ResponseWriter, _ *http.Request) {
 	type response struct {

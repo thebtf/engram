@@ -201,6 +201,9 @@ func (s *Server) storeExtractedObservation(ctx context.Context, project string, 
 	if dedupErr != nil {
 		log.Debug().Err(dedupErr).Str("title", parsedObs.Title).Msg("extract: dedup check failed, proceeding with ADD")
 	}
+	// NOTE: In v5, CheckDuplicate always returns ActionAdd; the NOOP and UPDATE
+	// branches below are currently unreachable. They are preserved so dedup
+	// logic is ready to reactivate when vector search is restored.
 	if dedupResult != nil && dedupResult.Action == dedup.ActionNoop {
 		return dedup.ActionNoop, 0, nil
 	}

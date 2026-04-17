@@ -2704,32 +2704,16 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			Migrate: func(tx *gorm.DB) error {
 				return tx.Exec(`DROP TABLE IF EXISTS content_chunks CASCADE`).Error
 			},
-			Rollback: func(tx *gorm.DB) error {
-				// Recreate schema as it existed after migration 029 (text column added).
-				// Note: rollback only restores schema; chunk data is not recoverable.
-				// The embedding vector(384) dimension matches the original BGE default model.
-				sqls := []string{
-					`CREATE TABLE IF NOT EXISTS content_chunks (
-						hash       TEXT NOT NULL REFERENCES content(hash) ON DELETE CASCADE,
-						seq        INTEGER NOT NULL,
-						pos        INTEGER NOT NULL,
-						model      TEXT NOT NULL,
-						embedding  vector(384),
-						created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-						text       TEXT NOT NULL DEFAULT '',
-						PRIMARY KEY (hash, seq)
-					)`,
-					`CREATE INDEX IF NOT EXISTS idx_content_chunks_hash ON content_chunks(hash)`,
-					`CREATE INDEX IF NOT EXISTS idx_content_chunks_embedding_hnsw
-					 ON content_chunks USING hnsw (embedding vector_cosine_ops)
-					 WITH (m = 16, ef_construction = 64)`,
-				}
-				for _, s := range sqls {
-					if err := tx.Exec(s).Error; err != nil {
-						return fmt.Errorf("migration 085 rollback: %w", err)
-					}
-				}
-				return nil
+			// Rollback is intentionally irreversible: the entire embedding pipeline
+			// (internal/vector, internal/embedding, pgvector-go dependency) was removed
+			// in v5. Recreating the DDL would produce a schema that no running code can
+			// populate, and the correct dimension varied per installation (migration 020
+			// allowed overriding it), so vector(384) would be wrong for many deployments.
+			// Downgrading past this migration requires restoring from a pre-v5 backup.
+			Rollback: func(*gorm.DB) error {
+				return fmt.Errorf("migration 085 rollback is not supported: " +
+					"content_chunks table and the embedding pipeline were permanently removed in v5; " +
+					"restore from a pre-v5 backup to downgrade")
 			},
 		},
 	})

@@ -344,10 +344,14 @@ func (s *Service) handleFileContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Vector search removed in v5 (content_chunks table dropped). Return empty results.
+	// "deprecated" and "message" allow clients to distinguish feature-removal
+	// from a genuine empty-result search, preventing silent degradation.
 	writeJSON(w, map[string]any{
-		"files":   files,
-		"results": map[string]any{},
-		"count":   0,
+		"files":      files,
+		"results":    map[string]any{},
+		"count":      0,
+		"deprecated": true,
+		"message":    "file-context vector search removed in v5; results are intentionally empty",
 	})
 }
 
@@ -721,7 +725,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		// Legacy path (ENGRAM_INJECT_UNIFIED=false): vector search removed in v5.
 		// Fall back to FTS-based retrieval.
 		legacyQuery := project + " code development"
-		legacyScopeFilter := gorm.ScopeFilter{Project: project}
+		legacyScopeFilter := gorm.ScopeFilter{Project: project, AgentID: agentID}
 		fetched, fetchErr := s.observationStore.SearchObservationsFTSFiltered(ctx, legacyQuery, legacyScopeFilter, 10)
 		if fetchErr == nil && len(fetched) > 0 {
 			for _, obs := range fetched {

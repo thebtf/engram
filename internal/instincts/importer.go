@@ -32,7 +32,8 @@ func Import(ctx context.Context, dir string, vectorClient any, obsStore *gorm.Ob
 	}
 
 	for _, inst := range instincts {
-		// Dedup skipped in v5 (vector storage removed); always import.
+		// IsDuplicate always returns false in v5 (vector storage removed).
+		// The isDup branch is currently unreachable but kept for when dedup is restored.
 		isDup, err := IsDuplicate(ctx, vectorClient, inst.Trigger, defaultDedupThreshold)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("dedup check for %s: %v", inst.ID, err))

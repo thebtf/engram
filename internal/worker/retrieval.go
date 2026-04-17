@@ -292,7 +292,9 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	if len(baseSimilarityScores) > 0 {
 		laneThresholdScores = baseSimilarityScores
 	}
-	if s.typeLanesEnabled() && len(clusteredObservations) > 0 {
+	// Only apply type-lane filtering when we have numeric scores; an empty
+	// score-map (FTS-only mode) would eliminate every observation.
+	if s.typeLanesEnabled() && len(clusteredObservations) > 0 && len(laneThresholdScores) > 0 {
 		clusteredObservations = s.applyTypedLaneSelection(clusteredObservations, similarityScores, laneThresholdScores, limit)
 	}
 	if len(clusteredObservations) > 0 {
@@ -325,10 +327,15 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 				return s.getTopImportanceObservations(fillCtx, project, fillLimit)
 			})
 	}
-	totalResults := 0
-	for _, observation := range clusteredObservations {
-		if score, exists := similarityScores[observation.ID]; exists && score > NoiseFloorScore {
-			totalResults++
+	// When similarityScores is empty (FTS-only mode, no vector scores) the
+	// score-gated loop would always yield zero, so fall back to observation count.
+	totalResults := len(clusteredObservations)
+	if len(similarityScores) > 0 {
+		totalResults = 0
+		for _, observation := range clusteredObservations {
+			if score, exists := similarityScores[observation.ID]; exists && score > NoiseFloorScore {
+				totalResults++
+			}
 		}
 	}
 	if limit > 0 && len(clusteredObservations) > limit {

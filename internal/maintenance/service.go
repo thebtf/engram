@@ -3,6 +3,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -409,7 +410,11 @@ func (s *Service) runMaintenance(ctx context.Context) {
 	s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "started", "")
 	if s.config.ConsolidationEnabled && s.nearDedupFinder != nil {
 		merged, err := s.nearDedupFinder.FindAndMerge(ctx)
-		if err != nil {
+		if errors.Is(err, ErrNearDedupUnsupported) {
+			// Vector dedup removed in v5 — treat as skipped, not failed.
+			s.log.Debug().Msg("Near-duplicate consolidation skipped: unsupported in v5")
+			s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "skipped", "near-dedup unsupported in v5")
+		} else if err != nil {
 			s.log.Error().Err(err).Msg("Failed to run near-duplicate consolidation")
 			s.emitProgress(subtasks[taskIdx-1], taskIdx, total, "failed", err.Error())
 		} else {

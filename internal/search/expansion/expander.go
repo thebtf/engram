@@ -63,11 +63,13 @@ type Config struct {
 }
 
 // DefaultConfig returns sensible default configuration.
+// EnableVocabularyExpansion is intentionally false in v5: vocabulary expansion
+// requires vector embeddings which were removed in the v5 cleanup.
 func DefaultConfig() Config {
 	return Config{
 		MaxExpansions:             4,
 		MinSimilarity:             0.5,
-		EnableVocabularyExpansion: true,
+		EnableVocabularyExpansion: false,
 	}
 }
 
@@ -257,18 +259,9 @@ func (e *Expander) expandByIntent(query string, intent QueryIntent) []ExpandedQu
 	return expansions
 }
 
-// expandByVocabulary finds similar terms from the observation vocabulary.
-// Without an embedding service, vocabulary expansion is unavailable and returns nil.
+// expandByVocabulary is a no-op in v5: vocabulary expansion requires vector
+// embeddings which were removed in the v5 cleanup. Always returns nil.
 func (e *Expander) expandByVocabulary(_ context.Context, _ string, _ float64) []ExpandedQuery {
-	e.vocabMu.RLock()
-	defer e.vocabMu.RUnlock()
-
-	if len(e.vocabulary) == 0 {
-		return nil
-	}
-
-	// Vocabulary expansion requires vector embeddings, which are no longer available in v5.
-	// Return nil so callers fall back to intent-based expansions only.
 	return nil
 }
 

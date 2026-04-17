@@ -2730,7 +2730,17 @@ func TestHandleFindSimilarObservations_ReturnsEmptyInV5(t *testing.T) {
 	// Vector search removed in v5: should return empty observations without error.
 	result, err := server.handleFindSimilarObservations(ctx, json.RawMessage(`{"query": "test query"}`))
 	require.NoError(t, err)
-	assert.Contains(t, result, `"count":0`)
+
+	// Verify both count==0 and that observations is present as an empty array,
+	// not missing or null, so the response shape is stable for clients.
+	var payload struct {
+		Count        int   `json:"count"`
+		Observations []any `json:"observations"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(result), &payload))
+	assert.Equal(t, 0, payload.Count)
+	require.NotNil(t, payload.Observations)
+	assert.Len(t, payload.Observations, 0)
 }
 
 // TestHandleGetObservationRelationships_NilRelationStore tests nil relation store handling.

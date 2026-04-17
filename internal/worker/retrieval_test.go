@@ -39,16 +39,19 @@ func TestRetrieveRelevant_FTSFallback_ReturnsObservations(t *testing.T) {
 // TestRetrieveRelevant_MaxResultsCapsOutput verifies that MaxResults caps the returned list.
 func TestRetrieveRelevant_MaxResultsCapsOutput(t *testing.T) {
 	service := newRetrievalTestService()
+	// The mock respects the limit parameter so the assertion can be exact.
+	// Disambiguated titles keep term-based clustering from collapsing these entries.
+	distinctTitles := []string{"Alpha migration schema", "Gravity kernel panic", "Lunar lattice cipher", "Rhizome radio silence", "Spectral pivot anomaly"}
 	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ gorm.ScopeFilter, limit int) ([]*models.Observation, error) {
 		obs := make([]*models.Observation, 0, limit)
-		for i := 1; i <= 5; i++ {
-			obs = append(obs, newObservation(int64(i), ""))
+		for i := 1; i <= limit && i-1 < len(distinctTitles); i++ {
+			obs = append(obs, newObservation(int64(i), distinctTitles[i-1]))
 		}
 		return obs, nil
 	}
 	observations, _, err := service.RetrieveRelevant(context.Background(), "engram", "cap", RetrievalOptions{MaxResults: 2})
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(observations), 5) // hook ignores limit in this mock, just verify no crash
+	require.Len(t, observations, 2)
 }
 
 // TestRetrieveRelevant_LLMFilterHonorsSilence verifies LLM filter returning empty silences results.

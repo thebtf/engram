@@ -32,21 +32,6 @@ const queueSize = 256
 // detectionTimeout is the maximum time for a single detection run.
 const detectionTimeout = 5 * time.Second
 
-// similarityThreshold is the minimum cosine similarity for candidate observations.
-const similarityThreshold = 0.6
-
-// supersedeSimilarityThreshold is the minimum similarity for supersession detection.
-const supersedeSimilarityThreshold = 0.92
-
-// contradictSimilarityThreshold is the minimum similarity for contradiction detection.
-const contradictSimilarityThreshold = 0.7
-
-// evolvesFromSimilarityThreshold is the minimum similarity for evolves_from detection.
-const evolvesFromSimilarityThreshold = 0.7
-
-// candidateLimit is the number of similar observations to retrieve from vector search.
-const candidateLimit = 20
-
 // detectRequest represents a queued detection request.
 type detectRequest struct {
 	ObsID   int64
@@ -57,13 +42,12 @@ type detectRequest struct {
 // In v5, vector-based similarity detection is removed; only structural relations
 // (temporal chain, file edges, intentional [[obs:N]] links) are detected.
 type Detector struct {
-	relationStore     *gorm.RelationStore
-	conflictStore     *gorm.ConflictStore
-	observationStore  *gorm.ObservationStore
-	promptStore       *gorm.PromptStore
-	causalClassifier  *CausalClassifier
-	parentCtx         context.Context
-	queue             chan detectRequest
+	relationStore    *gorm.RelationStore
+	conflictStore    *gorm.ConflictStore
+	observationStore *gorm.ObservationStore
+	promptStore      *gorm.PromptStore
+	parentCtx        context.Context
+	queue            chan detectRequest
 }
 
 // NewDetector creates a new relation detector.
@@ -82,11 +66,6 @@ func NewDetector(
 		promptStore:      promptStore,
 		queue:            make(chan detectRequest, queueSize),
 	}
-}
-
-// SetCausalClassifier sets the LLM-based causal classifier for FR-44/FR-45.
-func (d *Detector) SetCausalClassifier(c *CausalClassifier) {
-	d.causalClassifier = c
 }
 
 // Start launches the background goroutine that processes detection requests.
