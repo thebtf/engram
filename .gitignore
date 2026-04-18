@@ -93,6 +93,7 @@ docs/dist
 .tmp_gocache/
 .tmp-gomodcache/
 .tmp_gomodcache/
+.cache/
 
 # Session artifacts
 continuity.txt
