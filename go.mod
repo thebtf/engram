@@ -18,7 +18,7 @@ require (
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.6
 	github.com/thebtf/aimux/loom v0.1.0
-	github.com/thebtf/mcp-mux/muxcore v0.19.0
+	github.com/thebtf/mcp-mux/muxcore v0.19.7
 	github.com/tiktoken-go/tokenizer v0.7.0
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/metric v1.43.0
