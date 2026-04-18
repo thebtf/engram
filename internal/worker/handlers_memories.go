@@ -4,6 +4,7 @@ package worker
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -66,7 +67,7 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 	created, err := s.memoryStore.Create(r.Context(), mem)
 	if err != nil {
 		log.Error().Err(err).Str("project", req.Project).Msg("store memory failed")
-		http.Error(w, "store memory: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -99,17 +100,25 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const maxLimit = 500
 	limit := 50
 	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			limit = n
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			http.Error(w, "limit must be a positive integer", http.StatusBadRequest)
+			return
 		}
+		if n > maxLimit {
+			http.Error(w, fmt.Sprintf("limit must not exceed %d", maxLimit), http.StatusBadRequest)
+			return
+		}
+		limit = n
 	}
 
 	mems, err := s.memoryStore.List(r.Context(), project, limit)
 	if err != nil {
 		log.Error().Err(err).Str("project", project).Msg("list memories failed")
-		http.Error(w, "list memories: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -153,7 +162,7 @@ func (s *Service) handleDeleteMemoryByID(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		log.Error().Err(err).Int64("id", id).Msg("delete memory failed")
-		http.Error(w, "delete memory: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 

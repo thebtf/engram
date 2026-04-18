@@ -101,6 +101,10 @@ func (s *Service) handleGetCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := r.URL.Query().Get("project")
+	if project == "" {
+		http.Error(w, "project is required", http.StatusBadRequest)
+		return
+	}
 
 	v, err := s.getVault()
 	if err != nil {
@@ -115,7 +119,7 @@ func (s *Service) handleGetCredential(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Error().Err(err).Str("name", name).Msg("get credential failed")
-		http.Error(w, "get credential: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -181,6 +185,16 @@ func (s *Service) handleStoreCredential(w http.ResponseWriter, r *http.Request) 
 		// valid
 	default:
 		http.Error(w, "invalid scope: must be \"project\" or \"global\"", http.StatusBadRequest)
+		return
+	}
+	if req.Scope == "global" {
+		// Global-scope credentials are not yet supported via this API — the credentials
+		// table requires a non-empty project (store validation). Reject early with a clear
+		// error rather than letting the store return an opaque "project must not be empty".
+		// When global credential support is added, the schema and store will need a
+		// dedicated global-project sentinel (e.g. project="__global__") or a nullable
+		// project column with an IS NULL path.
+		http.Error(w, "global-scope credentials are not yet supported; use scope \"project\" and provide a project name", http.StatusBadRequest)
 		return
 	}
 	if req.Scope == "project" && req.Project == "" {
@@ -252,19 +266,8 @@ func (s *Service) handleDeleteCredential(w http.ResponseWriter, r *http.Request)
 	}
 
 	project := r.URL.Query().Get("project")
-	scope := r.URL.Query().Get("scope")
-	if scope == "" {
-		scope = "project"
-	}
-	switch scope {
-	case "project", "global":
-		// valid
-	default:
-		http.Error(w, "invalid scope: must be \"project\" or \"global\"", http.StatusBadRequest)
-		return
-	}
-	if scope == "project" && project == "" {
-		http.Error(w, "project is required for project-scoped credentials", http.StatusBadRequest)
+	if project == "" {
+		http.Error(w, "project is required", http.StatusBadRequest)
 		return
 	}
 
@@ -274,7 +277,7 @@ func (s *Service) handleDeleteCredential(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		log.Error().Err(err).Str("name", name).Msg("delete credential failed")
-		http.Error(w, "delete credential: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
