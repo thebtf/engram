@@ -225,8 +225,6 @@ type RecentSearchQuery struct {
 
 // setupCallbacks configures callbacks on stores and processors.
 func (s *Service) setupCallbacks(
-	observationStore *gorm.ObservationStore,
-	processor *sdk.Processor,
 	sessionManager *session.Manager,
 ) {
 	// Set callbacks for session lifecycle events
@@ -510,7 +508,7 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Setup callbacks on stores and processors
-	s.setupCallbacks(observationStore, processor, sessionManager)
+	s.setupCallbacks(sessionManager)
 
 	// Initialize importance scoring system
 	scoringConfig := models.DefaultScoringConfig()
@@ -628,19 +626,19 @@ func (s *Service) initializeAsync() {
 	// Create versioned document store for collaborative document MCP tools (migration 051).
 	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
 
-	mcpServer := mcp.NewServer(
-		searchMgr,
-		s.version,
-		observationStore,
-		relationStore,
-		sessionStore,
-		scoreCalculator,
-		recalculator,
-		collectionRegistry,
-		sessionIdxStore,
-		documentStore,
-		chunkManager,
-	)
+	mcpServer := mcp.NewServer(mcp.ServerOptions{
+		SearchMgr:          searchMgr,
+		Version:            s.version,
+		ObservationStore:   observationStore,
+		RelationStore:      relationStore,
+		SessionStore:       sessionStore,
+		ScoreCalculator:    scoreCalculator,
+		Recalculator:       recalculator,
+		CollectionRegistry: collectionRegistry,
+		SessionIdxStore:    sessionIdxStore,
+		DocumentStore:      documentStore,
+		ChunkManager:       chunkManager,
+	})
 	mcpServer.SetInjectionStore(injectionStore)
 	// Wire graph store into MCP server and search manager.
 	if s.graphStore != nil {

@@ -55,34 +55,37 @@ type Server struct {
 	version                string
 }
 
+// ServerOptions holds the dependencies injected into the MCP Server.
+type ServerOptions struct {
+	SearchMgr          *search.Manager
+	Version            string
+	ObservationStore   *gorm.ObservationStore
+	RelationStore      *gorm.RelationStore
+	SessionStore       *gorm.SessionStore
+	ScoreCalculator    *scoring.Calculator
+	Recalculator       *scoring.Recalculator
+	CollectionRegistry *collections.Registry
+	SessionIdxStore    *sessions.Store
+	DocumentStore      *gorm.DocumentStore
+	ChunkManager       *chunking.Manager
+}
+
 // NewServer creates a new MCP server.
-func NewServer(
-	searchMgr *search.Manager,
-	version string,
-	observationStore *gorm.ObservationStore,
-	relationStore *gorm.RelationStore,
-	sessionStore *gorm.SessionStore,
-	scoreCalculator *scoring.Calculator,
-	recalculator *scoring.Recalculator,
-	collectionRegistry *collections.Registry,
-	sessionIdxStore *sessions.Store,
-	documentStore *gorm.DocumentStore,
-	chunkManager *chunking.Manager,
-) *Server {
+func NewServer(opts ServerOptions) *Server {
 	return &Server{
-		searchMgr:          searchMgr,
-		version:            version,
+		searchMgr:          opts.SearchMgr,
+		version:            opts.Version,
 		stdin:              os.Stdin,
 		stdout:             os.Stdout,
-		observationStore:   observationStore,
-		relationStore:      relationStore,
-		sessionStore:       sessionStore,
-		scoreCalculator:    scoreCalculator,
-		recalculator:       recalculator,
-		collectionRegistry: collectionRegistry,
-		sessionIdxStore:    sessionIdxStore,
-		documentStore:      documentStore,
-		chunkManager:       chunkManager,
+		observationStore:   opts.ObservationStore,
+		relationStore:      opts.RelationStore,
+		sessionStore:       opts.SessionStore,
+		scoreCalculator:    opts.ScoreCalculator,
+		recalculator:       opts.Recalculator,
+		collectionRegistry: opts.CollectionRegistry,
+		sessionIdxStore:    opts.SessionIdxStore,
+		documentStore:      opts.DocumentStore,
+		chunkManager:       opts.ChunkManager,
 	}
 }
 
@@ -388,7 +391,7 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 
 | Tool | Purpose | Key Actions |
 |------|---------|-------------|
-| ` + "`recall`" + ` | **Search & retrieve** memories | search (default), preset, by_file, by_concept, by_type, similar, timeline, related, patterns, get, sessions, explain, reasoning |
+| ` + "`recall`" + ` | **Search & retrieve** memories | search (default), preset, by_file, by_concept, by_type, similar, timeline, related, get, sessions, explain, reasoning |
 | ` + "`store`" + ` | **Save** memories, edit, merge, extract | create (default), edit, merge, import, extract |
 | ` + "`feedback`" + ` | **Rate** quality, suppress, record outcomes | rate, suppress, outcome |
 | ` + "`issues`" + ` | **Cross-project issue tracking** between agents | create, list, get, update, comment, reopen |

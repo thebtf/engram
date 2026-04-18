@@ -57,6 +57,46 @@ func TestMigrationsIntegration(t *testing.T) {
 	t.Logf("vectors.embedding = vector(%d) — correct", actual)
 }
 
+// TestMigrationsIntegration_PatternsDropped verifies that a fresh-install migration chain
+// correctly creates and then removes the patterns subsystem tables.
+// It checks that after running all migrations:
+//   - The "patterns" table does NOT exist (dropped by 098_drop_patterns)
+//   - The "pattern_observations" table does NOT exist (dropped by 098_drop_patterns)
+//
+// This is a regression guard: if either 009_patterns or 098_drop_patterns is broken,
+// fresh installs will fail silently while upgrades from pre-US5 instances remain green.
+func TestMigrationsIntegration_PatternsDropped(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+
+	// Run the full migration chain — this covers both 009_patterns (create) and
+	// 098_drop_patterns (drop), exercising the fresh-install path end-to-end.
+	require.NoError(t, runMigrations(db), "full migration chain must succeed on fresh DB")
+
+	// Verify that neither patterns table survives — 098_drop_patterns must have run.
+	for _, table := range []string{"patterns", "pattern_observations"} {
+		var count int
+		err := db.Raw(`
+			SELECT COUNT(*) FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = ?
+		`, table).Scan(&count).Error
+		require.NoError(t, err, "checking existence of table %q", table)
+		require.Equal(t, 0, count, "table %q must not exist after 098_drop_patterns", table)
+	}
+}
+
 func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
