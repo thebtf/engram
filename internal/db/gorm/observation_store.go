@@ -590,13 +590,18 @@ func (s *ObservationStore) GetObservationsByCommandPrefix(ctx context.Context, p
 		limit = 10
 	}
 
-	escaper := strings.NewReplacer(`\\`, `\\\\`, `%`, `\\%`, `_`, `\\_`)
-	pattern := escaper.Replace(strings.TrimSpace(command)) + "%"
+	// Intent: find observations whose `commands_run` contains a command that
+	// is a PREFIX of the query. I.e. a stored `"git push --force"` matches a
+	// query `"git push --force origin main"` because the stored value is a
+	// prefix of the query. `starts_with(?, cmd)` expresses this directly
+	// without the LIKE/ESCAPE wildcard hazard (%, _ in either side are
+	// treated as literals). Requires PostgreSQL 11+.
+	trimmed := strings.TrimSpace(command)
 	var dbObservations []Observation
 	err := s.db.WithContext(ctx).
 		Scopes(projectScopeFilter(project), activeObservationFilter(), importanceOrdering()).
 		Where("type IN ?", []models.ObservationType{models.ObsTypeBugfix, models.ObsTypePitfall}).
-		Where("EXISTS (SELECT 1 FROM jsonb_array_elements_text(commands_run) AS cmd WHERE cmd LIKE ? ESCAPE '\\\\')", pattern).
+		Where("EXISTS (SELECT 1 FROM jsonb_array_elements_text(commands_run) AS cmd WHERE starts_with(?, cmd))", trimmed).
 		Limit(limit).
 		Find(&dbObservations).Error
 	if err != nil {

@@ -57,11 +57,11 @@ func TestHandleMemoryTriggers_BashCommandPrefixMatchesTop3Warnings(t *testing.T)
 	_, err := sessionStore.CreateSDKSession(ctx, sdkSessionID, project, "")
 	require.NoError(t, err)
 
-	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypeBugfix, "Force push incident", []string{"Executed: git push --force"})
-	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypePitfall, "Main branch overwrite", []string{"Executed: git push --force origin main"})
-	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypeBugfix, "Protected branch failure", []string{"Executed: git push --force origin"})
-	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypePitfall, "Should be capped", []string{"Executed: git push --force-with-lease"})
-	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypeDiscovery, "Discovery should be filtered", []string{"Executed: git push --force"})
+	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypeBugfix, "Force push incident", []string{"git push --force"})
+	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypePitfall, "Main branch overwrite", []string{"git push --force origin main"})
+	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypeBugfix, "Protected branch failure", []string{"git push --force origin"})
+	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypePitfall, "Should be capped", []string{"git push --force-with-lease"})
+	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypeDiscovery, "Discovery should be filtered", []string{"git push --force"})
 
 	service := &Service{observationStore: observationStore}
 	body, err := json.Marshal(MemoryTriggerRequest{
@@ -99,7 +99,7 @@ func TestHandleMemoryTriggers_BashCommandWithoutMatchReturnsEmptyArray(t *testin
 	_, err := sessionStore.CreateSDKSession(ctx, sdkSessionID, project, "")
 	require.NoError(t, err)
 
-	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypeBugfix, "Unrelated build failure", []string{"Executed: go build ./..."})
+	seedBashTriggerObservation(t, observationStore, sdkSessionID, project, models.ObsTypeBugfix, "Unrelated build failure", []string{"go build ./..."})
 
 	service := &Service{observationStore: observationStore}
 	body, err := json.Marshal(MemoryTriggerRequest{
