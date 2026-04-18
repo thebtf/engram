@@ -453,6 +453,18 @@ func TestHandleToolsList(t *testing.T) {
 		assert.True(t, allToolNames[name], "legacy tool %s should be present with include_all=true", name)
 	}
 
+	// Removed tools must not appear in either listing (regression guard).
+	removedTools := []string{
+		"trigger_maintenance",
+		"get_maintenance_stats",
+		"suggest_consolidations",
+		"run_consolidation",
+	}
+	for _, name := range removedTools {
+		assert.False(t, toolNames[name], "removed tool %s should not be in default listing", name)
+		assert.False(t, allToolNames[name], "removed tool %s should not be present with include_all=true", name)
+	}
+
 	// Anthropic API rejects oneOf/allOf/anyOf at the top level of input_schema.
 	// Verify EVERY tool (primary + secondary) has a compliant top-level schema.
 	forbiddenKeys := []string{"oneOf", "allOf", "anyOf"}

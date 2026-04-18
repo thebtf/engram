@@ -283,9 +283,6 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 
 	freshObservations, staleCount := s.filterFreshObservations(ctx, observations, state.cwd)
 	freshCount := len(freshObservations)
-	if len(freshObservations) > 0 {
-		freshObservations = s.applyReranking(query, freshObservations, similarityScores)
-	}
 
 	// Default 0.9: observations with cosine similarity >= 0.9 are considered duplicates
 	// and collapsed into a single cluster. Overridable via config.ClusteringThreshold.
@@ -455,7 +452,3 @@ func (s *Service) filterFreshObservations(ctx context.Context, observations []*m
 	return freshObservations, staleCount
 }
 
-func (s *Service) applyReranking(query string, observations []*models.Observation, similarityScores map[int64]float64) []*models.Observation {
-	// Reranking removed in v5.
-	return observations
-}

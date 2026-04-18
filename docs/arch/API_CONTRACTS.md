@@ -55,7 +55,6 @@ Tools accept JSON arguments and return JSON results. Error responses follow the 
 |------|---------------|-------------|
 | `get_memory_stats` | `project?: string` | Overall memory statistics (counts, score distributions) |
 | `get_observation_quality` | `id: int64` | Quality score breakdown for a single observation |
-| `suggest_consolidations` | `project?: string`, `limit?: int` | Suggest observation pairs to merge |
 | `get_temporal_trends` | `project?: string`, `periods?: int` | Trend analysis over time windows |
 | `get_data_quality_report` | `project?: string` | Data quality metrics across observations |
 | `batch_tag_by_pattern` | `pattern: string`, `concepts: []string`, `project?: string` | Auto-tag observations matching a text pattern |
@@ -71,14 +70,6 @@ Tools accept JSON arguments and return JSON results. Error responses follow the 
 |------|---------------|-------------|
 | `search_sessions` | `query: string`, `workstation_id?: string`, `project_id?: string`, `limit?: int` | Full-text search across indexed JSONL sessions |
 | `list_sessions` | `workstation_id?: string`, `project_id?: string`, `limit?: int` | List sessions with optional filtering |
-
-### Memory Consolidation
-
-| Tool | Key Parameters | Description |
-|------|---------------|-------------|
-| `run_consolidation` | `type?: string` | Trigger consolidation: `all`\|`decay`\|`associations`\|`forgetting`. Requires worker running (consolidationScheduler != nil). |
-| `trigger_maintenance` | — | Run maintenance tasks manually |
-| `get_maintenance_stats` | — | Maintenance run statistics |
 
 ---
 
@@ -119,7 +110,7 @@ All API responses are JSON. The worker uses `github.com/goccy/go-json` for faste
 
 ### Dashboard
 
-The worker serves a Vue.js dashboard at `/` (embedded from `ui/dist/` at build time). The dashboard provides a real-time view of observations, search, and consolidation status via SSE events.
+The worker serves a Vue.js dashboard at `/` (embedded from `ui/dist/` at build time). The dashboard provides a real-time view of observations and search via SSE events.
 
 ---
 

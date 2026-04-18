@@ -13,7 +13,7 @@ func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string,
 	}
 	action := coerceString(m["action"], "")
 	if action == "" {
-		return "", fmt.Errorf("action required for admin tool (valid: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, export, backfill_status)")
+		return "", fmt.Errorf("action required for admin tool (valid: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, export, backfill_status, compress_aaak, set_aaak_code, taxonomy_stats)")
 	}
 
 	switch action {
