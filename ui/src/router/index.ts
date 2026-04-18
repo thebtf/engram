@@ -55,11 +55,6 @@ const routes = [
     redirect: '/monitor',
   },
   {
-    path: '/graph/:observationId?',
-    name: 'graph',
-    component: () => import('@/views/GraphView.vue'),
-  },
-  {
     path: '/patterns',
     name: 'patterns',
     component: () => import('@/views/PatternsView.vue'),

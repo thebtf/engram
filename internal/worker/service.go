@@ -26,8 +26,6 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
-	graphpkg "github.com/thebtf/engram/internal/graph"
-	"github.com/thebtf/engram/internal/graph/falkordb"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/logbuf"
@@ -97,8 +95,6 @@ type Service struct {
 	promptStore            *gorm.PromptStore
 	conflictStore          *gorm.ConflictStore
 	relationStore          *gorm.RelationStore
-	graphStore             graphpkg.GraphStore
-	graphWriter            *graphpkg.AsyncGraphWriter
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
@@ -385,21 +381,7 @@ func (s *Service) initializeAsync() {
 	conflictStore := gorm.NewConflictStore(store)
 	relationStore := gorm.NewRelationStore(store)
 
-	// Initialize optional FalkorDB graph store
-	var gs graphpkg.GraphStore = &graphpkg.NoopGraphStore{}
-	var gw *graphpkg.AsyncGraphWriter
 	cfg := config.Get()
-	if cfg.GraphProvider == "falkordb" && cfg.FalkorDBAddr != "" {
-		fdb, err := falkordb.NewFalkorDBGraphStore(cfg)
-		if err != nil {
-			log.Warn().Err(err).Msg("FalkorDB connection failed, falling back to noop graph store")
-		} else {
-			gs = fdb
-			gw = graphpkg.NewAsyncGraphWriter(gs)
-			relationStore.SetCallback(gw.Enqueue)
-			log.Info().Msg("FalkorDB graph store enabled with async dual-write")
-		}
-	}
 
 	// Create observation store
 	observationStore := gorm.NewObservationStore(store, nil)
@@ -474,8 +456,6 @@ func (s *Service) initializeAsync() {
 	s.promptStore = promptStore
 	s.conflictStore = conflictStore
 	s.relationStore = relationStore
-	s.graphStore = gs
-	s.graphWriter = gw
 	s.sessionManager = sessionManager
 	s.processor = processor
 	if processor != nil {
@@ -501,11 +481,6 @@ func (s *Service) initializeAsync() {
 
 	// Start buffered token stats flusher (batches DB writes every 5s)
 	s.startTokenStatsFlusher(s.ctx)
-
-	// Background sync: populate FalkorDB from existing PostgreSQL relations.
-	if _, ok := gs.(*graphpkg.NoopGraphStore); !ok && gs != nil {
-		go s.syncGraphFromRelations()
-	}
 
 	// Setup callbacks on stores and processors
 	s.setupCallbacks(sessionManager)
@@ -640,11 +615,6 @@ func (s *Service) initializeAsync() {
 		ChunkManager:       chunkManager,
 	})
 	mcpServer.SetInjectionStore(injectionStore)
-	// Wire graph store into MCP server and search manager.
-	if s.graphStore != nil {
-		mcpServer.SetGraphStore(s.graphStore)
-		searchMgr.SetGraphStore(s.graphStore)
-	}
 
 	// Wire backfill status into MCP server.
 	mcpServer.SetBackfillStatusFunc(func() (any, error) {
@@ -1059,7 +1029,6 @@ func (s *Service) setupRoutes() {
 		r.Delete("/api/projects/{id}", s.handleDeleteProject)
 		r.Get("/api/stats", s.handleGetStats)
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)
-		r.Post("/api/graph/sync", s.handleGraphSync)
 		r.Get("/api/types", s.handleGetTypes)
 		r.Get("/api/models", s.handleGetModels)
 
@@ -1608,38 +1577,6 @@ func (s *Service) processAllSessions() {
 	s.broadcastProcessingStatus()
 }
 
-// syncGraphFromRelations loads all relations from PostgreSQL and syncs them to FalkorDB.
-func (s *Service) syncGraphFromRelations() {
-	if s.graphStore == nil || s.relationStore == nil {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	log.Info().Msg("Starting graph sync from PostgreSQL relations...")
-
-	// Load all relations (minConfidence=0 fetches everything).
-	const maxRelations = 100000
-	relations, err := s.relationStore.GetHighConfidenceRelations(ctx, 0, maxRelations)
-	if err != nil {
-		log.Error().Err(err).Msg("Graph sync: failed to load relations from PostgreSQL")
-		return
-	}
-
-	if len(relations) == 0 {
-		log.Info().Msg("Graph sync: no relations to sync")
-		return
-	}
-
-	if err := s.graphStore.SyncFromRelations(ctx, relations); err != nil {
-		log.Error().Err(err).Msg("Graph sync: SyncFromRelations failed")
-		return
-	}
-
-	log.Info().Int("total_synced", len(relations)).Msg("Graph sync from PostgreSQL complete")
-}
-
 // Shutdown gracefully shuts down the service.
 func (s *Service) Shutdown(ctx context.Context) error {
 	log.Info().Msg("Starting graceful shutdown...")
@@ -1679,13 +1616,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	// Phase 3: Stop background workers (drain queues)
 	log.Debug().Msg("Phase 3: Stopping background workers...")
-	if s.graphWriter != nil {
-		s.graphWriter.Close()
-		log.Debug().Msg("Graph writer stopped")
-	}
-	if s.graphStore != nil {
-		collectError("graph_store", s.graphStore.Close())
-	}
 	if s.recalculator != nil {
 		s.recalculator.Stop()
 	}

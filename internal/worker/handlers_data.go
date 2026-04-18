@@ -312,7 +312,6 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-
 	// Include total observation count (active, non-archived, non-superseded)
 	if s.observationStore != nil {
 		obsCount, err := s.observationStore.GetTotalObservationCount(r.Context(), project)
@@ -338,33 +337,6 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	// Add circuit breaker metrics
 	if s.processor != nil {
 		response["circuitBreaker"] = s.processor.CircuitBreakerMetrics()
-	}
-
-	// Add graph store stats
-	if s.graphStore != nil {
-		gs, err := s.graphStore.Stats(r.Context())
-		if err == nil {
-			response["graph"] = map[string]any{
-				"provider":   gs.Provider,
-				"connected":  gs.Connected,
-				"node_count": gs.NodeCount,
-				"edge_count": gs.EdgeCount,
-			}
-		} else {
-			response["graph"] = map[string]any{
-				"provider":  gs.Provider,
-				"connected": false,
-				"error":     err.Error(),
-			}
-		}
-		if s.graphWriter != nil {
-			enqueued, written, dropped := s.graphWriter.Stats()
-			response["graphWriter"] = map[string]any{
-				"enqueued": enqueued,
-				"written":  written,
-				"dropped":  dropped,
-			}
-		}
 	}
 
 	writeJSON(w, response)
@@ -718,35 +690,6 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, _ *http.Request) {
 		"enabled": false,
 		"message": "Vector storage removed in v5 (content_chunks table dropped)",
 	})
-}
-
-// handleGraphSync godoc
-// @Summary Sync graph from relations
-// @Description Triggers a manual re-sync of relations from PostgreSQL to FalkorDB. Runs in background.
-// @Tags Graph
-// @Produce json
-// @Security ApiKeyAuth
-// @Success 200 {object} map[string]interface{}
-// @Failure 503 {string} string "graph backend not connected"
-// @Router /api/graph/sync [post]
-func (s *Service) handleGraphSync(w http.ResponseWriter, r *http.Request) {
-	if s.graphStore == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, map[string]any{"error": "graph backend not configured"})
-		return
-	}
-
-	if err := s.graphStore.Ping(r.Context()); err != nil {
-		http.Error(w, "graph backend not connected: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-
-	// Run sync in background.
-	go func() {
-		s.syncGraphFromRelations()
-	}()
-
-	writeJSON(w, map[string]any{"status": "sync started in background"})
 }
 
 // bulkDeleteRequest is the JSON body for DELETE /api/observations/bulk.

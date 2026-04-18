@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/palace/aaak"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
@@ -21,14 +20,13 @@ type StoreEntitiesResult struct {
 
 // StoreEntitiesParams holds all dependencies needed by StoreEntities.
 type StoreEntitiesParams struct {
-	DB         *gorm.DB
-	GraphStore graph.GraphStore
-	Project    string
-	Result     *ExtractionResult
-	SourceIDs  []int64
+	DB        *gorm.DB
+	Project   string
+	Result    *ExtractionResult
+	SourceIDs []int64
 }
 
-// StoreEntities persists extracted entities as observations and creates FalkorDB edges.
+// StoreEntities persists extracted entities as observations.
 // Entities are deduped by (lower(title), project, entity_type).
 func StoreEntities(ctx context.Context, p StoreEntitiesParams) (*StoreEntitiesResult, error) {
 	if p.Result == nil || len(p.Result.Entities) == 0 {
@@ -136,46 +134,6 @@ func StoreEntities(ctx context.Context, p StoreEntitiesParams) (*StoreEntitiesRe
 			entityIDsByName[strings.ToLower(entity.Name)] = newID
 
 			counts.Created++
-		}
-	}
-
-	// Create FalkorDB edges
-	if p.GraphStore != nil {
-		var edges []graph.RelationEdge
-
-		// Entity → source observations
-		for _, entity := range p.Result.Entities {
-			entityID, ok := entityIDsByName[strings.ToLower(entity.Name)]
-			if !ok {
-				continue
-			}
-			for _, srcID := range p.SourceIDs {
-				edges = append(edges, graph.RelationEdge{
-					SourceID:     entityID,
-					TargetID:     srcID,
-					RelationType: "extracted_from",
-					Confidence:   0.8,
-				})
-			}
-		}
-
-		// Entity → entity edges
-		for _, rel := range p.Result.Relations {
-			fromID := entityIDsByName[strings.ToLower(rel.From)]
-			toID := entityIDsByName[strings.ToLower(rel.To)]
-			if fromID > 0 && toID > 0 {
-				edges = append(edges, graph.RelationEdge{
-					SourceID:     fromID,
-					TargetID:     toID,
-					RelationType: models.RelationType(rel.RelType),
-					Confidence:   0.7,
-				})
-			}
-		}
-
-		if len(edges) > 0 {
-			// Non-fatal: graph edges are supplementary
-			_ = p.GraphStore.StoreEdgesBatch(ctx, edges)
 		}
 	}
 

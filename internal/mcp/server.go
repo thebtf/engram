@@ -18,7 +18,6 @@ import (
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
-	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
@@ -43,7 +42,6 @@ type Server struct {
 	documentStore          *gorm.DocumentStore
 	versionedDocumentStore *gorm.VersionedDocumentStore
 	chunkManager           *chunking.Manager
-	graphStore             graphpkg.GraphStore
 	reasoningStore         *gorm.ReasoningTraceStore
 	issueStore             *gorm.IssueStore
 	memoryStore            *gorm.MemoryStore
@@ -87,11 +85,6 @@ func NewServer(opts ServerOptions) *Server {
 		documentStore:      opts.DocumentStore,
 		chunkManager:       opts.ChunkManager,
 	}
-}
-
-// SetGraphStore sets the graph store for graph-related MCP tools.
-func (s *Server) SetGraphStore(gs graphpkg.GraphStore) {
-	s.graphStore = gs
 }
 
 // SetInjectionStore sets the injection store for learning MCP tools.
@@ -397,7 +390,7 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 | ` + "`issues`" + ` | **Cross-project issue tracking** between agents | create, list, get, update, comment, reopen |
 | ` + "`vault`" + ` | **Credentials** — encrypted AES-256-GCM | store, get, list, delete, status |
 | ` + "`docs`" + ` | **Documents** — versioned docs & collections | create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs |
-| ` + "`admin`" + ` | **Bulk ops**, analytics | bulk_delete, bulk_supersede, tag, graph, stats, trends, quality, export, ... |
+| ` + "`admin`" + ` | **Bulk ops**, analytics | bulk_delete, bulk_supersede, tag, stats, trends, quality, export, ... |
 | ` + "`check_system_health`" + ` | **Health** check of all subsystems | (no params) |
 
 ## Issues — Cross-Project Agent Bug Tracker
@@ -585,7 +578,7 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name:        "admin",
-			Description: "Administrative operations: bulk ops, tagging, graph, analytics. Actions: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, export, backfill_status, compress_aaak, set_aaak_code, taxonomy_stats. Action required.",
+			Description: "Administrative operations: bulk ops, tagging, analytics. Actions: " + strings.Join(adminActions, ", ") + ". Action required.",
 			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -593,11 +586,10 @@ func (s *Server) primaryTools() []Tool {
 				"properties": map[string]any{
 					"action":  map[string]any{"type": "string", "description": "Action to perform (required). See tool description for valid actions."},
 					"ids":     map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "description": "Observation IDs (for bulk_delete, bulk_supersede, bulk_boost)"},
-					"id":      map[string]any{"type": "number", "description": "Observation ID (for tag, obs_quality, scoring, graph)"},
+					"id":      map[string]any{"type": "number", "description": "Observation ID (for tag, obs_quality, scoring)"},
 					"tag":     map[string]any{"type": "string", "description": "Tag name (for by_tag, batch_tag)"},
 					"project": map[string]any{"type": "string", "description": "Project name (for trends, quality, importance, etc.)"},
 					"format":  map[string]any{"type": "string", "description": "Export format: json/jsonl/markdown (for export)"},
-					"mode":    map[string]any{"type": "string", "description": "Graph mode (for graph action)"},
 					"amount":  map[string]any{"type": "number", "description": "Boost amount (for bulk_boost)"},
 					"add":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to add (for tag)"},
 					"remove":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to remove (for tag)"},
@@ -807,21 +799,6 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"project":        map[string]any{"type": "string", "description": "Filter by project name"},
 					"min_similarity": map[string]any{"type": "number", "default": 0.7, "minimum": 0.0, "maximum": 1.0, "description": "Minimum similarity threshold (0-1)"},
 					"limit":          map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
-				},
-			},
-		},
-		{
-			Name:        "graph_query",
-			Description: "Unified graph query tool. Consolidates find_related_observations, get_observation_relationships, and get_graph_neighbors.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id"},
-				"properties": map[string]any{
-					"mode":      map[string]any{"type": "string", "enum": []string{"related", "relationships", "neighbors"}, "default": "related", "description": "Graph query mode"},
-					"id":        map[string]any{"type": "number", "description": "Observation ID to query around"},
-					"max_depth": map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "Maximum traversal depth (mode=relationships)"},
-					"limit":     map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
 				},
 			},
 		},
@@ -1057,17 +1034,6 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"days":  map[string]any{"type": "number", "default": 7, "minimum": 1, "maximum": 30, "description": "Number of days to analyze"},
 					"top_n": map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50, "description": "Number of top patterns to return"},
 				},
-			},
-		},
-		// get_observation_relationships removed from registration (subset of graph_query) — dispatch alias retained
-		// get_graph_neighbors removed from registration (subset of graph_query) — dispatch alias retained
-		{
-			Name:        "get_graph_stats",
-			Description: "Get graph backend statistics. Returns provider, connection status, node count, and edge count.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
 			},
 		},
 		{
@@ -1638,21 +1604,6 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 
 	// Legacy alias handlers for non-search tools
 	switch name {
-	case "graph_query":
-		// Consolidated graph tool — routes by mode parameter
-		gm, gErr := parseArgs(args)
-		if gErr != nil {
-			return "", gErr
-		}
-		mode := coerceString(gm["mode"], "related")
-		switch mode {
-		case "relationships":
-			return s.handleGetObservationRelationships(ctx, args)
-		case "neighbors":
-			return s.handleGetGraphNeighbors(ctx, args)
-		default: // "related"
-			return s.handleFindRelatedObservations(ctx, args)
-		}
 	case "find_related_observations":
 		return s.handleFindRelatedObservations(ctx, args)
 	case "find_similar_observations":
@@ -1697,12 +1648,6 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleCheckSystemHealth(ctx)
 	case "analyze_search_patterns":
 		return s.handleAnalyzeSearchPatterns(ctx, args)
-	case "get_observation_relationships":
-		return s.handleGetObservationRelationships(ctx, args)
-	case "get_graph_neighbors":
-		return s.handleGetGraphNeighbors(ctx, args)
-	case "get_graph_stats":
-		return s.handleGetGraphStats(ctx)
 	case "get_observation_scoring_breakdown":
 		return s.handleGetObservationScoringBreakdown(ctx, args)
 	case "analyze_observation_importance":
@@ -4180,117 +4125,6 @@ func (s *Server) handleListSessions(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("marshal results: %w", err)
 	}
 	return string(data), nil
-}
-
-// handleGetGraphNeighbors returns graph neighbors via FalkorDB.
-func (s *Server) handleGetGraphNeighbors(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		ObservationID int64
-		MaxHops       int
-		Limit         int
-	}
-	params.ObservationID = coerceInt64(m["observation_id"], 0)
-	params.MaxHops = coerceInt(m["max_hops"], 0)
-	params.Limit = coerceInt(m["limit"], 0)
-	if params.ObservationID <= 0 {
-		return "", fmt.Errorf("observation_id is required")
-	}
-	if params.MaxHops <= 0 {
-		params.MaxHops = 2
-	}
-	if params.Limit <= 0 {
-		params.Limit = 20
-	}
-
-	if s.graphStore == nil {
-		result := map[string]any{"error": "graph backend not configured"}
-		b, _ := json.MarshalIndent(result, "", "  ")
-		return string(b), nil
-	}
-
-	if err := s.graphStore.Ping(ctx); err != nil {
-		result := map[string]any{"error": "graph backend not connected", "details": err.Error()}
-		b, _ := json.MarshalIndent(result, "", "  ")
-		return string(b), nil
-	}
-
-	neighbors, err := s.graphStore.GetNeighbors(ctx, params.ObservationID, params.MaxHops, params.Limit)
-	if err != nil {
-		return "", fmt.Errorf("get graph neighbors: %w", err)
-	}
-
-	// Enrich with observation details.
-	type NeighborInfo struct {
-		ID           int64  `json:"id"`
-		Title        string `json:"title"`
-		Type         string `json:"type"`
-		Project      string `json:"project"`
-		RelationType string `json:"relation_type"`
-		Hops         int    `json:"hops"`
-	}
-
-	result := make([]NeighborInfo, 0, len(neighbors))
-	for _, n := range neighbors {
-		info := NeighborInfo{
-			ID:           n.ObsID,
-			RelationType: string(n.RelationType),
-			Hops:         n.Hops,
-		}
-		// Try to enrich with observation details.
-		obs, err := s.observationStore.GetObservationByID(ctx, n.ObsID)
-		if err == nil && obs != nil {
-			info.Title = obs.Title.String
-			info.Type = string(obs.Type)
-			info.Project = obs.Project
-		}
-		result = append(result, info)
-	}
-
-	response := map[string]any{
-		"observation_id": params.ObservationID,
-		"max_hops":       params.MaxHops,
-		"neighbors":      result,
-		"count":          len(result),
-	}
-	b, _ := json.MarshalIndent(response, "", "  ")
-	return string(b), nil
-}
-
-// handleGetGraphStats returns graph backend statistics.
-func (s *Server) handleGetGraphStats(ctx context.Context) (string, error) {
-	if s.graphStore == nil {
-		result := map[string]any{
-			"provider":  "none",
-			"connected": false,
-		}
-		b, _ := json.MarshalIndent(result, "", "  ")
-		return string(b), nil
-	}
-
-	stats, err := s.graphStore.Stats(ctx)
-	if err != nil {
-		result := map[string]any{
-			"provider":  stats.Provider,
-			"connected": false,
-			"error":     err.Error(),
-		}
-		b, _ := json.MarshalIndent(result, "", "  ")
-		return string(b), nil
-	}
-
-	result := map[string]any{
-		"provider":   stats.Provider,
-		"connected":  stats.Connected,
-		"node_count": stats.NodeCount,
-		"edge_count": stats.EdgeCount,
-	}
-	b, _ := json.MarshalIndent(result, "", "  ")
-	return string(b), nil
 }
 
 // handleFindByFileContext retrieves observations directly associated with a specific file path,

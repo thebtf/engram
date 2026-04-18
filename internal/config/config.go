@@ -113,8 +113,6 @@ type Config struct {
 	ContextObsConcepts           []string `json:"context_obs_concepts"`
 	ContextObsTypes              []string `json:"context_obs_types"`
 	ContextFullCount             int      `json:"context_full_count"`
-	GraphBranchFactor            int      `json:"graph_branch_factor"`
-	GraphEdgeWeight              float64  `json:"graph_edge_weight"`
 	ContextRelevanceThreshold    float64  `json:"context_relevance_threshold"`
 	RerankingCandidates          int      `json:"reranking_candidates"`
 	WorkerPort                   int      `json:"worker_port"`
@@ -124,16 +122,13 @@ type Config struct {
 	ContextSessionCount          int      `json:"context_session_count"`
 	MaxConns                     int      `json:"max_conns"`
 	RerankingAlpha               float64  `json:"reranking_alpha"`
-	GraphMaxHops                 int      `json:"graph_max_hops"`
 	RerankingResults             int      `json:"reranking_results"`
-	GraphRebuildIntervalMin      int      `json:"graph_rebuild_interval_min"`
 	HubThreshold                 int      `json:"hub_threshold"`
 	ObservationRetentionDays     int      `json:"observation_retention_days"`
 	MaintenanceIntervalHours     int      `json:"maintenance_interval_hours"`
 	ContextShowWorkTokens        bool     `json:"context_show_work_tokens"`
 	ContextShowReadTokens        bool     `json:"context_show_read_tokens"`
 	RerankingPureMode            bool     `json:"reranking_pure_mode"`
-	GraphEnabled                 bool     `json:"graph_enabled"`
 	MaintenanceEnabled           bool     `json:"maintenance_enabled"`
 	RerankingEnabled             bool     `json:"reranking_enabled"`
 	ContextShowLastSummary       bool     `json:"context_show_last_summary"`
@@ -155,11 +150,6 @@ type Config struct {
 	WorkerToken                  string   // env-only
 	CollectionConfigPath         string   // env-only
 	WorkstationID                string   // env-only: WORKSTATION_ID
-	GraphProvider                string   `json:"graph_provider"` // "falkordb" or "" (disabled)
-	FalkorDBAddr                 string   // env-only: ENGRAM_FALKORDB_ADDR
-	FalkorDBPassword             string   // env-only: ENGRAM_FALKORDB_PASSWORD
-	FalkorDBGraphName            string   `json:"falkordb_graph_name"`    // default: "engram"
-	GraphSearchExpansion         bool     `json:"graph_search_expansion"` // expand search via graph (default: true when graph provider set)
 	TelemetryEnabled             bool     `json:"telemetry_enabled"`
 	SmartGCEnabled               bool     `json:"smart_gc_enabled"`
 	SmartGCThreshold             float64  `json:"smart_gc_threshold"`
@@ -193,7 +183,6 @@ type Config struct {
 	ProjectBriefingEnabled       bool     `json:"project_briefing_enabled"`        // ENGRAM_PROJECT_BRIEFING_ENABLED (default: false)
 	WriteMergeEnabled             bool     `json:"write_merge_enabled"`              // ENGRAM_WRITE_MERGE_ENABLED (default: false)
 	ContradictionDetectionEnabled bool     `json:"contradiction_detection_enabled"`  // ENGRAM_CONTRADICTION_DETECTION_ENABLED (default: true)
-	InjectGraphBFSEnabled         bool     `json:"inject_graph_bfs_enabled"`         // ENGRAM_INJECT_GRAPH_BFS_ENABLED (default: false)
 	EnforceSourceProject          bool     `json:"enforce_source_project"`           // ENGRAM_ENFORCE_SOURCE_PROJECT (default: true)
 	SessionBoost                  float64  `json:"session_boost"`                    // ENGRAM_SESSION_BOOST (default: 1.3)
 	TypeSearchLanes              map[string]SearchLaneConfig `json:"type_search_lanes"` // typed lane overrides; merged over DefaultTypeSearchLanes
@@ -316,11 +305,6 @@ func Default() *Config {
 		RerankingResults:               10,                    // Return top 10 after reranking
 		RerankingAlpha:                 0.7,                   // Favor cross-encoder score
 		RerankingMinImprovement:        0,                     // Always apply reranking
-		GraphEnabled:                   true,                  // Enable graph-aware search by default
-		GraphMaxHops:                   2,                     // Two-hop traversal
-		GraphBranchFactor:              5,                     // Expand top 5 neighbors per node
-		GraphEdgeWeight:                0.3,                   // Minimum edge weight to follow
-		GraphRebuildIntervalMin:        60,                    // Rebuild graph every 60 minutes
 		VectorStorageStrategy:          "hub",                 // Hub storage strategy (LEANN-inspired)
 		EmbeddingProvider:              "openai",
 		EmbeddingBaseURL:               "https://api.openai.com/v1",
@@ -349,8 +333,6 @@ func Default() *Config {
 		HyDETimeoutMS:                  800, // 800ms within 5s expansion budget
 		WorkerHost:                     "127.0.0.1",
 		DatabaseMaxConns:               10,
-		FalkorDBGraphName:              "engram",
-		GraphSearchExpansion:           true,
 		TelemetryEnabled:               true,
 		SmartGCEnabled:                 false, // Opt-in: archive low-value observations
 		SmartGCThreshold:               0.05,  // FinalScore below this = candidate for archival
@@ -380,7 +362,6 @@ func Default() *Config {
 		ProjectBriefingEnabled:          false, // Opt-in: inject synthesized per-project briefing block (FR-6 / T029)
 		WriteMergeEnabled:               false, // Opt-in: write-time merge path for observations (FR-10 / T040)
 		ContradictionDetectionEnabled:   true,  // Safety default until operators disable the old supersede path explicitly (T038a)
-		InjectGraphBFSEnabled:           false, // Opt-in: entity-seeded BFS traversal for inject path (US8 / T042)
 		EnforceSourceProject:            true,  // Enforce source/project scoping on store/recall (T010)
 		SessionBoost:                    1.3,   // Boost factor for observations from recently active sessions
 		TypeSearchLanes:                cloneTypeSearchLanes(DefaultTypeSearchLanes),
@@ -473,24 +454,9 @@ func Load() (*Config, error) {
 			if v, ok := settings["ENGRAM_CONTEXT_MAX_PROMPT_RESULTS"].(float64); ok && v >= 0 {
 				cfg.ContextMaxPromptResults = int(v)
 			}
-			if v, ok := settings["ENGRAM_GRAPH_ENABLED"].(bool); ok {
-				cfg.GraphEnabled = v
-			}
-			if v, ok := settings["ENGRAM_GRAPH_MAX_HOPS"].(float64); ok && v > 0 {
-				cfg.GraphMaxHops = int(v)
-			}
-			if v, ok := settings["ENGRAM_GRAPH_BRANCH_FACTOR"].(float64); ok && v > 0 {
-				cfg.GraphBranchFactor = int(v)
-			}
-			if v, ok := settings["ENGRAM_GRAPH_EDGE_WEIGHT"].(float64); ok && v >= 0 && v <= 1 {
-				cfg.GraphEdgeWeight = v
-			}
-			if v, ok := settings["ENGRAM_GRAPH_REBUILD_INTERVAL_MIN"].(float64); ok && v > 0 {
-				cfg.GraphRebuildIntervalMin = int(v)
-			}
-			if v, ok := settings["ENGRAM_VECTOR_STORAGE_STRATEGY"].(string); ok && v != "" {
-				cfg.VectorStorageStrategy = v
-			}
+				if v, ok := settings["ENGRAM_VECTOR_STORAGE_STRATEGY"].(string); ok && v != "" {
+					cfg.VectorStorageStrategy = v
+				}
 			if v, ok := settings["EMBEDDING_PROVIDER"].(string); ok && v != "" {
 				cfg.EmbeddingProvider = v
 			}
@@ -531,12 +497,9 @@ func Load() (*Config, error) {
 			if v, ok := settings["ENGRAM_CONTRADICTION_DETECTION_ENABLED"].(bool); ok {
 				cfg.ContradictionDetectionEnabled = v
 			}
-			if v, ok := settings["ENGRAM_INJECT_GRAPH_BFS_ENABLED"].(bool); ok {
-				cfg.InjectGraphBFSEnabled = v
-			}
-			if v, ok := settings["ENGRAM_ENFORCE_SOURCE_PROJECT"].(bool); ok {
-				cfg.EnforceSourceProject = v
-			}
+				if v, ok := settings["ENGRAM_ENFORCE_SOURCE_PROJECT"].(bool); ok {
+					cfg.EnforceSourceProject = v
+				}
 			if raw, ok := settings["type_search_lanes"]; ok {
 				cfg.TypeSearchLanes = mergeTypeSearchLanes(DefaultTypeSearchLanes, raw)
 			} else if raw, ok := settings["ENGRAM_TYPE_SEARCH_LANES"]; ok {
@@ -638,24 +601,9 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("WORKSTATION_ID")); v != "" {
 		cfg.WorkstationID = v
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_GRAPH_PROVIDER")); v != "" {
-		cfg.GraphProvider = v
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_FALKORDB_ADDR")); v != "" {
-		cfg.FalkorDBAddr = v
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_FALKORDB_PASSWORD")); v != "" {
-		cfg.FalkorDBPassword = v
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_FALKORDB_GRAPH_NAME")); v != "" {
-		cfg.FalkorDBGraphName = v
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_GRAPH_SEARCH_EXPANSION")); v == "false" || v == "0" {
-		cfg.GraphSearchExpansion = false
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_TELEMETRY_ENABLED")); v == "false" || v == "0" {
-		cfg.TelemetryEnabled = false
-	}
+		if v := strings.TrimSpace(os.Getenv("ENGRAM_TELEMETRY_ENABLED")); v == "false" || v == "0" {
+			cfg.TelemetryEnabled = false
+		}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_SMART_GC_ENABLED")); v == "true" || v == "1" {
 		cfg.SmartGCEnabled = true
 	}
@@ -783,15 +731,10 @@ func Load() (*Config, error) {
 			cfg.ContradictionDetectionEnabled = b
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECT_GRAPH_BFS_ENABLED")); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.InjectGraphBFSEnabled = b
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENFORCE_SOURCE_PROJECT")); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.EnforceSourceProject = b
-		}
+		if v := strings.TrimSpace(os.Getenv("ENGRAM_ENFORCE_SOURCE_PROJECT")); v != "" {
+			if b, err := strconv.ParseBool(v); err == nil {
+				cfg.EnforceSourceProject = b
+			}
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_TYPE_SEARCH_LANES")); v != "" {
 		var raw any

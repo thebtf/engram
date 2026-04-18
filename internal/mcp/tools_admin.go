@@ -4,7 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
+
+// adminActions is the single source of truth for valid admin tool actions.
+// It is referenced by handleAdmin for validation messages and by the tool
+// registration in server.go for the tool description.
+var adminActions = []string{
+	"bulk_delete", "bulk_supersede", "bulk_boost",
+	"tag", "by_tag", "batch_tag",
+	"stats", "trends", "quality", "importance",
+	"search_analytics", "obs_quality", "scoring",
+	"export", "backfill_status",
+	"compress_aaak", "set_aaak_code", "taxonomy_stats",
+}
 
 func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
@@ -13,7 +26,7 @@ func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string,
 	}
 	action := coerceString(m["action"], "")
 	if action == "" {
-		return "", fmt.Errorf("action required for admin tool (valid: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, export, backfill_status, compress_aaak, set_aaak_code, taxonomy_stats)")
+		return "", fmt.Errorf("action required for admin tool (valid: %s)", strings.Join(adminActions, ", "))
 	}
 
 	switch action {
@@ -29,10 +42,6 @@ func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string,
 		return s.handleGetObservationsByTag(ctx, args)
 	case "batch_tag":
 		return s.handleBatchTagByPattern(ctx, args)
-	case "graph":
-		return s.callTool(ctx, "graph_query", args)
-	case "graph_stats":
-		return s.handleGetGraphStats(ctx)
 	case "stats":
 		return s.handleGetMemoryStats(ctx)
 	case "trends":
@@ -59,6 +68,6 @@ func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string,
 	case "taxonomy_stats":
 		return s.handleTaxonomyStats(ctx, args)
 	default:
-		return "", fmt.Errorf("unknown admin action: %q (valid: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, graph, graph_stats, stats, trends, quality, importance, search_analytics, obs_quality, scoring, export, backfill_status, compress_aaak, set_aaak_code, taxonomy_stats)", action)
+		return "", fmt.Errorf("unknown admin action: %q (valid: %s)", action, strings.Join(adminActions, ", "))
 	}
 }

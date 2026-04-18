@@ -15,7 +15,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	graphpkg "github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/strutil"
 	"golang.org/x/sync/singleflight"
@@ -297,21 +296,20 @@ func ApplyDiversityPenalty(observations []*models.Observation, scores map[int64]
 
 // Manager provides unified search across PostgreSQL FTS.
 type Manager struct {
-	ctx                  context.Context
-	searchGroup          singleflight.Group
-	cancel               context.CancelFunc
-	metrics              *SearchMetrics
-	promptStore          *gorm.PromptStore
-	observationStore     *gorm.ObservationStore
-	summaryStore         *gorm.SummaryStore
-	graphStore           graphpkg.GraphStore
-	documentStore        *gorm.DocumentStore
-	resultCache          map[string]*cachedResult
-	queryFrequency       map[string]*queryFrequencyInfo
-	cacheTTL             time.Duration
-	cacheMaxSize         int
-	resultCacheMu        sync.RWMutex
-	queryFrequencyMu     sync.RWMutex
+	ctx              context.Context
+	searchGroup      singleflight.Group
+	cancel           context.CancelFunc
+	metrics          *SearchMetrics
+	promptStore      *gorm.PromptStore
+	observationStore *gorm.ObservationStore
+	summaryStore     *gorm.SummaryStore
+	documentStore    *gorm.DocumentStore
+	resultCache      map[string]*cachedResult
+	queryFrequency   map[string]*queryFrequencyInfo
+	cacheTTL         time.Duration
+	cacheMaxSize     int
+	resultCacheMu    sync.RWMutex
+	queryFrequencyMu sync.RWMutex
 }
 
 // queryFrequencyInfo tracks how often a query is used.
@@ -352,11 +350,6 @@ func NewManager(
 	// Start cache warming goroutine
 	go m.cacheWarmingLoop()
 	return m
-}
-
-// SetGraphStore sets the graph store for graph-augmented search expansion.
-func (m *Manager) SetGraphStore(gs graphpkg.GraphStore) {
-	m.graphStore = gs
 }
 
 // SetDocumentStore sets the document store for document search.
@@ -998,11 +991,6 @@ func (m *Manager) ftsSearch(ctx context.Context, params SearchParams) (*UnifiedS
 	return m.filterSearch(ctx, params)
 }
 
-
-
-
-
-
 // buildResultFromFTS constructs a UnifiedSearchResult from pre-fetched FTS observations.
 func (m *Manager) buildResultFromFTS(ftsResults []gorm.ScoredObservation, params SearchParams) (*UnifiedSearchResult, error) {
 	results := make([]SearchResult, 0, len(ftsResults))
@@ -1175,76 +1163,3 @@ func (m *Manager) promptToResult(prompt *models.UserPromptWithSession, format st
 }
 
 var truncate = strutil.TruncateTrimmed
-
-const (
-	graphExpansionTopN    = 5
-	graphExpansionMaxHops = 2
-	graphExpansionLimit   = 10
-	graphExpansionDecay   = 0.7
-)
-
-// ExpandViaGraph takes the top-N fused results and expands them via graph neighbors.
-// Neighbor scores decay as 0.7^hops relative to the parent's score.
-// Only observation-type results are expanded. New neighbors are merged into the
-// fused list, re-sorted by score, and capped at the original limit.
-func (m *Manager) ExpandViaGraph(ctx context.Context, fused []ScoredID, limit int) []ScoredID {
-	if m.graphStore == nil {
-		return fused
-	}
-	// Check that graphStore is actually connected (not noop).
-	if err := m.graphStore.Ping(ctx); err != nil {
-		return fused
-	}
-
-	// Build set of existing IDs to avoid duplicates.
-	seen := make(map[int64]bool, len(fused))
-	for _, f := range fused {
-		seen[f.ID] = true
-	}
-
-	// Expand top-N observation results.
-	topN := graphExpansionTopN
-	if topN > len(fused) {
-		topN = len(fused)
-	}
-
-	var expanded []ScoredID
-	for i := 0; i < topN; i++ {
-		item := fused[i]
-		if item.DocType != "observation" {
-			continue
-		}
-		neighbors, err := m.graphStore.GetNeighbors(ctx, item.ID, graphExpansionMaxHops, graphExpansionLimit)
-		if err != nil {
-			log.Debug().Err(err).Int64("obs_id", item.ID).Msg("graph expansion: GetNeighbors failed")
-			continue
-		}
-		for _, n := range neighbors {
-			if seen[n.ObsID] {
-				continue
-			}
-			seen[n.ObsID] = true
-			decayedScore := item.Score * math.Pow(graphExpansionDecay, float64(n.Hops))
-			expanded = append(expanded, ScoredID{
-				ID:      n.ObsID,
-				DocType: "observation",
-				Score:   decayedScore,
-			})
-		}
-	}
-
-	if len(expanded) == 0 {
-		return fused
-	}
-
-	log.Debug().Int("graph_expansions", len(expanded)).Msg("graph expansion added neighbors")
-
-	fused = append(fused, expanded...)
-	sort.Slice(fused, func(i, j int) bool {
-		return fused[i].Score > fused[j].Score
-	})
-	if len(fused) > limit {
-		fused = fused[:limit]
-	}
-	return fused
-}
