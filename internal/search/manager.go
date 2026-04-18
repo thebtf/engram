@@ -306,7 +306,6 @@ type Manager struct {
 	summaryStore         *gorm.SummaryStore
 	graphStore           graphpkg.GraphStore
 	documentStore        *gorm.DocumentStore
-	projectSettingsStore *gorm.ProjectSettingsStore
 	resultCache          map[string]*cachedResult
 	queryFrequency       map[string]*queryFrequencyInfo
 	cacheTTL             time.Duration
@@ -365,27 +364,15 @@ func (m *Manager) SetDocumentStore(ds *gorm.DocumentStore) {
 	m.documentStore = ds
 }
 
-// SetProjectSettingsStore sets the project settings store for per-project adaptive thresholds.
-func (m *Manager) SetProjectSettingsStore(ps *gorm.ProjectSettingsStore) {
-	m.projectSettingsStore = ps
-}
-
-// GetProjectThreshold returns the per-project relevance threshold.
-// Falls back to globalDefault if no project-specific setting exists.
+// GetProjectThreshold returns the relevance threshold for a project.
+// As of US4 (v5 cleanup), per-project adaptive thresholds were removed — this
+// always returns globalDefault. Kept as a wrapper so callers in internal/worker
+// do not need to change. Remove callers + this method together in a later US
+// (tracked as follow-up cleanup).
 func (m *Manager) GetProjectThreshold(ctx context.Context, project string, globalDefault float64) float64 {
-	if m.projectSettingsStore == nil {
-		return globalDefault
-	}
-	threshold, err := m.projectSettingsStore.GetThreshold(ctx, project)
-	if err != nil {
-		return globalDefault
-	}
-	// If the stored threshold equals the default (0.3), honor globalDefault
-	// in case the operator configured a higher global threshold.
-	if threshold == 0.3 {
-		return globalDefault
-	}
-	return threshold
+	_ = ctx
+	_ = project
+	return globalDefault
 }
 
 // Close stops background goroutines and cleans up resources.

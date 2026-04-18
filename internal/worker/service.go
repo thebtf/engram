@@ -146,7 +146,6 @@ type Service struct {
 	llmFilter              *search.LLMFilter
 	retrievalHooks         *retrievalHooks
 	llmClient              learning.LLMClient
-	projectSettingsStore   *gorm.ProjectSettingsStore
 	strategySelector       *learning.StrategySelector
 	authHandlers           *AuthHandlers
 	version                string
@@ -863,11 +862,6 @@ func (s *Service) initializeAsync() {
 	s.initMu.Lock()
 	s.grpcServer = grpcSrv
 	s.initMu.Unlock()
-
-	// Wire project settings store for adaptive per-project thresholds.
-	projectSettingsStore := gorm.NewProjectSettingsStore(store.DB)
-	searchMgr.SetProjectSettingsStore(projectSettingsStore)
-	s.projectSettingsStore = projectSettingsStore
 
 	s.initMu.Lock()
 	s.searchMgr = searchMgr

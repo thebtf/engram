@@ -11,7 +11,6 @@
 //   - memory_blocks    — not present in migrations (non-existent table)
 //   - collections      — not present in migrations (non-existent table)
 //   - embeddings       — not present in migrations (no FK to projects)
-//   - project_settings — project TEXT PRIMARY KEY, standalone table (no FK)
 //   - issues           — source_project/target_project are TEXT, no FK
 //
 // VERDICT: No ON DELETE CASCADE FK from any table to projects.id.

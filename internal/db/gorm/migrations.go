@@ -3091,6 +3091,24 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return fmt.Errorf("migration 090_observations_to_static_entities: rollback is not safe after cutover — post-migration writes to credentials/memories/behavioral_rules would be destroyed; perform manual rollback if this is a pre-cutover environment")
 			},
 		},
+		{
+			// Migration 097_drop_project_settings — US4 (v5 cleanup, plan.md §Phase 4).
+			// project_settings held per-project adaptive thresholds (idx_projects_threshold);
+			// US4 removes adaptive thresholds entirely, callers use the global default.
+			// Per plan.md C3: rollback returns error — project_settings data is not recoverable
+			// without a pre-US4 pg_dump (data is derived, can be recomputed from learning signals
+			// in a future v5.X if adaptive thresholds return).
+			ID: "097_drop_project_settings",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.Exec(`DROP TABLE IF EXISTS project_settings`).Error; err != nil {
+					return fmt.Errorf("migration 097_drop_project_settings: DROP: %w", err)
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return fmt.Errorf("migration 097_drop_project_settings rollback is IRREVERSIBLE — project_settings data was derived from learning signals and is not recoverable without a pre-US4 pg_dump snapshot")
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
