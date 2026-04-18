@@ -927,32 +927,6 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		},
 		{
-			Name:        "store_rule",
-			Description: "Store a behavioral rule (always-inject guidance applied at session-start). Project-scoped if project is set, global otherwise.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"content"},
-				"properties": map[string]any{
-					"project":  map[string]any{"type": "string", "description": "Project name (omit for global rule)"},
-					"content":  map[string]any{"type": "string", "description": "Rule content (required)"},
-					"priority": map[string]any{"type": "number", "description": "Priority — higher values inject first (default 0)"},
-				},
-			},
-		},
-		{
-			Name:        "list_rules",
-			Description: "List behavioral rules for a project (always includes global rules where project is NULL).",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{
-					"project": map[string]any{"type": "string", "description": "Project name (omit to list only global rules)"},
-					"limit":   map[string]any{"type": "number", "description": "Max results (default 50, max 500)"},
-				},
-			},
-		},
-		{
 			Name:        "get_observation",
 			Description: "Get a single observation by its ID. Returns full observation details including all metadata.",
 			tier:        tierAdmin,
@@ -1243,6 +1217,41 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
+	}
+
+	// Behavioral rules tools — only advertise when the store is wired (US3 Commit C).
+	// Advertising store_rule/list_rules when behavioralRulesStore is nil would cause
+	// every call to fail with "behavioral rules store not initialised" — unhelpful noise
+	// for deployments that have not yet run migration 089.
+	if s.behavioralRulesStore != nil {
+		tools = append(tools,
+			Tool{
+				Name:        "store_rule",
+				Description: "Store a behavioral rule (always-inject guidance applied at session-start). Project-scoped if project is set, global otherwise.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{"content"},
+					"properties": map[string]any{
+						"project":  map[string]any{"type": "string", "description": "Project name (omit for global rule)"},
+						"content":  map[string]any{"type": "string", "description": "Rule content (required)"},
+						"priority": map[string]any{"type": "number", "description": "Priority — higher values inject first (default 0)"},
+					},
+				},
+			},
+			Tool{
+				Name:        "list_rules",
+				Description: "List behavioral rules for a project (always includes global rules where project is NULL).",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{
+						"project": map[string]any{"type": "string", "description": "Project name (omit to list only global rules)"},
+						"limit":   map[string]any{"type": "number", "description": "Max results (default 50, max 500)"},
+					},
+				},
+			},
+		)
 	}
 
 	// Backfill status tool — only advertise when backfill tracker is available

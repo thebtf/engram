@@ -301,15 +301,20 @@ func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 	// Anti-drift note: if migration 090 changes its SELECT columns, this test
 	// will fail to reproduce the prod migration shape and must be updated in
 	// lockstep. The CI pipeline runs both together, so drift is detected.
+	// IMPORTANT: this SQL must stay in sync with migration 090 step 1 in
+	// internal/db/gorm/migrations.go. The only intentional delta is the trailing
+	// "AND project = ?" predicate which scopes the INSERT to testProject rows only.
+	// If migration 090 changes its column list or expressions, update here in lockstep.
 	credInsertSQL := `
-		INSERT INTO credentials (project, key, encrypted_secret, encryption_key_fingerprint, created_at, updated_at)
+		INSERT INTO credentials (project, key, encrypted_secret, encryption_key_fingerprint, scope, created_at, updated_at)
 		SELECT
 			project,
 			title AS key,
 			encrypted_secret,
 			encryption_key_fingerprint,
-			TO_TIMESTAMP(created_at_epoch) AS created_at,
-			TO_TIMESTAMP(created_at_epoch) AS updated_at
+			COALESCE(NULLIF(scope, ''), 'project') AS scope,
+			TO_TIMESTAMP(created_at_epoch / 1000.0) AS created_at,
+			TO_TIMESTAMP(created_at_epoch / 1000.0) AS updated_at
 		FROM observations
 		WHERE type = 'credential'
 		  AND encrypted_secret IS NOT NULL
