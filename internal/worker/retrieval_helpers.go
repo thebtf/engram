@@ -8,51 +8,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/pkg/models"
 )
-
-func (s *Service) expandGraphNeighbors(ctx context.Context, observations []*models.Observation, similarityScores map[int64]float64, limit int) []*models.Observation {
-	if len(observations) == 0 {
-		return observations
-	}
-	var expanded []search.ScoredID
-	if s.retrievalHooks != nil && s.retrievalHooks.expandViaGraph != nil {
-		scoredIDs := make([]search.ScoredID, 0, len(observations))
-		for _, observation := range observations {
-			scoredIDs = append(scoredIDs, search.ScoredID{ID: observation.ID, DocType: "observation", Score: similarityScores[observation.ID]})
-		}
-		expanded = s.retrievalHooks.expandViaGraph(ctx, scoredIDs, limit)
-	} else if s.searchMgr != nil {
-		scoredIDs := make([]search.ScoredID, 0, len(observations))
-		for _, observation := range observations {
-			scoredIDs = append(scoredIDs, search.ScoredID{ID: observation.ID, DocType: "observation", Score: similarityScores[observation.ID]})
-		}
-		expanded = s.searchMgr.ExpandViaGraph(ctx, scoredIDs, limit)
-	}
-	if len(expanded) == 0 {
-		return observations
-	}
-	existingIDs := make(map[int64]bool, len(observations))
-	newIDs := make([]int64, 0, len(expanded))
-	for _, observation := range observations {
-		existingIDs[observation.ID] = true
-	}
-	for _, scoredID := range expanded {
-		if !existingIDs[scoredID.ID] && scoredID.DocType == "observation" {
-			newIDs = append(newIDs, scoredID.ID)
-			similarityScores[scoredID.ID] = scoredID.Score
-		}
-	}
-	if len(newIDs) == 0 {
-		return observations
-	}
-	graphObservations, err := s.fetchObservationsByID(ctx, newIDs, "", 0)
-	if err != nil || len(graphObservations) == 0 {
-		return observations
-	}
-	return append(observations, graphObservations...)
-}
 
 func (s *Service) lookupDiversityScores(ctx context.Context, observations []*models.Observation) (map[int64]float64, error) {
 	if s.retrievalHooks != nil && s.retrievalHooks.getDiversityScores != nil {
@@ -103,18 +60,7 @@ func (s *Service) lookupGraphSeedNeighbors(ctx context.Context, seedID int64) ([
 		}
 		return normalizeObservationIDs(rawIDs), nil
 	}
-	if s.graphStore == nil {
-		return nil, nil
-	}
-	neighbors, err := s.graphStore.GetNeighbors(ctx, seedID, 2, 10)
-	if err != nil {
-		return nil, err
-	}
-	rawIDs := make([]int64, 0, len(neighbors))
-	for _, neighbor := range neighbors {
-		rawIDs = append(rawIDs, neighbor.ObsID)
-	}
-	return normalizeObservationIDs(rawIDs), nil
+	return nil, nil
 }
 
 func (s *Service) sessionBoostFactor() float64 {

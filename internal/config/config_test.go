@@ -157,21 +157,6 @@ func (s *ConfigSuite) TestContradictionDetectionEnabledEnvOverride() {
 	s.False(cfg.ContradictionDetectionEnabled, "ENGRAM_CONTRADICTION_DETECTION_ENABLED=false must disable contradiction detection")
 }
 
-// TestInjectGraphBFSEnabledDefaultFalse verifies graph BFS inject path is opt-in.
-func (s *ConfigSuite) TestInjectGraphBFSEnabledDefaultFalse() {
-	cfg, err := Load()
-	s.Require().NoError(err)
-	s.False(cfg.InjectGraphBFSEnabled, "graph BFS inject path must default to disabled")
-}
-
-// TestInjectGraphBFSEnabledEnvOverride verifies the env flag enables graph BFS inject path.
-func (s *ConfigSuite) TestInjectGraphBFSEnabledEnvOverride() {
-	s.T().Setenv("ENGRAM_INJECT_GRAPH_BFS_ENABLED", "true")
-	cfg, err := Load()
-	s.Require().NoError(err)
-	s.True(cfg.InjectGraphBFSEnabled, "ENGRAM_INJECT_GRAPH_BFS_ENABLED=true must enable graph BFS inject path")
-}
-
 // TestTypeSearchLanesDefaultsInitialized verifies defaults are present in config.
 func (s *ConfigSuite) TestTypeSearchLanesDefaultsInitialized() {
 	cfg := Default()

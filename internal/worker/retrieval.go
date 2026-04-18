@@ -52,7 +52,6 @@ type retrievalHooks struct {
 	getObservationsByIDs           func(ctx context.Context, ids []int64, orderBy string, limit int) ([]*models.Observation, error)
 	searchObservationsFTSFiltered  func(ctx context.Context, query string, scopeFilter gorm.ScopeFilter, limit int) ([]*models.Observation, error)
 	getRecentObservationsFiltered  func(ctx context.Context, scopeFilter gorm.ScopeFilter, limit int) ([]*models.Observation, error)
-	expandViaGraph                 func(ctx context.Context, scoredIDs []search.ScoredID, limit int) []search.ScoredID
 	getDiversityScores             func(ctx context.Context, ids []int64) (map[int64]float64, error)
 	getRecentSessionIDs            func(ctx context.Context, project string, since time.Time) (map[string]bool, error)
 	getTopImportanceObservations   func(ctx context.Context, project string, limit int) ([]*models.Observation, error)
@@ -230,57 +229,6 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	observations = fallbackObservations
 	_ = baseSimilarityScores // no vector scores in v5
 
-	// Graph BFS fusion blends graph neighbor hits with the primary retrieval list (FTS in v5,
-	// vector scores in future modes). Building the base list from observations (rank-ordered)
-	// instead of from similarityScores preserves FTS hits that have no numeric score.
-	if s.config != nil && s.config.InjectGraphBFSEnabled {
-		seedIDs := s.ExtractSessionEntitySeeds(ctx, opts.SessionID, project)
-		if len(seedIDs) > 0 {
-			graphList := make([]search.ScoredID, 0, len(seedIDs))
-			for _, seedID := range seedIDs {
-				neighborIDs, err := s.lookupGraphSeedNeighbors(ctx, seedID)
-				if err != nil {
-					continue
-				}
-				for _, neighborID := range neighborIDs {
-					graphList = append(graphList, search.ScoredID{ID: neighborID, DocType: "observation", Score: 0.2})
-				}
-			}
-			if len(graphList) > 0 {
-				// Base list: prefer explicit scores when we have them (future vector mode),
-				// otherwise rank observations by their current order (FTS result rank).
-				vectorList := make([]search.ScoredID, 0, len(observations)+len(similarityScores))
-				if len(similarityScores) > 0 {
-					for id, score := range similarityScores {
-						vectorList = append(vectorList, search.ScoredID{ID: id, DocType: "observation", Score: score})
-					}
-					sort.Slice(vectorList, func(i, j int) bool {
-						return vectorList[i].Score > vectorList[j].Score
-					})
-				} else {
-					for idx, obs := range observations {
-						// Rank-based score; higher rank → higher score so RRF weights early FTS hits more.
-						vectorList = append(vectorList, search.ScoredID{ID: obs.ID, DocType: "observation", Score: 1.0 / float64(idx+1)})
-					}
-				}
-				fused := search.RRF(vectorList, graphList)
-				fusedIDs := make([]int64, 0, len(fused))
-				for _, item := range fused {
-					if item.DocType == "observation" {
-						fusedIDs = append(fusedIDs, item.ID)
-						similarityScores[item.ID] = item.Score
-					}
-				}
-				if len(fusedIDs) > 0 {
-					fusedObs, err := s.fetchObservationsByID(ctx, fusedIDs, "", limit)
-					if err == nil && len(fusedObs) > 0 {
-						observations = fusedObs
-					}
-				}
-			}
-		}
-	}
-
 	freshObservations, staleCount := s.filterFreshObservations(ctx, observations, state.cwd)
 	freshCount := len(freshObservations)
 
@@ -292,7 +240,6 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	}
 	clusteredObservations := clusterObservations(freshObservations, clusteringThreshold)
 	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
-	clusteredObservations = s.expandGraphNeighbors(ctx, clusteredObservations, similarityScores, limit)
 	laneThresholdScores := similarityScores
 	if len(baseSimilarityScores) > 0 {
 		laneThresholdScores = baseSimilarityScores
@@ -451,4 +398,3 @@ func (s *Service) filterFreshObservations(ctx context.Context, observations []*m
 	}
 	return freshObservations, staleCount
 }
-

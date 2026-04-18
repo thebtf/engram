@@ -115,53 +115,6 @@ func TestExtractSessionEntitySeeds_LimitsToFiveUniqueIDs(t *testing.T) {
 	require.Equal(t, []int64{1, 2, 3, 4, 5}, seeds)
 }
 
-// TestRetrieveRelevant_InjectGraphBFSEnabled_FusesGraphNeighbors verifies BFS graph injection.
-func TestRetrieveRelevant_InjectGraphBFSEnabled_FusesGraphNeighbors(t *testing.T) {
-	service := newRetrievalTestService()
-	service.config.InjectGraphBFSEnabled = true
-	service.config.TypeLanesEnabled = true
-	service.config.TypeSearchLanes = map[string]config.SearchLaneConfig{
-		"default": {
-			MinScore:       0.55,
-			TopK:           10,
-			RerankerWeight: 1.0,
-		},
-	}
-	service.retrievalHooks.getLastPromptBySession = func(_ context.Context, _, _ string) (*models.UserPromptWithSession, error) {
-		return &models.UserPromptWithSession{UserPrompt: models.UserPrompt{PromptText: "authctx"}}, nil
-	}
-	service.retrievalHooks.getEntityObservationsBySession = func(_ context.Context, _ string) ([]*models.Observation, error) {
-		entity := newObservation(100, "authctx")
-		entity.Type = models.ObsTypeEntity
-		entity.FilesRead = []string{"internal/auth.go"}
-		return []*models.Observation{entity}, nil
-	}
-	service.retrievalHooks.getGraphNeighbors = func(_ context.Context, obsID int64, maxHops int, limit int) ([]int64, error) {
-		require.Equal(t, int64(100), obsID)
-		require.Equal(t, 2, maxHops)
-		require.Equal(t, 10, limit)
-		return []int64{0, 42, 42, -1}, nil
-	}
-	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ gorm.ScopeFilter, _ int) ([]*models.Observation, error) {
-		return []*models.Observation{}, nil
-	}
-	service.retrievalHooks.getObservationsByIDs = func(_ context.Context, ids []int64, _ string, _ int) ([]*models.Observation, error) {
-		result := make([]*models.Observation, 0, len(ids))
-		for _, id := range ids {
-			obs := newObservation(id, "Graph seeded")
-			obs.Type = models.ObsTypeDiscovery
-			result = append(result, obs)
-		}
-		return result, nil
-	}
-
-	observations, scores, err := service.RetrieveRelevant(context.Background(), "engram", "auth query", RetrievalOptions{MaxResults: 10, SessionID: "session-1"})
-	require.NoError(t, err)
-	// Graph neighbors 42 (valid, appears twice) should be fused in
-	_ = observations
-	require.NotZero(t, scores[42])
-}
-
 func newRetrievalTestService() *Service {
 	cfg := config.Default()
 	cfg.InjectionFloor = 0
