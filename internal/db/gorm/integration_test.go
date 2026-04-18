@@ -44,7 +44,6 @@ func TestIntegration_EndToEndWorkflow(t *testing.T) {
 	summaryStore := NewSummaryStore(store)
 	conflictStore := NewConflictStore(store)
 	relationStore := NewRelationStore(store)
-	patternStore := NewPatternStore(store)
 
 	// Create observation store with dependencies
 	observationStore := NewObservationStore(store, nil)
@@ -103,26 +102,6 @@ func TestIntegration_EndToEndWorkflow(t *testing.T) {
 	err = observationStore.IncrementRetrievalCount(ctx, []int64{obsID1, obsID2})
 	require.NoError(t, err)
 
-	// Step 8: Create a pattern
-	pattern := &models.Pattern{
-		Name:           "Test Pattern",
-		Type:           models.PatternTypeBug,
-		Signature:      []string{"bug", "fix"},
-		Frequency:      1,
-		Projects:       []string{"test-project"},
-		ObservationIDs: []int64{obsID1, obsID2},
-		Status:         models.PatternStatusActive,
-		Confidence:     0.75,
-		LastSeenAt:     now.Format(time.RFC3339),
-		LastSeenEpoch:  now.UnixMilli(),
-		CreatedAt:      now.Format(time.RFC3339),
-		CreatedAtEpoch: now.UnixMilli(),
-	}
-
-	patternID, err := patternStore.StorePattern(ctx, pattern)
-	require.NoError(t, err)
-	assert.Greater(t, patternID, int64(0))
-
 	// Step 9: Store a prompt
 	promptID, err := promptStore.SaveUserPromptWithMatches(ctx, "claude-test", 1, "Test prompt", 2)
 	require.NoError(t, err)
@@ -156,13 +135,7 @@ func TestIntegration_EndToEndWorkflow(t *testing.T) {
 	assert.Len(t, relations, 1)
 	assert.Equal(t, obsID2, relations[0].TargetID)
 
-	// Step 13: Verify pattern
-	retrievedPattern, err := patternStore.GetPatternByID(ctx, patternID)
-	require.NoError(t, err)
-	require.NotNil(t, retrievedPattern)
-	assert.Equal(t, "Test Pattern", retrievedPattern.Name)
-
-	// Step 14: Verify stats
+	// Step 13: Verify stats
 	stats, err := observationStore.GetObservationFeedbackStats(ctx, "test-project")
 	require.NoError(t, err)
 	assert.Equal(t, 2, stats.Total)
