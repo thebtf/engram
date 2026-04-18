@@ -31,7 +31,7 @@ func TestHandleSetSessionOutcomeMCP_UsesCanonicalSessionIDForNumericInput(t *tes
 	sessionStore := dbgorm.NewSessionStore(store)
 	observationStore := dbgorm.NewObservationStore(store, nil)
 	injectionStore := dbgorm.NewInjectionStore(store.DB)
-	server := NewServer(nil, "test", observationStore, nil, nil, sessionStore, nil, nil, nil, nil, nil, nil)
+	server := NewServer(nil, "test", observationStore, nil, sessionStore, nil, nil, nil, nil, nil, nil)
 	server.SetInjectionStore(injectionStore)
 	defer observationStore.Close()
 

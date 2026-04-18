@@ -227,52 +227,6 @@ func (r *ObservationRelation) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// Pattern represents a detected recurring pattern.
-type Pattern struct {
-	Status          models.PatternStatus   `gorm:"type:text;default:'active';check:status IN ('active', 'deprecated', 'merged');index"`
-	Name            string                 `gorm:"type:text;not null"`
-	Type            models.PatternType     `gorm:"type:text;check:type IN ('bug', 'refactor', 'architecture', 'anti-pattern', 'best-practice');index;not null"`
-	CreatedAt       string                 `gorm:"not null"`
-	LastSeenAt      string                 `gorm:"not null"`
-	Signature       models.JSONStringArray `gorm:"type:text"`
-	Projects        models.JSONStringArray `gorm:"type:text"`
-	ObservationIDs  models.JSONInt64Array  `gorm:"type:text"`
-	Recommendation  sql.NullString         `gorm:"type:text"`
-	Description     sql.NullString         `gorm:"type:text"`
-	MergedIntoID    sql.NullInt64
-	Frequency       int     `gorm:"default:1;index:idx_patterns_frequency,sort:desc"`
-	Confidence      float64 `gorm:"type:real;default:0.5;index:idx_patterns_confidence,sort:desc"`
-	ID              int64   `gorm:"primaryKey;autoIncrement"`
-	LastSeenAtEpoch int64   `gorm:"index:idx_patterns_last_seen,sort:desc;not null"`
-	CreatedAtEpoch  int64   `gorm:"not null"`
-}
-
-func (Pattern) TableName() string { return "patterns" }
-
-// BeforeCreate hook to ensure timestamps and defaults are set.
-func (p *Pattern) BeforeCreate(tx *gorm.DB) error {
-	now := time.Now()
-	if p.CreatedAtEpoch == 0 {
-		p.CreatedAtEpoch = now.UnixMilli()
-	}
-	if p.CreatedAt == "" {
-		p.CreatedAt = now.Format(time.RFC3339)
-	}
-	if p.LastSeenAtEpoch == 0 {
-		p.LastSeenAtEpoch = now.UnixMilli()
-	}
-	if p.LastSeenAt == "" {
-		p.LastSeenAt = now.Format(time.RFC3339)
-	}
-	if p.Confidence == 0 {
-		p.Confidence = 0.5
-	}
-	if p.Frequency == 0 {
-		p.Frequency = 1
-	}
-	return nil
-}
-
 // ConceptWeight stores configurable weights for importance scoring.
 type ConceptWeight struct {
 	Concept   string  `gorm:"primaryKey;type:text"`
@@ -367,11 +321,11 @@ func (TelemetrySnapshot) TableName() string { return "telemetry_snapshots" }
 // Maps a canonical git-remote-based project ID to optional legacy path-based aliases,
 // enabling zero-downtime migration when clients upgrade to git-remote IDs.
 type Project struct {
-	GitRemote     sql.NullString `gorm:"column:git_remote;index"`
-	RelativePath  sql.NullString `gorm:"column:relative_path"`
-	DisplayName   sql.NullString `gorm:"column:display_name"`
+	GitRemote    sql.NullString `gorm:"column:git_remote;index"`
+	RelativePath sql.NullString `gorm:"column:relative_path"`
+	DisplayName  sql.NullString `gorm:"column:display_name"`
 	// RemovedAt marks the project as soft-deleted. NULL means live. Set by DELETE /api/projects/{id}.
-	RemovedAt     *time.Time     `gorm:"column:removed_at;default:null"`
+	RemovedAt *time.Time `gorm:"column:removed_at;default:null"`
 	// LastHeartbeat records the last SyncProjectState call from a daemon tracking this project.
 	LastHeartbeat *time.Time     `gorm:"column:last_heartbeat"`
 	LegacyIDs     pq.StringArray `gorm:"column:legacy_ids;type:text[]"`

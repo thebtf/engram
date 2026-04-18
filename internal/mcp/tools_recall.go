@@ -52,9 +52,6 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 	case "related":
 		return s.handleFindRelatedObservations(ctx, args)
 
-	case "patterns":
-		return s.handleGetPatterns(ctx, args)
-
 	case "get":
 		return s.handleGetObservation(ctx, args)
 
@@ -84,7 +81,7 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	default:
 		return "", fmt.Errorf(
-			"unknown recall action: %q (valid: search, preset, by_file, by_concept, by_type, similar, timeline, related, patterns, get, sessions, explain, reasoning, hit_rate, wake_up, taxonomy, tunnels)",
+			"unknown recall action: %q (valid: search, preset, by_file, by_concept, by_type, similar, timeline, related, get, sessions, explain, reasoning, hit_rate, wake_up, taxonomy, tunnels)",
 			action,
 		)
 	}

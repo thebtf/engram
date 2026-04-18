@@ -33,7 +33,6 @@ type Server struct {
 	stdout                 io.Writer
 	searchMgr              *search.Manager
 	observationStore       *gorm.ObservationStore
-	patternStore           *gorm.PatternStore
 	relationStore          *gorm.RelationStore
 	sessionStore           *gorm.SessionStore
 	injectionStore         *gorm.InjectionStore
@@ -61,7 +60,6 @@ func NewServer(
 	searchMgr *search.Manager,
 	version string,
 	observationStore *gorm.ObservationStore,
-	patternStore *gorm.PatternStore,
 	relationStore *gorm.RelationStore,
 	sessionStore *gorm.SessionStore,
 	scoreCalculator *scoring.Calculator,
@@ -77,7 +75,6 @@ func NewServer(
 		stdin:              os.Stdin,
 		stdout:             os.Stdout,
 		observationStore:   observationStore,
-		patternStore:       patternStore,
 		relationStore:      relationStore,
 		sessionStore:       sessionStore,
 		scoreCalculator:    scoreCalculator,
@@ -485,12 +482,12 @@ func (s *Server) primaryTools() []Tool {
 	return []Tool{
 		{
 			Name:        "recall",
-			Description: "Search and retrieve memories. Actions: search (default), preset (decisions/changes/how_it_works), by_file, by_concept, by_type, similar, timeline, related, patterns, get, sessions, explain, reasoning.",
+			Description: "Search and retrieve memories. Actions: search (default), preset (decisions/changes/how_it_works), by_file, by_concept, by_type, similar, timeline, related, get, sessions, explain, reasoning.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":         map[string]any{"type": "string", "enum": []string{"search", "preset", "by_file", "by_concept", "by_type", "similar", "timeline", "related", "patterns", "get", "sessions", "explain", "reasoning", "hit_rate"}, "default": "search", "description": "Action to perform"},
+					"action":         map[string]any{"type": "string", "enum": []string{"search", "preset", "by_file", "by_concept", "by_type", "similar", "timeline", "related", "get", "sessions", "explain", "reasoning", "hit_rate"}, "default": "search", "description": "Action to perform"},
 					"query":          map[string]any{"type": "string", "description": "Search query (for search, preset, similar, timeline:query, sessions, explain)"},
 					"preset":         map[string]any{"type": "string", "enum": []string{"decisions", "changes", "how_it_works"}, "description": "Search preset (for action=preset)"},
 					"files":          map[string]any{"type": "string", "description": "File paths (for action=by_file)"},
@@ -822,20 +819,6 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"id":        map[string]any{"type": "number", "description": "Observation ID to query around"},
 					"max_depth": map[string]any{"type": "number", "default": 2, "minimum": 1, "maximum": 5, "description": "Maximum traversal depth (mode=relationships)"},
 					"limit":     map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
-				},
-			},
-		},
-		{
-			Name:        "get_patterns",
-			Description: "Get detected patterns from observations. Patterns represent recurring themes, workflows, or practices discovered across observations.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"type":    map[string]any{"type": "string", "enum": []string{"workflow", "preference", "best_practice", "anti_pattern", "tooling"}, "description": "Filter by pattern type"},
-					"project": map[string]any{"type": "string", "description": "Filter by project"},
-					"query":   map[string]any{"type": "string", "description": "Search patterns by name/description"},
-					"limit":   map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
 				},
 			},
 		},
@@ -1671,8 +1654,6 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleFindRelatedObservations(ctx, args)
 	case "find_similar_observations":
 		return s.handleFindSimilarObservations(ctx, args)
-	case "get_patterns":
-		return s.handleGetPatterns(ctx, args)
 	case "get_memory_stats":
 		return s.handleGetMemoryStats(ctx)
 	case "bulk_delete_observations":
@@ -2120,85 +2101,11 @@ func (s *Server) handleFindSimilarObservations(ctx context.Context, args json.Ra
 	return string(output), nil
 }
 
-// handleGetPatterns returns patterns from the pattern store.
-func (s *Server) handleGetPatterns(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Type    string
-		Project string
-		Query   string
-		Limit   int
-	}
-	params.Type = coerceString(m["type"], "")
-	params.Project = coerceString(m["project"], "")
-	params.Query = coerceString(m["query"], "")
-	params.Limit = coerceInt(m["limit"], 0)
-
-	if params.Limit == 0 {
-		params.Limit = 20
-	}
-	if params.Limit > 100 {
-		params.Limit = 100
-	}
-
-	var patterns []*models.Pattern
-
-	// Query patterns based on filters
-	if params.Query != "" {
-		// FTS search
-		patterns, err = s.patternStore.SearchPatternsFTS(ctx, params.Query, params.Limit)
-	} else if params.Type != "" {
-		// Filter by type
-		patterns, err = s.patternStore.GetPatternsByType(ctx, models.PatternType(params.Type), params.Limit)
-	} else if params.Project != "" {
-		// Filter by project
-		patterns, err = s.patternStore.GetPatternsByProject(ctx, params.Project, params.Limit)
-	} else {
-		// Get all active patterns
-		patterns, err = s.patternStore.GetActivePatterns(ctx, params.Limit, 0, "")
-	}
-
-	if err != nil {
-		return "", fmt.Errorf("failed to get patterns: %w", err)
-	}
-
-	response := map[string]any{
-		"patterns": patterns,
-		"count":    len(patterns),
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
-}
-
 // handleGetMemoryStats returns statistics about the memory system.
 func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 	stats := make(map[string]any, 8) // Pre-allocate for expected stats keys
 
 	// Vector storage removed in v5; no vector stats available.
-
-	// Get pattern stats
-	if s.patternStore != nil {
-		patternStats, err := s.patternStore.GetPatternStats(ctx)
-		if err == nil && patternStats != nil {
-			stats["patterns"] = map[string]any{
-				"total":             patternStats.Total,
-				"active":            patternStats.Active,
-				"deprecated":        patternStats.Deprecated,
-				"merged":            patternStats.Merged,
-				"total_occurrences": patternStats.TotalOccurrences,
-				"avg_confidence":    patternStats.AvgConfidence,
-			}
-		}
-	}
 
 	// Get search metrics
 	if s.searchMgr != nil {
@@ -3665,29 +3572,6 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 		Removed: true,
 	}
 	report.Subsystems["vectors"] = vectorHealth
-
-	// Check pattern detection health
-	patternHealth := &SubsystemHealth{
-		Status:  "healthy",
-		Metrics: make(map[string]any),
-	}
-	if s.patternStore != nil {
-		patterns, err := s.patternStore.GetActivePatterns(ctx, 100, 0, "")
-		if err != nil {
-			patternHealth.Status = "degraded"
-			patternHealth.Message = "Could not query patterns: " + err.Error()
-		} else {
-			patternHealth.Metrics["total_patterns"] = len(patterns)
-
-			// Count by type
-			typeCounts := make(map[string]int)
-			for _, p := range patterns {
-				typeCounts[string(p.Type)]++
-			}
-			patternHealth.Metrics["patterns_by_type"] = typeCounts
-		}
-	}
-	report.Subsystems["patterns"] = patternHealth
 
 	// Check session store health
 	sessionHealth := &SubsystemHealth{

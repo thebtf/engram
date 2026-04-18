@@ -32,7 +32,6 @@ import (
 	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
-	"github.com/thebtf/engram/internal/pattern"
 	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/search/expansion"
@@ -97,11 +96,9 @@ type Service struct {
 	summaryStore           *gorm.SummaryStore
 	promptStore            *gorm.PromptStore
 	conflictStore          *gorm.ConflictStore
-	patternStore           *gorm.PatternStore
 	relationStore          *gorm.RelationStore
 	graphStore             graphpkg.GraphStore
 	graphWriter            *graphpkg.AsyncGraphWriter
-	patternDetector        *pattern.Detector
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
@@ -228,36 +225,10 @@ type RecentSearchQuery struct {
 
 // setupCallbacks configures callbacks on stores and processors.
 func (s *Service) setupCallbacks(
-	patternDetector *pattern.Detector,
 	observationStore *gorm.ObservationStore,
 	processor *sdk.Processor,
 	sessionManager *session.Manager,
 ) {
-	// Set vector sync callbacks on processor if available
-	if processor != nil && patternDetector != nil {
-		processor.SetSyncObservationFunc(func(obs *models.Observation) {
-			// Trigger pattern detection for the new observation
-			s.wg.Add(1) // Track goroutine for graceful shutdown
-			go func(observation *models.Observation) {
-				defer s.wg.Done()
-				detectCtx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-				defer cancel()
-				if result, err := patternDetector.AnalyzeObservation(detectCtx, observation); err != nil {
-					// Don't log context canceled errors during shutdown
-					if s.ctx.Err() == nil {
-						log.Warn().Err(err).Int64("obs_id", observation.ID).Msg("Pattern detection failed")
-					}
-				} else if result.MatchedPattern != nil {
-					log.Debug().
-						Int64("pattern_id", result.MatchedPattern.ID).
-						Str("pattern_name", result.MatchedPattern.Name).
-						Bool("is_new", result.IsNewPattern).
-						Msg("Pattern matched for observation")
-				}
-			}(obs)
-		})
-	}
-
 	// Set callbacks for session lifecycle events
 	if sessionManager != nil {
 		sessionManager.SetOnSessionCreated(func(id int64) {
@@ -414,7 +385,6 @@ func (s *Service) initializeAsync() {
 	summaryStore := gorm.NewSummaryStore(store)
 	promptStore := gorm.NewPromptStore(store, nil)
 	conflictStore := gorm.NewConflictStore(store)
-	patternStore := gorm.NewPatternStore(store)
 	relationStore := gorm.NewRelationStore(store)
 
 	// Initialize optional FalkorDB graph store
@@ -505,7 +475,6 @@ func (s *Service) initializeAsync() {
 	s.summaryStore = summaryStore
 	s.promptStore = promptStore
 	s.conflictStore = conflictStore
-	s.patternStore = patternStore
 	s.relationStore = relationStore
 	s.graphStore = gs
 	s.graphWriter = gw
@@ -540,15 +509,8 @@ func (s *Service) initializeAsync() {
 		go s.syncGraphFromRelations()
 	}
 
-	// Initialize pattern detector
-	patternDetector := pattern.NewDetector(patternStore, observationStore, pattern.DefaultConfig())
-
-	s.initMu.Lock()
-	s.patternDetector = patternDetector
-	s.initMu.Unlock()
-
 	// Setup callbacks on stores and processors
-	s.setupCallbacks(patternDetector, observationStore, processor, sessionManager)
+	s.setupCallbacks(observationStore, processor, sessionManager)
 
 	// Initialize importance scoring system
 	scoringConfig := models.DefaultScoringConfig()
@@ -586,12 +548,6 @@ func (s *Service) initializeAsync() {
 		recalculator.Start(s.ctx)
 	}()
 	log.Info().Msg("Importance scoring system initialized")
-
-	// Start pattern detector background analysis
-	if patternDetector != nil {
-		patternDetector.Start()
-		log.Info().Msg("Pattern recognition engine started")
-	}
 
 	// Periodic prompt cache eviction (Learning Memory v3)
 	s.wg.Add(1)
@@ -633,7 +589,7 @@ func (s *Service) initializeAsync() {
 			s.initMu.Lock()
 			s.llmClient = sharedLLM
 			s.initMu.Unlock()
-			log.Info().Str("model", llmCfg.Model).Msg("LLM client initialized for pattern insights")
+			log.Info().Str("model", llmCfg.Model).Msg("LLM client initialized")
 		}
 	}
 
@@ -676,7 +632,6 @@ func (s *Service) initializeAsync() {
 		searchMgr,
 		s.version,
 		observationStore,
-		patternStore,
 		relationStore,
 		sessionStore,
 		scoreCalculator,
@@ -1146,19 +1101,6 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/issues/{id}", s.handleGetIssue)
 		r.Patch("/api/issues/{id}", s.handleUpdateIssue)
 		r.Delete("/api/issues/{id}", s.handleDeleteIssue)
-
-		// Pattern routes
-		r.Get("/api/patterns", s.handleGetPatterns)
-		r.Get("/api/patterns/stats", s.handleGetPatternStats)
-		r.Get("/api/patterns/search", s.handleSearchPatterns)
-		r.Get("/api/patterns/by-name", s.handleGetPatternByName)
-		r.Get("/api/patterns/{id}", s.handleGetPatternByID)
-		r.Get("/api/patterns/{id}/insight", s.handleGetPatternInsight)
-		r.Get("/api/patterns/{id}/observations", s.handleGetPatternObservations)
-		r.Post("/api/patterns/{id}/insight", s.handlePostPatternInsight)
-		r.Delete("/api/patterns/{id}", s.handleDeletePattern)
-		r.Post("/api/patterns/{id}/deprecate", s.handleDeprecatePattern)
-		r.Post("/api/patterns/merge", s.handleMergePatterns)
 
 		// Relation routes (knowledge graph)
 		r.Get("/api/relations/stats", s.handleGetRelationStats)
@@ -1748,9 +1690,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 	if s.recalculator != nil {
 		s.recalculator.Stop()
-	}
-	if s.patternDetector != nil {
-		s.patternDetector.Stop()
 	}
 
 	// Phase 4: Shutdown sessions (flush pending work)

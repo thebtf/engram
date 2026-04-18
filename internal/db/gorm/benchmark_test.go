@@ -5,7 +5,6 @@ package gorm
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -300,32 +299,6 @@ func BenchmarkRelationStore_StoreRelation(b *testing.B) {
 		_, err := relationStore.StoreRelation(ctx, relation)
 		if err != nil {
 			b.Fatalf("StoreRelation failed: %v", err)
-		}
-	}
-}
-
-// BenchmarkPatternStore_StorePattern benchmarks pattern storage.
-func BenchmarkPatternStore_StorePattern(b *testing.B) {
-	store, cleanup := setupBenchStore(b)
-	defer cleanup()
-
-	patternStore := NewPatternStore(store)
-	ctx := context.Background()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		pattern := &models.Pattern{
-			Name:        fmt.Sprintf("Pattern %d", i),
-			Type:        models.PatternTypeBug,
-			Description: sql.NullString{String: "Benchmark pattern", Valid: true},
-			Frequency:   1,
-			Confidence:  0.8,
-			Projects:    []string{"bench-project"},
-			Status:      models.PatternStatusActive,
-		}
-		_, err := patternStore.StorePattern(ctx, pattern)
-		if err != nil {
-			b.Fatalf("StorePattern failed: %v", err)
 		}
 	}
 }
