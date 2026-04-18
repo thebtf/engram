@@ -2,6 +2,22 @@
 
 Configure the connection to your Engram server by editing `~/.claude/settings.json`.
 
+## Why `settings.json` env vars (not `/config` UI)
+
+Claude Code supports two paths for plugin credentials:
+
+1. **`/config` UI** → stored in `~/.claude/.credentials.json` `pluginSecrets["engram@engram"]`.
+   Prone to silent wipes from CC's shared credential-store race
+   (see [anthropics/claude-code#45551](https://github.com/anthropics/claude-code/issues/45551)
+   and engram issue #83). After a `/login`, concurrent MCP OAuth write, or CC update,
+   `api_token` can disappear and the plugin loses auth without warning.
+
+2. **`settings.json` `env` section** (recommended) → `ENGRAM_URL` + `ENGRAM_API_TOKEN`
+   in `~/.claude/settings.json`. Survives all of the above because it's a separate file
+   touched only by your edits.
+
+The plugin accepts either path; this guide uses path 2 because it's the stable one.
+
 ## Instructions
 
 ### 1. Determine the server URL
