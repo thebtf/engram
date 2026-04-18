@@ -182,7 +182,12 @@ func TestSyncProjectState_HeartbeatUpdated(t *testing.T) {
 	defer db.Exec("DELETE FROM projects WHERE id = ?", projectID)
 
 	srv := syncServer(t, db)
-	before := time.Now().UTC()
+	// Truncate to microseconds so the comparison against newHB (loaded from
+	// PostgreSQL timestamptz, which has microsecond precision) is not skewed
+	// by Windows monotonic clock sub-microsecond fractions that Postgres
+	// silently drops. Without truncation, this test is flaky when the server's
+	// UPDATE timestamp lands in the same microsecond as `before`.
+	before := time.Now().UTC().Truncate(time.Microsecond)
 	req := &pb.SyncProjectStateRequest{
 		ClientId:        "daemon-test-3",
 		LocalProjectIds: []string{projectID},

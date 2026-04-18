@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -61,7 +62,7 @@ func (s *Server) SyncProjectState(ctx context.Context, req *pb.SyncProjectStateR
 		// Query the server's projects table for all reported IDs.
 		var rows []projectRow
 		if err := s.db.WithContext(ctx).
-			Raw("SELECT id, removed_at FROM projects WHERE id = ANY(?)", localIDs).
+			Raw("SELECT id, removed_at FROM projects WHERE id = ANY(?)", pq.Array(localIDs)).
 			Scan(&rows).Error; err != nil {
 			return nil, status.Errorf(codes.Internal, "query projects: %v", err)
 		}
@@ -88,7 +89,7 @@ func (s *Server) SyncProjectState(ctx context.Context, req *pb.SyncProjectStateR
 			s.db.WithContext(ctx).
 				Exec(
 					"UPDATE projects SET last_heartbeat = ? WHERE id = ANY(?) AND removed_at IS NULL",
-					now, localIDs,
+					now, pq.Array(localIDs),
 				)
 		}
 	}
