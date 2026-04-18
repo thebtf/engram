@@ -80,11 +80,6 @@ const routes = [
     component: () => import('@/views/SessionDetailView.vue'),
   },
   {
-    path: '/analytics',
-    name: 'analytics',
-    component: () => import('@/views/AnalyticsView.vue'),
-  },
-  {
     path: '/system',
     name: 'system',
     component: () => import('@/views/SystemView.vue'),
@@ -93,11 +88,6 @@ const routes = [
     path: '/tokens',
     name: 'tokens',
     component: () => import('@/views/TokensView.vue'),
-  },
-  {
-    path: '/learning',
-    name: 'learning',
-    component: () => import('@/views/LearningView.vue'),
   },
   {
     path: '/admin',

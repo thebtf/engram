@@ -31,8 +31,6 @@ const allNavItems: NavItem[] = [
   { name: 'patterns', label: 'Patterns', icon: 'fa-puzzle-piece', path: '/patterns' },
   { name: 'issues', label: 'Issues', icon: 'fa-circle-exclamation', path: '/issues' },
   { name: 'sessions', label: 'Sessions', icon: 'fa-clock-rotate-left', path: '/sessions' },
-  { name: 'analytics', label: 'Analytics', icon: 'fa-chart-line', path: '/analytics' },
-  { name: 'learning', label: 'Learning', icon: 'fa-graduation-cap', path: '/learning' },
   { name: 'system', label: 'System', icon: 'fa-server', path: '/system' },
   { name: 'tokens', label: 'Tokens', icon: 'fa-key', path: '/tokens' },
 ]
