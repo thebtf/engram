@@ -19,7 +19,6 @@ import (
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/privacy"
-	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/pkg/models"
@@ -35,8 +34,6 @@ type Server struct {
 	relationStore          *gorm.RelationStore
 	sessionStore           *gorm.SessionStore
 	injectionStore         *gorm.InjectionStore
-	scoreCalculator        *scoring.Calculator
-	recalculator           *scoring.Recalculator
 	collectionRegistry     *collections.Registry
 	sessionIdxStore        *sessions.Store
 	documentStore          *gorm.DocumentStore
@@ -60,8 +57,6 @@ type ServerOptions struct {
 	ObservationStore   *gorm.ObservationStore
 	RelationStore      *gorm.RelationStore
 	SessionStore       *gorm.SessionStore
-	ScoreCalculator    *scoring.Calculator
-	Recalculator       *scoring.Recalculator
 	CollectionRegistry *collections.Registry
 	SessionIdxStore    *sessions.Store
 	DocumentStore      *gorm.DocumentStore
@@ -78,8 +73,6 @@ func NewServer(opts ServerOptions) *Server {
 		observationStore:   opts.ObservationStore,
 		relationStore:      opts.RelationStore,
 		sessionStore:       opts.SessionStore,
-		scoreCalculator:    opts.ScoreCalculator,
-		recalculator:       opts.Recalculator,
 		collectionRegistry: opts.CollectionRegistry,
 		sessionIdxStore:    opts.SessionIdxStore,
 		documentStore:      opts.DocumentStore,
@@ -1728,8 +1721,6 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":
 		return s.handleSuppressMemory(ctx, args)
-	case "set_session_outcome":
-		return s.handleSetSessionOutcomeMCP(ctx, args)
 	}
 
 	// Search-based tools: use parseArgs + coercion instead of direct unmarshal
@@ -3817,14 +3808,8 @@ func (s *Server) handleGetObservationScoringBreakdown(ctx context.Context, args 
 		return "", fmt.Errorf("observation not found: %d", params.ID)
 	}
 
-	// Calculate scoring components
-	if s.scoreCalculator == nil {
-		return "", fmt.Errorf("score calculator not initialized")
-	}
-
-	components := s.scoreCalculator.CalculateComponents(obs, time.Now())
-
-	// Build response with observation context
+	// Build response with observation scoring data stored on the observation itself.
+	// Component-level breakdown was removed with the scoring package in v5.
 	response := map[string]any{
 		"observation": map[string]any{
 			"id":         obs.ID,
@@ -3834,21 +3819,12 @@ func (s *Server) handleGetObservationScoringBreakdown(ctx context.Context, args 
 			"created_at": obs.CreatedAtEpoch,
 		},
 		"scoring": map[string]any{
-			"final_score":       components.FinalScore,
-			"type_weight":       components.TypeWeight,
-			"recency_decay":     components.RecencyDecay,
-			"core_score":        components.CoreScore,
-			"feedback_contrib":  components.FeedbackContrib,
-			"concept_contrib":   components.ConceptContrib,
-			"retrieval_contrib": components.RetrievalContrib,
-			"age_days":          components.AgeDays,
+			"final_score":        obs.ImportanceScore,
+			"effectiveness_score": obs.EffectivenessScore,
+			"utility_score":      obs.UtilityScore,
 		},
 		"explanation": map[string]any{
-			"type_impact":      fmt.Sprintf("Observation type '%s' has weight %.2f", obs.Type, components.TypeWeight),
-			"recency_impact":   fmt.Sprintf("%.1f days old, decay factor %.2f", components.AgeDays, components.RecencyDecay),
-			"feedback_impact":  fmt.Sprintf("User feedback contributes %.2f to score", components.FeedbackContrib),
-			"concept_impact":   fmt.Sprintf("Concept tags contribute %.2f to score", components.ConceptContrib),
-			"retrieval_impact": fmt.Sprintf("Retrieval frequency contributes %.2f to score", components.RetrievalContrib),
+			"note": "Component-level scoring breakdown was removed in v5. Use final_score for ranking.",
 		},
 	}
 

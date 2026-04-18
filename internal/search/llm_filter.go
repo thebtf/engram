@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/strutil"
 )
@@ -20,14 +19,19 @@ const llmFilterSystemPrompt = `You are a memory relevance filter for an AI codin
 // llmFilterNarrativeTruncate is the maximum characters of narrative included in each candidate.
 const llmFilterNarrativeTruncate = 200
 
+// llmClient is the minimal interface for calling an LLM completion API.
+type llmClient interface {
+	Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+}
+
 // LLMFilter evaluates observation candidates for behavioral relevance using an LLM.
 type LLMFilter struct {
-	client  learning.LLMClient
+	client  llmClient
 	timeout time.Duration
 }
 
 // NewLLMFilter creates a new LLM-based relevance filter.
-func NewLLMFilter(client learning.LLMClient, timeout time.Duration) *LLMFilter {
+func NewLLMFilter(client llmClient, timeout time.Duration) *LLMFilter {
 	return &LLMFilter{
 		client:  client,
 		timeout: timeout,

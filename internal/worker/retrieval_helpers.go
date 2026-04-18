@@ -34,10 +34,8 @@ func (s *Service) lookupRecentSessionIDs(ctx context.Context, project string, si
 }
 
 func (s *Service) sessionBoostFactor() float64 {
-	if s.config == nil || s.config.SessionBoost <= 0 {
-		return 1.0
-	}
-	return s.config.SessionBoost
+	// SessionBoost config field removed in v5; boost is always disabled.
+	return 1.0
 }
 
 func (s *Service) getTopImportanceObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
@@ -55,9 +53,6 @@ func (s *Service) applyLLMFilter(ctx context.Context, project, query string, obs
 		return observations
 	}
 	candidates := observations
-	if s.config != nil && s.config.LLMFilterCandidates > 0 && len(candidates) > s.config.LLMFilterCandidates {
-		candidates = candidates[:s.config.LLMFilterCandidates]
-	}
 	var relevantIDs []int64
 	if s.retrievalHooks != nil && s.retrievalHooks.filterByRelevance != nil {
 		relevantIDs = s.retrievalHooks.filterByRelevance(ctx, candidates, project, query)

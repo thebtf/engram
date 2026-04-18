@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-
-	"github.com/thebtf/engram/internal/learning"
 )
 
 // InjectionRecord represents a single observation injection event.
@@ -35,9 +33,8 @@ func (s *InjectionStore) RecordInjections(ctx context.Context, records []Injecti
 	return s.db.WithContext(ctx).Table("observation_injections").Create(&records).Error
 }
 
-// GetInjectionsBySession returns injection records for a session as learning.InjectionRecord values.
-// Implements learning.InjectionSource so InjectionStore can be passed directly to the propagator.
-func (s *InjectionStore) GetInjectionsBySession(ctx context.Context, sessionID string) ([]learning.InjectionRecord, error) {
+// GetInjectionsBySession returns injection records for a session.
+func (s *InjectionStore) GetInjectionsBySession(ctx context.Context, sessionID string) ([]InjectionRecord, error) {
 	var rows []InjectionRecord
 	err := s.db.WithContext(ctx).Table("observation_injections").
 		Where("session_id = ?", sessionID).
@@ -45,14 +42,7 @@ func (s *InjectionStore) GetInjectionsBySession(ctx context.Context, sessionID s
 	if err != nil {
 		return nil, err
 	}
-	result := make([]learning.InjectionRecord, len(rows))
-	for i, r := range rows {
-		result[i] = learning.InjectionRecord{
-			ObservationID:    r.ObservationID,
-			InjectionSection: r.InjectionSection,
-		}
-	}
-	return result, nil
+	return rows, nil
 }
 
 // CountInjectionsBySession returns the number of injection records for a session.

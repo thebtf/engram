@@ -5,17 +5,21 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/strutil"
 )
+
+// LLMClient is the minimal interface for calling an LLM completion API.
+type LLMClient interface {
+	Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+}
 
 // WikiGenerator generates wiki summaries for entities from their source observations.
 type WikiGenerator struct{}
 
 // Generate creates a wiki summary for an entity from its source observations.
 // Source observations are capped at 10, with content truncated to fit ~4000 token budget.
-func (w *WikiGenerator) Generate(ctx context.Context, llm learning.LLMClient, entity *models.Observation, sourceObs []*models.Observation) (*WikiResult, error) {
+func (w *WikiGenerator) Generate(ctx context.Context, llm LLMClient, entity *models.Observation, sourceObs []*models.Observation) (*WikiResult, error) {
 	if llm == nil {
 		return nil, fmt.Errorf("LLM client not available")
 	}

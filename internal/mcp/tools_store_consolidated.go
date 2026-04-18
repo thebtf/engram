@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/pkg/llmclient"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -106,8 +106,7 @@ func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessa
 	scope := coerceString(m["scope"], "project")
 
 	// Create LLM client for extraction.
-	llmCfg := learning.DefaultOpenAIConfig()
-	llmClient := learning.NewOpenAIClient(llmCfg)
+	llmClient := llmclient.New(llmclient.DefaultConfig())
 	if !llmClient.IsConfigured() {
 		return "LLM not configured — cannot extract observations. Set ENGRAM_LLM_URL and ENGRAM_LLM_API_KEY.", nil
 	}

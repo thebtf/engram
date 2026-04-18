@@ -12,7 +12,6 @@ import (
 // retrievalHooks is initialised so tests can override individual hooks without nil-pointer panics.
 func newInjectTestService(injectUnified bool) *Service {
 	cfg := config.Default()
-	cfg.InjectionFloor = 0
 	cfg.InjectUnified = injectUnified
 	return &Service{
 		config:         cfg,

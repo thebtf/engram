@@ -165,11 +165,6 @@ type Config struct {
 	StoreMemorySummarize         bool     `json:"store_memory_summarize"`          // Use LLM to summarize long content (default: false)
 	EncryptionKeyFile            string   `json:"-"`                               // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
 	EncryptionKey                string   `json:"-"`                               // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
-	LLMMaxTokens                 int      `json:"llm_max_tokens"`                  // ENGRAM_LLM_MAX_TOKENS (default: 4096)
-	LLMFilterEnabled             bool     `json:"llm_filter_enabled"`              // ENGRAM_LLM_FILTER_ENABLED (default: false)
-	LLMFilterModel               string   `json:"llm_filter_model"`                // ENGRAM_LLM_FILTER_MODEL (default: same as ENGRAM_LLM_MODEL)
-	LLMFilterTimeoutMS           int      `json:"llm_filter_timeout_ms"`           // ENGRAM_LLM_FILTER_TIMEOUT_MS (default: 3000)
-	LLMFilterCandidates          int      `json:"llm_filter_candidates"`           // ENGRAM_LLM_FILTER_CANDIDATES (default: 15)
 	ConsolidationEnabled         bool     `json:"consolidation_enabled"`           // ENGRAM_CONSOLIDATION_ENABLED (default: false)
 	SupersessionEnabled          bool     `json:"supersession_enabled"`            // ENGRAM_SUPERSESSION_ENABLED (default: true)
 	StorePathSupersessionEnabled bool     `json:"store_path_supersession_enabled"` // ENGRAM_STORE_PATH_SUPERSESSION_ENABLED (default: true)
@@ -177,20 +172,11 @@ type Config struct {
 	ConsolidationThreshold       float64  `json:"consolidation_threshold"`         // ENGRAM_CONSOLIDATION_THRESHOLD (default: 0.95)
 	AlwaysInjectLimit            int      `json:"always_inject_limit"`             // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
 	ProjectInjectLimit           int      `json:"project_inject_limit"`            // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
-	InjectionFloor               int      `json:"injection_floor"`                 // ENGRAM_INJECTION_FLOOR (default: 0)
 	InjectUnified                bool     `json:"inject_unified"`                  // ENGRAM_INJECT_UNIFIED (default: true) — emergency rollback flag; removed after two release cycles
 	TypeLanesEnabled             bool     `json:"type_lanes_enabled"`              // ENGRAM_TYPE_LANES_ENABLED (default: false)
-	ProjectBriefingEnabled       bool     `json:"project_briefing_enabled"`        // ENGRAM_PROJECT_BRIEFING_ENABLED (default: false)
 	WriteMergeEnabled             bool     `json:"write_merge_enabled"`              // ENGRAM_WRITE_MERGE_ENABLED (default: false)
-	ContradictionDetectionEnabled bool     `json:"contradiction_detection_enabled"`  // ENGRAM_CONTRADICTION_DETECTION_ENABLED (default: true)
 	EnforceSourceProject          bool     `json:"enforce_source_project"`           // ENGRAM_ENFORCE_SOURCE_PROJECT (default: true)
-	SessionBoost                  float64  `json:"session_boost"`                    // ENGRAM_SESSION_BOOST (default: 1.3)
 	TypeSearchLanes              map[string]SearchLaneConfig `json:"type_search_lanes"` // typed lane overrides; merged over DefaultTypeSearchLanes
-
-	// Injection strategy A/B testing (closed-loop learning FR-5)
-	InjectionStrategies   []string `json:"injection_strategies"`    // Available strategies
-	InjectionStrategyMode string   `json:"injection_strategy_mode"` // "round-robin" or "fixed"
-	DefaultStrategy       string   `json:"default_strategy"`        // Default strategy name
 
 	// Signal weights for reward computation (closed-loop learning FR-7)
 	SignalWeights map[string]float64 `json:"signal_weights"`
@@ -200,19 +186,9 @@ type Config struct {
 	// Env: ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES (default: 15)
 	OutcomeRecorderIntervalMinutes int `json:"outcome_recorder_interval_minutes"`
 
-	// Synthesis: entity extraction + wiki layer (synthesize-wiki-layer spec)
-	EntityExtractionEnabled bool   `json:"entity_extraction_enabled"` // ENGRAM_ENTITY_EXTRACTION_ENABLED (default: true)
-	EntityExtractionLimit   int    `json:"entity_extraction_limit"`   // ENGRAM_ENTITY_EXTRACTION_LIMIT (default: 20)
 	WikiGenerationLimit     int    `json:"wiki_generation_limit"`     // ENGRAM_WIKI_GENERATION_LIMIT (default: 10)
 	WikiMinSources          int    `json:"wiki_min_sources"`          // ENGRAM_WIKI_MIN_SOURCES (default: 5)
 	WikiDataDir             string `json:"wiki_data_dir"`             // ENGRAM_WIKI_DATA_DIR (default: {DataDir}/wiki)
-
-	// Source-aware decay: per-source half-life overrides (gstack-insights spec FR-2)
-	HalfLifeManual     float64 `json:"halflife_manual"`      // ENGRAM_HALFLIFE_MANUAL (default: 30)
-	HalfLifeSDK        float64 `json:"halflife_sdk"`         // ENGRAM_HALFLIFE_SDK (default: 7)
-	HalfLifeLLM        float64 `json:"halflife_llm"`         // ENGRAM_HALFLIFE_LLM (default: 90)
-	HalfLifeAlgorithm  float64 `json:"halflife_algorithm"`   // ENGRAM_HALFLIFE_ALGORITHM (default: 14)
-	HalfLifeCrossModel float64 `json:"halflife_cross_model"` // ENGRAM_HALFLIFE_CROSS_MODEL (default: 60)
 
 	// Authentik SSO forward-auth integration
 	// ENGRAM_AUTHENTIK_ENABLED: enable Authentik header detection (default: false)
@@ -345,10 +321,6 @@ func Default() *Config {
 		StoreMemorySoftLimit:           1000,
 		StoreMemorySummarize:           false,
 		StoreMemoryDedupThreshold:      0.92,
-		LLMMaxTokens:                   4096,  // Enough for thinking models (reasoning + content)
-		LLMFilterEnabled:               false, // Opt-in: requires LLM configuration
-		LLMFilterTimeoutMS:             3000,  // 3s timeout for LLM filter
-		LLMFilterCandidates:            15,    // Evaluate top 15 candidates
 		ConsolidationEnabled:           false, // Opt-in: near-duplicate merging during maintenance
 		SupersessionEnabled:            true,  // Enabled: mark old decisions superseded on new write
 		StorePathSupersessionEnabled:   true,  // Enabled: allow dedup UPDATE flows on store paths to supersede existing observations
@@ -356,21 +328,12 @@ func Default() *Config {
 		ConsolidationThreshold:         0.95,  // 95% similarity triggers maintenance-time merge
 		AlwaysInjectLimit:              20,    // Inject up to 20 always-inject observations per session
 		ProjectInjectLimit:             15,    // Inject up to 15 project-scoped observations per session
-		InjectionFloor:                 0,     // Silence path: 0 = disabled (v4 default, FR-1). Operators can set ENGRAM_INJECTION_FLOOR=3 for legacy fill behavior.
 		InjectUnified:                  true,  // Use unified RetrieveRelevant path for inject (FR-3). Set ENGRAM_INJECT_UNIFIED=false for emergency rollback.
 		TypeLanesEnabled:               false, // Opt-in: typed lane dispatch for retrieval (FR-8)
-		ProjectBriefingEnabled:          false, // Opt-in: inject synthesized per-project briefing block (FR-6 / T029)
 		WriteMergeEnabled:               false, // Opt-in: write-time merge path for observations (FR-10 / T040)
-		ContradictionDetectionEnabled:   true,  // Safety default until operators disable the old supersede path explicitly (T038a)
 		EnforceSourceProject:            true,  // Enforce source/project scoping on store/recall (T010)
-		SessionBoost:                    1.3,   // Boost factor for observations from recently active sessions
 		TypeSearchLanes:                cloneTypeSearchLanes(DefaultTypeSearchLanes),
-		InjectionStrategies:            []string{"baseline", "effectiveness-weighted", "recency-boosted", "diverse"},
-		InjectionStrategyMode:          "round-robin",
-		DefaultStrategy:                "baseline",
 		OutcomeRecorderIntervalMinutes: 15,
-		EntityExtractionEnabled:        true, // Enabled by default when LLM client is available
-		EntityExtractionLimit:          20,   // Max observations processed per maintenance cycle
 		WikiGenerationLimit:            10,   // Max wiki pages generated per maintenance cycle
 		WikiMinSources:                 5,    // Min linked observations to trigger wiki generation
 		SignalWeights: map[string]float64{
@@ -380,12 +343,6 @@ func Default() *Config {
 			"test_passed":  0.5,
 			"error_streak": -0.5,
 		},
-		// Source-aware decay defaults (gstack-insights FR-2)
-		HalfLifeManual:     30.0,
-		HalfLifeSDK:        7.0,
-		HalfLifeLLM:        90.0,
-		HalfLifeAlgorithm:  14.0,
-		HalfLifeCrossModel: 60.0,
 	}
 }
 
@@ -488,14 +445,8 @@ func Load() (*Config, error) {
 			if v, ok := settings["ENGRAM_TYPE_LANES_ENABLED"].(bool); ok {
 				cfg.TypeLanesEnabled = v
 			}
-			if v, ok := settings["ENGRAM_PROJECT_BRIEFING_ENABLED"].(bool); ok {
-				cfg.ProjectBriefingEnabled = v
-			}
 			if v, ok := settings["ENGRAM_WRITE_MERGE_ENABLED"].(bool); ok {
 				cfg.WriteMergeEnabled = v
-			}
-			if v, ok := settings["ENGRAM_CONTRADICTION_DETECTION_ENABLED"].(bool); ok {
-				cfg.ContradictionDetectionEnabled = v
 			}
 				if v, ok := settings["ENGRAM_ENFORCE_SOURCE_PROJECT"].(bool); ok {
 					cfg.EnforceSourceProject = v
@@ -651,27 +602,6 @@ func Load() (*Config, error) {
 	} else if v := strings.TrimSpace(os.Getenv("ENGRAM_ENCRYPTION_KEY")); v != "" {
 		cfg.EncryptionKey = v
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_MAX_TOKENS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.LLMMaxTokens = n
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_ENABLED")); v == "true" || v == "1" {
-		cfg.LLMFilterEnabled = true
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_MODEL")); v != "" {
-		cfg.LLMFilterModel = v
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_TIMEOUT_MS")); v != "" {
-		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
-			cfg.LLMFilterTimeoutMS = ms
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_LLM_FILTER_CANDIDATES")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.LLMFilterCandidates = n
-		}
-	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONSOLIDATION_ENABLED")); v == "true" || v == "1" {
 		cfg.ConsolidationEnabled = true
 	}
@@ -701,11 +631,6 @@ func Load() (*Config, error) {
 			cfg.ProjectInjectLimit = n
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECTION_FLOOR")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.InjectionFloor = n
-		}
-	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECT_UNIFIED")); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.InjectUnified = b
@@ -716,19 +641,9 @@ func Load() (*Config, error) {
 			cfg.TypeLanesEnabled = b
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_PROJECT_BRIEFING_ENABLED")); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.ProjectBriefingEnabled = b
-		}
-	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_WRITE_MERGE_ENABLED")); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.WriteMergeEnabled = b
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONTRADICTION_DETECTION_ENABLED")); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.ContradictionDetectionEnabled = b
 		}
 	}
 		if v := strings.TrimSpace(os.Getenv("ENGRAM_ENFORCE_SOURCE_PROJECT")); v != "" {
@@ -742,32 +657,12 @@ func Load() (*Config, error) {
 			cfg.TypeSearchLanes = mergeTypeSearchLanes(cfg.TypeSearchLanes, raw)
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_SESSION_BOOST")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			cfg.SessionBoost = f
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECTION_STRATEGY_MODE")); v != "" {
-		cfg.InjectionStrategyMode = v
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_DEFAULT_STRATEGY")); v != "" {
-		cfg.DefaultStrategy = v
-	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.OutcomeRecorderIntervalMinutes = n
 		}
 	}
 
-	// Synthesis: entity extraction + wiki layer
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENTITY_EXTRACTION_ENABLED")); v == "false" || v == "0" {
-		cfg.EntityExtractionEnabled = false
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENTITY_EXTRACTION_LIMIT")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.EntityExtractionLimit = n
-		}
-	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_WIKI_GENERATION_LIMIT")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.WikiGenerationLimit = n
@@ -785,33 +680,6 @@ func Load() (*Config, error) {
 	// Set WikiDataDir default relative to DataDir if not explicitly set
 	if cfg.WikiDataDir == "" {
 		cfg.WikiDataDir = filepath.Join(filepath.Dir(cfg.DBPath), "wiki")
-	}
-
-	// Source-aware decay: per-source half-life overrides (gstack-insights FR-2)
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_HALFLIFE_MANUAL")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			cfg.HalfLifeManual = f
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_HALFLIFE_SDK")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			cfg.HalfLifeSDK = f
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_HALFLIFE_LLM")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			cfg.HalfLifeLLM = f
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_HALFLIFE_ALGORITHM")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			cfg.HalfLifeAlgorithm = f
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_HALFLIFE_CROSS_MODEL")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			cfg.HalfLifeCrossModel = f
-		}
 	}
 
 	// Authentik SSO forward-auth integration
