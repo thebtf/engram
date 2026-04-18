@@ -206,9 +206,8 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	retrievalMeta := &retrievalMetadata{}
 	retrievalCtx := withRetrievalRequest(r.Context(), agentID, cwd, retrievalMeta)
 	clusteredObservations, similarityScores, err := s.RetrieveRelevant(retrievalCtx, project, query, RetrievalOptions{
-		MaxResults:    maxResults,
-		UseLLMFilter:  s.config.LLMFilterEnabled,
-		FilePaths:     filesBeingEdited,
+		MaxResults: maxResults,
+		FilePaths:  filesBeingEdited,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -234,15 +233,6 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	// Record retrieval stats with staleness metrics
 	s.recordRetrievalStatsExtended(project, int64(len(clusteredObservations)), 0, 0,
 		int64(staleCount), int64(freshCount), int64(duplicatesRemoved), true)
-
-	// Increment retrieval counts for scoring (async, non-blocking)
-	if len(clusteredObservations) > 0 {
-		ids := make([]int64, len(clusteredObservations))
-		for i, obs := range clusteredObservations {
-			ids[i] = obs.ID
-		}
-		s.incrementRetrievalCounts(ids)
-	}
 
 	log.Info().
 		Str("project", project).
@@ -765,16 +755,8 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		recentIDs[obs.ID] = struct{}{}
 	}
 
-	// --- Project briefing section: optional synthesized per-project digest (FR-6) ---
+	// Project briefing was removed in v5 (ProjectBriefingEnabled config field deleted).
 	var projectBriefing *models.Observation
-	if s.config.ProjectBriefingEnabled && s.observationStore != nil {
-		briefingObs, briefingErr := s.observationStore.GetProjectBriefingObservation(ctx, project)
-		if briefingErr != nil {
-			log.Debug().Err(briefingErr).Str("project", project).Msg("Failed to fetch project briefing observation")
-		} else {
-			projectBriefing = briefingObs
-		}
-	}
 
 	// --- Always-inject section: observations tagged with "always-inject" concept (FR-1, FR-6) ---
 	var alwaysInjectObservations []*models.Observation
@@ -795,29 +777,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// --- Injection floor: ensure minimum observations across all sections ---
-	// When InjectionFloor == 0 (v4 default, FR-1), the silence path is active — no fill.
-	// Operators can set InjectionFloor > 0 via ENGRAM_INJECTION_FLOOR for legacy fill behavior.
-	injectionFloor := s.config.InjectionFloor
-	if injectionFloor > 0 && s.observationStore != nil {
-		totalInjected := len(recentFresh) + len(relevantObservations) + len(guidanceObservations) + len(alwaysInjectObservations)
-		if totalInjected < injectionFloor {
-			needed := injectionFloor - totalInjected
-			fillObs, fillErr := s.observationStore.GetTopImportanceObservations(ctx, project, needed+totalInjected)
-			if fillErr == nil {
-				for _, obs := range fillObs {
-					if _, already := recentIDs[obs.ID]; !already {
-						recentFresh = append(recentFresh, obs)
-						recentIDs[obs.ID] = struct{}{}
-						needed--
-						if needed == 0 {
-							break
-						}
-					}
-				}
-			}
-		}
-	}
+	// Injection floor was removed in v5 (InjectionFloor config field deleted).
 
 	// --- Backward-compat observations field: full recent list + relevant deduped union ---
 	// Get the full recent list (up to configured limit) for the legacy field
@@ -865,15 +825,6 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	s.recordRetrievalStatsExtended(project, int64(len(clusteredObservations)), 0, 0,
 		int64(staleCount), int64(len(allFreshObservations)), int64(duplicatesRemoved), false)
 
-	// Increment retrieval counts for scoring (async, non-blocking)
-	if len(clusteredObservations) > 0 {
-		ids := make([]int64, len(clusteredObservations))
-		for i, obs := range clusteredObservations {
-			ids[i] = obs.ID
-		}
-		s.incrementRetrievalCounts(ids)
-	}
-
 	// Apply token budget: estimate tokens and trim observations to fit
 	tokenBudget := s.config.ContextMaxTokens
 	var tokenEstimate int
@@ -918,41 +869,8 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		Int("guidance_section", len(guidanceObservations)).
 		Msg("Context injection with clustering")
 
-	// Fetch agent-specific effectiveness stats for relevant observations when agent_id is present.
-	// Used by the effectiveness-weighted strategy to personalise injection ordering per agent.
-	var agentStats map[int64]gorm.AgentObservationStat
-	if agentID != "" && s.agentStatsStore != nil && len(relevantObservations) > 0 {
-		obsIDs := make([]int64, len(relevantObservations))
-		for i, obs := range relevantObservations {
-			obsIDs[i] = obs.ID
-		}
-		if stats, err := s.agentStatsStore.GetAgentStats(ctx, agentID, obsIDs); err == nil {
-			agentStats = stats
-		} else {
-			log.Debug().Err(err).Str("agent_id", agentID).Msg("Failed to fetch agent stats for injection strategy")
-		}
-	}
-
-	// Apply A/B injection strategy (closed-loop learning FR-5).
-	// Strategy is selected per-session and applied to the relevant observations section.
-	// The strategy name is recorded on the session row for later comparison.
+	// Agent stats fetch + A/B injection strategy selector were removed in v5.
 	var selectedStrategy string
-	if s.strategySelector != nil {
-		selectedStrategy = s.strategySelector.SelectStrategy(sessionID)
-		relevantObservations = applyStrategy(selectedStrategy, relevantObservations, agentStats)
-		log.Debug().Str("session", sessionID).Str("strategy", selectedStrategy).Msg("Injection strategy applied")
-		// Record strategy on session (fire-and-forget)
-		if sessionID != "" && s.sessionStore != nil {
-			capturedStrategy := selectedStrategy
-			capturedSID := sessionID
-			sessionStore := s.sessionStore
-			go func() {
-				if err := sessionStore.UpdateInjectionStrategy(context.Background(), capturedSID, capturedStrategy); err != nil {
-					log.Debug().Err(err).Str("session", capturedSID).Msg("Failed to record injection strategy on session")
-				}
-			}()
-		}
-	}
 
 	// Apply active version substitution (APO-lite, Phase 5).
 	// For each observation in guidance and always-inject sections, check whether an active
@@ -1008,7 +926,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"relevant":           compactObservations(relevantObservations),
 			"guidance":           compactObservations(guidanceObservations),
 			"always_inject":      compactObservations(alwaysInjectObservations),
-			"project_briefing":   projectBriefingNarrative(s.config.ProjectBriefingEnabled, projectBriefing),
+			"project_briefing":   projectBriefingNarrative(false, projectBriefing),
 			"full_count":         fullCount,
 			"stale_excluded":     staleCount,
 			"duplicates_removed": duplicatesRemoved,
@@ -1024,7 +942,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"relevant":           relevantObservations,
 			"guidance":           guidanceObservations,
 			"always_inject":      alwaysInjectObservations,
-			"project_briefing":   projectBriefingNarrative(s.config.ProjectBriefingEnabled, projectBriefing),
+			"project_briefing":   projectBriefingNarrative(false, projectBriefing),
 			"full_count":         fullCount,
 			"stale_excluded":     staleCount,
 			"duplicates_removed": duplicatesRemoved,

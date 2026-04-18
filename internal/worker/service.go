@@ -27,10 +27,8 @@ import (
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/grpcserver"
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
-	"github.com/thebtf/engram/internal/scoring"
 	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/search/expansion"
 	"github.com/thebtf/engram/internal/sessions"
@@ -42,7 +40,6 @@ import (
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/internal/worker/sse"
-	"github.com/thebtf/engram/pkg/models"
 	googlegrpc "google.golang.org/grpc"
 )
 
@@ -99,8 +96,6 @@ type Service struct {
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
 	queryExpander          *expansion.Expander
-	scoreCalculator        *scoring.Calculator
-	recalculator           *scoring.Recalculator
 	mcpHealth              *mcp.MCPHealth
 	searchMgr              *search.Manager
 	collectionRegistry     *collections.Registry
@@ -132,8 +127,6 @@ type Service struct {
 	versionStore           *gorm.VersionStore
 	llmFilter              *search.LLMFilter
 	retrievalHooks         *retrievalHooks
-	llmClient              learning.LLMClient
-	strategySelector       *learning.StrategySelector
 	authHandlers           *AuthHandlers
 	version                string
 	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
@@ -290,7 +283,6 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		statsCacheTTL:      time.Minute, // Cache stats for 1 minute
 		ingestDedup:        newDeduplicationCache(5 * time.Minute),
 		mcpHealth:          mcp.NewMCPHealth(),
-		strategySelector:   learning.NewStrategySelector(cfg.InjectionStrategies, cfg.InjectionStrategyMode, cfg.DefaultStrategy),
 		eventBus:           &projectevents.Bus{},
 	}
 
@@ -485,43 +477,6 @@ func (s *Service) initializeAsync() {
 	// Setup callbacks on stores and processors
 	s.setupCallbacks(sessionManager)
 
-	// Initialize importance scoring system
-	scoringConfig := models.DefaultScoringConfig()
-
-	// Apply per-source half-life overrides from config (gstack-insights FR-2)
-	scoringConfig.SourceHalfLives[models.SourceManual] = s.config.HalfLifeManual
-	scoringConfig.SourceHalfLives[models.SourceUnknown] = s.config.HalfLifeSDK
-	scoringConfig.SourceHalfLives[models.SourceBackfill] = s.config.HalfLifeSDK
-	scoringConfig.SourceHalfLives[models.SourceTodoWrite] = s.config.HalfLifeSDK
-	scoringConfig.SourceHalfLives[models.SourceLLMDerived] = s.config.HalfLifeLLM
-	scoringConfig.SourceHalfLives[models.SourceCrossModel] = s.config.HalfLifeCrossModel
-	scoringConfig.SourceHalfLives[models.SourceToolVerified] = s.config.HalfLifeAlgorithm * 1.5 // 21d = 14 * 1.5
-	scoringConfig.SourceHalfLives[models.SourceToolRead] = s.config.HalfLifeAlgorithm           // 14d
-	scoringConfig.SourceHalfLives[models.SourceWebFetch] = s.config.HalfLifeAlgorithm           // 14d
-	scoringConfig.SourceHalfLives[models.SourceInstinctImport] = s.config.HalfLifeManual        // 30d
-
-	// Load concept weights from database if available
-	if weights, err := observationStore.GetConceptWeights(s.ctx); err == nil && len(weights) > 0 {
-		scoringConfig.ConceptWeights = weights
-		log.Info().Int("count", len(weights)).Msg("Loaded concept weights from database")
-	}
-
-	scoreCalculator := scoring.NewCalculator(scoringConfig)
-	recalculator := scoring.NewRecalculator(observationStore, scoreCalculator, log.Logger)
-
-	s.initMu.Lock()
-	s.scoreCalculator = scoreCalculator
-	s.recalculator = recalculator
-	s.initMu.Unlock()
-
-	// Start background recalculator
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		recalculator.Start(s.ctx)
-	}()
-	log.Info().Msg("Importance scoring system initialized")
-
 	// Periodic prompt cache eviction (Learning Memory v3)
 	s.wg.Add(1)
 	go func() {
@@ -554,40 +509,6 @@ func (s *Service) initializeAsync() {
 	// Initialize retrieval stats log store with batched flush
 	retrievalStatsLogStore := gorm.NewRetrievalStatsLogStore(store.GetDB())
 
-	// Initialize shared LLM client (used for pattern insights and LLM filter)
-	{
-		llmCfg := learning.DefaultOpenAIConfig()
-		sharedLLM := learning.NewOpenAIClient(llmCfg)
-		if sharedLLM.IsConfigured() {
-			s.initMu.Lock()
-			s.llmClient = sharedLLM
-			s.initMu.Unlock()
-			log.Info().Str("model", llmCfg.Model).Msg("LLM client initialized")
-		}
-	}
-
-	// Initialize LLM filter if enabled
-	if cfg.LLMFilterEnabled {
-		llmCfg := learning.DefaultOpenAIConfig()
-		if cfg.LLMFilterModel != "" {
-			llmCfg.Model = cfg.LLMFilterModel
-		}
-		llmClient := learning.NewOpenAIClient(llmCfg)
-		if llmClient.IsConfigured() {
-			filterTimeout := time.Duration(cfg.LLMFilterTimeoutMS) * time.Millisecond
-			s.initMu.Lock()
-			s.llmFilter = search.NewLLMFilter(llmClient, filterTimeout)
-			s.initMu.Unlock()
-			log.Info().
-				Str("model", llmCfg.Model).
-				Int("timeout_ms", cfg.LLMFilterTimeoutMS).
-				Int("candidates", cfg.LLMFilterCandidates).
-				Msg("LLM behavioral relevance filter enabled")
-		} else {
-			log.Warn().Msg("LLM filter enabled but LLM not configured (set ENGRAM_LLM_URL + ENGRAM_LLM_API_KEY)")
-		}
-	}
-
 	// Initialize search manager for MCP tools
 	searchMgr := search.NewManager(observationStore, summaryStore, promptStore)
 
@@ -607,8 +528,6 @@ func (s *Service) initializeAsync() {
 		ObservationStore:   observationStore,
 		RelationStore:      relationStore,
 		SessionStore:       sessionStore,
-		ScoreCalculator:    scoreCalculator,
-		Recalculator:       recalculator,
 		CollectionRegistry: collectionRegistry,
 		SessionIdxStore:    sessionIdxStore,
 		DocumentStore:      documentStore,
@@ -1003,14 +922,6 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/sessions/subagent-complete", s.handleSubagentComplete)
 		r.Post("/api/sessions/{id}/summarize", s.handleSummarize)
 		r.Post("/api/sessions/{id}/extract-learnings", s.handleExtractLearnings)
-		r.Post("/api/sessions/{sessionId}/mark-injected", s.handleSessionMarkInjected)
-		r.Post("/api/sessions/{sessionId}/outcome", s.handleSetSessionOutcome)
-		r.Post("/api/sessions/{sessionId}/propagate-outcome", s.handlePropagateOutcome)
-		r.Get("/api/learning/effectiveness-distribution", s.handleGetEffectivenessDistribution)
-		r.Get("/api/learning/strategies", s.handleGetStrategies)
-		r.Get("/api/learning/curve", s.handleGetLearningCurve)
-		r.Get("/api/learning/hit-rate", s.handleGetHitRateAnalytics)
-		r.Get("/api/sessions/{sessionId}/injections", s.handleGetSessionInjections)
 
 		// Session transcript indexing (client pushes JSONL for FTS)
 		r.Post("/api/sessions/index", s.handleIndexSession)
@@ -1031,22 +942,6 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)
 		r.Get("/api/types", s.handleGetTypes)
 		r.Get("/api/models", s.handleGetModels)
-
-		// Observation scoring and feedback routes
-		r.Post("/api/observations/{id}/feedback", s.handleObservationFeedback)
-		r.Post("/api/observations/{id}/utility", s.handleObservationUtility)
-		r.Get("/api/observations/{id}/score", s.handleExplainScore)
-		r.Get("/api/observations/{id}/effectiveness", s.handleGetEffectiveness)
-		r.Post("/api/observations/mark-injected", s.handleMarkInjected)
-		r.Get("/api/observations/top", s.handleGetTopObservations)
-		r.Get("/api/observations/most-retrieved", s.handleGetMostRetrieved)
-		r.Get("/api/observations/recently-injected", s.handleGetRecentlyInjected)
-
-		// Scoring configuration routes
-		r.Get("/api/scoring/stats", s.handleGetScoringStats)
-		r.Get("/api/scoring/concepts", s.handleGetConceptWeights)
-		r.Put("/api/scoring/concepts/{concept}", s.handleUpdateConceptWeight)
-		r.Post("/api/scoring/recalculate", s.handleTriggerRecalculation)
 
 		// Context injection
 		r.Get("/api/context/count", s.handleContextCount)
@@ -1616,9 +1511,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	// Phase 3: Stop background workers (drain queues)
 	log.Debug().Msg("Phase 3: Stopping background workers...")
-	if s.recalculator != nil {
-		s.recalculator.Stop()
-	}
 
 	// Phase 4: Shutdown sessions (flush pending work)
 	log.Debug().Msg("Phase 4: Shutting down sessions...")

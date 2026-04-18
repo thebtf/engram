@@ -117,8 +117,6 @@ func TestExtractSessionEntitySeeds_LimitsToFiveUniqueIDs(t *testing.T) {
 
 func newRetrievalTestService() *Service {
 	cfg := config.Default()
-	cfg.InjectionFloor = 0
-	cfg.SessionBoost = 1.0
 	cfg.ContextRelevanceThreshold = 0.3
 	return &Service{
 		config:         cfg,

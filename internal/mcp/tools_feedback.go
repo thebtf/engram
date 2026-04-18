@@ -23,9 +23,7 @@ func (s *Server) handleFeedbackConsolidated(ctx context.Context, args json.RawMe
 		return s.handleRateMemory(ctx, args)
 	case "suppress":
 		return s.handleSuppressMemory(ctx, args)
-	case "outcome":
-		return s.handleSetSessionOutcomeMCP(ctx, args)
 	default:
-		return "", fmt.Errorf("unknown feedback action: %q (valid: rate, suppress, outcome)", action)
+		return "", fmt.Errorf("unknown feedback action: %q (valid: rate, suppress)", action)
 	}
 }

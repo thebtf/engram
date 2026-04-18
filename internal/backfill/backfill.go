@@ -11,7 +11,6 @@ import (
 	"github.com/thebtf/engram/internal/backfill/chunk"
 	"github.com/thebtf/engram/internal/backfill/extract"
 	"github.com/thebtf/engram/internal/backfill/metrics"
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -64,14 +63,19 @@ type Result struct {
 	Metrics *metrics.Metrics
 }
 
+// LLMClient is the minimal interface for calling an LLM completion API.
+type LLMClient interface {
+	Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+}
+
 // Runner orchestrates the backfill pipeline for a list of session files.
 type Runner struct {
-	llm learning.LLMClient
+	llm LLMClient
 	cfg Config
 }
 
 // NewRunner creates a new Runner with the given LLM client and config.
-func NewRunner(llm learning.LLMClient, cfg Config) *Runner {
+func NewRunner(llm LLMClient, cfg Config) *Runner {
 	if cfg.MaxChunkChars <= 0 {
 		cfg.MaxChunkChars = chunk.DefaultMaxChunkChars
 	}

@@ -268,16 +268,7 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 			return similarityScores[clusteredObservations[i].ID] > similarityScores[clusteredObservations[j].ID]
 		})
 	}
-	injectionFloor := 0
-	if s.config != nil {
-		injectionFloor = s.config.InjectionFloor
-	}
-	if injectionFloor > 0 {
-		clusteredObservations = fillToFloor(ctx, injectionFloor, clusteredObservations, nil,
-			func(fillCtx context.Context, fillLimit int) ([]*models.Observation, error) {
-				return s.getTopImportanceObservations(fillCtx, project, fillLimit)
-			})
-	}
+	// InjectionFloor config field removed in v5; fill-to-floor is disabled.
 	// When similarityScores is empty (FTS-only mode, no vector scores) the
 	// score-gated loop would always yield zero, so fall back to observation count.
 	totalResults := len(clusteredObservations)

@@ -15,7 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/internal/sessions"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/pkg/models"
@@ -518,8 +517,8 @@ func (s *Service) handleSummarize(w http.ResponseWriter, r *http.Request) {
 
 // ExtractLearningsRequest is the request body for learning extraction.
 type ExtractLearningsRequest struct {
-	Messages []learning.Message `json:"messages"`
-	Project  string             `json:"project"`
+	Messages []json.RawMessage `json:"messages"`
+	Project  string            `json:"project"`
 }
 
 // handleExtractLearnings godoc
@@ -537,85 +536,9 @@ type ExtractLearningsRequest struct {
 // @Failure 503 {string} string "service not ready"
 // @Router /api/sessions/{id}/extract-learnings [post]
 func (s *Service) handleExtractLearnings(w http.ResponseWriter, r *http.Request) {
-	if !learning.IsEnabled() {
-		writeJSON(w, map[string]any{"status": "disabled", "count": 0})
-		return
-	}
-
-	var req ExtractLearningsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if len(req.Messages) == 0 {
-		writeJSON(w, map[string]any{"status": "ok", "count": 0})
-		return
-	}
-
-	s.initMu.RLock()
-	observationStore := s.observationStore
-	s.initMu.RUnlock()
-
-	// Idempotency: skip if learnings already extracted for this session (Learning Memory v3 FR-5)
-	idStr := chi.URLParam(r, "id")
-	if idStr != "" {
-		sessionID, _ := strconv.ParseInt(idStr, 10, 64)
-		if sessionID > 0 {
-			if sess, err := s.sessionStore.GetSessionByID(r.Context(), sessionID); err == nil && sess != nil {
-				existingCount, _ := observationStore.CountBySessionAndType(r.Context(), sess.SDKSessionID.String, "guidance")
-				if existingCount > 0 {
-					log.Info().Int64("session", sessionID).Int64("existing", existingCount).Msg("Skipping extract-learnings: already extracted")
-					writeJSON(w, map[string]any{"status": "already_extracted", "count": existingCount})
-					return
-				}
-			}
-		}
-	}
-
-	if observationStore == nil {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Create LLM client
-	llmCfg := learning.DefaultOpenAIConfig()
-	llmClient := learning.NewOpenAIClient(llmCfg)
-	if !llmClient.IsConfigured() {
-		writeJSON(w, map[string]any{"status": "llm_not_configured", "count": 0})
-		return
-	}
-
-	// Extract learnings
-	extractor := learning.NewExtractor(llmClient)
-	observations, err := extractor.ExtractGuidance(r.Context(), req.Messages, req.Project)
-	if err != nil {
-		log.Warn().Err(err).Msg("Learning extraction failed")
-		http.Error(w, "extraction failed", http.StatusInternalServerError)
-		return
-	}
-
-	if len(observations) == 0 {
-		writeJSON(w, map[string]any{"status": "ok", "count": 0})
-		return
-	}
-
-	// Store extracted observations
-	stored := 0
-	for _, obs := range observations {
-		if _, _, err := observationStore.StoreObservation(r.Context(), "", req.Project, obs, 0, 0); err != nil {
-			log.Warn().Err(err).Str("title", obs.Title).Msg("Failed to store extracted guidance")
-			continue
-		}
-		stored++
-	}
-
-	log.Info().Int("extracted", len(observations)).Int("stored", stored).Msg("Learning extraction complete")
-
-	writeJSON(w, map[string]any{
-		"status": "ok",
-		"count":  stored,
-	})
+	// Learning extraction via LLM was removed in v5. Endpoint kept for client
+	// compatibility but always returns disabled so callers can detect and skip.
+	writeJSON(w, map[string]any{"status": "disabled", "count": 0})
 }
 
 // maxSessionIndexBody is the per-request body limit for session indexing (5 MB).

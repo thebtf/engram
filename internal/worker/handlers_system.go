@@ -19,11 +19,8 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 
 	response := map[string]any{
 		"llm": map[string]any{
-			"url":            os.Getenv("ENGRAM_LLM_URL"),
-			"model":          os.Getenv("ENGRAM_LLM_MODEL"),
-			"max_tokens":     cfg.LLMMaxTokens,
-			"filter_enabled": cfg.LLMFilterEnabled,
-			"filter_model":   cfg.LLMFilterModel,
+			"url":   os.Getenv("ENGRAM_LLM_URL"),
+			"model": os.Getenv("ENGRAM_LLM_MODEL"),
 		},
 		"embedding": map[string]any{
 			"provider":   cfg.EmbeddingProvider,
@@ -78,12 +75,9 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 			"supersession_threshold":  cfg.SupersessionThreshold,
 			"store_path_supersession": cfg.StorePathSupersessionEnabled,
 			"write_merge_enabled":     cfg.WriteMergeEnabled,
-			"contradiction_detection": cfg.ContradictionDetectionEnabled,
-			"injection_floor":         cfg.InjectionFloor,
 			"inject_unified":          cfg.InjectUnified,
 			"always_inject_limit":     cfg.AlwaysInjectLimit,
 			"project_inject_limit":    cfg.ProjectInjectLimit,
-			"session_boost":           cfg.SessionBoost,
 		},
 		"storage": map[string]any{
 			"vector_strategy":    cfg.VectorStorageStrategy,
@@ -93,8 +87,6 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 		"features": map[string]any{
 			"telemetry_enabled":      cfg.TelemetryEnabled,
 			"enforce_source_project": cfg.EnforceSourceProject,
-			"project_briefing":       cfg.ProjectBriefingEnabled,
-			"entity_extraction":      cfg.EntityExtractionEnabled,
 		},
 	}
 

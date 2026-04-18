@@ -12,9 +12,9 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/backfill"
 	"github.com/thebtf/engram/internal/backfill/extract"
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
+	"github.com/thebtf/engram/pkg/llmclient"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -295,8 +295,7 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Initialize LLM client from server env vars.
-	llmCfg := learning.DefaultOpenAIConfig()
-	llmClient := learning.NewOpenAIClient(llmCfg)
+	llmClient := llmclient.New(llmclient.DefaultConfig())
 	if !llmClient.IsConfigured() {
 		http.Error(w, "LLM not configured on server (set ENGRAM_LLM_URL + ENGRAM_LLM_API_KEY)", http.StatusServiceUnavailable)
 		return
@@ -479,8 +478,7 @@ func (s *Service) handleImportFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Initialize LLM client from server env vars.
-	llmCfg := learning.DefaultOpenAIConfig()
-	llmClient := learning.NewOpenAIClient(llmCfg)
+	llmClient := llmclient.New(llmclient.DefaultConfig())
 	if !llmClient.IsConfigured() {
 		http.Error(w, "LLM not configured on server (set ENGRAM_LLM_URL + ENGRAM_LLM_API_KEY)", http.StatusServiceUnavailable)
 		return

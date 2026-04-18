@@ -19,8 +19,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/learning"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/pkg/llmclient"
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/pkg/similarity"
 )
@@ -220,7 +220,7 @@ type Processor struct {
 	observationStore         *gorm.ObservationStore
 	summaryStore             *gorm.SummaryStore
 	reasoningStore           *gorm.ReasoningTraceStore
-	llmClient                learning.LLMClient
+	llmClient                llmclient.LLMClient
 	broadcastFunc            BroadcastFunc
 	syncObservationFunc      SyncObservationFunc
 	syncSummaryFunc          SyncSummaryFunc
@@ -298,22 +298,22 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 	cfg := config.Get()
 
 	// Initialize LLM client (OpenAI-compatible API — works in Docker)
-	llmCfg := learning.DefaultOpenAIConfig()
-	var llmClient learning.LLMClient
-	openaiClient := learning.NewOpenAIClient(llmCfg)
+	llmCfg := llmclient.DefaultConfig()
+	var llmClt llmclient.LLMClient
+	openaiClient := llmclient.New(llmCfg)
 	if openaiClient.IsConfigured() {
-		llmClient = openaiClient
+		llmClt = openaiClient
 		log.Info().Str("url", llmCfg.BaseURL).Str("model", llmCfg.Model).Msg("SDK processor using LLM API")
 	}
 
 	log.Info().
-		Bool("llm_configured", llmClient != nil).
+		Bool("llm_configured", llmClt != nil).
 		Str("llm_url", llmCfg.BaseURL).
 		Str("llm_model", llmCfg.Model).
 		Msg("SDK processor backend summary")
 
 	// Require LLM backend
-	if llmClient == nil {
+	if llmClt == nil {
 		return nil, fmt.Errorf("no LLM backend available: set ENGRAM_LLM_URL for API access")
 	}
 
@@ -329,7 +329,7 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 
 	return &Processor{
 		model:                    cfg.Model,
-		llmClient:                llmClient,
+		llmClient:                llmClt,
 		observationStore:         observationStore,
 		summaryStore:             summaryStore,
 		sem:                      make(chan struct{}, concurrency),
@@ -508,106 +508,20 @@ func (p *Processor) queryWriteMergeCandidateIDs(ctx context.Context, project str
 	return ids
 }
 
-func (p *Processor) applyWriteMergeDecision(ctx context.Context, sdkSessionID, project string, obs *models.ParsedObservation, promptNumber int) (*models.Observation, bool, string, error) {
-	if obs == nil || !config.Get().WriteMergeEnabled || p.llmClient == nil {
-		return nil, false, "", nil
-	}
-	candidateIDs := p.queryWriteMergeCandidateIDs(ctx, project, obs)
-	if len(candidateIDs) == 0 {
-		return nil, false, "", nil
-	}
-	fetchedCandidates, err := p.observationStore.GetObservationsByIDs(ctx, candidateIDs, "default", len(candidateIDs))
-	if err != nil {
-		return nil, false, "", err
-	}
-	candidates := make([]*models.Observation, 0, len(fetchedCandidates))
-	for _, candidate := range fetchedCandidates {
-		if candidate == nil || candidate.ID <= 0 || candidate.Type != obs.Type || candidate.IsSuperseded || candidate.Project != project {
-			continue
-		}
-		candidates = append(candidates, candidate)
-	}
-	if len(candidates) == 0 {
-		return nil, false, "", nil
-	}
-	newObs := models.NewObservation(sdkSessionID, project, obs, promptNumber, 0)
-	decision, err := learning.DecideMerge(ctx, p.llmClient, newObs, candidates)
-	if err != nil {
-		return nil, false, "", nil
-	}
-	if decision.Action == learning.MergeActionCreateNew {
-		return nil, false, "", nil
-	}
-	if decision.TargetID <= 0 {
-		log.Warn().Str("action", decision.Action).Msg("write-merge: missing target_id, falling back to create")
-		return nil, false, "", nil
-	}
-	var target *models.Observation
-	for _, candidate := range candidates {
-		if candidate != nil && candidate.ID == decision.TargetID {
-			target = candidate
-			break
-		}
-	}
-	if target == nil {
-		log.Warn().Int64("target_id", decision.TargetID).Msg("write-merge: target_id not in candidate set, falling back to create")
-		return nil, false, "", nil
-	}
+// mergeActionUpdate is a sentinel returned by applyWriteMergeDecision when an
+// existing observation was updated in-place (write-merge update path).
+const mergeActionUpdate = "update"
 
-	switch decision.Action {
-	case learning.MergeActionSkip:
-		log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: skipped new observation")
-		return nil, true, learning.MergeActionSkip, nil
-	case learning.MergeActionSupersede:
-		if !config.Get().ContradictionDetectionEnabled {
-			log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: contradiction detection disabled; falling back to create path")
-			return nil, false, "", nil
-		}
-		// Keep old observation active until the caller successfully creates the replacement row.
-		// This avoids the lossy state where the old row is superseded but the new insert fails.
-		return target, false, learning.MergeActionSupersede, nil
-	case learning.MergeActionUpdate:
-		title := target.Title.String
-		if title == "" {
-			title = obs.Title
-		}
-		subtitle := target.Subtitle.String
-		if subtitle == "" {
-			subtitle = obs.Subtitle
-		}
-		narrative := mergeNarrative(target.Narrative.String, obs.Narrative)
-		facts := unionStrings([]string(target.Facts), obs.Facts)
-		concepts := unionStrings([]string(target.Concepts), obs.Concepts)
-		filesRead := unionStrings([]string(target.FilesRead), obs.FilesRead)
-		filesModified := unionStrings([]string(target.FilesModified), obs.FilesModified)
-		commandsRun := unionStrings([]string(target.CommandsRun), obs.CommandsRun)
-		fileMtimes := mergeFileMtimes(target.FileMtimes, obs.FileMtimes)
-		updated, err := p.observationStore.UpdateObservation(ctx, target.ID, &gorm.ObservationUpdate{
-			Title:         &title,
-			Subtitle:      &subtitle,
-			Narrative:     &narrative,
-			Facts:         &facts,
-			Concepts:      &concepts,
-			FilesRead:     &filesRead,
-			FilesModified: &filesModified,
-			CommandsRun:   &commandsRun,
-			FileMtimes:    &fileMtimes,
-		})
-		if err != nil {
-			return nil, false, "", err
-		}
-		p.enqueueObservationSync(updated)
-		p.broadcast(map[string]any{
-			"type":    "observation",
-			"action":  "updated",
-			"id":      target.ID,
-			"project": project,
-		})
-		log.Info().Str("project", project).Int64("target_id", target.ID).Msg("write-merge: updated existing observation")
-		return updated, false, learning.MergeActionUpdate, nil
-	default:
+// applyWriteMergeDecision evaluates whether a new observation should be merged
+// into an existing one. LLM-based merge decisions were removed with the learning
+// package in v5; this implementation always returns create-new (nil, false, "", nil).
+func (p *Processor) applyWriteMergeDecision(_ context.Context, _, _ string, obs *models.ParsedObservation, _ int) (*models.Observation, bool, string, error) {
+	if obs == nil || !config.Get().WriteMergeEnabled {
 		return nil, false, "", nil
 	}
+	// Write-merge requires an LLM decision step that was removed in v5.
+	// Always fall through to create-new.
+	return nil, false, "", nil
 }
 
 // ProcessObservation processes a single tool observation and extracts insights.
@@ -735,7 +649,7 @@ func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, projec
 					existingObs = append(existingObs, mergedObs)
 				}
 			}
-			if mergeAction == learning.MergeActionUpdate {
+			if mergeAction == mergeActionUpdate {
 				storedCount++
 				continue
 			}
