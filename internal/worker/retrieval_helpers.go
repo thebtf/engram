@@ -33,36 +33,6 @@ func (s *Service) lookupRecentSessionIDs(ctx context.Context, project string, si
 	return s.observationStore.GetRecentSessionIDs(ctx, project, since)
 }
 
-func normalizeObservationIDs(raw []int64) []int64 {
-	ids := make([]int64, 0, len(raw))
-	seen := make(map[int64]struct{}, len(raw))
-	for _, id := range raw {
-		if id <= 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	return ids
-}
-
-func (s *Service) lookupGraphSeedNeighbors(ctx context.Context, seedID int64) ([]int64, error) {
-	if seedID <= 0 {
-		return nil, nil
-	}
-	if s.retrievalHooks != nil && s.retrievalHooks.getGraphNeighbors != nil {
-		rawIDs, err := s.retrievalHooks.getGraphNeighbors(ctx, seedID, 2, 10)
-		if err != nil {
-			return nil, err
-		}
-		return normalizeObservationIDs(rawIDs), nil
-	}
-	return nil, nil
-}
-
 func (s *Service) sessionBoostFactor() float64 {
 	if s.config == nil || s.config.SessionBoost <= 0 {
 		return 1.0

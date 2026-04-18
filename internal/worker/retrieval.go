@@ -60,7 +60,6 @@ type retrievalHooks struct {
 	readSignalCountForPath         func(sessionID, filePath string) int
 	filePathObservations           func(ctx context.Context, project, filePath string, limit int) ([]*models.Observation, error)
 	getEntityObservationsBySession func(ctx context.Context, sessionID string) ([]*models.Observation, error)
-	getGraphNeighbors              func(ctx context.Context, obsID int64, maxHops int, limit int) ([]int64, error)
 	// getLastPromptBySession returns the most recent user prompt for a specific session.
 	// When nil, loadLastUserPromptBySession falls back to project-wide lookup.
 	getLastPromptBySession func(ctx context.Context, project, sessionID string) (*models.UserPromptWithSession, error)

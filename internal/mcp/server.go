@@ -578,7 +578,7 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name:        "admin",
-			Description: "Administrative operations: bulk ops, tagging, analytics. Actions: bulk_delete, bulk_supersede, bulk_boost, tag, by_tag, batch_tag, stats, trends, quality, importance, search_analytics, obs_quality, scoring, export, backfill_status, compress_aaak, set_aaak_code, taxonomy_stats. Action required.",
+			Description: "Administrative operations: bulk ops, tagging, analytics. Actions: " + strings.Join(adminActions, ", ") + ". Action required.",
 			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -4125,56 +4125,6 @@ func (s *Server) handleListSessions(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("marshal results: %w", err)
 	}
 	return string(data), nil
-}
-
-// handleGetGraphNeighbors returns graph neighbors via FalkorDB.
-func (s *Server) handleGetGraphNeighbors(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		ObservationID int64
-		MaxHops       int
-		Limit         int
-	}
-	params.ObservationID = coerceInt64(m["observation_id"], 0)
-	params.MaxHops = coerceInt(m["max_hops"], 0)
-	params.Limit = coerceInt(m["limit"], 0)
-	if params.ObservationID <= 0 {
-		return "", fmt.Errorf("observation_id is required")
-	}
-	if params.MaxHops <= 0 {
-		params.MaxHops = 2
-	}
-	if params.Limit <= 0 {
-		params.Limit = 20
-	}
-
-	_ = ctx
-
-	response := map[string]any{
-		"error":          "graph backend removed",
-		"observation_id": params.ObservationID,
-		"max_hops":       params.MaxHops,
-		"neighbors":      []any{},
-		"count":          0,
-	}
-	b, _ := json.MarshalIndent(response, "", "  ")
-	return string(b), nil
-}
-
-// handleGetGraphStats returns graph backend statistics.
-func (s *Server) handleGetGraphStats(ctx context.Context) (string, error) {
-	_ = ctx
-	result := map[string]any{
-		"provider":  "none",
-		"connected": false,
-		"error":     "graph backend removed",
-	}
-	b, _ := json.MarshalIndent(result, "", "  ")
-	return string(b), nil
 }
 
 // handleFindByFileContext retrieves observations directly associated with a specific file path,
