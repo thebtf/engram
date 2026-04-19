@@ -20,7 +20,7 @@ var Version = "dev"
 
 // @title Engram API
 // @version 1.0.0
-// @description Persistent shared memory infrastructure for AI agents. Stores observations in PostgreSQL + pgvector, exposes MCP tools via HTTP/SSE. Note: the host below is the default for local development; set ENGRAM_LISTEN_ADDR to change the listen address in production.
+// @description Persistent shared memory infrastructure for AI agents. Stores memories + behavioral rules + credentials in PostgreSQL. REST API over HTTP; MCP tools are served via stdio client proxy only (server-side MCP HTTP transports removed in v5). Note: the host below is the default for local development; set ENGRAM_LISTEN_ADDR to change the listen address in production.
 // @host localhost:37777
 // @BasePath /
 // @securityDefinitions.apikey ApiKeyAuth

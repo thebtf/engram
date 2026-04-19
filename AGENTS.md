@@ -9,8 +9,10 @@ STACKS: [GO]
 ## PROJECT OVERVIEW
 
 Persistent shared memory infrastructure for Claude Code workstations.
-Single server (Docker on Unraid/NAS) stores observations in PostgreSQL 17 + pgvector,
-exposes 48 MCP tools via Streamable HTTP / SSE on port 37777.
+Single server (Docker on Unraid/NAS) stores memories, behavioral rules, credentials,
+issues, and documents in PostgreSQL 17. MCP tools are exposed via the `engram` stdio
+client proxy (server-side HTTP MCP transports removed in v5); REST API + gRPC on
+port 37777 (cmux multiplexed).
 
 ## RULES
 
@@ -27,10 +29,8 @@ exposes 48 MCP tools via Streamable HTTP / SSE on port 37777.
 - Language: Go 1.25+
 - Build: `make build`
 - Test: `go test ./...`
-- Database: PostgreSQL 17 + pgvector (HNSW cosine index)
-- Embedding: OpenAI-compatible REST API
-- Reranking: API-based cross-encoder reranker
-- Server: `cmd/engram-server/main.go` — HTTP API + MCP SSE + MCP Streamable HTTP + dashboard
+- Database: PostgreSQL 17
+- Server: `cmd/engram-server/main.go` — HTTP API + gRPC + dashboard on :37777 (cmux)
 - Client: `cmd/engram/main.go` — stdio MCP proxy with git-derived project identity
 - Hooks: `plugin/hooks/` — JavaScript hooks for Claude Code lifecycle
 - Plugin: `plugin/` — Claude Code plugin definition + marketplace
@@ -40,12 +40,11 @@ exposes 48 MCP tools via Streamable HTTP / SSE on port 37777.
 ```
 cmd/engram-server/   — server entry point
 cmd/engram/          — local client (stdio MCP proxy)
-internal/mcp/        — MCP protocol, 48 tool handlers (tools_*.go)
-internal/search/     — hybrid search (tsvector + vector + BM25, RRF fusion)
-internal/scoring/    — importance + relevance scoring
-internal/embedding/  — OpenAI-compatible REST embedding provider
-internal/worker/sdk/ — observation extraction (LLM API or Claude CLI)
-internal/learning/   — self-learning, LLM client
+internal/mcp/        — MCP protocol, tool handlers (tools_*.go)
+internal/grpcserver/ — gRPC service implementations
+internal/worker/     — HTTP handlers, retrieval, session management
+internal/db/gorm/    — GORM models + stores (memories, behavioral_rules, credentials, issues, documents)
+internal/crypto/     — AES-256-GCM vault for credential encryption
 plugin/hooks/        — JS hooks (session-start, user-prompt, post-tool-use, stop)
 ```
 
