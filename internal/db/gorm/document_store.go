@@ -55,7 +55,7 @@ func (s *DocumentStore) UpsertDocument(ctx context.Context, collection, path, ti
 			updated_at = NOW()
 	`
 
-	if _, err := s.rawDB.ExecContext(ctx, upsertQuery, collection, path, nullString(title), hash); err != nil {
+	if _, err := s.rawDB.ExecContext(ctx, upsertQuery, collection, path, sqlNullString(title), hash); err != nil {
 		return nil, fmt.Errorf("upsert document: %w", err)
 	}
 
