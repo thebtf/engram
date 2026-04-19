@@ -46,20 +46,6 @@ const routes = [
     component: () => import('@/views/VaultView.vue'),
   },
   {
-    path: '/monitor',
-    name: 'monitor',
-    component: () => import('@/views/MonitorView.vue'),
-  },
-  {
-    path: '/logs',
-    redirect: '/monitor',
-  },
-  {
-    path: '/patterns',
-    name: 'patterns',
-    component: () => import('@/views/PatternsView.vue'),
-  },
-  {
     path: '/issues',
     name: 'issues',
     component: () => import('@/views/IssuesView.vue'),
@@ -78,11 +64,6 @@ const routes = [
     path: '/sessions/:id',
     name: 'session-detail',
     component: () => import('@/views/SessionDetailView.vue'),
-  },
-  {
-    path: '/system',
-    name: 'system',
-    component: () => import('@/views/SystemView.vue'),
   },
   {
     path: '/tokens',
