@@ -295,7 +295,6 @@ make install  # устанавливает плагин + запускает wor
 **Новые переменные окружения:**
 - `ENGRAM_LLM_URL` / `ENGRAM_LLM_API_KEY` / `ENGRAM_LLM_MODEL` — для LLM-управляемого извлечения
 - `ENGRAM_ENCRYPTION_KEY` — шифрование хранилища (AES-256 в hex-формате)
-- `ENGRAM_HYDE_ENABLED` — HyDE query expansion
 - `ENGRAM_GRAPH_PROVIDER` — `falkordb` или пусто (in-memory)
 - `ENGRAM_CONSOLIDATION_ENABLED` / `ENGRAM_SMART_GC_ENABLED` — функции консолидации
 
@@ -325,7 +324,6 @@ make install  # устанавливает плагин + запускает wor
 | `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Название модели LLM |
 | `ENGRAM_RERANKING_API_URL` | — | Эндпоинт cross-encoder reranker |
 | `ENGRAM_ENCRYPTION_KEY` | — | Ключ шифрования хранилища (AES-256 в hex-формате) |
-| `ENGRAM_HYDE_ENABLED` | `false` | Включить HyDE query expansion |
 | `ENGRAM_CONTEXT_MAX_TOKENS` | `8000` | Бюджет token для инъекции контекста |
 | `ENGRAM_GRAPH_PROVIDER` | — | `falkordb` или пусто (in-memory) |
 | `ENGRAM_CONSOLIDATION_ENABLED` | `false` | Включить консолидацию памяти |

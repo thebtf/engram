@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (v5 US9)
+
+- `internal/search` package deleted (search.Manager, RRF, MMR, LLM filter, search metrics)
+- `internal/search/expansion` package deleted (HyDE query expansion, Expander)
+- `recall` MCP tool reduced to trivial SQL filter (memoryStore.List + in-memory substring)
+- Dropped MCP tools: `search`, `timeline`, `decisions`, `changes`, `how_it_works`, `find_by_concept`, `find_by_type`, `get_recent_context`, `get_context_timeline`, `get_timeline_by_query`, `explain_search_ranking`
+- `ENGRAM_HYDE_ENABLED` env var removed
+- `ENGRAM_LLM_FILTER_ENABLED` env var removed
+
 ## [3.7.1] - 2026-04-12
 
 Post-MVP stabilization: hotfixes, reconciliation, and feedback import.
@@ -133,7 +142,6 @@ challenge-report.md, hook-lifecycle-findings.md).
 
 - `ENGRAM_INJECTION_FLOOR` -- default changed **3 -> 0** (breaking if you relied on the floor)
 - `ENGRAM_INJECT_UNIFIED` -- new, default **true** (rollback flag)
-- `ENGRAM_LLM_FILTER_ENABLED` -- unchanged default (false); behavior changed on empty-set path
 
 ### Schema
 

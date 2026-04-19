@@ -295,7 +295,6 @@ make install  # installs plugin + starts worker
 **New environment variables:**
 - `ENGRAM_LLM_URL` / `ENGRAM_LLM_API_KEY` / `ENGRAM_LLM_MODEL` — for LLM-driven extraction
 - `ENGRAM_ENCRYPTION_KEY` — vault encryption (hex-encoded AES-256)
-- `ENGRAM_HYDE_ENABLED` — HyDE query expansion
 - `ENGRAM_GRAPH_PROVIDER` — `falkordb` or empty (in-memory)
 - `ENGRAM_CONSOLIDATION_ENABLED` / `ENGRAM_SMART_GC_ENABLED` — consolidation features
 
@@ -325,7 +324,6 @@ make install  # installs plugin + starts worker
 | `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | LLM model name |
 | `ENGRAM_RERANKING_API_URL` | — | Cross-encoder reranker endpoint |
 | `ENGRAM_ENCRYPTION_KEY` | — | Vault encryption key (hex-encoded AES-256) |
-| `ENGRAM_HYDE_ENABLED` | `false` | Enable HyDE query expansion |
 | `ENGRAM_CONTEXT_MAX_TOKENS` | `8000` | Token budget for context injection |
 | `ENGRAM_INJECTION_FLOOR` | `0` | Minimum injected count. `0` keeps the silence path active; set `3` for legacy fill behavior |
 | `ENGRAM_INJECT_UNIFIED` | `true` | Use the unified retrieval pipeline for inject (disable only for emergency rollback) |

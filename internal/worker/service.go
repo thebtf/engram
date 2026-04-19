@@ -29,8 +29,6 @@ import (
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
-	"github.com/thebtf/engram/internal/search"
-	"github.com/thebtf/engram/internal/search/expansion"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/update"
@@ -95,9 +93,7 @@ type Service struct {
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
-	queryExpander          *expansion.Expander
 	mcpHealth              *mcp.MCPHealth
-	searchMgr              *search.Manager
 	collectionRegistry     *collections.Registry
 	sessionIdxStore        *sessions.Store
 	router                 *chi.Mux
@@ -125,7 +121,6 @@ type Service struct {
 	injectionStore         *gorm.InjectionStore
 	agentStatsStore        *gorm.AgentStatsStore
 	versionStore           *gorm.VersionStore
-	llmFilter              *search.LLMFilter
 	retrievalHooks         *retrievalHooks
 	authHandlers           *AuthHandlers
 	version                string
@@ -307,11 +302,6 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	return svc, nil
 }
 
-// HyDE query expansion removed in v5 (US11/US9). Generator is always nil.
-func (s *Service) createHyDEGenerator() *expansion.HyDEGenerator {
-	return nil
-}
-
 // createChunkManager creates a chunking manager with all available language chunkers.
 func (s *Service) createChunkManager() *chunking.Manager {
 	opts := chunking.DefaultChunkOptions()
@@ -481,9 +471,6 @@ func (s *Service) initializeAsync() {
 	// Initialize retrieval stats log store with batched flush
 	retrievalStatsLogStore := gorm.NewRetrievalStatsLogStore(store.GetDB())
 
-	// Initialize search manager for MCP tools
-	searchMgr := search.NewManager(observationStore, summaryStore, promptStore)
-
 	// Initialize MCP server and SSE handler (serves /sse and /message on the worker port)
 	// Create document store for collection MCP tools
 	documentStore := gorm.NewDocumentStore(store)
@@ -495,7 +482,6 @@ func (s *Service) initializeAsync() {
 	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
 
 	mcpServer := mcp.NewServer(mcp.ServerOptions{
-		SearchMgr:          searchMgr,
 		Version:            s.version,
 		ObservationStore:   observationStore,
 		RelationStore:      relationStore,
@@ -537,7 +523,6 @@ func (s *Service) initializeAsync() {
 	s.initMu.Unlock()
 
 	s.initMu.Lock()
-	s.searchMgr = searchMgr
 	s.collectionRegistry = collectionRegistry
 	s.sessionIdxStore = sessionIdxStore
 	s.searchQueryLogStore = searchQueryLogStore

@@ -295,7 +295,6 @@ make install  # 安装插件 + 启动 worker
 **新环境变量：**
 - `ENGRAM_LLM_URL` / `ENGRAM_LLM_API_KEY` / `ENGRAM_LLM_MODEL` — 用于 LLM 驱动的提取
 - `ENGRAM_ENCRYPTION_KEY` — 保险库加密（十六进制编码的 AES-256）
-- `ENGRAM_HYDE_ENABLED` — HyDE 查询扩展
 - `ENGRAM_GRAPH_PROVIDER` — `falkordb` 或留空（内存模式）
 - `ENGRAM_CONSOLIDATION_ENABLED` / `ENGRAM_SMART_GC_ENABLED` — 整合功能
 
@@ -325,7 +324,6 @@ make install  # 安装插件 + 启动 worker
 | `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | LLM 模型名称 |
 | `ENGRAM_RERANKING_API_URL` | — | 交叉编码器重排序器端点 |
 | `ENGRAM_ENCRYPTION_KEY` | — | 保险库加密密钥（十六进制编码的 AES-256） |
-| `ENGRAM_HYDE_ENABLED` | `false` | 启用 HyDE 查询扩展 |
 | `ENGRAM_CONTEXT_MAX_TOKENS` | `8000` | 上下文注入的 token 预算 |
 | `ENGRAM_GRAPH_PROVIDER` | — | `falkordb` 或留空（内存模式） |
 | `ENGRAM_CONSOLIDATION_ENABLED` | `false` | 启用记忆整合 |

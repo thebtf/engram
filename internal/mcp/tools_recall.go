@@ -1,6 +1,11 @@
 // Package mcp — tools_recall.go routes consolidated "recall" tool actions
 // to existing handler functions on *Server. This is the single entry point
 // for all memory retrieval operations, dispatching by action parameter.
+//
+// v5 (US9): dropped actions search (was hybrid/fusion), preset, by_concept,
+// by_type, similar, timeline, explain. The "search" action now runs a trivial
+// SQL filter over the memories store. Dropped handler symbols have been
+// removed from server.go.
 package mcp
 
 import (
@@ -22,32 +27,30 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	switch action {
 	case "search":
-		// Delegate to the full search dispatch in callTool.
-		return s.callTool(ctx, "search", args)
+		return s.handleRecallSearch(ctx, m)
 
 	case "preset":
-		preset := coerceString(m["preset"], "")
-		switch preset {
-		case "decisions", "changes", "how_it_works":
-			return s.callTool(ctx, preset, args)
-		default:
-			return "", fmt.Errorf("recall: unknown preset %q (valid: decisions, changes, how_it_works)", preset)
-		}
+		// Dropped in v5 (US9): preset (decisions/changes/how_it_works) used search.Manager.
+		return "", fmt.Errorf("recall: action %q not supported in v5 (search.Manager removed — use recall(action=\"search\") instead)", action)
 
 	case "by_file":
 		return s.callTool(ctx, "find_by_file", args)
 
 	case "by_concept":
-		return s.callTool(ctx, "find_by_concept", args)
+		// Dropped in v5 (US9): concept index backed by search.Manager.
+		return "", fmt.Errorf("recall: action %q not supported in v5 (concept search removed — use recall(action=\"search\") instead)", action)
 
 	case "by_type":
-		return s.callTool(ctx, "find_by_type", args)
+		// Dropped in v5 (US9): type-lane search backed by search.Manager.
+		return "", fmt.Errorf("recall: action %q not supported in v5 (type-lane search removed — use recall(action=\"search\") instead)", action)
 
 	case "similar":
-		return s.handleFindSimilarObservations(ctx, args)
+		// Dropped in v5 (US9): vector similarity search removed (content_chunks dropped).
+		return "", fmt.Errorf("recall: action %q not supported in v5 (vector similarity removed)", action)
 
 	case "timeline":
-		return s.callTool(ctx, "timeline", args)
+		// Dropped in v5 (US9): timeline backed by search.Manager.
+		return "", fmt.Errorf("recall: action %q not supported in v5 (timeline search removed — use recall(action=\"search\") instead)", action)
 
 	case "related":
 		return s.handleFindRelatedObservations(ctx, args)
@@ -63,7 +66,8 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 		return s.handleListSessions(ctx, args)
 
 	case "explain":
-		return s.handleExplainSearchRanking(ctx, args)
+		// Dropped in v5 (US9): explain ranked search results using search.Manager.
+		return "", fmt.Errorf("recall: action %q not supported in v5 (search ranking removed)", action)
 
 	case "reasoning":
 		return s.handleReasoningSearch(ctx, args)
@@ -81,10 +85,87 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	default:
 		return "", fmt.Errorf(
-			"unknown recall action: %q (valid: search, preset, by_file, by_concept, by_type, similar, timeline, related, get, sessions, explain, reasoning, hit_rate, wake_up, taxonomy, tunnels)",
+			"unknown recall action: %q (valid: search, by_file, related, get, sessions, reasoning, hit_rate, wake_up, taxonomy, tunnels)",
 			action,
 		)
 	}
+}
+
+// handleRecallSearch performs trivial SQL-based memory retrieval.
+// It filters the memories table by project (required when non-empty) and
+// optionally applies a case-insensitive substring match on content when a
+// query string is provided. Results are ordered by created_at DESC.
+func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (string, error) {
+	project := coerceString(m["project"], "")
+	query := coerceString(m["query"], "")
+	limit := coerceInt(m["limit"], 20)
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("recall: memory store not configured")
+	}
+
+	// List returns created_at DESC, project-filtered results.
+	// For an empty project, fallback to observationStore for backward compat.
+	if project == "" {
+		// No project scope: return a helpful message rather than silently
+		// returning zero rows (the project param is required by List).
+		return `{"memories":[],"count":0,"note":"project parameter required for memory search in v5"}`, nil
+	}
+
+	memories, err := s.memoryStore.List(ctx, project, limit)
+	if err != nil {
+		return "", fmt.Errorf("recall search: %w", err)
+	}
+
+	// Apply optional query filter in-memory (case-insensitive substring).
+	query = strings.TrimSpace(query)
+	if query != "" {
+		queryLower := strings.ToLower(query)
+		filtered := memories[:0]
+		for _, mem := range memories {
+			if strings.Contains(strings.ToLower(mem.Content), queryLower) {
+				filtered = append(filtered, mem)
+			}
+		}
+		memories = filtered
+	}
+
+	type memoryResult struct {
+		Tags        []string `json:"tags,omitempty"`
+		Content     string   `json:"content"`
+		SourceAgent string   `json:"source_agent,omitempty"`
+		Project     string   `json:"project"`
+		ID          int64    `json:"id"`
+		Version     int      `json:"version"`
+	}
+	results := make([]memoryResult, 0, len(memories))
+	for _, mem := range memories {
+		results = append(results, memoryResult{
+			ID:          mem.ID,
+			Project:     mem.Project,
+			Content:     mem.Content,
+			Tags:        mem.Tags,
+			SourceAgent: mem.SourceAgent,
+			Version:     mem.Version,
+		})
+	}
+
+	out := map[string]any{
+		"memories": results,
+		"count":    len(results),
+	}
+	if query != "" {
+		out["query"] = query
+	}
+
+	output, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("recall search marshal: %w", err)
+	}
+	return string(output), nil
 }
 
 // handleHitRateAnalytics returns noise_candidate and high_value observations from concepts.

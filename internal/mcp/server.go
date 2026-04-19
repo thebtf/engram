@@ -19,17 +19,15 @@ import (
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/privacy"
-	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// Server is the MCP server that exposes search tools.
+// Server is the MCP server that exposes engram tools.
 // Field order optimized for memory alignment (fieldalignment).
 type Server struct {
 	stdin                  io.Reader
 	stdout                 io.Writer
-	searchMgr              *search.Manager
 	observationStore       *gorm.ObservationStore
 	relationStore          *gorm.RelationStore
 	sessionStore           *gorm.SessionStore
@@ -52,7 +50,6 @@ type Server struct {
 
 // ServerOptions holds the dependencies injected into the MCP Server.
 type ServerOptions struct {
-	SearchMgr          *search.Manager
 	Version            string
 	ObservationStore   *gorm.ObservationStore
 	RelationStore      *gorm.RelationStore
@@ -66,7 +63,6 @@ type ServerOptions struct {
 // NewServer creates a new MCP server.
 func NewServer(opts ServerOptions) *Server {
 	return &Server{
-		searchMgr:          opts.SearchMgr,
 		version:            opts.Version,
 		stdin:              os.Stdin,
 		stdout:             os.Stdout,
@@ -451,7 +447,7 @@ Use ` + "`store(action=\"extract\", content=\"...\")`" + ` to let the LLM extrac
 ## Workflow Patterns
 
 **Starting work:** Context is auto-injected by hooks. Use ` + "`recall(query=\"...\")`" + ` for deeper search.
-**Before modifying code:** ` + "`recall(action=\"by_file\")`" + ` + ` + "`recall(action=\"preset\", preset=\"how_it_works\")`" + `
+**Before modifying code:** ` + "`recall(action=\"by_file\")`" + ` to find file-related memories.
 **After completing a feature:** ` + "`store(content=\"...\", title=\"...\", type=\"decision\")`" + ` — capture what was built and why.
 **After fixing a bug:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture root cause and fix.
 **After research:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture findings. (Do NOT use memory_type values like ` + "`insight`" + ` in the observation ` + "`type`" + ` field.)
@@ -471,24 +467,18 @@ func (s *Server) primaryTools() []Tool {
 	return []Tool{
 		{
 			Name:        "recall",
-			Description: "Search and retrieve memories. Actions: search (default), preset (decisions/changes/how_it_works), by_file, by_concept, by_type, similar, timeline, related, get, sessions, explain, reasoning.",
+			Description: "Search and retrieve memories. Actions: search (default, trivial SQL filter over memories), by_file, related, get, sessions, reasoning, hit_rate, wake_up, taxonomy, tunnels.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":         map[string]any{"type": "string", "enum": []string{"search", "preset", "by_file", "by_concept", "by_type", "similar", "timeline", "related", "get", "sessions", "explain", "reasoning", "hit_rate"}, "default": "search", "description": "Action to perform"},
-					"query":          map[string]any{"type": "string", "description": "Search query (for search, preset, similar, timeline:query, sessions, explain)"},
-					"preset":         map[string]any{"type": "string", "enum": []string{"decisions", "changes", "how_it_works"}, "description": "Search preset (for action=preset)"},
+					"action":         map[string]any{"type": "string", "enum": []string{"search", "by_file", "related", "get", "sessions", "reasoning", "hit_rate", "wake_up", "taxonomy", "tunnels"}, "default": "search", "description": "Action to perform"},
+					"query":          map[string]any{"type": "string", "description": "Search query / substring filter (for search, sessions)"},
 					"files":          map[string]any{"type": "string", "description": "File paths (for action=by_file)"},
-					"concept":        map[string]any{"type": "string", "description": "Concept tag (for action=by_concept)"},
-					"type":           map[string]any{"type": "string", "description": "Observation type (for action=by_type)"},
 					"id":             map[string]any{"type": "number", "description": "Observation ID (for action=get, related)"},
 					"project":        map[string]any{"type": "string", "description": "Project name filter"},
 					"limit":          map[string]any{"type": "number", "description": "Max results"},
-					"mode":           map[string]any{"type": "string", "description": "Timeline mode: recent/anchor/query (for action=timeline)"},
-					"min_similarity": map[string]any{"type": "number", "description": "Min similarity 0-1 (for action=similar)"},
 					"min_confidence": map[string]any{"type": "number", "description": "Min confidence 0-1 (for action=related)"},
-					"format":         map[string]any{"type": "string", "description": "Output format: text/items/detailed"},
 				},
 			},
 		},
@@ -605,121 +595,11 @@ func (s *Server) primaryTools() []Tool {
 }
 
 // handleToolsList returns the list of available tools.
+// Note (v5/US9): search, timeline, decisions, changes, how_it_works, find_by_concept,
+// find_by_type removed — they were backed by internal/search (dropped). Use the
+// consolidated recall(action="search") tool instead.
 func (s *Server) handleToolsList(req *Request) *Response {
 	tools := []Tool{
-		{
-			Name:        "search",
-			Description: "Unified search across all memory types (observations, sessions, and user prompts) using vector-first semantic search (pgvector).",
-			tier:        tierCore,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query":     map[string]any{"type": "string", "description": "Natural language search query for semantic ranking"},
-					"preset":    map[string]any{"type": "string", "enum": []string{"decisions", "changes", "how_it_works"}, "description": "Shortcut presets that set type/concept filters automatically"},
-					"type":      map[string]any{"type": "string", "enum": []string{"observations", "sessions", "prompts"}, "description": "Filter by document type"},
-					"project":   map[string]any{"type": "string", "description": "Filter by project name"},
-					"obs_type":  map[string]any{"type": "string", "description": "Filter observations by type"},
-					"concepts":  map[string]any{"type": "string", "description": "Filter by concept tags"},
-					"files":     map[string]any{"type": "string", "description": "Filter by file paths"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}, "description": "Start date for filtering"},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}, "description": "End date for filtering"},
-					"orderBy":   map[string]any{"type": "string", "enum": []string{"relevance", "date_desc", "date_asc"}, "default": "date_desc"},
-					"limit":     map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
-					"offset":    map[string]any{"type": "number", "default": 0, "minimum": 0},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-				"required": []string{},
-			},
-		},
-		{
-			Name:        "timeline",
-			Description: "Fetch timeline of observations around a specific point in time. Consolidates get_context_timeline, get_timeline_by_query, and get_recent_context.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"mode":      map[string]any{"type": "string", "enum": []string{"anchor", "query", "recent"}, "default": "anchor", "description": "Timeline mode: anchor (by ID), query (search+timeline), recent (latest observations)"},
-					"anchor_id": map[string]any{"type": "number", "description": "Observation ID to use as anchor (mode=anchor)"},
-					"query":     map[string]any{"type": "string", "description": "Natural language query to find anchor observation (mode=query)"},
-					"before":    map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"after":     map[string]any{"type": "number", "default": 10, "minimum": 0, "maximum": 100},
-					"project":   map[string]any{"type": "string"},
-					"concepts":  map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"obs_type":  map[string]any{"type": "string"},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		{
-			Name:        "decisions",
-			Description: "Semantic shortcut for finding architectural, design, and implementation decisions.",
-			tier:        tierCore,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"query"},
-				"properties": map[string]any{
-					"query":     map[string]any{"type": "string", "description": "Natural language query for finding decisions"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"limit":     map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		{
-			Name:        "changes",
-			Description: "Semantic shortcut for finding code changes, refactorings, and modifications.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"query"},
-				"properties": map[string]any{
-					"query":     map[string]any{"type": "string", "description": "Natural language query for finding changes"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"limit":     map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		{
-			Name:        "how_it_works",
-			Description: "Semantic shortcut for understanding system architecture, design patterns, and implementation details.",
-			tier:        tierCore,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"query"},
-				"properties": map[string]any{
-					"query":     map[string]any{"type": "string", "description": "Natural language query for understanding how something works"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"limit":     map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		{
-			Name:        "find_by_concept",
-			Description: "Find observations tagged with specific concepts.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"concepts"},
-				"properties": map[string]any{
-					"concepts":  map[string]any{"type": "string", "description": "Concept tag(s) to filter by"},
-					"type":      map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"project":   map[string]any{"type": "string"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"orderBy":   map[string]any{"type": "string", "enum": []string{"date_desc", "date_asc"}, "default": "date_desc"},
-					"limit":     map[string]any{"type": "number", "default": 20},
-					"offset":    map[string]any{"type": "number", "default": 0},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
 		{
 			Name:        "find_by_file",
 			Description: "Find observations related to specific file paths.",
@@ -741,31 +621,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
-		// find_by_file_context removed from registration (near-duplicate of find_by_file) — dispatch alias retained
-		{
-			Name:        "find_by_type",
-			Description: "Find observations of specific types.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"type"},
-				"properties": map[string]any{
-					"type":      map[string]any{"type": "string", "description": "Observation type(s) to filter by"},
-					"concepts":  map[string]any{"type": "string"},
-					"files":     map[string]any{"type": "string"},
-					"project":   map[string]any{"type": "string"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"orderBy":   map[string]any{"type": "string", "enum": []string{"date_desc", "date_asc"}, "default": "date_desc"},
-					"limit":     map[string]any{"type": "number", "default": 20},
-					"offset":    map[string]any{"type": "number", "default": 0},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		// get_recent_context removed from registration (consolidated into timeline) — dispatch alias retained
-		// get_context_timeline removed from registration (consolidated into timeline) — dispatch alias retained
-		// get_timeline_by_query removed from registration (consolidated into timeline) — dispatch alias retained
+		// find_by_file_context, find_by_type, timeline, get_recent_context, get_context_timeline,
+		// get_timeline_by_query removed in v5 (US9) — backed by internal/search which is dropped.
 		{
 			Name:        "find_related_observations",
 			Description: "Find observations related to a given observation ID filtered by confidence threshold. Returns related observations sorted by confidence score. Useful for discovering relevant context.",
@@ -1632,7 +1489,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 	case "batch_tag_by_pattern":
 		return s.handleBatchTagByPattern(ctx, args)
 	case "explain_search_ranking":
-		return s.handleExplainSearchRanking(ctx, args)
+		// v5 (US9): explain_search_ranking removed — internal/search dropped.
+		return "", fmt.Errorf("tool %q removed in v5 (internal/search dropped)", name)
 	case "export_observations":
 		return s.handleExportObservations(ctx, args)
 	case "issues":
@@ -1723,175 +1581,19 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleSuppressMemory(ctx, args)
 	}
 
-	// Search-based tools: use parseArgs + coercion instead of direct unmarshal
-	// to handle MCP clients sending numeric values as strings or floats.
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-	params := buildSearchParams(m)
-
-	var result *search.UnifiedSearchResult
-
+	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/
+	// find_by_type tools removed — internal/search package dropped.
+	// find_by_file uses observationStore directly.
 	switch name {
-	case "search":
-		// Handle preset parameter for consolidated search
-		preset := coerceString(m["preset"], "")
-		switch preset {
-		case "decisions":
-			result, err = s.searchMgr.Decisions(ctx, params)
-		case "changes":
-			result, err = s.searchMgr.Changes(ctx, params)
-		case "how_it_works":
-			result, err = s.searchMgr.HowItWorks(ctx, params)
-		default:
-			result, err = s.searchMgr.UnifiedSearch(ctx, params)
-		}
-
-	// Timeline tools: consolidated via mode/alias
-	case "timeline":
-		mode := coerceString(m["mode"], "")
-		switch mode {
-		case "query":
-			result, err = s.handleTimelineByQuery(ctx, m)
-		case "recent":
-			result, err = s.searchMgr.UnifiedSearch(ctx, params)
-		default: // "anchor" or empty — default behavior
-			result, err = s.handleTimeline(ctx, m)
-		}
-
-	// Search aliases (backward compatibility)
-	case "decisions":
-		result, err = s.searchMgr.Decisions(ctx, params)
-	case "changes":
-		result, err = s.searchMgr.Changes(ctx, params)
-	case "how_it_works":
-		result, err = s.searchMgr.HowItWorks(ctx, params)
-	case "find_by_concept":
-		params.Type = "observations"
-		result, err = s.searchMgr.UnifiedSearch(ctx, params)
 	case "find_by_file":
-		params.Type = "observations"
-		result, err = s.searchMgr.UnifiedSearch(ctx, params)
-	case "find_by_type":
-		params.Type = "observations"
-		result, err = s.searchMgr.UnifiedSearch(ctx, params)
-	case "get_recent_context":
-		result, err = s.searchMgr.UnifiedSearch(ctx, params)
-
-	// Timeline aliases (backward compatibility)
-	case "get_context_timeline":
-		result, err = s.handleTimeline(ctx, m)
-	case "get_timeline_by_query":
-		result, err = s.handleTimelineByQuery(ctx, m)
-
+		return s.handleFindByFileObservations(ctx, args)
+	case "search", "timeline", "decisions", "changes", "how_it_works",
+		"find_by_concept", "find_by_type", "get_recent_context",
+		"get_context_timeline", "get_timeline_by_query":
+		return "", fmt.Errorf("tool %q removed in v5 (internal/search dropped) — use recall(action=\"search\") instead", name)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
-
-	if err != nil {
-		return "", err
-	}
-
-	output, err := json.Marshal(result)
-	if err != nil {
-		return "", fmt.Errorf("marshal result: %w", err)
-	}
-
-	return string(output), nil
-}
-
-// TimelineParams represents parameters for timeline operations.
-type TimelineParams struct {
-	Query     string `json:"query"`
-	Project   string `json:"project"`
-	ObsType   string `json:"obs_type"`
-	Concepts  string `json:"concepts"`
-	Files     string `json:"files"`
-	Format    string `json:"format"`
-	AnchorID  int64  `json:"anchor_id"`
-	Before    int    `json:"before"`
-	After     int    `json:"after"`
-	DateStart int64  `json:"dateStart"`
-	DateEnd   int64  `json:"dateEnd"`
-}
-
-// handleTimeline handles timeline requests using pre-parsed args map.
-func (s *Server) handleTimeline(ctx context.Context, m map[string]any) (*search.UnifiedSearchResult, error) {
-	params := buildTimelineParams(m)
-
-	if params.Before <= 0 {
-		params.Before = 10
-	}
-	if params.After <= 0 {
-		params.After = 10
-	}
-
-	// If query provided, first find anchor
-	if params.Query != "" && params.AnchorID == 0 {
-		searchParams := search.SearchParams{
-			Query:   params.Query,
-			Type:    "observations",
-			Project: params.Project,
-			Limit:   1,
-		}
-		result, err := s.searchMgr.UnifiedSearch(ctx, searchParams)
-		if err != nil {
-			return nil, err
-		}
-		if len(result.Results) > 0 {
-			params.AnchorID = result.Results[0].ID
-		}
-	}
-
-	if params.AnchorID == 0 {
-		return &search.UnifiedSearchResult{Results: []search.SearchResult{}}, nil
-	}
-
-	// Fetch observations around anchor
-	searchParams := search.SearchParams{
-		Type:     "observations",
-		Project:  params.Project,
-		ObsType:  params.ObsType,
-		Concepts: params.Concepts,
-		Files:    params.Files,
-		Limit:    params.Before + params.After + 1,
-		Format:   params.Format,
-	}
-
-	return s.searchMgr.UnifiedSearch(ctx, searchParams)
-}
-
-// handleTimelineByQuery handles combined search + timeline requests using pre-parsed args map.
-func (s *Server) handleTimelineByQuery(ctx context.Context, m map[string]any) (*search.UnifiedSearchResult, error) {
-	params := buildTimelineParams(m)
-
-	if params.Query == "" {
-		return nil, fmt.Errorf("query is required")
-	}
-
-	// First search
-	searchParams := search.SearchParams{
-		Query:     params.Query,
-		Type:      "observations",
-		Project:   params.Project,
-		DateStart: params.DateStart,
-		DateEnd:   params.DateEnd,
-		Limit:     1,
-	}
-
-	result, err := s.searchMgr.UnifiedSearch(ctx, searchParams)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(result.Results) == 0 {
-		return result, nil
-	}
-
-	// Now get timeline around that result
-	m["anchor_id"] = result.Results[0].ID
-	return s.handleTimeline(ctx, m)
 }
 
 // handleFindRelatedObservations finds observations related to a given observation ID.
@@ -1965,6 +1667,49 @@ func (s *Server) handleFindRelatedObservations(ctx context.Context, args json.Ra
 		return "", fmt.Errorf("marshal response: %w", err)
 	}
 
+	return string(output), nil
+}
+
+// handleFindByFileObservations finds observations related to a file path using
+// the observationStore directly (no search.Manager required — v5/US9).
+// Replaces the old search-based find_by_file dispatch.
+func (s *Server) handleFindByFileObservations(ctx context.Context, args json.RawMessage) (string, error) {
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
+	files := coerceString(m["files"], "")
+	project := coerceString(m["project"], "")
+	limit := coerceInt(m["limit"], 20)
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	if files == "" {
+		return "", fmt.Errorf("files parameter is required")
+	}
+	if project == "" {
+		return "", fmt.Errorf("project parameter is required")
+	}
+
+	observations, err := s.observationStore.GetObservationsByFile(ctx, project, files, limit)
+	if err != nil {
+		return "", fmt.Errorf("find_by_file: %w", err)
+	}
+	if observations == nil {
+		observations = []*models.Observation{}
+	}
+
+	response := map[string]any{
+		"observations": observations,
+		"count":        len(observations),
+		"files":        files,
+	}
+	output, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("marshal response: %w", err)
+	}
 	return string(output), nil
 }
 
@@ -2044,15 +1789,7 @@ func (s *Server) handleFindSimilarObservations(ctx context.Context, args json.Ra
 func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 	stats := make(map[string]any, 8) // Pre-allocate for expected stats keys
 
-	// Vector storage removed in v5; no vector stats available.
-
-	// Get search metrics
-	if s.searchMgr != nil {
-		searchMetrics := s.searchMgr.Metrics()
-		if searchMetrics != nil {
-			stats["search"] = searchMetrics.GetStats()
-		}
-	}
+	// Vector storage and search.Manager removed in v5 (US9); no vector/search stats available.
 
 	output, err := json.Marshal(stats)
 	if err != nil {
@@ -2733,35 +2470,24 @@ func (s *Server) handleGetObservationsByTag(ctx context.Context, args json.RawMe
 		params.Limit = 50
 	}
 
-	// Use search with concept filter
-	searchParams := search.SearchParams{
-		Query:    params.Tag,
-		Type:     "observations",
-		Project:  params.Project,
-		Limit:    params.Limit,
-		Concepts: params.Tag,
-	}
-
-	result, err := s.searchMgr.UnifiedSearch(ctx, searchParams)
+	// v5 (US9): use FTS directly on observationStore instead of search.Manager.
+	observations, err := s.observationStore.SearchObservationsFTS(ctx, params.Tag, params.Project, params.Limit)
 	if err != nil {
-		return "", fmt.Errorf("search: %w", err)
+		return "", fmt.Errorf("search by tag: %w", err)
 	}
 
-	// Filter results to only include observations with the exact tag in metadata
-	var filtered []search.SearchResult
-	for _, r := range result.Results {
-		if r.Type != "observation" {
-			continue
-		}
-		// Check if concepts metadata contains the tag
-		if concepts, ok := r.Metadata["concepts"].([]any); ok {
-			for _, c := range concepts {
-				if cs, ok := c.(string); ok && cs == params.Tag {
-					filtered = append(filtered, r)
-					break
-				}
+	// Filter to only observations that have the exact tag in concepts.
+	var filtered []*models.Observation
+	for _, obs := range observations {
+		for _, c := range obs.Concepts {
+			if c == params.Tag {
+				filtered = append(filtered, obs)
+				break
 			}
 		}
+	}
+	if filtered == nil {
+		filtered = []*models.Observation{}
 	}
 
 	response := map[string]any{
@@ -3086,15 +2812,8 @@ func (s *Server) handleBatchTagByPattern(ctx context.Context, args json.RawMessa
 		params.MaxMatches = 100
 	}
 
-	// Search for matching observations using the pattern
-	searchParams := search.SearchParams{
-		Query:   params.Pattern,
-		Type:    "observations",
-		Project: params.Project,
-		Limit:   params.MaxMatches,
-	}
-
-	result, err := s.searchMgr.UnifiedSearch(ctx, searchParams)
+	// v5 (US9): use FTS directly on observationStore instead of search.Manager.
+	observations, err := s.observationStore.SearchObservationsFTS(ctx, params.Pattern, params.Project, params.MaxMatches)
 	if err != nil {
 		return "", fmt.Errorf("search: %w", err)
 	}
@@ -3103,25 +2822,19 @@ func (s *Server) handleBatchTagByPattern(ctx context.Context, args json.RawMessa
 	var matches []map[string]any
 	var taggedCount int
 
-	for _, r := range result.Results {
-		if r.Type != "observation" {
-			continue
+	for _, obs := range observations {
+		title := ""
+		if obs.Title.Valid {
+			title = obs.Title.String
 		}
-
 		match := map[string]any{
-			"id":    r.ID,
-			"title": r.Title,
-			"score": r.Score,
+			"id":    obs.ID,
+			"title": title,
 		}
 		matches = append(matches, match)
 
 		// Apply tags if not dry run
 		if !params.DryRun {
-			obs, err := s.observationStore.GetObservationByID(ctx, r.ID)
-			if err != nil || obs == nil {
-				continue
-			}
-
 			// Merge existing tags with new tags (avoid duplicates)
 			tagSet := make(map[string]bool)
 			newTags := make([]string, 0, len(obs.Concepts)+len(params.Tags))
@@ -3139,7 +2852,7 @@ func (s *Server) handleBatchTagByPattern(ctx context.Context, args json.RawMessa
 			update := &gorm.ObservationUpdate{
 				Concepts: &newTags,
 			}
-			_, err = s.observationStore.UpdateObservation(ctx, r.ID, update)
+			_, err = s.observationStore.UpdateObservation(ctx, obs.ID, update)
 			if err == nil {
 				taggedCount++
 			}
@@ -3166,116 +2879,7 @@ func (s *Server) handleBatchTagByPattern(ctx context.Context, args json.RawMessa
 	return string(output), nil
 }
 
-// handleExplainSearchRanking explains why each observation ranked where it did in search results.
-func (s *Server) handleExplainSearchRanking(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Query   string
-		Project string
-		TopN    int
-	}
-	params.Query = coerceString(m["query"], "")
-	params.Project = coerceString(m["project"], "")
-	params.TopN = coerceInt(m["top_n"], 5)
-
-	if params.Query == "" {
-		return "", fmt.Errorf("query is required")
-	}
-	if params.TopN < 1 || params.TopN > 20 {
-		params.TopN = 5
-	}
-
-	// Perform search to get results
-	searchParams := search.SearchParams{
-		Query:   params.Query,
-		Type:    "observations",
-		Project: params.Project,
-		Limit:   params.TopN,
-		OrderBy: "relevance",
-	}
-
-	result, err := s.searchMgr.UnifiedSearch(ctx, searchParams)
-	if err != nil {
-		return "", fmt.Errorf("search: %w", err)
-	}
-
-	// Build detailed explanations for each result
-	type RankExplanation struct {
-		ScoreBreakdown map[string]float64 `json:"score_breakdown"`
-		Metadata       map[string]any     `json:"metadata,omitempty"`
-		Title          string             `json:"title"`
-		Type           string             `json:"type"`
-		MatchedFields  []string           `json:"matched_fields"`
-		Rank           int                `json:"rank"`
-		ID             int64              `json:"id"`
-		Score          float64            `json:"score"`
-	}
-
-	explanations := make([]RankExplanation, 0, len(result.Results))
-	for i, r := range result.Results {
-		exp := RankExplanation{
-			Rank:     i + 1,
-			ID:       r.ID,
-			Title:    r.Title,
-			Type:     r.Type,
-			Score:    r.Score,
-			Metadata: r.Metadata,
-		}
-
-		// Build score breakdown from available metadata
-		exp.ScoreBreakdown = make(map[string]float64)
-		if vs, ok := r.Metadata["vector_score"].(float64); ok {
-			exp.ScoreBreakdown["vector_similarity"] = vs
-		}
-		if is, ok := r.Metadata["importance_score"].(float64); ok {
-			exp.ScoreBreakdown["importance"] = is
-		}
-		if ts, ok := r.Metadata["text_score"].(float64); ok {
-			exp.ScoreBreakdown["text_match"] = ts
-		}
-		if rs, ok := r.Metadata["recency_score"].(float64); ok {
-			exp.ScoreBreakdown["recency"] = rs
-		}
-		// Add base score estimate if breakdown is incomplete
-		if len(exp.ScoreBreakdown) == 0 {
-			exp.ScoreBreakdown["combined_score"] = r.Score
-		}
-
-		// Determine matched fields
-		exp.MatchedFields = []string{}
-		if r.Metadata["field_type"] != nil {
-			if ft, ok := r.Metadata["field_type"].(string); ok && ft != "" {
-				exp.MatchedFields = append(exp.MatchedFields, ft)
-			}
-		}
-
-		explanations = append(explanations, exp)
-	}
-
-	response := map[string]any{
-		"query":        params.Query,
-		"project":      params.Project,
-		"result_count": len(explanations),
-		"explanations": explanations,
-		"tips": []string{
-			"Higher vector_similarity indicates better semantic match with query",
-			"Importance score reflects user feedback and retrieval history",
-			"Recency boosts newer observations slightly",
-			"Use tag_observation to boost important observations",
-		},
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
-}
+// handleExplainSearchRanking was removed in v5 (US9): internal/search dropped.
 
 // handleExportObservations exports observations in various formats.
 func (s *Server) handleExportObservations(ctx context.Context, args json.RawMessage) (string, error) {
@@ -3303,33 +2907,28 @@ func (s *Server) handleExportObservations(ctx context.Context, args json.RawMess
 		params.Limit = 100
 	}
 
-	// Build search params to fetch observations
-	searchParams := search.SearchParams{
-		Type:      "observations",
-		Project:   params.Project,
-		Limit:     params.Limit,
-		OrderBy:   "date_desc",
-		DateStart: params.DateStart,
-		DateEnd:   params.DateEnd,
-		ObsType:   params.ObsType,
-	}
-
-	result, err := s.searchMgr.UnifiedSearch(ctx, searchParams)
-	if err != nil {
-		return "", fmt.Errorf("search: %w", err)
-	}
-
-	// Fetch full observation data for export
-	ids := make([]int64, 0, len(result.Results))
-	for _, r := range result.Results {
-		if r.Type == "observation" {
-			ids = append(ids, r.ID)
-		}
-	}
-
-	observations, err := s.observationStore.GetObservationsByIDs(ctx, ids, "", 0)
+	// v5 (US9): use GetAllRecentObservations + in-memory filter; search.Manager removed.
+	allObs, err := s.observationStore.GetAllRecentObservations(ctx, params.Limit)
 	if err != nil {
 		return "", fmt.Errorf("get observations: %w", err)
+	}
+
+	// Filter by project, type, and date range in-memory.
+	observations := make([]*models.Observation, 0, len(allObs))
+	for _, obs := range allObs {
+		if params.Project != "" && obs.Project != params.Project {
+			continue
+		}
+		if params.ObsType != "" && string(obs.Type) != params.ObsType {
+			continue
+		}
+		if params.DateStart > 0 && obs.CreatedAt.Unix() < params.DateStart {
+			continue
+		}
+		if params.DateEnd > 0 && obs.CreatedAt.Unix() > params.DateEnd {
+			continue
+		}
+		observations = append(observations, obs)
 	}
 
 	// Format output based on requested format
@@ -3608,29 +3207,7 @@ func (s *Server) handleAnalyzeSearchPatterns(ctx context.Context, args json.RawM
 		Insights:          []string{},
 	}
 
-	// Get search stats from the search manager if available
-	if s.searchMgr != nil {
-		metrics := s.searchMgr.Metrics()
-		if metrics != nil {
-			stats := metrics.GetStats()
-			if totalSearches, ok := stats["total_searches"].(int); ok && totalSearches > 0 {
-				analysis.TotalSearches = totalSearches
-				analysis.Insights = append(analysis.Insights,
-					fmt.Sprintf("Total searches: %d", totalSearches))
-			}
-			if avgLatency, ok := stats["avg_latency_ms"].(float64); ok {
-				analysis.Insights = append(analysis.Insights,
-					fmt.Sprintf("Average search latency: %.2fms", avgLatency))
-			}
-		}
-
-		// Get cache stats
-		cacheStats := s.searchMgr.CacheStats()
-		if hitRate, ok := cacheStats["hit_rate"].(float64); ok {
-			analysis.Insights = append(analysis.Insights,
-				fmt.Sprintf("Cache hit rate: %.1f%%", hitRate*100))
-		}
-	}
+	// v5 (US9): search.Manager removed — no search metrics or cache stats available.
 
 	// Analyze observation patterns to suggest search improvements
 	if s.observationStore != nil {
