@@ -7,8 +7,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/search"
-	"github.com/thebtf/engram/internal/search/expansion"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -37,7 +35,7 @@ type retrievalContextState struct {
 
 type retrievalMetadata struct {
 	threshold         float64
-	expandedQueries   []expansion.ExpandedQuery
+	expandedQueries   []string // v5: query expansion removed; always single original query
 	detectedIntent    string
 	usedVector        bool
 	totalResults      int
@@ -65,51 +63,36 @@ type retrievalHooks struct {
 	getLastPromptBySession func(ctx context.Context, project, sessionID string) (*models.UserPromptWithSession, error)
 }
 
+// defaultMinScore is the minimum relevance score used in place of the removed
+// lane-based score thresholds (internal/search package dropped in v5 US9).
+const defaultMinScore = 0.3
+
 // Type-lane config removed in v5 (US11): lane-based search selection is no longer a feature.
 func (s *Service) typeLanesEnabled() bool {
 	return false
 }
 
-func (s *Service) laneConfigForType(obsType models.ObservationType) (cfg struct {
+func (s *Service) laneConfigForType(_ models.ObservationType) (cfg struct {
 	MinScore       float64
 	TopK           int
 	RerankerWeight float64
 }) {
-	lane, ok := search.DefaultSearchLanes[string(obsType)]
-	if !ok {
-		lane = search.DefaultSearchLanes["default"]
-	}
+	// Lane config removed in v5 (US9/US11); return fixed defaults.
 	return struct {
 		MinScore       float64
 		TopK           int
 		RerankerWeight float64
-	}{MinScore: lane.MinScore, TopK: lane.TopK, RerankerWeight: lane.RerankerWeight}
+	}{MinScore: defaultMinScore, TopK: 0, RerankerWeight: 1.0}
 }
 
 func (s *Service) laneWeightMap() map[models.ObservationType]float64 {
-	weights := make(map[models.ObservationType]float64)
-	for name, lane := range search.DefaultSearchLanes {
-		weights[models.ObservationType(name)] = lane.RerankerWeight
-	}
-	return weights
+	// Lane weights removed in v5 (US9/US11); return empty map (no per-type weighting).
+	return make(map[models.ObservationType]float64)
 }
 
 func (s *Service) typedLaneMinScore() float64 {
-	minScore := 0.0
-	found := false
-	for _, lane := range search.DefaultSearchLanes {
-		if lane.MinScore <= 0 {
-			continue
-		}
-		if !found || lane.MinScore < minScore {
-			minScore = lane.MinScore
-			found = true
-		}
-	}
-	if !found {
-		return search.DefaultSearchLanes["default"].MinScore
-	}
-	return minScore
+	// Lane min-score removed in v5 (US9/US11); return fixed default.
+	return defaultMinScore
 }
 
 func (s *Service) applyTypedLaneSelection(observations []*models.Observation, rankingScores, thresholdScores map[int64]float64, limit int) []*models.Observation {
@@ -212,21 +195,11 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	if s.typeLanesEnabled() && len(clusteredObservations) > 0 && len(laneThresholdScores) > 0 {
 		clusteredObservations = s.applyTypedLaneSelection(clusteredObservations, similarityScores, laneThresholdScores, limit)
 	}
-	if len(clusteredObservations) > 0 {
-		search.ApplyCompositeScoring(clusteredObservations, similarityScores)
-		if s.typeLanesEnabled() {
-			search.ApplyLaneWeights(clusteredObservations, similarityScores, s.laneWeightMap())
-		}
-		if diversityScores, diversityErr := s.lookupDiversityScores(ctx, clusteredObservations); diversityErr == nil && len(diversityScores) > 0 {
-			search.ApplyDiversityPenalty(clusteredObservations, similarityScores, diversityScores)
-		}
-	}
-	if sessionBoost := s.sessionBoostFactor(); sessionBoost > 1.0 && len(clusteredObservations) > 0 {
-		twoHoursAgo := time.Now().Add(-2 * time.Hour)
-		if recentSessions, sessionErr := s.lookupRecentSessionIDs(ctx, project, twoHoursAgo); sessionErr == nil {
-			search.ApplySessionBoost(clusteredObservations, similarityScores, recentSessions, sessionBoost)
-		}
-	}
+	// search.ApplyCompositeScoring / ApplyLaneWeights / ApplyDiversityPenalty /
+	// ApplySessionBoost all lived in internal/search which was dropped in v5 (US9).
+	// With no vector scores (similarityScores is always empty in v5 FTS-only mode)
+	// these scoring passes were no-ops anyway — observations are already ordered by
+	// FTS rank + importance from the DB query.
 	if len(similarityScores) > 0 && len(clusteredObservations) > 0 {
 		sort.Slice(clusteredObservations, func(i, j int) bool {
 			return similarityScores[clusteredObservations[i].ID] > similarityScores[clusteredObservations[j].ID]
@@ -268,23 +241,14 @@ func (s *Service) getProjectThreshold(ctx context.Context, project string) float
 	if s.retrievalHooks != nil && s.retrievalHooks.getProjectThreshold != nil {
 		return s.retrievalHooks.getProjectThreshold(ctx, project, globalDefault)
 	}
-	if s.searchMgr == nil {
-		return globalDefault
-	}
-	return s.searchMgr.GetProjectThreshold(ctx, project, globalDefault)
+	// searchMgr removed in v5 (US9); return config default.
+	return globalDefault
 }
 
-func (s *Service) expandQueries(ctx context.Context, query string) ([]expansion.ExpandedQuery, string) {
-	if s.queryExpander == nil {
-		return []expansion.ExpandedQuery{{Query: query, Weight: 1.0, Source: "original"}}, ""
-	}
-	// QueryExpansion timeout and HyDE toggles removed in v5 (US11/US9).
-	cfg := expansion.DefaultConfig()
-	expandedQueries := s.queryExpander.Expand(ctx, query, cfg)
-	if len(expandedQueries) == 0 {
-		return []expansion.ExpandedQuery{{Query: query, Weight: 1.0, Source: "original"}}, ""
-	}
-	return expandedQueries, string(expandedQueries[0].Intent)
+// expandQueries returns the original query as a single-element slice.
+// Query expansion (HyDE, multi-query) was removed in v5 (US9/US11).
+func (s *Service) expandQueries(_ context.Context, query string) ([]string, string) {
+	return []string{query}, ""
 }
 
 func (s *Service) fetchObservationsByID(ctx context.Context, ids []int64, orderBy string, limit int) ([]*models.Observation, error) {

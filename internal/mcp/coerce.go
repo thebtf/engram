@@ -5,9 +5,24 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-
-	"github.com/thebtf/engram/internal/search"
 )
+
+// TimelineParams holds parsed parameters for timeline-style MCP tool calls.
+// Kept as a concrete struct so tests can marshal/unmarshal independently of
+// the handler implementation.
+type TimelineParams struct {
+	AnchorID  int64  `json:"anchor_id"`
+	DateStart int64  `json:"dateStart"`
+	DateEnd   int64  `json:"dateEnd"`
+	Query     string `json:"query"`
+	Project   string `json:"project"`
+	Concepts  string `json:"concepts"`
+	Files     string `json:"files"`
+	ObsType   string `json:"obs_type"`
+	Format    string `json:"format"`
+	Before    int    `json:"before"`
+	After     int    `json:"after"`
+}
 
 // parseArgs unmarshals JSON args into map[string]any for safe type coercion.
 // MCP clients may send numeric values as strings or floats; this intermediate
@@ -201,46 +216,6 @@ func coerceInt64Slice(v any) []int64 {
 		}
 	}
 	return result
-}
-
-// buildSearchParams constructs a SearchParams from a coerced map.
-// This replaces direct json.Unmarshal into SearchParams, which breaks
-// when MCP clients send numeric values as strings.
-func buildSearchParams(m map[string]any) search.SearchParams {
-	return search.SearchParams{
-		Query:             coerceString(m["query"], ""),
-		Type:              coerceString(m["type"], ""),
-		Project:           coerceString(m["project"], ""),
-		ObsType:           coerceString(m["obs_type"], ""),
-		Concepts:          coerceString(m["concepts"], ""),
-		Files:             coerceString(m["files"], ""),
-		Scope:             coerceString(m["scope"], ""),
-		OrderBy:           coerceString(m["orderBy"], ""),
-		Format:            coerceString(m["format"], ""),
-		Limit:             coerceInt(m["limit"], 0),
-		Offset:            coerceInt(m["offset"], 0),
-		DateStart:         coerceInt64(m["dateStart"], 0),
-		DateEnd:           coerceInt64(m["dateEnd"], 0),
-		IncludeGlobal:     coerceBool(m["include_global"], false),
-		ExcludeSuperseded: coerceBool(m["exclude_superseded"], false),
-	}
-}
-
-// buildTimelineParams constructs TimelineParams from a coerced map.
-func buildTimelineParams(m map[string]any) TimelineParams {
-	return TimelineParams{
-		AnchorID:  coerceInt64(m["anchor_id"], 0),
-		Query:     coerceString(m["query"], ""),
-		Before:    coerceInt(m["before"], 0),
-		After:     coerceInt(m["after"], 0),
-		Project:   coerceString(m["project"], ""),
-		Concepts:  coerceString(m["concepts"], ""),
-		Files:     coerceString(m["files"], ""),
-		ObsType:   coerceString(m["obs_type"], ""),
-		Format:    coerceString(m["format"], ""),
-		DateStart: coerceInt64(m["dateStart"], 0),
-		DateEnd:   coerceInt64(m["dateEnd"], 0),
-	}
 }
 
 // clampToInt safely converts a float64 to int, clamping to int range.

@@ -11,7 +11,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -254,13 +253,15 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		obsWithScores[i] = obsMap
 	}
 
-	// Build expansion info for response
+	// Build expansion info for response.
+	// v5 (US9): query expansion removed — expandedQueries is always a single-element
+	// []string containing the original query. Weight and source fields are omitted.
 	expansionInfo := make([]map[string]any, len(expandedQueries))
 	for i, eq := range expandedQueries {
 		expansionInfo[i] = map[string]any{
-			"query":  eq.Query,
-			"weight": eq.Weight,
-			"source": eq.Source,
+			"query":  eq,
+			"weight": 1.0,
+			"source": "original",
 		}
 	}
 
@@ -984,32 +985,17 @@ func (s *Service) handleSearchDecisions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	const maxDecisionSearchLimit = 100
-	limit := body.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-	if limit > maxDecisionSearchLimit {
-		limit = maxDecisionSearchLimit
-	}
-
-	params := search.SearchParams{
-		Query:   body.Query,
-		Project: body.Project,
-		Limit:   limit,
-	}
-
-	result, err := s.searchMgr.Decisions(r.Context(), params)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
+	// Decisions preset search was backed by search.Manager, dropped in v5 (US9).
+	// Return 501 Not Implemented so clients can distinguish "feature removed" from
+	// "no results". Use recall(action="search") via MCP instead.
+	_ = body.Limit
+	w.WriteHeader(http.StatusNotImplemented)
 	writeJSON(w, map[string]any{
 		"project":      body.Project,
 		"query":        body.Query,
-		"observations": result.Results,
-		"total_count":  result.TotalCount,
+		"observations": []any{},
+		"total_count":  0,
+		"deprecated":   "decisions preset search removed in v5 (US9); use recall(action=\"search\") via MCP",
 	})
 }
 

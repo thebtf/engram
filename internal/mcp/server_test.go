@@ -31,7 +31,6 @@ func TestServerSuite(t *testing.T) {
 func (s *ServerSuite) TestNewServer() {
 	server := NewServer(ServerOptions{Version: "1.0.0"})
 	s.NotNil(server)
-	s.Nil(server.searchMgr)
 	s.Equal("1.0.0", server.version)
 }
 
@@ -422,8 +421,9 @@ func TestHandleToolsList(t *testing.T) {
 	assert.Equal(t, len(primaryTools), len(tools), "default tools/list should return exactly %d tools", len(primaryTools))
 
 	// Legacy tools must NOT be present in default listing
+	// "search" and "decisions" dropped in v5 (US9) along with internal/search.
 	legacyTools := []string{
-		"search", "decisions", "find_by_file",
+		"find_by_file",
 		"bulk_delete_observations",
 	}
 	for _, name := range legacyTools {
@@ -454,11 +454,14 @@ func TestHandleToolsList(t *testing.T) {
 	}
 
 	// Removed tools must not appear in either listing (regression guard).
+	// Includes v5 (US9) removals: search, decisions (backed by internal/search, dropped).
 	removedTools := []string{
 		"trigger_maintenance",
 		"get_maintenance_stats",
 		"suggest_consolidations",
 		"run_consolidation",
+		"search",
+		"decisions",
 	}
 	for _, name := range removedTools {
 		assert.False(t, toolNames[name], "removed tool %s should not be in default listing", name)
@@ -584,7 +587,9 @@ func TestCallTool_InvalidArgs(t *testing.T) {
 	server := NewServer(ServerOptions{Version: "1.0.0"})
 	ctx := context.Background()
 
-	_, err := server.callTool(ctx, "search", json.RawMessage(`invalid json`))
+	// "search" was dropped in v5 (US9). Use a still-live tool (find_by_file) to
+	// exercise the invalid-JSON path in callTool.
+	_, err := server.callTool(ctx, "find_by_file", json.RawMessage(`invalid json`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid arguments")
 }
@@ -1320,48 +1325,8 @@ func TestHandleBatchTagByPattern_Validation(t *testing.T) {
 	}
 }
 
-// TestHandleExplainSearchRanking_Validation tests parameter validation.
-func TestHandleExplainSearchRanking_Validation(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	tests := []struct {
-		name        string
-		args        string
-		errContains string
-		wantErr     bool
-	}{
-		{
-			name:        "missing query",
-			args:        `{"top_n": 5}`,
-			wantErr:     true,
-			errContains: "query is required",
-		},
-		{
-			name:        "invalid json",
-			args:        `{invalid`,
-			wantErr:     true,
-			errContains: "invalid arguments",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := server.handleExplainSearchRanking(ctx, json.RawMessage(tt.args))
-			if tt.wantErr {
-				require.Error(t, err)
-				if tt.errContains != "" {
-					assert.Contains(t, err.Error(), tt.errContains)
-				}
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
+// TestHandleExplainSearchRanking_Validation was removed in v5 (US9):
+// handleExplainSearchRanking is deleted along with the search.Manager it explained.
 
 // TestHandleGetObservationRelationships_Validation tests parameter validation.
 func TestHandleGetObservationRelationships_Validation(t *testing.T) {
@@ -1453,47 +1418,6 @@ func TestHandleGetObservationScoringBreakdown_Validation(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestHandleTimeline_InvalidJSON tests timeline with invalid JSON.
-func TestHandleTimelineByQuery_EmptyQuery(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	// Empty query should error
-	_, err := server.handleTimelineByQuery(ctx, map[string]any{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "query is required")
-}
-
-// TestHandleTimeline_NoAnchorNoQuery tests timeline with no anchor and no query.
-func TestHandleTimeline_NoAnchorNoQuery(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	// No anchor_id and no query should return empty result
-	result, err := server.handleTimeline(ctx, map[string]any{})
-	require.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Empty(t, result.Results)
-}
-
-// TestHandleTimeline_WithDefaults tests timeline default values are applied.
-func TestHandleTimeline_WithDefaults(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	// With anchor_id = 0, should return empty result
-	result, err := server.handleTimeline(ctx, map[string]any{"anchor_id": float64(0)})
-	require.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Empty(t, result.Results)
 }
 
 // =============================================================================
@@ -1701,7 +1625,6 @@ func TestServerFields(t *testing.T) {
 	server := NewServer(ServerOptions{Version: "2.0.0"})
 
 	assert.Equal(t, "2.0.0", server.version)
-	assert.Nil(t, server.searchMgr)
 	assert.NotNil(t, server.stdin)
 	assert.NotNil(t, server.stdout)
 }
@@ -2487,37 +2410,11 @@ func TestCallTool_AllSpecialTools(t *testing.T) {
 	}
 }
 
-// TestCallTool_SearchTools tests search-based tools in callTool.
-func TestCallTool_SearchTools(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	// All search tools should fail with invalid JSON or when searchMgr is nil
-	searchTools := []string{
-		"search",
-		"timeline",
-		"decisions",
-		"changes",
-		"how_it_works",
-		"find_by_concept",
-		"find_by_file",
-		"find_by_type",
-		"get_recent_context",
-		"get_context_timeline",
-		"get_timeline_by_query",
-	}
-
-	for _, toolName := range searchTools {
-		t.Run(toolName+"_invalid_json", func(t *testing.T) {
-			t.Parallel()
-			_, err := server.callTool(ctx, toolName, json.RawMessage(`{invalid`))
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "invalid")
-		})
-	}
-}
+// TestCallTool_SearchTools was removed in v5 (US9):
+// search, timeline, decisions, changes, how_it_works, find_by_concept, find_by_type,
+// get_recent_context, get_context_timeline, get_timeline_by_query — all dropped with
+// the internal/search package. find_by_file remains and is covered by
+// TestHandleFindByFileContext_ProjectRequired.
 
 func TestHandleFindByFileContext_ProjectRequired(t *testing.T) {
 	t.Parallel()
@@ -2527,31 +2424,6 @@ func TestHandleFindByFileContext_ProjectRequired(t *testing.T) {
 	_, err := server.handleFindByFileContext(context.Background(), json.RawMessage(`{"file_path":"internal/auth/service.go"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "project is required")
-}
-
-// TestHandleTimeline_EmptyMap tests timeline with empty map returns empty result.
-func TestHandleTimeline_EmptyMap(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	result, err := server.handleTimeline(ctx, map[string]any{})
-	require.NoError(t, err)
-	assert.Empty(t, result.Results)
-}
-
-// TestHandleTimelineByQuery_ValidationExtended tests timeline_by_query validation.
-func TestHandleTimelineByQuery_ValidationExtended(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	// Missing query should error
-	_, err := server.handleTimelineByQuery(ctx, map[string]any{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "query is required")
 }
 
 // =============================================================================

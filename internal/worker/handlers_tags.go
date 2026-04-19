@@ -9,7 +9,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/search"
 )
 
 // batchTagRequest is the JSON body for POST /api/observations/batch-tag.
@@ -336,45 +335,16 @@ func (s *Service) handleGetObservationsByTag(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	if s.searchMgr == nil {
-		http.Error(w, "search manager not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	searchParams := search.SearchParams{
-		Query:    tag,
-		Type:     "observations",
-		Project:  project,
-		Limit:    limit,
-		Concepts: tag,
-	}
-
-	result, err := s.searchMgr.UnifiedSearch(r.Context(), searchParams)
-	if err != nil {
-		log.Error().Err(err).Str("tag", tag).Msg("search by tag failed")
-		http.Error(w, "search: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Filter results to only include observations with the exact tag
-	var filtered []search.SearchResult
-	for _, res := range result.Results {
-		if res.Type != "observation" {
-			continue
-		}
-		if concepts, ok := res.Metadata["concepts"].([]any); ok {
-			for _, c := range concepts {
-				if cs, ok := c.(string); ok && cs == tag {
-					filtered = append(filtered, res)
-					break
-				}
-			}
-		}
-	}
-
+	// Tag-based search was backed by search.Manager.UnifiedSearch, dropped in v5 (US9).
+	// Return 501 Not Implemented so clients can distinguish "feature removed" from
+	// "no results". Tags/concepts on observations will also disappear when US3-PR-B
+	// drops the observations table.
+	_ = limit
+	w.WriteHeader(http.StatusNotImplemented)
 	writeJSON(w, map[string]any{
 		"tag":          tag,
-		"observations": filtered,
-		"count":        len(filtered),
+		"observations": []any{},
+		"count":        0,
+		"deprecated":   "tag-based observation search removed in v5 (US9); observations table removal pending US3-PR-B",
 	})
 }

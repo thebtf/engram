@@ -56,9 +56,8 @@ func (s *Service) applyLLMFilter(ctx context.Context, project, query string, obs
 	var relevantIDs []int64
 	if s.retrievalHooks != nil && s.retrievalHooks.filterByRelevance != nil {
 		relevantIDs = s.retrievalHooks.filterByRelevance(ctx, candidates, project, query)
-	} else if s.llmFilter != nil {
-		relevantIDs = s.llmFilter.FilterByRelevance(ctx, candidates, project, query)
 	} else {
+		// llmFilter removed in v5 (US9) — no LLM-based relevance filter path.
 		return observations
 	}
 	if len(relevantIDs) == 0 {

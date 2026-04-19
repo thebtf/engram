@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/privacy"
-	"github.com/thebtf/engram/internal/search"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -302,10 +301,11 @@ func truncateTitle(content string, maxLen int) string {
 	return truncated + "..."
 }
 
-// handleRecallMemory retrieves observations by semantic search.
+// handleRecallMemory retrieves observations via FTS (v5: vector search removed).
+// Falls back to a simple substring filter when observationStore is unavailable.
 func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.searchMgr == nil {
-		return "", fmt.Errorf("search manager not available")
+	if s.observationStore == nil {
+		return "", fmt.Errorf("recall_memory: observation store not configured")
 	}
 
 	m, err := parseArgs(args)
@@ -313,54 +313,65 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		return "", err
 	}
 
-	var params struct {
-		Tags    []string
-		Query   string
-		Type    string
-		Format  string
-		Limit   int
-		Project string
-	}
-	params.Tags = coerceStringSlice(m["tags"])
-	params.Query = coerceString(m["query"], "")
-	params.Type = coerceString(m["type"], "")
-	params.Format = coerceString(m["format"], "")
-	params.Limit = coerceInt(m["limit"], 0)
-	params.Project = coerceString(m["project"], "")
-	if params.Query == "" {
+	query := coerceString(m["query"], "")
+	obsType := coerceString(m["type"], "")
+	format := coerceString(m["format"], "")
+	limit := coerceInt(m["limit"], 0)
+	project := strings.TrimSpace(coerceString(m["project"], ""))
+	tags := coerceStringSlice(m["tags"])
+
+	if query == "" {
 		return "", fmt.Errorf("query is required")
 	}
-	if params.Limit <= 0 {
-		params.Limit = 10
+	if limit <= 0 {
+		limit = 10
 	}
-	if params.Limit > 50 {
-		params.Limit = 50
+	if limit > 50 {
+		limit = 50
 	}
-	if params.Format == "" {
-		params.Format = "text"
-	}
-
-	searchParams := search.SearchParams{
-		Query:         params.Query,
-		Project:       strings.TrimSpace(params.Project),
-		Limit:         params.Limit,
-		IncludeGlobal: true,
-		Format:        "full",
-		Type:          "observations",
-	}
-	if len(params.Tags) > 0 {
-		searchParams.Concepts = strings.Join(params.Tags, ",")
-	}
-	if params.Type != "" {
-		searchParams.ObsType = params.Type
+	if format == "" {
+		format = "text"
 	}
 
-	result, err := s.searchMgr.UnifiedSearch(ctx, searchParams)
+	observations, err := s.observationStore.SearchObservationsFTS(ctx, query, project, limit*4)
 	if err != nil {
-		return "", fmt.Errorf("search: %w", err)
+		return "", fmt.Errorf("recall_memory: %w", err)
 	}
 
-	switch params.Format {
+	// Filter by type when requested.
+	if obsType != "" {
+		filtered := make([]*models.Observation, 0, len(observations))
+		for _, obs := range observations {
+			if string(obs.Type) == obsType {
+				filtered = append(filtered, obs)
+			}
+		}
+		observations = filtered
+	}
+
+	// Filter by concept tags when requested.
+	if len(tags) > 0 {
+		tagSet := make(map[string]struct{}, len(tags))
+		for _, t := range tags {
+			tagSet[t] = struct{}{}
+		}
+		filtered := make([]*models.Observation, 0, len(observations))
+		for _, obs := range observations {
+			for _, c := range obs.Concepts {
+				if _, ok := tagSet[c]; ok {
+					filtered = append(filtered, obs)
+					break
+				}
+			}
+		}
+		observations = filtered
+	}
+
+	if len(observations) > limit {
+		observations = observations[:limit]
+	}
+
+	switch format {
 	case "items":
 		type item struct {
 			Concepts  []string `json:"concepts,omitempty"`
@@ -370,54 +381,41 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 			Narrative string   `json:"narrative,omitempty"`
 			ID        int64    `json:"id"`
 		}
-		items := make([]item, 0, len(result.Results))
-		for _, r := range result.Results {
-			var concepts []string
-			if c, ok := r.Metadata["concepts"]; ok {
-				switch cv := c.(type) {
-				case []string:
-					concepts = cv
-				case []any:
-					for _, v := range cv {
-						if sv, ok := v.(string); ok {
-							concepts = append(concepts, sv)
-						}
-					}
-				}
-			}
+		items := make([]item, 0, len(observations))
+		for _, obs := range observations {
 			items = append(items, item{
-				ID:        r.ID,
-				Title:     r.Title,
-				Type:      r.Type,
-				Scope:     r.Scope,
-				Narrative: r.Content,
-				Concepts:  concepts,
+				ID:        obs.ID,
+				Title:     obs.Title.String,
+				Type:      string(obs.Type),
+				Scope:     string(obs.Scope),
+				Narrative: obs.Narrative.String,
+				Concepts:  []string(obs.Concepts),
 			})
 		}
 		out, _ := json.MarshalIndent(items, "", "  ")
 		return string(out), nil
 
 	case "detailed":
-		out, err := json.MarshalIndent(result, "", "  ")
+		out, err := json.MarshalIndent(observations, "", "  ")
 		if err != nil {
 			return "", fmt.Errorf("marshal result: %w", err)
 		}
 		return string(out), nil
 
 	default: // "text"
-		if len(result.Results) == 0 {
+		if len(observations) == 0 {
 			return "No memories found matching the query.", nil
 		}
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("Found %d memories for query: %q\n\n", len(result.Results), params.Query))
-		for i, r := range result.Results {
+		sb.WriteString(fmt.Sprintf("Found %d memories for query: %q\n\n", len(observations), query))
+		for i, obs := range observations {
 			scopeTag := ""
-			if r.Scope == "global" {
+			if obs.Scope == models.ScopeGlobal {
 				scopeTag = " [GLOBAL]"
 			}
-			sb.WriteString(fmt.Sprintf("%d. [%s]%s %s\n", i+1, strings.ToUpper(r.Type), scopeTag, r.Title))
-			if r.Content != "" {
-				content := r.Content
+			sb.WriteString(fmt.Sprintf("%d. [%s]%s %s\n", i+1, strings.ToUpper(string(obs.Type)), scopeTag, obs.Title.String))
+			if obs.Narrative.String != "" {
+				content := obs.Narrative.String
 				if len(content) > 300 {
 					content = content[:300] + "..."
 				}
