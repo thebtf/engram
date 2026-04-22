@@ -18,7 +18,7 @@ import (
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
-	"github.com/thebtf/engram/internal/db/gorm"
+	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
 )
@@ -371,7 +371,7 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 | Tool | Purpose | Key Actions |
 |------|---------|-------------|
 | ` + "`recall`" + ` | **Search & retrieve** memories | search (default), preset, by_file, by_concept, by_type, similar, timeline, related, get, sessions, explain, reasoning |
-| ` + "`store`" + ` | **Save** memories, edit, merge, extract | create (default), edit, merge, import, extract |
+| ` + "`store`" + ` | **Save** memories, edit, merge, import | create (default), edit, merge, import |
 | ` + "`feedback`" + ` | **Rate** quality, suppress, record outcomes | rate, suppress, outcome |
 | ` + "`issues`" + ` | **Cross-project issue tracking** between agents | create, list, get, update, comment, reopen |
 | ` + "`vault`" + ` | **Credentials** — encrypted AES-256-GCM | store, get, list, delete, status |
@@ -439,7 +439,7 @@ After completing work, store observations about:
 
 **Bugs/tasks for OTHER projects → use ` + "`issues`" + `**, not ` + "`store`" + `.** ` + "`store`" + ` is for knowledge. ` + "`issues`" + ` is for actionable work items.
 
-Use ` + "`store(action=\"extract\", content=\"...\")`" + ` to let the LLM extract structured observations from raw content automatically.
+Use ` + "`store(action=\"import\", path=\"...\")`" + ` to bulk import pre-authored observations when you already have them in file form.
 
 ## Workflow Patterns
 
@@ -671,8 +671,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
-			{
-				Name:        "search_sessions",
+		{
+			Name:        "search_sessions",
 			Description: "Full-text search across indexed Claude Code sessions.",
 			tier:        tierAdmin,
 			InputSchema: map[string]any{
@@ -863,7 +863,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
-	if s.memoryStore != nil && crypto.VaultExists(config.Get()) {
+	if config.GetDatabaseDSN() != "" && crypto.VaultExists(config.Get()) {
 		tools = append(tools,
 			Tool{
 				Name:        "store_credential",
@@ -1479,7 +1479,7 @@ func (s *Server) handleFindSimilarObservations(ctx context.Context, args json.Ra
 		"observations":   []any{},
 		"count":          0,
 		"min_similarity": params.MinSimilarity,
-		"note":           "Vector similarity search removed in v5; use the 'search' tool for FTS-based retrieval",
+		"note":           "Vector similarity search removed in v5; use recall(action=\"search\") for FTS-based retrieval",
 	}
 
 	output, err := json.Marshal(response)
@@ -1526,7 +1526,7 @@ func (s *Server) handleMergeObservations(_ context.Context, _ json.RawMessage) (
 
 // handleGetObservation — removed in v5 (US3); observations table dropped.
 func (s *Server) handleGetObservation(_ context.Context, _ json.RawMessage) (string, error) {
-	return "", fmt.Errorf("get_observation removed in v5 (US3) — observations table dropped")
+	return "", fmt.Errorf("get_observation removed in v5 (US3) — use recall(action=\"get\") instead")
 }
 
 // handleEditObservation — removed in v5 (US3); observations table dropped.
@@ -1613,13 +1613,53 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 		Actions:       []string{},
 	}
 
-	// Check database health
+	// Check database health with a real ping/query against the configured database.
 	dbHealth := &SubsystemHealth{
-		Status:  "healthy",
-		Message: "Database subsystem healthy in v5; observation-era counters removed",
+		Status:  "unhealthy",
+		Message: "Database subsystem not configured",
 		Metrics: map[string]any{
-			"note": "Static entities and memories replaced observation-era health counters in v5",
+			"health_check": "gorm store ping + SELECT 1 latency check",
 		},
+	}
+	dsn := config.GetDatabaseDSN()
+	if dsn != "" {
+		store, err := gorm.NewStore(gorm.Config{DSN: dsn})
+		if err != nil {
+			dbHealth.Message = "Database health check failed: " + err.Error()
+			report.HealthScore -= 50
+			report.Actions = append(report.Actions, "Check database connectivity and PostgreSQL DSN configuration")
+		} else {
+			defer func() {
+				_ = store.Close()
+			}()
+			health := store.HealthCheckForce(ctx)
+			dbHealth.Status = health.Status
+			if health.Error != "" {
+				dbHealth.Message = "Database health check failed: " + health.Error
+			} else {
+				dbHealth.Message = "Database health check succeeded"
+				if health.Warning != "" {
+					dbHealth.Warnings = append(dbHealth.Warnings, health.Warning)
+				}
+			}
+			dbHealth.Metrics["query_latency_ms"] = health.QueryLatency.Milliseconds()
+			dbHealth.Metrics["open_connections"] = health.PoolStats.OpenConnections
+			dbHealth.Metrics["in_use_connections"] = health.PoolStats.InUse
+			dbHealth.Metrics["idle_connections"] = health.PoolStats.Idle
+			switch health.Status {
+			case "healthy":
+				// no-op
+			case "degraded":
+				report.HealthScore -= 20
+				report.Actions = append(report.Actions, "Investigate database latency or connection pool contention")
+			default:
+				report.HealthScore -= 50
+				report.Actions = append(report.Actions, "Check database connectivity and PostgreSQL availability")
+			}
+		}
+	} else {
+		report.HealthScore -= 50
+		report.Actions = append(report.Actions, "Configure PostgreSQL DSN before calling check_system_health")
 	}
 	report.Subsystems["database"] = dbHealth
 

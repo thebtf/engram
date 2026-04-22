@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -591,6 +592,20 @@ func (s *Service) handleIndexSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := store.UpsertSession(r.Context(), indexedMap); err != nil {
+		if errors.Is(err, sessions.ErrIndexedSessionsUnsupported) {
+			log.Info().
+				Str("session_id", meta.SessionID).
+				Str("workstation_id", workstationID).
+				Int("exchange_count", meta.ExchangeCount).
+				Msg("Session indexing skipped: indexed_sessions capability disabled in v5")
+			writeJSON(w, map[string]any{
+				"status":         "disabled",
+				"session_id":     meta.SessionID,
+				"exchange_count": meta.ExchangeCount,
+				"note":           "indexed_sessions capability removed in v5; request accepted but not stored",
+			})
+			return
+		}
 		log.Error().Err(err).Str("session_id", meta.SessionID).Msg("Failed to upsert indexed session")
 		http.Error(w, "failed to store session", http.StatusInternalServerError)
 		return

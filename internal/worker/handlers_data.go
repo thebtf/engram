@@ -170,16 +170,15 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 
 // handleGetSummaries godoc
 // @Summary List summaries
-// @Description Returns recent session summaries with optional semantic search via vector store.
+// @Description Session summaries endpoint removed in v5. Returns 501 Not Implemented after request validation.
 // @Tags Observations
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project"
 // @Param query query string false "Semantic search query"
 // @Param limit query int false "Number of results (default 50)"
-// @Success 200 {array} models.SessionSummary
+// @Success 501 {string} string "session summaries endpoint removed in v5; session_summaries persistence was dropped in US3-PR-B"
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
 // @Router /api/summaries [get]
 func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultSummariesLimit)
@@ -200,16 +199,15 @@ func (s *Service) handleGetSummaries(w http.ResponseWriter, r *http.Request) {
 
 // handleGetPrompts godoc
 // @Summary List user prompts
-// @Description Returns recent user prompts with optional semantic search via vector store.
+// @Description User prompts endpoint removed in v5. Returns 501 Not Implemented after request validation.
 // @Tags Observations
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project"
 // @Param query query string false "Semantic search query"
 // @Param limit query int false "Number of results (default 100)"
-// @Success 200 {array} models.UserPromptWithSession
+// @Success 501 {string} string "user prompts endpoint removed in v5; prompt persistence was dropped in US3-PR-B"
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
 // @Router /api/prompts [get]
 func (s *Service) handleGetPrompts(w http.ResponseWriter, r *http.Request) {
 	limit := gorm.ParseLimitParam(r, DefaultPromptsLimit)
@@ -523,17 +521,15 @@ type UpdateObservationRequest struct {
 
 // handleUpdateObservation godoc
 // @Summary Update an observation
-// @Description Updates an existing observation's fields. Only provided fields are updated.
+// @Description Observation update endpoint removed in v5. Returns 501 Not Implemented after request validation.
 // @Tags Observations
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int true "Observation ID"
 // @Param body body UpdateObservationRequest true "Fields to update"
-// @Success 200 {object} map[string]interface{}
+// @Success 501 {string} string "observation update endpoint removed in v5; observations persistence was dropped in US3-PR-B"
 // @Failure 400 {string} string "bad request"
-// @Failure 404 {string} string "observation not found"
-// @Failure 500 {string} string "internal error"
 // @Router /api/observations/{id} [put]
 func (s *Service) handleUpdateObservation(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r.PathValue("id"), "observation")
@@ -555,15 +551,13 @@ func (s *Service) handleUpdateObservation(w http.ResponseWriter, r *http.Request
 
 // handleGetObservationByID godoc
 // @Summary Get observation by ID
-// @Description Returns a single observation by its ID.
+// @Description Observation lookup endpoint removed in v5. Returns 501 Not Implemented after request validation.
 // @Tags Observations
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int true "Observation ID"
-// @Success 200 {object} models.Observation
+// @Success 501 {string} string "observation lookup endpoint removed in v5; observations persistence was dropped in US3-PR-B"
 // @Failure 400 {string} string "bad request"
-// @Failure 404 {string} string "observation not found"
-// @Failure 500 {string} string "internal error"
 // @Router /api/observations/{id} [get]
 func (s *Service) handleGetObservationByID(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r.PathValue("id"), "observation")
@@ -661,15 +655,14 @@ type bulkDeleteRequest struct {
 
 // handleBulkDeleteREST godoc
 // @Summary Bulk delete observations
-// @Description Deletes multiple observations by ID. Maximum 100 per request.
+// @Description Bulk observation delete endpoint removed in v5. Returns 501 Not Implemented after request validation.
 // @Tags Observations
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param body body bulkDeleteRequest true "Observation IDs to delete"
-// @Success 200 {object} object
+// @Success 501 {string} string "bulk observation delete endpoint removed in v5; observations persistence was dropped in US3-PR-B"
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
 // @Router /api/observations/bulk [delete]
 func (s *Service) handleBulkDeleteREST(w http.ResponseWriter, r *http.Request) {
 	var req bulkDeleteRequest
@@ -698,15 +691,14 @@ type bulkScopeChangeRequest struct {
 
 // handleBulkScopeChange godoc
 // @Summary Bulk update observation scope
-// @Description Changes the scope of multiple observations to either "global" or "project".
+// @Description Bulk observation scope endpoint removed in v5. Returns 501 Not Implemented after request validation.
 // @Tags Observations
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param body body bulkScopeChangeRequest true "IDs and new scope"
-// @Success 200 {object} object
+// @Success 501 {string} string "bulk observation scope endpoint removed in v5; observations persistence was dropped in US3-PR-B"
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
 // @Router /api/observations/bulk-scope [patch]
 func (s *Service) handleBulkScopeChange(w http.ResponseWriter, r *http.Request) {
 	var req bulkScopeChangeRequest

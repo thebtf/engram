@@ -26,10 +26,41 @@ func runMigrations(db *gorm.DB) error {
 		// Keep the historical chain self-contained for fresh databases even though
 		// later PR-B drop migrations remove observations/session_summaries again.
 		// sdk_sessions must remain because SessionStore is still wired.
+		//
+		// NOTE: do not rely solely on the current pkg/models structs here. Fresh-install
+		// replay must create the historical baseline columns that later ALTER/INDEX steps
+		// expect (for example session_summaries.importance_score). Upgrades from older
+		// databases already have these columns; fresh DBs need them created up front.
 		{
 			ID: "001_core_tables",
 			Migrate: func(tx *gorm.DB) error {
-				return tx.AutoMigrate(&SDKSession{}, &models.Observation{}, &models.SessionSummary{})
+				if err := tx.AutoMigrate(&SDKSession{}, &models.Observation{}); err != nil {
+					return err
+				}
+				sqls := []string{
+					`CREATE TABLE IF NOT EXISTS session_summaries (
+						id BIGSERIAL PRIMARY KEY,
+						sdk_session_id TEXT NOT NULL,
+						project TEXT NOT NULL,
+						request TEXT,
+						investigated TEXT,
+						learned TEXT,
+						completed TEXT,
+						next_steps TEXT,
+						notes TEXT,
+						prompt_number BIGINT,
+						discovery_tokens BIGINT NOT NULL DEFAULT 0,
+						created_at TEXT NOT NULL DEFAULT NOW()::text,
+						created_at_epoch BIGINT NOT NULL DEFAULT 0,
+						importance_score DOUBLE PRECISION NOT NULL DEFAULT 0
+					)`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 001: %w", err)
+					}
+				}
+				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
 				return tx.Migrator().DropTable("sdk_sessions", "observations", "session_summaries")
@@ -37,12 +68,30 @@ func runMigrations(db *gorm.DB) error {
 		},
 
 		// Migration 002: User prompts table.
-		// Keep the base table creation so historical migration 003 can ALTER it on
-		// fresh databases; PR-B still drops the table later in 100_drop_user_prompts.
+		// Keep the base table creation self-contained so historical migration 003 and later
+		// project-rewrite migrations can ALTER/UPDATE the table on fresh databases.
 		{
 			ID: "002_user_prompts",
 			Migrate: func(tx *gorm.DB) error {
-				return tx.AutoMigrate(&models.UserPrompt{})
+				sqls := []string{
+					`CREATE TABLE IF NOT EXISTS user_prompts (
+						id BIGSERIAL PRIMARY KEY,
+						claude_session_id TEXT NOT NULL,
+						sdk_session_id TEXT NOT NULL DEFAULT '',
+						project TEXT NOT NULL DEFAULT '',
+						prompt_number INTEGER NOT NULL DEFAULT 0,
+						prompt_text TEXT NOT NULL,
+						matched_observations INTEGER NOT NULL DEFAULT 0,
+						created_at TEXT NOT NULL DEFAULT NOW()::text,
+						created_at_epoch BIGINT NOT NULL DEFAULT 0
+					)`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 002: %w", err)
+					}
+				}
+				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
 				return tx.Migrator().DropTable("user_prompts")

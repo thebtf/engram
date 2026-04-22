@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	gormlib "gorm.io/gorm"
 	"github.com/thebtf/engram/internal/backfill"
 	"github.com/thebtf/engram/internal/backfill/extract"
 	"github.com/thebtf/engram/internal/privacy"
@@ -321,6 +323,10 @@ func vaultStoreDetectedSecrets(ctx context.Context, s *Service, text, project st
 	for _, secret := range secrets {
 		_, err := credentialStore.Get(ctx, project, secret.Name)
 		if err == nil {
+			continue
+		}
+		if !errors.Is(err, gormlib.ErrRecordNotFound) {
+			log.Warn().Err(err).Str("name", secret.Name).Msg("backfill: failed to check existing credential")
 			continue
 		}
 

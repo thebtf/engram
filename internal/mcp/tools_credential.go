@@ -33,10 +33,6 @@ func (s *Server) getVault() (*crypto.Vault, error) {
 // database DSN using only public constructors. This removes the prior reflect/unsafe
 // field access while keeping the change local to MCP wiring.
 func (s *Server) credentialStore() (*gormstore.CredentialStore, error) {
-	if s.memoryStore == nil {
-		return nil, fmt.Errorf("credential store not available")
-	}
-
 	dsn := config.GetDatabaseDSN()
 	if dsn == "" {
 		return nil, fmt.Errorf("credential store not available: database DSN not configured")
