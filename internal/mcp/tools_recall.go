@@ -73,7 +73,7 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 		return s.handleReasoningSearch(ctx, args)
 
 	case "hit_rate":
-		return s.handleHitRateAnalytics(ctx, args)
+		return "", fmt.Errorf("recall: action %q not supported in v5 (hit rate analytics depended on observations/injection_log)", action)
 
 	// Palace actions
 	case "wake_up":
@@ -110,7 +110,6 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	}
 
 	// List returns created_at DESC, project-filtered results.
-	// For an empty project, fallback to observationStore for backward compat.
 	if project == "" {
 		// No project scope: return a helpful message rather than silently
 		// returning zero rows (the project param is required by List).
@@ -187,81 +186,10 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	return string(output), nil
 }
 
-// handleHitRateAnalytics returns noise_candidate and high_value observations from concepts.
-func (s *Server) handleHitRateAnalytics(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	project := coerceString(m["project"], "")
-	limit := coerceInt(m["limit"], 20)
-
-	db := s.observationStore.GetDB().WithContext(ctx)
-
-	type hitRateObs struct {
-		ID    int64  `gorm:"column:id"`
-		Title string `gorm:"column:title"`
-		Type  string `gorm:"column:type"`
-		Flag  string `gorm:"column:flag"`
-	}
-
-	var results []hitRateObs
-
-	// Find observations with noise_candidate or high_value in concepts
-	sql := `
-		SELECT id, COALESCE(title, '') as title, type,
-			CASE
-				WHEN concepts::text LIKE '%noise_candidate%' THEN 'noise_candidate'
-				WHEN concepts::text LIKE '%high_value%' THEN 'high_value'
-			END as flag
-		FROM observations
-		WHERE (concepts::text LIKE '%noise_candidate%' OR concepts::text LIKE '%high_value%')
-		AND status = 'active'`
-	params := []interface{}{}
-	if project != "" {
-		sql += " AND project = ?"
-		params = append(params, project)
-	}
-	sql += " ORDER BY importance_score DESC LIMIT ?"
-	params = append(params, limit)
-
-	if err := db.Raw(sql, params...).Scan(&results).Error; err != nil {
-		return "", fmt.Errorf("hit_rate query: %w", err)
-	}
-
-	if len(results) == 0 {
-		return "No hit rate analytics data available. Hit rate analytics is disabled in v5 (injection_log was dropped in US1).", nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## Hit Rate Analytics (%d observations)\n\n", len(results)))
-
-	noiseCount, starCount := 0, 0
-	sb.WriteString("### Noise Candidates (injected 10+ times, never cited)\n")
-	for _, r := range results {
-		if r.Flag == "noise_candidate" {
-			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", r.ID, r.Title, r.Type))
-			noiseCount++
-		}
-	}
-	if noiseCount == 0 {
-		sb.WriteString("None found.\n")
-	}
-
-	sb.WriteString("\n### High Value (injected 5+ times, >50% citation rate)\n")
-	for _, r := range results {
-		if r.Flag == "high_value" {
-			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", r.ID, r.Title, r.Type))
-			starCount++
-		}
-	}
-	if starCount == 0 {
-		sb.WriteString("None found.\n")
-	}
-
-	sb.WriteString(fmt.Sprintf("\nSummary: %d noise, %d high-value\n", noiseCount, starCount))
-	return sb.String(), nil
+// handleHitRateAnalytics was observation-backed in pre-v5 engram.
+// v5 removed the underlying observations/injection_log analytics path.
+func (s *Server) handleHitRateAnalytics(context.Context, json.RawMessage) (string, error) {
+	return "", fmt.Errorf("hit_rate analytics not available in v5 (observation/injection_log pipeline removed)")
 }
 
 // handleReasoningSearch retrieves reasoning traces by project.

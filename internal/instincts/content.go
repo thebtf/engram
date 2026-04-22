@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/internal/db/gorm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,51 +44,10 @@ func ParseContent(name, content string) (*Instinct, error) {
 }
 
 // ImportFromContent imports instincts from file content sent over the wire.
-// This is the client-server counterpart to Import() which reads from disk.
-func ImportFromContent(ctx context.Context, files []InstinctFile, obsStore *gorm.ObservationStore) (*ImportResult, error) {
-	var instincts []*Instinct
-	var parseErrors []error
-
-	for _, f := range files {
-		if !strings.HasSuffix(f.Name, ".md") {
-			continue
-		}
-		inst, err := ParseContent(f.Name, f.Content)
-		if err != nil {
-			parseErrors = append(parseErrors, err)
-			continue
-		}
-		instincts = append(instincts, inst)
-	}
-
-	result := &ImportResult{
-		Total: len(instincts) + len(parseErrors),
-	}
-
-	for _, e := range parseErrors {
-		result.Errors = append(result.Errors, e.Error())
-	}
-
-	for _, inst := range instincts {
-		parsed := ConvertToObservation(inst)
-		obsID, _, err := obsStore.StoreObservation(ctx, instinctSessionID, instinctProject, parsed, 0, 0)
-		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("store observation for %s: %v", inst.ID, err))
-			continue
-		}
-
-		importance := InstinctImportanceScore(inst.Confidence)
-		if err := obsStore.UpdateImportanceScore(ctx, obsID, importance); err != nil {
-			log.Warn().Err(err).Str("id", inst.ID).Msg("Failed to update importance score")
-		}
-
-		result.Imported++
-		log.Info().Str("id", inst.ID).Str("trigger", inst.Trigger).Msg("Imported instinct")
-	}
-
-	if result.Imported == 0 && len(result.Errors) > 0 {
-		return result, fmt.Errorf("no instincts imported: %d errors", len(result.Errors))
-	}
-
-	return result, nil
+// v5 (US3): ObservationStore removed; import is disabled until chunk 3 wires
+// the MemoryStore replacement. Returns an error explaining the situation.
+func ImportFromContent(ctx context.Context, files []InstinctFile) (*ImportResult, error) {
+	_ = ctx
+	_ = files
+	return nil, fmt.Errorf("instinct import disabled in v5 (US3) — MemoryStore wiring pending in chunk 3")
 }

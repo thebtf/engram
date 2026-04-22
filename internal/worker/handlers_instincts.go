@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/instincts"
 )
 
@@ -27,7 +26,7 @@ type InstinctsImportRequest struct {
 // @Failure 400 {string} string "invalid path"
 // @Failure 404 {string} string "directory not found"
 // @Failure 500 {string} string "import failed"
-// @Failure 503 {string} string "observation store not initialized"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/instincts/import [post]
 func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) {
 	var params InstinctsImportRequest
@@ -39,7 +38,8 @@ func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Resolve and validate path against allowed base directory
+	// Resolve and validate path against allowed base directory so callers keep the
+	// same request contract even though filesystem-based import was removed in v5.
 	dir, err := instincts.ResolveDir(params.Path)
 	if err != nil {
 		http.Error(w, "Invalid path: "+err.Error(), http.StatusBadRequest)
@@ -51,22 +51,11 @@ func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	s.initMu.RLock()
-	obsStore := s.observationStore
-	s.initMu.RUnlock()
-
-	if obsStore == nil {
-		http.Error(w, "Observation store not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
-	result, importErr := instincts.Import(r.Context(), dir, obsStore)
-	if importErr != nil {
-		log.Error().Err(importErr).Msg("Instinct import failed")
-		http.Error(w, "Import failed: "+importErr.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	w.WriteHeader(http.StatusNotImplemented)
+	writeJSON(w, map[string]any{
+		"error":      "removed_in_v5",
+		"path":       dir,
+		"deprecated": true,
+		"message":    "filesystem instinct import no longer persists observations in v5; use the MCP import_instincts tool with 'files' content until memory-backed REST import exists",
+	})
 }

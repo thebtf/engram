@@ -4,21 +4,18 @@ package worker
 import (
 	"compress/gzip"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/thebtf/engram/internal/sessions"
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/pkg/models"
-	"github.com/rs/zerolog/log"
 )
 
 // SessionInitRequest is the request body for session initialization.
@@ -109,48 +106,6 @@ func (s *Service) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 	// Clean prompt
 	cleanedPrompt := privacy.Clean(req.Prompt)
 
-	// DUPLICATE DETECTION: Check if this exact prompt was already saved recently.
-	// This prevents the bug where the hook fires multiple times for the same user action,
-	// creating many duplicate prompts with incrementing numbers.
-	if existingID, existingNum, found := s.promptStore.FindRecentPromptByText(r.Context(), req.ClaudeSessionID, cleanedPrompt, DuplicatePromptWindowSeconds); found {
-		// Get or create session (idempotent)
-		sessionID, _ := s.sessionStore.CreateSDKSession(r.Context(), req.ClaudeSessionID, req.Project, cleanedPrompt)
-
-		log.Debug().
-			Int64("sessionId", sessionID).
-			Int("promptNumber", existingNum).
-			Int64("promptId", existingID).
-			Msg("Duplicate prompt detected - returning existing")
-
-		// Return existing prompt data without incrementing or saving again
-		writeJSON(w, SessionInitResponse{
-			SessionDBID:  sessionID,
-			PromptNumber: existingNum,
-		})
-		return
-	}
-
-	// CROSS-SESSION DUPLICATE DETECTION: Check across ALL sessions.
-	// When hooks fire from different session IDs (e.g., subagent spawning),
-	// the same prompt text may appear under a different claude_session_id.
-	if existingID, existingNum, found := s.promptStore.FindRecentPromptByTextGlobal(r.Context(), cleanedPrompt, DuplicatePromptWindowSeconds); found {
-		sessionID, _ := s.sessionStore.CreateSDKSession(r.Context(), req.ClaudeSessionID, req.Project, cleanedPrompt)
-
-		log.Debug().
-			Int64("sessionId", sessionID).
-			Int("promptNumber", existingNum).
-			Int64("promptId", existingID).
-			Msg("Cross-session duplicate prompt detected - returning existing")
-
-		writeJSON(w, SessionInitResponse{
-			SessionDBID:  sessionID,
-			PromptNumber: existingNum,
-			Skipped:      true,
-			Reason:       "cross-session-duplicate",
-		})
-		return
-	}
-
 	// Create session (idempotent)
 	sessionID, err := s.sessionStore.CreateSDKSession(r.Context(), req.ClaudeSessionID, req.Project, cleanedPrompt)
 	if err != nil {
@@ -171,12 +126,7 @@ func (s *Service) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save user prompt with matched observation count
-	_, err = s.promptStore.SaveUserPromptWithMatches(r.Context(), req.ClaudeSessionID, promptNum, cleanedPrompt, req.MatchedObservations)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to save user prompt")
-		// Non-fatal: continue with session initialization
-	}
+	// v5 (US3): prompt store removed; prompt is cached in-memory only via SetLastPrompt above.
 
 	log.Info().
 		Int64("sessionId", sessionID).
@@ -622,36 +572,23 @@ func (s *Service) handleIndexSession(w http.ResponseWriter, r *http.Request) {
 	}
 	content := strings.Join(parts, "\n")
 
-	counts := meta.ToolCounts
-	if counts == nil {
-		counts = make(map[string]int)
-	}
-	toolCounts, err := json.Marshal(counts)
-	if err != nil {
-		http.Error(w, "failed to marshal tool counts", http.StatusInternalServerError)
-		return
-	}
-
 	projectID := ""
 	if meta.ProjectPath != "" {
 		projectID = sessions.ProjectID(meta.ProjectPath)
 	}
 
-	indexed := &gormdb.IndexedSession{
-		ID:            meta.SessionID,
-		WorkstationID: workstationID,
-		ProjectID:     projectID,
-		ProjectPath:   sql.NullString{String: meta.ProjectPath, Valid: meta.ProjectPath != ""},
-		GitBranch:     sql.NullString{String: meta.GitBranch, Valid: meta.GitBranch != ""},
-		FirstMsgAt:    sql.NullTime{Time: meta.FirstMsgAt, Valid: !meta.FirstMsgAt.IsZero()},
-		LastMsgAt:     sql.NullTime{Time: meta.LastMsgAt, Valid: !meta.LastMsgAt.IsZero()},
-		ExchangeCount: meta.ExchangeCount,
-		ToolCounts:    sql.NullString{String: string(toolCounts), Valid: true},
-		Content:       sql.NullString{String: content, Valid: content != ""},
-		FileMtime:     sql.NullTime{Time: time.Now().UTC(), Valid: true},
+	// v5 (US3): IndexedSession removed; pass metadata as a plain map.
+	indexedMap := map[string]any{
+		"id":             meta.SessionID,
+		"workstation_id": workstationID,
+		"project_id":     projectID,
+		"project_path":   meta.ProjectPath,
+		"git_branch":     meta.GitBranch,
+		"exchange_count": meta.ExchangeCount,
+		"content":        content,
 	}
 
-	if err := store.UpsertSession(r.Context(), indexed); err != nil {
+	if err := store.UpsertSession(r.Context(), indexedMap); err != nil {
 		log.Error().Err(err).Str("session_id", meta.SessionID).Msg("Failed to upsert indexed session")
 		http.Error(w, "failed to store session", http.StatusInternalServerError)
 		return

@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 )
 
 // =============================================================================
@@ -587,11 +586,10 @@ func TestCallTool_InvalidArgs(t *testing.T) {
 	server := NewServer(ServerOptions{Version: "1.0.0"})
 	ctx := context.Background()
 
-	// "search" was dropped in v5 (US9). Use a still-live tool (find_by_file) to
-	// exercise the invalid-JSON path in callTool.
+	// find_by_file was retired in v5; invalid JSON never reaches per-tool validation.
 	_, err := server.callTool(ctx, "find_by_file", json.RawMessage(`invalid json`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid arguments")
+	assert.Contains(t, err.Error(), "removed in v5")
 }
 
 // =============================================================================
@@ -858,25 +856,25 @@ func TestHandleBulkDeleteObservations_Validation(t *testing.T) {
 			name:        "missing ids",
 			args:        `{}`,
 			wantErr:     true,
-			errContains: "ids is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "empty ids array",
 			args:        `{"ids": []}`,
 			wantErr:     true,
-			errContains: "ids is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "too many ids",
 			args:        `{"ids": [` + strings.Repeat("1,", 1001) + `1]}`,
 			wantErr:     true,
-			errContains: "maximum 1000 IDs",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -913,19 +911,19 @@ func TestHandleBulkMarkSuperseded_Validation(t *testing.T) {
 			name:        "missing ids",
 			args:        `{}`,
 			wantErr:     true,
-			errContains: "ids is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "empty ids array",
 			args:        `{"ids": []}`,
 			wantErr:     true,
-			errContains: "ids is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "too many ids",
 			args:        `{"ids": [` + strings.Repeat("1,", 1001) + `1]}`,
 			wantErr:     true,
-			errContains: "maximum 1000 IDs",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -962,25 +960,25 @@ func TestHandleBulkBoostObservations_Validation(t *testing.T) {
 			name:        "missing ids",
 			args:        `{"boost": 0.1}`,
 			wantErr:     true,
-			errContains: "ids is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "boost out of range low",
 			args:        `{"ids": [1], "boost": -1.5}`,
 			wantErr:     true,
-			errContains: "boost must be between",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "boost out of range high",
 			args:        `{"ids": [1], "boost": 1.5}`,
 			wantErr:     true,
-			errContains: "boost must be between",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "too many ids",
 			args:        `{"ids": [` + strings.Repeat("1,", 1001) + `1], "boost": 0.1}`,
 			wantErr:     true,
-			errContains: "maximum 1000 IDs",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1017,25 +1015,25 @@ func TestHandleMergeObservations_Validation(t *testing.T) {
 			name:        "missing source_id",
 			args:        `{"target_id": 2}`,
 			wantErr:     true,
-			errContains: "source_id and target_id are required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "missing target_id",
 			args:        `{"source_id": 1}`,
 			wantErr:     true,
-			errContains: "source_id and target_id are required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "same source and target",
 			args:        `{"source_id": 1, "target_id": 1}`,
 			wantErr:     true,
-			errContains: "source_id and target_id cannot be the same",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "boost out of range",
 			args:        `{"source_id": 1, "target_id": 2, "boost": 0.6}`,
 			wantErr:     true,
-			errContains: "boost must be between 0 and 0.5",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1072,13 +1070,13 @@ func TestHandleGetObservation_Validation(t *testing.T) {
 			name:        "missing id",
 			args:        `{}`,
 			wantErr:     true,
-			errContains: "id is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1115,19 +1113,19 @@ func TestHandleEditObservation_Validation(t *testing.T) {
 			name:        "missing id",
 			args:        `{"title": "new title"}`,
 			wantErr:     true,
-			errContains: "id is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "invalid scope",
 			args:        `{"id": 1, "scope": "invalid"}`,
 			wantErr:     true,
-			errContains: "scope must be 'project' or 'global'",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1164,13 +1162,13 @@ func TestHandleGetObservationQuality_Validation(t *testing.T) {
 			name:        "missing id",
 			args:        `{}`,
 			wantErr:     true,
-			errContains: "id is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1207,19 +1205,19 @@ func TestHandleTagObservation_Validation(t *testing.T) {
 			name:        "missing id",
 			args:        `{"tags": ["tag1"]}`,
 			wantErr:     true,
-			errContains: "id is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "missing tags",
 			args:        `{"id": 1}`,
 			wantErr:     true,
-			errContains: "tags is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "invalid mode",
 			args:        `{"id": 1, "tags": ["tag1"], "mode": "invalid"}`,
 			wantErr:     true,
-			errContains: "mode must be 'add', 'remove', or 'set'",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1256,13 +1254,13 @@ func TestHandleGetObservationsByTag_Validation(t *testing.T) {
 			name:        "missing tag",
 			args:        `{}`,
 			wantErr:     true,
-			errContains: "tag is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1299,13 +1297,13 @@ func TestHandleBatchTagByPattern_Validation(t *testing.T) {
 			name:        "missing pattern",
 			args:        `{"tags": ["tag1"]}`,
 			wantErr:     true,
-			errContains: "pattern is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "missing tags",
 			args:        `{"pattern": "test"}`,
 			wantErr:     true,
-			errContains: "tags is required",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1345,7 +1343,7 @@ func TestHandleGetObservationRelationships_Validation(t *testing.T) {
 			name:        "missing id",
 			args:        `{}`,
 			wantErr:     true,
-			errContains: "id is required",
+			errContains: "id is required and must be positive",
 		},
 		{
 			name:        "negative id",
@@ -1394,13 +1392,13 @@ func TestHandleGetObservationScoringBreakdown_Validation(t *testing.T) {
 			name:        "missing id",
 			args:        `{}`,
 			wantErr:     true,
-			errContains: "id is required",
+			errContains: "removed in v5",
 		},
 		{
 			name:        "negative id",
 			args:        `{"id": -1}`,
 			wantErr:     true,
-			errContains: "id is required and must be positive",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1947,7 +1945,7 @@ func TestHandleGetTemporalTrends_Validation(t *testing.T) {
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -1982,7 +1980,7 @@ func TestHandleGetDataQualityReport_Validation(t *testing.T) {
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -2017,7 +2015,7 @@ func TestHandleExportObservations_Validation(t *testing.T) {
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -2087,7 +2085,7 @@ func TestHandleAnalyzeObservationImportance_Validation(t *testing.T) {
 			name:        "invalid json",
 			args:        `{invalid`,
 			wantErr:     true,
-			errContains: "invalid arguments",
+			errContains: "removed in v5",
 		},
 	}
 
@@ -2419,11 +2417,11 @@ func TestCallTool_AllSpecialTools(t *testing.T) {
 func TestHandleFindByFileContext_ProjectRequired(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(ServerOptions{Version: "1.0.0", ObservationStore: &dbgorm.ObservationStore{}})
+	server := NewServer(ServerOptions{Version: "1.0.0"})
 
 	_, err := server.handleFindByFileContext(context.Background(), json.RawMessage(`{"file_path":"internal/auth/service.go"}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "project is required")
+	assert.Contains(t, err.Error(), "removed in v5")
 }
 
 // =============================================================================
@@ -2488,7 +2486,7 @@ func TestHandleBulkBoostObservations_TooManyIDs(t *testing.T) {
 
 	_, err := server.handleBulkBoostObservations(ctx, json.RawMessage(argsJSON))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "maximum 1000 IDs")
+	assert.Contains(t, err.Error(), "removed in v5")
 }
 
 // TestHandleMergeObservations_SameID tests merge with same source and target.
@@ -2501,7 +2499,7 @@ func TestHandleMergeObservations_SameID(t *testing.T) {
 	// source_id and target_id cannot be the same
 	_, err := server.handleMergeObservations(ctx, json.RawMessage(`{"source_id": 123, "target_id": 123}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot be the same")
+	assert.Contains(t, err.Error(), "removed in v5")
 }
 
 // TestHandleMergeObservations_InvalidBoost tests merge with invalid boost.
@@ -2514,5 +2512,5 @@ func TestHandleMergeObservations_InvalidBoost(t *testing.T) {
 	// boost must be between 0 and 0.5
 	_, err := server.handleMergeObservations(ctx, json.RawMessage(`{"source_id": 1, "target_id": 2, "boost": 0.6}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "boost must be between")
+	assert.Contains(t, err.Error(), "removed in v5")
 }

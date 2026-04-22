@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -25,7 +24,7 @@ func TestRetrieveRelevant_NoHooks_ReturnsEmpty(t *testing.T) {
 // (the only search path in v5 after vector storage was removed).
 func TestRetrieveRelevant_FTSFallback_ReturnsObservations(t *testing.T) {
 	service := newRetrievalTestService()
-	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ gorm.ScopeFilter, _ int) ([]*models.Observation, error) {
+	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ retrievalScope, _ int) ([]*models.Observation, error) {
 		return []*models.Observation{
 			newObservation(1, "Alpha"),
 			newObservation(2, "Beta"),
@@ -42,7 +41,7 @@ func TestRetrieveRelevant_MaxResultsCapsOutput(t *testing.T) {
 	// The mock respects the limit parameter so the assertion can be exact.
 	// Disambiguated titles keep term-based clustering from collapsing these entries.
 	distinctTitles := []string{"Alpha migration schema", "Gravity kernel panic", "Lunar lattice cipher", "Rhizome radio silence", "Spectral pivot anomaly"}
-	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ gorm.ScopeFilter, limit int) ([]*models.Observation, error) {
+	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ retrievalScope, limit int) ([]*models.Observation, error) {
 		obs := make([]*models.Observation, 0, limit)
 		for i := 1; i <= limit && i-1 < len(distinctTitles); i++ {
 			obs = append(obs, newObservation(int64(i), distinctTitles[i-1]))
@@ -57,7 +56,7 @@ func TestRetrieveRelevant_MaxResultsCapsOutput(t *testing.T) {
 // TestRetrieveRelevant_LLMFilterHonorsSilence verifies LLM filter returning empty silences results.
 func TestRetrieveRelevant_LLMFilterHonorsSilence(t *testing.T) {
 	service := newRetrievalTestService()
-	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ gorm.ScopeFilter, _ int) ([]*models.Observation, error) {
+	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, _ retrievalScope, _ int) ([]*models.Observation, error) {
 		return []*models.Observation{newObservation(1, "Alpha"), newObservation(2, "Beta")}, nil
 	}
 	service.retrievalHooks.filterByRelevance = func(_ context.Context, _ []*models.Observation, _, _ string) []int64 {

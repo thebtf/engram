@@ -82,14 +82,21 @@ func (s *Service) handleGetRelationGraph(w http.ResponseWriter, r *http.Request)
 }
 
 // handleGetRelatedObservations godoc
+// relatedObservationRef is the v5-compatible response shape for related-observation
+// lookups now that observation persistence has been removed.
+type relatedObservationRef struct {
+	ID            int64   `json:"id"`
+	MinConfidence float64 `json:"min_confidence,omitempty"`
+}
+
 // @Summary Get related observations
-// @Description Returns observations related to a given one, filtered by minimum confidence.
+// @Description Returns related observation IDs only in v5 because full observation records were removed.
 // @Tags Relations
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int true "Observation ID"
 // @Param min_confidence query number false "Minimum confidence threshold (default 0.4, range 0-1)"
-// @Success 200 {array} models.Observation
+// @Success 200 {array} relatedObservationRef
 // @Failure 400 {string} string "invalid observation id"
 // @Failure 500 {string} string "internal error"
 // @Router /api/observations/{id}/related [get]
@@ -109,30 +116,21 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	// Get related observation IDs
 	relatedIDs, err := s.relationStore.GetRelatedObservationIDs(r.Context(), id, minConfidence)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if len(relatedIDs) == 0 {
-		writeJSON(w, []*models.Observation{})
-		return
+	refs := make([]relatedObservationRef, 0, len(relatedIDs))
+	for _, relatedID := range relatedIDs {
+		refs = append(refs, relatedObservationRef{
+			ID:            relatedID,
+			MinConfidence: minConfidence,
+		})
 	}
 
-	// Fetch full observations
-	observations, err := s.observationStore.GetObservationsByIDs(r.Context(), relatedIDs, "importance", 50)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if observations == nil {
-		observations = []*models.Observation{}
-	}
-
-	writeJSON(w, observations)
+	writeJSON(w, refs)
 }
 
 // handleGetRelationsByType godoc

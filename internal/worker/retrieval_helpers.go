@@ -27,10 +27,9 @@ func (s *Service) lookupRecentSessionIDs(ctx context.Context, project string, si
 	if s.retrievalHooks != nil && s.retrievalHooks.getRecentSessionIDs != nil {
 		return s.retrievalHooks.getRecentSessionIDs(ctx, project, since)
 	}
-	if s.observationStore == nil {
-		return nil, nil
-	}
-	return s.observationStore.GetRecentSessionIDs(ctx, project, since)
+	// observation-backed session lookup was removed in v5; there is no equivalent
+	// session index in the memories/rules stores.
+	return map[string]bool{}, nil
 }
 
 func (s *Service) sessionBoostFactor() float64 {
@@ -42,10 +41,8 @@ func (s *Service) getTopImportanceObservations(ctx context.Context, project stri
 	if s.retrievalHooks != nil && s.retrievalHooks.getTopImportanceObservations != nil {
 		return s.retrievalHooks.getTopImportanceObservations(ctx, project, limit)
 	}
-	if s.observationStore == nil {
-		return nil, nil
-	}
-	return s.observationStore.GetTopImportanceObservations(ctx, project, limit)
+	// Top-importance observation ranking was removed with observation-backed retrieval in v5.
+	return nil, nil
 }
 
 func (s *Service) applyLLMFilter(ctx context.Context, project, query string, observations []*models.Observation) []*models.Observation {
@@ -84,10 +81,9 @@ func (s *Service) loadRecentUserPromptsByProject(ctx context.Context, project st
 	if s.retrievalHooks != nil && s.retrievalHooks.getRecentUserPromptsByProject != nil {
 		return s.retrievalHooks.getRecentUserPromptsByProject(ctx, project, limit)
 	}
-	if s.promptStore == nil {
-		return nil, nil
-	}
-	return s.promptStore.GetRecentUserPromptsByProject(ctx, project, limit)
+	// Prompt history storage was removed in v5. Without a retrieval hook there is no
+	// honest backend for recent prompt lookup.
+	return nil, nil
 }
 
 // loadLastUserPromptBySession returns the most recent user prompt for the given session.
@@ -160,16 +156,6 @@ func (s *Service) ExtractSessionEntitySeeds(ctx context.Context, sessionID, proj
 				if obs != nil && obs.Type == models.ObsTypeEntity {
 					entityObservations = append(entityObservations, obs)
 				}
-			}
-		}
-	} else if s.observationStore != nil {
-		allSessionObservations, err := s.observationStore.GetObservationsBySession(ctx, sessionID)
-		if err != nil {
-			log.Debug().Err(err).Str("session_id", sessionID).Msg("failed to get session observations")
-		}
-		for _, obs := range allSessionObservations {
-			if obs != nil && obs.Type == models.ObsTypeEntity {
-				entityObservations = append(entityObservations, obs)
 			}
 		}
 	}

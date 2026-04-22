@@ -7,8 +7,6 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/internal/db/gorm"
 )
 
 // batchTagRequest is the JSON body for POST /api/observations/batch-tag.
@@ -20,22 +18,16 @@ type batchTagRequest struct {
 
 // handleBatchTagObservations godoc
 // @Summary Batch add or remove a tag on multiple observations
-// @Description Adds or removes a single tag across a list of observation IDs.
+// @Description Observation tag mutation was removed in v5. Validation is preserved so clients receive stable request errors before the explicit removal payload.
 // @Tags Tags
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param body body batchTagRequest true "Batch tag operation"
-// @Success 200 {object} object
+// @Success 501 {object} map[string]interface{}
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
 // @Router /api/observations/batch-tag [post]
 func (s *Service) handleBatchTagObservations(w http.ResponseWriter, r *http.Request) {
-	if s.observationStore == nil {
-		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
-		return
-	}
-
 	var req batchTagRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
@@ -58,50 +50,14 @@ func (s *Service) handleBatchTagObservations(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	ctx := r.Context()
-	var updated int64
-
-	for _, id := range req.IDs {
-		obs, err := s.observationStore.GetObservationByID(ctx, id)
-		if err != nil {
-			log.Error().Err(err).Int64("id", id).Msg("batch-tag: get observation failed")
-			continue
-		}
-		if obs == nil {
-			continue
-		}
-
-		var newTags []string
-		switch req.Action {
-		case "add":
-			tagSet := make(map[string]bool)
-			for _, t := range obs.Concepts {
-				tagSet[t] = true
-				newTags = append(newTags, t)
-			}
-			if !tagSet[req.Tag] {
-				newTags = append(newTags, req.Tag)
-			}
-		case "remove":
-			for _, t := range obs.Concepts {
-				if t != req.Tag {
-					newTags = append(newTags, t)
-				}
-			}
-		}
-
-		update := &gorm.ObservationUpdate{Concepts: &newTags}
-		if _, err := s.observationStore.UpdateObservation(ctx, id, update); err != nil {
-			log.Error().Err(err).Int64("id", id).Msg("batch-tag: update observation failed")
-			continue
-		}
-		updated++
-	}
-
+	w.WriteHeader(http.StatusNotImplemented)
 	writeJSON(w, map[string]any{
-		"updated": updated,
-		"tag":     req.Tag,
-		"action":  req.Action,
+		"error":      "removed_in_v5",
+		"deprecated": true,
+		"ids":        req.IDs,
+		"tag":        req.Tag,
+		"action":     req.Action,
+		"message":    "batch observation tag mutation removed in v5; observations persistence was dropped in US3-PR-B",
 	})
 }
 
@@ -113,21 +69,16 @@ type tagCloudEntry struct {
 
 // handleTagCloud godoc
 // @Summary Get tag cloud from observation concepts
-// @Description Returns aggregated concept tags with occurrence counts.
+// @Description Observation tag cloud aggregation was removed in v5.
 // @Tags Tags
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project"
 // @Param limit query int false "Max tags to return (default 20)"
-// @Success 200 {array} tagCloudEntry
-// @Failure 500 {string} string "internal error"
+// @Success 501 {object} map[string]interface{}
+// @Failure 400 {string} string "bad request"
 // @Router /api/observations/tag-cloud [get]
 func (s *Service) handleTagCloud(w http.ResponseWriter, r *http.Request) {
-	if s.observationStore == nil {
-		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
-		return
-	}
-
 	project := r.URL.Query().Get("project")
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -141,50 +92,15 @@ func (s *Service) handleTagCloud(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	db := s.observationStore.GetDB()
-
-	var query string
-	var args []any
-
-	if project != "" {
-		query = `
-			SELECT tag, COUNT(*) AS count
-			FROM observations, jsonb_array_elements_text(concepts) AS tag
-			WHERE COALESCE(is_superseded, 0) = 0
-			  AND project = ?
-			GROUP BY tag
-			ORDER BY count DESC
-			LIMIT ?`
-		args = []any{project, limit}
-	} else {
-		query = `
-			SELECT tag, COUNT(*) AS count
-			FROM observations, jsonb_array_elements_text(concepts) AS tag
-			WHERE COALESCE(is_superseded, 0) = 0
-			GROUP BY tag
-			ORDER BY count DESC
-			LIMIT ?`
-		args = []any{limit}
-	}
-
-	type row struct {
-		Tag   string `gorm:"column:tag"`
-		Count int    `gorm:"column:count"`
-	}
-
-	var rows []row
-	if err := db.WithContext(r.Context()).Raw(query, args...).Scan(&rows).Error; err != nil {
-		log.Error().Err(err).Msg("tag-cloud: query failed")
-		http.Error(w, "query failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	entries := make([]tagCloudEntry, len(rows))
-	for i, row := range rows {
-		entries[i] = tagCloudEntry{Tag: row.Tag, Count: row.Count}
-	}
-
-	writeJSON(w, entries)
+	w.WriteHeader(http.StatusNotImplemented)
+	writeJSON(w, map[string]any{
+		"error":      "removed_in_v5",
+		"deprecated": true,
+		"project":    project,
+		"limit":      limit,
+		"tags":       []tagCloudEntry{},
+		"message":    "observation tag cloud removed in v5; observations persistence was dropped in US3-PR-B",
+	})
 }
 
 // tagObservationRequest is the JSON body for POST /api/observations/{id}/tags.
@@ -195,24 +111,17 @@ type tagObservationRequest struct {
 
 // handleTagObservation godoc
 // @Summary Add, remove, or set tags on an observation
-// @Description Modifies the concept tags on an observation. Action must be "add", "remove", or "set".
+// @Description Observation tag mutation was removed in v5. Validation is preserved so clients receive stable request errors before the explicit removal payload.
 // @Tags Tags
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int true "Observation ID"
 // @Param body body tagObservationRequest true "Tag operation"
-// @Success 200 {object} object
+// @Success 501 {object} map[string]interface{}
 // @Failure 400 {string} string "bad request"
-// @Failure 404 {string} string "not found"
-// @Failure 500 {string} string "internal error"
 // @Router /api/observations/{id}/tags [post]
 func (s *Service) handleTagObservation(w http.ResponseWriter, r *http.Request) {
-	if s.observationStore == nil {
-		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
-		return
-	}
-
 	idStr := chi.URLParam(r, "id")
 	id, ok := parseIDParam(w, idStr, "observation")
 	if !ok {
@@ -237,68 +146,20 @@ func (s *Service) handleTagObservation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current observation
-	obs, err := s.observationStore.GetObservationByID(r.Context(), id)
-	if err != nil {
-		log.Error().Err(err).Int64("id", id).Msg("get observation for tagging failed")
-		http.Error(w, "get observation: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if obs == nil {
-		http.Error(w, "observation not found", http.StatusNotFound)
-		return
-	}
-
-	// Compute new tags
-	var newTags []string
-	switch req.Action {
-	case "set":
-		newTags = req.Tags
-	case "add":
-		tagSet := make(map[string]bool)
-		for _, t := range obs.Concepts {
-			tagSet[t] = true
-			newTags = append(newTags, t)
-		}
-		for _, t := range req.Tags {
-			if !tagSet[t] {
-				tagSet[t] = true
-				newTags = append(newTags, t)
-			}
-		}
-	case "remove":
-		removeSet := make(map[string]bool)
-		for _, t := range req.Tags {
-			removeSet[t] = true
-		}
-		for _, t := range obs.Concepts {
-			if !removeSet[t] {
-				newTags = append(newTags, t)
-			}
-		}
-	}
-
-	update := &gorm.ObservationUpdate{
-		Concepts: &newTags,
-	}
-	updatedObs, err := s.observationStore.UpdateObservation(r.Context(), id, update)
-	if err != nil {
-		log.Error().Err(err).Int64("id", id).Msg("update observation tags failed")
-		http.Error(w, "update observation: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
+	w.WriteHeader(http.StatusNotImplemented)
 	writeJSON(w, map[string]any{
-		"id":           id,
-		"action":       req.Action,
-		"tags_applied": req.Tags,
-		"current_tags": updatedObs.Concepts,
+		"error":      "removed_in_v5",
+		"deprecated": true,
+		"id":         id,
+		"action":     req.Action,
+		"tags":       req.Tags,
+		"message":    "observation tag mutation removed in v5; observations persistence was dropped in US3-PR-B",
 	})
 }
 
 // handleGetObservationsByTag godoc
 // @Summary List observations by tag
-// @Description Returns observations that have the specified concept tag.
+// @Description Observation tag search was removed in v5.
 // @Tags Tags
 // @Produce json
 // @Security ApiKeyAuth
@@ -306,16 +167,10 @@ func (s *Service) handleTagObservation(w http.ResponseWriter, r *http.Request) {
 // @Param project query string false "Filter by project"
 // @Param limit query int false "Number of results (default 50, max 200)"
 // @Param offset query int false "Pagination offset"
-// @Success 200 {object} object
+// @Success 501 {object} map[string]interface{}
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
 // @Router /api/observations/by-tag/{tag} [get]
 func (s *Service) handleGetObservationsByTag(w http.ResponseWriter, r *http.Request) {
-	if s.observationStore == nil {
-		http.Error(w, "observation store not available", http.StatusServiceUnavailable)
-		return
-	}
-
 	tag := chi.URLParam(r, "tag")
 	if tag == "" {
 		http.Error(w, "tag is required", http.StatusBadRequest)
@@ -337,14 +192,16 @@ func (s *Service) handleGetObservationsByTag(w http.ResponseWriter, r *http.Requ
 
 	// Tag-based search was backed by search.Manager.UnifiedSearch, dropped in v5 (US9).
 	// Return 501 Not Implemented so clients can distinguish "feature removed" from
-	// "no results". Tags/concepts on observations will also disappear when US3-PR-B
-	// drops the observations table.
-	_ = limit
+	// "no results".
 	w.WriteHeader(http.StatusNotImplemented)
 	writeJSON(w, map[string]any{
+		"error":        "removed_in_v5",
+		"deprecated":   true,
 		"tag":          tag,
+		"project":      project,
+		"limit":        limit,
 		"observations": []any{},
 		"count":        0,
-		"deprecated":   "tag-based observation search removed in v5 (US9); observations table removal pending US3-PR-B",
+		"message":      "tag-based observation search removed in v5; observations persistence was dropped in US3-PR-B",
 	})
 }

@@ -20,7 +20,6 @@ import (
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
-	"github.com/thebtf/engram/pkg/models"
 )
 
 // Server is the MCP server that exposes engram tools.
@@ -28,7 +27,6 @@ import (
 type Server struct {
 	stdin                  io.Reader
 	stdout                 io.Writer
-	observationStore       *gorm.ObservationStore
 	relationStore          *gorm.RelationStore
 	sessionStore           *gorm.SessionStore
 	injectionStore         *gorm.InjectionStore
@@ -51,7 +49,6 @@ type Server struct {
 // ServerOptions holds the dependencies injected into the MCP Server.
 type ServerOptions struct {
 	Version            string
-	ObservationStore   *gorm.ObservationStore
 	RelationStore      *gorm.RelationStore
 	SessionStore       *gorm.SessionStore
 	CollectionRegistry *collections.Registry
@@ -66,7 +63,6 @@ func NewServer(opts ServerOptions) *Server {
 		version:            opts.Version,
 		stdin:              os.Stdin,
 		stdout:             os.Stdout,
-		observationStore:   opts.ObservationStore,
 		relationStore:      opts.RelationStore,
 		sessionStore:       opts.SessionStore,
 		collectionRegistry: opts.CollectionRegistry,
@@ -674,247 +670,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				},
 			},
 		},
-		{
-			Name:        "bulk_mark_superseded",
-			Description: "Mark multiple observations as superseded (stale). Useful for cleanup without permanent deletion.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"ids"},
-				"properties": map[string]any{
-					"ids": map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "description": "Array of observation IDs to mark as superseded"},
-				},
-			},
-		},
-		{
-			Name:        "bulk_boost_observations",
-			Description: "Boost or reduce the importance score of multiple observations. Positive values increase importance, negative decrease.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"ids", "boost"},
-				"properties": map[string]any{
-					"ids":   map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "description": "Array of observation IDs to boost"},
-					"boost": map[string]any{"type": "number", "minimum": -1.0, "maximum": 1.0, "description": "Boost amount (-1.0 to 1.0)"},
-				},
-			},
-		},
-		{
-			Name:        "merge_observations",
-			Description: "Merge two observations into one. The target observation is kept and boosted, the source is marked as superseded. Useful for deduplication without data loss.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"source_id", "target_id"},
-				"properties": map[string]any{
-					"source_id": map[string]any{"type": "number", "description": "ID of the observation to merge FROM (will be superseded)"},
-					"target_id": map[string]any{"type": "number", "description": "ID of the observation to merge INTO (will be kept and boosted)"},
-					"boost":     map[string]any{"type": "number", "default": 0.1, "minimum": 0, "maximum": 0.5, "description": "Score boost for the target observation (default 0.1)"},
-				},
-			},
-		},
-		{
-			Name:        "get_observation",
-			Description: "Get a single observation by its ID. Returns full observation details including all metadata.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id"},
-				"properties": map[string]any{
-					"id": map[string]any{"type": "number", "description": "Observation ID to retrieve"},
-				},
-			},
-		},
-		{
-			Name:        "edit_observation",
-			Description: "Edit an existing observation. Only provided fields will be updated, others remain unchanged. Useful for correcting errors, adding details, or updating scope.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id"},
-				"properties": map[string]any{
-					"id":             map[string]any{"type": "number", "description": "Observation ID to edit"},
-					"title":          map[string]any{"type": "string", "description": "New title (optional)"},
-					"subtitle":       map[string]any{"type": "string", "description": "New subtitle (optional)"},
-					"narrative":      map[string]any{"type": "string", "description": "New narrative text (optional)"},
-					"facts":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "New facts array (optional)"},
-					"concepts":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "New concept tags (optional)"},
-					"files_read":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "New files read list (optional)"},
-					"files_modified": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "New files modified list (optional)"},
-					"scope":          map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "New scope (optional)"},
-					"status":         map[string]any{"type": "string", "description": "Observation status: active or resolved", "enum": []string{"active", "resolved"}},
-					"status_reason":  map[string]any{"type": "string", "description": "Reason for status change"},
-					"always_inject":  map[string]any{"type": "boolean", "description": "If true, add always-inject concept (injected into every context). If false, remove it."},
-				},
-			},
-		},
-		{
-			Name:        "get_observation_quality",
-			Description: "Get quality metrics for an observation. Returns completeness score, usage stats, and improvement suggestions.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id"},
-				"properties": map[string]any{
-					"id": map[string]any{"type": "number", "description": "Observation ID to analyze"},
-				},
-			},
-		},
-		{
-			Name:        "tag_observation",
-			Description: "Add or remove concept tags from an observation. Tags help with organization and filtering. Use mode 'add' to add new tags, 'remove' to remove specific tags, or 'set' to replace all tags.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id", "tags"},
-				"properties": map[string]any{
-					"id":   map[string]any{"type": "number", "description": "Observation ID to tag"},
-					"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to add, remove, or set"},
-					"mode": map[string]any{"type": "string", "enum": []string{"add", "remove", "set"}, "default": "add", "description": "Operation mode: 'add' appends tags, 'remove' removes specific tags, 'set' replaces all tags"},
-				},
-			},
-		},
-		{
-			Name:        "get_observations_by_tag",
-			Description: "Find all observations that have a specific concept tag. Useful for browsing by category.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"tag"},
-				"properties": map[string]any{
-					"tag":     map[string]any{"type": "string", "description": "Tag/concept to search for"},
-					"project": map[string]any{"type": "string", "description": "Filter by project (optional)"},
-					"limit":   map[string]any{"type": "number", "default": 50, "minimum": 1, "maximum": 200, "description": "Maximum observations to return"},
-				},
-			},
-		},
-		{
-			Name:        "get_temporal_trends",
-			Description: "Analyze observation creation patterns over time. Returns daily counts, peak activity times, and trend insights. Useful for understanding work patterns.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"project":  map[string]any{"type": "string", "description": "Filter by project (optional)"},
-					"days":     map[string]any{"type": "number", "default": 30, "minimum": 1, "maximum": 365, "description": "Number of days to analyze"},
-					"group_by": map[string]any{"type": "string", "enum": []string{"day", "week", "hour_of_day"}, "default": "day", "description": "How to group the data"},
-				},
-			},
-		},
-		{
-			Name:        "get_data_quality_report",
-			Description: "Get a comprehensive quality assessment of observations. Shows completeness distribution, common issues, and improvement suggestions.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"project": map[string]any{"type": "string", "description": "Filter by project (optional)"},
-					"limit":   map[string]any{"type": "number", "default": 100, "minimum": 10, "maximum": 500, "description": "Number of observations to analyze"},
-				},
-			},
-		},
-		{
-			Name:        "batch_tag_by_pattern",
-			Description: "Apply tags to observations matching a pattern. Useful for retroactive organization and categorization.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"pattern", "tags"},
-				"properties": map[string]any{
-					"pattern":     map[string]any{"type": "string", "description": "Search pattern to match (searches title, narrative, facts)"},
-					"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to add to matching observations"},
-					"project":     map[string]any{"type": "string", "description": "Filter by project (optional)"},
-					"dry_run":     map[string]any{"type": "boolean", "default": true, "description": "If true, only preview matches without applying tags"},
-					"max_matches": map[string]any{"type": "number", "default": 100, "minimum": 1, "maximum": 500, "description": "Maximum observations to tag"},
-				},
-			},
-		},
-		{
-			Name:        "explain_search_ranking",
-			Description: "Debug search results by showing score breakdown for top matches. Explains why each observation ranked where it did.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"query"},
-				"properties": map[string]any{
-					"query":   map[string]any{"type": "string", "description": "Search query to analyze"},
-					"project": map[string]any{"type": "string", "description": "Project context for search"},
-					"top_n":   map[string]any{"type": "number", "default": 5, "minimum": 1, "maximum": 20, "description": "Number of top results to explain"},
-				},
-			},
-		},
-		{
-			Name:        "export_observations",
-			Description: "Export observations in various formats for backup or analysis.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"format":     map[string]any{"type": "string", "enum": []string{"json", "jsonl", "markdown"}, "default": "json", "description": "Export format"},
-					"project":    map[string]any{"type": "string", "description": "Filter by project (optional)"},
-					"limit":      map[string]any{"type": "number", "default": 100, "minimum": 1, "maximum": 1000, "description": "Maximum observations to export"},
-					"date_start": map[string]any{"type": "number", "description": "Filter by creation date (epoch milliseconds)"},
-					"date_end":   map[string]any{"type": "number", "description": "Filter by creation date (epoch milliseconds)"},
-					"obs_type":   map[string]any{"type": "string", "description": "Filter by observation type"},
-				},
-			},
-		},
-		{
-			Name:        "issues",
-			Description: "Cross-project issue tracker. Required params per action: create=[project,title,target_project]; get/update/comment/reopen/close=[id]; update=[status=resolved]; comment=[body]. All mutating actions also need project.",
-			tier:        tierCore,
-			InputSchema: issuesToolSchema(),
-		},
-		{
-			Name:        "check_system_health",
-			Description: "Comprehensive system health check. Returns status of all subsystems (database, vectors, cache, search) with actionable diagnostics.",
-			tier:        tierCore,
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		{
-			Name:        "analyze_search_patterns",
-			Description: "Analyze search query patterns to identify common searches, missed queries, and optimization opportunities.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"days":  map[string]any{"type": "number", "default": 7, "minimum": 1, "maximum": 30, "description": "Number of days to analyze"},
-					"top_n": map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50, "description": "Number of top patterns to return"},
-				},
-			},
-		},
-		{
-			Name:        "get_observation_scoring_breakdown",
-			Description: "Get detailed scoring breakdown for an observation. Shows how importance scores are calculated including type weight, recency decay, feedback contribution, concept boost, and retrieval frequency. Useful for understanding why observations are ranked the way they are.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id"},
-				"properties": map[string]any{
-					"id": map[string]any{"type": "number", "description": "Observation ID to get scoring breakdown for"},
-				},
-			},
-		},
-		{
-			Name:        "analyze_observation_importance",
-			Description: "Analyze observation importance patterns in a project. Returns statistics on feedback distribution, top-scoring observations, most-retrieved observations, and concept weights. Useful for understanding what makes observations valuable.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"project":                 map[string]any{"type": "string", "description": "Project to analyze (optional, analyzes all if omitted)"},
-					"include_top_scored":      map[string]any{"type": "boolean", "default": true, "description": "Include top-scoring observations"},
-					"include_most_retrieved":  map[string]any{"type": "boolean", "default": true, "description": "Include most-retrieved observations"},
-					"include_concept_weights": map[string]any{"type": "boolean", "default": true, "description": "Include concept weight analysis"},
-					"limit":                   map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50, "description": "Number of top observations to include"},
-				},
-			},
-		},
-		{
-			Name:        "search_sessions",
+			{
+				Name:        "search_sessions",
 			Description: "Full-text search across indexed Claude Code sessions.",
 			tier:        tierAdmin,
 			InputSchema: map[string]any{
@@ -1014,8 +771,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		})
 	}
 
-	// Memory management tools — only advertise when observation store is available
-	if s.observationStore != nil {
+	// Memory management tools — advertise when memory storage is available
+	if s.memoryStore != nil {
 		tools = append(tools,
 			Tool{
 				Name:        "store_memory",
@@ -1104,8 +861,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
-	// Credential vault tools — only advertise when observation store is available
-	if s.observationStore != nil {
+	// Credential vault tools — advertise when vault-backed credential storage is available
+	if s.memoryStore != nil {
 		tools = append(tools,
 			Tool{
 				Name:        "store_credential",
@@ -1597,6 +1354,7 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 }
 
 // handleFindRelatedObservations finds observations related to a given observation ID.
+// v5 (US3): observation store removed; returns related IDs only (no full observation fetch).
 func (s *Server) handleFindRelatedObservations(ctx context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {
@@ -1615,12 +1373,9 @@ func (s *Server) handleFindRelatedObservations(ctx context.Context, args json.Ra
 	if params.ID == 0 {
 		return "", fmt.Errorf("id is required")
 	}
-
-	// Use -1 as sentinel for "not provided" since 0.0 is a valid threshold
 	if params.MinConfidence < 0 {
 		params.MinConfidence = 0.5
 	}
-
 	if params.Limit == 0 {
 		params.Limit = 20
 	}
@@ -1628,88 +1383,35 @@ func (s *Server) handleFindRelatedObservations(ctx context.Context, args json.Ra
 		params.Limit = 100
 	}
 
-	// Get related observation IDs with confidence filter
 	relatedIDs, err := s.relationStore.GetRelatedObservationIDs(ctx, params.ID, params.MinConfidence)
 	if err != nil {
 		return "", fmt.Errorf("failed to get related observations: %w", err)
 	}
-
 	if relatedIDs == nil {
 		relatedIDs = []int64{}
 	}
-
-	// Limit results
 	if len(relatedIDs) > params.Limit {
 		relatedIDs = relatedIDs[:params.Limit]
 	}
 
-	// Fetch full observations in batch (avoids N+1 query problem)
-	observations, err := s.observationStore.GetObservationsByIDsPreserveOrder(ctx, relatedIDs)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to batch fetch related observations, falling back to individual fetch")
-		// Fallback to individual fetch if batch fails
-		observations = make([]*models.Observation, 0, len(relatedIDs))
-		for _, id := range relatedIDs {
-			obs, fetchErr := s.observationStore.GetObservationByID(ctx, id)
-			if fetchErr == nil && obs != nil {
-				observations = append(observations, obs)
-			}
-		}
-	}
-
+	// v5 (US3): observation store removed; return IDs only.
 	response := map[string]any{
-		"observations": observations,
-		"count":        len(observations),
+		"observation_ids": relatedIDs,
+		"count":           len(relatedIDs),
+		"note":            "Full observation fetch unavailable in v5 — use recall(action=\"search\") with the returned IDs",
 	}
 
 	output, err := json.Marshal(response)
 	if err != nil {
 		return "", fmt.Errorf("marshal response: %w", err)
 	}
-
 	return string(output), nil
 }
 
-// handleFindByFileObservations finds observations related to a file path using
-// the observationStore directly (no search.Manager required — v5/US9).
-// Replaces the old search-based find_by_file dispatch.
-func (s *Server) handleFindByFileObservations(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	files := coerceString(m["files"], "")
-	project := coerceString(m["project"], "")
-	limit := coerceInt(m["limit"], 20)
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
-
-	if files == "" {
-		return "", fmt.Errorf("files parameter is required")
-	}
-	// project is optional per schema (only "files" is required);
-	// empty project returns global observations via the store.
-
-	observations, err := s.observationStore.GetObservationsByFile(ctx, project, files, limit)
-	if err != nil {
-		return "", fmt.Errorf("find_by_file: %w", err)
-	}
-	if observations == nil {
-		observations = []*models.Observation{}
-	}
-
-	response := map[string]any{
-		"observations": observations,
-		"count":        len(observations),
-		"files":        files,
-	}
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-	return string(output), nil
+// handleFindByFileObservations finds observations related to a file path.
+// v5 (US3): observation store removed; tool returns not-available error.
+func (s *Server) handleFindByFileObservations(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("find_by_file removed in v5 (US3) — use recall(action=\"search\") instead")
 }
 
 // sendResponse sends a JSON-RPC response.
@@ -1798,1235 +1500,71 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 	return string(output), nil
 }
 
-// handleBulkDeleteObservations deletes multiple observations by ID.
-func (s *Server) handleBulkDeleteObservations(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		IDs []int64
-	}
-	params.IDs = coerceInt64Slice(m["ids"])
-
-	if len(params.IDs) == 0 {
-		return "", fmt.Errorf("ids is required")
-	}
-
-	if len(params.IDs) > 1000 {
-		return "", fmt.Errorf("maximum 1000 IDs per request")
-	}
-
-	var deleted int64
-	var errors []string
-
-	// Delete in batches
-	batchSize := 100
-	for i := 0; i < len(params.IDs); i += batchSize {
-		end := min(i+batchSize, len(params.IDs))
-		batch := params.IDs[i:end]
-
-		for _, id := range batch {
-			if err := s.observationStore.DeleteObservation(ctx, id); err != nil {
-				errors = append(errors, fmt.Sprintf("id %d: %v", id, err))
-				continue
-			}
-			deleted++
-			// Vector storage removed in v5; no vector cleanup needed.
-		}
-	}
-
-	response := map[string]any{
-		"deleted": deleted,
-		"total":   len(params.IDs),
-	}
-	if len(errors) > 0 {
-		response["errors"] = errors
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	// Return error if all deletions failed (complete failure)
-	if deleted == 0 && len(errors) > 0 {
-		return string(output), fmt.Errorf("bulk delete failed: %d errors, first: %s", len(errors), errors[0])
-	}
-
-	return string(output), nil
+// handleBulkDeleteObservations — removed in v5 (US3); observations table dropped.
+func (s *Server) handleBulkDeleteObservations(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("bulk_delete_observations removed in v5 (US3) — observations table replaced by memories")
 }
 
-// handleBulkMarkSuperseded marks multiple observations as superseded.
-func (s *Server) handleBulkMarkSuperseded(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		IDs []int64
-	}
-	params.IDs = coerceInt64Slice(m["ids"])
-
-	if len(params.IDs) == 0 {
-		return "", fmt.Errorf("ids is required")
-	}
-
-	if len(params.IDs) > 1000 {
-		return "", fmt.Errorf("maximum 1000 IDs per request")
-	}
-
-	// Use batch update for efficiency (single query instead of N queries)
-	updated, err := s.observationStore.MarkAsSupersededBatch(ctx, params.IDs)
-	if err != nil {
-		return "", fmt.Errorf("batch mark as superseded: %w", err)
-	}
-
-	response := map[string]any{
-		"updated": updated,
-		"total":   len(params.IDs),
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleBulkMarkSuperseded — removed in v5 (US3); observations table dropped.
+func (s *Server) handleBulkMarkSuperseded(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("bulk_mark_superseded removed in v5 (US3) — observations table dropped")
 }
 
-// handleBulkBoostObservations boosts the importance score of multiple observations.
-func (s *Server) handleBulkBoostObservations(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		IDs   []int64
-		Boost float64
-	}
-	params.IDs = coerceInt64Slice(m["ids"])
-	params.Boost = coerceFloat64(m["boost"], 0)
-
-	if len(params.IDs) == 0 {
-		return "", fmt.Errorf("ids is required")
-	}
-
-	if len(params.IDs) > 1000 {
-		return "", fmt.Errorf("maximum 1000 IDs per request")
-	}
-
-	if params.Boost < -1.0 || params.Boost > 1.0 {
-		return "", fmt.Errorf("boost must be between -1.0 and 1.0")
-	}
-
-	var boosted int64
-	var errors []string
-
-	// Batch fetch all observations in one query instead of N queries
-	observations, err := s.observationStore.GetObservationsByIDs(ctx, params.IDs, "", 0)
-	if err != nil {
-		return "", fmt.Errorf("batch fetch observations: %w", err)
-	}
-
-	// Build a map for O(1) lookup
-	obsMap := make(map[int64]*models.Observation, len(observations))
-	for _, obs := range observations {
-		obsMap[obs.ID] = obs
-	}
-
-	// Calculate new scores and prepare batch update
-	scoresToUpdate := make(map[int64]float64, len(params.IDs))
-	for _, id := range params.IDs {
-		obs, found := obsMap[id]
-		if !found {
-			errors = append(errors, fmt.Sprintf("id %d: not found", id))
-			continue
-		}
-
-		// Calculate new importance score (clamp between 0 and 1)
-		newScore := obs.ImportanceScore + params.Boost
-		if newScore < 0 {
-			newScore = 0
-		}
-		if newScore > 1 {
-			newScore = 1
-		}
-		scoresToUpdate[id] = newScore
-	}
-
-	// Batch update all scores in one operation
-	if len(scoresToUpdate) > 0 {
-		if err := s.observationStore.UpdateImportanceScores(ctx, scoresToUpdate); err != nil {
-			return "", fmt.Errorf("batch update scores: %w", err)
-		}
-		boosted = int64(len(scoresToUpdate))
-	}
-
-	response := map[string]any{
-		"boosted":    boosted,
-		"total":      len(params.IDs),
-		"boost_used": params.Boost,
-	}
-	if len(errors) > 0 {
-		response["errors"] = errors
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleBulkBoostObservations — removed in v5 (US3); observations table dropped.
+func (s *Server) handleBulkBoostObservations(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("bulk_boost_observations removed in v5 (US3) — observations table dropped")
 }
 
-// handleMergeObservations merges two observations, keeping the target and superseding the source.
-func (s *Server) handleMergeObservations(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		SourceID int64
-		TargetID int64
-		Boost    float64
-	}
-	params.SourceID = coerceInt64(m["source_id"], 0)
-	params.TargetID = coerceInt64(m["target_id"], 0)
-	params.Boost = coerceFloat64(m["boost"], 0)
-
-	if params.SourceID == 0 || params.TargetID == 0 {
-		return "", fmt.Errorf("source_id and target_id are required")
-	}
-
-	if params.SourceID == params.TargetID {
-		return "", fmt.Errorf("source_id and target_id cannot be the same")
-	}
-
-	// Set default boost if not provided
-	if params.Boost == 0 {
-		params.Boost = 0.1
-	}
-	if params.Boost < 0 || params.Boost > 0.5 {
-		return "", fmt.Errorf("boost must be between 0 and 0.5")
-	}
-
-	// Get both observations to verify they exist
-	source, err := s.observationStore.GetObservationByID(ctx, params.SourceID)
-	if err != nil {
-		return "", fmt.Errorf("get source observation: %w", err)
-	}
-	if source == nil {
-		return "", fmt.Errorf("source observation %d not found", params.SourceID)
-	}
-
-	target, err := s.observationStore.GetObservationByID(ctx, params.TargetID)
-	if err != nil {
-		return "", fmt.Errorf("get target observation: %w", err)
-	}
-	if target == nil {
-		return "", fmt.Errorf("target observation %d not found", params.TargetID)
-	}
-
-	// Mark source as superseded
-	if err := s.observationStore.MarkAsSuperseded(ctx, params.SourceID); err != nil {
-		return "", fmt.Errorf("mark source as superseded: %w", err)
-	}
-
-	// Boost target's importance score
-	newScore := target.ImportanceScore + params.Boost
-	if newScore > 1.0 {
-		newScore = 1.0
-	}
-	if err := s.observationStore.UpdateImportanceScore(ctx, params.TargetID, newScore); err != nil {
-		return "", fmt.Errorf("update target score: %w", err)
-	}
-
-	response := map[string]any{
-		"merged":           true,
-		"source_id":        params.SourceID,
-		"source_title":     source.Title.String,
-		"target_id":        params.TargetID,
-		"target_title":     target.Title.String,
-		"target_new_score": newScore,
-		"target_old_score": target.ImportanceScore,
-		"boost_applied":    params.Boost,
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleMergeObservations — removed in v5 (US3); observations table dropped.
+func (s *Server) handleMergeObservations(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("merge_observations removed in v5 (US3) — observations table dropped")
 }
 
-// handleGetObservation returns a single observation by ID.
-func (s *Server) handleGetObservation(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		ID int64
-	}
-	params.ID = coerceInt64(m["id"], 0)
-
-	if params.ID == 0 {
-		return "", fmt.Errorf("id is required")
-	}
-
-	obs, err := s.observationStore.GetObservationByID(ctx, params.ID)
-	if err != nil {
-		return "", fmt.Errorf("get observation: %w", err)
-	}
-	if obs == nil {
-		return "", fmt.Errorf("observation %d not found", params.ID)
-	}
-
-	output, err := json.Marshal(obs)
-	if err != nil {
-		return "", fmt.Errorf("marshal observation: %w", err)
-	}
-
-	return string(output), nil
+// handleGetObservation — removed in v5 (US3); observations table dropped.
+func (s *Server) handleGetObservation(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("get_observation removed in v5 (US3) — observations table dropped")
 }
 
-// handleEditObservation updates an existing observation with provided fields.
-func (s *Server) handleEditObservation(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Title         *string
-		Subtitle      *string
-		Narrative     *string
-		Scope         *string
-		Status        *string
-		StatusReason  *string
-		Facts         []string
-		Concepts      []string
-		FilesRead     []string
-		FilesModified []string
-		ID            int64
-	}
-	params.ID = coerceInt64(m["id"], 0)
-	if v, ok := m["title"]; ok && v != nil {
-		s := coerceString(v, "")
-		params.Title = &s
-	}
-	if v, ok := m["subtitle"]; ok && v != nil {
-		s := coerceString(v, "")
-		params.Subtitle = &s
-	}
-	if v, ok := m["narrative"]; ok && v != nil {
-		s := coerceString(v, "")
-		params.Narrative = &s
-	}
-	if v, ok := m["scope"]; ok && v != nil {
-		s := coerceString(v, "")
-		params.Scope = &s
-	}
-	if v, ok := m["status"]; ok && v != nil {
-		s := coerceString(v, "")
-		params.Status = &s
-	}
-	if v, ok := m["status_reason"]; ok && v != nil {
-		s := coerceString(v, "")
-		params.StatusReason = &s
-	}
-	params.Facts = coerceStringSlice(m["facts"])
-	params.Concepts = coerceStringSlice(m["concepts"])
-	params.FilesRead = coerceStringSlice(m["files_read"])
-	params.FilesModified = coerceStringSlice(m["files_modified"])
-
-	if params.ID == 0 {
-		return "", fmt.Errorf("id is required")
-	}
-
-	// Validate scope if provided
-	if params.Scope != nil && *params.Scope != "project" && *params.Scope != "global" {
-		return "", fmt.Errorf("scope must be 'project' or 'global'")
-	}
-
-	// Validate status if provided
-	if params.Status != nil && *params.Status != "active" && *params.Status != "resolved" {
-		return "", fmt.Errorf("status must be 'active' or 'resolved'")
-	}
-
-	// Handle always_inject: merge "always-inject" concept into existing concepts
-	if v, ok := m["always_inject"]; ok && v != nil {
-		alwaysInject := coerceBool(v, false)
-		// Fetch current observation to get existing concepts
-		existing, fetchErr := s.observationStore.GetObservationByID(ctx, params.ID)
-		if fetchErr == nil && existing != nil {
-			concepts := make([]string, 0, len(existing.Concepts)+1)
-			hasIt := false
-			for _, c := range existing.Concepts {
-				if c == "always-inject" {
-					hasIt = true
-					if !alwaysInject {
-						continue // remove it
-					}
-				}
-				concepts = append(concepts, c)
-			}
-			if alwaysInject && !hasIt {
-				concepts = append(concepts, "always-inject")
-			}
-			if alwaysInject != hasIt { // changed
-				params.Concepts = concepts
-			}
-		}
-	}
-
-	// Build update struct
-	update := &gorm.ObservationUpdate{}
-	if params.Title != nil {
-		update.Title = params.Title
-	}
-	if params.Subtitle != nil {
-		update.Subtitle = params.Subtitle
-	}
-	if params.Narrative != nil {
-		update.Narrative = params.Narrative
-	}
-	if params.Facts != nil {
-		update.Facts = &params.Facts
-	}
-	if params.Concepts != nil {
-		update.Concepts = &params.Concepts
-	}
-	if params.FilesRead != nil {
-		update.FilesRead = &params.FilesRead
-	}
-	if params.FilesModified != nil {
-		update.FilesModified = &params.FilesModified
-	}
-	if params.Scope != nil {
-		update.Scope = params.Scope
-	}
-	if params.Status != nil {
-		update.Status = params.Status
-	}
-	if params.StatusReason != nil {
-		update.StatusReason = params.StatusReason
-	}
-
-	// Update the observation
-	updatedObs, err := s.observationStore.UpdateObservation(ctx, params.ID, update)
-	if err != nil {
-		return "", fmt.Errorf("update observation: %w", err)
-	}
-
-	// Note: Vector resync is handled by the worker service when available
-	// The MCP server doesn't have access to the embedding service
-
-	response := map[string]any{
-		"updated":       true,
-		"observation":   updatedObs,
-		"vector_resync": "deferred",
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleEditObservation — removed in v5 (US3); observations table dropped.
+func (s *Server) handleEditObservation(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("edit_observation removed in v5 (US3) — observations table dropped")
 }
 
-// handleGetObservationQuality returns quality metrics for an observation.
-func (s *Server) handleGetObservationQuality(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		ID int64
-	}
-	params.ID = coerceInt64(m["id"], 0)
-
-	if params.ID == 0 {
-		return "", fmt.Errorf("id is required")
-	}
-
-	obs, err := s.observationStore.GetObservationByID(ctx, params.ID)
-	if err != nil {
-		return "", fmt.Errorf("get observation: %w", err)
-	}
-	if obs == nil {
-		return "", fmt.Errorf("observation %d not found", params.ID)
-	}
-
-	// Calculate completeness score
-	completenessScore := 0.0
-	maxScore := 5.0
-	suggestions := []string{}
-
-	// Check title (required, 1 point)
-	if obs.Title.Valid && obs.Title.String != "" {
-		completenessScore += 1.0
-	} else {
-		suggestions = append(suggestions, "Add a descriptive title")
-	}
-
-	// Check narrative (important, 1.5 points)
-	if obs.Narrative.Valid && len(obs.Narrative.String) > 50 {
-		completenessScore += 1.5
-	} else if obs.Narrative.Valid && obs.Narrative.String != "" {
-		completenessScore += 0.5
-		suggestions = append(suggestions, "Expand the narrative to provide more context (aim for 50+ characters)")
-	} else {
-		suggestions = append(suggestions, "Add a narrative explaining the observation")
-	}
-
-	// Check facts (valuable, 1 point)
-	if len(obs.Facts) >= 2 {
-		completenessScore += 1.0
-	} else if len(obs.Facts) == 1 {
-		completenessScore += 0.5
-		suggestions = append(suggestions, "Add more key facts (aim for 2+)")
-	} else {
-		suggestions = append(suggestions, "Add key facts to capture important details")
-	}
-
-	// Check concepts (useful, 0.75 points)
-	if len(obs.Concepts) >= 2 {
-		completenessScore += 0.75
-	} else if len(obs.Concepts) == 1 {
-		completenessScore += 0.25
-		suggestions = append(suggestions, "Add more concept tags for better discoverability")
-	} else {
-		suggestions = append(suggestions, "Add concept tags to categorize this observation")
-	}
-
-	// Check file references (helpful, 0.75 points)
-	if len(obs.FilesRead) > 0 || len(obs.FilesModified) > 0 {
-		completenessScore += 0.75
-	} else {
-		suggestions = append(suggestions, "Consider adding file references if applicable")
-	}
-
-	// Determine quality tier
-	qualityTier := "poor"
-	switch {
-	case completenessScore >= 4.0:
-		qualityTier = "excellent"
-	case completenessScore >= 3.0:
-		qualityTier = "good"
-	case completenessScore >= 2.0:
-		qualityTier = "fair"
-	}
-
-	response := map[string]any{
-		"id":                 params.ID,
-		"completeness_score": completenessScore,
-		"max_score":          maxScore,
-		"completeness_pct":   (completenessScore / maxScore) * 100,
-		"quality_tier":       qualityTier,
-		"importance_score":   obs.ImportanceScore,
-		"retrieval_count":    obs.RetrievalCount,
-		"is_superseded":      obs.IsSuperseded,
-		"suggestions":        suggestions,
-		"field_stats": map[string]any{
-			"has_title":            obs.Title.Valid && obs.Title.String != "",
-			"has_narrative":        obs.Narrative.Valid && obs.Narrative.String != "",
-			"narrative_length":     len(obs.Narrative.String),
-			"facts_count":          len(obs.Facts),
-			"concepts_count":       len(obs.Concepts),
-			"files_read_count":     len(obs.FilesRead),
-			"files_modified_count": len(obs.FilesModified),
-		},
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleGetObservationQuality — removed in v5 (US3); observations table dropped.
+func (s *Server) handleGetObservationQuality(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("get_observation_quality removed in v5 (US3) — observations table dropped")
 }
 
-// handleTagObservation adds, removes, or sets tags on an observation.
-func (s *Server) handleTagObservation(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Mode string
-		Tags []string
-		ID   int64
-	}
-	params.Mode = coerceString(m["mode"], "add")
-	params.Tags = coerceStringSlice(m["tags"])
-	params.ID = coerceInt64(m["id"], 0)
-
-	if params.ID == 0 {
-		return "", fmt.Errorf("id is required")
-	}
-	if len(params.Tags) == 0 {
-		return "", fmt.Errorf("tags is required")
-	}
-	if params.Mode != "add" && params.Mode != "remove" && params.Mode != "set" {
-		return "", fmt.Errorf("mode must be 'add', 'remove', or 'set'")
-	}
-
-	// Get current observation
-	obs, err := s.observationStore.GetObservationByID(ctx, params.ID)
-	if err != nil {
-		return "", fmt.Errorf("get observation: %w", err)
-	}
-	if obs == nil {
-		return "", fmt.Errorf("observation %d not found", params.ID)
-	}
-
-	// Compute new tags
-	var newTags []string
-	switch params.Mode {
-	case "set":
-		newTags = params.Tags
-	case "add":
-		// Add new tags, avoiding duplicates
-		tagSet := make(map[string]bool)
-		for _, t := range obs.Concepts {
-			tagSet[t] = true
-			newTags = append(newTags, t)
-		}
-		for _, t := range params.Tags {
-			if !tagSet[t] {
-				tagSet[t] = true
-				newTags = append(newTags, t)
-			}
-		}
-	case "remove":
-		// Remove specified tags
-		removeSet := make(map[string]bool)
-		for _, t := range params.Tags {
-			removeSet[t] = true
-		}
-		for _, t := range obs.Concepts {
-			if !removeSet[t] {
-				newTags = append(newTags, t)
-			}
-		}
-	}
-
-	// Update using existing UpdateObservation method
-	update := &gorm.ObservationUpdate{
-		Concepts: &newTags,
-	}
-	updatedObs, err := s.observationStore.UpdateObservation(ctx, params.ID, update)
-	if err != nil {
-		return "", fmt.Errorf("update observation: %w", err)
-	}
-
-	response := map[string]any{
-		"id":           params.ID,
-		"mode":         params.Mode,
-		"tags_applied": params.Tags,
-		"current_tags": updatedObs.Concepts,
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleTagObservation — removed in v5 (US3); observations table dropped.
+func (s *Server) handleTagObservation(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("tag_observation removed in v5 (US3) — observations table dropped")
 }
 
-// handleGetObservationsByTag retrieves observations with a specific concept tag.
-func (s *Server) handleGetObservationsByTag(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Tag     string
-		Project string
-		Limit   int
-	}
-	params.Tag = coerceString(m["tag"], "")
-	params.Project = coerceString(m["project"], "")
-	params.Limit = coerceInt(m["limit"], 50)
-
-	if params.Tag == "" {
-		return "", fmt.Errorf("tag is required")
-	}
-	if params.Limit < 1 || params.Limit > 200 {
-		params.Limit = 50
-	}
-
-	// v5 (US9): use FTS directly on observationStore instead of search.Manager.
-	observations, err := s.observationStore.SearchObservationsFTS(ctx, params.Tag, params.Project, params.Limit)
-	if err != nil {
-		return "", fmt.Errorf("search by tag: %w", err)
-	}
-
-	// Filter to only observations that have the exact tag in concepts.
-	var filtered []*models.Observation
-	for _, obs := range observations {
-		for _, c := range obs.Concepts {
-			if c == params.Tag {
-				filtered = append(filtered, obs)
-				break
-			}
-		}
-	}
-	if filtered == nil {
-		filtered = []*models.Observation{}
-	}
-
-	response := map[string]any{
-		"tag":          params.Tag,
-		"observations": filtered,
-		"count":        len(filtered),
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleGetObservationsByTag — removed in v5 (US3); observations table dropped.
+func (s *Server) handleGetObservationsByTag(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("get_observations_by_tag removed in v5 (US3) — observations table dropped")
 }
 
-// handleGetTemporalTrends analyzes observation creation patterns over time.
-func (s *Server) handleGetTemporalTrends(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Project string
-		GroupBy string
-		Days    int
-	}
-	params.Project = coerceString(m["project"], "")
-	params.GroupBy = coerceString(m["group_by"], "day")
-	params.Days = coerceInt(m["days"], 30)
-
-	if params.Days < 1 || params.Days > 365 {
-		params.Days = 30
-	}
-
-	// Get observations for analysis
-	obs, err := s.observationStore.GetRecentObservations(ctx, params.Project, params.Days*50) // Rough estimate
-	if err != nil {
-		return "", fmt.Errorf("get observations: %w", err)
-	}
-
-	// Calculate time range
-	now := time.Now()
-	startTime := now.AddDate(0, 0, -params.Days)
-	startEpoch := startTime.UnixMilli()
-
-	// Group observations by time bucket
-	buckets := make(map[string]int)
-	typeDistribution := make(map[string]int)
-	conceptCounts := make(map[string]int)
-	totalInRange := 0
-
-	for _, o := range obs {
-		if o.CreatedAtEpoch < startEpoch {
-			continue
-		}
-		totalInRange++
-
-		created := time.UnixMilli(o.CreatedAtEpoch)
-		var key string
-		switch params.GroupBy {
-		case "week":
-			year, week := created.ISOWeek()
-			key = fmt.Sprintf("%d-W%02d", year, week)
-		case "hour_of_day":
-			key = fmt.Sprintf("%02d:00", created.Hour())
-		default: // day
-			key = created.Format("2006-01-02")
-		}
-		buckets[key]++
-
-		// Track type distribution
-		typeDistribution[string(o.Type)]++
-
-		// Track top concepts
-		for _, c := range o.Concepts {
-			conceptCounts[c]++
-		}
-	}
-
-	// Find peak period
-	peakPeriod := ""
-	peakCount := 0
-	for k, v := range buckets {
-		if v > peakCount {
-			peakCount = v
-			peakPeriod = k
-		}
-	}
-
-	// Sort and get top concepts
-	type conceptEntry struct {
-		name  string
-		count int
-	}
-	var topConcepts []conceptEntry
-	for name, count := range conceptCounts {
-		topConcepts = append(topConcepts, conceptEntry{name, count})
-	}
-	// Simple sort - just take top 10
-	for i := 0; i < len(topConcepts) && i < 10; i++ {
-		for j := i + 1; j < len(topConcepts); j++ {
-			if topConcepts[j].count > topConcepts[i].count {
-				topConcepts[i], topConcepts[j] = topConcepts[j], topConcepts[i]
-			}
-		}
-	}
-	if len(topConcepts) > 10 {
-		topConcepts = topConcepts[:10]
-	}
-	topConceptsMap := make([]map[string]any, len(topConcepts))
-	for i, c := range topConcepts {
-		topConceptsMap[i] = map[string]any{"concept": c.name, "count": c.count}
-	}
-
-	response := map[string]any{
-		"period": map[string]any{
-			"start":    startTime.Format("2006-01-02"),
-			"end":      now.Format("2006-01-02"),
-			"days":     params.Days,
-			"group_by": params.GroupBy,
-		},
-		"summary": map[string]any{
-			"total_observations": totalInRange,
-			"daily_average":      float64(totalInRange) / float64(params.Days),
-			"peak_period":        peakPeriod,
-			"peak_count":         peakCount,
-		},
-		"distribution":      buckets,
-		"type_distribution": typeDistribution,
-		"top_concepts":      topConceptsMap,
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleGetTemporalTrends — removed in v5 (US3); observations table dropped.
+func (s *Server) handleGetTemporalTrends(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("get_temporal_trends removed in v5 (US3) — observations table dropped")
 }
 
-// handleGetDataQualityReport generates a comprehensive quality assessment.
-func (s *Server) handleGetDataQualityReport(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Project string
-		Limit   int
-	}
-	params.Project = coerceString(m["project"], "")
-	params.Limit = coerceInt(m["limit"], 100)
-
-	if params.Limit < 10 || params.Limit > 500 {
-		params.Limit = 100
-	}
-
-	// Get observations for analysis
-	obs, err := s.observationStore.GetRecentObservations(ctx, params.Project, params.Limit)
-	if err != nil {
-		return "", fmt.Errorf("get observations: %w", err)
-	}
-
-	if len(obs) == 0 {
-		return `{"error": "no observations found", "analyzed": 0}`, nil
-	}
-
-	// Quality analysis
-	qualityScores := make([]float64, 0, len(obs))
-	issuesFound := make(map[string]int)
-	improvements := make(map[string]int)
-	scoreDistribution := map[string]int{"excellent": 0, "good": 0, "fair": 0, "poor": 0}
-
-	for _, o := range obs {
-		score := 0.0
-		maxScore := 5.0
-
-		// Check completeness
-		if o.Title.Valid && o.Title.String != "" {
-			score += 1.0
-		} else {
-			issuesFound["missing_title"]++
-			improvements["add_title"]++
-		}
-
-		if o.Narrative.Valid && o.Narrative.String != "" {
-			score += 1.0
-		} else {
-			issuesFound["missing_narrative"]++
-			improvements["add_narrative"]++
-		}
-
-		if len(o.Facts) > 0 {
-			score += 1.0
-			if len(o.Facts) >= 3 {
-				score += 0.5 // Bonus for multiple facts
-			}
-		} else {
-			issuesFound["no_facts"]++
-			improvements["add_facts"]++
-		}
-
-		if len(o.Concepts) > 0 {
-			score += 1.0
-		} else {
-			issuesFound["no_concepts"]++
-			improvements["add_concepts"]++
-		}
-
-		if len(o.FilesRead) > 0 || len(o.FilesModified) > 0 {
-			score += 0.5
-		}
-
-		normalized := (score / maxScore) * 100
-		qualityScores = append(qualityScores, normalized)
-
-		// Categorize
-		switch {
-		case normalized >= 80:
-			scoreDistribution["excellent"]++
-		case normalized >= 60:
-			scoreDistribution["good"]++
-		case normalized >= 40:
-			scoreDistribution["fair"]++
-		default:
-			scoreDistribution["poor"]++
-		}
-	}
-
-	// Calculate average
-	var avgScore float64
-	for _, s := range qualityScores {
-		avgScore += s
-	}
-	avgScore /= float64(len(qualityScores))
-
-	// Build top issues list
-	type issueEntry struct {
-		name  string
-		count int
-	}
-	var topIssues []issueEntry
-	for name, count := range issuesFound {
-		topIssues = append(topIssues, issueEntry{name, count})
-	}
-	for i := 0; i < len(topIssues) && i < 5; i++ {
-		for j := i + 1; j < len(topIssues); j++ {
-			if topIssues[j].count > topIssues[i].count {
-				topIssues[i], topIssues[j] = topIssues[j], topIssues[i]
-			}
-		}
-	}
-	if len(topIssues) > 5 {
-		topIssues = topIssues[:5]
-	}
-
-	// Convert top issues to response format
-	topIssuesList := make([]map[string]any, 0, len(topIssues))
-	for _, issue := range topIssues {
-		topIssuesList = append(topIssuesList, map[string]any{
-			"issue": issue.name,
-			"count": issue.count,
-		})
-	}
-
-	response := map[string]any{
-		"analyzed": len(obs),
-		"project":  params.Project,
-		"quality_summary": map[string]any{
-			"average_score": fmt.Sprintf("%.1f%%", avgScore),
-			"distribution":  scoreDistribution,
-		},
-		"issues_found": issuesFound,
-		"top_issues":   topIssuesList,
-		"improvements": improvements,
-		"recommendations": []string{
-			"Add titles to observations for better discoverability",
-			"Include narratives to provide context",
-			"Add concept tags for better organization",
-			"Include at least 2-3 key facts per observation",
-		},
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleGetDataQualityReport — removed in v5 (US3); observations table dropped.
+func (s *Server) handleGetDataQualityReport(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("get_data_quality_report removed in v5 (US3) — observations table dropped")
 }
 
-// handleBatchTagByPattern applies tags to observations matching a pattern.
-func (s *Server) handleBatchTagByPattern(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Pattern    string
-		Project    string
-		Tags       []string
-		MaxMatches int
-		DryRun     bool
-	}
-	params.Pattern = coerceString(m["pattern"], "")
-	params.Project = coerceString(m["project"], "")
-	params.Tags = coerceStringSlice(m["tags"])
-	params.MaxMatches = coerceInt(m["max_matches"], 100)
-	params.DryRun = coerceBool(m["dry_run"], true)
-
-	if params.Pattern == "" {
-		return "", fmt.Errorf("pattern is required")
-	}
-	if len(params.Tags) == 0 {
-		return "", fmt.Errorf("tags is required")
-	}
-	if params.MaxMatches < 1 || params.MaxMatches > 500 {
-		params.MaxMatches = 100
-	}
-
-	// v5 (US9): use FTS directly on observationStore instead of search.Manager.
-	observations, err := s.observationStore.SearchObservationsFTS(ctx, params.Pattern, params.Project, params.MaxMatches)
-	if err != nil {
-		return "", fmt.Errorf("search: %w", err)
-	}
-
-	// Collect matching observation IDs
-	var matches []map[string]any
-	var taggedCount int
-
-	for _, obs := range observations {
-		title := ""
-		if obs.Title.Valid {
-			title = obs.Title.String
-		}
-		match := map[string]any{
-			"id":    obs.ID,
-			"title": title,
-		}
-		matches = append(matches, match)
-
-		// Apply tags if not dry run
-		if !params.DryRun {
-			// Merge existing tags with new tags (avoid duplicates)
-			tagSet := make(map[string]bool)
-			newTags := make([]string, 0, len(obs.Concepts)+len(params.Tags))
-			for _, t := range obs.Concepts {
-				tagSet[t] = true
-				newTags = append(newTags, t)
-			}
-			for _, t := range params.Tags {
-				if !tagSet[t] {
-					tagSet[t] = true
-					newTags = append(newTags, t)
-				}
-			}
-
-			update := &gorm.ObservationUpdate{
-				Concepts: &newTags,
-			}
-			_, err = s.observationStore.UpdateObservation(ctx, obs.ID, update)
-			if err == nil {
-				taggedCount++
-			}
-		}
-	}
-
-	response := map[string]any{
-		"pattern":       params.Pattern,
-		"tags":          params.Tags,
-		"dry_run":       params.DryRun,
-		"matches_found": len(matches),
-		"matches":       matches,
-	}
-
-	if !params.DryRun {
-		response["tagged_count"] = taggedCount
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-
-	return string(output), nil
+// handleBatchTagByPattern — removed in v5 (US3); observations table dropped.
+func (s *Server) handleBatchTagByPattern(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("batch_tag_by_pattern removed in v5 (US3) — observations table dropped")
 }
 
 // handleExplainSearchRanking was removed in v5 (US9): internal/search dropped.
 
-// handleExportObservations exports observations in various formats.
-func (s *Server) handleExportObservations(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Format    string
-		Project   string
-		ObsType   string
-		Limit     int
-		DateStart int64
-		DateEnd   int64
-	}
-	params.Format = coerceString(m["format"], "json")
-	params.Project = coerceString(m["project"], "")
-	params.ObsType = coerceString(m["obs_type"], "")
-	params.Limit = coerceInt(m["limit"], 100)
-	params.DateStart = coerceInt64(m["date_start"], 0)
-	params.DateEnd = coerceInt64(m["date_end"], 0)
-
-	if params.Limit < 1 || params.Limit > 1000 {
-		params.Limit = 100
-	}
-
-	// v5 (US9): use GetAllRecentObservations + in-memory filter; search.Manager removed.
-	allObs, err := s.observationStore.GetAllRecentObservations(ctx, params.Limit)
-	if err != nil {
-		return "", fmt.Errorf("get observations: %w", err)
-	}
-
-	// Filter by project, type, and date range in-memory.
-	observations := make([]*models.Observation, 0, len(allObs))
-	for _, obs := range allObs {
-		if params.Project != "" && obs.Project != params.Project {
-			continue
-		}
-		if params.ObsType != "" && string(obs.Type) != params.ObsType {
-			continue
-		}
-		if params.DateStart > 0 || params.DateEnd > 0 {
-			ts, err := time.Parse(time.RFC3339, obs.CreatedAt)
-			if err != nil {
-				// Unparseable timestamp — skip the date filter for this observation.
-				observations = append(observations, obs)
-				continue
-			}
-			if params.DateStart > 0 && ts.UnixMilli() < params.DateStart {
-				continue
-			}
-			if params.DateEnd > 0 && ts.UnixMilli() > params.DateEnd {
-				continue
-			}
-		}
-		observations = append(observations, obs)
-	}
-
-	// Format output based on requested format
-	var output string
-	switch params.Format {
-	case "jsonl":
-		// JSON Lines format - one JSON object per line
-		var lines []string
-		for _, obs := range observations {
-			line, err := json.Marshal(obs)
-			if err != nil {
-				continue
-			}
-			lines = append(lines, string(line))
-		}
-		// Use proper JSON marshaling to avoid injection issues
-		jsonlOutput := struct {
-			Format string `json:"format"`
-			Data   string `json:"data"`
-			Count  int    `json:"count"`
-		}{
-			Format: "jsonl",
-			Count:  len(observations),
-			Data:   strings.Join(lines, "\n"),
-		}
-		outputBytes, err := json.Marshal(jsonlOutput)
-		if err != nil {
-			return "", fmt.Errorf("marshal jsonl output: %w", err)
-		}
-		output = string(outputBytes)
-
-	case "markdown":
-		// Markdown format for human reading
-		var md strings.Builder
-		md.WriteString("# Observations Export\n\n")
-		md.WriteString(fmt.Sprintf("Total: %d observations\n\n", len(observations)))
-		md.WriteString("---\n\n")
-
-		for _, obs := range observations {
-			title := ""
-			if obs.Title.Valid {
-				title = obs.Title.String
-			}
-			md.WriteString(fmt.Sprintf("## [%s] %s\n\n", obs.Type, title))
-			if obs.Subtitle.Valid && obs.Subtitle.String != "" {
-				md.WriteString(fmt.Sprintf("*%s*\n\n", obs.Subtitle.String))
-			}
-			if obs.Narrative.Valid && obs.Narrative.String != "" {
-				md.WriteString(fmt.Sprintf("%s\n\n", obs.Narrative.String))
-			}
-			if len(obs.Facts) > 0 {
-				md.WriteString("### Key Facts\n")
-				for _, fact := range obs.Facts {
-					md.WriteString(fmt.Sprintf("- %s\n", fact))
-				}
-				md.WriteString("\n")
-			}
-			if len(obs.Concepts) > 0 {
-				md.WriteString(fmt.Sprintf("**Tags:** %s\n\n", strings.Join(obs.Concepts, ", ")))
-			}
-			md.WriteString(fmt.Sprintf("**ID:** %d | **Created:** %s | **Importance:** %.2f\n\n",
-				obs.ID, obs.CreatedAt, obs.ImportanceScore))
-			md.WriteString("---\n\n")
-		}
-
-		// Wrap markdown in JSON response
-		response := map[string]any{
-			"format": "markdown",
-			"count":  len(observations),
-			"data":   md.String(),
-		}
-		outputBytes, err := json.Marshal(response)
-		if err != nil {
-			return "", fmt.Errorf("marshal response: %w", err)
-		}
-		output = string(outputBytes)
-
-	default: // json
-		response := map[string]any{
-			"format":       "json",
-			"count":        len(observations),
-			"observations": observations,
-		}
-		outputBytes, err := json.Marshal(response)
-		if err != nil {
-			return "", fmt.Errorf("marshal response: %w", err)
-		}
-		output = string(outputBytes)
-	}
-
-	return output, nil
+// handleExportObservations — removed in v5 (US3); observations table dropped.
+func (s *Server) handleExportObservations(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("export_observations removed in v5 (US3) — observations table dropped")
 }
 
 // handleBackfillStatus returns backfill run status via the injected status function.
@@ -3074,36 +1612,10 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 	// Check database health
 	dbHealth := &SubsystemHealth{
 		Status:  "healthy",
-		Metrics: make(map[string]any),
-	}
-	if s.observationStore != nil {
-		// Count observations
-		count, err := s.observationStore.GetObservationCount(ctx, "")
-		if err != nil {
-			dbHealth.Status = "unhealthy"
-			dbHealth.Message = "Database query failed: " + err.Error()
-			report.HealthScore -= 30
-		} else {
-			dbHealth.Metrics["total_observations"] = count
-			dbHealth.Message = "Database operational"
-		}
-
-		// Check for recent activity
-		recent, err := s.observationStore.GetAllRecentObservations(ctx, 1)
-		if err == nil && len(recent) > 0 {
-			dbHealth.Metrics["last_observation"] = recent[0].CreatedAt
-			// Check epoch for staleness warning
-			if recent[0].CreatedAtEpoch > 0 {
-				lastActivityTime := time.UnixMilli(recent[0].CreatedAtEpoch)
-				if time.Since(lastActivityTime) > 7*24*time.Hour {
-					dbHealth.Warnings = append(dbHealth.Warnings, "No observations in the last 7 days")
-				}
-			}
-		}
-	} else {
-		dbHealth.Status = "unhealthy"
-		dbHealth.Message = "Observation store not initialized"
-		report.HealthScore -= 50
+		Message: "Database subsystem healthy in v5; observation-era counters removed",
+		Metrics: map[string]any{
+			"note": "Static entities and memories replaced observation-era health counters in v5",
+		},
 	}
 	report.Subsystems["database"] = dbHealth
 
@@ -3170,7 +1682,7 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 }
 
 // handleAnalyzeSearchPatterns analyzes search query patterns.
-func (s *Server) handleAnalyzeSearchPatterns(ctx context.Context, args json.RawMessage) (string, error) {
+func (s *Server) handleAnalyzeSearchPatterns(_ context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -3182,7 +1694,6 @@ func (s *Server) handleAnalyzeSearchPatterns(ctx context.Context, args json.RawM
 	}
 	params.Days = coerceInt(m["days"], 0)
 	params.TopN = coerceInt(m["top_n"], 0)
-
 	if params.Days <= 0 {
 		params.Days = 7
 	}
@@ -3190,76 +1701,17 @@ func (s *Server) handleAnalyzeSearchPatterns(ctx context.Context, args json.RawM
 		params.TopN = 10
 	}
 
-	type QueryPattern struct {
-		Query       string  `json:"query"`
-		LastUsed    string  `json:"last_used"`
-		Count       int     `json:"count"`
-		AvgResults  float64 `json:"avg_results"`
-		ZeroResults int     `json:"zero_result_count"`
-	}
-
-	type PatternAnalysis struct {
-		Period            string         `json:"period"`
-		TopQueries        []QueryPattern `json:"top_queries"`
-		ZeroResultQueries []string       `json:"zero_result_queries,omitempty"`
-		Insights          []string       `json:"insights,omitempty"`
-		TotalSearches     int            `json:"total_searches"`
-		UniqueQueries     int            `json:"unique_queries"`
-	}
-
-	analysis := &PatternAnalysis{
-		Period:            fmt.Sprintf("Last %d days", params.Days),
-		TopQueries:        []QueryPattern{},
-		ZeroResultQueries: []string{},
-		Insights:          []string{},
-	}
-
-	// v5 (US9): search.Manager removed — no search metrics or cache stats available.
-
-	// Analyze observation patterns to suggest search improvements
-	if s.observationStore != nil {
-		// Get recent observations to understand content patterns
-		observations, err := s.observationStore.GetAllRecentObservations(ctx, 100)
-		if err == nil {
-			analysis.UniqueQueries = len(observations)
-
-			// Analyze observation types
-			typeCounts := make(map[string]int)
-			for _, obs := range observations {
-				typeCounts[string(obs.Type)]++
-			}
-
-			// Find most common types
-			mostCommon := ""
-			maxCount := 0
-			for t, c := range typeCounts {
-				if c > maxCount {
-					mostCommon = t
-					maxCount = c
-				}
-			}
-			if mostCommon != "" {
-				analysis.Insights = append(analysis.Insights,
-					fmt.Sprintf("Most common observation type: %s (%d occurrences)", mostCommon, maxCount))
-			}
-
-			// Check for concept coverage
-			conceptCounts := make(map[string]int)
-			for _, obs := range observations {
-				for _, c := range obs.Concepts {
-					conceptCounts[c]++
-				}
-			}
-			if len(conceptCounts) > 0 {
-				analysis.Insights = append(analysis.Insights,
-					fmt.Sprintf("%d unique concepts across %d observations", len(conceptCounts), len(observations)))
-			}
-		}
-	}
-
-	// Add general recommendations
-	if len(analysis.Insights) == 0 {
-		analysis.Insights = append(analysis.Insights, "Insufficient data for pattern analysis")
+	analysis := map[string]any{
+		"period":              fmt.Sprintf("Last %d days", params.Days),
+		"top_queries":         []map[string]any{},
+		"zero_result_queries": []string{},
+		"insights": []string{
+			"Search metrics unavailable in v5",
+			"Observation-era search analytics were removed with the observations table cleanup",
+		},
+		"total_searches": 0,
+		"unique_queries": 0,
+		"note":           "search metrics unavailable in v5",
 	}
 
 	output, err := json.Marshal(analysis)
@@ -3367,184 +1819,14 @@ func (s *Server) handleGetObservationRelationships(ctx context.Context, args jso
 	return string(output), nil
 }
 
-// handleGetObservationScoringBreakdown returns detailed scoring breakdown for an observation.
-func (s *Server) handleGetObservationScoringBreakdown(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		ID int64
-	}
-	params.ID = coerceInt64(m["id"], 0)
-
-	if params.ID <= 0 {
-		return "", fmt.Errorf("id is required and must be positive")
-	}
-
-	// Get the observation
-	obs, err := s.observationStore.GetObservationByID(ctx, params.ID)
-	if err != nil {
-		return "", fmt.Errorf("get observation: %w", err)
-	}
-	if obs == nil {
-		return "", fmt.Errorf("observation not found: %d", params.ID)
-	}
-
-	// Build response with observation scoring data stored on the observation itself.
-	// Component-level breakdown was removed with the scoring package in v5.
-	response := map[string]any{
-		"observation": map[string]any{
-			"id":         obs.ID,
-			"title":      obs.Title.String,
-			"type":       string(obs.Type),
-			"project":    obs.Project,
-			"created_at": obs.CreatedAtEpoch,
-		},
-		"scoring": map[string]any{
-			"final_score":        obs.ImportanceScore,
-			"effectiveness_score": obs.EffectivenessScore,
-			"utility_score":      obs.UtilityScore,
-		},
-		"explanation": map[string]any{
-			"note": "Component-level scoring breakdown was removed in v5. Use final_score for ranking.",
-		},
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-	return string(output), nil
+// handleGetObservationScoringBreakdown — removed in v5 (US3); observations table dropped.
+func (s *Server) handleGetObservationScoringBreakdown(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("get_observation_scoring_breakdown removed in v5 (US3) — observations table dropped")
 }
 
-// handleAnalyzeObservationImportance returns importance analysis for a project's observations.
-func (s *Server) handleAnalyzeObservationImportance(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		IncludeTopScored      *bool
-		IncludeMostRetrieved  *bool
-		IncludeConceptWeights *bool
-		Project               string
-		Limit                 int
-	}
-	params.Project = coerceString(m["project"], "")
-	params.Limit = coerceInt(m["limit"], 0)
-	if v, ok := m["include_top_scored"]; ok && v != nil {
-		b := coerceBool(v, true)
-		params.IncludeTopScored = &b
-	}
-	if v, ok := m["include_most_retrieved"]; ok && v != nil {
-		b := coerceBool(v, true)
-		params.IncludeMostRetrieved = &b
-	}
-	if v, ok := m["include_concept_weights"]; ok && v != nil {
-		b := coerceBool(v, true)
-		params.IncludeConceptWeights = &b
-	}
-
-	// Set defaults
-	if params.Limit <= 0 {
-		params.Limit = 10
-	}
-	if params.Limit > 50 {
-		params.Limit = 50
-	}
-	includeTopScored := params.IncludeTopScored == nil || *params.IncludeTopScored
-	includeMostRetrieved := params.IncludeMostRetrieved == nil || *params.IncludeMostRetrieved
-	includeConceptWeights := params.IncludeConceptWeights == nil || *params.IncludeConceptWeights
-
-	response := make(map[string]any)
-	response["project"] = params.Project
-	if params.Project == "" {
-		response["project"] = "(all projects)"
-	}
-
-	// Get feedback statistics
-	stats, err := s.observationStore.GetObservationFeedbackStats(ctx, params.Project)
-	if err != nil {
-		return "", fmt.Errorf("get feedback stats: %w", err)
-	}
-	response["feedback_stats"] = stats
-
-	// Get top-scoring observations
-	if includeTopScored {
-		topScored, err := s.observationStore.GetTopScoringObservations(ctx, params.Project, params.Limit)
-		if err != nil {
-			log.Warn().Err(err).Msg("Failed to get top-scoring observations")
-		} else {
-			topScoredSummary := make([]map[string]any, 0, len(topScored))
-			for _, obs := range topScored {
-				topScoredSummary = append(topScoredSummary, map[string]any{
-					"id":               obs.ID,
-					"title":            obs.Title.String,
-					"type":             string(obs.Type),
-					"importance_score": obs.ImportanceScore,
-				})
-			}
-			response["top_scoring_observations"] = topScoredSummary
-		}
-	}
-
-	// Get most-retrieved observations
-	if includeMostRetrieved {
-		mostRetrieved, err := s.observationStore.GetMostRetrievedObservations(ctx, params.Project, params.Limit)
-		if err != nil {
-			log.Warn().Err(err).Msg("Failed to get most-retrieved observations")
-		} else {
-			mostRetrievedSummary := make([]map[string]any, 0, len(mostRetrieved))
-			for _, obs := range mostRetrieved {
-				mostRetrievedSummary = append(mostRetrievedSummary, map[string]any{
-					"id":              obs.ID,
-					"title":           obs.Title.String,
-					"type":            string(obs.Type),
-					"retrieval_count": obs.RetrievalCount,
-				})
-			}
-			response["most_retrieved_observations"] = mostRetrievedSummary
-		}
-	}
-
-	// Get concept weights
-	if includeConceptWeights {
-		conceptWeights, err := s.observationStore.GetConceptWeights(ctx)
-		if err != nil {
-			log.Warn().Err(err).Msg("Failed to get concept weights")
-		} else if len(conceptWeights) > 0 {
-			response["concept_weights"] = conceptWeights
-		}
-	}
-
-	// Generate insights
-	insights := []string{}
-	if stats != nil {
-		if stats.Positive > 0 {
-			insights = append(insights, fmt.Sprintf("%d observations marked as valuable (positive feedback)", stats.Positive))
-		}
-		if stats.Negative > 0 {
-			insights = append(insights, fmt.Sprintf("%d observations marked as not helpful (negative feedback)", stats.Negative))
-		}
-		if stats.AvgScore > 0 {
-			insights = append(insights, fmt.Sprintf("Average importance score: %.2f", stats.AvgScore))
-		}
-		if stats.AvgRetrieval > 0 {
-			insights = append(insights, fmt.Sprintf("Average retrieval count: %.1f", stats.AvgRetrieval))
-		}
-	}
-	if len(insights) > 0 {
-		response["insights"] = insights
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-	return string(output), nil
+// handleAnalyzeObservationImportance — removed in v5 (US3); observations table dropped.
+func (s *Server) handleAnalyzeObservationImportance(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("analyze_observation_importance removed in v5 (US3) — observations table dropped")
 }
 
 // handleSearchSessions handles full-text search across indexed sessions.
@@ -3687,61 +1969,7 @@ func (s *Server) handleListSessions(ctx context.Context, args json.RawMessage) (
 	return string(data), nil
 }
 
-// handleFindByFileContext retrieves observations directly associated with a specific file path,
-// ordered by importance score DESC. Uses the JSONB file-index for precise, fast lookups.
-func (s *Server) handleFindByFileContext(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
-	}
-
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Project  string
-		FilePath string
-		Limit    int
-	}
-	params.Project = strings.TrimSpace(coerceString(m["project"], ""))
-	params.FilePath = coerceString(m["file_path"], "")
-	params.Limit = coerceInt(m["limit"], 10)
-
-	if params.Project == "" {
-		return "", fmt.Errorf("project is required")
-	}
-	if params.FilePath == "" {
-		return "", fmt.Errorf("file_path is required")
-	}
-	if params.Limit < 1 || params.Limit > 100 {
-		params.Limit = 10
-	}
-
-	observations, err := s.observationStore.GetObservationsByFile(ctx, params.Project, params.FilePath, params.Limit)
-	if err != nil {
-		return "", fmt.Errorf("get observations by file: %w", err)
-	}
-
-	type fileContextResult struct {
-		FilePath     string                `json:"file_path"`
-		Count        int                   `json:"count"`
-		Observations []*models.Observation `json:"observations"`
-	}
-
-	out := fileContextResult{
-		FilePath:     params.FilePath,
-		Count:        len(observations),
-		Observations: observations,
-	}
-	if out.Observations == nil {
-		out.Observations = []*models.Observation{}
-	}
-
-	output, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal result: %w", err)
-	}
-
-	return string(output), nil
+// handleFindByFileContext — removed in v5 (US3); observations table dropped.
+func (s *Server) handleFindByFileContext(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", fmt.Errorf("find_by_file_context removed in v5 (US3) — observations table dropped")
 }

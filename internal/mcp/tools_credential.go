@@ -3,11 +3,18 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
+	"time"
+	"unsafe"
+
+	gogorm "gorm.io/gorm"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
+	gormstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -25,10 +32,62 @@ func (s *Server) getVault() (*crypto.Vault, error) {
 	return s.vault, s.vaultInitErr
 }
 
-// handleStoreCredential encrypts and stores a credential observation.
+// credentialStore derives a dedicated CredentialStore from the MCP server's existing
+// in-process GORM wiring. v5 removed observation-backed credentials, but the MCP
+// server still has a MemoryStore, which already carries the shared *gorm.DB handle.
+//
+// Scope note: this keeps the fix inside tools_credential.go, as requested, without
+// widening Server's public surface or adding new injected fields.
+func (s *Server) credentialStore() (*gormstore.CredentialStore, error) {
+	if s.memoryStore == nil {
+		return nil, fmt.Errorf("credential store not available")
+	}
+
+	db, err := extractMemoryStoreDB(s.memoryStore)
+	if err != nil {
+		return nil, fmt.Errorf("credential store not available: %w", err)
+	}
+	return newCredentialStoreFromDB(db), nil
+}
+
+func extractMemoryStoreDB(ms *gormstore.MemoryStore) (*gogorm.DB, error) {
+	if ms == nil {
+		return nil, fmt.Errorf("memory store is nil")
+	}
+
+	value := reflect.ValueOf(ms)
+	if value.Kind() != reflect.Pointer || value.IsNil() {
+		return nil, fmt.Errorf("memory store is not an initialized pointer")
+	}
+
+	field := value.Elem().FieldByName("db")
+	if !field.IsValid() {
+		return nil, fmt.Errorf("memory store db field not found")
+	}
+	if !field.CanAddr() {
+		return nil, fmt.Errorf("memory store db field is not addressable")
+	}
+
+	dbValue := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
+	db, ok := dbValue.Interface().(*gogorm.DB)
+	if !ok || db == nil {
+		return nil, fmt.Errorf("memory store db field has unexpected type")
+	}
+	return db, nil
+}
+
+func newCredentialStoreFromDB(db *gogorm.DB) *gormstore.CredentialStore {
+	store := &gormstore.CredentialStore{}
+	field := reflect.ValueOf(store).Elem().FieldByName("db")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(db))
+	return store
+}
+
+// handleStoreCredential encrypts and stores a credential in the dedicated credentials table.
 func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
+	store, err := s.credentialStore()
+	if err != nil {
+		return "", err
 	}
 
 	m, err := parseArgs(args)
@@ -63,7 +122,10 @@ func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage
 	default:
 		return "", fmt.Errorf("invalid scope %q: must be \"project\" or \"global\"", params.Scope)
 	}
-	if params.Scope == "project" && params.Project == "" {
+	if params.Scope == "global" {
+		return "", fmt.Errorf("global-scope credentials are not yet supported; use scope \"project\" and provide a project name")
+	}
+	if params.Project == "" {
 		return "", fmt.Errorf("project is required for project-scoped credentials")
 	}
 
@@ -77,43 +139,22 @@ func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("encrypt credential: %w", err)
 	}
 
-	// Expand hierarchical tags: "lang:go" → ["lang", "lang:go"]
-	seen := make(map[string]bool)
-	var concepts []string
-	for _, tag := range params.Tags {
-		parts := expandTagHierarchy(tag)
-		for _, p := range parts {
-			if !seen[p] {
-				seen[p] = true
-				concepts = append(concepts, p)
-			}
-		}
-	}
-
-	scope := models.ObservationScope(params.Scope)
-	obs := &models.ParsedObservation{
-		Type:                     models.ObsTypeCredential,
-		SourceType:               models.SourceManual,
-		Title:                    params.Name,
-		Narrative:                params.Name,
-		Concepts:                 concepts,
-		Scope:                    scope,
+	created, err := store.Create(ctx, &models.Credential{
+		Project:                  params.Project,
+		Key:                      params.Name,
 		EncryptedSecret:          ciphertext,
 		EncryptionKeyFingerprint: v.Fingerprint(),
-	}
-
-	// Use a stable synthetic session ID for vault-created credentials
-	// to avoid unique constraint violations on empty claude_session_id.
-	const vaultSessionID = "credential:vault"
-	id, _, err := s.observationStore.StoreObservation(ctx, vaultSessionID, params.Project, obs, 0, 0)
+		Scope:                    params.Scope,
+		EditedBy:                 "mcp",
+	})
 	if err != nil {
-		return "", fmt.Errorf("store credential observation: %w", err)
+		return "", fmt.Errorf("store credential: %w", err)
 	}
 
 	result := map[string]any{
-		"id":      id,
+		"id":      created.ID,
 		"name":    params.Name,
-		"scope":   string(scope),
+		"scope":   params.Scope,
 		"message": "Credential stored successfully",
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
@@ -125,8 +166,9 @@ func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage
 
 // handleGetCredential retrieves and decrypts a credential by name.
 func (s *Server) handleGetCredential(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
+	store, err := s.credentialStore()
+	if err != nil {
+		return "", err
 	}
 
 	m, err := parseArgs(args)
@@ -143,28 +185,28 @@ func (s *Server) handleGetCredential(ctx context.Context, args json.RawMessage) 
 	if params.Name == "" {
 		return "", fmt.Errorf("name is required")
 	}
+	if params.Project == "" {
+		return "", fmt.Errorf("project is required")
+	}
 
 	v, err := s.getVault()
 	if err != nil {
 		return "", fmt.Errorf("vault not available — configure ENGRAM_ENCRYPTION_KEY or ENGRAM_ENCRYPTION_KEY_FILE: %w", err)
 	}
 
-	cred, err := s.observationStore.GetCredential(ctx, params.Name, params.Project)
+	cred, err := store.Get(ctx, params.Project, params.Name)
 	if err != nil {
+		if errors.Is(err, gogorm.ErrRecordNotFound) {
+			return "", fmt.Errorf("credential %q not found", params.Name)
+		}
 		return "", fmt.Errorf("get credential: %w", err)
 	}
-	if cred == nil {
-		return "", fmt.Errorf("credential %q not found", params.Name)
-	}
 
-	// Verify key fingerprint before decryption to detect key mismatch early.
-	if cred.EncryptionKeyFingerprint.Valid && cred.EncryptionKeyFingerprint.String != "" {
-		if !v.MatchesFingerprint(cred.EncryptionKeyFingerprint.String) {
-			return "", fmt.Errorf(
-				"encryption key mismatch: credential %q was encrypted with key fingerprint %q, current key has fingerprint %q — restore the original key to decrypt",
-				params.Name, cred.EncryptionKeyFingerprint.String, v.Fingerprint(),
-			)
-		}
+	if cred.EncryptionKeyFingerprint != "" && !v.MatchesFingerprint(cred.EncryptionKeyFingerprint) {
+		return "", fmt.Errorf(
+			"encryption key mismatch: credential %q was encrypted with key fingerprint %q, current key has fingerprint %q — restore the original key to decrypt",
+			params.Name, cred.EncryptionKeyFingerprint, v.Fingerprint(),
+		)
 	}
 
 	plaintext, err := v.Decrypt(cred.EncryptedSecret)
@@ -175,7 +217,7 @@ func (s *Server) handleGetCredential(ctx context.Context, args json.RawMessage) 
 	result := map[string]any{
 		"name":  params.Name,
 		"value": plaintext,
-		"scope": string(cred.Scope),
+		"scope": cred.Scope,
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -186,8 +228,9 @@ func (s *Server) handleGetCredential(ctx context.Context, args json.RawMessage) 
 
 // handleListCredentials lists credential names and metadata (no values).
 func (s *Server) handleListCredentials(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
+	store, err := s.credentialStore()
+	if err != nil {
+		return "", err
 	}
 
 	m, err := parseArgs(args)
@@ -199,32 +242,32 @@ func (s *Server) handleListCredentials(ctx context.Context, args json.RawMessage
 		Project string
 	}
 	params.Project = coerceString(m["project"], "")
+	if params.Project == "" {
+		return "[]", nil
+	}
 
-	creds, err := s.observationStore.ListCredentials(ctx, params.Project)
+	creds, err := store.List(ctx, params.Project)
 	if err != nil {
 		return "", fmt.Errorf("list credentials: %w", err)
 	}
 
 	type credItem struct {
-		Concepts []string `json:"concepts,omitempty"`
-		Name     string   `json:"name"`
-		Scope    string   `json:"scope"`
-		ID       int64    `json:"id"`
+		Name      string `json:"name"`
+		Scope     string `json:"scope"`
+		CreatedAt string `json:"created_at,omitempty"`
+		ID        int64  `json:"id"`
 	}
 	items := make([]credItem, 0, len(creds))
 	for _, c := range creds {
-		name := ""
-		if c.Title.Valid {
-			name = c.Title.String
-		} else if c.Narrative.Valid {
-			name = c.Narrative.String
+		item := credItem{
+			ID:    c.ID,
+			Name:  c.Key,
+			Scope: c.Scope,
 		}
-		items = append(items, credItem{
-			ID:       c.ID,
-			Name:     name,
-			Scope:    string(c.Scope),
-			Concepts: []string(c.Concepts),
-		})
+		if !c.CreatedAt.IsZero() {
+			item.CreatedAt = c.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		items = append(items, item)
 	}
 
 	out, err := json.MarshalIndent(items, "", "  ")
@@ -236,8 +279,9 @@ func (s *Server) handleListCredentials(ctx context.Context, args json.RawMessage
 
 // handleDeleteCredential removes a credential by name.
 func (s *Server) handleDeleteCredential(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
+	store, err := s.credentialStore()
+	if err != nil {
+		return "", err
 	}
 
 	m, err := parseArgs(args)
@@ -265,11 +309,17 @@ func (s *Server) handleDeleteCredential(ctx context.Context, args json.RawMessag
 	default:
 		return "", fmt.Errorf("invalid scope %q: must be \"project\" or \"global\"", params.Scope)
 	}
-	if params.Scope == "project" && params.Project == "" {
+	if params.Scope == "global" {
+		return "", fmt.Errorf("global-scope credentials are not yet supported; use scope \"project\" and provide a project name")
+	}
+	if params.Project == "" {
 		return "", fmt.Errorf("project is required for project-scoped credentials")
 	}
 
-	if err := s.observationStore.DeleteCredential(ctx, params.Name, params.Project, params.Scope); err != nil {
+	if err := store.Delete(ctx, params.Project, params.Name); err != nil {
+		if errors.Is(err, gogorm.ErrRecordNotFound) {
+			return "", fmt.Errorf("credential %q not found", params.Name)
+		}
 		return "", fmt.Errorf("delete credential: %w", err)
 	}
 
@@ -302,8 +352,8 @@ func (s *Server) handleVaultStatus(ctx context.Context, _ json.RawMessage) (stri
 	}
 
 	count := 0
-	if s.observationStore != nil {
-		if n, err := s.observationStore.CountCredentials(ctx); err == nil {
+	if store, err := s.credentialStore(); err == nil {
+		if n, countErr := store.CountCredentials(ctx); countErr == nil {
 			count = int(n)
 		}
 	}

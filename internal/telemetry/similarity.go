@@ -28,11 +28,9 @@ type SimilarityTelemetry struct {
 }
 
 // NewSimilarityTelemetry creates a new SimilarityTelemetry instance.
-// Both observationStore and vectorClient are accepted for call-site compatibility
-// but are intentionally unused in v5 (vector pipeline removed).
+// vectorClient is accepted for call-site compatibility but unused in v5.
 func NewSimilarityTelemetry(
 	store *gorm.Store,
-	_ *gorm.ObservationStore,
 	_ any,
 	log zerolog.Logger,
 ) *SimilarityTelemetry {

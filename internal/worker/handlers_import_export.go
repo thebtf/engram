@@ -2,63 +2,48 @@
 package worker
 
 import (
-	"database/sql"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"sort"
 	"strconv"
-	"strings"
-	"sync"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/pkg/models"
-	"github.com/thebtf/engram/pkg/similarity"
-	"github.com/rs/zerolog/log"
 )
 
 // BulkImportRequest is the request body for bulk observation import.
 type BulkImportRequest struct {
-	Project      string                 `json:"project"`
-	SessionID    string                 `json:"session_id,omitempty"`
-	Observations []BulkObservationInput `json:"observations"`
+	Project      string          `json:"project"`
+	SessionID    string          `json:"session_id,omitempty"`
+	Observations json.RawMessage `json:"observations"`
 }
 
-// BulkObservationInput represents a single observation in bulk import.
-type BulkObservationInput struct {
-	Type          string   `json:"type"`
-	Title         string   `json:"title"`
-	Subtitle      string   `json:"subtitle,omitempty"`
-	Narrative     string   `json:"narrative,omitempty"`
-	Scope         string   `json:"scope,omitempty"`
-	Facts         []string `json:"facts,omitempty"`
-	Concepts      []string `json:"concepts,omitempty"`
-	FilesRead     []string `json:"files_read,omitempty"`
-	FilesModified []string `json:"files_modified,omitempty"`
+// ArchiveRequest is the request body for archiving observations.
+type ArchiveRequest struct {
+	Project    string  `json:"project,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	IDs        []int64 `json:"ids,omitempty"`
+	MaxAgeDays int     `json:"max_age_days,omitempty"`
 }
 
-// BulkImportResponse contains the result of a bulk import operation.
-type BulkImportResponse struct {
-	Errors            []string `json:"errors,omitempty"`
-	Imported          int      `json:"imported"`
-	Failed            int      `json:"failed"`
-	SkippedDuplicates int      `json:"skipped_duplicates,omitempty"`
+func writeRemovedInV5Error(w http.ResponseWriter, path string) {
+	w.WriteHeader(http.StatusNotImplemented)
+	writeJSON(w, map[string]any{
+		"error":   "removed_in_v5",
+		"message": "Observation import/export/archive endpoints were removed in v5. Use the v5 memory, rules, credentials, documents, and issues APIs instead.",
+		"path":    path,
+	})
 }
 
 // handleBulkImport godoc
 // @Summary Bulk import observations
-// @Description Imports multiple observations in a single request. Supports deduplication within the batch. Max batch size: 100.
+// @Description This observation-era import endpoint was removed in v5.
 // @Tags Import/Export
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param body body BulkImportRequest true "Observations to import"
-// @Success 200 {object} BulkImportResponse
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/observations/bulk-import [post]
 func (s *Service) handleBulkImport(w http.ResponseWriter, r *http.Request) {
 	var req BulkImportRequest
@@ -72,151 +57,29 @@ func (s *Service) handleBulkImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(req.Project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if len(req.Observations) == 0 {
-		http.Error(w, "at least one observation is required", http.StatusBadRequest)
+		http.Error(w, "observations is required", http.StatusBadRequest)
 		return
 	}
 
-	// Limit batch size to prevent overwhelming the system
-	maxBatchSize := 100
-	if len(req.Observations) > maxBatchSize {
-		http.Error(w, fmt.Sprintf("batch size exceeds maximum of %d", maxBatchSize), http.StatusBadRequest)
-		return
-	}
-
-	// Reuse existing session if provided; otherwise create a synthetic one.
-	// CreateSDKSession is idempotent: calling it with the same claude_session_id
-	// returns the existing session ID without creating a duplicate row.
-	claudeSessionKey := req.SessionID
-	if claudeSessionKey == "" {
-		claudeSessionKey = fmt.Sprintf("bulk-import-%d", time.Now().UnixMilli())
-	}
-	sessionID, err := s.sessionStore.CreateSDKSession(r.Context(), claudeSessionKey, req.Project, "bulk import")
-	if err != nil {
-		http.Error(w, "failed to create import session: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var imported, failed, skippedDupes int
-	var errors []string
-
-	// Track imported observations for deduplication within the batch
-	importedObs := make([]*models.Observation, 0, len(req.Observations))
-
-	// Deduplication threshold - observations more similar than this are considered duplicates
-	const dedupThreshold = 0.7
-
-	for i, obsInput := range req.Observations {
-		// Validate observation type using O(1) map lookup
-		if !IsValidObservationType(obsInput.Type) {
-			failed++
-			errors = append(errors, fmt.Sprintf("observation %d: invalid type '%s'", i, obsInput.Type))
-			continue
-		}
-
-		// Build parsed observation
-		parsedObs := &models.ParsedObservation{
-			Type:          models.ObservationType(obsInput.Type),
-			Title:         obsInput.Title,
-			Subtitle:      obsInput.Subtitle,
-			Facts:         obsInput.Facts,
-			Narrative:     obsInput.Narrative,
-			Concepts:      obsInput.Concepts,
-			FilesRead:     obsInput.FilesRead,
-			FilesModified: obsInput.FilesModified,
-			Scope:         models.ObservationScope(obsInput.Scope),
-		}
-
-		// Convert to temporary observation for similarity check
-		tempObs := &models.Observation{
-			Title:     sql.NullString{String: parsedObs.Title, Valid: parsedObs.Title != ""},
-			Subtitle:  sql.NullString{String: parsedObs.Subtitle, Valid: parsedObs.Subtitle != ""},
-			Narrative: sql.NullString{String: parsedObs.Narrative, Valid: parsedObs.Narrative != ""},
-		}
-
-		// Check for duplicates within this import batch
-		if similarity.IsSimilarToAny(tempObs, importedObs, dedupThreshold) {
-			skippedDupes++
-			continue
-		}
-
-		// Store observation
-		_, _, err := s.observationStore.StoreObservation(
-			r.Context(),
-			fmt.Sprintf("bulk-import-%d", sessionID),
-			req.Project,
-			parsedObs,
-			0, // prompt number
-			0, // discovery tokens
-		)
-		if err != nil {
-			failed++
-			errors = append(errors, fmt.Sprintf("observation %d: %v", i, err))
-			continue
-		}
-
-		// Track for deduplication of subsequent observations in this batch
-		importedObs = append(importedObs, tempObs)
-		imported++
-	}
-
-	log.Info().
-		Str("project", req.Project).
-		Int("imported", imported).
-		Int("failed", failed).
-		Int("skipped_duplicates", skippedDupes).
-		Msg("Bulk import completed")
-
-	// Invalidate observation count cache after import
-	if imported > 0 {
-		if req.Project != "" {
-			s.invalidateObsCountCache(req.Project)
-		} else {
-			s.invalidateAllObsCountCache()
-		}
-	}
-
-	// Broadcast observation event for dashboard refresh
-	s.sseBroadcaster.Broadcast(map[string]any{
-		"type":    "observation",
-		"action":  "bulk_import",
-		"project": req.Project,
-		"count":   imported,
-	})
-
-	writeJSON(w, BulkImportResponse{
-		Imported:          imported,
-		Failed:            failed,
-		SkippedDuplicates: skippedDupes,
-		Errors:            errors,
-	})
-}
-
-// ArchiveRequest is the request body for archiving observations.
-type ArchiveRequest struct {
-	Project    string  `json:"project,omitempty"`
-	Reason     string  `json:"reason,omitempty"`
-	IDs        []int64 `json:"ids,omitempty"`
-	MaxAgeDays int     `json:"max_age_days,omitempty"`
+	writeRemovedInV5Error(w, r.URL.Path)
 }
 
 // handleArchiveObservations godoc
 // @Summary Archive observations
-// @Description Archives observations by ID list or by age criteria. Supports batch archival with parallel processing and per-observation error tracking.
+// @Description This observation-era archive endpoint was removed in v5.
 // @Tags Import/Export
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param body body ArchiveRequest true "Archive criteria: ids, project, max_age_days, reason"
-// @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/observations/archive [post]
 func (s *Service) handleArchiveObservations(w http.ResponseWriter, r *http.Request) {
 	var req ArchiveRequest
@@ -225,202 +88,101 @@ func (s *Service) handleArchiveObservations(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var archivedIDs []int64
-	var failedIDs []int64
-	var errors []string
-	var err error
-
-	if len(req.IDs) > 0 {
-		// Archive specific observations with parallel processing for large batches
-		if len(req.IDs) > 5 {
-			// Use parallel archival for batches larger than 5
-			type archiveResult struct {
-				err error
-				id  int64
-			}
-			results := make(chan archiveResult, len(req.IDs))
-
-			// Limit concurrency to avoid overwhelming the database
-			sem := make(chan struct{}, 5)
-			var wg sync.WaitGroup
-
-			for _, id := range req.IDs {
-				wg.Add(1)
-				go func(obsID int64) {
-					defer wg.Done()
-					sem <- struct{}{}        // Acquire
-					defer func() { <-sem }() // Release
-
-					archErr := s.observationStore.ArchiveObservation(r.Context(), obsID, req.Reason)
-					results <- archiveResult{id: obsID, err: archErr}
-				}(id)
-			}
-
-			// Close results channel when all goroutines complete
-			go func() {
-				wg.Wait()
-				close(results)
-			}()
-
-			// Collect results
-			for res := range results {
-				if res.err != nil {
-					log.Warn().Err(res.err).Int64("id", res.id).Msg("Failed to archive observation")
-					failedIDs = append(failedIDs, res.id)
-					errors = append(errors, fmt.Sprintf("id %d: %v", res.id, res.err))
-				} else {
-					archivedIDs = append(archivedIDs, res.id)
-				}
-			}
-		} else {
-			// Sequential for small batches
-			for _, id := range req.IDs {
-				if archErr := s.observationStore.ArchiveObservation(r.Context(), id, req.Reason); archErr != nil {
-					log.Warn().Err(archErr).Int64("id", id).Msg("Failed to archive observation")
-					failedIDs = append(failedIDs, id)
-					errors = append(errors, fmt.Sprintf("id %d: %v", id, archErr))
-				} else {
-					archivedIDs = append(archivedIDs, id)
-				}
-			}
-		}
-	} else if req.Project != "" || req.MaxAgeDays > 0 {
-		// Archive by age
-		archivedIDs, err = s.observationStore.ArchiveOldObservations(r.Context(), req.Project, req.MaxAgeDays, req.Reason)
-		if err != nil {
-			http.Error(w, "failed to archive: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	} else {
+	if len(req.IDs) == 0 && req.Project == "" && req.MaxAgeDays <= 0 {
 		http.Error(w, "either 'ids' or 'project'/'max_age_days' is required", http.StatusBadRequest)
 		return
 	}
 
-	log.Info().
-		Str("project", req.Project).
-		Int("archived", len(archivedIDs)).
-		Int("failed", len(failedIDs)).
-		Msg("Observations archived")
-
-	// Invalidate cache if any observations were archived
-	if len(archivedIDs) > 0 {
-		if req.Project != "" {
-			s.invalidateObsCountCache(req.Project)
-		} else {
-			s.invalidateAllObsCountCache()
+	if req.Project != "" {
+		if err := ValidateProjectName(req.Project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 
-	response := map[string]any{
-		"archived_count": len(archivedIDs),
-		"archived_ids":   archivedIDs,
-	}
-	if len(failedIDs) > 0 {
-		response["failed_count"] = len(failedIDs)
-		response["failed_ids"] = failedIDs
-		response["errors"] = errors
-	}
-
-	writeJSON(w, response)
+	writeRemovedInV5Error(w, r.URL.Path)
 }
 
 // handleUnarchiveObservation godoc
 // @Summary Unarchive observation
-// @Description Restores an archived observation to active status.
+// @Description This observation-era unarchive endpoint was removed in v5.
 // @Tags Import/Export
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int true "Observation ID"
-// @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "invalid observation id"
-// @Failure 500 {string} string "internal error"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/observations/{id}/unarchive [post]
 func (s *Service) handleUnarchiveObservation(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
+	if _, err := strconv.ParseInt(idStr, 10, 64); err != nil {
 		http.Error(w, "invalid observation id", http.StatusBadRequest)
 		return
 	}
 
-	if err := s.observationStore.UnarchiveObservation(r.Context(), id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Invalidate all caches since we don't know the project
-	s.invalidateAllObsCountCache()
-
-	writeJSON(w, map[string]any{
-		"success": true,
-		"id":      id,
-	})
+	writeRemovedInV5Error(w, r.URL.Path)
 }
 
 // handleGetArchivedObservations godoc
 // @Summary List archived observations
-// @Description Returns archived observations, optionally filtered by project.
+// @Description This observation-era archived-observations endpoint was removed in v5.
 // @Tags Import/Export
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project"
 // @Param limit query int false "Number of results (default 100)"
-// @Success 200 {array} models.Observation
-// @Failure 500 {string} string "internal error"
+// @Failure 400 {string} string "bad request"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/observations/archived [get]
 func (s *Service) handleGetArchivedObservations(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	limit := gorm.ParseLimitParam(r, DefaultObservationsLimit)
+	_ = gorm.ParseLimitParam(r, DefaultObservationsLimit)
 
-	observations, err := s.observationStore.GetArchivedObservations(r.Context(), project, limit)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if project != "" {
+		if err := ValidateProjectName(project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
-	if observations == nil {
-		observations = []*models.Observation{}
-	}
-
-	writeJSON(w, observations)
+	writeRemovedInV5Error(w, r.URL.Path)
 }
 
 // handleGetArchivalStats godoc
 // @Summary Get archival statistics
-// @Description Returns archival statistics including counts and trends.
+// @Description This observation-era archival stats endpoint was removed in v5.
 // @Tags Import/Export
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project"
-// @Success 200 {object} map[string]interface{}
-// @Failure 500 {string} string "internal error"
+// @Failure 400 {string} string "bad request"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/observations/archival-stats [get]
 func (s *Service) handleGetArchivalStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-
-	stats, err := s.observationStore.GetArchivalStats(r.Context(), project)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if project != "" {
+		if err := ValidateProjectName(project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
-	writeJSON(w, stats)
+	writeRemovedInV5Error(w, r.URL.Path)
 }
 
 // handleExportObservations godoc
 // @Summary Export observations
-// @Description Exports observations in JSON or CSV format. Supports filtering by project, scope, and type. Returns file as download attachment.
+// @Description This observation-era export endpoint was removed in v5.
 // @Tags Import/Export
-// @Produce json text/csv
+// @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project"
 // @Param format query string false "Export format: json or csv (default json)"
 // @Param scope query string false "Filter by scope: project, global"
 // @Param type query string false "Filter by observation type"
 // @Param limit query int false "Number of results (default 1000, max 5000)"
-// @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/observations/export [get]
 func (s *Service) handleExportObservations(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
@@ -428,109 +190,35 @@ func (s *Service) handleExportObservations(w http.ResponseWriter, r *http.Reques
 	if format == "" {
 		format = "json"
 	}
-	scope := r.URL.Query().Get("scope")                 // project, global, or empty for all
-	obsType := r.URL.Query().Get("type")                // bugfix, feature, etc.
-	limit := gorm.ParseLimitParamWithMax(r, 1000, 5000) // Higher limit for exports, capped at 5000
+	scope := r.URL.Query().Get("scope")
+	obsType := r.URL.Query().Get("type")
+	_ = gorm.ParseLimitParamWithMax(r, 1000, 5000)
 
-	// Validate format
 	if format != "json" && format != "csv" {
 		http.Error(w, "format must be 'json' or 'csv'", http.StatusBadRequest)
 		return
 	}
 
-	// Get observations with filters
-	ctx := r.Context()
-	var observations []*models.Observation
-	var err error
-
 	if project != "" {
-		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", "", limit, 0)
-	} else {
-		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", "", limit, 0)
+		if err := ValidateProjectName(project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if scope != "" {
+		if scope != "project" && scope != "global" {
+			http.Error(w, "scope must be 'project' or 'global'", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if obsType != "" && !IsValidObservationType(obsType) {
+		http.Error(w, "invalid observation type", http.StatusBadRequest)
 		return
 	}
 
-	// Apply additional filters
-	if scope != "" || obsType != "" {
-		filtered := make([]*models.Observation, 0, len(observations))
-		for _, obs := range observations {
-			if scope != "" && string(obs.Scope) != scope {
-				continue
-			}
-			if obsType != "" && string(obs.Type) != obsType {
-				continue
-			}
-			filtered = append(filtered, obs)
-		}
-		observations = filtered
-	}
-
-	// Generate filename
-	timestamp := time.Now().Format("20060102-150405")
-	filename := fmt.Sprintf("observations-%s.%s", timestamp, format)
-	if project != "" {
-		// Sanitize project name for filename
-		sanitized := strings.ReplaceAll(project, "/", "_")
-		sanitized = strings.ReplaceAll(sanitized, "\\", "_")
-		if len(sanitized) > 50 {
-			sanitized = sanitized[:50]
-		}
-		filename = fmt.Sprintf("observations-%s-%s.%s", sanitized, timestamp, format)
-	}
-
-	switch format {
-	case "csv":
-		w.Header().Set("Content-Type", "text/csv")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-		s.writeObservationsCSV(w, observations)
-	default: // json
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-		writeJSON(w, map[string]any{
-			"exported_at":  time.Now().Format(time.RFC3339),
-			"project":      project,
-			"count":        len(observations),
-			"observations": observations,
-		})
-	}
-}
-
-// writeObservationsCSV writes observations in CSV format.
-// Uses fmt.Fprintf directly to avoid intermediate string allocations.
-func (s *Service) writeObservationsCSV(w http.ResponseWriter, observations []*models.Observation) {
-	// Write CSV header
-	_, _ = io.WriteString(w, "id,type,scope,project,title,subtitle,narrative,concepts,facts,created_at,importance_score\n")
-
-	for _, obs := range observations {
-		// Write directly to avoid string allocation per row
-		_, _ = fmt.Fprintf(w, "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f\n",
-			obs.ID,
-			obs.Type,
-			obs.Scope,
-			escapeCsvField(obs.Project),
-			escapeCsvField(obs.Title.String),
-			escapeCsvField(obs.Subtitle.String),
-			escapeCsvField(obs.Narrative.String),
-			escapeCsvField(strings.Join(obs.Concepts, ";")),
-			escapeCsvField(strings.Join(obs.Facts, ";")),
-			obs.CreatedAt,
-			obs.ImportanceScore,
-		)
-	}
-}
-
-// escapeCsvField escapes a field for CSV output.
-func escapeCsvField(s string) string {
-	// If field contains comma, quote, or newline, wrap in quotes and escape quotes
-	if strings.ContainsAny(s, ",\"\n\r") {
-		s = strings.ReplaceAll(s, "\"", "\"\"")
-		return "\"" + s + "\""
-	}
-	return s
+	writeRemovedInV5Error(w, r.URL.Path)
 }
 
 // BulkStatusRequest represents a request to update status for multiple observations.
@@ -543,15 +231,14 @@ type BulkStatusRequest struct {
 
 // handleBulkStatusUpdate godoc
 // @Summary Bulk status update
-// @Description Updates status for multiple observations in one request. Actions: supersede, archive, set_feedback. Max 500 IDs.
+// @Description This observation-era bulk status endpoint was removed in v5.
 // @Tags Import/Export
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param body body BulkStatusRequest true "Bulk action request"
-// @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/observations/bulk-status [post]
 func (s *Service) handleBulkStatusUpdate(w http.ResponseWriter, r *http.Request) {
 	var req BulkStatusRequest
@@ -570,191 +257,52 @@ func (s *Service) handleBulkStatusUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx := r.Context()
-	var updated, failed int
-	var errors []string
-
 	switch req.Action {
-	case "supersede":
-		for _, id := range req.IDs {
-			if err := s.observationStore.MarkAsSuperseded(ctx, id); err != nil {
-				failed++
-				errors = append(errors, fmt.Sprintf("id %d: %v", id, err))
-			} else {
-				updated++
-			}
-		}
-
-	case "archive":
-		for _, id := range req.IDs {
-			if err := s.observationStore.ArchiveObservation(ctx, id, req.Reason); err != nil {
-				failed++
-				errors = append(errors, fmt.Sprintf("id %d: %v", id, err))
-			} else {
-				updated++
-			}
-		}
-
+	case "supersede", "archive", "suppress":
 	case "set_feedback":
 		if req.Feedback < -1 || req.Feedback > 1 {
 			http.Error(w, "feedback must be -1, 0, or 1", http.StatusBadRequest)
 			return
 		}
-		for _, id := range req.IDs {
-			if err := s.observationStore.UpdateObservationFeedback(ctx, id, req.Feedback); err != nil {
-				failed++
-				errors = append(errors, fmt.Sprintf("id %d: %v", id, err))
-			} else {
-				updated++
-			}
-		}
-
-	case "suppress":
-		for _, id := range req.IDs {
-			result := s.observationStore.GetDB().WithContext(ctx).
-				Exec("UPDATE observations SET is_suppressed = TRUE WHERE id = ?", id)
-			if result.Error != nil {
-				failed++
-				errors = append(errors, fmt.Sprintf("id %d: %v", id, result.Error))
-			} else if result.RowsAffected > 0 {
-				updated++
-			} else {
-				failed++
-				errors = append(errors, fmt.Sprintf("id %d: not found", id))
-			}
-		}
-
 	default:
 		http.Error(w, "action must be 'supersede', 'archive', 'suppress', or 'set_feedback'", http.StatusBadRequest)
 		return
 	}
 
-	// Invalidate cache for actions that affect visibility/counts
-	if (req.Action == "archive" || req.Action == "suppress") && updated > 0 {
-		// No project info available, invalidate all caches
-		s.invalidateAllObsCountCache()
-	}
-
-	response := map[string]any{
-		"action":  req.Action,
-		"updated": updated,
-		"failed":  failed,
-	}
-	if len(errors) > 0 {
-		response["errors"] = errors
-	}
-
-	writeJSON(w, response)
+	writeRemovedInV5Error(w, r.URL.Path)
 }
 
 // handleFindDuplicates godoc
 // @Summary Find duplicate observations
-// @Description Finds potential duplicate observations using Jaccard similarity clustering. Returns groups of similar observations.
+// @Description This observation-era duplicate finder endpoint was removed in v5.
 // @Tags Import/Export
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Filter by project"
 // @Param threshold query number false "Similarity threshold (default 0.6, range 0-1)"
 // @Param limit query int false "Number of observations to check (default 100)"
-// @Success 200 {object} map[string]interface{}
-// @Failure 500 {string} string "internal error"
+// @Failure 400 {string} string "bad request"
+// @Failure 501 {object} map[string]interface{}
 // @Router /api/observations/duplicates [get]
 func (s *Service) handleFindDuplicates(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	thresholdStr := r.URL.Query().Get("threshold")
-	limit := gorm.ParseLimitParam(r, 100)
-
-	// Parse threshold (default 0.6 = 60% similarity)
-	threshold := 0.6
-	if thresholdStr != "" {
-		if t, err := strconv.ParseFloat(thresholdStr, 64); err == nil && t > 0 && t < 1 {
-			threshold = t
-		}
-	}
-
-	// Get recent observations
-	ctx := r.Context()
-	var observations []*models.Observation
-	var err error
+	_ = gorm.ParseLimitParam(r, 100)
 
 	if project != "" {
-		observations, _, err = s.observationStore.GetObservationsByProjectStrictPaginated(ctx, project, "", "", "", "", limit, 0)
-	} else {
-		observations, _, err = s.observationStore.GetAllRecentObservationsPaginated(ctx, "", "", "", "", limit, 0)
-	}
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if len(observations) < 2 {
-		writeJSON(w, map[string]any{
-			"duplicate_groups": []any{},
-			"total_checked":    len(observations),
-			"threshold":        threshold,
-		})
-		return
-	}
-
-	// Find duplicates using similarity comparison
-	type duplicateGroup struct {
-		Observations []map[string]any `json:"observations"`
-		Similarity   float64          `json:"similarity"`
-	}
-
-	groups := []duplicateGroup{}
-	processed := make(map[int64]bool)
-
-	for i, obs1 := range observations {
-		if processed[obs1.ID] {
-			continue
-		}
-
-		terms1 := similarity.ExtractObservationTerms(obs1)
-		if len(terms1) == 0 {
-			continue
-		}
-
-		group := duplicateGroup{
-			Observations: []map[string]any{obs1.ToMap()},
-			Similarity:   1.0,
-		}
-
-		for j := i + 1; j < len(observations); j++ {
-			obs2 := observations[j]
-			if processed[obs2.ID] {
-				continue
-			}
-
-			terms2 := similarity.ExtractObservationTerms(obs2)
-			sim := similarity.JaccardSimilarity(terms1, terms2)
-
-			if sim >= threshold {
-				obsMap := obs2.ToMap()
-				obsMap["similarity_to_first"] = sim
-				group.Observations = append(group.Observations, obsMap)
-				group.Similarity = min(group.Similarity, sim)
-				processed[obs2.ID] = true
-			}
-		}
-
-		if len(group.Observations) > 1 {
-			processed[obs1.ID] = true
-			groups = append(groups, group)
+		if err := ValidateProjectName(project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 
-	// Sort groups by size (largest first)
-	sort.Slice(groups, func(i, j int) bool {
-		return len(groups[i].Observations) > len(groups[j].Observations)
-	})
+	if thresholdStr != "" {
+		threshold, err := strconv.ParseFloat(thresholdStr, 64)
+		if err != nil || threshold <= 0 || threshold >= 1 {
+			http.Error(w, "threshold must be a number between 0 and 1", http.StatusBadRequest)
+			return
+		}
+	}
 
-	writeJSON(w, map[string]any{
-		"duplicate_groups": groups,
-		"total_checked":    len(observations),
-		"groups_found":     len(groups),
-		"threshold":        threshold,
-		"project":          project,
-	})
+	writeRemovedInV5Error(w, r.URL.Path)
 }

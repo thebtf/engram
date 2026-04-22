@@ -9,10 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
-	"gorm.io/gorm/logger"
 )
 
 func TestIsSelfReferentialSummary(t *testing.T) {
@@ -1698,18 +1695,14 @@ func TestProcessObservation_SkipDuplicate(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Valid input that would be processed
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
-	// First call should try to process (will fail because claudePath doesn't exist)
 	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
-	// Expect error because claudePath doesn't exist
-	assert.Error(t, err)
+	assert.NoError(t, err)
 
-	// Second call with same input should be skipped as duplicate
 	err = p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
-	assert.NoError(t, err) // No error because it was skipped as duplicate
+	assert.NoError(t, err)
 }
 
 func TestProcessObservation_CircuitBreakerOpen(t *testing.T) {
@@ -1722,40 +1715,30 @@ func TestProcessObservation_CircuitBreakerOpen(t *testing.T) {
 	}
 
 	ctx := context.Background()
-
-	// Use "Edit" tool — bypasses shouldSkipTrivialOperation (Edit always proceeds)
-	// so the circuit breaker check is actually reached.
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
 	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "circuit breaker open")
+	assert.NoError(t, err)
 }
 
 func TestProcessObservation_ContextCancel(t *testing.T) {
 	p := &Processor{
 		circuitBreaker: NewCircuitBreaker(5, 60),
 		deduplicator:   NewRequestDeduplicator(300, 1000),
-		sem:            make(chan struct{}, 1), // Small semaphore
+		sem:            make(chan struct{}, 1), // Retained to document that v5 no-op path ignores it.
 	}
 
-	// Fill the semaphore
 	p.sem <- struct{}{}
 
-	// Create a cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+	cancel()
 
-	// Valid input that would be processed
 	input := map[string]string{"file_path": "/project/main.go"}
 	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
 
-	// Use "Edit" tool — bypasses shouldSkipTrivialOperation so the semaphore
-	// and context cancellation checks are actually reached.
 	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	assert.NoError(t, err)
 }
 
 // =============================================================================
@@ -1787,46 +1770,14 @@ func TestProcessSummary_CircuitBreakerOpen(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Meaningful assistant message (> 200 chars, contains code discussion)
 	assistantMsg := `I've updated the handler.go file to fix the authentication bug.
 The function validateToken() was not checking token expiry correctly.
 I've added a check for the exp claim and implemented proper error handling.
 The changes have been tested and the build passes successfully.
 Here's the implementation details and code review.`
 
-	// Valid request but no LLM client → should fail
 	err := p.ProcessSummary(ctx, 1, "session-1", "project-1",
 		"Implement authentication", "User message", assistantMsg)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 }
 
-
-func testProcessorObservationStore(t *testing.T) (*dbgorm.ObservationStore, func()) {
-	t.Helper()
-
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-
-	store, err := dbgorm.NewStore(dbgorm.Config{
-		DSN:      dsn,
-		MaxConns: 4,
-		LogLevel: logger.Silent,
-	})
-	require.NoError(t, err)
-
-	obsStore := dbgorm.NewObservationStore(store, nil)
-	cleanup := func() {
-		obsStore.Close()
-		require.NoError(t, store.Close())
-	}
-	return obsStore, cleanup
-}
-
-func seedProcessorObservation(t *testing.T, ctx context.Context, store *dbgorm.ObservationStore, project string, parsed *models.ParsedObservation) int64 {
-	t.Helper()
-	id, _, err := store.StoreObservation(ctx, "seed-session", project, parsed, 1, 0)
-	require.NoError(t, err)
-	return id
-}

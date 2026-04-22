@@ -22,7 +22,6 @@ import (
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/pkg/llmclient"
 	"github.com/thebtf/engram/pkg/models"
-	"github.com/thebtf/engram/pkg/similarity"
 )
 
 // CircuitBreaker implements a simple circuit breaker pattern for CLI calls.
@@ -217,22 +216,18 @@ const MaxVectorSyncWorkers = 8
 // Uses LLM API (OpenAI-compatible) as primary backend, with Claude CLI as optional fallback.
 // Field order optimized for memory alignment (fieldalignment).
 type Processor struct {
-	observationStore         *gorm.ObservationStore
-	summaryStore             *gorm.SummaryStore
-	reasoningStore           *gorm.ReasoningTraceStore
-	llmClient                llmclient.LLMClient
-	broadcastFunc            BroadcastFunc
-	syncObservationFunc      SyncObservationFunc
-	syncSummaryFunc          SyncSummaryFunc
-	circuitBreaker           *CircuitBreaker
-	deduplicator             *RequestDeduplicator
-	vectorSyncChan           chan *models.Observation
-	vectorSyncDone           chan struct{}
-	sem                      chan struct{}
-	model                    string
-	dedupSimilarityThreshold float64
-	dedupWindowSize          int
-	vectorSyncWg             sync.WaitGroup
+	reasoningStore      *gorm.ReasoningTraceStore
+	llmClient           llmclient.LLMClient
+	broadcastFunc       BroadcastFunc
+	syncObservationFunc SyncObservationFunc
+	syncSummaryFunc     SyncSummaryFunc
+	circuitBreaker      *CircuitBreaker
+	deduplicator        *RequestDeduplicator
+	vectorSyncChan      chan *models.Observation
+	vectorSyncDone      chan struct{}
+	sem                 chan struct{}
+	model               string
+	vectorSyncWg        sync.WaitGroup
 }
 
 // SetBroadcastFunc sets the broadcast callback for SSE events.
@@ -255,15 +250,8 @@ func (p *Processor) SetSyncSummaryFunc(fn SyncSummaryFunc) {
 	p.syncSummaryFunc = fn
 }
 
-// SetDedupConfig sets deduplication parameters.
-func (p *Processor) SetDedupConfig(threshold float64, windowSize int) {
-	if threshold > 0 && threshold <= 1.0 {
-		p.dedupSimilarityThreshold = threshold
-	}
-	if windowSize > 0 {
-		p.dedupWindowSize = windowSize
-	}
-}
+// SetDedupConfig is retained for compatibility but is a no-op in v5.
+func (p *Processor) SetDedupConfig(_ float64, _ int) {}
 
 // broadcast sends an event via the broadcast callback if set.
 func (p *Processor) broadcast(event map[string]any) {
@@ -294,7 +282,7 @@ const DefaultConcurrentLLMCalls = 4
 // NewProcessor creates a new SDK processor.
 // It requires at least one LLM backend: either an OpenAI-compatible API (ENGRAM_LLM_URL)
 // or a local Claude CLI binary. If neither is available, it returns an error.
-func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.SummaryStore) (*Processor, error) {
+func NewProcessor() (*Processor, error) {
 	cfg := config.Get()
 
 	// Initialize LLM client (OpenAI-compatible API — works in Docker)
@@ -328,17 +316,13 @@ func NewProcessor(observationStore *gorm.ObservationStore, summaryStore *gorm.Su
 	}
 
 	return &Processor{
-		model:                    cfg.Model,
-		llmClient:                llmClt,
-		observationStore:         observationStore,
-		summaryStore:             summaryStore,
-		sem:                      make(chan struct{}, concurrency),
-		circuitBreaker:           NewCircuitBreaker(5, 60),                               // Open after 5 failures, reset after 60s
-		deduplicator:             NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
-		vectorSyncChan:           make(chan *models.Observation, MaxVectorSyncWorkers*2), // Buffered channel
-		vectorSyncDone:           make(chan struct{}),
-		dedupSimilarityThreshold: 0.4, // Will be overridden by config
-		dedupWindowSize:          50,  // Will be overridden by config
+		model:            cfg.Model,
+		llmClient:        llmClt,
+		sem:              make(chan struct{}, concurrency),
+		circuitBreaker:   NewCircuitBreaker(5, 60),                               // Open after 5 failures, reset after 60s
+		deduplicator:     NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
+		vectorSyncChan:   make(chan *models.Observation, MaxVectorSyncWorkers*2), // Buffered channel
+		vectorSyncDone:   make(chan struct{}),
 	}, nil
 }
 
@@ -448,274 +432,34 @@ func mergeFileMtimes(existing models.JSONInt64Map, incoming map[string]int64) ma
 	return merged
 }
 
-// queryWriteMergeCandidateIDs returns observation IDs that are plausible merge
-// candidates for obs, using FTS as a proxy for the former vector-similarity
-// lookup (removed in v5 when content_chunks was dropped).
-//
-// Strategy: build a short text query from Title + first few Facts/Concepts,
-// run SearchObservationsFTS for the same project, filter by matching Type and
-// non-superseded status, then return up to 5 candidate IDs.
-func (p *Processor) queryWriteMergeCandidateIDs(ctx context.Context, project string, obs *models.ParsedObservation) []int64 {
-	if obs == nil || p.observationStore == nil {
-		return nil
-	}
-
-	// Build a concise query from the most discriminating fields.
-	queryParts := make([]string, 0, 4)
-	if obs.Title != "" {
-		queryParts = append(queryParts, obs.Title)
-	}
-	// Include up to 2 facts and 2 concepts for additional signal.
-	for i, f := range obs.Facts {
-		if i >= 2 {
-			break
-		}
-		if f != "" {
-			queryParts = append(queryParts, f)
-		}
-	}
-	for i, c := range obs.Concepts {
-		if i >= 2 {
-			break
-		}
-		if c != "" {
-			queryParts = append(queryParts, c)
-		}
-	}
-	if len(queryParts) == 0 {
-		return nil
-	}
-	query := strings.Join(queryParts, " ")
-
-	const candidateSearchLimit = 10
-	candidates, err := p.observationStore.SearchObservationsFTS(ctx, query, project, candidateSearchLimit)
-	if err != nil {
-		log.Debug().Err(err).Str("project", project).Msg("write-merge: FTS candidate search failed")
-		return nil
-	}
-
-	const maxCandidates = 5
-	ids := make([]int64, 0, maxCandidates)
-	for _, c := range candidates {
-		if c == nil || c.IsSuperseded || c.Type != obs.Type {
-			continue
-		}
-		ids = append(ids, c.ID)
-		if len(ids) >= maxCandidates {
-			break
-		}
-	}
-	return ids
-}
-
-// mergeActionUpdate is a sentinel returned by applyWriteMergeDecision when an
-// existing observation was updated in-place (write-merge update path).
-const mergeActionUpdate = "update"
-
-// applyWriteMergeDecision is a no-op: LLM-based merge decisions were removed
-// with the learning package in v5. Always returns create-new.
-func (p *Processor) applyWriteMergeDecision(_ context.Context, _, _ string, _ *models.ParsedObservation, _ int) (*models.Observation, bool, string, error) {
-	return nil, false, "", nil
-}
-
-// ProcessObservation processes a single tool observation and extracts insights.
-func (p *Processor) ProcessObservation(ctx context.Context, sdkSessionID, project string, toolName string, toolInput, toolResponse any, promptNumber int, cwd string, userPrompt ...string) error {
-	// Skip certain tools that aren't worth processing
+// ProcessObservation no longer persists observations in v5/PR-B.
+// The observation and summary subsystem is being retired; this method now performs
+// only lightweight filtering/dedup bookkeeping and exits explicitly.
+func (p *Processor) ProcessObservation(_ context.Context, sdkSessionID, project string, toolName string, toolInput, toolResponse any, _ int, _ string, _ ...string) error {
 	if shouldSkipTool(toolName) {
-		log.Info().Str("tool", toolName).Msg("Skipping tool (not interesting for memory)")
+		log.Debug().Str("tool", toolName).Msg("SDK observation extraction skipped for uninteresting tool in v5")
 		return nil
 	}
 
-	// Convert tool data to strings for pre-filtering
 	inputStr := toJSONString(toolInput)
 	outputStr := toJSONString(toolResponse)
-
-	// Pre-filter trivial operations without calling Haiku
 	if shouldSkipTrivialOperation(toolName, inputStr, outputStr) {
-		log.Debug().Str("tool", toolName).Msg("Skipping trivial operation (pre-filter)")
+		log.Debug().Str("tool", toolName).Msg("SDK observation extraction skipped for trivial operation in v5")
 		return nil
 	}
 
-	// Check for duplicate request within TTL window
 	reqHash := hashRequest(toolName, inputStr, outputStr)
 	if p.deduplicator.IsDuplicate(reqHash) {
-		log.Debug().Str("tool", toolName).Msg("Skipping duplicate request (dedup)")
+		log.Debug().Str("tool", toolName).Msg("SDK observation extraction duplicate skipped in v5")
 		return nil
 	}
-
-	// Check circuit breaker before making LLM call
-	if !p.circuitBreaker.Allow() {
-		log.Warn().Str("tool", toolName).Msg("Circuit breaker open - skipping LLM call")
-		return fmt.Errorf("circuit breaker open")
-	}
-
-	log.Info().Str("tool", toolName).Msg("Processing tool execution via LLM")
-
-	// Record this request to prevent duplicates
 	p.deduplicator.Record(reqHash)
 
-	// Build the prompt with optional user intent context (Learning Memory v3 FR-4)
-	var userIntent string
-	if len(userPrompt) > 0 && userPrompt[0] != "" {
-		userIntent = userPrompt[0]
-	}
-	exec := ToolExecution{
-		ToolName:   toolName,
-		ToolInput:  inputStr,
-		ToolOutput: outputStr,
-		CWD:        cwd,
-		UserIntent: userIntent,
-	}
-	prompt := BuildObservationPrompt(exec)
-
-	// Acquire semaphore slot (limits concurrent LLM calls)
-	select {
-	case p.sem <- struct{}{}:
-		defer func() { <-p.sem }()
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	// Call LLM backend (API or CLI fallback)
-	response, err := p.callLLM(ctx, prompt)
-	if err != nil {
-		p.circuitBreaker.RecordFailure()
-		log.Error().Err(err).Str("tool", toolName).Msg("Failed to call LLM for observation extraction")
-		return err
-	}
-	p.circuitBreaker.RecordSuccess()
-
-	// Parse observations from response
-	observations := ParseObservations(response, sdkSessionID)
-	if len(observations) == 0 {
-		log.Info().Str("tool", toolName).Msg("No observations extracted (Claude deemed not significant)")
-		return nil
-	}
-
-	// Get existing observations for deduplication
-	existingObs, err := p.observationStore.GetRecentObservations(ctx, project, p.dedupWindowSize)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to get existing observations for dedup check")
-		existingObs = nil // Continue without dedup
-	}
-
-	// Store each observation (with deduplication check)
-	var storedCount, skippedCount, mergeEvaluatedCount, mergeSkipCount int
-
-	for _, obs := range observations {
-		// Capture file modification times for staleness detection
-		obs.FileMtimes = captureFileMtimes(obs.FilesRead, obs.FilesModified, cwd)
-
-		// Convert to stored observation for similarity check
-		storedObs := obs.ToStoredObservation()
-
-		// Check if this observation is too similar to existing ones
-		if existingObs != nil && similarity.IsSimilarToAny(storedObs, existingObs, p.dedupSimilarityThreshold) {
-			log.Debug().
-				Str("type", string(obs.Type)).
-				Str("title", obs.Title).
-				Msg("Skipping observation - too similar to existing")
-			skippedCount++
-			continue
-		}
-
-		mergeEvaluatedCount++
-		mergedObs, mergeSkipped, mergeAction, mergeErr := p.applyWriteMergeDecision(ctx, sdkSessionID, project, obs, promptNumber)
-		if mergeErr != nil {
-			log.Warn().Err(mergeErr).Msg("write-merge: failed to apply merge decision, falling back to create path")
-		}
-		if mergeSkipped {
-			mergeSkipCount++
-			skippedCount++
-			continue
-		}
-		if mergedObs != nil && mergedObs.ID > 0 {
-			if existingObs != nil {
-				replaced := false
-				for i, existing := range existingObs {
-					if existing != nil && existing.ID == mergedObs.ID {
-						existingObs[i] = mergedObs
-						replaced = true
-						break
-					}
-				}
-				if !replaced {
-					existingObs = append(existingObs, mergedObs)
-				}
-			}
-			if mergeAction == mergeActionUpdate {
-				storedCount++
-				continue
-			}
-		}
-
-		id, createdAtEpoch, err := p.observationStore.StoreObservation(ctx, sdkSessionID, project, obs, promptNumber, 0)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to store observation")
-			continue
-		}
-		if mergedObs != nil && mergedObs.ID > 0 && !mergedObs.IsSuperseded {
-			if err := p.observationStore.MarkAsSuperseded(ctx, mergedObs.ID); err != nil {
-				rollbackErr := p.observationStore.DeleteObservation(ctx, id)
-				if rollbackErr != nil {
-					log.Error().Err(rollbackErr).Int64("new_id", id).Msg("write-merge: failed to rollback replacement observation after supersede failure")
-					return fmt.Errorf("write-merge: failed to supersede target %d after replacement insert: %w (rollback failed: %v)", mergedObs.ID, err, rollbackErr)
-				}
-				return fmt.Errorf("write-merge: failed to supersede target %d after replacement insert: %w", mergedObs.ID, err)
-			}
-		}
-		storedCount++
-		log.Info().
-			Int64("id", id).
-			Str("type", string(obs.Type)).
-			Str("title", obs.Title).
-			Int("trackedFiles", len(obs.FileMtimes)).
-			Msg("Observation stored")
-
-		// Sync to vector DB via bounded worker pool (non-blocking to reduce latency)
-		if p.syncObservationFunc != nil {
-			fullObs := models.NewObservation(sdkSessionID, project, obs, promptNumber, 0)
-			fullObs.ID = id
-			fullObs.CreatedAtEpoch = createdAtEpoch
-			p.enqueueObservationSync(fullObs)
-		}
-
-		// Broadcast new observation event for dashboard refresh
-		p.broadcast(map[string]any{
-			"type":    "observation",
-			"action":  "created",
-			"id":      id,
-			"project": project,
-		})
-
-		// Add to existing for subsequent dedup checks within same batch
-		if existingObs != nil {
-			existingObs = append(existingObs, storedObs)
-		}
-	}
-
-	if skippedCount > 0 {
-		log.Info().
-			Int("stored", storedCount).
-			Int("skipped", skippedCount).
-			Msg("Observation processing complete (duplicates skipped)")
-	}
-	if mergeEvaluatedCount > 0 {
-		log.Info().
-			Str("project", project).
-			Int("merge_evaluated", mergeEvaluatedCount).
-			Int("merge_skipped", mergeSkipCount).
-			Float64("merge_skip_rate", float64(mergeSkipCount)/float64(mergeEvaluatedCount)).
-			Msg("write-merge telemetry")
-	}
-
-	// Asynchronously extract reasoning traces from the LLM response (System 2 memory).
-	// Only runs when a reasoning store is configured and the response contains
-	// enough multi-step reasoning indicators.
-	if p.reasoningStore != nil && storedCount > 0 && DetectReasoning(response) {
-		go p.extractAndStoreReasoning(context.Background(), sdkSessionID, project, response)
-	}
-
+	log.Info().
+		Str("sdk_session_id", sdkSessionID).
+		Str("project", project).
+		Str("tool", toolName).
+		Msg("SDK observation extraction removed in v5 cleanup; skipping persistence and LLM extraction")
 	return nil
 }
 
@@ -787,131 +531,15 @@ func (p *Processor) extractAndStoreReasoning(ctx context.Context, sdkSessionID, 
 }
 
 // ProcessSummary processes a session summary request.
-func (p *Processor) ProcessSummary(ctx context.Context, sessionDBID int64, sdkSessionID, project, userPrompt, lastUserMsg, lastAssistantMsg string) error {
-	// Debug: log what we received
-	log.Debug().
-		Int64("sessionId", sessionDBID).
-		Int("lastAssistantMsgLen", len(lastAssistantMsg)).
-		Str("lastAssistantMsgPreview", truncate(lastAssistantMsg, 200)).
-		Msg("ProcessSummary called")
-
-	// If no assistant message provided, build content from stored observations for this session
-	if !hasMeaningfulContent(lastAssistantMsg) && p.observationStore != nil {
-		type obsRow struct {
-			Type      string `gorm:"column:type"`
-			Title     string `gorm:"column:title"`
-			Narrative string `gorm:"column:narrative"`
-		}
-		var rows []obsRow
-		if err := p.observationStore.GetDB().WithContext(ctx).
-			Raw(`SELECT type, COALESCE(title, '') as title, COALESCE(narrative, '') as narrative
-				FROM observations WHERE sdk_session_id = ? ORDER BY created_at_epoch DESC LIMIT 10`, sdkSessionID).
-			Scan(&rows).Error; err == nil && len(rows) > 0 {
-			var sb strings.Builder
-			sb.WriteString("Session observations:\n")
-			for _, o := range rows {
-				sb.WriteString("- [")
-				sb.WriteString(o.Type)
-				sb.WriteString("] ")
-				sb.WriteString(o.Title)
-				if o.Narrative != "" {
-					sb.WriteString(": ")
-					sb.WriteString(o.Narrative)
-				}
-				sb.WriteString("\n")
-			}
-			lastAssistantMsg = sb.String()
-			log.Debug().
-				Int64("sessionId", sessionDBID).
-				Int("observations", len(rows)).
-				Msg("Built summary content from session observations")
-		}
-	}
-
-	// Third fallback: use the session's initial user prompt
-	if !hasMeaningfulContent(lastAssistantMsg) && userPrompt != "" && len(strings.TrimSpace(userPrompt)) >= 10 {
-		lastAssistantMsg = "Session started with user request: " + userPrompt
-		log.Debug().
-			Int64("sessionId", sessionDBID).
-			Msg("Using userPrompt as summary fallback")
-	}
-
-	// Skip summary generation if there's still no meaningful content
-	if !hasMeaningfulContent(lastAssistantMsg) {
-		log.Info().
-			Int64("sessionId", sessionDBID).
-			Int("msgLen", len(lastAssistantMsg)).
-			Msg("Skipping summary - no meaningful content available")
-		return nil
-	}
-
-	// Build the summary prompt
-	req := SummaryRequest{
-		SessionDBID:          sessionDBID,
-		SDKSessionID:         sdkSessionID,
-		Project:              project,
-		UserPrompt:           userPrompt,
-		LastUserMessage:      lastUserMsg,
-		LastAssistantMessage: lastAssistantMsg,
-	}
-	prompt := BuildSummaryPrompt(req)
-
-	// Acquire semaphore slot (limits concurrent LLM calls)
-	select {
-	case p.sem <- struct{}{}:
-		defer func() { <-p.sem }()
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	// Call LLM backend (API or CLI fallback)
-	response, err := p.callLLM(ctx, prompt)
-	if err != nil {
-		log.Error().Err(err).Int64("sessionId", sessionDBID).Msg("Failed to call LLM for summary")
-		return err
-	}
-
-	// Parse summary from response
-	summary := ParseSummary(response, sessionDBID)
-	if summary == nil {
-		log.Info().Int64("sessionId", sessionDBID).Msg("No summary generated (skipped or empty)")
-		return nil
-	}
-
-	// Filter out summaries that describe the memory agent itself
-	if isSelfReferentialSummary(summary) {
-		log.Info().Int64("sessionId", sessionDBID).Msg("Skipping self-referential summary (describes agent, not user work)")
-		return nil
-	}
-
-	// Store the summary (promptNumber=0, discoveryTokens=0 for summaries)
-	id, createdAtEpoch, err := p.summaryStore.StoreSummary(ctx, sdkSessionID, project, summary, 0, 0)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to store summary")
-		return err
-	}
-
+func (p *Processor) ProcessSummary(_ context.Context, sessionDBID int64, sdkSessionID, project, userPrompt, lastUserMsg, lastAssistantMsg string) error {
 	log.Info().
-		Int64("id", id).
 		Int64("sessionId", sessionDBID).
-		Msg("Summary stored")
-
-	// Sync to vector DB if callback is set
-	if p.syncSummaryFunc != nil {
-		fullSummary := models.NewSessionSummary(sdkSessionID, project, summary, 0, 0)
-		fullSummary.ID = id
-		fullSummary.CreatedAtEpoch = createdAtEpoch
-		p.syncSummaryFunc(fullSummary)
-	}
-
-	// Broadcast new summary event for dashboard refresh
-	p.broadcast(map[string]any{
-		"type":    "summary",
-		"action":  "created",
-		"id":      id,
-		"project": project,
-	})
-
+		Str("sdkSessionID", sdkSessionID).
+		Str("project", project).
+		Int("userPromptLen", len(userPrompt)).
+		Int("lastUserMsgLen", len(lastUserMsg)).
+		Int("lastAssistantMsgLen", len(lastAssistantMsg)).
+		Msg("Skipping ProcessSummary: summaries removed in v5 cleanup")
 	return nil
 }
 

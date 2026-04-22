@@ -97,7 +97,7 @@ func (t *backfillTracker) snapshot() map[string]*RunInfo {
 
 // handleBackfillIngest godoc
 // @Summary Ingest backfill observations
-// @Description Stores pre-extracted observations from a backfill run. Supports semantic deduplication via vector similarity.
+// @Description Observation-era backfill ingest was removed in v5. The endpoint remains for compatibility and returns an explicit deprecation response.
 // @Tags Backfill
 // @Accept json
 // @Produce json
@@ -105,7 +105,6 @@ func (t *backfillTracker) snapshot() map[string]*RunInfo {
 // @Param body body BackfillRequest true "Backfill observations"
 // @Success 200 {object} BackfillResponse
 // @Failure 400 {string} string "bad request"
-// @Failure 503 {string} string "observation store not initialized"
 // @Router /api/backfill [post]
 func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 	var req BackfillRequest
@@ -123,65 +122,19 @@ func (s *Service) handleBackfillIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.initMu.RLock()
-	obsStore := s.observationStore
-	s.initMu.RUnlock()
-
-	if obsStore == nil {
-		http.Error(w, "Observation store not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
-	resp := BackfillResponse{}
+	resp := BackfillResponse{Skipped: len(req.Observations)}
 	runInfo := s.backfillTracker.getOrCreate(req.RunID)
-
-	for _, bo := range req.Observations {
-		// Convert to XMLObservation for validation
-		xo := extract.XMLObservation{
-			Type:      bo.Type,
-			Outcome:   bo.Outcome,
-			Title:     bo.Title,
-			Narrative: bo.Narrative,
-		}
-
-		// Validate type and outcome
-		if !extract.ValidTypes[bo.Type] {
-			log.Warn().Str("type", bo.Type).Str("title", bo.Title).Msg("backfill: invalid observation type")
-			resp.Errors++
-			continue
-		}
-		if !extract.ValidOutcomes[bo.Outcome] {
-			log.Warn().Str("outcome", bo.Outcome).Str("title", bo.Title).Msg("backfill: invalid outcome")
-			resp.Errors++
-			continue
-		}
-
-		obs := extract.ConvertToObservation(xo, req.Project)
-		obs.Concepts = bo.Concepts
-		obs.FilesRead = bo.Files
-
-		// Add backfill metadata
-		obs.Scope = models.ScopeProject
-
-		sdkSessionID := fmt.Sprintf("backfill-%s-%s", req.RunID, req.SessionID)
-		_, _, err := obsStore.StoreObservation(r.Context(), sdkSessionID, req.Project, obs, 0, 0)
-		if err != nil {
-			log.Error().Err(err).Str("title", bo.Title).Msg("backfill: failed to store observation")
-			resp.Errors++
-			continue
-		}
-
-		resp.Stored++
-	}
-
-	// Update run tracker
 	runInfo.Stored += resp.Stored
 	runInfo.Skipped += resp.Skipped
 	runInfo.Errors += resp.Errors
 	runInfo.Sessions++
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSON(w, map[string]any{
+		"stored":     resp.Stored,
+		"skipped":    resp.Skipped,
+		"errors":     resp.Errors,
+		"deprecated": "observation backfill ingest removed in v5",
+	})
 }
 
 // handleBackfillStatus godoc
@@ -310,19 +263,9 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		MetricsReport:         result.Metrics.Report(),
 	}
 
-	// Store observations.
-	s.initMu.RLock()
-	obsStore := s.observationStore
-	s.initMu.RUnlock()
-
-	if obsStore == nil {
-		http.Error(w, "Observation store not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
+	// Store session metadata still supported in v5; observation/session-summary persistence was removed.
 	sdkSessionID := fmt.Sprintf("backfill-%s-%s", req.RunID, req.SessionID)
 
-	// T017: Create SDK session record so backfilled sessions appear in Sessions page.
 	if s.sessionStore != nil {
 		sessionDBID, err := s.sessionStore.CreateSDKSession(r.Context(), sdkSessionID, project, "backfill")
 		if err != nil {
@@ -331,57 +274,24 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		_ = sessionDBID
 	}
 
-	// T016: Store session summary if the retrospective produced one.
-	if result.Summary != nil && result.Summary.Summary.Request != "" && s.summaryStore != nil {
-		summary := &models.ParsedSummary{
-			Request:   result.Summary.Summary.Request,
-			Completed: result.Summary.Summary.Completed,
-			Learned:   result.Summary.Summary.Learned,
-			NextSteps: result.Summary.Summary.NextSteps,
-		}
-		_, _, err := s.summaryStore.StoreSummary(r.Context(), sdkSessionID, project, summary, 0, 0)
-		if err != nil {
-			log.Warn().Err(err).Msg("backfill: failed to store summary")
-		}
-	}
-
-	if len(result.Observations) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
+	if len(result.Observations) > 0 {
+		resp.Skipped = len(result.Observations)
 	}
 
 	runInfo := s.backfillTracker.getOrCreate(req.RunID)
-
-	for _, eo := range result.Observations {
-		obs := eo.Observation
-
-		// Add backfill metadata.
-		obs.Scope = models.ScopeProject
-
-		obsProject := project
-		if eo.Project != "" {
-			obsProject = eo.Project
-		}
-
-		_, _, storeErr := obsStore.StoreObservation(r.Context(), sdkSessionID, obsProject, obs, 0, 0)
-		if storeErr != nil {
-			log.Error().Err(storeErr).Str("title", obs.Title).Msg("backfill-session: failed to store observation")
-			resp.Errors++
-			continue
-		}
-
-		resp.Stored++
-	}
-
-	// Update run tracker.
 	runInfo.Stored += resp.Stored
 	runInfo.Skipped += resp.Skipped
 	runInfo.Errors += resp.Errors
 	runInfo.Sessions++
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSON(w, map[string]any{
+		"stored":                resp.Stored,
+		"skipped":               resp.Skipped,
+		"errors":                resp.Errors,
+		"observations_extracted": resp.ObservationsExtracted,
+		"metrics_report":        resp.MetricsReport,
+		"deprecated":            "backfill observation/session-summary persistence removed in v5",
+	})
 }
 
 // vaultStoreDetectedSecrets extracts secrets from text, encrypts each with the vault,
@@ -400,22 +310,17 @@ func vaultStoreDetectedSecrets(ctx context.Context, s *Service, text, project st
 	}
 
 	s.initMu.RLock()
-	obsStore := s.observationStore
+	credentialStore := s.credentialStore
 	s.initMu.RUnlock()
-	if obsStore == nil {
-		log.Warn().Msg("backfill: observation store not available, skipping secret storage")
+	if credentialStore == nil {
+		log.Warn().Msg("backfill: credential store not available, skipping secret storage")
 		return
 	}
 
 	stored := 0
 	for _, secret := range secrets {
-		// Idempotency: skip if credential with this name already exists.
-		existing, err := obsStore.GetCredential(ctx, secret.Name, project)
-		if err != nil {
-			log.Warn().Err(err).Str("name", secret.Name).Msg("backfill: failed to check existing credential")
-			continue
-		}
-		if existing != nil {
+		_, err := credentialStore.Get(ctx, project, secret.Name)
+		if err == nil {
 			continue
 		}
 
@@ -425,21 +330,16 @@ func vaultStoreDetectedSecrets(ctx context.Context, s *Service, text, project st
 			continue
 		}
 
-		obs := &models.ParsedObservation{
-			Type:                     models.ObsTypeCredential,
-			SourceType:               models.SourceBackfill,
-			Title:                    secret.Name,
-			Narrative:                secret.Name,
-			Concepts:                 []string{"auto-detected", "redactor"},
-			Scope:                    models.ScopeProject,
+		_, createErr := credentialStore.Create(ctx, &models.Credential{
+			Project:                  project,
+			Key:                      secret.Name,
 			EncryptedSecret:          ciphertext,
 			EncryptionKeyFingerprint: vault.Fingerprint(),
-		}
-
-		const vaultSessionID = "credential:auto-redactor"
-		_, _, storeErr := obsStore.StoreObservation(ctx, vaultSessionID, project, obs, 0, 0)
-		if storeErr != nil {
-			log.Warn().Err(storeErr).Str("name", secret.Name).Msg("backfill: failed to store auto-detected credential")
+			Scope:                    string(models.ScopeProject),
+			EditedBy:                 "backfill-auto-redactor",
+		})
+		if createErr != nil {
+			log.Warn().Err(createErr).Str("name", secret.Name).Msg("backfill: failed to store auto-detected credential")
 			continue
 		}
 		stored++
@@ -508,42 +408,42 @@ func (s *Service) handleImportFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.initMu.RLock()
-	obsStore := s.observationStore
+	behavioralRulesStore := s.behavioralRulesStore
 	s.initMu.RUnlock()
 
-	if obsStore == nil {
-		http.Error(w, "observation store not ready", http.StatusServiceUnavailable)
+	if behavioralRulesStore == nil {
+		http.Error(w, "behavioral rules store not ready", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Build and store as guidance observation.
-	parsed := &models.ParsedObservation{
-		Type:       models.ObsTypeGuidance,
-		SourceType: models.SourceManual,
-		Title:      obs.Title,
-		Narrative:  obs.Narrative,
-		Concepts:   obs.Concepts.Concepts,
-		Scope:      models.ScopeGlobal,
+	ruleContent := strings.TrimSpace(obs.Narrative)
+	if ruleContent == "" {
+		ruleContent = strings.TrimSpace(obs.Title)
+	}
+	if ruleContent == "" {
+		writeJSON(w, map[string]any{
+			"status": "skipped",
+			"reason": "LLM returned empty behavioral rule content",
+		})
+		return
 	}
 
-	sessionID := fmt.Sprintf("feedback-import:%s", req.SourceFile)
-	id, _, storeErr := obsStore.StoreObservation(r.Context(), sessionID, "", parsed, 0, 0)
+	createdRule, storeErr := behavioralRulesStore.Create(r.Context(), &models.BehavioralRule{
+		Content:  ruleContent,
+		EditedBy: fmt.Sprintf("feedback-import:%s", req.SourceFile),
+		Priority: 80,
+	})
 	if storeErr != nil {
-		log.Error().Err(storeErr).Str("title", obs.Title).Msg("feedback import: failed to store")
-		http.Error(w, "failed to store observation: "+storeErr.Error(), http.StatusInternalServerError)
+		log.Error().Err(storeErr).Str("title", obs.Title).Msg("feedback import: failed to store rule")
+		http.Error(w, "failed to store behavioral rule: "+storeErr.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Set high importance for behavioral rules.
-	if err := obsStore.UpdateImportanceScore(r.Context(), id, 0.8); err != nil {
-		log.Warn().Err(err).Int64("id", id).Msg("feedback import: failed to set importance")
-	}
-
-	log.Info().Int64("id", id).Str("title", obs.Title).Str("source", req.SourceFile).Msg("feedback import: stored rule")
+	log.Info().Int64("id", createdRule.ID).Str("title", obs.Title).Str("source", req.SourceFile).Msg("feedback import: stored rule")
 
 	writeJSON(w, map[string]any{
 		"status":      "imported",
-		"id":          id,
+		"id":          createdRule.ID,
 		"title":       obs.Title,
 		"source_file": req.SourceFile,
 	})

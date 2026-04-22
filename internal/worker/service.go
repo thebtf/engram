@@ -85,10 +85,6 @@ type Service struct {
 	ctx                    context.Context
 	initError              error
 	server                 *http.Server
-	observationStore       *gorm.ObservationStore
-	summaryStore           *gorm.SummaryStore
-	promptStore            *gorm.PromptStore
-	conflictStore          *gorm.ConflictStore
 	relationStore          *gorm.RelationStore
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
@@ -100,7 +96,6 @@ type Service struct {
 	store                  *gorm.Store
 	retrievalStats         map[string]*RetrievalStats
 	sessionStore           *gorm.SessionStore
-	rawEventStore          *gorm.RawEventStore
 	tokenStore             *gorm.TokenStore
 	ingestDedup            *deduplicationCache
 	cancel                 context.CancelFunc
@@ -334,20 +329,14 @@ func (s *Service) initializeAsync() {
 
 	// Create store wrappers
 	sessionStore := gorm.NewSessionStore(store)
-	summaryStore := gorm.NewSummaryStore(store)
-	promptStore := gorm.NewPromptStore(store, nil)
-	conflictStore := gorm.NewConflictStore(store)
 	relationStore := gorm.NewRelationStore(store)
-
-	// Create observation store
-	observationStore := gorm.NewObservationStore(store, nil)
 
 	// Create session manager
 	sessionManager := session.NewManager(sessionStore)
 
 	// Create SDK processor (optional - requires LLM API or Claude CLI)
 	var processor *sdk.Processor
-	proc, err := sdk.NewProcessor(observationStore, summaryStore)
+	proc, err := sdk.NewProcessor()
 	if err != nil {
 		log.Warn().Err(err).Msg("SDK processor not available — set ENGRAM_LLM_URL for observation extraction")
 	} else {
@@ -366,9 +355,6 @@ func (s *Service) initializeAsync() {
 	userStore := gorm.NewUserStore(store.DB)
 	invitationStore := gorm.NewInvitationStore(store.DB)
 	authSessionStore := gorm.NewAuthSessionStore(store.DB)
-
-	// Create raw event store and ingest deduplication cache
-	rawEventStore := gorm.NewRawEventStore(store)
 
 	// Create injection store for closed-loop learning
 	injectionStore := gorm.NewInjectionStore(store.GetDB())
@@ -398,7 +384,6 @@ func (s *Service) initializeAsync() {
 	s.initMu.Lock()
 	s.store = store
 	s.sessionStore = sessionStore
-	s.rawEventStore = rawEventStore
 	s.injectionStore = injectionStore
 	s.issueStore = issueStore
 	s.credentialStore = credentialStore
@@ -407,10 +392,6 @@ func (s *Service) initializeAsync() {
 	s.agentStatsStore = agentStatsStore
 	s.versionStore = versionStore
 	s.tokenStore = tokenStore
-	s.observationStore = observationStore
-	s.summaryStore = summaryStore
-	s.promptStore = promptStore
-	s.conflictStore = conflictStore
 	s.relationStore = relationStore
 	s.sessionManager = sessionManager
 	s.processor = processor
@@ -483,7 +464,6 @@ func (s *Service) initializeAsync() {
 
 	mcpServer := mcp.NewServer(mcp.ServerOptions{
 		Version:            s.version,
-		ObservationStore:   observationStore,
 		RelationStore:      relationStore,
 		SessionStore:       sessionStore,
 		CollectionRegistry: collectionRegistry,
@@ -652,36 +632,8 @@ func (s *Service) verifyStaleObservation(req staleVerifyRequest) {
 		return
 	}
 
-	// Get observation from DB
-	s.initMu.RLock()
-	store := s.observationStore
-	processor := s.processor
-	s.initMu.RUnlock()
-
-	if store == nil || processor == nil {
-		return
-	}
-
-	obs, err := store.GetObservationByID(s.ctx, req.observationID)
-	if err != nil || obs == nil {
-		return
-	}
-
-	// Verify with Claude CLI (this is slow but we're in background)
-	if !processor.VerifyObservation(s.ctx, obs, req.cwd) {
-		// Invalid - delete it
-		deleted, err := store.DeleteObservations(s.ctx, []int64{obs.ID})
-		if err == nil && deleted > 0 {
-			log.Info().
-				Int64("id", obs.ID).
-				Str("title", obs.Title.String).
-				Msg("Background verification: deleted invalid observation")
-		}
-	} else {
-		log.Debug().
-			Int64("id", obs.ID).
-			Msg("Background verification: observation still valid")
-	}
+	// Observation-era background stale verification was removed in v5.
+	_ = req
 }
 
 // mcpHandlerAdapter wraps mcp.Server to implement grpcserver.MCPHandler.
@@ -982,10 +934,6 @@ func (s *Service) setupRoutes() {
 		// Token stats
 		r.Get("/api/auth/tokens/{id}/stats", s.handleGetTokenStats)
 
-		// Indexed session routes (separate from live session management)
-		r.Get("/api/sessions-index", s.handleListIndexedSessions)
-		r.Get("/api/sessions-index/search", s.handleSearchIndexedSessions)
-
 		// Analytics routes
 		r.Get("/api/analytics/trends", s.handleGetTrends)
 
@@ -1148,10 +1096,26 @@ func (s *Service) getCachedObservationCount(ctx context.Context, project string)
 	}
 	s.cachedObsCountsMu.RUnlock()
 
-	// Cache miss or expired - query database
-	count, err := s.observationStore.GetObservationCount(ctx, project)
-	if err != nil {
-		return 0, err
+	// Cache miss or expired - query v5 stores.
+	count := 0
+	if s.memoryStore != nil {
+		mems, err := s.memoryStore.List(ctx, project, 1000)
+		if err != nil {
+			return 0, err
+		}
+		count += len(mems)
+	}
+	if s.behavioralRulesStore != nil {
+		projectPtr := &project
+		rules, err := s.behavioralRulesStore.List(ctx, projectPtr, 1000)
+		if err != nil {
+			return 0, err
+		}
+		for _, rule := range rules {
+			if rule != nil && rule.Project != nil && *rule.Project == project {
+				count++
+			}
+		}
 	}
 
 	// Update cache

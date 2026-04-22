@@ -8,7 +8,7 @@ import (
 )
 
 // ConvertToObservation maps an instinct to a parsed guidance observation
-// suitable for storage via ObservationStore.StoreObservation.
+// suitable for storage as a memory record.
 func ConvertToObservation(inst *Instinct) *models.ParsedObservation {
 	// Build concepts from domain
 	var concepts []string

@@ -3,6 +3,7 @@ package worker
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -111,6 +112,54 @@ func applyStrategy(strategy string, observations []*models.Observation, agentSta
 		// "baseline": no change
 		return observations
 	}
+}
+
+func behavioralRulesToObservations(rules []*models.BehavioralRule) []*models.Observation {
+	result := make([]*models.Observation, 0, len(rules))
+	for _, rule := range rules {
+		if rule == nil {
+			continue
+		}
+		project := ""
+		if rule.Project != nil {
+			project = *rule.Project
+		}
+		result = append(result, &models.Observation{
+			ID:             rule.ID,
+			Project:        project,
+			Scope:          models.ScopeGlobal,
+			Type:           models.ObsTypeGuidance,
+			CreatedAt:      rule.CreatedAt.Format(time.RFC3339),
+			CreatedAtEpoch: rule.CreatedAt.UnixMilli(),
+			Title:          sql.NullString{String: rule.Content, Valid: rule.Content != ""},
+			Narrative:      sql.NullString{String: rule.Content, Valid: rule.Content != ""},
+			Concepts:       models.JSONStringArray{"behavioral-rule", "always-inject"},
+			ImportanceScore: 1,
+		})
+	}
+	return result
+}
+
+func memoriesToObservations(mems []*models.Memory) []*models.Observation {
+	result := make([]*models.Observation, 0, len(mems))
+	for _, mem := range mems {
+		if mem == nil {
+			continue
+		}
+		result = append(result, &models.Observation{
+			ID:              mem.ID,
+			Project:         mem.Project,
+			Scope:           models.ScopeProject,
+			Type:            models.ObsTypeDiscovery,
+			CreatedAt:       mem.CreatedAt.Format(time.RFC3339),
+			CreatedAtEpoch:  mem.CreatedAt.UnixMilli(),
+			Title:           sql.NullString{String: mem.Content, Valid: mem.Content != ""},
+			Narrative:       sql.NullString{String: mem.Content, Valid: mem.Content != ""},
+			Concepts:        models.JSONStringArray(mem.Tags),
+			ImportanceScore: 1,
+		})
+	}
+	return result
 }
 
 // handleSearchByPrompt godoc
@@ -273,14 +322,23 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	// Track this search for analytics
 	s.trackSearchQuery(query, project, "observations", len(clusteredObservations), float32(time.Since(searchStart).Milliseconds()))
 
-	// Always-inject tier: fetch observations tagged "always-inject" regardless of query (FR-1, FR-6)
+	// Always-inject tier: backed by behavioral_rules in v5.
 	alwaysInjectLimit := s.config.AlwaysInjectLimit
 	if alwaysInjectLimit <= 0 {
 		alwaysInjectLimit = 20
 	}
-	alwaysInjectObs, aiErr := s.observationStore.GetAlwaysInjectObservations(r.Context(), project, alwaysInjectLimit)
-	if aiErr != nil {
-		log.Debug().Err(aiErr).Msg("Failed to fetch always-inject observations for search")
+	var alwaysInjectObs []*models.Observation
+	if s.behavioralRulesStore != nil {
+		projectPtr := &project
+		if project == "" {
+			projectPtr = nil
+		}
+		rules, aiErr := s.behavioralRulesStore.List(r.Context(), projectPtr, alwaysInjectLimit)
+		if aiErr != nil {
+			log.Debug().Err(aiErr).Msg("Failed to fetch always-inject behavioral rules for search")
+		} else {
+			alwaysInjectObs = behavioralRulesToObservations(rules)
+		}
 	}
 
 	writeJSON(w, map[string]any{
@@ -654,8 +712,8 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// --- Recent section: last 5 observations by created_at ---
-	scopeFilter := gorm.ScopeFilter{Project: project, AgentID: agentID}
-	recentRaw, err := s.observationStore.GetRecentObservationsFiltered(ctx, scopeFilter, 5)
+	scopeFilter := retrievalScope{Project: project, AgentID: agentID}
+	recentRaw, err := s.searchFallbackObservations(ctx, "", scopeFilter, 5)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -713,41 +771,23 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		// Legacy path (ENGRAM_INJECT_UNIFIED=false): vector search removed in v5.
-		// Fall back to FTS-based retrieval.
-		legacyQuery := project + " code development"
-		legacyScopeFilter := gorm.ScopeFilter{Project: project, AgentID: agentID}
-		fetched, fetchErr := s.observationStore.SearchObservationsFTSFiltered(ctx, legacyQuery, legacyScopeFilter, 10)
-		if fetchErr == nil && len(fetched) > 0 {
-			for _, obs := range fetched {
-				if _, alreadyInRecent := recentIDs[obs.ID]; !alreadyInRecent {
-					relevantObservations = append(relevantObservations, obs)
-				}
-			}
-		}
+		// Legacy path (ENGRAM_INJECT_UNIFIED=false): observation-era fallback removed in PR-B.
+		// Keep HTTP contract stable by returning an empty relevant section instead of erroring.
+		relevantObservations = []*models.Observation{}
 	}
 
-	// --- Guidance section: top guidance observations ---
+	// --- Guidance section: top behavioral rules in v5 ---
 	var guidanceObservations []*models.Observation
-	guidanceRaw, guidanceErr := s.observationStore.GetGuidanceObservations(ctx, project, 5)
-	if guidanceErr != nil {
-		log.Debug().Err(guidanceErr).Str("project", project).Msg("Failed to fetch guidance observations")
-	} else {
-		// Apply staleness filter
-		for _, obs := range guidanceRaw {
-			if len(obs.FileMtimes) > 0 {
-				var paths []string
-				for path := range obs.FileMtimes {
-					paths = append(paths, path)
-				}
-				currentMtimes := sdk.GetFileMtimes(paths, cwd)
-				if obs.CheckStaleness(currentMtimes) {
-					staleCount++
-					s.queueStaleVerification(obs.ID, cwd)
-					continue
-				}
-			}
-			guidanceObservations = append(guidanceObservations, obs)
+	if s.behavioralRulesStore != nil {
+		projectPtr := &project
+		if project == "" {
+			projectPtr = nil
+		}
+		rules, guidanceErr := s.behavioralRulesStore.List(ctx, projectPtr, 5)
+		if guidanceErr != nil {
+			log.Debug().Err(guidanceErr).Str("project", project).Msg("Failed to fetch behavioral rules guidance")
+		} else {
+			guidanceObservations = behavioralRulesToObservations(rules)
 		}
 	}
 
@@ -759,33 +799,48 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	// Project briefing was removed in v5 (ProjectBriefingEnabled config field deleted).
 	var projectBriefing *models.Observation
 
-	// --- Always-inject section: observations tagged with "always-inject" concept (FR-1, FR-6) ---
+	// --- Always-inject section: backed by behavioral_rules in v5 ---
 	var alwaysInjectObservations []*models.Observation
 	alwaysInjectLimit := s.config.AlwaysInjectLimit
 	if alwaysInjectLimit <= 0 {
 		alwaysInjectLimit = 20
 	}
-	alwaysInjectRaw, aiErr := s.observationStore.GetAlwaysInjectObservations(ctx, project, alwaysInjectLimit)
-	if aiErr != nil {
-		log.Debug().Err(aiErr).Msg("Failed to fetch always-inject observations")
-	} else {
-		for _, obs := range alwaysInjectRaw {
-			// Deduplicate against guidance and recent sections
-			if _, already := recentIDs[obs.ID]; !already {
-				alwaysInjectObservations = append(alwaysInjectObservations, obs)
-				recentIDs[obs.ID] = struct{}{}
+	if s.behavioralRulesStore != nil {
+		projectPtr := &project
+		if project == "" {
+			projectPtr = nil
+		}
+		rules, aiErr := s.behavioralRulesStore.List(ctx, projectPtr, alwaysInjectLimit)
+		if aiErr != nil {
+			log.Debug().Err(aiErr).Msg("Failed to fetch always-inject behavioral rules")
+		} else {
+			for _, obs := range behavioralRulesToObservations(rules) {
+				if _, already := recentIDs[obs.ID]; !already {
+					alwaysInjectObservations = append(alwaysInjectObservations, obs)
+					recentIDs[obs.ID] = struct{}{}
+				}
 			}
 		}
 	}
 
 	// Injection floor was removed in v5 (InjectionFloor config field deleted).
 
-	// --- Backward-compat observations field: full recent list + relevant deduped union ---
-	// Get the full recent list (up to configured limit) for the legacy field
-	allRecentRaw, err := s.observationStore.GetRecentObservationsFiltered(ctx, scopeFilter, limit)
+	// --- Backward-compat observations field: use v5 memory fallback where available ---
+	allRecentRaw, err := s.searchFallbackObservations(ctx, "", scopeFilter, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if allRecentRaw == nil && s.memoryStore != nil && project != "" {
+		mems, memErr := s.memoryStore.List(ctx, project, limit)
+		if memErr != nil {
+			http.Error(w, memErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		allRecentRaw = memoriesToObservations(mems)
+	}
+	if allRecentRaw == nil {
+		allRecentRaw = []*models.Observation{}
 	}
 
 	var allFreshObservations []*models.Observation
@@ -1030,23 +1085,15 @@ func (s *Service) handleContextCount(w http.ResponseWriter, r *http.Request) {
 }
 
 // trackSearchMiss records a search query that returned zero results for analytics.
+// Observation-era search miss persistence was removed in v5; keep the hook as a no-op so callers stay stable.
 func (s *Service) trackSearchMiss(project, query string) {
-	s.initMu.RLock()
-	obsStore := s.observationStore
-	s.initMu.RUnlock()
-	if obsStore == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-	defer cancel()
-	if err := obsStore.RecordSearchMiss(ctx, project, query); err != nil {
-		log.Warn().Err(err).Str("project", project).Msg("failed to record search miss")
-	}
+	_ = project
+	_ = query
 }
 
 // handleSearchMissAnalytics godoc
 // @Summary Get search miss analytics
-// @Description Returns aggregated analytics for search queries that returned zero results, useful for self-tuning.
+// @Description Search miss analytics persistence was removed in v5; this endpoint remains for compatibility and returns an explicit deprecation payload.
 // @Tags Search
 // @Accept json
 // @Produce json
@@ -1054,8 +1101,6 @@ func (s *Service) trackSearchMiss(project, query string) {
 // @Param body body object true "Params: project (optional — omit to aggregate across all projects), limit (optional)"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "invalid project name"
-// @Failure 500 {string} string "internal error"
-// @Failure 503 {string} string "store not available"
 // @Router /api/analytics/search-misses [post]
 func (s *Service) handleSearchMissAnalytics(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -1072,32 +1117,15 @@ func (s *Service) handleSearchMissAnalytics(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-
-	const maxSearchMissStatsLimit = 200
 	if body.Limit <= 0 {
 		body.Limit = 50
-	}
-	if body.Limit > maxSearchMissStatsLimit {
-		body.Limit = maxSearchMissStatsLimit
-	}
-
-	s.initMu.RLock()
-	obsStore := s.observationStore
-	s.initMu.RUnlock()
-	if obsStore == nil {
-		http.Error(w, "store not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	stats, err := obsStore.GetSearchMissStats(r.Context(), body.Project, body.Limit)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
 	}
 
 	writeJSON(w, map[string]any{
 		"project":      body.Project,
-		"miss_stats":   stats,
-		"total_misses": len(stats),
+		"limit":        body.Limit,
+		"miss_stats":   []any{},
+		"total_misses": 0,
+		"deprecated":   "search miss analytics persistence removed in v5",
 	})
 }

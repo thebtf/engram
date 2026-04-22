@@ -14,11 +14,10 @@ import (
 // Supports two modes:
 //   - files: array of {name, content} objects (client-server, preferred)
 //   - path: filesystem path (legacy, only works when server has local access)
+//
+// v5 (US3): ObservationStore removed; import delegates to the updated
+// instincts package which returns an error until chunk 3 wires MemoryStore.
 func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
-	}
-
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -41,7 +40,6 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 	}
 
 	// Mutual exclusivity: exactly one of files/path is required.
-	// (Previously enforced via JSON Schema anyOf, but Anthropic API rejects that at top level.)
 	if len(params.Files) == 0 && params.Path == "" {
 		return "", fmt.Errorf("import_instincts: one of 'files' (array of {name, content}) or 'path' (directory) is required")
 	}
@@ -53,7 +51,7 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 
 	if len(params.Files) > 0 {
 		// Client-server mode: content sent over the wire
-		result, err = instincts.ImportFromContent(ctx, params.Files, s.observationStore)
+		result, err = instincts.ImportFromContent(ctx, params.Files)
 	} else {
 		// Legacy mode: read from local filesystem (deprecated)
 		log.Warn().Str("path", params.Path).Msg("import_instincts: using deprecated path-based import; 'path' parameter will be removed. Use 'files' with content instead.")
@@ -67,7 +65,7 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 			return "", fmt.Errorf("instincts directory not found: %s (hint: use 'files' parameter to send content directly)", dir)
 		}
 
-		result, err = instincts.Import(ctx, dir, s.observationStore)
+		result, err = instincts.Import(ctx, dir)
 	}
 
 	if err != nil {

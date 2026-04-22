@@ -3,11 +3,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/google/uuid"
+	gormlib "gorm.io/gorm"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
@@ -36,10 +37,10 @@ func isValidStoreObservationType(obsType models.ObservationType) bool {
 	}
 }
 
-// handleStoreMemory explicitly stores a memory/observation.
+// handleStoreMemory explicitly stores a memory in the v5 memories table.
 func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("memory store not available")
 	}
 
 	m, err := parseArgs(args)
@@ -112,13 +113,20 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			Msg("store_memory: content truncated to soft limit")
 	}
 
-	// Redact secrets from content before storing — warn and continue rather than reject.
 	if privacy.ContainsSecrets(params.Content) {
 		log.Warn().Msg("store_memory: content contains secrets — redacting before storage")
 		params.Content = privacy.RedactSecrets(params.Content)
 	}
 
-	// Classify observation type from content keywords when not provided.
+	resolvedScope := params.Scope
+	if resolvedScope == "" {
+		resolvedScope = string(models.ScopeProject)
+	}
+
+	if params.Project == "" && !(params.AlwaysInject && resolvedScope == string(models.ScopeGlobal)) {
+		return "", fmt.Errorf("project is required for store_memory in v5 unless always_inject=true with scope=global")
+	}
+
 	obsTypeStr := params.Type
 	if obsTypeStr == "" {
 		cl := strings.ToLower(params.Content)
@@ -140,105 +148,105 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("invalid type %q: must be one of decision, bugfix, feature, refactor, discovery, change, guidance, credential, entity, wiki, pitfall, operational, timeline", obsTypeStr)
 	}
 
-	// Expand hierarchical tags: "lang:go:concurrency" -> ["lang", "lang:go", "lang:go:concurrency"]
 	seen := make(map[string]bool)
-	var concepts []string
+	tags := make([]string, 0, len(params.Tags)+3)
 	for _, tag := range params.Tags {
 		for _, part := range expandTagHierarchy(tag) {
 			if !seen[part] {
 				seen[part] = true
-				concepts = append(concepts, part)
+				tags = append(tags, part)
 			}
 		}
 	}
 
-	// Add always-inject concept when requested — observations with this concept
-	// are injected into every agent context regardless of query relevance.
-	if params.AlwaysInject && !seen["always-inject"] {
-		concepts = append(concepts, "always-inject")
-		seen["always-inject"] = true
+	if !seen["type:"+obsTypeStr] {
+		tags = append(tags, "type:"+obsTypeStr)
+		seen["type:"+obsTypeStr] = true
+	}
+	if !seen["scope:"+resolvedScope] {
+		tags = append(tags, "scope:"+resolvedScope)
+		seen["scope:"+resolvedScope] = true
+	}
+	if params.TtlDays != nil && !seen[fmt.Sprintf("ttl:%d", *params.TtlDays)] {
+		ttlTag := fmt.Sprintf("ttl:%d", *params.TtlDays)
+		tags = append(tags, ttlTag)
+		seen[ttlTag] = true
 	}
 
-	// Determine scope from explicit param or auto-detect from concepts.
-	var scope models.ObservationScope
-	if params.Scope != "" {
-		scope = models.ObservationScope(params.Scope)
-	} else {
-		scope = models.DetermineScope(concepts)
+	ttlDays := computeTTLDays(params.TtlDays, tags)
+	ttlApplied := ttlDays > 0
+
+	if params.AlwaysInject {
+		if s.behavioralRulesStore == nil {
+			return "", fmt.Errorf("always_inject=true requires behavioral rules store")
+		}
+		var project *string
+		if resolvedScope != string(models.ScopeGlobal) {
+			p := params.Project
+			project = &p
+		}
+		rule := &models.BehavioralRule{
+			Project:  project,
+			Content:  params.Content,
+			Priority: 0,
+		}
+		created, err := s.behavioralRulesStore.Create(ctx, rule)
+		if err != nil {
+			return "", fmt.Errorf("store behavioral rule: %w", err)
+		}
+
+		result := map[string]any{
+			"id":            created.ID,
+			"title":         truncateTitle(created.Content, 80),
+			"type":          string(models.ObsTypeGuidance),
+			"scope":         resolvedScope,
+			"storage":       "behavioral_rules",
+			"always_inject": true,
+			"message":       "Behavioral rule stored successfully",
+		}
+		out, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal result: %w", err)
+		}
+		return string(out), nil
 	}
 
-	if scope == models.ScopeGlobal {
-		log.Warn().
-			Str("project", params.Project).
-			Msg("store_memory: storing global-scoped observation")
-	}
-
-	// Vector-based dedup removed in v5; every store_memory call creates a new observation.
-	const contradictionAction = "ADD"
-
-	title := params.Title
-	if title == "" {
-		title = truncateTitle(params.Content, 80)
-	}
-
-	// Validate agent_source: coerce to 'unknown' if unrecognized
-	agentSource := models.AgentUnknown
+	agentSource := string(models.AgentUnknown)
 	if params.AgentSource != "" {
 		if models.IsValidAgentSource(params.AgentSource) {
-			agentSource = models.AgentSource(params.AgentSource)
+			agentSource = params.AgentSource
 		} else {
 			return "", fmt.Errorf("invalid agent_source %q: must be one of claude-code, codex, gemini, other, unknown", params.AgentSource)
 		}
 	}
 
-	obs := &models.ParsedObservation{
-		Type:        obsType,
-		SourceType:  models.SourceManual,
-		MemoryType:  models.ClassifyMemoryType(&models.ParsedObservation{Type: obsType, Narrative: params.Content, Concepts: concepts}),
-		Title:       title,
-		Narrative:   params.Content,
-		Concepts:    concepts,
-		Rejected:    params.Rejected,
-		Scope:       scope,
-		AgentSource: agentSource,
+	memory := &models.Memory{
+		Project:     params.Project,
+		Content:     params.Content,
+		Tags:        tags,
+		SourceAgent: agentSource,
 	}
-
-	// Generate a unique session ID for manual memories to avoid
-	// duplicate key violations on idx_sdk_sessions_claude_session_id.
-	// Empty string causes conflicts because PostgreSQL NULLs are always unique
-	// (ON CONFLICT on sdk_session_id won't fire) but claude_session_id="" collides.
-	manualSessionID := "manual-" + uuid.NewString()
-	id, _, err := s.observationStore.StoreObservation(ctx, manualSessionID, params.Project, obs, 0, 0)
+	created, err := s.memoryStore.Create(ctx, memory)
 	if err != nil {
-		return "", fmt.Errorf("store observation: %w", err)
-	}
-	if params.Importance != nil {
-		if err := s.observationStore.UpdateImportanceScore(ctx, id, *params.Importance); err != nil {
-			return "", fmt.Errorf("set importance: %w", err)
-		}
-	}
-
-	// Apply TTL for verified facts.
-	ttlDays := computeTTLDays(params.TtlDays, concepts)
-	ttlApplied := false
-	if ttlDays > 0 {
-		if err := s.observationStore.SetObservationTTL(ctx, id, ttlDays); err != nil {
-			log.Warn().Err(err).Int64("id", id).Int("ttl_days", ttlDays).Msg("failed to set observation TTL")
-		} else {
-			ttlApplied = true
-		}
+		return "", fmt.Errorf("store memory: %w", err)
 	}
 
 	result := map[string]any{
-		"id":      id,
-		"title":   title,
-		"type":    string(obsType),
-		"scope":   string(scope),
-		"action":  contradictionAction,
+		"id":      created.ID,
+		"title":   truncateTitle(created.Content, 80),
+		"type":    obsTypeStr,
+		"scope":   params.Scope,
+		"storage": "memories",
 		"message": "Memory stored successfully",
 	}
 	if ttlApplied {
 		result["ttl_days"] = ttlDays
+	}
+	if params.Importance != nil {
+		result["importance_note"] = "importance metadata is not stored in v5 memories schema"
+	}
+	if len(params.Rejected) > 0 {
+		result["rejected_note"] = "rejected alternatives are not stored in v5 memories schema"
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -301,11 +309,10 @@ func truncateTitle(content string, maxLen int) string {
 	return truncated + "..."
 }
 
-// handleRecallMemory retrieves observations via FTS (v5: vector search removed).
-// Falls back to a simple substring filter when observationStore is unavailable.
+// handleRecallMemory retrieves memories from the v5 memories table using list + in-memory filtering.
 func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("recall_memory: observation store not configured")
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("recall_memory: memory store not configured")
 	}
 
 	m, err := parseArgs(args)
@@ -313,8 +320,8 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		return "", err
 	}
 
-	query := coerceString(m["query"], "")
-	obsType := coerceString(m["type"], "")
+	query := strings.TrimSpace(coerceString(m["query"], ""))
+	obsType := strings.TrimSpace(coerceString(m["type"], ""))
 	format := coerceString(m["format"], "")
 	limit := coerceInt(m["limit"], 0)
 	project := strings.TrimSpace(coerceString(m["project"], ""))
@@ -332,94 +339,141 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	if format == "" {
 		format = "text"
 	}
+	if project == "" {
+		project = strings.TrimSpace(projectFromContext(ctx))
+	}
+	if project == "" {
+		return "", fmt.Errorf("project is required for recall_memory in v5")
+	}
 
-	observations, err := s.observationStore.SearchObservationsFTS(ctx, query, project, limit*4)
+	fetchLimit := limit
+	if query != "" || obsType != "" || len(tags) > 0 {
+		const candidateMultiplier = 10
+		const minCandidatePool = 1000
+		fetchLimit = limit * candidateMultiplier
+		if fetchLimit < minCandidatePool {
+			fetchLimit = minCandidatePool
+		}
+	}
+
+	memories, err := s.memoryStore.List(ctx, project, fetchLimit)
 	if err != nil {
 		return "", fmt.Errorf("recall_memory: %w", err)
 	}
 
-	// Filter by type when requested.
-	if obsType != "" {
-		filtered := make([]*models.Observation, 0, len(observations))
-		for _, obs := range observations {
-			if string(obs.Type) == obsType {
-				filtered = append(filtered, obs)
-			}
-		}
-		observations = filtered
+	queryLower := strings.ToLower(query)
+	tagSet := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tagSet[strings.ToLower(tag)] = struct{}{}
 	}
 
-	// Filter by concept tags when requested.
-	if len(tags) > 0 {
-		tagSet := make(map[string]struct{}, len(tags))
-		for _, t := range tags {
-			tagSet[t] = struct{}{}
-		}
-		filtered := make([]*models.Observation, 0, len(observations))
-		for _, obs := range observations {
-			for _, c := range obs.Concepts {
-				if _, ok := tagSet[c]; ok {
-					filtered = append(filtered, obs)
+	filtered := make([]*models.Memory, 0, min(limit, len(memories)))
+	for _, mem := range memories {
+		contentLower := strings.ToLower(mem.Content)
+		if queryLower != "" && !strings.Contains(contentLower, queryLower) {
+			matchedTag := false
+			for _, tag := range mem.Tags {
+				if strings.Contains(strings.ToLower(tag), queryLower) {
+					matchedTag = true
 					break
 				}
 			}
+			if !matchedTag {
+				continue
+			}
 		}
-		observations = filtered
-	}
 
-	if len(observations) > limit {
-		observations = observations[:limit]
+		if obsType != "" {
+			typeTag := strings.ToLower("type:" + obsType)
+			typeMatched := false
+			for _, tag := range mem.Tags {
+				if strings.ToLower(tag) == typeTag {
+					typeMatched = true
+					break
+				}
+			}
+			if !typeMatched {
+				continue
+			}
+		}
+
+		if len(tagSet) > 0 {
+			tagMatched := false
+			for _, tag := range mem.Tags {
+				if _, ok := tagSet[strings.ToLower(tag)]; ok {
+					tagMatched = true
+					break
+				}
+			}
+			if !tagMatched {
+				continue
+			}
+		}
+
+		filtered = append(filtered, mem)
+		if len(filtered) == limit {
+			break
+		}
 	}
 
 	switch format {
 	case "items":
 		type item struct {
-			Concepts  []string `json:"concepts,omitempty"`
-			Title     string   `json:"title"`
-			Type      string   `json:"type"`
-			Scope     string   `json:"scope"`
-			Narrative string   `json:"narrative,omitempty"`
-			ID        int64    `json:"id"`
+			Tags        []string `json:"tags,omitempty"`
+			Title       string   `json:"title"`
+			Type        string   `json:"type,omitempty"`
+			Content     string   `json:"content"`
+			SourceAgent string   `json:"source_agent,omitempty"`
+			Project     string   `json:"project"`
+			ID          int64    `json:"id"`
 		}
-		items := make([]item, 0, len(observations))
-		for _, obs := range observations {
+		items := make([]item, 0, len(filtered))
+		for _, mem := range filtered {
 			items = append(items, item{
-				ID:        obs.ID,
-				Title:     obs.Title.String,
-				Type:      string(obs.Type),
-				Scope:     string(obs.Scope),
-				Narrative: obs.Narrative.String,
-				Concepts:  []string(obs.Concepts),
+				ID:          mem.ID,
+				Title:       truncateTitle(mem.Content, 80),
+				Type:        obsType,
+				Content:     mem.Content,
+				Tags:        mem.Tags,
+				SourceAgent: mem.SourceAgent,
+				Project:     mem.Project,
 			})
 		}
-		out, _ := json.MarshalIndent(items, "", "  ")
-		return string(out), nil
-
-	case "detailed":
-		out, err := json.MarshalIndent(observations, "", "  ")
+		out, err := json.MarshalIndent(items, "", "  ")
 		if err != nil {
 			return "", fmt.Errorf("marshal result: %w", err)
 		}
 		return string(out), nil
 
-	default: // "text"
-		if len(observations) == 0 {
+	case "detailed":
+		out, err := json.MarshalIndent(filtered, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal result: %w", err)
+		}
+		return string(out), nil
+
+	default:
+		if len(filtered) == 0 {
 			return "No memories found matching the query.", nil
 		}
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("Found %d memories for query: %q\n\n", len(observations), query))
-		for i, obs := range observations {
-			scopeTag := ""
-			if obs.Scope == models.ScopeGlobal {
-				scopeTag = " [GLOBAL]"
-			}
-			sb.WriteString(fmt.Sprintf("%d. [%s]%s %s\n", i+1, strings.ToUpper(string(obs.Type)), scopeTag, obs.Title.String))
-			if obs.Narrative.String != "" {
-				content := obs.Narrative.String
-				if len(content) > 300 {
-					content = content[:300] + "..."
+		sb.WriteString(fmt.Sprintf("Found %d memories for query: %q\n\n", len(filtered), query))
+		for i, mem := range filtered {
+			typeLabel := "MEMORY"
+			for _, tag := range mem.Tags {
+				if strings.HasPrefix(tag, "type:") {
+					typeLabel = strings.ToUpper(strings.TrimPrefix(tag, "type:"))
+					break
 				}
-				sb.WriteString(fmt.Sprintf("   %s\n", content))
+			}
+			sb.WriteString(fmt.Sprintf("%d. [%s] %s\n", i+1, typeLabel, truncateTitle(mem.Content, 80)))
+			content := mem.Content
+			if len(content) > 300 {
+				content = content[:300] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("   %s\n", content))
+			if len(mem.Tags) > 0 {
+				sb.WriteString(fmt.Sprintf("   tags: %s\n", strings.Join(mem.Tags, ", ")))
 			}
 			sb.WriteString("\n")
 		}
@@ -427,13 +481,8 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	}
 }
 
-// handleRateMemory allows agents to rate observation usefulness.
-// A "useful" rating increments user_feedback by 1; "not_useful" decrements by 1.
+// handleRateMemory is kept explicit in v5: memories do not have a rating field yet.
 func (s *Server) handleRateMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
-	}
-
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -458,24 +507,13 @@ func (s *Server) handleRateMemory(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("rating must be 'useful' or 'not_useful'")
 	}
 
-	delta := 1
-	if rating == "not_useful" {
-		delta = -1
-	}
-
-	if err := s.observationStore.GetDB().WithContext(ctx).
-		Exec("UPDATE observations SET user_feedback = COALESCE(user_feedback, 0) + ? WHERE id = ?", delta, id).Error; err != nil {
-		return "", fmt.Errorf("update feedback: %w", err)
-	}
-
-	return fmt.Sprintf("Rated observation %d as %s", id, rating), nil
+	return "", fmt.Errorf("rate_memory removed in v5 (US3): memories table has no rating field yet")
 }
 
-// handleSuppressMemory marks an observation as suppressed, excluding it from future search results.
-// The observation remains in the database but is hidden from all FTS and LIKE search queries.
+// handleSuppressMemory suppresses a v5 memory via soft-delete in the memories table.
 func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("memory store not available")
 	}
 
 	m, err := parseArgs(args)
@@ -488,10 +526,12 @@ func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("id required")
 	}
 
-	if err := s.observationStore.GetDB().WithContext(ctx).
-		Exec("UPDATE observations SET is_suppressed = TRUE WHERE id = ?", id).Error; err != nil {
-		return "", fmt.Errorf("suppress: %w", err)
+	if err := s.memoryStore.Delete(ctx, id); err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			return "", fmt.Errorf("suppress_memory: memory %d not found", id)
+		}
+		return "", fmt.Errorf("suppress_memory: %w", err)
 	}
 
-	return fmt.Sprintf("Observation %d suppressed", id), nil
+	return fmt.Sprintf("Memory %d suppressed", id), nil
 }

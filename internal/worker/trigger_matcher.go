@@ -20,6 +20,7 @@ const repeatedReadCandidateLimit = 20
 const repeatedReadResultLimit = 3
 
 func (s *Service) matchBashCommandTriggers(ctx context.Context, req MemoryTriggerRequest) ([]MemoryTriggerMatch, error) {
+	_ = ctx
 	command := extractTriggerCommand(req.Params)
 	if command == "" {
 		return []MemoryTriggerMatch{}, nil
@@ -27,29 +28,9 @@ func (s *Service) matchBashCommandTriggers(ctx context.Context, req MemoryTrigge
 	if privacy.ContainsSecrets(command) {
 		return []MemoryTriggerMatch{}, nil
 	}
-	if s.observationStore == nil {
-		return []MemoryTriggerMatch{}, nil
-	}
 
-	observations, err := s.observationStore.GetObservationsByCommandPrefix(ctx, req.Project, command, bashTriggerResultLimit)
-	if err != nil {
-		return nil, err
-	}
-	matches := make([]MemoryTriggerMatch, 0, len(observations))
-	for _, observation := range observations {
-		if observation == nil {
-			continue
-		}
-		matches = append(matches, MemoryTriggerMatch{
-			Kind:          "warning",
-			ObservationID: observation.ID,
-			Blurb:         semanticTriggerBlurb(observation),
-		})
-		if len(matches) >= bashTriggerResultLimit {
-			break
-		}
-	}
-	return matches, nil
+	// Observation-backed command trigger matching was removed in v5.
+	return []MemoryTriggerMatch{}, nil
 }
 
 func extractTriggerCommand(params map[string]any) string {
@@ -110,14 +91,9 @@ func (s *Service) filePathObservations(ctx context.Context, project, filePath st
 	if s.retrievalHooks != nil && s.retrievalHooks.filePathObservations != nil {
 		return s.retrievalHooks.filePathObservations(ctx, project, filePath, limit)
 	}
-	if s.observationStore == nil {
-		return []*models.Observation{}, nil
-	}
-	observations, err := s.observationStore.GetObservationsByFile(ctx, project, filePath, limit)
-	if err != nil {
-		return nil, err
-	}
-	return observations, nil
+
+	// Observation-backed file path lookups were removed in v5.
+	return []*models.Observation{}, nil
 }
 
 func hasPatternConcept(concepts []string) bool {

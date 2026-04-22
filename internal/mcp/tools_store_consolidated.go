@@ -4,34 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-
-	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/privacy"
-	"github.com/thebtf/engram/pkg/llmclient"
-	"github.com/thebtf/engram/pkg/models"
 )
-
-// rawContentExtractionPrompt is sent to the LLM to extract structured
-// observations from arbitrary content provided by the user.
-const rawContentExtractionPrompt = `Analyze this content and extract memorable observations.
-
-For each observation, output:
-- type: decision | bugfix | feature | refactor | change | discovery | guidance
-- title: Short descriptive title (max 80 chars)
-- narrative: What happened and why it matters (max 300 chars)
-- concepts: From list: how-it-works, why-it-exists, what-changed, problem-solution, gotcha, pattern, trade-off, best-practice, anti-pattern, architecture, security, performance, testing, debugging, workflow, tooling, refactoring, api, database, configuration, error-handling
-
-Output valid JSON only:
-{
-  "observations": [
-    {"type": "decision", "title": "...", "narrative": "...", "concepts": ["architecture"]}
-  ]
-}
-
-Maximum 5 observations per content block. If no clear observations, return {"observations": []}.`
 
 // handleStoreConsolidated routes store tool actions to the appropriate handler.
 func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessage) (string, error) {
@@ -52,7 +25,7 @@ func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessa
 	case "import":
 		return s.handleImportInstincts(ctx, args)
 	case "extract":
-		return s.handleExtractAndOperate(ctx, args)
+		return "", fmt.Errorf("store(action=\"extract\") removed in v5 (US3) — observations table dropped")
 	// Palace actions
 	case "mine":
 		return s.handleMine(ctx, args)
@@ -63,145 +36,3 @@ func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessa
 	}
 }
 
-// handleExtractAndOperate uses an LLM to extract structured observations from
-// arbitrary content and stores them as individual observations.
-func (s *Server) handleExtractAndOperate(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.observationStore == nil {
-		return "", fmt.Errorf("observation store not available")
-	}
-
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	content := coerceString(m["content"], "")
-	if content == "" {
-		return "", fmt.Errorf("content is required for extract action")
-	}
-	if len(content) < 50 {
-		return "Content too short for extraction (minimum 50 characters).", nil
-	}
-
-	// Truncate to ~8000 tokens (~32000 chars)
-	if len(content) > 32000 {
-		content = content[:32000]
-	}
-
-	// Redact secrets before sending to LLM.
-	if privacy.ContainsSecrets(content) {
-		log.Warn().Msg("extract: content contains secrets — redacting before LLM call")
-		content = privacy.RedactSecrets(content)
-	}
-
-	var project string
-	if config.Get().EnforceSourceProject {
-		project = projectFromContext(ctx)
-		if project == "" {
-			project = coerceString(m["project"], "")
-		}
-	} else {
-		project = coerceString(m["project"], "")
-	}
-	scope := coerceString(m["scope"], "project")
-
-	// Create LLM client for extraction.
-	llmClient := llmclient.New(llmclient.DefaultConfig())
-	if !llmClient.IsConfigured() {
-		return "LLM not configured — cannot extract observations. Set ENGRAM_LLM_URL and ENGRAM_LLM_API_KEY.", nil
-	}
-
-	// Call LLM for extraction.
-	response, err := llmClient.Complete(ctx, rawContentExtractionPrompt, content)
-	if err != nil {
-		return "", fmt.Errorf("extraction LLM call failed: %w", err)
-	}
-
-	// Strip markdown code fences if present.
-	response = strings.TrimSpace(response)
-	response = strings.TrimPrefix(response, "```json")
-	response = strings.TrimPrefix(response, "```")
-	response = strings.TrimSuffix(response, "```")
-	response = strings.TrimSpace(response)
-
-	var result struct {
-		Observations []struct {
-			Type      string   `json:"type"`
-			Title     string   `json:"title"`
-			Narrative string   `json:"narrative"`
-			Concepts  []string `json:"concepts"`
-		} `json:"observations"`
-	}
-	if err := json.Unmarshal([]byte(response), &result); err != nil {
-		return "Failed to parse LLM extraction response: " + err.Error(), nil
-	}
-
-	if len(result.Observations) == 0 {
-		return `{"extracted": 0, "stored": 0}`, nil
-	}
-
-	// Valid observation types for validation.
-	validTypes := map[string]bool{
-		"decision": true, "bugfix": true, "feature": true,
-		"refactor": true, "change": true, "discovery": true, "guidance": true,
-	}
-
-	stored := 0
-	var titles []string
-
-	for _, obs := range result.Observations {
-		if obs.Title == "" || obs.Narrative == "" {
-			continue
-		}
-
-		// Default to "discovery" if the LLM returns an invalid type.
-		obsType := obs.Type
-		if !validTypes[obsType] {
-			obsType = "discovery"
-		}
-
-		parsedObs := &models.ParsedObservation{
-			Type:       models.ObservationType(obsType),
-			SourceType: models.SourceLLMDerived,
-			MemoryType: models.ClassifyMemoryType(&models.ParsedObservation{
-				Type:      models.ObservationType(obsType),
-				Narrative: obs.Narrative,
-				Concepts:  obs.Concepts,
-			}),
-			Title:     obs.Title,
-			Narrative: obs.Narrative,
-			Concepts:  obs.Concepts,
-			Scope:     models.ObservationScope(scope),
-		}
-
-		_, err := s.storeExtractedObservation(ctx, project, parsedObs)
-		if err != nil {
-			log.Warn().Err(err).Str("title", obs.Title).Msg("Failed to store extracted observation")
-			continue
-		}
-
-		stored++
-		titles = append(titles, obs.Title)
-	}
-
-	summary := fmt.Sprintf(`{"extracted": %d, "stored": %d, "titles": %s}`,
-		len(result.Observations), stored, marshalTitles(titles))
-	return summary, nil
-}
-
-// storeExtractedObservation stores a single LLM-extracted observation.
-// Vector-based dedup was removed in v5; every extracted observation is stored directly.
-func (s *Server) storeExtractedObservation(ctx context.Context, project string, parsedObs *models.ParsedObservation) (int64, error) {
-	extractSessionID := "extract-" + uuid.NewString()
-	obsID, _, err := s.observationStore.StoreObservation(ctx, extractSessionID, project, parsedObs, 0, 0)
-	if err != nil {
-		return 0, err
-	}
-	return obsID, nil
-}
-
-// marshalTitles converts a string slice to a JSON array string.
-func marshalTitles(titles []string) string {
-	b, _ := json.Marshal(titles)
-	return string(b)
-}

@@ -46,19 +46,14 @@ func (s *Service) handleContextByFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	observations, err := s.observationStore.GetObservationsByFile(r.Context(), project, filePath, limit)
-	if err != nil {
-		log.Debug().Err(err).Str("path", filePath).Msg("Failed to fetch file-context observations")
-		// Graceful degradation: return empty, don't error (NFR-3)
-		writeJSON(w, map[string]any{
-			"observations": []*struct{}{},
-			"total":        0,
-		})
-		return
-	}
+	log.Debug().Str("path", filePath).Str("project", project).Int("limit", limit).Msg("Context-by-file compatibility endpoint returns empty results in v5")
 
+	// Graceful degradation: the observation file-reference path was removed in v5.
+	// Keep the HTTP contract stable and return an empty payload instead of an error.
 	writeJSON(w, map[string]any{
-		"observations": observations,
-		"total":        len(observations),
+		"observations": []*struct{}{},
+		"total":        0,
+		"deprecated":   true,
+		"message":      "file-path observation context removed in v5; results are intentionally empty",
 	})
 }
