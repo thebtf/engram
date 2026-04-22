@@ -808,6 +808,10 @@ func grpcCodeToHTTP(code codes.Code) int {
 		return http.StatusNotFound
 	case codes.Unavailable:
 		return http.StatusServiceUnavailable
+	case codes.PermissionDenied:
+		return http.StatusForbidden
+	case codes.Unauthenticated:
+		return http.StatusUnauthorized
 	default:
 		return http.StatusInternalServerError
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,10 @@ func openSessionStartTestDB(t *testing.T) (*gormlib.DB, func()) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping session-start gRPC integration test")
+	}
+	lowerDSN := strings.ToLower(dsn)
+	if !strings.Contains(lowerDSN, "test") || strings.Contains(lowerDSN, "prod") || strings.Contains(lowerDSN, "production") || strings.Contains(lowerDSN, "staging") {
+		t.Skip("DATABASE_DSN does not look like a dedicated test database")
 	}
 
 	store, err := localgorm.NewStore(localgorm.Config{
@@ -60,6 +65,14 @@ func TestGetSessionStartContext_InvalidArgument(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: "proj", IssuesLimit: -1})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: "proj", MemoriesLimit: maxSessionStartMemoriesLimit + 1})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: "proj", IssuesLimit: maxSessionStartIssuesLimit + 1})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }

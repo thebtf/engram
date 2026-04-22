@@ -150,9 +150,13 @@ function writeJSONFile(filePath, value) {
   if (!filePath) {
     return;
   }
-  const parentDir = path.dirname(filePath);
-  fs.mkdirSync(parentDir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf8');
+  try {
+    const parentDir = path.dirname(filePath);
+    fs.mkdirSync(parentDir, { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
+  } catch {
+    // Cache persistence is best-effort; never throw from hook helpers.
+  }
 }
 
 function readAllStdin() {

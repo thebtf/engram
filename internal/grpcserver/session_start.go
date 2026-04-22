@@ -15,6 +15,10 @@ import (
 const (
 	defaultSessionStartMemoriesLimit = 20
 	defaultSessionStartIssuesLimit   = 20
+	defaultSessionStartRulesLimit    = 20
+	maxSessionStartMemoriesLimit     = 200
+	maxSessionStartIssuesLimit       = 200
+	maxSessionStartRulesLimit        = 200
 )
 
 // GetSessionStartContext returns static session-start entities for a project.
@@ -28,8 +32,14 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 	if req.GetMemoriesLimit() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "memories_limit must be >= 0")
 	}
+	if req.GetMemoriesLimit() > maxSessionStartMemoriesLimit {
+		return nil, status.Errorf(codes.InvalidArgument, "memories_limit must be <= %d", maxSessionStartMemoriesLimit)
+	}
 	if req.GetIssuesLimit() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "issues_limit must be >= 0")
+	}
+	if req.GetIssuesLimit() > maxSessionStartIssuesLimit {
+		return nil, status.Errorf(codes.InvalidArgument, "issues_limit must be <= %d", maxSessionStartIssuesLimit)
 	}
 	if s.db == nil {
 		return nil, status.Error(codes.Unavailable, "database not ready")
@@ -43,6 +53,7 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 	if issuesLimit == 0 {
 		issuesLimit = defaultSessionStartIssuesLimit
 	}
+	rulesLimit := defaultSessionStartRulesLimit
 
 	issueStore := dbgorm.NewIssueStore(s.db)
 	issueRows, _, err := issueStore.ListIssuesEx(ctx, dbgorm.IssueListParams{
@@ -51,13 +62,13 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		Limit:         issuesLimit,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list session-start issues: %v", err)
+		return nil, status.Error(codes.Internal, "failed to list session-start issues")
 	}
 
 	memoryStore := dbgorm.NewMemoryStore(&dbgorm.Store{DB: s.db})
 	memoryRows, err := memoryStore.List(ctx, project, memoriesLimit)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list session-start memories: %v", err)
+		return nil, status.Error(codes.Internal, "failed to list session-start memories")
 	}
 
 	var ruleRows []dbgorm.BehavioralRule
@@ -65,8 +76,9 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		Where("deleted_at IS NULL").
 		Where("project = ? OR project IS NULL", project).
 		Order("priority DESC, created_at DESC").
+		Limit(rulesLimit).
 		Find(&ruleRows).Error; err != nil {
-		return nil, status.Errorf(codes.Internal, "list session-start rules: %v", err)
+		return nil, status.Error(codes.Internal, "failed to list session-start rules")
 	}
 
 	generatedAt := timestamppb.Now()

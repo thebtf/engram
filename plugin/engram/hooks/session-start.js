@@ -160,7 +160,7 @@ function buildCachedSessionStartPayload(overrides = {}) {
     issues: [],
     rules: [],
     memories: [],
-    generated_at: '2026-04-22T12:00:00Z',
+    generated_at: new Date(0).toISOString(),
     ...overrides,
   };
 }
