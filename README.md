@@ -19,7 +19,7 @@ Engram fixes this by keeping only the memory primitives that proved reliable in 
 
 In v5.0.0, session-start inject is simplified to a static composite payload: open issues, always-inject behavioral rules, and recent memories. The old dynamic relevance, graph, reranking, and extraction stack is gone from the main product path.
 
-**7 consolidated MCP tools** remain for the static entity surface, keeping context usage lean while preserving the workflows that actually worked.
+A reduced static-first MCP surface remains for the surviving entity model, keeping context usage lean while preserving the workflows that actually worked.
 <!-- redoc:end:intro -->
 
 ---

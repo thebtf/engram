@@ -19,7 +19,7 @@ Engram решает эту проблему, оставляя только те 
 
 В v5.0.0 session-start inject упрощён до статического composite payload: открытые issues, always-inject behavioral rules и recent memories. Старый динамический relevance / graph / reranking / extraction stack больше не находится на основном продуктном пути.
 
-**7 консолидированных MCP-инструментов** остаются для статической entity-surface и удерживают использование context window на разумном уровне.
+Сокращённая static-first MCP surface остаётся для surviving entity model и удерживает использование context window на разумном уровне.
 <!-- redoc:end:intro -->
 
 ---
@@ -228,7 +228,7 @@ Claude Code подставляет `${VAR}` из переменных окруж
 **Команда CLI:**
 
 ```bash
-claude mcp add-json engram '{"type":"http","url":"http://your-server:37777/mcp","headers":{"Authorization":"Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"}}' -s user
+claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_AUTH_ADMIN_TOKEN":"${ENGRAM_AUTH_ADMIN_TOKEN}"}}' -s user
 ```
 
 ### Сборка из исходников
@@ -308,14 +308,6 @@ Engram предоставляет сокращённую static-first MCP surfac
 - loom background tasks
 
 Старая dynamic search / graph / learning-oriented tool surface больше не является primary v5 path.
-
-| `timeline` | Просмотр по временному диапазону |
-| `related` | Обход связей в графе |
-| `patterns` | Обнаруженные повторяющиеся паттерны |
-| `get` | Получение наблюдения по ID |
-| `sessions` | Поиск/список индексированных сессий |
-| `explain` | Отладка ранжирования результатов поиска |
-| `reasoning` | Извлечение reasoning traces |
 
 ### `store` — Сохранение и организация
 
