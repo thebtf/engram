@@ -1415,7 +1415,7 @@ func (s *Server) handleFindRelatedObservations(ctx context.Context, args json.Ra
 // handleFindByFileObservations finds observations related to a file path.
 // v5 (US3): observation store removed; tool returns not-available error.
 func (s *Server) handleFindByFileObservations(_ context.Context, _ json.RawMessage) (string, error) {
-	return "", fmt.Errorf("find_by_file removed in v5 (US3) — use recall(action=\"search\") instead")
+	return "", fmt.Errorf("find_by_file removed in v5 (US3) — use recall(action=\"search\") to locate relevant memories and recall(action=\"get\") to inspect a specific memory")
 }
 
 // sendResponse sends a JSON-RPC response.

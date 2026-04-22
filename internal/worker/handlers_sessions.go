@@ -670,6 +670,14 @@ func (s *Service) handleCheckSessions(w http.ResponseWriter, r *http.Request) {
 
 	existing, err := store.CheckSessionsExist(r.Context(), req.SessionIDs)
 	if err != nil {
+		if errors.Is(err, sessions.ErrIndexedSessionsUnsupported) {
+			writeJSON(w, map[string]any{
+				"missing":    req.SessionIDs,
+				"status":     "disabled",
+				"deprecated": "indexed session checks removed in v5",
+			})
+			return
+		}
 		log.Error().Err(err).Msg("Failed to check session existence")
 		http.Error(w, "database error", http.StatusInternalServerError)
 		return

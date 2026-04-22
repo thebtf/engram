@@ -10,14 +10,27 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// TestRetrieveRelevant_NoHooks_ReturnsEmpty verifies that without any hooks wired,
-// RetrieveRelevant returns empty results (FTS fallback returns nothing when hook is nil).
+// TestRetrieveRelevant_NoHooks_ReturnsEmpty verifies that without hooks or static stores,
+// RetrieveRelevant still returns a stable empty result.
 func TestRetrieveRelevant_NoHooks_ReturnsEmpty(t *testing.T) {
 	service := newRetrievalTestService()
 	observations, similarityScores, err := service.RetrieveRelevant(context.Background(), "engram", "missing", RetrievalOptions{MaxResults: 5})
 	require.NoError(t, err)
 	require.Empty(t, observations)
 	require.Empty(t, similarityScores)
+}
+
+func TestObservationMatchesFallbackQuery_MatchesTitleNarrativeAndConcepts(t *testing.T) {
+	observation := &models.Observation{
+		Title:     sql.NullString{String: "Authentication failure", Valid: true},
+		Narrative: sql.NullString{String: "Billing sync retried", Valid: true},
+		Concepts:  []string{"security", "match-tag"},
+	}
+
+	require.True(t, observationMatchesFallbackQuery(observation, "auth"))
+	require.True(t, observationMatchesFallbackQuery(observation, "billing"))
+	require.True(t, observationMatchesFallbackQuery(observation, "match-tag"))
+	require.False(t, observationMatchesFallbackQuery(observation, "missing"))
 }
 
 // TestRetrieveRelevant_FTSFallback_ReturnsObservations verifies FTS-based retrieval

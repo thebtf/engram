@@ -84,26 +84,17 @@ func (c *deduplicationCache) cleanup() {
 // @Failure 500 {string} string "internal error"
 // @Router /api/events/ingest [post]
 func (s *Service) handleIngestEvent(w http.ResponseWriter, r *http.Request) {
-	var req IngestRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
-	}
-
-	log.Info().
-		Str("tool", req.ToolName).
-		Str("session_id", req.SessionID).
-		Str("project", req.Project).
-		Msg("/api/events/ingest removed in v5; rejecting ingest request")
+	log.Info().Msg("/api/events/ingest removed in v5; rejecting ingest request without reading payload")
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotImplemented)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":         "removed_in_v5",
 		"error":          "event ingest endpoint was removed in v5",
-		"tool_name":      req.ToolName,
-		"session_id":     req.SessionID,
-		"project":        req.Project,
-		"workstation_id": req.WorkstationID,
+		"tool_name":      "",
+		"session_id":     "",
+		"project":        "",
+		"workstation_id": "",
 	})
 }
 

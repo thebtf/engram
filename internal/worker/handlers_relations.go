@@ -123,6 +123,7 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 	}
 
 	refs := make([]relatedObservationRef, 0, len(relations))
+	seen := make(map[int64]int, len(relations))
 	for _, relation := range relations {
 		if relation == nil || relation.Confidence < minConfidence {
 			continue
@@ -132,7 +133,18 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 		if relatedID == id {
 			relatedID = relation.TargetID
 		}
+		if relatedID == id {
+			continue
+		}
 
+		if idx, ok := seen[relatedID]; ok {
+			if relation.Confidence > refs[idx].Confidence {
+				refs[idx].Confidence = relation.Confidence
+			}
+			continue
+		}
+
+		seen[relatedID] = len(refs)
 		refs = append(refs, relatedObservationRef{
 			ID:         relatedID,
 			Confidence: relation.Confidence,

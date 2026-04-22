@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/thebtf/engram/internal/worker/sdk"
@@ -271,7 +272,82 @@ func (s *Service) searchFallbackObservations(ctx context.Context, query string, 
 	if s.retrievalHooks != nil && s.retrievalHooks.getRecentObservationsFiltered != nil {
 		return s.retrievalHooks.getRecentObservationsFiltered(ctx, scopeFilter, limit)
 	}
-	return nil, nil
+
+	if limit <= 0 {
+		limit = DefaultSearchLimit
+	}
+
+	fetchLimit := limit
+	trimmedQuery := strings.TrimSpace(query)
+	if trimmedQuery != "" {
+		const candidateMultiplier = 10
+		const minCandidatePool = 1000
+		fetchLimit = limit * candidateMultiplier
+		if fetchLimit < minCandidatePool {
+			fetchLimit = minCandidatePool
+		}
+	}
+
+	observations := make([]*models.Observation, 0, fetchLimit)
+	if s.memoryStore != nil && scopeFilter.Project != "" {
+		memories, err := s.memoryStore.List(ctx, scopeFilter.Project, fetchLimit)
+		if err != nil {
+			return nil, err
+		}
+		observations = append(observations, memoriesToObservations(memories)...)
+	}
+	if s.behavioralRulesStore != nil {
+		var projectPtr *string
+		if scopeFilter.Project != "" {
+			project := scopeFilter.Project
+			projectPtr = &project
+		}
+		rules, err := s.behavioralRulesStore.List(ctx, projectPtr, fetchLimit)
+		if err != nil {
+			return nil, err
+		}
+		observations = append(observations, behavioralRulesToObservations(rules)...)
+	}
+	if len(observations) == 0 {
+		return []*models.Observation{}, nil
+	}
+
+	if trimmedQuery != "" {
+		queryLower := strings.ToLower(trimmedQuery)
+		filtered := observations[:0]
+		for _, observation := range observations {
+			if observationMatchesFallbackQuery(observation, queryLower) {
+				filtered = append(filtered, observation)
+			}
+		}
+		observations = filtered
+	}
+
+	sort.SliceStable(observations, func(i, j int) bool {
+		return observations[i].CreatedAtEpoch > observations[j].CreatedAtEpoch
+	})
+	if len(observations) > limit {
+		observations = observations[:limit]
+	}
+	return observations, nil
+}
+
+func observationMatchesFallbackQuery(observation *models.Observation, queryLower string) bool {
+	if observation == nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(observation.Title.String), queryLower) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(observation.Narrative.String), queryLower) {
+		return true
+	}
+	for _, concept := range observation.Concepts {
+		if strings.Contains(strings.ToLower(concept), queryLower) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) filterFreshObservations(ctx context.Context, observations []*models.Observation, cwd string) ([]*models.Observation, int) {

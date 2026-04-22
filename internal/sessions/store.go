@@ -72,11 +72,11 @@ func (s *Store) UpsertSession(_ context.Context, _ map[string]any) error {
 	return unsupportedIndexedSessionsError("upsert session")
 }
 
-// CheckSessionsExist degrades to an empty result set in v5 so callers that still probe
-// indexed_sessions can continue operating without surfacing a server-internal failure.
-// The practical effect is that every requested session ID is treated as missing.
+// CheckSessionsExist returns the same sentinel as other indexed_sessions-backed
+// operations so live worker endpoints can surface an explicit v5-disabled
+// compatibility response instead of pretending every requested session is missing.
 func (s *Store) CheckSessionsExist(_ context.Context, _ []string) ([]string, error) {
-	return []string{}, nil
+	return nil, unsupportedIndexedSessionsError("check sessions exist")
 }
 
 // ListSessions returns an explicit error because indexed_sessions was removed in v5.

@@ -35,6 +35,20 @@ func TestHandleIngestEvent_ReturnsRemovedInV5(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
 	require.Equal(t, "removed_in_v5", result["status"])
 	require.Equal(t, "event ingest endpoint was removed in v5", result["error"])
-	require.Equal(t, "Edit", result["tool_name"])
-	require.Equal(t, "test-workstation", result["workstation_id"])
+	require.Equal(t, "", result["tool_name"])
+	require.Equal(t, "", result["workstation_id"])
+}
+
+func TestHandleIngestEvent_DoesNotReadInvalidBody(t *testing.T) {
+	service := &Service{}
+	req := httptest.NewRequest(http.MethodPost, "/api/events/ingest", strings.NewReader("{"))
+	w := httptest.NewRecorder()
+
+	service.handleIngestEvent(w, req)
+
+	require.Equal(t, http.StatusNotImplemented, w.Code)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	require.Equal(t, "removed_in_v5", result["status"])
+	require.Equal(t, "", result["tool_name"])
 }
