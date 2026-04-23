@@ -238,7 +238,11 @@ If not using the plugin, configure MCP directly in `~/.claude/settings.json`:
 {
   "mcpServers": {
     "engram": {
-      "command": "engram"
+      "command": "engram",
+      "env": {
+        "ENGRAM_URL": "http://your-server:37777",
+        "ENGRAM_AUTH_ADMIN_TOKEN": "${ENGRAM_AUTH_ADMIN_TOKEN}"
+      }
     }
   }
 }
@@ -321,10 +325,6 @@ Primary categories in v5:
 - loom background tasks
 
 The old dynamic search / graph / learning-oriented tool surface is no longer the primary v5 path.
-
-| `sessions` | Search/list indexed sessions |
-| `explain` | Debug search result ranking |
-| `reasoning` | Retrieve reasoning traces |
 
 ### `store` — Save and Organize
 
