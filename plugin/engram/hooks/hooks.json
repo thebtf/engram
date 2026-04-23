@@ -1,5 +1,5 @@
 {
-  "description": "Engram — persistent memory hooks for observations, context injection, and session summaries",
+  "description": "Engram — static session-start context plus protocol-safe compatibility hooks for Claude Code v5",
   "hooks": {
     "SessionStart": [
       {

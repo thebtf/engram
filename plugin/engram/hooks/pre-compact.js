@@ -1,6 +1,18 @@
 #!/usr/bin/env node
 'use strict';
 
-(async () => {
-  process.stdout.write('');
-})();
+const lib = require('./lib');
+
+async function handlePreCompact() {
+  return '';
+}
+
+if (require.main === module) {
+  (async () => {
+    await lib.RunHook('PreCompact', handlePreCompact);
+  })();
+}
+
+module.exports = {
+  handlePreCompact,
+};
