@@ -323,7 +323,6 @@ Primary categories in v5:
 - documents
 - credentials / vault
 - loom background tasks
-
 The old dynamic search / graph / learning-oriented tool surface is no longer the primary v5 path.
 
 ### `store` — Save and Organize
