@@ -24,11 +24,8 @@ interface NavItem {
 
 const allNavItems: NavItem[] = [
   { name: 'home', label: 'Home', icon: 'fa-house', path: '/' },
-  { name: 'observations', label: 'Observations', icon: 'fa-brain', path: '/observations' },
-  { name: 'search', label: 'Search', icon: 'fa-magnifying-glass', path: '/search' },
   { name: 'vault', label: 'Vault', icon: 'fa-vault', path: '/vault' },
   { name: 'issues', label: 'Issues', icon: 'fa-circle-exclamation', path: '/issues' },
-  { name: 'sessions', label: 'Sessions', icon: 'fa-clock-rotate-left', path: '/sessions' },
   { name: 'tokens', label: 'Tokens', icon: 'fa-key', path: '/tokens' },
 ]
 

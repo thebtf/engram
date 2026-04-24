@@ -1,4 +1,4 @@
-import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics, ContextSearchResponse, DecisionSearchResponse, SDKSessionListResponse } from '@/types'
+import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics } from '@/types'
 
 const API_BASE = '/api'
 const DEFAULT_TIMEOUT = 10000 // 10 seconds
@@ -247,89 +247,6 @@ export async function fetchScoringStats(project?: string, signal?: AbortSignal):
   return fetchWithRetry<FeedbackStats>(`${API_BASE}/scoring/stats${query ? '?' + query : ''}`, { signal })
 }
 
-export async function fetchTopObservations(project?: string, limit: number = 10, signal?: AbortSignal): Promise<Observation[]> {
-  const params = new URLSearchParams({ limit: String(limit) })
-  if (project) params.append('project', project)
-  return fetchWithRetry<Observation[]>(`${API_BASE}/observations/top?${params}`, { signal })
-}
-
-export async function fetchMostRetrievedObservations(project?: string, limit: number = 10, signal?: AbortSignal): Promise<Observation[]> {
-  const params = new URLSearchParams({ limit: String(limit) })
-  if (project) params.append('project', project)
-  return fetchWithRetry<Observation[]>(`${API_BASE}/observations/most-retrieved?${params}`, { signal })
-}
-
-// Search Analytics API functions
-export interface RecentQuery {
-  query: string
-  project?: string
-  type?: string
-  count: number
-  last_used: string
-}
-
-export interface SearchAnalytics {
-  total_searches: number
-  vector_searches: number
-  filter_searches: number
-  cache_hits: number
-  coalesced_requests: number
-  search_errors: number
-  avg_latency_ms: number
-  avg_vector_latency_ms: number
-  avg_filter_latency_ms: number
-}
-
-export async function fetchSearchAnalytics(since?: string, signal?: AbortSignal): Promise<SearchAnalytics> {
-  const params = new URLSearchParams()
-  if (since) params.append('since', since)
-  const query = params.toString()
-  return fetchWithRetry<SearchAnalytics>(`${API_BASE}/search/analytics${query ? '?' + query : ''}`, { signal })
-}
-
-interface RecentSearchResponse {
-  queries: Array<{
-    timestamp: string
-    query: string
-    project?: string
-    type?: string
-    results: number
-  }>
-  count: number
-}
-
-export async function fetchRecentSearches(limit: number = 20, since?: string, signal?: AbortSignal): Promise<RecentQuery[]> {
-  const params = new URLSearchParams({ limit: String(limit) })
-  if (since) params.append('since', since)
-  const response = await fetchWithRetry<RecentSearchResponse>(`${API_BASE}/search/recent?${params}`, { signal })
-  return (response.queries || []).map(q => ({
-    query: q.query,
-    project: q.project,
-    type: q.type,
-    count: q.results,
-    last_used: q.timestamp,
-  }))
-}
-
-// System health API
-export interface ComponentHealth {
-  name: string
-  status: 'healthy' | 'degraded' | 'unhealthy'
-  message?: string
-  latency_ms?: number
-}
-
-export interface SystemHealth {
-  status: 'healthy' | 'degraded' | 'unhealthy'
-  version: string
-  components: ComponentHealth[]
-  warnings?: string[]
-}
-
-export async function fetchSystemHealth(signal?: AbortSignal): Promise<SystemHealth> {
-  return fetchWithRetry<SystemHealth>(`${API_BASE}/selfcheck`, { signal })
-}
-
 export async function fetchGraphStats(signal?: AbortSignal): Promise<GraphStats> {
   return fetchWithRetry<GraphStats>(`${API_BASE}/graph/stats`, { signal })
 }
@@ -379,110 +296,12 @@ async function postJson<T>(url: string, body: unknown, options: FetchOptions = {
   throw lastError!
 }
 
-// PUT JSON helper (single attempt, no retry for mutations)
-async function putJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
-  const { timeout = DEFAULT_TIMEOUT, signal } = options
-  const timeoutController = new AbortController()
-  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
-  const combinedSignal = signal
-    ? combineAbortSignals(signal, timeoutController.signal)
-    : timeoutController.signal
-
-  try {
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: combinedSignal,
-    })
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    return response.json()
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      if (signal?.aborted) throw err
-      throw new Error('Request timed out')
-    }
-    throw err
-  } finally {
-    clearTimeout(timeoutId)
-  }
-}
-
-// Observation CRUD
-export async function fetchObservationById(id: number, signal?: AbortSignal): Promise<Observation> {
-  return fetchWithRetry<Observation>(`${API_BASE}/observations/${id}`, { signal })
-}
-
-export async function fetchObservationsPaginated(
-  params: { limit?: number; offset?: number; project?: string; type?: string; status?: string; memory_type?: string },
-  signal?: AbortSignal
-): Promise<ObservationsResponse> {
-  const searchParams = new URLSearchParams()
-  if (params.limit) searchParams.append('limit', String(params.limit))
-  if (params.offset) searchParams.append('offset', String(params.offset))
-  if (params.project) searchParams.append('project', params.project)
-  if (params.type) searchParams.append('type', params.type)
-  if (params.status) searchParams.append('status', params.status)
-  if (params.memory_type) searchParams.append('memory_type', params.memory_type)
-  return fetchWithRetry<ObservationsResponse>(`${API_BASE}/observations?${searchParams}`, { signal })
-}
-
-export async function updateObservationStatus(
-  id: number,
-  status: 'active' | 'resolved',
-  reason?: string
-): Promise<void> {
-  const body: Record<string, string> = { status }
-  if (reason) body.status_reason = reason
-  await putJson(`${API_BASE}/observations/${id}`, body)
-}
-
-export async function updateObservation(
-  id: number,
-  updates: {
-    title?: string
-    subtitle?: string
-    narrative?: string
-    scope?: string
-    facts?: string[]
-    concepts?: string[]
-  },
-  signal?: AbortSignal
-): Promise<{ observation: Observation; message: string }> {
-  return putJson(`${API_BASE}/observations/${id}`, updates, { signal })
-}
-
-export async function archiveObservations(
-  ids: number[],
-  reason?: string,
-  signal?: AbortSignal
-): Promise<{ archived: number[]; failed: number[]; errors?: string[] }> {
-  return postJson(`${API_BASE}/observations/archive`, { ids, reason }, { signal })
-}
-
 export async function submitObservationFeedback(
   id: number,
   feedback: number,
   signal?: AbortSignal
 ): Promise<{ score?: number }> {
   return postJson(`${API_BASE}/observations/${id}/feedback`, { feedback }, { signal })
-}
-
-// Search
-export async function searchObservations(
-  params: { query: string; project: string; limit?: number },
-  signal?: AbortSignal
-): Promise<ContextSearchResponse> {
-  return postJson(`${API_BASE}/context/search`, params, { signal })
-}
-
-export async function searchDecisions(
-  params: { query: string; project: string; limit?: number },
-  signal?: AbortSignal
-): Promise<DecisionSearchResponse> {
-  return postJson(`${API_BASE}/decisions/search`, params, { signal })
 }
 
 // DELETE helper (single attempt, no retry for mutations)
@@ -758,96 +577,6 @@ export async function deletePattern(id: number, signal?: AbortSignal): Promise<v
 
 export async function mergePatterns(ids: number[], signal?: AbortSignal): Promise<void> {
   await postJson<Record<string, unknown>>(`${API_BASE}/patterns/merge`, { ids }, { signal })
-}
-
-// ============================================================
-// Sessions Index API
-// ============================================================
-
-export interface IndexedSession {
-  id: string
-  workstation: string
-  project: string
-  date: string
-  message_count: number
-  created_at: string
-}
-
-// Raw shape returned by the Go handler
-interface RawIndexedSession {
-  id: string
-  workstation_id: string
-  project_id: string
-  project_path?: string
-  exchange_count: number
-  git_branch?: string
-  last_msg_at?: string
-}
-
-function mapRawSession(raw: RawIndexedSession): IndexedSession {
-  const lastMsg = raw.last_msg_at ? new Date(raw.last_msg_at) : null
-  return {
-    id: raw.id,
-    workstation: raw.workstation_id,
-    project: raw.project_path || raw.project_id,
-    date: lastMsg ? lastMsg.toISOString().slice(0, 10) : '',
-    message_count: raw.exchange_count,
-    created_at: raw.last_msg_at || '',
-  }
-}
-
-export async function fetchIndexedSessions(
-  params?: { project?: string; from?: string; to?: string },
-  signal?: AbortSignal
-): Promise<IndexedSession[]> {
-  const searchParams = new URLSearchParams()
-  if (params?.project) searchParams.append('project', params.project)
-  if (params?.from) searchParams.append('from', params.from)
-  if (params?.to) searchParams.append('to', params.to)
-  const query = searchParams.toString()
-  const raw = await fetchWithRetry<RawIndexedSession[]>(`${API_BASE}/sessions-index${query ? '?' + query : ''}`, { signal })
-  return (raw || []).map(mapRawSession)
-}
-
-// Raw shape for search results (slightly different from list — includes rank/snippet)
-interface RawSessionSearchResult {
-  id: string
-  workstation_id: string
-  project_path?: string
-  exchange_count: number
-  rank: number
-  snippet?: string
-}
-
-export async function searchIndexedSessions(
-  query: string,
-  signal?: AbortSignal
-): Promise<IndexedSession[]> {
-  const raw = await fetchWithRetry<RawSessionSearchResult[]>(`${API_BASE}/sessions-index/search?query=${encodeURIComponent(query)}`, { signal })
-  return (raw || []).map(r => ({
-    id: r.id,
-    workstation: r.workstation_id,
-    project: r.project_path || '',
-    date: '',
-    message_count: r.exchange_count,
-    created_at: '',
-  }))
-}
-
-export async function fetchSDKSessions(
-  params?: { project?: string; limit?: number; offset?: number; min_prompts?: number; from?: number; to?: number },
-  signal?: AbortSignal
-): Promise<SDKSessionListResponse> {
-  const query = new URLSearchParams()
-  if (params?.project) query.set('project', params.project)
-  if (params?.limit) query.set('limit', String(params.limit))
-  if (params?.offset) query.set('offset', String(params.offset))
-  if (params?.min_prompts) query.set('min_prompts', String(params.min_prompts))
-  if (params?.from) query.set('from', String(params.from))
-  if (params?.to) query.set('to', String(params.to))
-
-  const url = `${API_BASE}/sessions/list${query.toString() ? '?' + query.toString() : ''}`
-  return fetchWithRetry<SDKSessionListResponse>(url, { signal })
 }
 
 // ============================================================

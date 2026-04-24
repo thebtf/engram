@@ -26,21 +26,6 @@ const routes = [
     component: () => import('@/views/HomeView.vue'),
   },
   {
-    path: '/observations',
-    name: 'observations',
-    component: () => import('@/views/ObservationsView.vue'),
-  },
-  {
-    path: '/observations/:id',
-    name: 'observation-detail',
-    component: () => import('@/views/ObservationDetailView.vue'),
-  },
-  {
-    path: '/search',
-    name: 'search',
-    component: () => import('@/views/SearchView.vue'),
-  },
-  {
     path: '/vault',
     name: 'vault',
     component: () => import('@/views/VaultView.vue'),
@@ -54,16 +39,6 @@ const routes = [
     path: '/issues/:id',
     name: 'issue-detail',
     component: () => import('@/views/IssueDetailView.vue'),
-  },
-  {
-    path: '/sessions',
-    name: 'sessions',
-    component: () => import('@/views/SessionsView.vue'),
-  },
-  {
-    path: '/sessions/:id',
-    name: 'session-detail',
-    component: () => import('@/views/SessionDetailView.vue'),
   },
   {
     path: '/tokens',
