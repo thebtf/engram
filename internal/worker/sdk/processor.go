@@ -203,60 +203,6 @@ func (p *Processor) IsAvailable() bool {
 	return true
 }
 
-const writeMergeSimilarityThreshold = 0.75
-
-func unionStrings(parts ...[]string) []string {
-	seen := make(map[string]struct{})
-	merged := make([]string, 0)
-	for _, part := range parts {
-		for _, item := range part {
-			item = strings.TrimSpace(item)
-			if item == "" {
-				continue
-			}
-			if _, ok := seen[item]; ok {
-				continue
-			}
-			seen[item] = struct{}{}
-			merged = append(merged, item)
-		}
-	}
-	return merged
-}
-
-func mergeNarrative(existing, incoming string) string {
-	existing = strings.TrimSpace(existing)
-	incoming = strings.TrimSpace(incoming)
-	switch {
-	case existing == "":
-		return incoming
-	case incoming == "":
-		return existing
-	case existing == incoming:
-		return existing
-	case strings.Contains(existing, incoming):
-		return existing
-	case strings.Contains(incoming, existing):
-		return incoming
-	default:
-		return existing + "\n\n" + incoming
-	}
-}
-
-func mergeFileMtimes(existing models.JSONInt64Map, incoming map[string]int64) map[string]int64 {
-	if len(existing) == 0 && len(incoming) == 0 {
-		return nil
-	}
-	merged := make(map[string]int64, len(existing)+len(incoming))
-	for path, mtime := range existing {
-		merged[path] = mtime
-	}
-	for path, mtime := range incoming {
-		merged[path] = mtime
-	}
-	return merged
-}
-
 // ProcessObservation no longer persists observations in v5/PR-B.
 // The observation and summary subsystem is being retired; this method now performs
 // only lightweight filtering/dedup bookkeeping and exits explicitly.
