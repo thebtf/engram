@@ -35,7 +35,7 @@ test('Read with repeated signal returns trigger context', async () => {
   const sessionID = 'pre-tool-read-1';
   cleanupSignals(sessionID);
   const signalPath = path.join(os.tmpdir(), `engram-signals-${sessionID}.json`);
-  require('fs').writeFileSync(signalPath, JSON.stringify({ read_counts: { 'internal/auth.go': 3 } }), 'utf8');
+  fs.writeFileSync(signalPath, JSON.stringify({ read_counts: { 'internal/auth.go': 3 } }), 'utf8');
 
   const originalRequestGet = lib.requestGet;
   const originalRequestPost = lib.requestPost;
