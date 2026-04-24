@@ -1,4 +1,4 @@
-import type { Observation, UserPrompt, SessionSummary, Stats, FeedItem, ObservationFeedItem, PromptFeedItem, SummaryFeedItem, RelationWithDetails, RelationGraph, RelationStats, GraphStats, VectorMetrics } from '@/types'
+import type { Stats } from '@/types'
 
 const API_BASE = '/api'
 const DEFAULT_TIMEOUT = 10000 // 10 seconds
@@ -89,50 +89,6 @@ async function fetchWithRetry<T>(url: string, options: FetchOptions = {}): Promi
   throw lastError!
 }
 
-interface ObservationsResponse {
-  observations: Observation[]
-  total: number
-  limit: number
-  offset: number
-  hasMore: boolean
-  project_display_name?: string
-}
-
-export interface ObservationsResult {
-  observations: Observation[]
-  total: number
-}
-
-export async function fetchObservations(
-  limit: number = 100,
-  project?: string,
-  signal?: AbortSignal,
-  type?: string,
-  concept?: string
-): Promise<ObservationsResult> {
-  const params = new URLSearchParams({ limit: String(limit) })
-  if (project) params.append('project', project)
-  if (type) params.append('type', type)
-  if (concept) params.append('concept', concept)
-  const response = await fetchWithRetry<ObservationsResponse>(`${API_BASE}/observations?${params}`, { signal })
-  return {
-    observations: response.observations || [],
-    total: response.total ?? 0
-  }
-}
-
-export async function fetchPrompts(limit: number = 100, project?: string, signal?: AbortSignal): Promise<UserPrompt[]> {
-  const params = new URLSearchParams({ limit: String(limit) })
-  if (project) params.append('project', project)
-  return fetchWithRetry<UserPrompt[]>(`${API_BASE}/prompts?${params}`, { signal })
-}
-
-export async function fetchSummaries(limit: number = 50, project?: string, signal?: AbortSignal): Promise<SessionSummary[]> {
-  const params = new URLSearchParams({ limit: String(limit) })
-  if (project) params.append('project', project)
-  return fetchWithRetry<SessionSummary[]>(`${API_BASE}/summaries?${params}`, { signal })
-}
-
 export async function fetchStats(project?: string | null): Promise<Stats> {
   const params = new URLSearchParams()
   if (project) params.append('project', project)
@@ -142,117 +98,6 @@ export async function fetchStats(project?: string | null): Promise<Stats> {
 
 export async function fetchProjects(): Promise<string[]> {
   return fetchWithRetry<string[]>(`${API_BASE}/projects`)
-}
-
-/**
- * Combine and sort all feed items by timestamp
- */
-export function combineTimeline(
-  observations: Observation[],
-  prompts: UserPrompt[],
-  summaries: SessionSummary[]
-): FeedItem[] {
-  const obsItems: ObservationFeedItem[] = observations.map(o => ({
-    ...o,
-    itemType: 'observation' as const,
-    timestamp: new Date(o.created_at)
-  }))
-
-  const promptItems: PromptFeedItem[] = prompts.map(p => ({
-    ...p,
-    itemType: 'prompt' as const,
-    timestamp: new Date(p.created_at)
-  }))
-
-  const summaryItems: SummaryFeedItem[] = summaries.map(s => ({
-    ...s,
-    itemType: 'summary' as const,
-    timestamp: new Date(s.created_at)
-  }))
-
-  return [...obsItems, ...promptItems, ...summaryItems]
-    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
-}
-
-// Relation API functions
-export async function fetchObservationRelations(observationId: number, signal?: AbortSignal): Promise<RelationWithDetails[]> {
-  return fetchWithRetry<RelationWithDetails[]>(`${API_BASE}/observations/${observationId}/relations`, { signal })
-}
-
-export async function fetchObservationGraph(observationId: number, depth: number = 2, signal?: AbortSignal): Promise<RelationGraph> {
-  return fetchWithRetry<RelationGraph>(`${API_BASE}/observations/${observationId}/graph?depth=${depth}`, { signal })
-}
-
-export async function fetchRelatedObservations(observationId: number, minConfidence: number = 0.4, signal?: AbortSignal): Promise<Observation[]> {
-  return fetchWithRetry<Observation[]>(`${API_BASE}/observations/${observationId}/related?min_confidence=${minConfidence}`, { signal })
-}
-
-export async function fetchRelationStats(signal?: AbortSignal): Promise<RelationStats> {
-  return fetchWithRetry<RelationStats>(`${API_BASE}/relations/stats`, { signal })
-}
-
-// Scoring API functions
-export interface ScoreBreakdown {
-  observation: {
-    id: number
-    title: string
-    type: string
-    project: string
-    created_at: number
-  }
-  scoring: {
-    final_score: number
-    type_weight: number
-    recency_decay: number
-    core_score: number
-    feedback_contrib: number
-    concept_contrib: number
-    retrieval_contrib: number
-    age_days: number
-  }
-  explanation: {
-    type_impact: string
-    recency_impact: string
-    feedback_impact: string
-    concept_impact: string
-    retrieval_impact: string
-  }
-}
-
-export async function fetchObservationScore(observationId: number, signal?: AbortSignal): Promise<ScoreBreakdown> {
-  return fetchWithRetry<ScoreBreakdown>(`${API_BASE}/observations/${observationId}/score`, { signal })
-}
-
-export interface FeedbackStats {
-  total: number
-  positive: number
-  negative: number
-  neutral: number
-  avg_score: number
-  avg_retrieval: number
-}
-
-export interface TopObservation {
-  id: number
-  title: string
-  type: string
-  importance_score: number
-  retrieval_count?: number
-}
-
-export async function fetchScoringStats(project?: string, signal?: AbortSignal): Promise<FeedbackStats> {
-  const params = new URLSearchParams()
-  if (project) params.append('project', project)
-  const query = params.toString()
-  return fetchWithRetry<FeedbackStats>(`${API_BASE}/scoring/stats${query ? '?' + query : ''}`, { signal })
-}
-
-export async function fetchGraphStats(signal?: AbortSignal): Promise<GraphStats> {
-  return fetchWithRetry<GraphStats>(`${API_BASE}/graph/stats`, { signal })
-}
-
-export async function fetchVectorMetrics(signal?: AbortSignal): Promise<VectorMetrics> {
-  return fetchWithRetry<VectorMetrics>(`${API_BASE}/vector/metrics`, { signal })
 }
 
 // POST JSON helper with retry logic
@@ -294,14 +139,6 @@ async function postJson<T>(url: string, body: unknown, options: FetchOptions = {
     }
   }
   throw lastError!
-}
-
-export async function submitObservationFeedback(
-  id: number,
-  feedback: number,
-  signal?: AbortSignal
-): Promise<{ score?: number }> {
-  return postJson(`${API_BASE}/observations/${id}/feedback`, { feedback }, { signal })
 }
 
 // DELETE helper (single attempt, no retry for mutations)
@@ -442,71 +279,6 @@ export async function revokeToken(id: string, signal?: AbortSignal): Promise<voi
 }
 
 // ============================================================
-// Pattern Cleanup API
-// ============================================================
-
-export interface PatternCleanupResult {
-  orphans_found: number
-  orphans_archived: number
-  low_confidence_found: number
-  low_confidence_archived: number
-  confidence_recalculated: number
-}
-
-export async function cleanupPatterns(
-  threshold: number,
-  dryRun: boolean,
-  signal?: AbortSignal
-): Promise<PatternCleanupResult> {
-  return postJson<PatternCleanupResult>(
-    `${API_BASE}/maintenance/patterns/cleanup`,
-    { confidence_threshold: threshold, dry_run: dryRun },
-    { signal }
-  )
-}
-
-// ============================================================
-// Analytics API
-// ============================================================
-
-export interface SearchMiss {
-  query: string
-  project?: string
-  frequency: number
-  last_seen: string
-}
-
-export async function fetchSearchMisses(signal?: AbortSignal): Promise<SearchMiss[]> {
-  const result = await postJson<{ miss_stats: Array<{ query: string; miss_count: number; last_seen: string; project?: string }> }>(
-    `${API_BASE}/analytics/search-misses`, {}, { signal }
-  )
-  return (result?.miss_stats || []).map(s => ({
-    query: s.query,
-    project: s.project || '',
-    frequency: s.miss_count,
-    last_seen: s.last_seen,
-  }))
-}
-
-export interface RetrievalStatsResponse {
-  total_requests: number
-  observations_served: number
-  search_requests: number
-  context_injections: number
-  stale_excluded: number
-  fresh_count: number
-  duplicates_removed: number
-}
-
-export async function fetchRetrievalStats(project?: string, since?: string, signal?: AbortSignal): Promise<RetrievalStatsResponse> {
-  const params = new URLSearchParams()
-  if (project) params.append('project', project)
-  if (since) params.append('since', since)
-  const query = params.toString()
-  return fetchWithRetry<RetrievalStatsResponse>(`${API_BASE}/stats/retrieval${query ? '?' + query : ''}`, { signal })
-}
-
-// ============================================================
 // Patterns API
 // ============================================================
 
@@ -549,13 +321,13 @@ export async function fetchPatternInsight(id: number, signal?: AbortSignal): Pro
 }
 
 export interface PatternObservationsResponse {
-  observations: import('@/types').Observation[]
+  observations: unknown[]
   total: number
 }
 
 export interface PatternInsightResult {
   summary: string
-  source_observations: import('@/types').Observation[]
+  source_observations: unknown[]
   cached: boolean
 }
 
@@ -582,6 +354,26 @@ export async function mergePatterns(ids: number[], signal?: AbortSignal): Promis
 // ============================================================
 // System / Maintenance API
 // ============================================================
+
+export interface PatternCleanupResult {
+  orphans_found: number
+  orphans_archived: number
+  low_confidence_found: number
+  low_confidence_archived: number
+  confidence_recalculated: number
+}
+
+export async function cleanupPatterns(
+  threshold: number,
+  dryRun: boolean,
+  signal?: AbortSignal
+): Promise<PatternCleanupResult> {
+  return postJson<PatternCleanupResult>(
+    `${API_BASE}/maintenance/patterns/cleanup`,
+    { confidence_threshold: threshold, dry_run: dryRun },
+    { signal }
+  )
+}
 
 export async function triggerConsolidation(signal?: AbortSignal): Promise<{ message: string }> {
   return postJson<{ message: string }>(`${API_BASE}/maintenance/consolidate`, {}, { signal })
@@ -635,7 +427,6 @@ export async function triggerMaintenance(signal?: AbortSignal): Promise<{ messag
   return postJson<{ message: string }>(`${API_BASE}/maintenance/run`, {}, { signal })
 }
 
-// Keep fetchMaintenanceStats for backward compat (used by SystemView)
 export interface MaintenanceStats {
   last_consolidation?: string
   last_maintenance?: string
@@ -657,95 +448,49 @@ export async function checkForUpdate(signal?: AbortSignal): Promise<{
 }
 
 // ============================================================
-// Learning API (Closed-Loop Phase 6)
+// Analytics API
 // ============================================================
 
-export interface LearningCurvePoint {
-  date: string
-  sessions: number
-  successes: number
-  outcome_rate: number
+export interface SearchMiss {
+  query: string
+  project?: string
+  frequency: number
+  last_seen: string
 }
 
-export interface LearningCurveResponse {
-  data_points: LearningCurvePoint[]
+export async function fetchSearchMisses(signal?: AbortSignal): Promise<SearchMiss[]> {
+  const result = await postJson<{ miss_stats: Array<{ query: string; miss_count: number; last_seen: string; project?: string }> }>(
+    `${API_BASE}/analytics/search-misses`, {}, { signal }
+  )
+  return (result?.miss_stats || []).map(s => ({
+    query: s.query,
+    project: s.project || '',
+    frequency: s.miss_count,
+    last_seen: s.last_seen,
+  }))
 }
 
-export interface StrategyRow {
-  name: string
-  sessions: number
-  successes: number
-  outcome_rate: number
+export interface RetrievalStatsResponse {
+  total_requests: number
+  observations_served: number
+  search_requests: number
+  context_injections: number
+  stale_excluded: number
+  fresh_count: number
+  duplicates_removed: number
 }
 
-export interface StrategiesResponse {
-  strategies: StrategyRow[]
-}
-
-export interface EffectivenessResult {
-  observation_id: number
-  injections: number
-  successes: number
-  score: number
-  tier: string
-}
-
-export async function fetchLearningCurve(days?: number, project?: string, signal?: AbortSignal): Promise<LearningCurveResponse> {
+export async function fetchRetrievalStats(project?: string, since?: string, signal?: AbortSignal): Promise<RetrievalStatsResponse> {
   const params = new URLSearchParams()
-  if (days) params.set('days', String(days))
-  if (project) params.set('project', project)
+  if (project) params.append('project', project)
+  if (since) params.append('since', since)
   const query = params.toString()
-  return fetchWithRetry<LearningCurveResponse>(`${API_BASE}/learning/curve${query ? '?' + query : ''}`, { signal })
+  return fetchWithRetry<RetrievalStatsResponse>(`${API_BASE}/stats/retrieval${query ? '?' + query : ''}`, { signal })
 }
 
-export async function fetchStrategies(signal?: AbortSignal): Promise<StrategiesResponse> {
-  return fetchWithRetry<StrategiesResponse>(`${API_BASE}/learning/strategies`, { signal })
-}
-
-export async function fetchEffectiveness(id: number, agentId?: string, signal?: AbortSignal): Promise<EffectivenessResult> {
-  const params = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''
-  return fetchWithRetry<EffectivenessResult>(`${API_BASE}/observations/${id}/effectiveness${params}`, { signal })
-}
-
-export interface EffectivenessDistribution {
-  high: number
-  medium: number
-  low: number
-  insufficient: number
-  total: number
-}
-
-export interface HitRateAnalyticsResponse {
-  high_value: number
-  noise_candidates: number
-  observations: Array<{
-    id: number
-    title: string
-    type: string
-    flag: 'noise_candidate' | 'high_value'
-  }>
-  total: number
-}
-
-export async function fetchEffectivenessDistribution(signal?: AbortSignal): Promise<EffectivenessDistribution> {
-  return fetchWithRetry<EffectivenessDistribution>(`${API_BASE}/learning/effectiveness-distribution`, { signal })
-}
-
-export async function fetchHitRateAnalytics(signal?: AbortSignal): Promise<HitRateAnalyticsResponse> {
-  return fetchWithRetry<HitRateAnalyticsResponse>(`${API_BASE}/learning/hit-rate`, { signal })
-}
-
-// Observation tag management
-export async function updateObservationTags(
-  id: number,
-  action: 'add' | 'remove',
-  tag: string,
-  signal?: AbortSignal
-): Promise<{ concepts: string[] }> {
-  return postJson<{ concepts: string[] }>(`${API_BASE}/observations/${id}/tags`, { action, tags: [tag] }, { signal })
-}
-
-// --- Issues API (agent-issues feature) ---
+// ============================================================
+// Issues API
+// ============================================================
 
 export interface Issue {
   id: number
