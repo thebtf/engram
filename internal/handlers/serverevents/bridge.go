@@ -105,6 +105,12 @@ func NewBridge(logger *slog.Logger, reg *registry.Registry, tracker ProjectTrack
 	clientID := fmt.Sprintf("%d-%d", pid, startUnix)
 
 	serverURL := os.Getenv("ENGRAM_SERVER_URL")
+	if serverURL == "" {
+		if fallback := os.Getenv("ENGRAM_URL"); fallback != "" {
+			serverURL = fallback
+			logger.Warn("ENGRAM_URL is deprecated for bridge configuration; please use ENGRAM_SERVER_URL instead")
+		}
+	}
 	token := os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")
 
 	return &Bridge{
