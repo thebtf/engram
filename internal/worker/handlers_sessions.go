@@ -622,15 +622,9 @@ type CheckSessionsRequest struct {
 // @Failure 503 {string} string "service not ready"
 // @Router /api/sessions/check [post]
 func (s *Service) handleCheckSessions(w http.ResponseWriter, r *http.Request) {
-	s.initMu.RLock()
-	store := s.sessionIdxStore
-	s.initMu.RUnlock()
-
-	if store == nil {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
-		return
-	}
-
+	// indexed_sessions table removed in v5; sessionIdxStore is never populated.
+	// Decode request body to return the caller's IDs in the "missing" field for
+	// API compatibility, then report the feature as disabled.
 	var req CheckSessionsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -642,7 +636,6 @@ func (s *Service) handleCheckSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// indexed_sessions table removed in v5; all session IDs are treated as missing.
 	writeJSON(w, map[string]any{
 		"missing":    req.SessionIDs,
 		"status":     "disabled",

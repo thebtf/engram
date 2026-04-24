@@ -464,13 +464,13 @@ func (s *Server) primaryTools() []Tool {
 	return []Tool{
 		{
 			Name:        "recall",
-			Description: "Search and retrieve memories. Actions: search (default, trivial SQL filter over memories), by_file, related, sessions, reasoning.",
+			Description: "Search and retrieve memories. Actions: search (default, trivial SQL filter over memories), by_file, related, reasoning.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":         map[string]any{"type": "string", "enum": []string{"search", "by_file", "related", "sessions", "reasoning"}, "default": "search", "description": "Action to perform"},
-					"query":          map[string]any{"type": "string", "description": "Search query / substring filter (for search, sessions)"},
+					"action":         map[string]any{"type": "string", "enum": []string{"search", "by_file", "related", "reasoning"}, "default": "search", "description": "Action to perform"},
+					"query":          map[string]any{"type": "string", "description": "Search query / substring filter (for search)"},
 					"files":          map[string]any{"type": "string", "description": "File paths (for action=by_file)"},
 					"id":             map[string]any{"type": "number", "description": "Observation ID (for action=related)"},
 					"project":        map[string]any{"type": "string", "description": "Project name filter"},
@@ -565,16 +565,8 @@ func (s *Server) primaryTools() []Tool {
 				"required": []string{"action"},
 				"properties": map[string]any{
 					"action":  map[string]any{"type": "string", "description": "Action to perform (required). See tool description for valid actions."},
-					"ids":     map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "description": "Observation IDs (for bulk_delete, bulk_supersede, bulk_boost)"},
-					"id":      map[string]any{"type": "number", "description": "Observation ID (for tag, obs_quality, scoring)"},
-					"tag":     map[string]any{"type": "string", "description": "Tag name (for by_tag, batch_tag)"},
-					"project": map[string]any{"type": "string", "description": "Project name (for trends, quality, importance, etc.)"},
-					"format":  map[string]any{"type": "string", "description": "Export format: json/jsonl/markdown (for export)"},
-					"amount":  map[string]any{"type": "number", "description": "Boost amount (for bulk_boost)"},
-					"add":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to add (for tag)"},
-					"remove":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tags to remove (for tag)"},
-					"pattern": map[string]any{"type": "string", "description": "Search pattern (for batch_tag)"},
-					"days":    map[string]any{"type": "number", "description": "Days to analyze (for trends)"},
+					"project": map[string]any{"type": "string", "description": "Project name (for stats, search_analytics)"},
+					"days":    map[string]any{"type": "number", "description": "Days to analyze (for search_analytics)"},
 				},
 			},
 		},
@@ -660,7 +652,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		{
 			Name:        "search_sessions",
-			Description: "Full-text search across indexed Claude Code sessions.",
+			Description: "[DEPRECATED] Full-text search across indexed Claude Code sessions. Removed in v5 (US3) — indexed_sessions table dropped.",
 			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -673,7 +665,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		{
 			Name:        "list_sessions",
-			Description: "List indexed Claude Code sessions with optional workstation/project filters.",
+			Description: "[DEPRECATED] List indexed Claude Code sessions with optional workstation/project filters. Removed in v5 (US3) — indexed_sessions table dropped.",
 			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type": "object",

@@ -71,7 +71,7 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	default:
 		return "", fmt.Errorf(
-			"unknown recall action: %q (valid: search, by_file, related, sessions, reasoning)",
+			"unknown recall action: %q (valid: search, by_file, related, reasoning)",
 			action,
 		)
 	}
