@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +11,6 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-const semanticTriggerCandidateLimit = 10
-const semanticTriggerResultLimit = 3
-const bashTriggerResultLimit = 3
 const repeatedReadThreshold = 3
 const repeatedReadCandidateLimit = 20
 const repeatedReadResultLimit = 3
@@ -213,29 +209,6 @@ func parseReadCount(value any) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-func buildEditWriteTriggerQuery(tool, filePath string, params map[string]any) string {
-	_ = params
-	return fmt.Sprintf("%s %s", tool, filePath)
-}
-
-func isSemanticTriggerType(obsType models.ObservationType) bool {
-	switch obsType {
-	case models.ObsTypeBugfix, models.ObsTypeGuidance, models.ObsTypePitfall:
-		return true
-	default:
-		return false
-	}
-}
-
-func semanticTriggerKind(obsType models.ObservationType) string {
-	switch obsType {
-	case models.ObsTypeGuidance:
-		return "context"
-	default:
-		return "warning"
-	}
 }
 
 func semanticTriggerBlurb(observation *models.Observation) string {

@@ -2,7 +2,6 @@ package grpcserver
 
 import (
 	"context"
-	"os"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -10,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -38,7 +38,7 @@ type ToolDef struct {
 type Server struct {
 	pb.UnimplementedEngramServiceServer
 	handler MCPHandler
-	token   string             // from ENGRAM_API_TOKEN; empty means auth disabled
+	token   string             // from ENGRAM_AUTH_ADMIN_TOKEN; empty means auth disabled
 	db      *gorm.DB           // injected by worker after DB is ready
 	bus     *projectevents.Bus // in-process project lifecycle event bus
 }
@@ -46,7 +46,7 @@ type Server struct {
 // New creates a new gRPC server with an optional auth interceptor.
 // The returned *grpc.Server has EngramService already registered.
 func New(handler MCPHandler) (*grpc.Server, *Server) {
-	token := os.Getenv("ENGRAM_API_TOKEN")
+	token := config.GetWorkerToken()
 
 	srv := &Server{
 		handler: handler,

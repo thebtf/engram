@@ -218,6 +218,50 @@ func (j JSONInt64Map) Value() (driver.Value, error) {
 	return json.Marshal(j)
 }
 
+// JSONInt64Array is a custom type for handling JSON int64 arrays in PostgreSQL.
+// Supports both JSON array format ([1,2,3]) and PostgreSQL array format ({1,2,3}).
+type JSONInt64Array []int64
+
+// Scan implements sql.Scanner for JSONInt64Array.
+func (j *JSONInt64Array) Scan(src interface{}) error {
+	if src == nil {
+		*j = nil
+		return nil
+	}
+
+	var data []byte
+	switch v := src.(type) {
+	case string:
+		data = []byte(v)
+	case []byte:
+		data = v
+	default:
+		return fmt.Errorf("JSONInt64Array.Scan: unsupported type %T", src)
+	}
+
+	if len(data) == 0 {
+		*j = nil
+		return nil
+	}
+
+	// Convert PostgreSQL array format {1,2,3} to JSON array format [1,2,3].
+	s := string(data)
+	if len(s) >= 2 && s[0] == '{' && s[len(s)-1] == '}' {
+		s = "[" + s[1:len(s)-1] + "]"
+		data = []byte(s)
+	}
+
+	return json.Unmarshal(data, j)
+}
+
+// Value implements driver.Valuer for JSONInt64Array.
+func (j JSONInt64Array) Value() (driver.Value, error) {
+	if j == nil {
+		return nil, nil
+	}
+	return json.Marshal(j)
+}
+
 // Observation represents a learning extracted from a Claude Code session.
 type Observation struct {
 	FileMtimes              JSONInt64Map     `db:"file_mtimes" json:"file_mtimes,omitempty"`

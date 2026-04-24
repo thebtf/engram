@@ -1,11 +1,17 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
 const preToolUse = require('./pre-tool-use');
 const lib = require('./lib');
 
-function cleanup(sessionID) {
-  lib.clearSessionSignals(sessionID);
+function cleanupSignals(sessionID) {
+  const safe = String(sessionID).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const p = path.join(os.tmpdir(), `engram-signals-${safe}.json`);
+  try { fs.unlinkSync(p); } catch (_) {}
 }
 
 test('returns empty for unsupported tool', async () => {
@@ -27,9 +33,9 @@ test('returns empty for unsupported tool', async () => {
 
 test('Read with repeated signal returns trigger context', async () => {
   const sessionID = 'pre-tool-read-1';
-  cleanup(sessionID);
-  const signalPath = require('path').join(require('os').tmpdir(), `engram-signals-${sessionID}.json`);
-  require('fs').writeFileSync(signalPath, JSON.stringify({ read_counts: { 'internal/auth.go': 3 } }), 'utf8');
+  cleanupSignals(sessionID);
+  const signalPath = path.join(os.tmpdir(), `engram-signals-${sessionID}.json`);
+  fs.writeFileSync(signalPath, JSON.stringify({ read_counts: { 'internal/auth.go': 3 } }), 'utf8');
 
   const originalRequestGet = lib.requestGet;
   const originalRequestPost = lib.requestPost;
@@ -62,7 +68,7 @@ test('Read with repeated signal returns trigger context', async () => {
   } finally {
     lib.requestGet = originalRequestGet;
     lib.requestPost = originalRequestPost;
-    cleanup(sessionID);
+    cleanupSignals(sessionID);
   }
 });
 

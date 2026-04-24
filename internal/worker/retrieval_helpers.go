@@ -5,45 +5,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/pkg/models"
 )
-
-func (s *Service) lookupDiversityScores(ctx context.Context, observations []*models.Observation) (map[int64]float64, error) {
-	if s.retrievalHooks != nil && s.retrievalHooks.getDiversityScores != nil {
-		ids := make([]int64, 0, len(observations))
-		for _, observation := range observations {
-			ids = append(ids, observation.ID)
-		}
-		return s.retrievalHooks.getDiversityScores(ctx, ids)
-	}
-	// injection_log table was dropped in v5 (US1); diversity scoring is now a no-op.
-	return nil, nil
-}
-
-func (s *Service) lookupRecentSessionIDs(ctx context.Context, project string, since time.Time) (map[string]bool, error) {
-	if s.retrievalHooks != nil && s.retrievalHooks.getRecentSessionIDs != nil {
-		return s.retrievalHooks.getRecentSessionIDs(ctx, project, since)
-	}
-	// observation-backed session lookup was removed in v5; there is no equivalent
-	// session index in the memories/rules stores.
-	return map[string]bool{}, nil
-}
-
-func (s *Service) sessionBoostFactor() float64 {
-	// SessionBoost config field removed in v5; boost is always disabled.
-	return 1.0
-}
-
-func (s *Service) getTopImportanceObservations(ctx context.Context, project string, limit int) ([]*models.Observation, error) {
-	if s.retrievalHooks != nil && s.retrievalHooks.getTopImportanceObservations != nil {
-		return s.retrievalHooks.getTopImportanceObservations(ctx, project, limit)
-	}
-	// Top-importance observation ranking was removed with observation-backed retrieval in v5.
-	return nil, nil
-}
 
 func (s *Service) applyLLMFilter(ctx context.Context, project, query string, observations []*models.Observation) []*models.Observation {
 	if len(observations) == 0 {

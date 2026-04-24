@@ -3,7 +3,6 @@ package worker
 
 import (
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -302,35 +301,8 @@ func (s *Service) handleSubagentComplete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Trigger immediate processing of queued observations
-	messages := s.sessionManager.DrainMessages(sess.ID)
-	if len(messages) > 0 && s.processor != nil {
-		log.Info().
-			Int64("sessionId", sess.ID).
-			Int("messages", len(messages)).
-			Msg("Processing queued observations from subagent")
-
-		for _, msg := range messages {
-			if msg.Type == session.MessageTypeObservation && msg.Observation != nil {
-				err := s.processor.ProcessObservation(
-					context.Background(),
-					sess.SDKSessionID.String,
-					sess.Project,
-					msg.Observation.ToolName,
-					msg.Observation.ToolInput,
-					msg.Observation.ToolResponse,
-					msg.Observation.PromptNumber,
-					msg.Observation.CWD,
-					msg.Observation.UserPrompt,
-				)
-				if err != nil {
-					log.Error().Err(err).
-						Str("tool", msg.Observation.ToolName).
-						Msg("Failed to process subagent observation")
-				}
-			}
-		}
-	}
+	// Drain any queued messages from the subagent session.
+	s.sessionManager.DrainMessages(sess.ID)
 
 	s.broadcastProcessingStatus()
 	w.WriteHeader(http.StatusOK)

@@ -41,7 +41,7 @@ Type Distribution:
 
 Fetch:
 ```bash
-curl -s -H "Authorization: Bearer ${ENGRAM_API_TOKEN}" \
+curl -s -H "Authorization: Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}" \
   "${ENGRAM_URL%/mcp}/api/learning/effectiveness-distribution"
 ```
 
@@ -58,7 +58,7 @@ Effectiveness (closed-loop learning):
 
 Fetch:
 ```bash
-curl -s -H "Authorization: Bearer ${ENGRAM_API_TOKEN}" \
+curl -s -H "Authorization: Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}" \
   "${ENGRAM_URL%/mcp}/api/learning/curve"
 ```
 
@@ -75,7 +75,7 @@ Learning Curve (last 7 days):
 
 Fetch:
 ```bash
-curl -s -H "Authorization: Bearer ${ENGRAM_API_TOKEN}" \
+curl -s -H "Authorization: Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}" \
   "${ENGRAM_URL%/mcp}/api/search/analytics"
 ```
 

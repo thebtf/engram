@@ -1,7 +1,6 @@
 package sdk
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"sync"
@@ -487,10 +486,6 @@ func TestGetFileContent(t *testing.T) {
 	})
 }
 
-func TestDefaultConcurrentLLMCalls(t *testing.T) {
-	assert.Equal(t, 4, DefaultConcurrentLLMCalls)
-}
-
 func TestObservationTypes(t *testing.T) {
 	expected := []string{"bugfix", "feature", "refactor", "change", "discovery", "decision"}
 	assert.Equal(t, expected, ObservationTypes)
@@ -507,17 +502,6 @@ func TestObservationConcepts(t *testing.T) {
 		"trade-off",
 	}
 	assert.Equal(t, expectedConcepts, ObservationConcepts)
-}
-
-// TestProcessorStruct tests processor struct initialization and methods.
-func TestProcessorStruct(t *testing.T) {
-	p := &Processor{
-		model: "haiku",
-		sem:   make(chan struct{}, DefaultConcurrentLLMCalls),
-	}
-
-	assert.Equal(t, "haiku", p.model)
-	assert.NotNil(t, p.sem)
 }
 
 // TestSetBroadcastFunc tests the broadcast callback setter.
@@ -588,10 +572,10 @@ func TestBroadcast_NilFunc(t *testing.T) {
 	p.broadcast(map[string]interface{}{"type": "test"})
 }
 
-// TestIsAvailable tests IsAvailable requires LLM client.
+// TestIsAvailable tests IsAvailable always returns true (LLM backend removed in v5).
 func TestIsAvailable(t *testing.T) {
 	p := &Processor{}
-	assert.False(t, p.IsAvailable())
+	assert.True(t, p.IsAvailable())
 }
 
 // TestShouldSkipTrivialOperation_EdgeCases tests edge cases for trivial operation detection.
@@ -866,44 +850,6 @@ func TestToJSONString_ComplexTypes(t *testing.T) {
 	}
 }
 
-// TestSystemPrompt tests that the system prompt is defined.
-func TestSystemPrompt(t *testing.T) {
-	assert.NotEmpty(t, systemPrompt)
-	assert.Contains(t, systemPrompt, "observation")
-	assert.Contains(t, systemPrompt, "CATEGORY")
-	assert.Contains(t, systemPrompt, "user_behavior")
-}
-
-// TestProcessorSemaphore tests the semaphore behavior.
-func TestProcessorSemaphore(t *testing.T) {
-	p := &Processor{
-		sem: make(chan struct{}, 2),
-	}
-
-	// Acquire 2 slots
-	p.sem <- struct{}{}
-	p.sem <- struct{}{}
-
-	// Third should block (we can test with select)
-	select {
-	case p.sem <- struct{}{}:
-		t.Error("Semaphore should be full")
-	default:
-		// Expected - semaphore is full
-	}
-
-	// Release one
-	<-p.sem
-
-	// Now should be able to acquire
-	select {
-	case p.sem <- struct{}{}:
-		// Expected
-	default:
-		t.Error("Should be able to acquire after release")
-	}
-}
-
 // TestCaptureFileMtimes_DuplicatePaths tests mtime capture with overlapping paths.
 func TestCaptureFileMtimes_DuplicatePaths(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "mtime-dup-test-*")
@@ -954,113 +900,6 @@ func TestSyncSummaryFuncType(t *testing.T) {
 		// Do nothing
 	}
 	assert.NotNil(t, fn)
-}
-
-// TestSanitizePrompt tests prompt sanitization for CLI safety.
-func TestSanitizePrompt(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "normal text",
-			input:    "Hello, world!",
-			expected: "Hello, world!",
-		},
-		{
-			name:     "text with newlines",
-			input:    "Line 1\nLine 2\nLine 3",
-			expected: "Line 1\nLine 2\nLine 3",
-		},
-		{
-			name:     "text with tabs",
-			input:    "Key:\tValue",
-			expected: "Key:\tValue",
-		},
-		{
-			name:     "text with carriage return",
-			input:    "Line 1\r\nLine 2",
-			expected: "Line 1\r\nLine 2",
-		},
-		{
-			name:     "text with null bytes",
-			input:    "Hello\x00World",
-			expected: "HelloWorld",
-		},
-		{
-			name:     "text with control characters",
-			input:    "Hello\x01\x02\x03World",
-			expected: "HelloWorld",
-		},
-		{
-			name:     "text with bell character",
-			input:    "Hello\x07World",
-			expected: "HelloWorld",
-		},
-		{
-			name:     "text with backspace",
-			input:    "Hello\x08World",
-			expected: "HelloWorld",
-		},
-		{
-			name:     "text with form feed",
-			input:    "Hello\x0cWorld",
-			expected: "HelloWorld",
-		},
-		{
-			name:     "text with escape",
-			input:    "Hello\x1bWorld",
-			expected: "HelloWorld",
-		},
-		{
-			name:     "unicode text",
-			input:    "Hello 世界 🌍",
-			expected: "Hello 世界 🌍",
-		},
-		{
-			name:     "empty string",
-			input:    "",
-			expected: "",
-		},
-		{
-			name:     "only control characters",
-			input:    "\x00\x01\x02\x03",
-			expected: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := sanitizePrompt(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-// TestMaxPromptSize tests that MaxPromptSize is reasonable.
-func TestMaxPromptSize(t *testing.T) {
-	assert.Equal(t, 100*1024, MaxPromptSize)
-}
-
-// BenchmarkSanitizePrompt benchmarks the sanitize function.
-func BenchmarkSanitizePrompt(b *testing.B) {
-	prompt := "Analyze the following code:\n```go\nfunc main() {\n\tfmt.Println(\"Hello, World!\")\n}\n```\n\nPlease identify any issues."
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		sanitizePrompt(prompt)
-	}
-}
-
-// BenchmarkSanitizePromptWithControlChars benchmarks sanitization with control characters.
-func BenchmarkSanitizePromptWithControlChars(b *testing.B) {
-	prompt := "Hello\x00World\x01Test\x02Data\x03End"
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		sanitizePrompt(prompt)
-	}
 }
 
 // TestSafeResolvePath tests the path traversal protection.
@@ -1185,111 +1024,6 @@ func TestSafeResolvePath(t *testing.T) {
 			}
 		})
 	}
-}
-
-// =============================================================================
-// TESTS FOR CircuitBreaker
-// =============================================================================
-
-func TestNewCircuitBreaker(t *testing.T) {
-	cb := NewCircuitBreaker(5, 60)
-
-	assert.NotNil(t, cb)
-	assert.Equal(t, int64(5), cb.threshold)
-	assert.Equal(t, int64(60), cb.resetTimeout)
-	assert.Equal(t, "closed", cb.State())
-}
-
-func TestCircuitBreaker_Allow_Closed(t *testing.T) {
-	cb := NewCircuitBreaker(5, 60)
-
-	// Closed state should allow requests
-	assert.True(t, cb.Allow())
-	assert.True(t, cb.Allow())
-}
-
-func TestCircuitBreaker_Allow_Open(t *testing.T) {
-	cb := NewCircuitBreaker(2, 60) // Low threshold for testing
-
-	// Record enough failures to open the circuit
-	cb.RecordFailure()
-	cb.RecordFailure()
-
-	// Open state should block requests
-	assert.False(t, cb.Allow())
-	assert.Equal(t, "open", cb.State())
-}
-
-func TestCircuitBreaker_RecordSuccess(t *testing.T) {
-	cb := NewCircuitBreaker(2, 60)
-
-	// Record a failure
-	cb.RecordFailure()
-	assert.Equal(t, int64(1), cb.Metrics().Failures)
-
-	// Record success resets failures
-	cb.RecordSuccess()
-	assert.Equal(t, int64(0), cb.Metrics().Failures)
-	assert.Equal(t, "closed", cb.State())
-}
-
-func TestCircuitBreaker_RecordFailure_OpensCircuit(t *testing.T) {
-	cb := NewCircuitBreaker(3, 60)
-
-	// Record failures below threshold
-	cb.RecordFailure()
-	assert.Equal(t, "closed", cb.State())
-
-	cb.RecordFailure()
-	assert.Equal(t, "closed", cb.State())
-
-	// Third failure should open circuit
-	cb.RecordFailure()
-	assert.Equal(t, "open", cb.State())
-}
-
-func TestCircuitBreaker_State(t *testing.T) {
-	cb := NewCircuitBreaker(1, 60)
-
-	// Initially closed
-	assert.Equal(t, "closed", cb.State())
-
-	// After failure, open
-	cb.RecordFailure()
-	assert.Equal(t, "open", cb.State())
-
-	// After success, closed
-	cb.RecordSuccess()
-	assert.Equal(t, "closed", cb.State())
-}
-
-func TestCircuitBreaker_Metrics(t *testing.T) {
-	cb := NewCircuitBreaker(5, 120)
-
-	metrics := cb.Metrics()
-	assert.Equal(t, "closed", metrics.State)
-	assert.Equal(t, int64(0), metrics.Failures)
-	assert.Equal(t, int64(5), metrics.Threshold)
-	assert.Equal(t, int64(120), metrics.ResetTimeoutSecs)
-	assert.Equal(t, int64(0), metrics.LastFailureUnix)
-
-	// After failure
-	cb.RecordFailure()
-	metrics = cb.Metrics()
-	assert.Equal(t, int64(1), metrics.Failures)
-	assert.Greater(t, metrics.LastFailureUnix, int64(0))
-}
-
-func TestCircuitBreaker_Metrics_OpenWithReset(t *testing.T) {
-	cb := NewCircuitBreaker(1, 60)
-
-	cb.RecordFailure()
-	assert.Equal(t, "open", cb.State())
-
-	metrics := cb.Metrics()
-	assert.Equal(t, "open", metrics.State)
-	assert.Greater(t, metrics.SecondsUntilReset, int64(0))
-	assert.LessOrEqual(t, metrics.SecondsUntilReset, int64(60))
 }
 
 // =============================================================================
@@ -1427,24 +1161,6 @@ func TestHashRequest_OutputTruncation(t *testing.T) {
 // TESTS FOR Processor methods
 // =============================================================================
 
-func TestProcessor_CircuitBreakerMetrics(t *testing.T) {
-	p := &Processor{
-		circuitBreaker: NewCircuitBreaker(5, 120),
-	}
-
-	metrics := p.CircuitBreakerMetrics()
-	assert.Equal(t, "closed", metrics.State)
-	assert.Equal(t, int64(0), metrics.Failures)
-	assert.Equal(t, int64(5), metrics.Threshold)
-	assert.Equal(t, int64(120), metrics.ResetTimeoutSecs)
-
-	// Record a failure and check metrics update
-	p.circuitBreaker.RecordFailure()
-	metrics = p.CircuitBreakerMetrics()
-	assert.Equal(t, int64(1), metrics.Failures)
-	assert.Greater(t, metrics.LastFailureUnix, int64(0))
-}
-
 // =============================================================================
 // TESTS FOR Vector Sync Workers
 // =============================================================================
@@ -1536,78 +1252,6 @@ func TestProcessor_VectorSyncWorker_NilSyncFunc(t *testing.T) {
 }
 
 // =============================================================================
-// TESTS FOR CircuitBreaker Additional Behaviors
-// =============================================================================
-
-func TestCircuitBreaker_Allow_OpenBlocksRequests(t *testing.T) {
-	cb := NewCircuitBreaker(1, 60)
-
-	// Open the circuit
-	cb.RecordFailure()
-	assert.Equal(t, "open", cb.State())
-
-	// All requests should be blocked
-	assert.False(t, cb.Allow())
-	assert.False(t, cb.Allow())
-	assert.False(t, cb.Allow())
-}
-
-func TestCircuitBreaker_MultipleFailures(t *testing.T) {
-	cb := NewCircuitBreaker(3, 60) // Higher threshold
-
-	// Record failures below threshold
-	cb.RecordFailure()
-	assert.Equal(t, "closed", cb.State())
-	assert.Equal(t, int64(1), cb.Metrics().Failures)
-
-	cb.RecordFailure()
-	assert.Equal(t, "closed", cb.State())
-	assert.Equal(t, int64(2), cb.Metrics().Failures)
-
-	// Third failure opens circuit
-	cb.RecordFailure()
-	assert.Equal(t, "open", cb.State())
-	assert.Equal(t, int64(3), cb.Metrics().Failures)
-}
-
-func TestCircuitBreaker_SuccessResetsFailures(t *testing.T) {
-	cb := NewCircuitBreaker(5, 60)
-
-	// Record some failures
-	cb.RecordFailure()
-	cb.RecordFailure()
-	assert.Equal(t, int64(2), cb.Metrics().Failures)
-
-	// Success resets failures
-	cb.RecordSuccess()
-	assert.Equal(t, int64(0), cb.Metrics().Failures)
-	assert.Equal(t, "closed", cb.State())
-}
-
-func TestCircuitBreaker_Metrics_Comprehensive(t *testing.T) {
-	cb := NewCircuitBreaker(5, 120)
-
-	// Initial state
-	metrics := cb.Metrics()
-	assert.Equal(t, "closed", metrics.State)
-	assert.Equal(t, int64(0), metrics.Failures)
-	assert.Equal(t, int64(5), metrics.Threshold)
-	assert.Equal(t, int64(120), metrics.ResetTimeoutSecs)
-	assert.Equal(t, int64(0), metrics.LastFailureUnix)
-	assert.Equal(t, int64(0), metrics.SecondsUntilReset)
-
-	// After failures that open circuit
-	for i := 0; i < 5; i++ {
-		cb.RecordFailure()
-	}
-	metrics = cb.Metrics()
-	assert.Equal(t, "open", metrics.State)
-	assert.Equal(t, int64(5), metrics.Failures)
-	assert.Greater(t, metrics.LastFailureUnix, int64(0))
-	assert.Greater(t, metrics.SecondsUntilReset, int64(0))
-}
-
-// =============================================================================
 // TESTS FOR MaxVectorSyncWorkers constant
 // =============================================================================
 
@@ -1639,145 +1283,4 @@ func TestRequestDeduplicator_IsDuplicate_ExpiredEntry(t *testing.T) {
 	assert.False(t, d.IsDuplicate(hash))
 }
 
-// =============================================================================
-// TESTS FOR ProcessObservation Early Returns
-// =============================================================================
-
-func TestProcessObservation_SkipTool(t *testing.T) {
-	p := &Processor{
-		circuitBreaker: NewCircuitBreaker(5, 60),
-		deduplicator:   NewRequestDeduplicator(300, 1000),
-	}
-
-	ctx := context.Background()
-
-	// TodoWrite should be skipped
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "TodoWrite",
-		map[string]string{"content": "test"}, "success", 1, "/test/cwd")
-	assert.NoError(t, err)
-
-	// Glob should be skipped
-	err = p.ProcessObservation(ctx, "session-1", "project-1", "Glob",
-		map[string]string{"pattern": "*.go"}, []string{"main.go", "test.go"}, 1, "/test/cwd")
-	assert.NoError(t, err)
-
-	// AskUserQuestion should be skipped
-	err = p.ProcessObservation(ctx, "session-1", "project-1", "AskUserQuestion",
-		"question", "answer", 1, "/test/cwd")
-	assert.NoError(t, err)
-}
-
-func TestProcessObservation_SkipTrivial(t *testing.T) {
-	p := &Processor{
-		circuitBreaker: NewCircuitBreaker(5, 60),
-		deduplicator:   NewRequestDeduplicator(300, 1000),
-	}
-
-	ctx := context.Background()
-
-	// Short output should be skipped
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Read",
-		map[string]string{"file_path": "/test.go"}, "short", 1, "/test/cwd")
-	assert.NoError(t, err)
-
-	// "No matches found" should be skipped
-	err = p.ProcessObservation(ctx, "session-1", "project-1", "Grep",
-		map[string]string{"pattern": "test"}, "No matches found in the repository", 1, "/test/cwd")
-	assert.NoError(t, err)
-}
-
-func TestProcessObservation_SkipDuplicate(t *testing.T) {
-	p := &Processor{
-		circuitBreaker: NewCircuitBreaker(5, 60),
-		deduplicator:   NewRequestDeduplicator(300, 1000),
-		sem:            make(chan struct{}, 4),
-	}
-
-	ctx := context.Background()
-
-	input := map[string]string{"file_path": "/project/main.go"}
-	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
-
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
-	assert.NoError(t, err)
-
-	err = p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
-	assert.NoError(t, err)
-}
-
-func TestProcessObservation_CircuitBreakerOpen(t *testing.T) {
-	cb := NewCircuitBreaker(1, 60) // Threshold of 1
-	cb.RecordFailure()             // Open the circuit breaker
-
-	p := &Processor{
-		circuitBreaker: cb,
-		deduplicator:   NewRequestDeduplicator(300, 1000),
-	}
-
-	ctx := context.Background()
-	input := map[string]string{"file_path": "/project/main.go"}
-	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
-
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
-	assert.NoError(t, err)
-}
-
-func TestProcessObservation_ContextCancel(t *testing.T) {
-	p := &Processor{
-		circuitBreaker: NewCircuitBreaker(5, 60),
-		deduplicator:   NewRequestDeduplicator(300, 1000),
-		sem:            make(chan struct{}, 1), // Retained to document that v5 no-op path ignores it.
-	}
-
-	p.sem <- struct{}{}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	input := map[string]string{"file_path": "/project/main.go"}
-	output := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello World\")\n}"
-
-	err := p.ProcessObservation(ctx, "session-1", "project-1", "Edit", input, output, 1, "/test/cwd")
-	assert.NoError(t, err)
-}
-
-// =============================================================================
-// TESTS FOR ProcessSummary Early Returns
-// =============================================================================
-
-func TestProcessSummary_SkipEmptyRequest(t *testing.T) {
-	p := &Processor{
-		circuitBreaker: NewCircuitBreaker(5, 60),
-		deduplicator:   NewRequestDeduplicator(300, 1000),
-	}
-
-	ctx := context.Background()
-
-	// Empty request should be skipped (sessionDBID, sdkSessionID, project, userPrompt, lastUserMsg, lastAssistantMsg)
-	err := p.ProcessSummary(ctx, 1, "session-1", "project-1", "", "", "")
-	assert.NoError(t, err)
-}
-
-func TestProcessSummary_CircuitBreakerOpen(t *testing.T) {
-	cb := NewCircuitBreaker(1, 60)
-	cb.RecordFailure() // Open the circuit breaker
-
-	p := &Processor{
-		circuitBreaker: cb,
-		deduplicator:   NewRequestDeduplicator(300, 1000),
-		sem:            make(chan struct{}, 4),
-	}
-
-	ctx := context.Background()
-
-	assistantMsg := `I've updated the handler.go file to fix the authentication bug.
-The function validateToken() was not checking token expiry correctly.
-I've added a check for the exp claim and implemented proper error handling.
-The changes have been tested and the build passes successfully.
-Here's the implementation details and code review.`
-
-	err := p.ProcessSummary(ctx, 1, "session-1", "project-1",
-		"Implement authentication", "User message", assistantMsg)
-	assert.NoError(t, err)
-}
 

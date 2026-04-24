@@ -112,7 +112,6 @@ func DetectExplicitCorrection(text string) (bool, string) {
 
 // DetectOpposingFileChanges checks if two observations have opposing changes on the same file.
 func DetectOpposingFileChanges(newer, older *Observation) (bool, string) {
-	// Check for overlapping modified files
 	newerFiles := make(map[string]bool)
 	for _, f := range newer.FilesModified {
 		newerFiles[f] = true
@@ -129,7 +128,6 @@ func DetectOpposingFileChanges(newer, older *Observation) (bool, string) {
 		return false, ""
 	}
 
-	// Check for opposing action words in titles/narratives
 	newerText := strings.ToLower(newer.Title.String + " " + newer.Narrative.String)
 	olderText := strings.ToLower(older.Title.String + " " + older.Narrative.String)
 
@@ -145,7 +143,6 @@ func DetectOpposingFileChanges(newer, older *Observation) (bool, string) {
 
 // DetectConceptTagMismatch checks if observations have same concepts but different recommendations.
 func DetectConceptTagMismatch(newer, older *Observation) (bool, string) {
-	// Find overlapping concepts
 	newerConcepts := make(map[string]bool)
 	for _, c := range newer.Concepts {
 		newerConcepts[c] = true
@@ -162,15 +159,12 @@ func DetectConceptTagMismatch(newer, older *Observation) (bool, string) {
 		return false, ""
 	}
 
-	// Check if same file was modified and concepts overlap
-	// This suggests the newer observation may update the approach
 	newerFiles := make(map[string]bool)
 	for _, f := range newer.FilesModified {
 		newerFiles[f] = true
 	}
 	for _, f := range older.FilesModified {
 		if newerFiles[f] {
-			// Same file modified with same concepts - likely an update
 			return true, "Same concepts (" + strings.Join(overlapping, ", ") + ") with overlapping file changes"
 		}
 	}
@@ -185,7 +179,6 @@ func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
 		HasConflict: false,
 	}
 
-	// 1. Check for explicit correction language in newer observation
 	if newer.Narrative.Valid {
 		if isCorrection, reason := DetectExplicitCorrection(newer.Narrative.String); isCorrection {
 			result.HasConflict = true
@@ -197,7 +190,6 @@ func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
 		}
 	}
 
-	// Check title as well
 	if newer.Title.Valid {
 		if isCorrection, reason := DetectExplicitCorrection(newer.Title.String); isCorrection {
 			result.HasConflict = true
@@ -209,7 +201,6 @@ func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
 		}
 	}
 
-	// 2. Check for opposing file changes
 	if isOpposing, reason := DetectOpposingFileChanges(newer, older); isOpposing {
 		result.HasConflict = true
 		result.Type = ConflictSuperseded
@@ -219,7 +210,6 @@ func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
 		return result
 	}
 
-	// 3. Check for concept tag mismatches with same files
 	if isMismatch, reason := DetectConceptTagMismatch(newer, older); isMismatch {
 		result.HasConflict = true
 		result.Type = ConflictSuperseded
@@ -238,12 +228,10 @@ func DetectConflictsWithExisting(newer *Observation, existing []*Observation) []
 	var results []*ConflictDetectionResult
 
 	for _, older := range existing {
-		// Skip self-comparison
 		if older.ID == newer.ID {
 			continue
 		}
 
-		// Only compare within same project (or both global)
 		if newer.Project != older.Project && newer.Scope != ScopeGlobal && older.Scope != ScopeGlobal {
 			continue
 		}

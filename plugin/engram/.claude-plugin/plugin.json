@@ -1,7 +1,7 @@
 {
   "name": "engram",
-  "version": "5.0.0",
-  "description": "Persistent memory for Claude Code — static session-start context, durable memory tools, and compatibility hooks aligned with v5. api_token is optional: set via /config UI or via ENGRAM_API_TOKEN env var in ~/.claude/settings.json (survives CC credential store races).",
+  "version": "5.0.1",
+  "description": "Persistent memory for Claude Code — static session-start context, durable memory tools, and compatibility hooks aligned with v5. api_token is optional: set via /config UI or via ENGRAM_AUTH_ADMIN_TOKEN env var in ~/.claude/settings.json (survives CC credential store races).",
   "author": {
     "name": "thebtf"
   },
@@ -18,7 +18,7 @@
     },
     "api_token": {
       "title": "API Token",
-      "description": "API authentication token for your engram server. Optional — if unset here, the plugin falls back to the ENGRAM_API_TOKEN env var (typically set in ~/.claude/settings.json). This workaround survives CC credential-store races that periodically wipe sensitive plugin values (see anthropics/claude-code#45551).",
+      "description": "API authentication token for your engram server. Optional — if unset here, the plugin falls back to the ENGRAM_AUTH_ADMIN_TOKEN env var (typically set in ~/.claude/settings.json). This workaround survives CC credential-store races that periodically wipe sensitive plugin values (see anthropics/claude-code#45551).",
       "type": "string",
       "required": false,
       "sensitive": true

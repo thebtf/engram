@@ -444,11 +444,10 @@ definitions:
     type: object
   internal_worker.BackfillSessionResponse:
     properties:
-      errors:
-        type: integer
-      metrics_report:
+      deprecated:
+        description: Explains that backfill persistence was removed in v5.
         type: string
-      observations_extracted:
+      errors:
         type: integer
       skipped:
         type: integer

@@ -10,9 +10,7 @@ package worker
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/rs/zerolog/log"
 )
@@ -110,29 +108,6 @@ func writeJSON(w http.ResponseWriter, data any) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Error().Err(err).Msg("Failed to encode JSON response")
 	}
-}
-
-// parseIDParam parses an ID parameter from a string.
-// Returns the parsed ID and true on success, or writes an error response and returns false.
-// The entityName is used in error messages (e.g., "observation", "session", "pattern").
-func parseIDParam(w http.ResponseWriter, idStr, entityName string) (int64, bool) {
-	if idStr == "" {
-		http.Error(w, entityName+" id required", http.StatusBadRequest)
-		return 0, false
-	}
-
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, "invalid "+entityName+" id", http.StatusBadRequest)
-		return 0, false
-	}
-
-	return id, true
-}
-
-// formatWarning formats a warning message for use in health responses.
-func formatWarning(format string, args ...any) string {
-	return fmt.Sprintf(format, args...)
 }
 
 // handleHealth godoc

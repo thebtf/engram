@@ -2,7 +2,6 @@ package worker
 
 import (
 	"net/http"
-	"os"
 )
 
 // handleGetConfig returns the current runtime configuration, grouped by category.
@@ -18,16 +17,6 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	response := map[string]any{
-		"llm": map[string]any{
-			"url":   os.Getenv("ENGRAM_LLM_URL"),
-			"model": os.Getenv("ENGRAM_LLM_MODEL"),
-		},
-		"embedding": map[string]any{
-			"provider":   cfg.EmbeddingProvider,
-			"base_url":   cfg.EmbeddingBaseURL,
-			"model":      cfg.EmbeddingModelName,
-			"dimensions": cfg.EmbeddingDimensions,
-		},
 		"context": map[string]any{
 			"observations":        cfg.ContextObservations,
 			"max_tokens":          cfg.ContextMaxTokens,

@@ -12,7 +12,7 @@ Restart the Engram worker process. Use when experiencing issues with the memory 
 
 4. Call the restart endpoint:
    ```bash
-   curl -X POST <base-url>/api/restart -H "Authorization: Bearer ${ENGRAM_API_TOKEN}"
+   curl -X POST <base-url>/api/restart -H "Authorization: Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"
    ```
 
 5. Wait 2 seconds, then call `check_system_health` again to verify the worker restarted.

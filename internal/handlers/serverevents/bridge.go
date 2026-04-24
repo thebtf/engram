@@ -71,7 +71,7 @@ type ProjectTracker interface {
 // reconciliation. This was caught in PR #171 review.
 type Bridge struct {
 	clientID  string // "${pid}-${startUnix}" per proto-extensions.md
-	token     string // ENGRAM_API_TOKEN; empty = no auth
+	token     string // ENGRAM_AUTH_ADMIN_TOKEN; empty = no auth
 	serverURL string // ENGRAM_SERVER_URL
 	logger    *slog.Logger
 	reg       *registry.Registry
@@ -87,7 +87,7 @@ type Bridge struct {
 // NewBridge creates a new Bridge.
 //
 // serverURL and token are read from the environment (ENGRAM_SERVER_URL /
-// ENGRAM_API_TOKEN). If serverURL is empty, Start is a no-op — the bridge
+// ENGRAM_AUTH_ADMIN_TOKEN). If serverURL is empty, Start is a no-op — the bridge
 // will log a warning and return without starting any goroutines.
 //
 // The logger should be scoped to the caller; the bridge prefixes its own
@@ -106,9 +106,12 @@ func NewBridge(logger *slog.Logger, reg *registry.Registry, tracker ProjectTrack
 
 	serverURL := os.Getenv("ENGRAM_SERVER_URL")
 	if serverURL == "" {
-		serverURL = os.Getenv("ENGRAM_URL") // legacy env var
+		if fallback := os.Getenv("ENGRAM_URL"); fallback != "" {
+			serverURL = fallback
+			logger.Warn("ENGRAM_URL is deprecated for bridge configuration; please use ENGRAM_SERVER_URL instead")
+		}
 	}
-	token := os.Getenv("ENGRAM_API_TOKEN")
+	token := os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")
 
 	return &Bridge{
 		clientID:  clientID,

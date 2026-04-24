@@ -43,11 +43,6 @@ type Config struct {
 	DBPath                    string `json:"db_path"`
 	Model                     string `json:"model"`
 	VectorStorageStrategy     string `json:"vector_storage_strategy"`
-	EmbeddingProvider         string `json:"embedding_provider"`
-	EmbeddingBaseURL          string `json:"embedding_base_url"`
-	EmbeddingModelName        string `json:"embedding_model_name"`
-	EmbeddingDimensions       int    `json:"embedding_dimensions"`
-	EmbeddingAPIKey           string
 	DatabaseDSN               string   `json:"-"`                  // env-only: DATABASE_DSN (contains password, never JSON)
 	DatabaseMaxConns          int      `json:"database_max_conns"` // PostgreSQL pool size (default: 10)
 	ContextObsConcepts        []string `json:"context_obs_concepts"`
@@ -70,13 +65,14 @@ type Config struct {
 	StoreMemoryHardLimit      int      `json:"store_memory_hard_limit"`      // Max chars for store_memory content (default: 10000)
 	StoreMemorySoftLimit      int      `json:"store_memory_soft_limit"`      // Chars above which content is truncated (default: 1000)
 	StoreMemoryDedupThreshold float64  `json:"store_memory_dedup_threshold"` // Cosine similarity for dedup (default: 0.92)
-	StoreMemorySummarize      bool     `json:"store_memory_summarize"`       // Use LLM to summarize long content (default: false)
 	EncryptionKeyFile         string   `json:"-"`                            // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
 	EncryptionKey             string   `json:"-"`                            // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
 	AlwaysInjectLimit         int      `json:"always_inject_limit"` // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
 	ProjectInjectLimit        int      `json:"project_inject_limit"` // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
 	InjectUnified             bool     `json:"inject_unified"`      // ENGRAM_INJECT_UNIFIED (default: true) — emergency rollback flag; removed after two release cycles
 	EnforceSourceProject      bool     `json:"enforce_source_project"` // ENGRAM_ENFORCE_SOURCE_PROJECT (default: true)
+	AuthSkipLocal             bool     `json:"auth_skip_local"`
+	AuthTrustedProxy          string   `json:"auth_trusted_proxy"`
 
 	// Signal weights for reward computation (closed-loop learning FR-7)
 	SignalWeights map[string]float64 `json:"signal_weights"`
@@ -166,10 +162,6 @@ func Default() *Config {
 		MaxConns:                       4,
 		Model:                          DefaultModel,
 		VectorStorageStrategy:          "hub", // Hub storage strategy (LEANN-inspired)
-		EmbeddingProvider:              "openai",
-		EmbeddingBaseURL:               "https://api.openai.com/v1",
-		EmbeddingModelName:             "text-embedding-3-small",
-		EmbeddingDimensions:            1536,
 		HubThreshold:                   5, // Require 5+ accesses to store embedding
 		ContextObservations:            100,
 		ContextFullCount:               25,
@@ -185,7 +177,6 @@ func Default() *Config {
 		TelemetryEnabled:               true,
 		StoreMemoryHardLimit:           10000,
 		StoreMemorySoftLimit:           1000,
-		StoreMemorySummarize:           false,
 		StoreMemoryDedupThreshold:      0.92,
 		AlwaysInjectLimit:              20,   // Inject up to 20 always-inject observations per session
 		ProjectInjectLimit:             15,   // Inject up to 15 project-scoped observations per session
@@ -249,19 +240,6 @@ func Load() (*Config, error) {
 			if v, ok := settings["ENGRAM_VECTOR_STORAGE_STRATEGY"].(string); ok && v != "" {
 				cfg.VectorStorageStrategy = v
 			}
-			if v, ok := settings["EMBEDDING_PROVIDER"].(string); ok && v != "" {
-				cfg.EmbeddingProvider = v
-			}
-			if v, ok := settings["EMBEDDING_BASE_URL"].(string); ok && v != "" {
-				cfg.EmbeddingBaseURL = v
-			}
-			// EMBEDDING_API_KEY is env-only, NOT loaded from JSON file.
-			if v, ok := settings["EMBEDDING_MODEL_NAME"].(string); ok && v != "" {
-				cfg.EmbeddingModelName = v
-			}
-			if v, ok := settings["EMBEDDING_DIMENSIONS"].(float64); ok && v > 0 {
-				cfg.EmbeddingDimensions = int(v)
-			}
 			if v, ok := settings["ENGRAM_HUB_THRESHOLD"].(float64); ok && v > 0 {
 				cfg.HubThreshold = int(v)
 			}
@@ -278,28 +256,8 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_WORKER_HOST")); v != "" {
 		cfg.WorkerHost = v
 	}
-	// Auth admin token: new name takes priority, old name is deprecated alias
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); v != "" {
 		cfg.WorkerToken = v
-	} else if v := strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN")); v != "" {
-		cfg.WorkerToken = v
-	}
-	if v := envFirstOf("ENGRAM_EMBEDDING_PROVIDER", "EMBEDDING_PROVIDER"); v != "" {
-		cfg.EmbeddingProvider = v
-	}
-	if v := envFirstOf("ENGRAM_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL"); v != "" {
-		cfg.EmbeddingBaseURL = v
-	}
-	if v := envFirstOf("ENGRAM_EMBEDDING_API_KEY", "EMBEDDING_API_KEY"); v != "" {
-		cfg.EmbeddingAPIKey = v
-	}
-	if v := envFirstOf("ENGRAM_EMBEDDING_MODEL_NAME", "EMBEDDING_MODEL_NAME"); v != "" {
-		cfg.EmbeddingModelName = v
-	}
-	if v := envFirstOf("ENGRAM_EMBEDDING_DIMENSIONS", "EMBEDDING_DIMENSIONS"); v != "" {
-		if d, err := strconv.Atoi(v); err == nil && d > 0 {
-			cfg.EmbeddingDimensions = d
-		}
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONTEXT_MAX_TOKENS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
@@ -373,19 +331,14 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTHENTIK_TRUSTED_PROXIES")); v != "" {
 		cfg.AuthentikTrustedProxies = splitTrim(v)
 	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_SKIP_LOCAL")); v == "true" || v == "1" {
+		cfg.AuthSkipLocal = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_TRUSTED_PROXY")); v != "" {
+		cfg.AuthTrustedProxy = v
+	}
 
 	return cfg, nil
-}
-
-// envFirstOf returns the first non-empty env var value from the given keys.
-// Allows ENGRAM_-prefixed vars to take priority over legacy unprefixed vars.
-func envFirstOf(keys ...string) string {
-	for _, k := range keys {
-		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // splitTrim splits a comma-separated string and trims whitespace.
@@ -435,12 +388,6 @@ func Reload() (*Config, []string, error) {
 		if old.Model != newCfg.Model {
 			changed = append(changed, "model")
 		}
-		if old.EmbeddingBaseURL != newCfg.EmbeddingBaseURL {
-			changed = append(changed, "embedding_base_url")
-		}
-		if old.EmbeddingModelName != newCfg.EmbeddingModelName {
-			changed = append(changed, "embedding_model_name")
-		}
 		if old.ContextMaxTokens != newCfg.ContextMaxTokens {
 			changed = append(changed, "context_max_tokens")
 		}
@@ -452,6 +399,12 @@ func Reload() (*Config, []string, error) {
 		}
 		if old.WorkerToken != newCfg.WorkerToken {
 			changed = append(changed, "worker_token (requires restart)")
+		}
+		if old.AuthSkipLocal != newCfg.AuthSkipLocal {
+			changed = append(changed, "auth_skip_local")
+		}
+		if old.AuthTrustedProxy != newCfg.AuthTrustedProxy {
+			changed = append(changed, "auth_trusted_proxy")
 		}
 	}
 
@@ -481,35 +434,13 @@ func GetWorkerHost() string {
 	return "127.0.0.1"
 }
 
-// GetWorkerToken returns the worker authentication token.
-// GetWorkerToken returns the admin authentication token.
-// Checks ENGRAM_AUTH_ADMIN_TOKEN first (preferred), falls back to ENGRAM_API_TOKEN (deprecated).
+// GetWorkerToken returns the admin authentication token from ENGRAM_AUTH_ADMIN_TOKEN.
+// Falls back to the value loaded from the config file if the env var is not set.
 func GetWorkerToken() string {
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); v != "" {
-		return v
+	if token := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); token != "" {
+		return token
 	}
-	return strings.TrimSpace(os.Getenv("ENGRAM_API_TOKEN"))
-}
-
-// GetEmbeddingProvider returns the embedding provider (e.g., "openai").
-func GetEmbeddingProvider() string {
-	if v := envFirstOf("ENGRAM_EMBEDDING_PROVIDER", "EMBEDDING_PROVIDER"); v != "" {
-		return v
-	}
-	return Get().EmbeddingProvider
-}
-
-// GetEmbeddingBaseURL returns the OpenAI-compatible API base URL.
-func GetEmbeddingBaseURL() string {
-	if v := envFirstOf("ENGRAM_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL"); v != "" {
-		return v
-	}
-	return Get().EmbeddingBaseURL
-}
-
-// GetEmbeddingAPIKey returns the embedding API key (env-only, never from config file).
-func GetEmbeddingAPIKey() string {
-	return envFirstOf("ENGRAM_EMBEDDING_API_KEY", "EMBEDDING_API_KEY")
+	return Get().WorkerToken
 }
 
 // GetDatabaseDSN returns the PostgreSQL DSN.
@@ -520,17 +451,6 @@ func GetDatabaseDSN() string {
 		return v
 	}
 	return Get().DatabaseDSN
-}
-
-// GetEmbeddingModelName returns the embedding model name for external providers.
-func GetEmbeddingModelName() string {
-	if v := envFirstOf("ENGRAM_EMBEDDING_MODEL_NAME", "EMBEDDING_MODEL_NAME"); v != "" {
-		return v
-	}
-	if cfg := Get(); cfg.EmbeddingModelName != "" {
-		return cfg.EmbeddingModelName
-	}
-	return "text-embedding-3-small"
 }
 
 // GetCollectionConfigPath returns the path to the collections YAML config.
@@ -549,24 +469,3 @@ func GetWorkstationID() string {
 	return strings.TrimSpace(os.Getenv("WORKSTATION_ID"))
 }
 
-// GetEmbeddingDimensions returns the embedding vector dimensions for external providers.
-func GetEmbeddingDimensions() int {
-	if v := envFirstOf("ENGRAM_EMBEDDING_DIMENSIONS", "EMBEDDING_DIMENSIONS"); v != "" {
-		if d, err := strconv.Atoi(v); err == nil && d > 0 {
-			return d
-		}
-	}
-	if cfg := Get(); cfg.EmbeddingDimensions > 0 {
-		return cfg.EmbeddingDimensions
-	}
-	return 1536
-}
-
-// GetEmbeddingTruncate returns whether client-side MRL truncation is enabled.
-// When true, vectors with more dimensions than configured are truncated and
-// L2-normalized. Requires a Matryoshka-trained model for quality preservation.
-// When false (default), a dimension mismatch causes an error (fail-fast).
-func GetEmbeddingTruncate() bool {
-	v := envFirstOf("ENGRAM_EMBEDDING_TRUNCATE", "EMBEDDING_TRUNCATE")
-	return v == "true" || v == "1" || v == "yes"
-}

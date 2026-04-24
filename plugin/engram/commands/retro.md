@@ -15,7 +15,7 @@ Tool: check_system_health()
 Then fetch injected observations for this session using the REST API:
 
 ```bash
-curl -s -H "Authorization: Bearer ${ENGRAM_API_TOKEN}" \
+curl -s -H "Authorization: Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}" \
   "${ENGRAM_URL%/mcp}/api/sessions/${SESSION_ID}/injections"
 ```
 
@@ -36,7 +36,7 @@ Group by injection section (always_inject, recent, relevant).
 Fetch system-wide effectiveness:
 
 ```bash
-curl -s -H "Authorization: Bearer ${ENGRAM_API_TOKEN}" \
+curl -s -H "Authorization: Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}" \
   "${ENGRAM_URL%/mcp}/api/learning/effectiveness-distribution"
 ```
 
@@ -53,7 +53,7 @@ Learning Trend: [improving/stable/declining]
 
 For learning trend, fetch:
 ```bash
-curl -s -H "Authorization: Bearer ${ENGRAM_API_TOKEN}" \
+curl -s -H "Authorization: Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}" \
   "${ENGRAM_URL%/mcp}/api/learning/curve"
 ```
 

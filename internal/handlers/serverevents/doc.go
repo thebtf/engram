@@ -36,7 +36,7 @@
 //
 // # Authentication
 //
-// The bridge reads ENGRAM_SERVER_URL and ENGRAM_API_TOKEN from the daemon
+// The bridge reads ENGRAM_SERVER_URL and ENGRAM_AUTH_ADMIN_TOKEN from the daemon
 // environment (same env vars as engramcore). The token is injected into every
 // outgoing gRPC call via outgoing metadata ("authorization: Bearer <token>").
 // Streaming RPCs require the token in the initial call context because the

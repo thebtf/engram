@@ -25,7 +25,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	if err != nil {
 		return nil, err
 	}
-	token := m.envFor(p, "ENGRAM_API_TOKEN")
+	token := m.envFor(p, "ENGRAM_AUTH_ADMIN_TOKEN")
 	project := m.cache.Resolve(p)
 
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
@@ -79,7 +79,7 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	if err != nil {
 		return nil, err
 	}
-	token := m.envFor(p, "ENGRAM_API_TOKEN")
+	token := m.envFor(p, "ENGRAM_AUTH_ADMIN_TOKEN")
 	project := m.cache.Resolve(p)
 
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)

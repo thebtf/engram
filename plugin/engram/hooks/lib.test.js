@@ -1,12 +1,28 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const test = require('node:test');
 const crypto = require('crypto');
 const path = require('path');
 
 const lib = require('./lib');
 
+function signalPath(sessionID) {
+  const safe = String(sessionID).replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(os.tmpdir(), `engram-signals-${safe}.json`);
+}
+
 function cleanup(sessionID) {
-  lib.clearSessionSignals(sessionID);
+  try { fs.unlinkSync(signalPath(sessionID)); } catch (_) {}
+}
+
+function getSessionFiles(sessionID) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(signalPath(sessionID), 'utf8'));
+    return Array.isArray(raw.files) ? raw.files : [];
+  } catch (_) {
+    return [];
+  }
 }
 
 test('add two different files to session store', (t) => {
@@ -18,7 +34,7 @@ test('add two different files to session store', (t) => {
   lib.appendSessionFile(sessionID, '/repo/one.txt');
   lib.appendSessionFile(sessionID, '/repo/two.txt');
 
-  const files = lib.getSessionFiles(sessionID);
+  const files = getSessionFiles(sessionID);
   assert.deepStrictEqual(files, ['/repo/one.txt', '/repo/two.txt']);
 });
 
@@ -31,7 +47,7 @@ test('dedupe repeated file paths in session store', (t) => {
   lib.appendSessionFile(sessionID, '/repo/repeat.txt');
   lib.appendSessionFile(sessionID, '/repo/repeat.txt');
 
-  const files = lib.getSessionFiles(sessionID);
+  const files = getSessionFiles(sessionID);
   assert.deepStrictEqual(files, ['/repo/repeat.txt']);
 });
 
@@ -45,7 +61,7 @@ test('keep only the latest 10 files when more are appended', (t) => {
     lib.appendSessionFile(sessionID, `/repo/file-${i}.txt`);
   }
 
-  const files = lib.getSessionFiles(sessionID);
+  const files = getSessionFiles(sessionID);
   assert.strictEqual(files.length, 10);
   assert.deepStrictEqual(files, [
     '/repo/file-2.txt',
@@ -68,7 +84,7 @@ test('appendSessionFile no-op behavior is detectable', (t) => {
   cleanup(sessionID);
 
   lib.appendSessionFile(sessionID, '/repo/important.txt');
-  const files = lib.getSessionFiles(sessionID);
+  const files = getSessionFiles(sessionID);
   assert.deepStrictEqual(files, ['/repo/important.txt']);
 });
 

@@ -97,7 +97,6 @@ type Service struct {
 	retrievalStats         map[string]*RetrievalStats
 	sessionStore           *gorm.SessionStore
 	tokenStore             *gorm.TokenStore
-	ingestDedup            *deduplicationCache
 	cancel                 context.CancelFunc
 	cachedObsCounts        map[string]cachedCount
 	config                 *config.Config
@@ -272,7 +271,6 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		backfillTracker:    newBackfillTracker(),
 		cachedObsCounts:    make(map[string]cachedCount),
 		statsCacheTTL:      time.Minute, // Cache stats for 1 minute
-		ingestDedup:        newDeduplicationCache(5 * time.Minute),
 		mcpHealth:          mcp.NewMCPHealth(),
 		eventBus:           &projectevents.Bus{},
 	}
@@ -288,7 +286,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
 		if token == "" && !authDisabled {
 			cancel()
-			return nil, fmt.Errorf("ENGRAM_AUTH_ADMIN_TOKEN (or ENGRAM_API_TOKEN) is not set — set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production)")
+			return nil, fmt.Errorf("ENGRAM_AUTH_ADMIN_TOKEN is not set — set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production)")
 		}
 	}
 
@@ -335,19 +333,11 @@ func (s *Service) initializeAsync() {
 	// Create session manager
 	sessionManager := session.NewManager(sessionStore)
 
-	// Create SDK processor (optional - requires LLM API or Claude CLI)
-	var processor *sdk.Processor
-	proc, err := sdk.NewProcessor()
-	if err != nil {
-		log.Warn().Err(err).Msg("SDK processor not available — set ENGRAM_LLM_URL for observation extraction")
-	} else {
-		processor = proc
-		// Set broadcast callback for SSE events
-		processor.SetBroadcastFunc(func(event map[string]any) {
-			s.sseBroadcaster.Broadcast(event)
-		})
-		log.Info().Msg("SDK processor initialized")
-	}
+	// Create SDK processor
+	processor := sdk.NewProcessor()
+	processor.SetBroadcastFunc(func(event map[string]any) {
+		s.sseBroadcaster.Broadcast(event)
+	})
 
 	// Create token store and wire into auth middleware
 	tokenStore := gorm.NewTokenStore(store)
@@ -371,9 +361,6 @@ func (s *Service) initializeAsync() {
 
 	// Create reasoning trace store for System 2 memory (reasoning chains)
 	reasoningStore := gorm.NewReasoningTraceStore(store)
-	if processor != nil {
-		processor.SetReasoningStore(reasoningStore)
-	}
 
 	// Create memory + behavioral rules + credential stores for US3 observations split.
 	// All three stores are wired here (Commit E — T021).
@@ -774,7 +761,7 @@ func (s *Service) setupRoutes() {
 	// MCP health counters (public — no auth required, lightweight)
 	s.router.Get("/api/mcp/health", s.mcpHealth.HandleHealth)
 
-	// OpenAPI docs (read-only spec; protected by global auth middleware if ENGRAM_API_TOKEN is set)
+	// OpenAPI docs (read-only spec; protected by global auth middleware if ENGRAM_AUTH_ADMIN_TOKEN is set)
 	s.router.Get("/api/docs", http.RedirectHandler("/api/docs/index.html", http.StatusMovedPermanently).ServeHTTP)
 	s.router.Get("/api/docs/*", httpSwagger.WrapHandler)
 
@@ -1095,21 +1082,6 @@ func (s *Service) getCachedObservationCount(ctx context.Context, project string)
 	return count, nil
 }
 
-// invalidateObsCountCache invalidates the observation count cache for a project.
-// Call this when observations are added, archived, or deleted.
-func (s *Service) invalidateObsCountCache(project string) {
-	s.cachedObsCountsMu.Lock()
-	delete(s.cachedObsCounts, project)
-	s.cachedObsCountsMu.Unlock()
-}
-
-// invalidateAllObsCountCache clears all observation count caches.
-func (s *Service) invalidateAllObsCountCache() {
-	s.cachedObsCountsMu.Lock()
-	s.cachedObsCounts = make(map[string]cachedCount)
-	s.cachedObsCountsMu.Unlock()
-}
-
 // Start starts the worker service.
 // The HTTP server starts immediately; database initialization happens async.
 func (s *Service) Start() error {
@@ -1120,12 +1092,7 @@ func (s *Service) Start() error {
 	authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
 
 	if token == "" && !authDisabled {
-		log.Fatal().Msg("ENGRAM_AUTH_ADMIN_TOKEN (or ENGRAM_API_TOKEN) is not set. Set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production).")
-	}
-
-	// Deprecation warning for old env var name
-	if os.Getenv("ENGRAM_API_TOKEN") != "" && os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN") == "" {
-		log.Warn().Msg("auth: ENGRAM_API_TOKEN is deprecated — rename to ENGRAM_AUTH_ADMIN_TOKEN (old name will be removed in v1.3)")
+		log.Fatal().Msg("ENGRAM_AUTH_ADMIN_TOKEN is not set. Set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production).")
 	}
 
 	if authDisabled {

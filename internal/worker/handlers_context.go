@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -19,106 +18,8 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// agentEffectivenessThreshold is the minimum number of agent-specific injections required
-// to substitute the global effectiveness score with the agent-specific one.
-const agentEffectivenessThreshold = 10
-
 type sessionStartContextProvider interface {
 	GetSessionStartContext(context.Context, *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error)
-}
-
-// applyStrategy reorders or filters observations according to the named injection strategy.
-// agentStats is an optional map of observation_id -> AgentObservationStat used by the
-// effectiveness-weighted strategy to personalise scores per agent. Pass nil to use global scores only.
-// It returns a new slice; the original is not mutated.
-func applyStrategy(strategy string, observations []*models.Observation, agentStats map[int64]gorm.AgentObservationStat) []*models.Observation {
-	if len(observations) == 0 {
-		return observations
-	}
-	switch strategy {
-	case "effectiveness-weighted":
-		// Sort by blend of importance_score (0.5) + effectiveness_score (0.5).
-		// When agent-specific stats have >= agentEffectivenessThreshold injections,
-		// substitute the global effectiveness_score with the agent-specific rate.
-		out := make([]*models.Observation, len(observations))
-		copy(out, observations)
-		effectivenessFor := func(obs *models.Observation) float64 {
-			if agentStats != nil {
-				if stat, ok := agentStats[obs.ID]; ok && stat.Injections >= agentEffectivenessThreshold {
-					if stat.Injections > 0 {
-						return float64(stat.Successes) / float64(stat.Injections)
-					}
-					return 0
-				}
-			}
-			return obs.EffectivenessScore
-		}
-		sort.SliceStable(out, func(i, j int) bool {
-			si := out[i].ImportanceScore*0.5 + effectivenessFor(out[i])*0.5
-			sj := out[j].ImportanceScore*0.5 + effectivenessFor(out[j])*0.5
-			return si > sj
-		})
-		return out
-
-	case "recency-boosted":
-		// Re-sort: observations < 24h old get 2x score multiplier
-		twentyFourHoursAgo := time.Now().UnixMilli() - 24*60*60*1000
-		out := make([]*models.Observation, len(observations))
-		copy(out, observations)
-		type weighted struct {
-			obs   *models.Observation
-			score float64
-		}
-		ws := make([]weighted, len(out))
-		for i, obs := range out {
-			score := obs.ImportanceScore
-			if obs.CreatedAtEpoch > twentyFourHoursAgo {
-				score *= 2.0
-			}
-			ws[i] = weighted{obs: obs, score: score}
-		}
-		sort.SliceStable(ws, func(i, j int) bool {
-			return ws[i].score > ws[j].score
-		})
-		result := make([]*models.Observation, len(ws))
-		for i, w := range ws {
-			result[i] = w.obs
-		}
-		return result
-
-	case "diverse":
-		// Keep max 2 observations per concept (first concept tag), interleaved
-		// Group by first concept
-		grouped := make(map[string][]*models.Observation)
-		order := make([]string, 0)
-		for _, obs := range observations {
-			key := ""
-			if len(obs.Concepts) > 0 {
-				key = string(obs.Concepts[0])
-			}
-			if _, exists := grouped[key]; !exists {
-				order = append(order, key)
-			}
-			if len(grouped[key]) < 2 {
-				grouped[key] = append(grouped[key], obs)
-			}
-		}
-		// Interleave: take one from each group in round-robin until all exhausted
-		out := make([]*models.Observation, 0, len(observations))
-		maxRound := 2
-		for round := 0; round < maxRound; round++ {
-			for _, key := range order {
-				if round < len(grouped[key]) {
-					out = append(out, grouped[key][round])
-				}
-			}
-		}
-		return out
-
-	default:
-		// "baseline": no change
-		return observations
-	}
 }
 
 func behavioralRulesToObservations(rules []*models.BehavioralRule) []*models.Observation {
@@ -542,50 +443,6 @@ func compactObservationsWithLimit(observations []*models.Observation, fullCount 
 		}
 	}
 	return result
-}
-
-// buildFileQuery extracts meaningful search terms from a file path.
-func buildFileQuery(filePath string) string {
-	// Remove common prefixes and extensions
-	path := strings.TrimPrefix(filePath, "/")
-
-	// Extract the filename and directory
-	parts := strings.Split(path, "/")
-	meaningful := make([]string, 0, len(parts))
-
-	for _, part := range parts {
-		// Skip common directory names that aren't meaningful
-		switch strings.ToLower(part) {
-		case "src", "lib", "internal", "pkg", "cmd", "api", "app", "test", "tests", "spec", "specs":
-			continue
-		default:
-			// Remove file extension
-			if idx := strings.LastIndex(part, "."); idx > 0 {
-				part = part[:idx]
-			}
-			// Convert camelCase/PascalCase to spaces
-			part = splitCamelCase(part)
-			// Convert snake_case to spaces
-			part = strings.ReplaceAll(part, "_", " ")
-			// Convert kebab-case to spaces
-			part = strings.ReplaceAll(part, "-", " ")
-			meaningful = append(meaningful, part)
-		}
-	}
-
-	return strings.Join(meaningful, " ")
-}
-
-// splitCamelCase splits camelCase or PascalCase into separate words.
-func splitCamelCase(s string) string {
-	var result strings.Builder
-	for i, r := range s {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			result.WriteRune(' ')
-		}
-		result.WriteRune(r)
-	}
-	return result.String()
 }
 
 // applyActiveVersions replaces each observation's narrative with its active ObservationVersion

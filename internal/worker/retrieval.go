@@ -67,79 +67,6 @@ type retrievalHooks struct {
 	getLastPromptBySession func(ctx context.Context, project, sessionID string) (*models.UserPromptWithSession, error)
 }
 
-// defaultMinScore is the minimum relevance score used in place of the removed
-// lane-based score thresholds (internal/search package dropped in v5 US9).
-const defaultMinScore = 0.3
-
-// Type-lane config removed in v5 (US11): lane-based search selection is no longer a feature.
-func (s *Service) typeLanesEnabled() bool {
-	return false
-}
-
-func (s *Service) laneConfigForType(_ models.ObservationType) (cfg struct {
-	MinScore       float64
-	TopK           int
-	RerankerWeight float64
-}) {
-	// Lane config removed in v5 (US9/US11); return fixed defaults.
-	return struct {
-		MinScore       float64
-		TopK           int
-		RerankerWeight float64
-	}{MinScore: defaultMinScore, TopK: 0, RerankerWeight: 1.0}
-}
-
-func (s *Service) laneWeightMap() map[models.ObservationType]float64 {
-	// Lane weights removed in v5 (US9/US11); return empty map (no per-type weighting).
-	return make(map[models.ObservationType]float64)
-}
-
-func (s *Service) typedLaneMinScore() float64 {
-	// Lane min-score removed in v5 (US9/US11); return fixed default.
-	return defaultMinScore
-}
-
-func (s *Service) applyTypedLaneSelection(observations []*models.Observation, rankingScores, thresholdScores map[int64]float64, limit int) []*models.Observation {
-	grouped := make(map[models.ObservationType][]*models.Observation)
-	for _, obs := range observations {
-		grouped[obs.Type] = append(grouped[obs.Type], obs)
-	}
-
-	selected := make([]*models.Observation, 0, len(observations))
-	seen := make(map[int64]struct{})
-	for obsType, items := range grouped {
-		lane := s.laneConfigForType(obsType)
-		filtered := make([]*models.Observation, 0, len(items))
-		for _, obs := range items {
-			score, ok := thresholdScores[obs.ID]
-			if !ok {
-				score = rankingScores[obs.ID]
-			}
-			if score < lane.MinScore {
-				continue
-			}
-			filtered = append(filtered, obs)
-		}
-		sort.Slice(filtered, func(i, j int) bool {
-			return rankingScores[filtered[i].ID] > rankingScores[filtered[j].ID]
-		})
-		if lane.TopK > 0 && len(filtered) > lane.TopK {
-			filtered = filtered[:lane.TopK]
-		}
-		for _, obs := range filtered {
-			if _, ok := seen[obs.ID]; ok {
-				continue
-			}
-			seen[obs.ID] = struct{}{}
-			selected = append(selected, obs)
-			if limit > 0 && len(selected) >= limit {
-				return selected
-			}
-		}
-	}
-	return selected
-}
-
 func withRetrievalRequest(ctx context.Context, agentID, cwd string, metadata *retrievalMetadata) context.Context {
 	return context.WithValue(ctx, retrievalContextKey{}, retrievalContextState{agentID: agentID, cwd: cwd, metadata: metadata})
 }
@@ -190,15 +117,6 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	const clusteringThreshold = 0.9
 	clusteredObservations := clusterObservations(freshObservations, clusteringThreshold)
 	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
-	laneThresholdScores := similarityScores
-	if len(baseSimilarityScores) > 0 {
-		laneThresholdScores = baseSimilarityScores
-	}
-	// Only apply type-lane filtering when we have numeric scores; an empty
-	// score-map (FTS-only mode) would eliminate every observation.
-	if s.typeLanesEnabled() && len(clusteredObservations) > 0 && len(laneThresholdScores) > 0 {
-		clusteredObservations = s.applyTypedLaneSelection(clusteredObservations, similarityScores, laneThresholdScores, limit)
-	}
 	// search.ApplyCompositeScoring / ApplyLaneWeights / ApplyDiversityPenalty /
 	// ApplySessionBoost all lived in internal/search which was dropped in v5 (US9).
 	// With no vector scores (similarityScores is always empty in v5 FTS-only mode)
@@ -253,13 +171,6 @@ func (s *Service) getProjectThreshold(ctx context.Context, project string) float
 // Query expansion (HyDE, multi-query) was removed in v5 (US9/US11).
 func (s *Service) expandQueries(_ context.Context, query string) ([]string, string) {
 	return []string{query}, ""
-}
-
-func (s *Service) fetchObservationsByID(ctx context.Context, ids []int64, orderBy string, limit int) ([]*models.Observation, error) {
-	if s.retrievalHooks != nil && s.retrievalHooks.getObservationsByIDs != nil {
-		return s.retrievalHooks.getObservationsByIDs(ctx, ids, orderBy, limit)
-	}
-	return nil, nil
 }
 
 func (s *Service) searchFallbackObservations(ctx context.Context, query string, scopeFilter retrievalScope, limit int) ([]*models.Observation, error) {

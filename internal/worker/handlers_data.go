@@ -3,7 +3,6 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"runtime"
 	"strings"
@@ -307,11 +306,6 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		response["rateLimiter"] = s.rateLimiter.Stats()
 	}
 
-	// Add circuit breaker metrics
-	if s.processor != nil {
-		response["circuitBreaker"] = s.processor.CircuitBreakerMetrics()
-	}
-
 	writeJSON(w, response)
 }
 
@@ -529,93 +523,6 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, _ *http.Request) {
 		"enabled": false,
 		"message": "Vector storage removed in v5 (content_chunks table dropped)",
 	})
-}
-
-const noHitRateAnalyticsDataMessage = "No hit rate analytics data available. Hit rate analytics is disabled in v5 (injection_log was dropped in US1)."
-
-type hitRateAnalyticsRow struct {
-	ID    int64  `gorm:"column:id"`
-	Title string `gorm:"column:title"`
-	Type  string `gorm:"column:type"`
-	Flag  string `gorm:"column:flag"`
-}
-
-func (s *Service) queryHitRateAnalyticsRows(ctx context.Context, project string, limit int) ([]hitRateAnalyticsRow, error) {
-	_ = ctx
-	_ = project
-	_ = limit
-	return nil, nil
-}
-
-func formatHitRateAnalyticsMarkdown(rows []hitRateAnalyticsRow) string {
-	if len(rows) == 0 {
-		return noHitRateAnalyticsDataMessage
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## Hit Rate Analytics (%d observations)\n\n", len(rows)))
-	noiseCount, starCount := 0, 0
-	sb.WriteString("### Noise Candidates (injected 10+ times, never cited)\n")
-	for _, row := range rows {
-		if row.Flag == "noise_candidate" {
-			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", row.ID, row.Title, row.Type))
-			noiseCount++
-		}
-	}
-	if noiseCount == 0 {
-		sb.WriteString("None found.\n")
-	}
-
-	sb.WriteString("\n### High Value (injected 5+ times, >50% citation rate)\n")
-	for _, row := range rows {
-		if row.Flag == "high_value" {
-			sb.WriteString(fmt.Sprintf("- [%d] %s (%s)\n", row.ID, row.Title, row.Type))
-			starCount++
-		}
-	}
-	if starCount == 0 {
-		sb.WriteString("None found.\n")
-	}
-	return sb.String()
-}
-
-func buildHitRateAnalyticsResponse(rows []hitRateAnalyticsRow) map[string]any {
-	observations := make([]map[string]any, 0, len(rows))
-	noiseCount := 0
-	valueCount := 0
-
-	for _, row := range rows {
-		if row.Flag == "noise_candidate" {
-			noiseCount++
-		}
-		if row.Flag == "high_value" {
-			valueCount++
-		}
-
-		observations = append(observations, map[string]any{
-			"id":    row.ID,
-			"title": row.Title,
-			"type":  row.Type,
-			"flag":  row.Flag,
-		})
-	}
-
-	return map[string]any{
-		"high_value":       valueCount,
-		"noise_candidates": noiseCount,
-		"observations":     observations,
-		"total":            len(observations),
-	}
-}
-
-func (s *Service) handleGetHitRateAnalytics(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.queryHitRateAnalyticsRows(r.Context(), r.URL.Query().Get("project"), 50)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, buildHitRateAnalyticsResponse(rows))
 }
 
 func (s *Service) handleGetSimilarityTelemetry(w http.ResponseWriter, r *http.Request) {

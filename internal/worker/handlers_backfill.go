@@ -12,11 +12,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
-	"github.com/thebtf/engram/internal/backfill"
-	"github.com/thebtf/engram/internal/backfill/extract"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
-	"github.com/thebtf/engram/pkg/llmclient"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -106,15 +103,6 @@ type BackfillSessionRequest struct {
 	Content string `json:"content"`
 }
 
-// BackfillSessionResponse is the response for POST /api/backfill/session.
-type BackfillSessionResponse struct {
-	Stored               int    `json:"stored"`
-	Skipped              int    `json:"skipped"`
-	Errors               int    `json:"errors"`
-	ObservationsExtracted int   `json:"observations_extracted"`
-	MetricsReport        string `json:"metrics_report,omitempty"`
-}
-
 // handleBackfillSession godoc
 // @Summary Backfill session with LLM extraction
 // @Description Accepts raw JSONL session content, runs server-side LLM extraction, and stores resulting observations with semantic deduplication.
@@ -164,7 +152,6 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		project = req.Project
 	}
 	if privacy.ContainsSecrets(req.Content) {
-		// Fire-and-forget vault storage (Constitution P3: Non-Blocking)
 		capturedContent := req.Content
 		capturedProject := project
 		go func() {
@@ -178,23 +165,6 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		sess.Exchanges[i].AssistantText = privacy.RedactSecrets(sess.Exchanges[i].AssistantText)
 	}
 
-	// Initialize LLM client from server env vars.
-	llmClient := llmclient.New(llmclient.DefaultConfig())
-	if !llmClient.IsConfigured() {
-		http.Error(w, "LLM not configured on server (set ENGRAM_LLM_URL + ENGRAM_LLM_API_KEY)", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Run extraction pipeline.
-	runner := backfill.NewRunner(llmClient, backfill.DefaultConfig())
-	result, _ := runner.ProcessSession(r.Context(), sess)
-
-	resp := BackfillSessionResponse{
-		ObservationsExtracted: len(result.Observations),
-		MetricsReport:         result.Metrics.Report(),
-	}
-
-	// Store session metadata still supported in v5; observation/session-summary persistence was removed.
 	sdkSessionID := fmt.Sprintf("backfill-%s-%s", req.RunID, req.SessionID)
 
 	if s.sessionStore != nil {
@@ -205,23 +175,14 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 		_ = sessionDBID
 	}
 
-	if len(result.Observations) > 0 {
-		resp.Skipped = len(result.Observations)
-	}
-
 	runInfo := s.backfillTracker.getOrCreate(req.RunID)
-	runInfo.Stored += resp.Stored
-	runInfo.Skipped += resp.Skipped
-	runInfo.Errors += resp.Errors
 	runInfo.Sessions++
 
 	writeJSON(w, map[string]any{
-		"stored":                resp.Stored,
-		"skipped":               resp.Skipped,
-		"errors":                resp.Errors,
-		"observations_extracted": resp.ObservationsExtracted,
-		"metrics_report":        resp.MetricsReport,
-		"deprecated":            "backfill observation/session-summary persistence removed in v5",
+		"stored":     0,
+		"skipped":    0,
+		"errors":     0,
+		"deprecated": "backfill observation/session-summary persistence removed in v5",
 	})
 }
 
@@ -286,100 +247,13 @@ func vaultStoreDetectedSecrets(ctx context.Context, s *Service, text, project st
 }
 
 // handleImportFeedback godoc
-// @Summary Import a feedback rule via LLM
-// @Description Accepts raw feedback_*.md content, processes it through the server-side LLM
-// to extract a structured TRIGGER→RULE→REASON observation, deduplicates, and stores as type=guidance.
+// @Summary Import feedback rule (removed)
+// @Description Endpoint removed in v5. LLM-based feedback import is no longer supported.
 // @Tags Import
-// @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param body body object true "Feedback content: {content: string, source_file: string}"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {string} string "bad request"
-// @Failure 503 {string} string "LLM not configured"
+// @Failure 410 {string} string "endpoint removed"
 // @Router /api/import/feedback [post]
-func (s *Service) handleImportFeedback(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Content    string `json:"content"`
-		SourceFile string `json:"source_file"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(req.Content) == "" {
-		http.Error(w, "content is required", http.StatusBadRequest)
-		return
-	}
-
-	// Initialize LLM client from server env vars.
-	llmClient := llmclient.New(llmclient.DefaultConfig())
-	if !llmClient.IsConfigured() {
-		http.Error(w, "LLM not configured on server (set ENGRAM_LLM_URL + ENGRAM_LLM_API_KEY)", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Call LLM with feedback import prompt.
-	callCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-	response, err := llmClient.Complete(callCtx, extract.FeedbackImportSystemPrompt, req.Content)
-	if err != nil {
-		log.Warn().Err(err).Str("source", req.SourceFile).Msg("feedback import: LLM call failed")
-		http.Error(w, "LLM extraction failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Constitution P9: RedactSecrets on LLM output before parsing
-	response = privacy.RedactSecrets(response)
-
-	// Parse single observation from LLM XML output.
-	obs := extract.ParseSingleObservation(response)
-	if obs == nil {
-		writeJSON(w, map[string]any{
-			"status": "skipped",
-			"reason": "LLM returned no parseable observation",
-		})
-		return
-	}
-
-	s.initMu.RLock()
-	behavioralRulesStore := s.behavioralRulesStore
-	s.initMu.RUnlock()
-
-	if behavioralRulesStore == nil {
-		http.Error(w, "behavioral rules store not ready", http.StatusServiceUnavailable)
-		return
-	}
-
-	ruleContent := strings.TrimSpace(obs.Narrative)
-	if ruleContent == "" {
-		ruleContent = strings.TrimSpace(obs.Title)
-	}
-	if ruleContent == "" {
-		writeJSON(w, map[string]any{
-			"status": "skipped",
-			"reason": "LLM returned empty behavioral rule content",
-		})
-		return
-	}
-
-	createdRule, storeErr := behavioralRulesStore.Create(r.Context(), &models.BehavioralRule{
-		Content:  ruleContent,
-		EditedBy: fmt.Sprintf("feedback-import:%s", req.SourceFile),
-		Priority: 80,
-	})
-	if storeErr != nil {
-		log.Error().Err(storeErr).Str("title", obs.Title).Msg("feedback import: failed to store rule")
-		http.Error(w, "failed to store behavioral rule: "+storeErr.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	log.Info().Int64("id", createdRule.ID).Str("title", obs.Title).Str("source", req.SourceFile).Msg("feedback import: stored rule")
-
-	writeJSON(w, map[string]any{
-		"status":      "imported",
-		"id":          createdRule.ID,
-		"title":       obs.Title,
-		"source_file": req.SourceFile,
-	})
+func (s *Service) handleImportFeedback(w http.ResponseWriter, _ *http.Request) {
+	http.Error(w, "endpoint removed in v5: LLM-based feedback import is no longer supported", http.StatusGone)
 }

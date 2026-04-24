@@ -4664,13 +4664,11 @@ const docTemplate = `{
         "internal_worker.BackfillSessionResponse": {
             "type": "object",
             "properties": {
-                "errors": {
-                    "type": "integer"
-                },
-                "metrics_report": {
+                "deprecated": {
+                    "description": "Explains that backfill persistence was removed in v5.",
                     "type": "string"
                 },
-                "observations_extracted": {
+                "errors": {
                     "type": "integer"
                 },
                 "skipped": {

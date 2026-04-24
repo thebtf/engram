@@ -8,136 +8,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	json "github.com/goccy/go-json"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/privacy"
-	"github.com/thebtf/engram/pkg/llmclient"
 	"github.com/thebtf/engram/pkg/models"
 )
-
-// CircuitBreaker implements a simple circuit breaker pattern for CLI calls.
-type CircuitBreaker struct {
-	failures     int64 // Current failure count
-	lastFailure  int64 // Unix timestamp of last failure
-	threshold    int64 // Number of failures before opening
-	resetTimeout int64 // Seconds to wait before trying again
-	state        int32 // 0=closed, 1=open, 2=half-open
-}
-
-const (
-	circuitClosed   int32 = 0
-	circuitOpen     int32 = 1
-	circuitHalfOpen int32 = 2
-)
-
-// NewCircuitBreaker creates a new circuit breaker.
-func NewCircuitBreaker(threshold int64, resetTimeout int64) *CircuitBreaker {
-	return &CircuitBreaker{
-		threshold:    threshold,
-		resetTimeout: resetTimeout,
-	}
-}
-
-// Allow checks if a request should be allowed through.
-func (cb *CircuitBreaker) Allow() bool {
-	state := atomic.LoadInt32(&cb.state)
-	if state == circuitClosed {
-		return true
-	}
-
-	if state == circuitOpen {
-		// Check if reset timeout has passed
-		lastFail := atomic.LoadInt64(&cb.lastFailure)
-		if time.Now().Unix()-lastFail > cb.resetTimeout {
-			// Transition to half-open
-			atomic.CompareAndSwapInt32(&cb.state, circuitOpen, circuitHalfOpen)
-			log.Info().Msg("Circuit breaker entering half-open state — testing with next request")
-			return true
-		}
-		return false
-	}
-
-	// Half-open: allow one request through
-	return true
-}
-
-// RecordSuccess records a successful call.
-func (cb *CircuitBreaker) RecordSuccess() {
-	prevState := atomic.LoadInt32(&cb.state)
-	atomic.StoreInt64(&cb.failures, 0)
-	atomic.StoreInt32(&cb.state, circuitClosed)
-	if prevState != circuitClosed {
-		log.Info().Msg("Circuit breaker recovered — LLM calls re-enabled")
-	}
-}
-
-// RecordFailure records a failed call.
-func (cb *CircuitBreaker) RecordFailure() {
-	failures := atomic.AddInt64(&cb.failures, 1)
-	atomic.StoreInt64(&cb.lastFailure, time.Now().Unix())
-
-	if failures >= cb.threshold {
-		atomic.StoreInt32(&cb.state, circuitOpen)
-		log.Warn().Int64("failures", failures).Msg("Circuit breaker opened - LLM calls temporarily disabled")
-	}
-}
-
-// State returns the current state as a string.
-func (cb *CircuitBreaker) State() string {
-	switch atomic.LoadInt32(&cb.state) {
-	case circuitOpen:
-		return "open"
-	case circuitHalfOpen:
-		return "half-open"
-	default:
-		return "closed"
-	}
-}
-
-// CircuitBreakerMetrics contains metrics about the circuit breaker state.
-type CircuitBreakerMetrics struct {
-	State             string `json:"state"`
-	Failures          int64  `json:"failures"`
-	Threshold         int64  `json:"threshold"`
-	ResetTimeoutSecs  int64  `json:"reset_timeout_secs"`
-	LastFailureUnix   int64  `json:"last_failure_unix,omitempty"`
-	SecondsUntilReset int64  `json:"seconds_until_reset,omitempty"`
-}
-
-// Metrics returns the current metrics of the circuit breaker.
-func (cb *CircuitBreaker) Metrics() CircuitBreakerMetrics {
-	failures := atomic.LoadInt64(&cb.failures)
-	lastFail := atomic.LoadInt64(&cb.lastFailure)
-	state := cb.State()
-
-	metrics := CircuitBreakerMetrics{
-		State:            state,
-		Failures:         failures,
-		Threshold:        cb.threshold,
-		ResetTimeoutSecs: cb.resetTimeout,
-	}
-
-	if lastFail > 0 {
-		metrics.LastFailureUnix = lastFail
-		if state == "open" {
-			remaining := cb.resetTimeout - (time.Now().Unix() - lastFail)
-			if remaining > 0 {
-				metrics.SecondsUntilReset = remaining
-			}
-		}
-	}
-
-	return metrics
-}
 
 // RequestDeduplicator tracks recent requests to prevent duplicates.
 type RequestDeduplicator struct {
@@ -213,19 +93,14 @@ type SyncSummaryFunc func(summary *models.SessionSummary)
 const MaxVectorSyncWorkers = 8
 
 // Processor handles SDK agent processing of observations and summaries.
-// Uses LLM API (OpenAI-compatible) as primary backend, with Claude CLI as optional fallback.
 // Field order optimized for memory alignment (fieldalignment).
 type Processor struct {
-	reasoningStore      *gorm.ReasoningTraceStore
-	llmClient           llmclient.LLMClient
 	broadcastFunc       BroadcastFunc
 	syncObservationFunc SyncObservationFunc
 	syncSummaryFunc     SyncSummaryFunc
-	circuitBreaker      *CircuitBreaker
 	deduplicator        *RequestDeduplicator
 	vectorSyncChan      chan *models.Observation
 	vectorSyncDone      chan struct{}
-	sem                 chan struct{}
 	model               string
 	vectorSyncWg        sync.WaitGroup
 }
@@ -238,11 +113,6 @@ func (p *Processor) SetBroadcastFunc(fn BroadcastFunc) {
 // SetSyncObservationFunc sets the callback for syncing observations to vector DB.
 func (p *Processor) SetSyncObservationFunc(fn SyncObservationFunc) {
 	p.syncObservationFunc = fn
-}
-
-// SetReasoningStore sets the reasoning trace store for System 2 memory extraction.
-func (p *Processor) SetReasoningStore(store *gorm.ReasoningTraceStore) {
-	p.reasoningStore = store
 }
 
 // SetSyncSummaryFunc sets the callback for syncing summaries to vector DB.
@@ -275,55 +145,15 @@ func (p *Processor) enqueueObservationSync(obs *models.Observation) {
 	go p.syncObservationFunc(obs)
 }
 
-// DefaultConcurrentLLMCalls is the default number of concurrent LLM calls.
-// Override with ENGRAM_LLM_CONCURRENCY env var.
-const DefaultConcurrentLLMCalls = 4
-
 // NewProcessor creates a new SDK processor.
-// It requires at least one LLM backend: either an OpenAI-compatible API (ENGRAM_LLM_URL)
-// or a local Claude CLI binary. If neither is available, it returns an error.
-func NewProcessor() (*Processor, error) {
+func NewProcessor() *Processor {
 	cfg := config.Get()
-
-	// Initialize LLM client (OpenAI-compatible API — works in Docker)
-	llmCfg := llmclient.DefaultConfig()
-	var llmClt llmclient.LLMClient
-	openaiClient := llmclient.New(llmCfg)
-	if openaiClient.IsConfigured() {
-		llmClt = openaiClient
-		log.Info().Str("url", llmCfg.BaseURL).Str("model", llmCfg.Model).Msg("SDK processor using LLM API")
-	}
-
-	log.Info().
-		Bool("llm_configured", llmClt != nil).
-		Str("llm_url", llmCfg.BaseURL).
-		Str("llm_model", llmCfg.Model).
-		Msg("SDK processor backend summary")
-
-	// Require LLM backend
-	if llmClt == nil {
-		return nil, fmt.Errorf("no LLM backend available: set ENGRAM_LLM_URL for API access")
-	}
-
-	// Configurable concurrency
-	concurrency := DefaultConcurrentLLMCalls
-	if v := os.Getenv("ENGRAM_LLM_CONCURRENCY"); v != "" {
-		if n, err := fmt.Sscanf(v, "%d", &concurrency); n == 1 && err == nil && concurrency > 0 {
-			// valid
-		} else {
-			concurrency = DefaultConcurrentLLMCalls
-		}
-	}
-
 	return &Processor{
-		model:            cfg.Model,
-		llmClient:        llmClt,
-		sem:              make(chan struct{}, concurrency),
-		circuitBreaker:   NewCircuitBreaker(5, 60),                               // Open after 5 failures, reset after 60s
-		deduplicator:     NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
-		vectorSyncChan:   make(chan *models.Observation, MaxVectorSyncWorkers*2), // Buffered channel
-		vectorSyncDone:   make(chan struct{}),
-	}, nil
+		model:          cfg.Model,
+		deduplicator:   NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
+		vectorSyncChan: make(chan *models.Observation, MaxVectorSyncWorkers*2), // Buffered channel
+		vectorSyncDone: make(chan struct{}),
+	}
 }
 
 // StartVectorSyncWorkers starts the bounded worker pool for vector sync operations.
@@ -368,68 +198,9 @@ func (p *Processor) vectorSyncWorker() {
 	}
 }
 
-// CircuitBreakerMetrics returns detailed metrics about the circuit breaker.
-func (p *Processor) CircuitBreakerMetrics() CircuitBreakerMetrics {
-	return p.circuitBreaker.Metrics()
-}
-
-// IsAvailable checks if an LLM backend (API or CLI) is available for processing.
+// IsAvailable always returns true — LLM backend removed in v5.
 func (p *Processor) IsAvailable() bool {
-	return p.llmClient != nil
-}
-
-const writeMergeSimilarityThreshold = 0.75
-
-func unionStrings(parts ...[]string) []string {
-	seen := make(map[string]struct{})
-	merged := make([]string, 0)
-	for _, part := range parts {
-		for _, item := range part {
-			item = strings.TrimSpace(item)
-			if item == "" {
-				continue
-			}
-			if _, ok := seen[item]; ok {
-				continue
-			}
-			seen[item] = struct{}{}
-			merged = append(merged, item)
-		}
-	}
-	return merged
-}
-
-func mergeNarrative(existing, incoming string) string {
-	existing = strings.TrimSpace(existing)
-	incoming = strings.TrimSpace(incoming)
-	switch {
-	case existing == "":
-		return incoming
-	case incoming == "":
-		return existing
-	case existing == incoming:
-		return existing
-	case strings.Contains(existing, incoming):
-		return existing
-	case strings.Contains(incoming, existing):
-		return incoming
-	default:
-		return existing + "\n\n" + incoming
-	}
-}
-
-func mergeFileMtimes(existing models.JSONInt64Map, incoming map[string]int64) map[string]int64 {
-	if len(existing) == 0 && len(incoming) == 0 {
-		return nil
-	}
-	merged := make(map[string]int64, len(existing)+len(incoming))
-	for path, mtime := range existing {
-		merged[path] = mtime
-	}
-	for path, mtime := range incoming {
-		merged[path] = mtime
-	}
-	return merged
+	return true
 }
 
 // ProcessObservation no longer persists observations in v5/PR-B.
@@ -463,72 +234,6 @@ func (p *Processor) ProcessObservation(_ context.Context, sdkSessionID, project 
 	return nil
 }
 
-// extractAndStoreReasoning extracts a reasoning trace from LLM output and
-// stores it if quality is sufficient. Runs asynchronously — errors are logged,
-// never propagated to the caller.
-func (p *Processor) extractAndStoreReasoning(ctx context.Context, sdkSessionID, project, response string) {
-	traceJSON, err := p.callLLM(ctx, reasoningExtractionPrompt+response)
-	if err != nil {
-		log.Debug().Err(err).Msg("Reasoning extraction LLM call failed")
-		return
-	}
-
-	var trace ReasoningTrace
-	if err := json.Unmarshal([]byte(traceJSON), &trace); err != nil || len(trace.Steps) == 0 {
-		log.Debug().Msg("No reasoning steps extracted")
-		return
-	}
-
-	// Evaluate quality via LLM
-	qualityStr, err := p.callLLM(ctx, reasoningQualityPrompt+traceJSON)
-	if err == nil {
-		qualityStr = strings.TrimSpace(qualityStr)
-		if q, parseErr := strconv.ParseFloat(qualityStr, 64); parseErr == nil {
-			trace.QualityScore = q
-		}
-	}
-
-	// Only persist traces with quality >= 0.5
-	if trace.QualityScore < 0.5 {
-		log.Debug().
-			Float64("quality", trace.QualityScore).
-			Int("steps", len(trace.Steps)).
-			Msg("Reasoning trace below quality threshold, discarding")
-		return
-	}
-
-	// Marshal steps and task_context back to JSON strings for DB storage
-	stepsJSON, err := json.Marshal(trace.Steps)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to marshal reasoning steps")
-		return
-	}
-	taskCtxJSON, err := json.Marshal(trace.TaskContext)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to marshal reasoning task context")
-		return
-	}
-
-	dbTrace := &gorm.ReasoningTrace{
-		SDKSessionID: sdkSessionID,
-		Project:      project,
-		Steps:        string(stepsJSON),
-		QualityScore: trace.QualityScore,
-		TaskContext:  string(taskCtxJSON),
-	}
-
-	id, err := p.reasoningStore.Create(ctx, dbTrace)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to store reasoning trace")
-		return
-	}
-
-	log.Info().
-		Int64("id", id).
-		Float64("quality", trace.QualityScore).
-		Int("steps", len(trace.Steps)).
-		Msg("Reasoning trace extracted and stored")
-}
 
 // ProcessSummary processes a session summary request.
 func (p *Processor) ProcessSummary(_ context.Context, sessionDBID int64, sdkSessionID, project, userPrompt, lastUserMsg, lastAssistantMsg string) error {
@@ -543,76 +248,6 @@ func (p *Processor) ProcessSummary(_ context.Context, sessionDBID int64, sdkSess
 	return nil
 }
 
-// MaxPromptSize is the maximum size of a prompt that can be passed to the LLM.
-// This prevents resource exhaustion from extremely large prompts.
-const MaxPromptSize = 100 * 1024 // 100KB
-
-// sanitizePrompt removes null bytes and control characters from a prompt.
-// Keeps newlines, tabs, and carriage returns as they're valid in prompts.
-func sanitizePrompt(s string) string {
-	return strings.Map(func(r rune) rune {
-		// Keep printable ASCII, extended Unicode, and common whitespace
-		if r >= 32 || r == '\n' || r == '\t' || r == '\r' {
-			return r
-		}
-		// Remove null bytes and other control characters
-		return -1
-	}, s)
-}
-
-// callLLM calls the LLM backend with the given prompt.
-// Tries LLM API first (works in Docker), falls back to Claude CLI if available.
-func (p *Processor) callLLM(ctx context.Context, prompt string) (string, error) {
-	if len(prompt) > MaxPromptSize {
-		return "", fmt.Errorf("prompt exceeds maximum size of %d bytes", MaxPromptSize)
-	}
-	prompt = sanitizePrompt(prompt)
-
-	// Try LLM API first (OpenAI-compatible — works in Docker without Claude CLI)
-	// Retry with backoff for transient errors (EOF, connection reset, 429, 503)
-	var lastErr error
-	if p.llmClient != nil {
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				backoff := time.Duration(attempt*2) * time.Second
-				time.Sleep(backoff)
-			}
-			llmCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-			response, err := p.llmClient.Complete(llmCtx, systemPrompt, prompt)
-			cancel()
-			if err == nil {
-				// Constitution P9: RedactSecrets on LLM output before returning
-				return privacy.RedactSecrets(response), nil
-			}
-			lastErr = err
-			errStr := err.Error()
-			// Retry only on transient errors
-			if strings.Contains(errStr, "EOF") ||
-				strings.Contains(errStr, "connection reset") ||
-				strings.Contains(errStr, "connection refused") ||
-				strings.Contains(errStr, "no such host") ||
-				strings.Contains(errStr, "429") ||
-				strings.Contains(errStr, "500") ||
-				strings.Contains(errStr, "502") ||
-				strings.Contains(errStr, "503") ||
-				strings.Contains(errStr, "504") {
-				log.Warn().Err(err).Int("attempt", attempt+1).Msg("LLM API transient error, retrying")
-				continue
-			}
-			// Non-transient error — don't retry
-			log.Warn().Err(err).Msg("LLM API call failed, trying CLI fallback")
-			break
-		}
-		if lastErr != nil {
-			log.Warn().Err(lastErr).Msg("LLM API call failed after retries")
-		}
-	}
-
-	if lastErr != nil {
-		return "", fmt.Errorf("LLM call failed after retries: %w", lastErr)
-	}
-	return "", fmt.Errorf("no LLM backend available (llmClient=%v)", p.llmClient != nil)
-}
 
 // shouldSkipTool returns true for tools that aren't worth processing.
 func shouldSkipTool(toolName string) bool {
@@ -884,87 +519,6 @@ func GetFileContent(path, cwd string) (string, bool) {
 	return string(content), true
 }
 
-// VerifyObservation checks if an observation is still valid given the current file contents.
-// Returns true if the observation is still accurate, false if it should be deleted.
-func (p *Processor) VerifyObservation(ctx context.Context, obs *models.Observation, cwd string) bool {
-	// Build file content context
-	var fileContents []string
-	var paths []string
-
-	// Combine files_read and files_modified
-	for _, path := range obs.FilesRead {
-		paths = append(paths, path)
-	}
-	for _, path := range obs.FilesModified {
-		paths = append(paths, path)
-	}
-
-	// Get current content of tracked files
-	for _, path := range paths {
-		if content, ok := GetFileContent(path, cwd); ok {
-			fileContents = append(fileContents, fmt.Sprintf("=== %s ===\n%s", path, content))
-		}
-	}
-
-	if len(fileContents) == 0 {
-		// No files available to verify against - keep the observation
-		return true
-	}
-
-	// Build verification prompt
-	prompt := fmt.Sprintf(`You are verifying if a previously recorded observation is still accurate.
-
-OBSERVATION:
-- Type: %s
-- Title: %s
-- Subtitle: %s
-- Narrative: %s
-- Facts: %v
-
-CURRENT FILE CONTENTS:
-%s
-
-TASK: Check if the observation is still accurate given the current file contents.
-Reply with ONLY one of:
-- VALID - if the observation is still accurate
-- INVALID - if the observation is no longer accurate (the code/behavior changed)
-- UNCERTAIN - if you can't determine validity (files might be incomplete)
-
-Your response:`,
-		obs.Type,
-		obs.Title.String,
-		obs.Subtitle.String,
-		obs.Narrative.String,
-		obs.Facts,
-		strings.Join(fileContents, "\n\n"),
-	)
-
-	// Call LLM backend for quick verification
-	response, err := p.callLLM(ctx, prompt)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to verify observation, keeping it")
-		return true // On error, keep the observation
-	}
-
-	response = strings.TrimSpace(strings.ToUpper(response))
-
-	// Parse response
-	if strings.Contains(response, "INVALID") {
-		log.Info().
-			Int64("id", obs.ID).
-			Str("title", obs.Title.String).
-			Msg("Observation verified as INVALID - will delete")
-		return false
-	}
-
-	// VALID or UNCERTAIN - keep the observation
-	log.Debug().
-		Int64("id", obs.ID).
-		Str("title", obs.Title.String).
-		Str("result", response).
-		Msg("Observation verified")
-	return true
-}
 
 // isSelfReferentialSummary checks if a summary describes the memory agent itself
 // rather than actual user work. These summaries should be filtered out.
@@ -1108,60 +662,3 @@ func hasMeaningfulContent(assistantMsg string) bool {
 	return matchCount >= 2
 }
 
-// systemPrompt is the extraction system prompt for the live SDK processor.
-// It uses the same category taxonomy as the backfill extractor, adapted for
-// single tool-execution analysis (one exchange rather than multi-exchange chunks).
-const systemPrompt = `You are a coding session analyst. Analyze this single tool execution and extract ONLY observations matching these categories. If none match, output <no_observations_found/>.
-
-CATEGORY 1 — DECISION: Agent or user explicitly chose between alternatives.
-CATEGORY 2 — CORRECTION: User told the agent it was wrong.
-CATEGORY 3 — DEBUGGING ARC: Error appeared, was investigated, and resolved.
-CATEGORY 4 — GOTCHA: Something behaved unexpectedly.
-CATEGORY 5 — PATTERN: A reusable approach that worked well.
-CATEGORY 6 — USER_BEHAVIOR: User corrected agent's approach or revealed a workflow preference. Extract as TRIGGER/RULE/REASON.
-
-DO NOT EXTRACT: File reads without decisions, routine commits, tool invocations without meaningful output, status checks, version bumps, generic descriptions, task checkbox toggles (changing [ ] to [x] or [x] to [ ] in tasks.md, TODO.md, or checklists — these are routine progress tracking, not decisions).
-
-RULES:
-- Maximum 1 observation per tool execution.
-- Maximum 150 words per narrative.
-- Do NOT include any text before or after the XML. Output ONLY the XML.
-
-EXAMPLES:
-
-Example 1 (user_behavior):
-"USER: you have tavily for this, FYI"
-<observation><category>user_behavior</category><type>decision</type><title>Rule: Use Tavily for doc research</title><narrative>TRIGGER: When studying external library docs. RULE: Use Tavily not manual WebFetch. REASON: Manual wastes 10+ calls.</narrative><concepts><concept>workflow</concept></concepts></observation>
-
-Example 2 (no_observations_found):
-"ASSISTANT: [tool: Read] Reading config.go."
-<no_observations_found/>
-
-OUTPUT FORMAT:
-<observation>
-<category>decision|correction|debugging|gotcha|pattern|user_behavior</category>
-<type>decision|bugfix|feature|refactor|discovery|change</type>
-<title>Short descriptive title (max 60 chars)</title>
-<subtitle>One-line summary</subtitle>
-<narrative>Context → What happened → Why it matters. Max 150 words.</narrative>
-<facts>
-<fact>Specific fact 1</fact>
-</facts>
-<concepts>
-<concept>tag1</concept>
-</concepts>
-<files_read>
-<file>/path/to/file</file>
-</files_read>
-<files_modified>
-<file>/path/to/file</file>
-</files_modified>
-</observation>
-
-Valid concepts (use ONLY these values in <concept> tags):
-how-it-works, why-it-exists, what-changed, problem-solution, gotcha, pattern,
-trade-off, best-practice, anti-pattern, architecture, security, performance,
-testing, debugging, workflow, tooling, refactoring, api, database,
-configuration, error-handling
-
-Do NOT invent new concept names. If no concept fits, omit the <concepts> section.`
