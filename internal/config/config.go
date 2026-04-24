@@ -400,6 +400,12 @@ func Reload() (*Config, []string, error) {
 		if old.WorkerToken != newCfg.WorkerToken {
 			changed = append(changed, "worker_token (requires restart)")
 		}
+		if old.AuthSkipLocal != newCfg.AuthSkipLocal {
+			changed = append(changed, "auth_skip_local")
+		}
+		if old.AuthTrustedProxy != newCfg.AuthTrustedProxy {
+			changed = append(changed, "auth_trusted_proxy")
+		}
 	}
 
 	return newCfg, changed, nil
@@ -429,8 +435,12 @@ func GetWorkerHost() string {
 }
 
 // GetWorkerToken returns the admin authentication token from ENGRAM_AUTH_ADMIN_TOKEN.
+// Falls back to the value loaded from the config file if the env var is not set.
 func GetWorkerToken() string {
-	return strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN"))
+	if token := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); token != "" {
+		return token
+	}
+	return Get().WorkerToken
 }
 
 // GetDatabaseDSN returns the PostgreSQL DSN.
