@@ -320,19 +320,10 @@ export async function fetchPatternInsight(id: number, signal?: AbortSignal): Pro
   return fetchWithRetry<PatternInsight>(`${API_BASE}/patterns/${id}/insight`, { signal })
 }
 
-export interface PatternObservationsResponse {
-  observations: unknown[]
-  total: number
-}
-
 export interface PatternInsightResult {
   summary: string
-  source_observations: unknown[]
+  source_observations: Array<{ id: number; title: string; type: string }>
   cached: boolean
-}
-
-export async function fetchPatternObservations(id: number, signal?: AbortSignal): Promise<PatternObservationsResponse> {
-  return fetchWithRetry<PatternObservationsResponse>(`${API_BASE}/patterns/${id}/observations`, { signal })
 }
 
 export async function generatePatternInsight(id: number, signal?: AbortSignal): Promise<PatternInsightResult> {
