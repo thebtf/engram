@@ -16,7 +16,7 @@ in a project that is NOT tracked by engram, use its native issue tracker
 
 To check if a project is engram-tracked:
 ```
-curl -s -H "Authorization: Bearer $ENGRAM_API_TOKEN" \
+curl -s -H "Authorization: Bearer $ENGRAM_AUTH_ADMIN_TOKEN" \
   http://$ENGRAM_HOST/api/issues/tracked-projects
 ```
 Returns `{"projects": [...], "count": N}`. A project is tracked if it has

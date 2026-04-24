@@ -25,37 +25,6 @@ function formatFactsLine(items) {
   return out;
 }
 
-function buildInjectURL(project, cwd, sessionID, legacyProject, gitRemote, relativePath, filesBeingEdited) {
-  let injectURL = `/api/context/inject?project=${encodeURIComponent(project)}&cwd=${encodeURIComponent(cwd)}`;
-  if (sessionID) {
-    injectURL += `&session_id=${encodeURIComponent(sessionID)}`;
-  }
-  if (legacyProject && legacyProject !== project) {
-    injectURL += `&legacy_project=${encodeURIComponent(legacyProject)}`;
-    injectURL += `&git_remote=${encodeURIComponent(gitRemote)}`;
-    injectURL += `&relative_path=${encodeURIComponent(relativePath)}`;
-  }
-  if (Array.isArray(filesBeingEdited)) {
-    for (const filePath of filesBeingEdited) {
-      if (typeof filePath === 'string' && filePath !== '') {
-        injectURL += `&files_being_edited=${encodeURIComponent(filePath)}`;
-      }
-    }
-  }
-  return injectURL;
-}
-
-function formatProjectBriefingBlock(projectBriefing) {
-  const briefing = escapeXmlTags(getString(projectBriefing)).trim();
-  if (briefing === '') {
-    return '';
-  }
-  return '<project-briefing>\n'
-    + '# Project Briefing\n'
-    + briefing
-    + '\n</project-briefing>\n';
-}
-
 function formatBehaviorRulesBlock(rules) {
   if (!Array.isArray(rules) || rules.length === 0) {
     return '';
@@ -167,7 +136,7 @@ function buildCachedSessionStartPayload(overrides = {}) {
 
 async function handleSessionStart(ctx, input) {
   if (!process.env.ENGRAM_URL) {
-    return '<engram-setup>\nEngram plugin is installed but not configured.\nSet environment variables to connect to your Engram server:\n  export ENGRAM_URL=http://your-server:37777/mcp\n  export ENGRAM_API_TOKEN=your-token\nThen restart Claude Code.\n</engram-setup>';
+    return '<engram-setup>\nEngram plugin is installed but not configured.\nSet environment variables to connect to your Engram server:\n  export ENGRAM_URL=http://your-server:37777/mcp\n  export ENGRAM_AUTH_ADMIN_TOKEN=your-token\nThen restart Claude Code.\n</engram-setup>';
   }
 
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
@@ -247,8 +216,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  buildInjectURL,
   buildCachedSessionStartPayload,
-  formatProjectBriefingBlock,
   handleSessionStart,
 };

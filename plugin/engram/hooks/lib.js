@@ -87,7 +87,7 @@ function ProjectIDWithName(cwd) {
 
 function buildRequestHeaders(includeJsonBody = false) {
   const headers = {};
-  const token = process.env.ENGRAM_API_TOKEN;
+  const token = process.env.ENGRAM_AUTH_ADMIN_TOKEN;
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -311,76 +311,6 @@ async function RunStatuslineHook(handler, offlineRenderer) {
   }
 }
 
-/**
- * WorkstationID returns a deterministic 8-char hex ID from hostname + machine_id.
- * Matches the server-side sessions.WorkstationID() logic:
- *   - On Linux: reads /etc/machine-id; falls back to hostname if unavailable.
- *   - On other platforms: uses hostname as both components (machine_id = hostname).
- */
-function WorkstationID() {
-  const os = require('os');
-  const fs = require('fs');
-  const hostname = os.hostname();
-
-  let machineID = '';
-  if (os.platform() === 'linux') {
-    try {
-      machineID = fs.readFileSync('/etc/machine-id', 'utf8').trim();
-    } catch {
-      // /etc/machine-id not available; fall back to hostname.
-    }
-  }
-  if (!machineID) {
-    machineID = hostname;
-  }
-
-  const input = hostname + machineID;
-  const hash = crypto.createHash('sha256').update(input).digest('hex');
-  return hash.slice(0, 8);
-}
-
-/**
- * requestUpload sends raw content (text/ndjson) to the server.
- * Optionally gzip-compresses bodies larger than 500 KB.
- */
-async function requestUpload(endpoint, content, timeoutMs = 15000) {
-  const zlib = require('zlib');
-  const url = resolveRequestURL(endpoint);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const headers = buildRequestHeaders(false);
-    headers['Content-Type'] = 'application/x-ndjson';
-
-    let body = content;
-    if (typeof content === 'string' && content.length > 500 * 1024) {
-      body = zlib.gzipSync(Buffer.from(content, 'utf8'));
-      headers['Content-Encoding'] = 'gzip';
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body,
-      signal: controller.signal,
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}: ${text}`);
-    }
-
-    if (!text) {
-      return {};
-    }
-
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // ──────────────────────────────────────────────────────────────
 // Session signal store — persists per-session counters to a temp
 // file so post-tool-use.js and stop.js can share state across
@@ -455,83 +385,6 @@ function appendSessionFile(sessionID, filePath) {
   }
 }
 
-/**
- * Read accumulated signal counters and file history for the given session.
- * Returns an empty object when no signals have been recorded.
- * @param {string} sessionID - Claude session ID
- * @returns {Object}
- */
-function getSessionSignals(sessionID) {
-  if (!sessionID) return {};
-  try {
-    const p = _signalPath(sessionID);
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Read file history for the given session.
- * Returns an empty array when no files have been recorded.
- * @param {string} sessionID - Claude session ID
- * @returns {string[]}
- */
-function getSessionFiles(sessionID) {
-  if (!sessionID) return [];
-  try {
-    const current = getSessionSignals(sessionID);
-    const files = Array.isArray(current.files) ? current.files : [];
-    return files.filter((entry) => typeof entry === 'string');
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Delete the signal file for the given session (call after stop).
- * @param {string} sessionID - Claude session ID
- */
-function clearSessionSignals(sessionID) {
-  if (!sessionID) return;
-  try {
-    fs.unlinkSync(_signalPath(sessionID));
-  } catch {
-    // File may not exist — ignore
-  }
-}
-
-// --- Diff-scope auto-tagging (gstack-insights FR-7) ---
-
-const SCOPE_PATTERNS = [
-  { pattern: /\.(tsx|jsx|vue|svelte|css|scss|less)$/i, scope: 'scope:frontend' },
-  { pattern: /^(internal|cmd|pkg)\//i, scope: 'scope:backend' },
-  { pattern: /(prompt|generation)/i, scope: 'scope:prompts' },
-  { pattern: /(_test\.go|\.test\.[jt]sx?|_test\.py)$/i, scope: 'scope:tests' },
-  { pattern: /(\.md$|^docs\/)/i, scope: 'scope:docs' },
-  { pattern: /\.(yaml|yml|toml)$|\.json$/i, scope: 'scope:config' },
-  { pattern: /(migration|migrate)/i, scope: 'scope:migrations' },
-  { pattern: /(api|handler|route)/i, scope: 'scope:api' },
-  { pattern: /(auth|session|jwt|oauth)/i, scope: 'scope:auth' },
-];
-
-/**
- * Analyze file paths and return matching scope tags.
- * @param {string[]} filePaths - Array of file paths
- * @returns {string[]} Unique scope tags
- */
-function diffScope(filePaths) {
-  if (!filePaths || !Array.isArray(filePaths)) return [];
-  const scopes = new Set();
-  for (const fp of filePaths) {
-    if (!fp) continue;
-    for (const { pattern, scope } of SCOPE_PATTERNS) {
-      if (pattern.test(fp)) scopes.add(scope);
-    }
-  }
-  return [...scopes];
-}
-
 // --- Crash-safe session markers (gstack-insights FR-8) ---
 
 const os = require('os');
@@ -548,19 +401,6 @@ function createPendingMarker(sessionId) {
     fs.writeFileSync(markerPath, String(Date.now()), { mode: 0o600 });
   } catch {
     // Non-blocking — marker failure is not critical
-  }
-}
-
-/**
- * Delete the pending session marker.
- * @param {string} sessionId
- */
-function deletePendingMarker(sessionId) {
-  if (!sessionId) return;
-  try {
-    fs.unlinkSync(path.join(os.tmpdir(), MARKER_PREFIX + sessionId));
-  } catch {
-    // File may not exist
   }
 }
 
@@ -664,39 +504,6 @@ function formatIssuesBlock(issues, project) {
 }
 
 /**
- * Format resolved issues into a <resolved-issues> block for source agent notification.
- * @param {Array} issues - Array of resolved issue objects created by this project
- * @param {string} project - Source project slug (the creator)
- * @returns {string} Formatted XML block, or empty string if no issues
- */
-function formatResolvedIssuesBlock(issues, project) {
-  if (!issues || !Array.isArray(issues) || issues.length === 0) return '';
-
-  let block = `<resolved-issues from-you count="${issues.length}" project="${project}" action-required="true">\n`;
-  block += `ACTION REQUIRED: ${issues.length} issue(s) you filed were RESOLVED by target agents. You must verify.\n`;
-  block += `Run /engram:issue for the full workflow, or at minimum for each issue:\n`;
-  block += `  1. issues(action="get", id=N) — read the resolution comment and understand what the other project claims to have fixed or added\n`;
-  block += `  2. Treat this as YOUR follow-up inbox for cross-project dialogue: inspect status, read comments/reports, test, verify, and judge result quality\n`;
-  block += `  3. If it works and you're satisfied: issues(action="close", id=N, project="${project}")\n`;
-  block += `  4. If it is incomplete, wrong, misunderstood, or unsatisfactory: issues(action="reopen", id=N, project="${project}", body="<concrete evidence>")\n`;
-  block += `  5. If more discussion is needed before reopen/close: comment with precise feedback and what still needs verification\n`;
-  block += `Leaving these unverified means false-positive 'fixed' claims stay in the system.\n\n`;
-
-  for (const issue of issues) {
-    const target = issue.target_project || 'unknown';
-    const resolvedAgo = issue.resolved_at ? _timeAgo(new Date(issue.resolved_at)) : 'recently';
-    block += `#${issue.id} [RESOLVED by ${target}] ${issue.title} (${resolvedAgo})\n`;
-
-    // Show latest comment as resolution summary
-    if (issue.comment_count > 0 && issue.updated_at) {
-      block += `  └─ ${issue.comment_count} comment(s), last updated ${_timeAgo(new Date(issue.updated_at))}\n`;
-    }
-  }
-  block += '</resolved-issues>';
-  return block;
-}
-
-/**
  * Simple time-ago formatter.
  * @param {Date} date
  * @returns {string}
@@ -720,22 +527,14 @@ module.exports = {
   writeJSONFile,
   ProjectIDWithName,
   LegacyProjectID,
-  WorkstationID,
   requestGet,
   requestPost,
-  requestUpload,
   RunHook,
   RunStatuslineHook,
   writeResponse,
   incrementSessionSignals,
   appendSessionFile,
-  getSessionSignals,
-  getSessionFiles,
-  clearSessionSignals,
-  diffScope,
   createPendingMarker,
-  deletePendingMarker,
   getStaleMarkers,
   formatIssuesBlock,
-  formatResolvedIssuesBlock,
 };

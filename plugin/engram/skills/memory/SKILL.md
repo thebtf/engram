@@ -293,7 +293,7 @@ For the SOURCE project, `resolved` issues are a follow-up inbox — you must rea
 
 | Mistake | Fix |
 |---------|-----|
-| Checking ENGRAM_URL / ENGRAM_API_TOKEN env vars | Do NOT check env vars. Call `check_system_health()` — if it works, Engram is connected regardless of config method |
+| Checking ENGRAM_URL / ENGRAM_AUTH_ADMIN_TOKEN env vars | Do NOT check env vars. Call `check_system_health()` — if it works, Engram is connected regardless of config method |
 | Not using `store_memory` for important insights | Use `store_memory` for decisions, patterns, and preferences you want to persist. Hooks capture automatically, but explicit memories are higher quality |
 | Ignoring injected context | Read `<engram-context>` (session start) and `<relevant-memory>` (per prompt) blocks — they contain prior knowledge |
 | Not searching before re-exploring code | `search` first — someone (maybe past you) already documented it |
