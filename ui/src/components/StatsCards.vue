@@ -5,20 +5,12 @@ import { computed } from 'vue'
 
 const props = defineProps<{
   stats: Stats | null
-  observationCount: number
 }>()
 
 const uptime = computed(() => {
   if (!props.stats?.uptime) return '-'
   return formatUptime(props.stats.uptime)
 })
-
-// Use the total count from the stats API when available (reflects actual DB total,
-// not the page size fetched by the timeline). Fall back to the timeline prop when
-// the stats endpoint hasn't returned yet.
-const displayObservationCount = computed(() =>
-  props.stats?.observationCount ?? props.observationCount
-)
 
 const status = computed(() => {
   if (!props.stats) return 'Loading'
@@ -49,7 +41,7 @@ const statusColor = computed(() => {
       </div>
     </div>
 
-    <!-- Active Sessions -->
+    <!-- Sessions Today -->
     <div class="glass rounded-xl p-4 border border-white/10">
       <div class="flex items-center justify-between">
         <div>
@@ -62,15 +54,15 @@ const statusColor = computed(() => {
       </div>
     </div>
 
-    <!-- Observations -->
+    <!-- Connected Clients -->
     <div class="glass rounded-xl p-4 border border-white/10">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-xs text-slate-400 uppercase tracking-wide">Observations</p>
-          <p class="text-2xl font-bold text-purple-400">{{ displayObservationCount }}</p>
+          <p class="text-xs text-slate-400 uppercase tracking-wide">Connected</p>
+          <p class="text-2xl font-bold text-purple-400">{{ stats?.connectedClients ?? 0 }}</p>
         </div>
         <div class="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-          <i class="fas fa-database text-purple-400" />
+          <i class="fas fa-plug text-purple-400" />
         </div>
       </div>
     </div>

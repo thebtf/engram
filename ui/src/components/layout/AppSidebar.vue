@@ -139,13 +139,9 @@ async function handleLogout() {
         </div>
       </div>
 
-      <!-- Memory Contents -->
+      <!-- Session Stats -->
       <div class="space-y-1">
-        <div class="text-[10px] text-slate-500 uppercase tracking-wider font-medium">Memory</div>
-        <div class="flex items-center justify-between text-xs">
-          <span class="text-slate-400">Observations</span>
-          <span class="text-white font-medium">{{ stats?.observationCount ?? '—' }}</span>
-        </div>
+        <div class="text-[10px] text-slate-500 uppercase tracking-wider font-medium">Activity</div>
         <div class="flex items-center justify-between text-xs">
           <span class="text-slate-400">Sessions Today</span>
           <span class="text-white font-medium">{{ stats?.sessionsToday ?? 0 }}</span>
