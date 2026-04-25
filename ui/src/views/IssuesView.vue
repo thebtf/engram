@@ -253,16 +253,16 @@ const issueTypes = [
 
     <!-- Issue table -->
     <div v-else class="rounded-md border">
-      <Table>
+      <Table class="table-auto">
         <TableHeader>
           <TableRow>
-            <TableHead class="w-16">#</TableHead>
-            <TableHead class="w-24">Priority</TableHead>
-            <TableHead class="w-28">Type</TableHead>
-            <TableHead>Title</TableHead>
-            <TableHead class="w-40">Project</TableHead>
-            <TableHead class="w-32">Created</TableHead>
-            <TableHead class="w-20">Comments</TableHead>
+            <TableHead class="w-12">#</TableHead>
+            <TableHead class="w-20">Priority</TableHead>
+            <TableHead class="w-24">Type</TableHead>
+            <TableHead class="min-w-[300px]">Title</TableHead>
+            <TableHead class="w-36">Project</TableHead>
+            <TableHead class="w-24">Created</TableHead>
+            <TableHead class="w-16 text-right">Msg</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -288,7 +288,7 @@ const issueTypes = [
             </TableCell>
             <TableCell>
               <div class="flex items-center gap-2">
-                <span class="font-medium truncate max-w-[320px]">{{ issue.title }}</span>
+                <span class="font-medium">{{ issue.title }}</span>
                 <Badge :class="statusBadgeClass(issue.status)" class="shrink-0">
                   {{ issue.status }}
                 </Badge>
