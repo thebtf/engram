@@ -3,12 +3,14 @@ import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 import { useSSE } from '@/composables/useSSE'
+import { useColorMode } from '@/composables/useColorMode'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 
 const route = useRoute()
 const { authenticated, loading, checkAuth } = useAuth()
 const { isReconnecting, reconnectCountdown } = useSSE()
+useColorMode()
 
 // Public routes (login, setup, register) render without sidebar/header
 const isPublicRoute = computed(() => !!route.meta.public)

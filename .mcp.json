@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "shadcn-vue": {
+      "type": "stdio",
+      "command": "bunx",
+      "args": [
+        "-y",
+        "@jpisnice/shadcn-ui-mcp-server",
+        "--framework",
+        "vue"
+      ],
+      "env": {}
+    }
+  }
+}
