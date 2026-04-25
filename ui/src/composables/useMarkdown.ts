@@ -92,20 +92,69 @@ function escapeHtml(text: string): string {
  * Only for content that doesn't already have fencing.
  */
 function preProcessCodeBlocks(text: string): string {
-  if (text.includes('```')) return text
+  // If text already has fenced code blocks, only process unfenced regions
+  if (text.includes('```')) return processUnfencedRegions(text)
 
+  return processLines(text.split('\n'))
+}
+
+/**
+ * Split text into fenced (pass-through) and unfenced (auto-detect) regions.
+ */
+function processUnfencedRegions(text: string): string {
   const lines = text.split('\n')
+  const result: string[] = []
+  let unfencedBuffer: string[] = []
+  let inFence = false
+
+  for (const line of lines) {
+    if (/^```/.test(line.trim())) {
+      if (!inFence) {
+        // Flush unfenced buffer before entering fence
+        if (unfencedBuffer.length > 0) {
+          result.push(processLines(unfencedBuffer))
+          unfencedBuffer = []
+        }
+        inFence = true
+        result.push(line)
+      } else {
+        inFence = false
+        result.push(line)
+      }
+    } else if (inFence) {
+      result.push(line)
+    } else {
+      unfencedBuffer.push(line)
+    }
+  }
+
+  // Flush remaining unfenced
+  if (unfencedBuffer.length > 0) {
+    result.push(processLines(unfencedBuffer))
+  }
+
+  return result.join('\n')
+}
+
+function processLines(lines: string[]): string {
   const result: string[] = []
   let codeBuffer: string[] = []
 
-  const isCodeLine = (line: string): boolean => {
+  const isCodeLine = (line: string, bufferLen: number): boolean => {
     const trimmed = line.trimStart()
-    if (trimmed === '') return codeBuffer.length > 0
+    if (trimmed === '') return bufferLen > 0
     if (/^[/$#>]/.test(trimmed)) return true
+    if (/^\(.*\)\s*(PS\s+)?[A-Z]:\\.*>/i.test(trimmed)) return true
+    if (/^PS\s+[A-Z]:\\.*>/i.test(trimmed)) return true
+    if (/^(warning|error|Error|mesh-ctl|fatal|WARN|ERR):/i.test(trimmed)) return true
     if (/^(inet6?|link\/|valid_lft|mtu |scope |brd )/.test(trimmed)) return true
     if (/^\d+:\s+\S+@?\S*:?\s/.test(trimmed)) return true
+    if (/^[a-z][\w-]+\s+(master|endpoint|client|server)\s+\d/i.test(trimmed)) return true
+    if (/^[A-Z_]{3,}(\s+[A-Z_]{2,}){2,}/.test(trimmed)) return true
     if (/^(\t|    )/.test(line) && !/^(\t|    )[-*+\d]/.test(line)) return true
     if (/^\w[\w_-]*:\s*".+"$/.test(trimmed)) return true
+    if (bufferLen > 0 && /^\w[\w_-]*:\s*\S/.test(trimmed)) return true
+    if (/^\d+\.\d+\.\d+\.\d+\/\d+\s+dev\s+/.test(trimmed)) return true
     return false
   }
 
@@ -121,7 +170,7 @@ function preProcessCodeBlocks(text: string): string {
   }
 
   for (const line of lines) {
-    if (isCodeLine(line)) {
+    if (isCodeLine(line, codeBuffer.length)) {
       codeBuffer.push(line)
     } else {
       if (codeBuffer.length > 0) flushCode()
