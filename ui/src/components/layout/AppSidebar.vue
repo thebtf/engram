@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { CircleAlert, Lock, Key, Settings, Sun, Moon, Monitor, LogOut } from 'lucide-vue-next'
+import { CircleAlert, Lock, Key, Settings, Monitor, Sun, Moon, LogOut } from 'lucide-vue-next'
+import { useColorMode } from '@/composables/useColorMode'
 import { useAuth } from '@/composables/useAuth'
 import { useSSE } from '@/composables/useSSE'
-import { useColorMode } from '@/composables/useColorMode'
 import {
   Sidebar,
   SidebarContent,
@@ -22,12 +22,6 @@ const router = useRouter()
 const { logout, authDisabled, isAdmin } = useAuth()
 const { isConnected } = useSSE()
 const { preference, cycleColorMode } = useColorMode()
-
-const themeLabel: Record<string, string> = {
-  light: 'Light',
-  dark: 'Dark',
-  auto: 'System',
-}
 
 interface NavItem {
   name: string
@@ -129,18 +123,17 @@ async function handleLogout() {
 
     <SidebarFooter>
       <SidebarMenu>
-        <!-- Theme toggle (cycles: light → dark → auto) -->
+        <!-- System -->
         <SidebarMenuItem>
           <SidebarMenuButton
-            :tooltip="`Theme: ${themeLabel[preference]}`"
-            @click="cycleColorMode"
+            as-child
+            :is-active="route.path === '/system'"
+            tooltip="System"
           >
-            <Sun v-if="preference === 'light'" />
-            <Moon v-if="preference === 'dark'" />
-            <Monitor v-if="preference === 'auto'" />
-            <span class="group-data-[collapsible=icon]:hidden">
-              {{ themeLabel[preference] }}
-            </span>
+            <router-link to="/system">
+              <Monitor />
+              <span>System</span>
+            </router-link>
           </SidebarMenuButton>
         </SidebarMenuItem>
 
@@ -162,16 +155,27 @@ async function handleLogout() {
           </div>
         </SidebarMenuItem>
 
-        <!-- Logout -->
+        <!-- Logout + Theme icon row -->
         <SidebarMenuItem>
-          <SidebarMenuButton
-            tooltip="Logout"
-            class="text-sidebar-foreground/70 hover:text-red-400"
-            @click="handleLogout"
-          >
-            <LogOut />
-            <span>Logout</span>
-          </SidebarMenuButton>
+          <div class="flex items-center justify-between px-2 py-1">
+            <SidebarMenuButton
+              tooltip="Logout"
+              class="text-sidebar-foreground/70 hover:text-red-400 flex-1"
+              @click="handleLogout"
+            >
+              <LogOut />
+              <span>Logout</span>
+            </SidebarMenuButton>
+            <button
+              class="p-1.5 rounded-md text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors group-data-[collapsible=icon]:hidden"
+              :title="`Theme: ${preference}`"
+              @click="cycleColorMode"
+            >
+              <Sun v-if="preference === 'light'" :size="14" />
+              <Moon v-if="preference === 'dark'" :size="14" />
+              <Monitor v-if="preference === 'auto'" :size="14" />
+            </button>
+          </div>
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarFooter>

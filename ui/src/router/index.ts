@@ -46,6 +46,11 @@ const routes = [
     component: () => import('@/views/TokensView.vue'),
   },
   {
+    path: '/system',
+    name: 'system',
+    component: () => import('@/views/SystemView.vue'),
+  },
+  {
     path: '/admin',
     name: 'admin',
     component: () => import('@/views/AdminView.vue'),
