@@ -177,15 +177,17 @@ const issueTypes = [
 </script>
 
 <template>
-  <div class="space-y-4">
-    <!-- Header -->
-    <div class="flex items-center justify-between flex-wrap gap-3">
-      <h1 class="text-xl font-semibold">Issues</h1>
+  <div class="space-y-3">
+    <!-- Header: title + actions -->
+    <div class="flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-3">
-        <span class="text-sm text-muted-foreground">{{ total }} total</span>
+        <h1 class="text-lg font-semibold">Issues</h1>
+        <span class="text-sm text-muted-foreground">{{ total }}</span>
+      </div>
+      <div class="flex items-center gap-2">
         <Button
           @click="toggleMyIssues"
-          :variant="myIssuesOnly ? 'default' : 'secondary'"
+          :variant="myIssuesOnly ? 'default' : 'outline'"
           size="sm"
         >
           My Issues
@@ -197,38 +199,39 @@ const issueTypes = [
       </div>
     </div>
 
-    <!-- Status filter pills -->
-    <div class="flex gap-2 flex-wrap">
-      <button
-        v-for="s in statusGroups"
-        :key="s.value"
-        @click="statusFilter = s.value"
-        :class="cn(
-          'px-3 py-1 text-sm rounded-full border transition-colors',
-          statusFilter === s.value
-            ? 'bg-primary text-primary-foreground border-primary'
-            : 'bg-background text-foreground border-border hover:bg-accent hover:text-accent-foreground'
-        )"
-      >
-        {{ s.label }}
-      </button>
-    </div>
-
-    <!-- Type filter pills -->
-    <div class="flex gap-2 flex-wrap">
-      <button
-        v-for="t in issueTypes"
-        :key="t.value"
-        @click="typeFilter = t.value"
-        :class="cn(
-          'px-3 py-1 text-sm rounded-full border transition-colors',
-          typeFilter === t.value
-            ? 'bg-primary text-primary-foreground border-primary'
-            : 'bg-background text-foreground border-border hover:bg-accent hover:text-accent-foreground'
-        )"
-      >
-        {{ t.label }}
-      </button>
+    <!-- Filters: status + type on one line -->
+    <div class="flex items-center gap-4 flex-wrap">
+      <div class="flex gap-1.5 flex-wrap">
+        <button
+          v-for="s in statusGroups"
+          :key="s.value"
+          @click="statusFilter = s.value"
+          :class="cn(
+            'px-2.5 py-1 text-xs rounded-full border transition-colors',
+            statusFilter === s.value
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-background text-foreground border-border hover:bg-accent hover:text-accent-foreground'
+          )"
+        >
+          {{ s.label }}
+        </button>
+      </div>
+      <div class="w-px h-5 bg-border" />
+      <div class="flex gap-1.5 flex-wrap">
+        <button
+          v-for="t in issueTypes"
+          :key="t.value"
+          @click="typeFilter = t.value"
+          :class="cn(
+            'px-2.5 py-1 text-xs rounded-full border transition-colors',
+            typeFilter === t.value
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-background text-foreground border-border hover:bg-accent hover:text-accent-foreground'
+          )"
+        >
+          {{ t.label }}
+        </button>
+      </div>
     </div>
 
     <!-- Loading -->

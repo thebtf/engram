@@ -56,7 +56,7 @@ onMounted(() => {
       <AppSidebar />
       <SidebarInset>
         <!-- Top bar: sidebar trigger + update banner -->
-        <header class="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
+        <header class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
           <SidebarTrigger class="-ml-1" />
           <Separator orientation="vertical" class="mr-2 h-4" />
 
@@ -104,7 +104,7 @@ onMounted(() => {
         </header>
 
         <!-- Main content -->
-        <main class="flex-1 overflow-auto p-6">
+        <main class="flex-1 overflow-auto px-4 py-4 lg:px-6">
           <router-view />
         </main>
       </SidebarInset>
