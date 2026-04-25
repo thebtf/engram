@@ -35,7 +35,7 @@ import (
 
 // daemonVersion is the string reported to gRPC Initialize and used in
 // structured logs. Tracks Constitution §15 unified engram + plugin version.
-const daemonVersion = "v5.2.1"
+const daemonVersion = "v5.2.2"
 
 func main() {
 	// Clean stale binaries from previous upgrades (.old.* files).
