@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "description": "Persistent memory for Claude Code — static session-start context, durable memory tools, and compatibility hooks aligned with v5. api_token is optional: set via /config UI or via ENGRAM_AUTH_ADMIN_TOKEN env var in ~/.claude/settings.json (survives CC credential store races).",
   "author": {
     "name": "thebtf"
