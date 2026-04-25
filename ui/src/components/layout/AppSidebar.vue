@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, CircleAlert, Lock, Key, Settings, Sun, Moon, LogOut } from 'lucide-vue-next'
+import { CircleAlert, Lock, Key, Settings, Sun, Moon, Monitor, LogOut } from 'lucide-vue-next'
 import { useAuth } from '@/composables/useAuth'
 import { useSSE } from '@/composables/useSSE'
 import { useColorMode } from '@/composables/useColorMode'
@@ -21,17 +21,22 @@ const route = useRoute()
 const router = useRouter()
 const { logout, authDisabled, isAdmin } = useAuth()
 const { isConnected } = useSSE()
-const { mode, toggleColorMode } = useColorMode()
+const { preference, cycleColorMode } = useColorMode()
+
+const themeLabel: Record<string, string> = {
+  light: 'Light',
+  dark: 'Dark',
+  auto: 'System',
+}
 
 interface NavItem {
   name: string
   label: string
-  icon: typeof LayoutDashboard
+  icon: typeof CircleAlert
   path: string
 }
 
 const allNavItems: NavItem[] = [
-  { name: 'home', label: 'Home', icon: LayoutDashboard, path: '/' },
   { name: 'issues', label: 'Issues', icon: CircleAlert, path: '/issues' },
   { name: 'vault', label: 'Vault', icon: Lock, path: '/vault' },
   { name: 'tokens', label: 'Tokens', icon: Key, path: '/tokens' },
@@ -60,17 +65,17 @@ async function handleLogout() {
 <template>
   <Sidebar collapsible="icon">
     <SidebarHeader>
-      <!-- Logo -->
-      <div class="flex items-center gap-3 px-1 py-1">
+      <!-- Logo (links to home) -->
+      <router-link to="/" class="flex items-center gap-3 px-1 py-1 rounded-md hover:bg-sidebar-accent transition-colors">
         <div
-          class="w-8 h-8 flex-shrink-0 rounded-lg bg-gradient-to-br from-claude-500 to-claude-700 flex items-center justify-center"
+          class="w-8 h-8 flex-shrink-0 rounded-lg bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center"
         >
-          <span class="text-white font-bold text-sm">E</span>
+          <span class="text-primary-foreground font-bold text-sm">E</span>
         </div>
-        <span class="text-sm font-bold truncate group-data-[collapsible=icon]:hidden">
-          <span class="text-claude-400">engram</span>
+        <span class="text-sm font-bold truncate group-data-[collapsible=icon]:hidden text-primary">
+          engram
         </span>
-      </div>
+      </router-link>
 
       <!-- Auth-disabled warning badge -->
       <div
@@ -124,16 +129,17 @@ async function handleLogout() {
 
     <SidebarFooter>
       <SidebarMenu>
-        <!-- Theme toggle -->
+        <!-- Theme toggle (cycles: light → dark → auto) -->
         <SidebarMenuItem>
           <SidebarMenuButton
-            :tooltip="mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
-            @click="toggleColorMode"
+            :tooltip="`Theme: ${themeLabel[preference]}`"
+            @click="cycleColorMode"
           >
-            <Sun v-if="mode === 'dark'" />
-            <Moon v-else />
+            <Sun v-if="preference === 'light'" />
+            <Moon v-if="preference === 'dark'" />
+            <Monitor v-if="preference === 'auto'" />
             <span class="group-data-[collapsible=icon]:hidden">
-              {{ mode === 'dark' ? 'Light mode' : 'Dark mode' }}
+              {{ themeLabel[preference] }}
             </span>
           </SidebarMenuButton>
         </SidebarMenuItem>

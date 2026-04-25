@@ -88,11 +88,11 @@ function handleTabChange() {
         <CardContent>
           <Tabs default-value="credentials" @update:model-value="handleTabChange">
             <TabsList class="w-full mb-6">
-              <TabsTrigger value="credentials" class="flex-1">
+              <TabsTrigger value="credentials" class="flex-1 justify-center">
                 <Mail class="w-4 h-4 mr-2" />
                 Email
               </TabsTrigger>
-              <TabsTrigger value="token" class="flex-1">
+              <TabsTrigger value="token" class="flex-1 justify-center">
                 <Key class="w-4 h-4 mr-2" />
                 Token
               </TabsTrigger>

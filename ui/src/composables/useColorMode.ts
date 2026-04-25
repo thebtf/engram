@@ -1,49 +1,78 @@
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 
-type ColorMode = 'light' | 'dark'
+type ColorPreference = 'light' | 'dark' | 'auto'
+type ResolvedMode = 'light' | 'dark'
 
-const mode = ref<ColorMode>('light')
+const preference = ref<ColorPreference>('auto')
 const isInitialized = ref(false)
 let watchStarted = false
+let mediaQuery: MediaQueryList | null = null
+let mediaListener: ((e: MediaQueryListEvent) => void) | null = null
 
-function applyMode(value: ColorMode) {
-  if (value === 'dark') {
+function getSystemMode(): ResolvedMode {
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function applyMode(resolved: ResolvedMode) {
+  if (resolved === 'dark') {
     document.documentElement.classList.add('dark')
   } else {
     document.documentElement.classList.remove('dark')
   }
 }
 
+function resolveMode(pref: ColorPreference): ResolvedMode {
+  return pref === 'auto' ? getSystemMode() : pref
+}
+
+function syncMediaListener(pref: ColorPreference) {
+  // Clean up old listener
+  if (mediaQuery && mediaListener) {
+    mediaQuery.removeEventListener('change', mediaListener)
+    mediaListener = null
+  }
+  // Only listen for OS changes when preference is 'auto'
+  if (pref === 'auto') {
+    mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    mediaListener = () => applyMode(resolveMode('auto'))
+    mediaQuery.addEventListener('change', mediaListener)
+  }
+}
+
 export function useColorMode() {
+  const resolvedMode = computed<ResolvedMode>(() => resolveMode(preference.value))
+
   onMounted(() => {
     if (!isInitialized.value) {
-      const stored = localStorage.getItem('theme') as ColorMode | null
-      if (stored) {
-        mode.value = stored
-      } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        mode.value = 'dark'
+      const stored = localStorage.getItem('theme') as ColorPreference | null
+      if (stored && ['light', 'dark', 'auto'].includes(stored)) {
+        preference.value = stored
       }
-      applyMode(mode.value)
+      // else default 'auto'
+      applyMode(resolvedMode.value)
+      syncMediaListener(preference.value)
       isInitialized.value = true
     }
 
-    // Create the watch only once at module level — prevents a new watcher
-    // being registered on every useColorMode() call.
     if (!watchStarted) {
       watchStarted = true
-      watch(mode, (newMode) => {
-        localStorage.setItem('theme', newMode)
-        applyMode(newMode)
+      watch(preference, (newPref) => {
+        localStorage.setItem('theme', newPref)
+        applyMode(resolveMode(newPref))
+        syncMediaListener(newPref)
       })
     }
   })
 
-  function toggleColorMode() {
-    mode.value = mode.value === 'light' ? 'dark' : 'light'
+  function cycleColorMode() {
+    const order: ColorPreference[] = ['light', 'dark', 'auto']
+    const idx = order.indexOf(preference.value)
+    preference.value = order[(idx + 1) % order.length]
   }
 
   return {
-    mode,
-    toggleColorMode,
+    preference,
+    resolvedMode,
+    cycleColorMode,
   }
 }

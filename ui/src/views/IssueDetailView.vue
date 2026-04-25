@@ -447,9 +447,12 @@ onMounted(loadIssue)
               @keydown.ctrl.enter="submitComment"
               @keydown.meta.enter="submitComment"
               placeholder="Write a comment... (Ctrl+Enter to send)"
-              class="min-h-[80px] max-h-[400px] resize-y"
+              class="min-h-[80px] max-h-[400px] resize-y font-mono text-sm"
             />
-            <div class="flex justify-end">
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-muted-foreground">
+                Markdown supported: **bold**, *italic*, `code`, ```blocks```, - lists
+              </span>
               <Button
                 size="sm"
                 @click="submitComment"

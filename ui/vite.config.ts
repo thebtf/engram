@@ -23,7 +23,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://unleashed.lan:37777',
+        target: 'http://localhost:37777',
         changeOrigin: true
       }
     }
