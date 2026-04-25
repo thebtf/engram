@@ -140,26 +140,33 @@ function processLines(lines: string[]): string {
   const result: string[] = []
   let codeBuffer: string[] = []
 
-  const isCodeLine = (line: string, bufferLen: number): boolean => {
+  const isCodeLine = (line: string, _bufferLen: number): boolean => {
     const trimmed = line.trimStart()
-    if (trimmed === '') return bufferLen > 0
+    if (trimmed === '') return false // handled by blank-line lookahead below
+    // Shell prompts: /, $, #, >, PS C:\...>
     if (/^[/$#>]/.test(trimmed)) return true
     if (/^\(.*\)\s*(PS\s+)?[A-Z]:\\.*>/i.test(trimmed)) return true
     if (/^PS\s+[A-Z]:\\.*>/i.test(trimmed)) return true
+    // CLI warning/error lines
     if (/^(warning|error|Error|mesh-ctl|fatal|WARN|ERR):/i.test(trimmed)) return true
+    // Network/system output
     if (/^(inet6?|link\/|valid_lft|mtu |scope |brd )/.test(trimmed)) return true
     if (/^\d+:\s+\S+@?\S*:?\s/.test(trimmed)) return true
+    // Tabular data rows
     if (/^[a-z][\w-]+\s+(master|endpoint|client|server)\s+\d/i.test(trimmed)) return true
+    // ALL-CAPS header row
     if (/^[A-Z_]{3,}(\s+[A-Z_]{2,}){2,}/.test(trimmed)) return true
+    // Indented lines (not markdown lists)
     if (/^(\t|    )/.test(line) && !/^(\t|    )[-*+\d]/.test(line)) return true
+    // YAML: key: "quoted value"
     if (/^\w[\w_-]*:\s*".+"$/.test(trimmed)) return true
-    if (bufferLen > 0 && /^\w[\w_-]*:\s*\S/.test(trimmed)) return true
-    // YAML top-level keys (word: or word:\n) — start a code block
+    // YAML: key: (empty — map/list start)
     if (/^\w[\w_-]*:\s*$/.test(trimmed)) return true
-    // YAML scalar values: key: number or key: ip/cidr
-    if (/^\w[\w_-]*:\s+\d/.test(trimmed)) return true
-    // YAML list items in code context
-    if (bufferLen > 0 && /^-\s+\w[\w_-]*:/.test(trimmed)) return true
+    // YAML: key: any_value (when inside code context OR looks config-like)
+    if (/^\w[\w_-]*:\s+\S/.test(trimmed)) return true
+    // YAML list items
+    if (/^-\s+\w[\w_-]*:/.test(trimmed)) return true
+    // IP routes
     if (/^\d+\.\d+\.\d+\.\d+\/\d+\s+dev\s+/.test(trimmed)) return true
     return false
   }
@@ -175,7 +182,25 @@ function processLines(lines: string[]): string {
     codeBuffer = []
   }
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
+    // Blank line inside code block: keep if next non-blank line is also code
+    if (line.trim() === '' && codeBuffer.length > 0) {
+      // Peek ahead: find next non-blank line
+      let nextCodeIdx = -1
+      for (let j = i + 1; j < lines.length && j <= i + 3; j++) {
+        if (lines[j].trim() !== '') {
+          nextCodeIdx = j
+          break
+        }
+      }
+      if (nextCodeIdx !== -1 && isCodeLine(lines[nextCodeIdx], codeBuffer.length)) {
+        codeBuffer.push(line) // keep blank line inside code block
+        continue
+      }
+    }
+
     if (isCodeLine(line, codeBuffer.length)) {
       codeBuffer.push(line)
     } else {
