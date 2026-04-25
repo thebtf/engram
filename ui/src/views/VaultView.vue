@@ -4,7 +4,40 @@ import { useVault } from '@/composables/useVault'
 import { safeAbsoluteDate } from '@/utils/formatters'
 import { copyToClipboard } from '@/utils/clipboard'
 import EmptyState from '@/components/layout/EmptyState.vue'
-import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Lock,
+  LockOpen,
+  Key,
+  Eye,
+  EyeOff,
+  Copy,
+  Check,
+  Trash2,
+  RefreshCw,
+  AlertTriangle,
+} from 'lucide-vue-next'
 
 const {
   credentials,
@@ -88,61 +121,63 @@ async function handleDelete() {
 </script>
 
 <template>
-  <div>
+  <div class="space-y-6">
     <!-- Header -->
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <i class="fas fa-vault text-claude-400 text-xl" />
-        <h1 class="text-2xl font-bold text-white">Vault</h1>
+        <Key class="text-primary size-5" />
+        <h1 class="text-2xl font-bold">Vault</h1>
       </div>
-      <button
-        @click="loadCredentials()"
-        :disabled="loading"
-        class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors disabled:opacity-50"
-      >
-        <i :class="['fas fa-sync-alt mr-1.5', loading && 'fa-spin']" />
+      <Button variant="outline" size="sm" :disabled="loading" @click="loadCredentials()">
+        <RefreshCw :class="['size-4', loading && 'animate-spin']" />
         Refresh
-      </button>
+      </Button>
     </div>
 
     <!-- Vault Status Card -->
-    <div v-if="vaultStatus" class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50 mb-6">
-      <div class="grid grid-cols-3 gap-4">
-        <div>
-          <span class="text-xs text-slate-500 block">Encryption</span>
-          <span :class="vaultStatus.encrypted ? 'text-green-400' : 'text-red-400'" class="text-sm font-medium">
-            <i :class="['fas mr-1', vaultStatus.encrypted ? 'fa-lock' : 'fa-lock-open']" />
-            {{ vaultStatus.encrypted ? 'Enabled' : 'Disabled' }}
-          </span>
-          <div v-if="!vaultStatus.encrypted" class="mt-2 text-sm text-amber-400">
-            <i class="fas fa-info-circle mr-1" />
-            To enable encryption: <code class="bg-slate-700 px-1 rounded">openssl rand -hex 32</code>
-            → set as <code class="bg-slate-700 px-1 rounded">ENGRAM_VAULT_KEY</code> env var
+    <Card v-if="vaultStatus">
+      <CardHeader class="pb-2">
+        <CardTitle class="text-sm font-medium text-muted-foreground">Vault Status</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div class="grid grid-cols-3 gap-6">
+          <div class="space-y-1">
+            <p class="text-xs text-muted-foreground">Encryption</p>
+            <div class="flex items-center gap-2">
+              <Badge :variant="vaultStatus.encrypted ? 'default' : 'destructive'">
+                <Lock v-if="vaultStatus.encrypted" class="size-3" />
+                <LockOpen v-else class="size-3" />
+                {{ vaultStatus.encrypted ? 'Enabled' : 'Disabled' }}
+              </Badge>
+            </div>
+            <p v-if="!vaultStatus.encrypted" class="text-xs text-amber-500 mt-2">
+              To enable: set <code class="bg-muted px-1 rounded text-xs">ENGRAM_VAULT_KEY</code> env var
+            </p>
+          </div>
+          <div class="space-y-1">
+            <p class="text-xs text-muted-foreground">Key Fingerprint</p>
+            <p class="text-sm font-mono">{{ vaultStatus.key_fingerprint || 'N/A' }}</p>
+          </div>
+          <div class="space-y-1">
+            <p class="text-xs text-muted-foreground">Credentials</p>
+            <p class="text-sm font-mono">{{ vaultStatus.credential_count }}</p>
           </div>
         </div>
-        <div>
-          <span class="text-xs text-slate-500 block">Key Fingerprint</span>
-          <span class="text-sm font-mono text-slate-300">{{ vaultStatus.key_fingerprint || 'N/A' }}</span>
-        </div>
-        <div>
-          <span class="text-xs text-slate-500 block">Credentials</span>
-          <span class="text-sm font-mono text-slate-300">{{ vaultStatus.credential_count }}</span>
-        </div>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
 
-    <!-- Loading -->
-    <div v-if="loading && credentials.length === 0" class="flex items-center justify-center py-20">
-      <i class="fas fa-circle-notch fa-spin text-claude-400 text-2xl" />
+    <!-- Loading skeleton -->
+    <div v-if="loading && credentials.length === 0" class="space-y-2">
+      <Skeleton class="h-12 w-full rounded-lg" />
+      <Skeleton class="h-12 w-full rounded-lg" />
+      <Skeleton class="h-12 w-full rounded-lg" />
     </div>
 
     <!-- Error -->
-    <div v-else-if="error" class="text-center py-16">
-      <i class="fas fa-exclamation-triangle text-red-400 text-3xl mb-3 block" />
-      <p class="text-red-400 mb-2">{{ error }}</p>
-      <button @click="loadCredentials()" class="text-sm text-slate-400 hover:text-white transition-colors">
-        Try again
-      </button>
+    <div v-else-if="error" class="flex flex-col items-center justify-center py-16 gap-3">
+      <AlertTriangle class="size-8 text-destructive" />
+      <p class="text-destructive text-sm">{{ error }}</p>
+      <Button variant="ghost" size="sm" @click="loadCredentials()">Try again</Button>
     </div>
 
     <!-- Empty State -->
@@ -153,87 +188,111 @@ async function handleDelete() {
       description="Credentials will appear here when stored via MCP tools."
     />
 
-    <!-- Credentials List -->
-    <div v-else class="space-y-2">
-      <!-- Inline action error (reveal/delete failures) -->
-      <div v-if="actionError" class="bg-red-500/20 border border-red-500/30 rounded-lg p-3 flex items-start gap-2">
-        <i class="fas fa-exclamation-triangle text-red-400 mt-0.5 flex-shrink-0" />
-        <span class="text-red-300 text-sm">{{ actionError }}</span>
+    <!-- Credentials Table -->
+    <div v-else class="space-y-3">
+      <!-- Inline action error -->
+      <div v-if="actionError" class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
+        <AlertTriangle class="size-4 text-destructive mt-0.5 shrink-0" />
+        <span class="text-sm text-destructive">{{ actionError }}</span>
       </div>
-      <div
-        v-for="cred in credentials"
-        :key="cred.name"
-        class="p-4 rounded-xl border-2 border-slate-700/50 bg-gradient-to-br from-slate-800/50 to-slate-900/50"
-      >
-        <div class="flex items-center justify-between">
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-1">
-              <i class="fas fa-key text-amber-500/70 text-sm" />
-              <h3 class="text-sm font-medium text-white truncate">{{ cred.name }}</h3>
-              <span class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-slate-700/50 text-slate-400 border border-slate-600/50">
-                {{ cred.scope }}
-              </span>
-            </div>
-            <span class="text-xs text-slate-500">Created {{ safeAbsoluteDate(cred.created_at) }}</span>
-          </div>
 
-          <div class="flex items-center gap-2 flex-shrink-0">
-            <!-- Revealed value -->
-            <div v-if="revealedValues[cred.name]" class="flex items-center gap-2">
-              <code class="px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs text-green-400 font-mono max-w-xs truncate">
-                {{ revealedValues[cred.name].value }}
-              </code>
-              <span class="text-[10px] text-amber-400 whitespace-nowrap">
-                Hides in {{ remainingSeconds(cred.name) }}s
-              </span>
-              <button
-                @click="copyValue(revealedValues[cred.name].value, cred.name)"
-                class="px-2 py-1 rounded text-xs text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors"
-                :title="copyFeedback === cred.name ? 'Copied!' : 'Copy'"
-              >
-                <i :class="['fas', copyFeedback === cred.name ? 'fa-check text-green-400' : 'fa-copy']" />
-              </button>
-              <button
-                @click="hideCredential(cred.name)"
-                class="px-2 py-1 rounded text-xs text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors"
-                title="Hide"
-              >
-                <i class="fas fa-eye-slash" />
-              </button>
-            </div>
-
-            <!-- Action buttons (when not revealed) -->
-            <template v-else>
-              <button
-                @click="revealCredential(cred.name)"
-                class="px-3 py-1.5 rounded-lg text-xs bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors"
-              >
-                <i class="fas fa-eye mr-1" />
-                Reveal
-              </button>
-            </template>
-
-            <button
-              @click="confirmDelete(cred.name)"
-              class="px-2 py-1.5 rounded-lg text-xs text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-              title="Delete"
-            >
-              <i class="fas fa-trash" />
-            </button>
-          </div>
-        </div>
-      </div>
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Scope</TableHead>
+              <TableHead>Created</TableHead>
+              <TableHead class="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="cred in credentials" :key="cred.name">
+              <TableCell>
+                <div class="flex items-center gap-2">
+                  <Key class="size-3.5 text-amber-500/70 shrink-0" />
+                  <span class="font-medium text-sm">{{ cred.name }}</span>
+                </div>
+                <!-- Revealed value inline -->
+                <div v-if="revealedValues[cred.name]" class="mt-2 flex items-center gap-2">
+                  <code class="px-2 py-1 rounded bg-muted border text-xs text-green-500 font-mono max-w-xs truncate">
+                    {{ revealedValues[cred.name].value }}
+                  </code>
+                  <span class="text-[10px] text-amber-500 whitespace-nowrap">
+                    Hides in {{ remainingSeconds(cred.name) }}s
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    :title="copyFeedback === cred.name ? 'Copied!' : 'Copy'"
+                    @click="copyValue(revealedValues[cred.name].value, cred.name)"
+                  >
+                    <Check v-if="copyFeedback === cred.name" class="size-3.5 text-green-500" />
+                    <Copy v-else class="size-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    title="Hide"
+                    @click="hideCredential(cred.name)"
+                  >
+                    <EyeOff class="size-3.5" />
+                  </Button>
+                </div>
+              </TableCell>
+              <TableCell>
+                <Badge variant="secondary" class="text-[10px]">{{ cred.scope }}</Badge>
+              </TableCell>
+              <TableCell class="text-xs text-muted-foreground">
+                {{ safeAbsoluteDate(cred.created_at) }}
+              </TableCell>
+              <TableCell class="text-right">
+                <div class="flex items-center justify-end gap-1">
+                  <Button
+                    v-if="!revealedValues[cred.name]"
+                    variant="outline"
+                    size="xs"
+                    @click="revealCredential(cred.name)"
+                  >
+                    <Eye class="size-3.5" />
+                    Reveal
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    class="text-muted-foreground hover:text-destructive"
+                    title="Delete"
+                    @click="confirmDelete(cred.name)"
+                  >
+                    <Trash2 class="size-3.5" />
+                  </Button>
+                </div>
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </Card>
     </div>
 
-    <!-- Delete Confirmation -->
-    <ConfirmDialog
-      :show="showDeleteConfirm"
-      title="Delete Credential"
-      :message="`Are you sure you want to delete '${deleteTarget}'? This action cannot be undone.`"
-      confirm-label="Delete"
-      :danger="true"
-      @confirm="handleDelete"
-      @cancel="showDeleteConfirm = false"
-    />
+    <!-- Delete Confirmation AlertDialog -->
+    <AlertDialog :open="showDeleteConfirm" @update:open="showDeleteConfirm = $event">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete Credential</AlertDialogTitle>
+          <AlertDialogDescription>
+            Are you sure you want to delete <strong>{{ deleteTarget }}</strong>? This action cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel @click="showDeleteConfirm = false">Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            @click="handleDelete"
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>

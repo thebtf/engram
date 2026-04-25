@@ -4,6 +4,37 @@ import { useAuth } from '@/composables/useAuth'
 import { useRouter } from 'vue-router'
 import { copyToClipboard } from '@/utils/clipboard'
 import { formatRelativeTime } from '@/utils/formatters'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Shield,
+  Users,
+  Ticket,
+  RefreshCw,
+  Plus,
+  Copy,
+  Check,
+  AlertTriangle,
+  Loader2,
+} from 'lucide-vue-next'
 
 const { isAdmin } = useAuth()
 const router = useRouter()
@@ -137,184 +168,163 @@ onMounted(async () => {
   <div class="space-y-8">
     <!-- Header -->
     <div class="flex items-center gap-3">
-      <i class="fas fa-shield-halved text-claude-400 text-xl" />
-      <h1 class="text-2xl font-bold text-white">Admin</h1>
+      <Shield class="text-primary size-5" />
+      <h1 class="text-2xl font-bold">Admin</h1>
     </div>
 
     <!-- Users Section -->
     <section class="space-y-4">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
-          <i class="fas fa-users text-slate-400" />
-          <h2 class="text-lg font-semibold text-white">Users</h2>
-          <span v-if="users.length > 0" class="text-sm text-slate-500">({{ users.length }})</span>
+          <Users class="size-4 text-muted-foreground" />
+          <h2 class="text-lg font-semibold">Users</h2>
+          <span v-if="users.length > 0" class="text-sm text-muted-foreground">({{ users.length }})</span>
         </div>
-        <button
-          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
-          :disabled="usersLoading"
-          @click="loadUsers"
-        >
-          <i :class="['fas fa-rotate-right text-xs', usersLoading ? 'animate-spin' : '']" />
+        <Button variant="outline" size="sm" :disabled="usersLoading" @click="loadUsers">
+          <RefreshCw :class="['size-4', usersLoading && 'animate-spin']" />
           Refresh
-        </button>
+        </Button>
       </div>
 
-      <div v-if="usersError" class="rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-3 text-red-400 text-sm">
-        {{ usersError }}
+      <div v-if="usersError" class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3">
+        <AlertTriangle class="size-4 text-destructive mt-0.5 shrink-0" />
+        <span class="text-sm text-destructive">{{ usersError }}</span>
       </div>
 
-      <div v-else-if="usersLoading && users.length === 0" class="text-slate-500 text-sm">
-        Loading users...
+      <div v-else-if="usersLoading && users.length === 0" class="space-y-2">
+        <Skeleton class="h-12 w-full rounded-lg" />
+        <Skeleton class="h-12 w-full rounded-lg" />
       </div>
 
-      <div v-else-if="users.length === 0" class="text-slate-500 text-sm">
-        No users found.
-      </div>
+      <p v-else-if="users.length === 0" class="text-sm text-muted-foreground">No users found.</p>
 
-      <div v-else class="rounded-xl border border-slate-700/50 overflow-hidden">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="bg-slate-800/60 text-slate-400 text-xs uppercase tracking-wider">
-              <th class="text-left px-4 py-3 font-medium">Email</th>
-              <th class="text-left px-4 py-3 font-medium">Role</th>
-              <th class="text-left px-4 py-3 font-medium">Last Login</th>
-              <th class="text-left px-4 py-3 font-medium">Created</th>
-              <th class="text-right px-4 py-3 font-medium">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-700/30">
-            <tr
+      <Card v-else>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Email</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>Last Login</TableHead>
+              <TableHead>Created</TableHead>
+              <TableHead class="text-right">Enabled</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow
               v-for="user in users"
               :key="user.id"
-              :class="['transition-colors', user.disabled ? 'bg-slate-900/30 opacity-60' : 'hover:bg-slate-800/30']"
+              :class="user.disabled ? 'opacity-50' : ''"
             >
-              <td class="px-4 py-3 text-white font-medium">{{ user.email }}</td>
-              <td class="px-4 py-3">
-                <select
-                  :value="user.role"
-                  class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-claude-500"
-                  @change="changeRole(user, ($event.target as HTMLSelectElement).value)"
-                >
-                  <option value="admin">admin</option>
-                  <option value="operator">operator</option>
-                </select>
-              </td>
-              <td class="px-4 py-3 text-slate-400">
+              <TableCell class="font-medium">{{ user.email }}</TableCell>
+              <TableCell>
+                <Select :model-value="user.role" @update:model-value="(role) => { if (role) changeRole(user, String(role)) }">
+                  <SelectTrigger class="h-7 w-28 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="admin">admin</SelectItem>
+                    <SelectItem value="operator">operator</SelectItem>
+                  </SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell class="text-sm text-muted-foreground">
                 {{ user.last_login_at ? formatRelativeTime(user.last_login_at) : '—' }}
-              </td>
-              <td class="px-4 py-3 text-slate-400">
+              </TableCell>
+              <TableCell class="text-sm text-muted-foreground">
                 {{ formatRelativeTime(user.created_at) }}
-              </td>
-              <td class="px-4 py-3 text-right">
-                <button
-                  :class="[
-                    'px-3 py-1 rounded-lg text-xs font-medium transition-colors',
-                    user.disabled
-                      ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
-                      : 'bg-red-500/20 text-red-400 hover:bg-red-500/30',
-                  ]"
-                  @click="toggleDisabled(user)"
-                >
-                  {{ user.disabled ? 'Enable' : 'Disable' }}
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+              </TableCell>
+              <TableCell class="text-right">
+                <Switch
+                  :checked="!user.disabled"
+                  @update:checked="toggleDisabled(user)"
+                />
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </Card>
     </section>
 
     <!-- Invitations Section -->
     <section class="space-y-4">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
-          <i class="fas fa-envelope-open-text text-slate-400" />
-          <h2 class="text-lg font-semibold text-white">Invitations</h2>
-          <span v-if="invitations.length > 0" class="text-sm text-slate-500">({{ invitations.length }})</span>
+          <Ticket class="size-4 text-muted-foreground" />
+          <h2 class="text-lg font-semibold">Invitations</h2>
+          <span v-if="invitations.length > 0" class="text-sm text-muted-foreground">({{ invitations.length }})</span>
         </div>
-        <button
-          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-claude-600 text-white hover:bg-claude-500 transition-colors disabled:opacity-50"
-          :disabled="generatingCode"
-          @click="generateCode"
-        >
-          <i :class="['fas fa-plus text-xs', generatingCode ? 'animate-spin fa-spinner' : '']" />
+        <Button size="sm" :disabled="generatingCode" @click="generateCode">
+          <Loader2 v-if="generatingCode" class="size-4 animate-spin" />
+          <Plus v-else class="size-4" />
           Generate Code
-        </button>
+        </Button>
       </div>
 
-      <div v-if="invitationsError" class="rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-3 text-red-400 text-sm">
-        {{ invitationsError }}
+      <div v-if="invitationsError" class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3">
+        <AlertTriangle class="size-4 text-destructive mt-0.5 shrink-0" />
+        <span class="text-sm text-destructive">{{ invitationsError }}</span>
       </div>
 
-      <div v-else-if="invitationsLoading && invitations.length === 0" class="text-slate-500 text-sm">
-        Loading invitations...
+      <div v-else-if="invitationsLoading && invitations.length === 0" class="space-y-2">
+        <Skeleton class="h-12 w-full rounded-lg" />
+        <Skeleton class="h-12 w-full rounded-lg" />
       </div>
 
-      <div v-else-if="invitations.length === 0" class="text-slate-500 text-sm">
+      <p v-else-if="invitations.length === 0" class="text-sm text-muted-foreground">
         No invitation codes yet. Generate one to invite users.
-      </div>
+      </p>
 
-      <div v-else class="rounded-xl border border-slate-700/50 overflow-hidden">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="bg-slate-800/60 text-slate-400 text-xs uppercase tracking-wider">
-              <th class="text-left px-4 py-3 font-medium">Code</th>
-              <th class="text-left px-4 py-3 font-medium">Status</th>
-              <th class="text-left px-4 py-3 font-medium">Created</th>
-              <th class="text-left px-4 py-3 font-medium">Used</th>
-              <th class="text-right px-4 py-3 font-medium">Action</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-700/30">
-            <tr
+      <Card v-else>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Code</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Created</TableHead>
+              <TableHead>Used</TableHead>
+              <TableHead class="text-right">Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow
               v-for="inv in invitations"
               :key="inv.id"
-              :class="['transition-colors', inv.used_by ? 'opacity-50' : 'hover:bg-slate-800/30']"
+              :class="inv.used_by ? 'opacity-50' : ''"
             >
-              <td class="px-4 py-3">
-                <code class="font-mono text-xs text-claude-300 bg-slate-800/60 px-2 py-1 rounded">
+              <TableCell>
+                <code class="font-mono text-xs text-primary bg-muted px-2 py-1 rounded">
                   {{ inv.code }}
                 </code>
-              </td>
-              <td class="px-4 py-3">
-                <span
-                  :class="[
-                    'px-2 py-0.5 rounded-full text-xs font-medium',
-                    inv.used_by
-                      ? 'bg-slate-700/50 text-slate-400'
-                      : 'bg-green-500/20 text-green-400',
-                  ]"
-                >
+              </TableCell>
+              <TableCell>
+                <Badge :variant="inv.used_by ? 'secondary' : 'outline'" class="text-[10px]">
                   {{ inv.used_by ? 'Used' : 'Unused' }}
-                </span>
-              </td>
-              <td class="px-4 py-3 text-slate-400">
+                </Badge>
+              </TableCell>
+              <TableCell class="text-sm text-muted-foreground">
                 {{ formatRelativeTime(inv.created_at) }}
-              </td>
-              <td class="px-4 py-3 text-slate-400">
+              </TableCell>
+              <TableCell class="text-sm text-muted-foreground">
                 {{ inv.used_at ? formatRelativeTime(inv.used_at) : '—' }}
-              </td>
-              <td class="px-4 py-3 text-right">
-                <button
+              </TableCell>
+              <TableCell class="text-right">
+                <Button
                   v-if="!inv.used_by"
-                  :class="[
-                    'flex items-center gap-1.5 ml-auto px-3 py-1 rounded-lg text-xs font-medium transition-colors',
-                    copiedId === inv.id
-                      ? 'bg-green-500/20 text-green-400'
-                      : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white',
-                  ]"
+                  variant="outline"
+                  size="xs"
                   :title="copiedId === inv.id ? 'Copied!' : 'Copy to clipboard'"
                   @click="copyCode(inv)"
                 >
-                  <i :class="['fas text-xs', copiedId === inv.id ? 'fa-check' : 'fa-copy']" />
+                  <Check v-if="copiedId === inv.id" class="size-3.5 text-green-500" />
+                  <Copy v-else class="size-3.5" />
                   {{ copiedId === inv.id ? 'Copied' : 'Copy' }}
-                </button>
-                <span v-else class="text-slate-600 text-xs">—</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+                </Button>
+                <span v-else class="text-muted-foreground text-sm">—</span>
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </Card>
     </section>
   </div>
 </template>

@@ -1,9 +1,41 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import {
+  ArrowLeft,
+  Pencil,
+  Trash2,
+  Ban,
+  Loader2,
+} from 'lucide-vue-next'
 import { fetchIssue, updateIssue, deleteIssue, type Issue, type IssueComment } from '@/utils/api'
 import { formatRelativeTime } from '@/utils/formatters'
 import { renderMarkdown } from '@/composables/useMarkdown'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Card,
+  CardContent,
+  CardHeader,
+} from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { cn } from '@/lib/utils'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,25 +64,36 @@ const showDeleteConfirm = ref(false)
 const rejectReason = ref('')
 const showRejectDialog = ref(false)
 
-function statusColor(status: string): string {
+// --- Display helpers ---
+function statusBadgeClass(status: string): string {
   switch (status) {
-    case 'open': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-    case 'acknowledged': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
-    case 'resolved': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-    case 'reopened': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-    case 'closed': return 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
-    case 'rejected': return 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
-    default: return 'bg-gray-100 text-gray-800'
+    case 'open': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 border-transparent'
+    case 'acknowledged': return 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300 border-transparent'
+    case 'resolved': return 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 border-transparent'
+    case 'reopened': return 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-transparent'
+    case 'closed': return 'bg-muted text-muted-foreground border-transparent'
+    case 'rejected': return 'bg-destructive/10 text-destructive border-transparent'
+    default: return 'bg-muted text-muted-foreground border-transparent'
   }
 }
 
-function priorityColor(priority: string): string {
+function priorityBadgeClass(priority: string): string {
   switch (priority) {
-    case 'critical': return 'text-red-600 dark:text-red-400'
-    case 'high': return 'text-orange-600 dark:text-orange-400'
-    case 'medium': return 'text-yellow-600 dark:text-yellow-400'
-    case 'low': return 'text-gray-500 dark:text-gray-400'
-    default: return 'text-gray-500'
+    case 'critical': return 'bg-destructive/10 text-destructive border-transparent'
+    case 'high': return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-transparent'
+    case 'medium': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-transparent'
+    case 'low': return 'bg-secondary text-secondary-foreground border-transparent'
+    default: return 'bg-secondary text-secondary-foreground border-transparent'
+  }
+}
+
+function typeBadgeClass(type: string): string {
+  switch (type) {
+    case 'bug': return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 border-transparent'
+    case 'feature': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400 border-transparent'
+    case 'improvement': return 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 border-transparent'
+    case 'task': return 'bg-secondary text-secondary-foreground border-transparent'
+    default: return 'bg-secondary text-secondary-foreground border-transparent'
   }
 }
 
@@ -120,12 +163,24 @@ function buildTimeline(iss: Issue, cmts: IssueComment[]): TimelineEvent[] {
 function dotColor(type: string): string {
   switch (type) {
     case 'created': return 'bg-blue-500'
-    case 'acknowledged': return 'bg-yellow-500'
+    case 'acknowledged': return 'bg-purple-500'
     case 'resolved': return 'bg-green-500'
-    case 'reopened': return 'bg-red-500'
+    case 'reopened': return 'bg-amber-500'
     case 'closed': return 'bg-emerald-600'
-    case 'rejected': return 'bg-gray-500'
-    default: return 'bg-gray-400'
+    case 'rejected': return 'bg-destructive'
+    default: return 'bg-muted-foreground'
+  }
+}
+
+function timelineBadgeClass(type: string): string {
+  switch (type) {
+    case 'created': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 border-transparent'
+    case 'acknowledged': return 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300 border-transparent'
+    case 'resolved': return 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 border-transparent'
+    case 'reopened': return 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-transparent'
+    case 'closed': return 'bg-muted text-muted-foreground border-transparent'
+    case 'rejected': return 'bg-destructive/10 text-destructive border-transparent'
+    default: return 'bg-muted text-muted-foreground border-transparent'
   }
 }
 
@@ -143,16 +198,6 @@ async function loadIssue() {
     error.value = err.message || 'Failed to load issue'
   } finally {
     loading.value = false
-  }
-}
-
-function typeColor(type: string): string {
-  switch (type) {
-    case 'bug': return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'
-    case 'feature': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
-    case 'improvement': return 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400'
-    case 'task': return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
-    default: return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
   }
 }
 
@@ -261,174 +306,247 @@ onMounted(loadIssue)
 <template>
   <div class="space-y-4">
     <!-- Back button -->
-    <button @click="router.push('/issues')" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
-      ← Back to Issues
-    </button>
+    <Button variant="ghost" size="sm" @click="router.push('/issues')" class="-ml-2">
+      <ArrowLeft class="w-4 h-4 mr-1" />
+      Back to Issues
+    </Button>
 
-    <div v-if="loading" class="text-center py-8 text-gray-500">Loading issue...</div>
-    <div v-else-if="error" class="text-center py-8 text-red-500">{{ error }}</div>
+    <!-- Loading -->
+    <div v-if="loading" class="flex items-center justify-center py-8 text-muted-foreground gap-2">
+      <Loader2 class="w-4 h-4 animate-spin" />
+      <span>Loading issue...</span>
+    </div>
+
+    <!-- Error -->
+    <div v-else-if="error && !issue" class="text-center py-8 text-destructive">{{ error }}</div>
 
     <template v-else-if="issue">
+      <!-- Error banner (non-fatal) -->
+      <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
+
       <!-- Header card -->
-      <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <template v-if="!editing">
-          <div class="flex items-start justify-between">
-            <div>
-              <div class="flex items-center gap-2 mb-2">
-                <span class="text-gray-400 text-sm">#{{ issue.id }}</span>
-                <span v-if="issue.type" :class="['px-2 py-0.5 text-xs rounded-full', typeColor(issue.type)]">{{ issue.type }}</span>
-                <span :class="['font-bold text-sm uppercase', priorityColor(issue.priority)]">{{ issue.priority }}</span>
-                <span :class="['px-2 py-0.5 text-xs rounded-full', statusColor(issue.status)]">{{ issue.status }}</span>
+      <Card>
+        <CardHeader class="pb-3">
+          <template v-if="!editing">
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-2 flex-wrap">
+                  <span class="text-muted-foreground text-sm font-mono">#{{ issue.id }}</span>
+                  <Badge v-if="issue.type" :class="typeBadgeClass(issue.type)">{{ issue.type }}</Badge>
+                  <Badge :class="priorityBadgeClass(issue.priority)" class="uppercase">{{ issue.priority }}</Badge>
+                  <Badge :class="statusBadgeClass(issue.status)">{{ issue.status }}</Badge>
+                </div>
+                <h1 class="text-lg font-semibold">{{ issue.title }}</h1>
+                <p class="text-sm text-muted-foreground mt-1">
+                  {{ shortProject(issue.source_project) }} &rarr; {{ shortProject(issue.target_project) }}
+                  &middot; Created {{ formatRelativeTime(issue.created_at) }}
+                </p>
               </div>
-              <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ issue.title }}</h1>
-              <div class="text-sm text-gray-500 mt-1">
-                {{ shortProject(issue.source_project) }} → {{ shortProject(issue.target_project) }}
-                · Created {{ formatRelativeTime(issue.created_at) }}
+
+              <!-- Operator actions -->
+              <div class="flex items-center gap-2 shrink-0">
+                <Button variant="secondary" size="sm" @click="startEdit">
+                  <Pencil class="w-3.5 h-3.5 mr-1" />
+                  Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-900/20"
+                  @click="showRejectDialog = true"
+                >
+                  <Ban class="w-3.5 h-3.5 mr-1" />
+                  Reject
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="border-destructive/50 text-destructive hover:bg-destructive/10"
+                  @click="showDeleteConfirm = true"
+                >
+                  <Trash2 class="w-3.5 h-3.5 mr-1" />
+                  Delete
+                </Button>
               </div>
             </div>
 
-            <!-- Operator actions -->
-            <div class="flex items-center gap-2 flex-shrink-0">
-              <button @click="startEdit" class="px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600">
-                <i class="fas fa-pen mr-1" /> Edit
-              </button>
-              <button @click="showRejectDialog = true" class="px-2 py-1 text-xs rounded bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 hover:bg-orange-200">
-                <i class="fas fa-ban mr-1" /> Reject
-              </button>
-              <button @click="showDeleteConfirm = true" class="px-2 py-1 text-xs rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-200">
-                <i class="fas fa-trash mr-1" /> Delete
-              </button>
+            <!-- Status override -->
+            <div class="mt-3 flex items-center gap-2">
+              <span class="text-xs text-muted-foreground">Status override:</span>
+              <Select
+                :model-value="issue.status"
+                :disabled="actionLoading"
+                @update:model-value="changeStatus($event as string)"
+              >
+                <SelectTrigger class="h-7 w-40 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="s in allStatuses" :key="s" :value="s">{{ s }}</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </div>
+          </template>
 
-          <!-- Status dropdown (operator override) -->
-          <div class="mt-3 flex items-center gap-2">
-            <span class="text-xs text-gray-500">Status override:</span>
-            <select
-              :value="issue.status"
-              @change="changeStatus(($event.target as HTMLSelectElement).value)"
-              :disabled="actionLoading"
-              class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
-            >
-              <option v-for="s in allStatuses" :key="s" :value="s">{{ s }}</option>
-            </select>
-          </div>
-        </template>
-
-        <!-- Edit mode -->
-        <template v-else>
-          <div class="space-y-3">
-            <input v-model="editTitle" class="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-lg font-semibold" />
-            <textarea v-model="editBody" rows="4" class="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm" />
-            <div class="flex gap-3">
-              <select v-model="editPriority" class="flex-1 px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100">
-                <option v-for="p in ['critical', 'high', 'medium', 'low']" :key="p" :value="p">{{ p }}</option>
-              </select>
-              <select v-model="editType" class="flex-1 px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100">
-                <option value="task">Task</option>
-                <option value="bug">Bug</option>
-                <option value="feature">Feature</option>
-                <option value="improvement">Improvement</option>
-              </select>
+          <!-- Edit mode -->
+          <template v-else>
+            <div class="space-y-3">
+              <Input v-model="editTitle" class="text-lg font-semibold" />
+              <Textarea v-model="editBody" class="min-h-[100px] resize-y" />
+              <div class="flex gap-3">
+                <Select v-model="editPriority" class="flex-1">
+                  <SelectTrigger>
+                    <SelectValue placeholder="Priority" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem v-for="p in ['critical', 'high', 'medium', 'low']" :key="p" :value="p">{{ p }}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select v-model="editType" class="flex-1">
+                  <SelectTrigger>
+                    <SelectValue placeholder="Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="task">Task</SelectItem>
+                    <SelectItem value="bug">Bug</SelectItem>
+                    <SelectItem value="feature">Feature</SelectItem>
+                    <SelectItem value="improvement">Improvement</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div class="flex gap-2">
+                <Button size="sm" @click="saveEdit" :disabled="actionLoading">
+                  <Loader2 v-if="actionLoading" class="w-3.5 h-3.5 mr-1 animate-spin" />
+                  Save
+                </Button>
+                <Button variant="secondary" size="sm" @click="editing = false">Cancel</Button>
+              </div>
             </div>
-            <div class="flex gap-2">
-              <button @click="saveEdit" :disabled="actionLoading" class="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50">Save</button>
-              <button @click="editing = false" class="px-3 py-1 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">Cancel</button>
-            </div>
-          </div>
-        </template>
-      </div>
+          </template>
+        </CardHeader>
+      </Card>
 
       <!-- Labels -->
       <div v-if="issue.labels && issue.labels.length > 0" class="flex gap-1 flex-wrap">
-        <span v-for="label in issue.labels" :key="label"
-          class="px-2 py-0.5 text-xs rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+        <Badge
+          v-for="label in issue.labels"
+          :key="label"
+          variant="secondary"
+        >
           {{ label }}
-        </span>
+        </Badge>
       </div>
 
       <!-- Comment form -->
-      <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Add Comment (as operator)</h3>
-        <div class="flex flex-col gap-2">
-          <textarea
-            v-model="newComment"
-            @keydown.ctrl.enter="submitComment"
-            @keydown.meta.enter="submitComment"
-            placeholder="Write a comment... (Ctrl+Enter to send)"
-            rows="4"
-            class="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm resize-y"
-            style="min-height: 80px; max-height: 400px"
-          ></textarea>
-          <div class="flex justify-end">
-            <button
-              @click="submitComment"
-              :disabled="commenting || !newComment.trim()"
-              class="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
-            >
-              {{ commenting ? '...' : 'Send' }}
-            </button>
+      <Card>
+        <CardContent class="pt-4">
+          <h3 class="text-sm font-medium mb-2">Add Comment (as operator)</h3>
+          <div class="flex flex-col gap-2">
+            <Textarea
+              v-model="newComment"
+              @keydown.ctrl.enter="submitComment"
+              @keydown.meta.enter="submitComment"
+              placeholder="Write a comment... (Ctrl+Enter to send)"
+              class="min-h-[80px] max-h-[400px] resize-y"
+            />
+            <div class="flex justify-end">
+              <Button
+                size="sm"
+                @click="submitComment"
+                :disabled="commenting || !newComment.trim()"
+              >
+                <Loader2 v-if="commenting" class="w-3.5 h-3.5 mr-1 animate-spin" />
+                {{ commenting ? 'Sending...' : 'Send' }}
+              </Button>
+            </div>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       <!-- Timeline -->
       <div class="space-y-3">
-        <h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wide">Timeline</h2>
+        <h2 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Timeline</h2>
 
         <div v-for="(event, idx) in timeline" :key="idx" class="flex gap-3">
           <div class="flex flex-col items-center">
-            <div :class="['w-2.5 h-2.5 rounded-full mt-1.5', dotColor(event.type)]" />
-            <div v-if="idx < timeline.length - 1" class="w-px flex-1 bg-gray-200 dark:bg-gray-700" />
+            <div :class="cn('w-2.5 h-2.5 rounded-full mt-1.5 shrink-0', dotColor(event.type))" />
+            <div v-if="idx < timeline.length - 1" class="w-px flex-1 bg-border mt-1" />
           </div>
 
-          <div class="pb-4 flex-1">
-            <div class="flex items-center gap-2 text-sm">
-              <span class="font-medium text-gray-700 dark:text-gray-300 capitalize">{{ event.type }}</span>
-              <span v-if="event.project" class="text-gray-500">by {{ shortProject(event.project) }}</span>
-              <span v-if="event.agent" class="text-gray-400">({{ event.agent }})</span>
-              <span class="text-gray-400 text-xs">{{ formatRelativeTime(event.date) }}</span>
+          <div class="pb-4 flex-1 min-w-0">
+            <div class="flex items-center gap-2 text-sm flex-wrap">
+              <Badge :class="timelineBadgeClass(event.type)" class="capitalize">{{ event.type }}</Badge>
+              <span v-if="event.project" class="text-muted-foreground text-xs">by {{ shortProject(event.project) }}</span>
+              <span v-if="event.agent" class="text-muted-foreground text-xs">({{ event.agent }})</span>
+              <span class="text-muted-foreground text-xs">{{ formatRelativeTime(event.date) }}</span>
             </div>
-            <div v-if="event.body" class="markdown-body mt-1 text-sm text-gray-600 dark:text-gray-400 break-words" v-html="renderMarkdown(event.body)" />
-          </div>
-        </div>
-      </div>
-
-      <!-- Delete confirmation -->
-      <div v-if="showDeleteConfirm" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div class="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-sm mx-4">
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Delete Issue #{{ issue.id }}?</h3>
-          <p class="text-sm text-gray-500 mb-4">This permanently deletes the issue and all comments. Cannot be undone.</p>
-          <div class="flex gap-2 justify-end">
-            <button @click="showDeleteConfirm = false" class="px-3 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">Cancel</button>
-            <button @click="confirmDelete" :disabled="actionLoading" class="px-3 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-500 disabled:opacity-50">Delete</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Reject dialog -->
-      <div v-if="showRejectDialog" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div class="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-sm mx-4">
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Reject Issue #{{ issue.id }}</h3>
-          <p class="text-sm text-gray-500 mb-3">Rejected issues are hidden from all agent sessions. Provide a reason:</p>
-          <textarea v-model="rejectReason" rows="3" placeholder="Rejection reason (required)..."
-            class="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm mb-4" />
-          <div class="flex gap-2 justify-end">
-            <button @click="showRejectDialog = false; rejectReason = ''" class="px-3 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">Cancel</button>
-            <button @click="confirmReject" :disabled="actionLoading || !rejectReason.trim()" class="px-3 py-2 text-sm rounded bg-orange-600 text-white hover:bg-orange-500 disabled:opacity-50">Reject</button>
+            <div
+              v-if="event.body"
+              class="markdown-body mt-1.5 text-sm text-muted-foreground break-words"
+              v-html="renderMarkdown(event.body)"
+            />
           </div>
         </div>
       </div>
     </template>
   </div>
+
+  <!-- Delete confirmation dialog -->
+  <Dialog :open="showDeleteConfirm" @update:open="showDeleteConfirm = $event">
+    <DialogContent class="max-w-sm">
+      <DialogHeader>
+        <DialogTitle>Delete Issue #{{ issue?.id }}?</DialogTitle>
+        <DialogDescription>
+          This permanently deletes the issue and all comments. Cannot be undone.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <Button variant="secondary" @click="showDeleteConfirm = false">Cancel</Button>
+        <Button variant="destructive" @click="confirmDelete" :disabled="actionLoading">
+          <Loader2 v-if="actionLoading" class="w-4 h-4 mr-2 animate-spin" />
+          Delete
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+
+  <!-- Reject dialog -->
+  <Dialog :open="showRejectDialog" @update:open="showRejectDialog = $event; if (!$event) rejectReason = ''">
+    <DialogContent class="max-w-sm">
+      <DialogHeader>
+        <DialogTitle>Reject Issue #{{ issue?.id }}</DialogTitle>
+        <DialogDescription>
+          Rejected issues are hidden from all agent sessions. Provide a reason:
+        </DialogDescription>
+      </DialogHeader>
+      <div class="py-2">
+        <Textarea
+          v-model="rejectReason"
+          placeholder="Rejection reason (required)..."
+          class="min-h-[80px] resize-y"
+        />
+      </div>
+      <DialogFooter>
+        <Button variant="secondary" @click="showRejectDialog = false; rejectReason = ''">Cancel</Button>
+        <Button
+          class="bg-orange-600 text-white hover:bg-orange-500"
+          @click="confirmReject"
+          :disabled="actionLoading || !rejectReason.trim()"
+        >
+          <Loader2 v-if="actionLoading" class="w-4 h-4 mr-2 animate-spin" />
+          Reject
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 </template>
 
 <style scoped>
 .markdown-body :deep(code) {
-  @apply bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-sm font-mono;
+  @apply bg-muted px-1 py-0.5 rounded text-sm font-mono;
 }
 .markdown-body :deep(pre) {
-  @apply bg-gray-100 dark:bg-gray-700 p-3 rounded-lg overflow-x-auto my-2;
+  @apply bg-muted p-3 rounded-lg overflow-x-auto my-2;
 }
 .markdown-body :deep(pre code) {
   @apply bg-transparent p-0;
@@ -444,7 +562,7 @@ onMounted(loadIssue)
   @apply list-decimal;
 }
 .markdown-body :deep(a) {
-  @apply text-blue-500 hover:underline;
+  @apply text-primary hover:underline;
 }
 .markdown-body :deep(p) {
   @apply my-1;

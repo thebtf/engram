@@ -4,7 +4,51 @@ import { useTokens } from '@/composables/useTokens'
 import { formatRelativeTime } from '@/utils/formatters'
 import { copyToClipboard } from '@/utils/clipboard'
 import EmptyState from '@/components/layout/EmptyState.vue'
-import ConfirmDialog from '@/components/layout/ConfirmDialog.vue'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Key,
+  Plus,
+  RefreshCw,
+  Copy,
+  Check,
+  Ban,
+  AlertTriangle,
+  Clock,
+  ArrowLeftRight,
+  BarChart2,
+  Loader2,
+} from 'lucide-vue-next'
 
 interface TokenStats {
   request_count: number
@@ -115,45 +159,38 @@ async function handleRevoke() {
 </script>
 
 <template>
-  <div>
+  <div class="space-y-6">
     <!-- Header -->
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <i class="fas fa-key text-claude-400 text-xl" />
-        <h1 class="text-2xl font-bold text-white">API Tokens</h1>
-        <span v-if="tokens.length > 0" class="text-sm text-slate-500">({{ tokens.length }})</span>
+        <Key class="text-primary size-5" />
+        <h1 class="text-2xl font-bold">API Tokens</h1>
+        <span v-if="tokens.length > 0" class="text-sm text-muted-foreground">({{ tokens.length }})</span>
       </div>
       <div class="flex items-center gap-2">
-        <button
-          @click="loadTokens()"
-          :disabled="loading"
-          class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white hover:border-claude-500/50 transition-colors disabled:opacity-50"
-        >
-          <i :class="['fas fa-sync-alt mr-1.5', loading && 'fa-spin']" />
+        <Button variant="outline" size="sm" :disabled="loading" @click="loadTokens()">
+          <RefreshCw :class="['size-4', loading && 'animate-spin']" />
           Refresh
-        </button>
-        <button
-          @click="openCreateModal()"
-          class="px-3 py-1.5 rounded-lg text-sm bg-claude-500 text-white hover:bg-claude-400 transition-colors"
-        >
-          <i class="fas fa-plus mr-1.5" />
+        </Button>
+        <Button size="sm" @click="openCreateModal()">
+          <Plus class="size-4" />
           Create Token
-        </button>
+        </Button>
       </div>
     </div>
 
-    <!-- Loading -->
-    <div v-if="loading && tokens.length === 0" class="flex items-center justify-center py-20">
-      <i class="fas fa-circle-notch fa-spin text-claude-400 text-2xl" />
+    <!-- Loading skeleton -->
+    <div v-if="loading && tokens.length === 0" class="space-y-2">
+      <Skeleton class="h-16 w-full rounded-lg" />
+      <Skeleton class="h-16 w-full rounded-lg" />
+      <Skeleton class="h-16 w-full rounded-lg" />
     </div>
 
     <!-- Error -->
-    <div v-else-if="error" class="text-center py-16">
-      <i class="fas fa-exclamation-triangle text-red-400 text-3xl mb-3 block" />
-      <p class="text-red-400 mb-2">{{ error }}</p>
-      <button @click="loadTokens()" class="text-sm text-slate-400 hover:text-white transition-colors">
-        Try again
-      </button>
+    <div v-else-if="error" class="flex flex-col items-center justify-center py-16 gap-3">
+      <AlertTriangle class="size-8 text-destructive" />
+      <p class="text-destructive text-sm">{{ error }}</p>
+      <Button variant="ghost" size="sm" @click="loadTokens()">Try again</Button>
     </div>
 
     <!-- Empty State -->
@@ -164,194 +201,193 @@ async function handleRevoke() {
       description="Create a token to authenticate API requests."
     />
 
-    <!-- Tokens List -->
-    <div v-else class="space-y-2">
-      <div
-        v-for="token in sortedTokens"
-        :key="token.id"
-        :class="[
-          'p-4 rounded-xl border-2 bg-gradient-to-br from-slate-800/50 to-slate-900/50',
-          token.revoked ? 'border-slate-700/30 opacity-50' : 'border-slate-700/50'
-        ]"
-      >
-        <div class="flex items-center justify-between">
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-1">
-              <h3 class="text-sm font-medium text-white">{{ token.name }}</h3>
-              <code class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-slate-900 border border-slate-700 text-slate-400">
+    <!-- Tokens Table -->
+    <Card v-else>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Name</TableHead>
+            <TableHead>Prefix</TableHead>
+            <TableHead>Scope</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Activity</TableHead>
+            <TableHead>Stats</TableHead>
+            <TableHead class="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow
+            v-for="token in sortedTokens"
+            :key="token.id"
+            :class="token.revoked ? 'opacity-50' : ''"
+          >
+            <TableCell class="font-medium">{{ token.name }}</TableCell>
+            <TableCell>
+              <code class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-muted border text-muted-foreground">
                 {{ token.token_prefix }}...
               </code>
-              <span :class="[
-                'px-2 py-0.5 text-[10px] font-medium rounded-full border',
-                token.scope === 'read-write'
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                  : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
-              ]">
+            </TableCell>
+            <TableCell>
+              <Badge :variant="token.scope === 'read-write' ? 'default' : 'secondary'" class="text-[10px]">
                 {{ token.scope }}
-              </span>
-              <span v-if="token.revoked" class="px-2 py-0.5 text-[10px] font-medium rounded-full border bg-red-500/20 text-red-300 border-red-500/30">
-                Revoked
-              </span>
-            </div>
-            <div class="flex items-center gap-3 text-xs text-slate-500">
-              <span>Created {{ formatRelativeTime(token.created_at) }}</span>
-              <span v-if="token.revoked_at">
-                <i class="fas fa-ban text-red-600 mr-0.5" />
-                Revoked {{ formatRelativeTime(token.revoked_at) }}
-              </span>
-              <span v-else-if="token.last_used_at">
-                <i class="fas fa-clock text-slate-600 mr-0.5" />
-                Last used {{ formatRelativeTime(token.last_used_at) }}
-              </span>
-              <span>
-                <i class="fas fa-arrow-right-arrow-left text-slate-600 mr-0.5" />
-                {{ token.request_count }} requests
-              </span>
-              <span v-if="token.error_count" class="text-red-400/70">
-                <i class="fas fa-exclamation-circle mr-0.5" />
-                {{ token.error_count }} errors
-              </span>
-            </div>
-            <!-- Per-token stats (lazy loaded) -->
-            <div class="mt-1">
+              </Badge>
+            </TableCell>
+            <TableCell>
+              <Badge v-if="token.revoked" variant="destructive" class="text-[10px]">Revoked</Badge>
+              <Badge v-else variant="outline" class="text-[10px] text-green-600 border-green-600/40">Active</Badge>
+            </TableCell>
+            <TableCell>
+              <div class="space-y-0.5 text-xs text-muted-foreground">
+                <div class="flex items-center gap-1">
+                  <ArrowLeftRight class="size-3 text-muted-foreground/60" />
+                  {{ token.request_count }} requests
+                </div>
+                <div v-if="token.error_count" class="flex items-center gap-1 text-destructive/70">
+                  <AlertTriangle class="size-3" />
+                  {{ token.error_count }} errors
+                </div>
+                <div v-if="token.revoked_at" class="flex items-center gap-1">
+                  <Ban class="size-3 text-destructive/60" />
+                  Revoked {{ formatRelativeTime(token.revoked_at) }}
+                </div>
+                <div v-else-if="token.last_used_at" class="flex items-center gap-1">
+                  <Clock class="size-3 text-muted-foreground/60" />
+                  Last used {{ formatRelativeTime(token.last_used_at) }}
+                </div>
+              </div>
+            </TableCell>
+            <TableCell>
+              <!-- Per-token stats (lazy loaded) -->
               <button
                 v-if="tokenStats[token.id] === undefined && !statsLoading[token.id]"
+                class="flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
                 @click="loadTokenStats(token.id)"
-                class="text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
               >
-                <i class="fas fa-chart-bar mr-0.5" />
+                <BarChart2 class="size-3" />
                 Load stats
               </button>
-              <span v-else-if="statsLoading[token.id]" class="text-[10px] text-slate-600">
-                <i class="fas fa-circle-notch fa-spin mr-0.5" />
-                Loading stats...
+              <span v-else-if="statsLoading[token.id]" class="flex items-center gap-1 text-[10px] text-muted-foreground/60">
+                <Loader2 class="size-3 animate-spin" />
+                Loading...
               </span>
-              <span v-else-if="tokenStats[token.id]" class="text-[10px] text-slate-500">
-                <i class="fas fa-chart-bar mr-0.5 text-slate-600" />
-                {{ tokenStats[token.id].request_count }} requests
-                <span v-if="tokenStats[token.id].last_used_at">
-                  · Last used: {{ formatRelativeTime(tokenStats[token.id].last_used_at!) }}
-                </span>
-                <span v-else> · Never used</span>
-              </span>
+              <div v-else-if="tokenStats[token.id]" class="text-[10px] text-muted-foreground">
+                <div class="flex items-center gap-1">
+                  <BarChart2 class="size-3 text-muted-foreground/60" />
+                  {{ tokenStats[token.id].request_count }} requests
+                </div>
+                <div v-if="tokenStats[token.id].last_used_at">
+                  Last: {{ formatRelativeTime(tokenStats[token.id].last_used_at!) }}
+                </div>
+                <div v-else>Never used</div>
+              </div>
+            </TableCell>
+            <TableCell class="text-right">
+              <Button
+                v-if="!token.revoked"
+                variant="outline"
+                size="xs"
+                class="text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+                @click="confirmRevoke(token.id)"
+              >
+                <Ban class="size-3.5" />
+                Revoke
+              </Button>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </Card>
+
+    <!-- Create Token Dialog -->
+    <Dialog :open="showCreateModal" @update:open="(v) => { if (!v) closeCreateModal() }">
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ createdToken ? 'Token Created' : 'Create API Token' }}</DialogTitle>
+        </DialogHeader>
+
+        <!-- One-time token reveal -->
+        <template v-if="createdToken">
+          <Card class="border-amber-500/30 bg-amber-500/5">
+            <div class="p-4 space-y-3">
+              <p class="text-xs text-amber-500 flex items-center gap-1.5">
+                <AlertTriangle class="size-3.5 shrink-0" />
+                Copy this token now. It will not be shown again.
+              </p>
+              <div class="flex items-center gap-2">
+                <code class="flex-1 px-2 py-1.5 rounded bg-muted border text-xs text-green-500 font-mono break-all select-all">
+                  {{ createdToken }}
+                </code>
+                <Button variant="outline" size="icon-sm" @click="copyToken">
+                  <Check v-if="copyFeedback" class="size-4 text-green-500" />
+                  <Copy v-else class="size-4" />
+                </Button>
+              </div>
+            </div>
+          </Card>
+          <DialogFooter>
+            <Button @click="closeCreateModal">Done</Button>
+          </DialogFooter>
+        </template>
+
+        <!-- Create form -->
+        <template v-else>
+          <div class="space-y-4 py-2">
+            <div class="space-y-1.5">
+              <Label for="token-name">Token Name</Label>
+              <Input
+                id="token-name"
+                v-model="newTokenName"
+                placeholder="e.g., my-workstation"
+                @keydown.enter="handleCreate"
+              />
+            </div>
+            <div class="space-y-2">
+              <Label>Scope</Label>
+              <RadioGroup v-model="newTokenScope" class="flex gap-6">
+                <div class="flex items-center gap-2">
+                  <RadioGroupItem id="scope-rw" value="read-write" />
+                  <Label for="scope-rw" class="font-normal cursor-pointer">Read-Write</Label>
+                </div>
+                <div class="flex items-center gap-2">
+                  <RadioGroupItem id="scope-ro" value="read-only" />
+                  <Label for="scope-ro" class="font-normal cursor-pointer">Read-Only</Label>
+                </div>
+              </RadioGroup>
+            </div>
+            <div v-if="createError" class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {{ createError }}
             </div>
           </div>
+          <DialogFooter>
+            <Button variant="outline" @click="closeCreateModal">Cancel</Button>
+            <Button :disabled="creating || !newTokenName.trim()" @click="handleCreate">
+              <Loader2 v-if="creating" class="size-4 animate-spin" />
+              Create
+            </Button>
+          </DialogFooter>
+        </template>
+      </DialogContent>
+    </Dialog>
 
-          <button
-            v-if="!token.revoked"
-            @click="confirmRevoke(token.id)"
-            class="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-red-400 hover:bg-red-500/10 border border-slate-700/50 hover:border-red-500/30 transition-colors flex-shrink-0"
+    <!-- Revoke Confirmation AlertDialog -->
+    <AlertDialog :open="showRevokeConfirm" @update:open="showRevokeConfirm = $event">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Revoke Token</AlertDialogTitle>
+          <AlertDialogDescription>
+            Are you sure you want to revoke <strong>{{ revokeTarget }}</strong>? Any clients using this token will lose access.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel @click="showRevokeConfirm = false">Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            @click="handleRevoke"
           >
-            <i class="fas fa-ban mr-1" />
             Revoke
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Create Token Modal -->
-    <Teleport to="body">
-      <Transition name="fade">
-        <div v-if="showCreateModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @click="closeCreateModal" />
-          <div class="relative glass border border-white/10 rounded-xl p-6 max-w-md w-full shadow-2xl">
-            <!-- Created token display -->
-            <template v-if="createdToken">
-              <h3 class="text-lg font-semibold text-white mb-2">Token Created</h3>
-              <div class="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 mb-4">
-                <p class="text-xs text-amber-400 mb-2">
-                  <i class="fas fa-triangle-exclamation mr-1" />
-                  Copy this token now. It will not be shown again.
-                </p>
-                <div class="flex items-center gap-2">
-                  <code class="flex-1 px-2 py-1.5 rounded bg-slate-900 border border-slate-700 text-xs text-green-400 font-mono break-all select-all">
-                    {{ createdToken }}
-                  </code>
-                  <button
-                    @click="copyToken"
-                    class="px-3 py-1.5 rounded-lg text-sm bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:text-white transition-colors flex-shrink-0"
-                  >
-                    <i :class="['fas', copyFeedback ? 'fa-check text-green-400' : 'fa-copy']" />
-                  </button>
-                </div>
-              </div>
-              <div class="flex justify-end">
-                <button @click="closeCreateModal" class="px-4 py-2 rounded-lg text-sm bg-claude-500 text-white hover:bg-claude-400 transition-colors">
-                  Done
-                </button>
-              </div>
-            </template>
-
-            <!-- Create form -->
-            <template v-else>
-              <h3 class="text-lg font-semibold text-white mb-4">Create API Token</h3>
-              <div class="space-y-4">
-                <div>
-                  <label class="block text-xs text-slate-400 mb-1">Token Name</label>
-                  <input
-                    v-model="newTokenName"
-                    type="text"
-                    placeholder="e.g., my-workstation"
-                    class="w-full px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/50 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-claude-500/50 focus:border-claude-500"
-                    @keydown.enter="handleCreate"
-                  />
-                </div>
-                <div>
-                  <label class="block text-xs text-slate-400 mb-2">Scope</label>
-                  <div class="flex gap-3">
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" v-model="newTokenScope" value="read-write" class="text-claude-500 focus:ring-claude-500" />
-                      <span class="text-sm text-slate-300">Read-Write</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" v-model="newTokenScope" value="read-only" class="text-claude-500 focus:ring-claude-500" />
-                      <span class="text-sm text-slate-300">Read-Only</span>
-                    </label>
-                  </div>
-                </div>
-                <div v-if="createError" class="p-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
-                  {{ createError }}
-                </div>
-              </div>
-              <div class="flex items-center justify-end gap-3 mt-6">
-                <button @click="closeCreateModal" class="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors">
-                  Cancel
-                </button>
-                <button
-                  @click="handleCreate"
-                  :disabled="creating || !newTokenName.trim()"
-                  class="px-4 py-2 rounded-lg text-sm font-medium bg-claude-500 text-white hover:bg-claude-400 transition-colors disabled:opacity-50"
-                >
-                  <i v-if="creating" class="fas fa-circle-notch fa-spin mr-1.5" />
-                  Create
-                </button>
-              </div>
-            </template>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-
-    <!-- Revoke Confirmation -->
-    <ConfirmDialog
-      :show="showRevokeConfirm"
-      title="Revoke Token"
-      :message="`Are you sure you want to revoke '${revokeTarget}'? Any clients using this token will lose access.`"
-      confirm-label="Revoke"
-      :danger="true"
-      @confirm="handleRevoke"
-      @cancel="showRevokeConfirm = false"
-    />
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>
-
-<style scoped>
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-</style>

@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { useSSE, useUpdate } from '@/composables'
 import SearchBar from '@/components/search/SearchBar.vue'
 
-const router = useRouter()
 const { isConnected, isProcessing } = useSSE()
 const { updateInfo, updateStatus, isUpdating, applyUpdate } = useUpdate()
 
@@ -12,11 +10,9 @@ const showUpdateModal = ref(false)
 const isRestarting = ref(false)
 const searchQuery = ref('')
 
-function handleSearch(q: string) {
-  if (q.trim()) {
-    router.push({ name: 'search', query: { q: q.trim() } })
-    searchQuery.value = ''
-  }
+function handleSearch(_q: string) {
+  // search route does not exist — no-op
+  searchQuery.value = ''
 }
 
 const restartWorker = async () => {
