@@ -6,6 +6,7 @@ import { useSSE } from '@/composables/useSSE'
 import { useColorMode } from '@/composables/useColorMode'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
+import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
 
 const route = useRoute()
 const { authenticated, loading, checkAuth } = useAuth()
@@ -21,7 +22,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-950 text-white">
+  <div class="min-h-screen bg-background text-foreground">
     <!-- Loading spinner while checking auth -->
     <div v-if="loading" class="min-h-screen flex items-center justify-center">
       <i class="fas fa-spinner fa-spin text-2xl text-slate-500" />
@@ -31,10 +32,9 @@ onMounted(() => {
     <router-view v-else-if="!authenticated || isPublicRoute" />
 
     <!-- Authenticated layout -->
-    <div v-else class="flex h-screen">
+    <SidebarProvider v-else>
       <AppSidebar />
-
-      <div class="flex-1 min-w-0 flex flex-col">
+      <SidebarInset>
         <!-- Reconnection Banner -->
         <Transition name="slide">
           <div
@@ -49,12 +49,12 @@ onMounted(() => {
         </Transition>
 
         <!-- Main content area -->
-        <main class="flex-1 p-6 min-h-0 overflow-auto">
+        <main class="flex-1 overflow-auto p-6">
           <AppHeader />
           <router-view />
         </main>
-      </div>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   </div>
 </template>
 
