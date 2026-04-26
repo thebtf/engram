@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,18 +13,28 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
+	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // requestIDKey is the context key for request IDs.
 type requestIDKey struct{}
+
+// emptyTokenStore satisfies auth.TokenStoreReader with an always-empty
+// candidate set. Used as the bootstrap reader for the validator until
+// SetValidator() swaps in the DB-backed *gormdb.TokenStore.
+type emptyTokenStore struct{}
+
+func (emptyTokenStore) FindByPrefix(_ context.Context, _ string) ([]gormdb.APIToken, error) {
+	return nil, nil
+}
 
 // projectNamePattern validates project names to prevent path traversal.
 var projectNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_.\\/:-]+$`)
@@ -110,20 +119,26 @@ var readOnlyAllowedPosts = map[string]bool{
 }
 
 // TokenAuth provides token-based authentication for the worker HTTP API.
-// Supports four auth methods:
-//  1. Master token (ENGRAM_API_TOKEN env var) via X-Auth-Token or Authorization: Bearer header -> admin
-//  2. Client API tokens (engram_* prefix, bcrypt-hashed in DB) via same headers -> scoped access
-//  3. HMAC-signed session cookie (engram_session) -> admin (dashboard)
-//  4. DB-backed auth session cookie (engram_auth) -> role from users table
-//  5. Authentik forward-auth header (X-Authentik-Email) from trusted proxy -> role from users table
+// Supports five auth methods:
+//  1. Master operator key (ENGRAM_AUTH_ADMIN_TOKEN env var) via X-Auth-Token or Authorization: Bearer header -> admin (Source=master)
+//  2. Client API tokens / worker keycards (engram_* prefix, bcrypt-hashed in DB) via same headers -> scoped access (Source=client)
+//  3. HMAC-signed session cookie (engram_session) -> admin (Source=session)
+//  4. DB-backed auth session cookie (engram_auth) -> role from users table (Source=session)
+//  5. Authentik forward-auth header (X-Authentik-Email) from trusted proxy -> role from users table (Source=session)
+//
+// Methods 1 + 2 delegate to the shared *auth.Validator (FR-2 / Plan ADR-002),
+// the same validator that backs gRPC. Methods 3-5 are HTTP-specific and
+// remain inline. Issuance endpoints (handlers_auth.handleCreateToken et al.)
+// gate on Source == "session" via auth.Identity.IsSessionAdmin (FR-6 / C4).
 type TokenAuth struct {
 	ExemptPaths             map[string]bool
-	token                   string
+	token                   string // master operator key (still cached for legacy session-cookie paths)
 	cookieKey               []byte
+	validator               *authpkg.Validator // delegate for methods 1 + 2
 	tokenStore              *gormdb.TokenStore
 	authSessionStore        *gormdb.AuthSessionStore
 	userStore               *gormdb.UserStore
-	statsCh                 chan string // buffered channel for async stats increment
+	statsCh                 chan string // buffered channel for async token stats increment
 	mu                      sync.RWMutex
 	enabled                 bool
 	authentikEnabled        bool
@@ -148,6 +163,14 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 		enabled:   token != "" && !authDisabled,
 		token:     token,
 		cookieKey: cookieKey,
+		// Bootstrap validator handles master-token bearer requests during the
+		// initialisation window before the DB-backed TokenStore is wired in.
+		// SetValidator replaces this with the full two-tier validator once
+		// initializeAsync completes. emptyTokenStore returns no client
+		// candidates, so worker keycards are temporarily unauthenticated until
+		// the swap — acceptable because bootstrap is sub-second and only
+		// service.go ever calls Middleware before SetValidator.
+		validator: authpkg.NewValidator(token, emptyTokenStore{}),
 		statsCh:   make(chan string, 256),
 		ExemptPaths: map[string]bool{
 			"/":                         true, // SPA index.html (dashboard handles auth client-side)
@@ -202,6 +225,17 @@ func (ta *TokenAuth) SetTokenStore(store *gormdb.TokenStore) {
 	ta.tokenStore = store
 }
 
+// SetValidator wires the shared auth.Validator into the middleware. Called
+// once after DB and tokenStore are ready (mirrors SetTokenStore lifecycle).
+// When validator is nil, the middleware falls back to its legacy inline
+// token compare paths — used only by tests that exercise auth-disabled
+// deployments and by the bootstrap window before initializeAsync completes.
+func (ta *TokenAuth) SetValidator(v *authpkg.Validator) {
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+	ta.validator = v
+}
+
 // SetAuthStores injects the user and auth-session stores used for
 // email/password session cookie validation (engram_auth cookie).
 // Called after DB initialization completes.
@@ -244,15 +278,15 @@ func (ta *TokenAuth) StatsCh() chan string {
 }
 
 // Middleware returns HTTP middleware that enforces token authentication.
-// Auth priority: header token (master or client) > HMAC session cookie > DB auth session cookie > 401.
+// Auth priority: header bearer (validator: master OR client keycard) >
+// HMAC session cookie > DB auth session cookie > Authentik forward-auth > 401.
 func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ta.mu.RLock()
 		enabled := ta.enabled
-		masterToken := ta.token
 		exempt := ta.ExemptPaths[r.URL.Path]
 		cookieKey := ta.cookieKey
-		store := ta.tokenStore
+		validator := ta.validator
 		authSessStore := ta.authSessionStore
 		uStore := ta.userStore
 		authentikEnabled := ta.authentikEnabled
@@ -260,167 +294,144 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		authentikTrustedProxies := ta.authentikTrustedProxies
 		ta.mu.RUnlock()
 
-		// Skip auth if disabled or path is exempt
+		// Skip auth if disabled or path is exempt.
 		if !enabled || exempt {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Also exempt static assets and docs
+		// Also exempt static assets and docs.
 		if strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasPrefix(r.URL.Path, "/api/docs") {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// 1. Check for token in header or query param (SSE EventSource can't set headers)
-		providedToken := r.Header.Get("X-Auth-Token")
-		if providedToken == "" {
-			auth := r.Header.Get("Authorization")
-			if bearer, found := strings.CutPrefix(auth, "Bearer "); found {
-				providedToken = bearer
-			}
-		}
-		if providedToken == "" {
-			// Only allow token in query param for SSE endpoints (EventSource can't set headers)
-			path := r.URL.Path
-			if path == "/api/events" || path == "/sse" || strings.HasPrefix(path, "/api/logs") {
-				providedToken = r.URL.Query().Get("token")
-			}
-		}
-
+		// 1. Bearer / X-Auth-Token / SSE-query token — delegate to validator.
+		providedToken := extractHTTPBearer(r)
 		if providedToken != "" {
-			// 1a. Check if it matches the master token -> admin
-			if subtle.ConstantTimeCompare([]byte(providedToken), []byte(masterToken)) == 1 {
-				ctx := context.WithValue(r.Context(), authRoleKey{}, "admin")
-				next.ServeHTTP(w, r.WithContext(ctx))
+			if validator == nil {
+				// Bootstrap window before initializeAsync wires the validator.
+				// Reject defensively — better than silently allowing.
+				log.Warn().Str("path", r.URL.Path).Msg("auth: validator not yet wired, rejecting bearer")
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 
-			// 1b. Check if it's a client token (eng_* prefix)
-			if strings.HasPrefix(providedToken, "engram_") && store != nil {
-				if ta.authenticateClientToken(w, r, next, providedToken, store) {
+			id, err := validator.Validate(r.Context(), providedToken)
+			if err != nil {
+				log.Warn().
+					Str("path", r.URL.Path).
+					Str("remote_addr", r.RemoteAddr).
+					Err(err).
+					Msg("auth: bearer rejected")
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Read-only scope gate (FR-6 inheriting v5 behaviour). Applies
+			// to client keycards only — operator key is always admin.
+			if id.Source == authpkg.SourceClient && id.Role == authpkg.RoleReadOnly {
+				if isMutatingMethod(r.Method) && !readOnlyAllowedPosts[r.URL.Path] {
+					http.Error(w, "forbidden: read-only token", http.StatusForbidden)
 					return
 				}
-				// authenticateClientToken wrote the error response if it failed
-				return
 			}
 
-			// Token provided but doesn't match anything
-			log.Warn().Str("path", r.URL.Path).Str("remote_addr", r.RemoteAddr).Msg("auth: rejected request with invalid token")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// Stats increment for client keycards only.
+			if id.Source == authpkg.SourceClient && id.KeycardID != "" {
+				select {
+				case ta.statsCh <- id.KeycardID:
+				default:
+					// Channel full — skip stats update rather than block auth.
+				}
+			}
+
+			next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
 			return
 		}
 
-		// 2. Check HMAC-signed session cookie (master-token login)
+		// 2. HMAC-signed session cookie (master-token login → admin).
 		if cookieKey != nil {
 			cookie, err := r.Cookie(sessionCookieName)
 			if err == nil && cookie.Value != "" {
 				if ta.authenticateSessionCookie(cookie.Value, cookieKey) {
-					ctx := context.WithValue(r.Context(), authRoleKey{}, "admin")
-					next.ServeHTTP(w, r.WithContext(ctx))
+					id := authpkg.Session("admin")
+					next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
 					return
 				}
 			}
 		}
 
-		// 3. Check DB-backed auth session cookie (email/password login)
+		// 3. DB-backed auth session cookie (email/password login).
 		if authSessStore != nil && uStore != nil {
 			if authCookie, err := r.Cookie("engram_auth"); err == nil && authCookie.Value != "" {
 				if sess, err := authSessStore.GetSession(authCookie.Value); err == nil {
 					if user, err := uStore.GetUserByID(sess.UserID); err == nil && !user.Disabled {
-						ctx := context.WithValue(r.Context(), authRoleKey{}, user.Role)
-						next.ServeHTTP(w, r.WithContext(ctx))
+						id := authpkg.Session(user.Role)
+						next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
 						return
 					}
 				}
 			}
 		}
 
-		// 4. Authentik forward-auth header check
+		// 4. Authentik forward-auth header.
 		if authentikEnabled && uStore != nil {
 			authentikEmail := r.Header.Get("X-Authentik-Email")
 			if authentikEmail != "" && isTrustedProxy(r, authentikTrustedProxies) {
-				// Auto-login or auto-provision
 				user, err := uStore.GetUserByEmail(authentikEmail)
 				if err != nil && authentikAutoProvision {
-					// Auto-provision new user from Authentik
 					user, err = uStore.CreateUser(authentikEmail, "", "operator")
 				}
 				if err == nil && user != nil && !user.Disabled {
-					ctx := context.WithValue(r.Context(), authRoleKey{}, user.Role)
-					next.ServeHTTP(w, r.WithContext(ctx))
+					id := authpkg.Session(user.Role)
+					next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), id)))
 					return
 				}
 			}
 		}
 
-		// 5. No valid auth
+		// 5. No valid auth.
 		log.Warn().Str("path", r.URL.Path).Str("remote_addr", r.RemoteAddr).Msg("auth: rejected unauthenticated request")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 }
 
-// authenticateClientToken validates a client API token and enforces scope.
-// Returns true if the request was handled (either forwarded or rejected).
-func (ta *TokenAuth) authenticateClientToken(w http.ResponseWriter, r *http.Request, next http.Handler, rawToken string, store *gormdb.TokenStore) bool {
-	// Extract prefix: chars 7-15 (first 8 hex chars after "engram_")
-	if len(rawToken) < 15 {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return true
+// extractHTTPBearer pulls the bearer string from (1) X-Auth-Token header,
+// (2) Authorization: Bearer header, (3) ?token= query for SSE endpoints.
+// Empty string when no bearer is present.
+func extractHTTPBearer(r *http.Request) string {
+	if v := r.Header.Get("X-Auth-Token"); v != "" {
+		return v
 	}
-	prefix := rawToken[7:15]
-
-	candidates, err := store.FindByPrefix(r.Context(), prefix)
-	if err != nil {
-		log.Error().Err(err).Msg("auth: token store lookup failed")
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return true
-	}
-	if len(candidates) == 0 {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return true
-	}
-
-	// Find the matching token by bcrypt comparison (handles prefix collisions).
-	var token *gormdb.APIToken
-	for i := range candidates {
-		if bcrypt.CompareHashAndPassword([]byte(candidates[i].TokenHash), []byte(rawToken)) == nil {
-			token = &candidates[i]
-			break
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		if bearer, found := strings.CutPrefix(auth, "Bearer "); found {
+			return bearer
 		}
 	}
-	if token == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return true
+	path := r.URL.Path
+	if path == "/api/events" || path == "/sse" || strings.HasPrefix(path, "/api/logs") {
+		return r.URL.Query().Get("token")
 	}
+	return ""
+}
 
-	// Check revoked
-	if token.Revoked {
-		http.Error(w, "token revoked", http.StatusUnauthorized)
-		return true
-	}
+// mutatingMethods is the set of HTTP verbs that change server state. Used to
+// gate read-only keycards (FR-6 inheriting v5 behaviour).
+var mutatingMethods = []string{"POST", "PUT", "DELETE", "PATCH"}
 
-	// Enforce read-only scope
-	if token.Scope == "read-only" {
-		method := r.Method
-		if method == "POST" || method == "PUT" || method == "DELETE" || method == "PATCH" {
-			if !readOnlyAllowedPosts[r.URL.Path] {
-				http.Error(w, "forbidden: read-only token", http.StatusForbidden)
-				return true
-			}
-		}
-	}
+// isMutatingMethod returns true for HTTP verbs in mutatingMethods.
+func isMutatingMethod(method string) bool {
+	return slices.Contains(mutatingMethods, method)
+}
 
-	// Increment stats asynchronously
-	select {
-	case ta.statsCh <- token.ID:
-	default:
-		// Channel full — skip stats update rather than block auth
-	}
-
-	ctx := context.WithValue(r.Context(), authRoleKey{}, token.Scope)
-	next.ServeHTTP(w, r.WithContext(ctx))
-	return true
+// buildAuthCtx attaches the resolved auth.Identity to ctx under both the new
+// auth.IdentityKey AND the legacy worker.authRoleKey{} (for handlers that have
+// not yet been migrated to read auth.RoleFrom).
+func buildAuthCtx(ctx context.Context, id authpkg.Identity) context.Context {
+	ctx = authpkg.WithIdentity(ctx, id)
+	ctx = context.WithValue(ctx, authRoleKey{}, string(id.Role))
+	return ctx
 }
 
 // authenticateSessionCookie validates an HMAC-signed session cookie.

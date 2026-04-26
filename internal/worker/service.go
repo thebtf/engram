@@ -387,7 +387,9 @@ func (s *Service) initializeAsync() {
 	// Dedup config removed in v5 (US11) — SDK processor uses fixed defaults.
 	s.initMu.Unlock()
 
-	// Wire token store into auth middleware for client token lookups
+	// Wire token store into auth middleware for client token lookups.
+	// Also wire the shared *auth.Validator (constructed below alongside the
+	// gRPC server) so HTTP and gRPC share one validation chain (FR-2).
 	if s.tokenAuth != nil {
 		s.tokenAuth.SetTokenStore(tokenStore)
 	}
@@ -495,6 +497,10 @@ func (s *Service) initializeAsync() {
 	var grpcValidator *auth.Validator
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true") {
 		grpcValidator = auth.NewValidator(config.GetWorkerToken(), tokenStore)
+	}
+	// Share the validator with the HTTP middleware (FR-2: symmetric validation).
+	if s.tokenAuth != nil && grpcValidator != nil {
+		s.tokenAuth.SetValidator(grpcValidator)
 	}
 	grpcSrv, grpcInternalSrv := grpcserver.New(adapter, grpcValidator)
 	grpcInternalSrv.SetDB(store.DB)
