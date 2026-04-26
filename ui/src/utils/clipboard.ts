@@ -1,6 +1,5 @@
 export async function copyToClipboard(text: string): Promise<boolean> {
-  // Try modern Clipboard API first (requires HTTPS or localhost)
-  if (navigator.clipboard?.writeText) {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text)
       return true
@@ -9,13 +8,14 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     }
   }
 
-  // Legacy fallback using execCommand (works over HTTP)
   try {
     const textarea = document.createElement('textarea')
     textarea.value = text
-    textarea.style.position = 'fixed'
-    textarea.style.left = '-9999px'
+    textarea.setAttribute('readonly', '')
+    textarea.style.cssText =
+      'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:none;outline:none;opacity:0;'
     document.body.appendChild(textarea)
+    textarea.focus()
     textarea.select()
     const success = document.execCommand('copy')
     document.body.removeChild(textarea)
