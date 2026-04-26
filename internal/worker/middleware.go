@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -319,12 +320,30 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 
 			id, err := validator.Validate(r.Context(), providedToken)
 			if err != nil {
-				log.Warn().
-					Str("path", r.URL.Path).
-					Str("remote_addr", r.RemoteAddr).
-					Err(err).
-					Msg("auth: bearer rejected")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				switch {
+				case errors.Is(err, authpkg.ErrEmptyToken),
+					errors.Is(err, authpkg.ErrInvalidCredentials),
+					errors.Is(err, authpkg.ErrRevoked):
+					// Auth-class errors — bearer was syntactically present
+					// but failed validation. 401 is correct.
+					log.Warn().
+						Str("path", r.URL.Path).
+						Str("remote_addr", r.RemoteAddr).
+						Err(err).
+						Msg("auth: bearer rejected")
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+				default:
+					// Wrapped store / bcrypt error — auth machinery itself
+					// is broken. Surface as 500 so monitoring distinguishes
+					// "rejected credential" from "auth subsystem down" (the
+					// gRPC interceptor maps the same case to codes.Internal).
+					log.Error().
+						Str("path", r.URL.Path).
+						Str("remote_addr", r.RemoteAddr).
+						Err(err).
+						Msg("auth: store/bcrypt failure")
+					http.Error(w, "auth store unavailable", http.StatusInternalServerError)
+				}
 				return
 			}
 
@@ -381,6 +400,16 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			if authentikEmail != "" && isTrustedProxy(r, authentikTrustedProxies) {
 				user, err := uStore.GetUserByEmail(authentikEmail)
 				if err != nil && authentikAutoProvision {
+					// Autoprovisioned users receive the "operator" role —
+					// the regular non-admin role. This is intentional:
+					// auto-creating SSO callers as admin would mean any
+					// user reaching the SSO endpoint receives keycard
+					// issuance privileges. Existing admins can promote
+					// the new user via PATCH /api/users/{id}/role. v6
+					// IsSessionAdmin (admin role only) preserves this
+					// boundary; v5 issuance gated on master-token bearer
+					// alone, so "operator" session users could never
+					// issue keycards either — no regression.
 					user, err = uStore.CreateUser(authentikEmail, "", "operator")
 				}
 				if err == nil && user != nil && !user.Disabled {

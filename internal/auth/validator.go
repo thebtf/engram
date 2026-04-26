@@ -156,7 +156,20 @@ func (v *Validator) Validate(ctx context.Context, raw string) (Identity, error) 
 			[]byte(raw),
 		)
 		if err == nil {
-			return Client(candidates[i].Scope, candidates[i].ID), nil
+			// Defense-in-depth: api_tokens.scope is plain text. A row with
+			// scope="admin" (data corruption, malicious INSERT, future
+			// schema drift) MUST NOT promote a worker keycard to admin.
+			// Whitelist the two values issuance is allowed to write.
+			switch Role(candidates[i].Scope) {
+			case RoleReadWrite, RoleReadOnly:
+				return Client(candidates[i].Scope, candidates[i].ID), nil
+			default:
+				return Identity{}, fmt.Errorf(
+					"auth: keycard %s has unexpected scope %q (allowed: %q, %q)",
+					candidates[i].ID, candidates[i].Scope,
+					RoleReadWrite, RoleReadOnly,
+				)
+			}
 		}
 		// bcrypt.ErrMismatchedHashAndPassword is the expected miss; only
 		// log on unexpected errors (bcrypt cost/format issues).

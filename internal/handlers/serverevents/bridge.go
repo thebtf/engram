@@ -105,11 +105,17 @@ func NewBridge(logger *slog.Logger, reg *registry.Registry, tracker ProjectTrack
 	startUnix := time.Now().Unix()
 	clientID := fmt.Sprintf("%d-%d", pid, startUnix)
 
-	serverURL := os.Getenv(config.EnvServerURLAlt)
+	// Precedence aligned with internal/config/envnames.go: EnvServerURL
+	// ("ENGRAM_URL") is canonical, EnvServerURLAlt ("ENGRAM_SERVER_URL")
+	// is the deprecated fallback. Reading them in the opposite order would
+	// let a divergent migration deploy serve tools/call and the
+	// serverevents bridge from two different backends within the same
+	// daemon process.
+	serverURL := os.Getenv(config.EnvServerURL)
 	if serverURL == "" {
-		if fallback := os.Getenv(config.EnvServerURL); fallback != "" {
+		if fallback := os.Getenv(config.EnvServerURLAlt); fallback != "" {
 			serverURL = fallback
-			logger.Warn("ENGRAM_URL is deprecated for bridge configuration; please use ENGRAM_SERVER_URL instead")
+			logger.Warn("ENGRAM_SERVER_URL is deprecated for bridge configuration; please use ENGRAM_URL instead")
 		}
 	}
 	// FR-3 / Plan ADR-003: workstation reads the client-semantic env var.

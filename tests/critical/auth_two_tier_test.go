@@ -251,6 +251,11 @@ func (stubMCPHandler) ServerInfo() (string, string)          { return "engram-cr
 func newGRPCBufconnClient(t *testing.T, v *auth.Validator) (pb.EngramServiceClient, func()) {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
+	// grpcserver.New returns (*grpc.Server, *grpcserver.Server) — NOT an
+	// error. The second return is the *Server wrapper used for SetDB /
+	// SetBus / SetValidator post-construction, none of which the bufconn
+	// fixture needs. The underscore is therefore the *Server pointer, not
+	// a swallowed error.
 	srv, _ := grpcserver.New(stubMCPHandler{}, v)
 	go func() { _ = srv.Serve(lis) }()
 

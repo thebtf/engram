@@ -27,10 +27,18 @@ import (
 //
 // The tlsMode axis stays in the key so changing ENGRAM_TLS_CA mid-session
 // does not silently reuse a stale connection against the new TLS policy.
+//
+// The tlsCAHash axis distinguishes two distinct custom-CA paths under the
+// same tlsMode = "custom-ca". Without it, switching ENGRAM_TLS_CA from
+// /etc/ca-A.pem to /etc/ca-B.pem leaves the connection still bound to the
+// trust store loaded from ca-A. Hashed (rather than stored as plaintext)
+// because pool keys end up in heap dumps; a stable short hash is enough to
+// distinguish CA versions without leaking the path layout.
 type connKey struct {
-	addr      string
-	tlsMode   string // "custom-ca", "system-tls", "plaintext"
-	tokenHash string // first 16 hex chars of sha256(token); empty for empty token
+	addr       string
+	tlsMode    string // "custom-ca", "system-tls", "plaintext"
+	tlsCAHash  string // first 16 hex chars of sha256(ENGRAM_TLS_CA); empty for non-custom-ca
+	tokenHash  string // first 16 hex chars of sha256(token); empty for empty token
 }
 
 // hashToken returns a stable short identifier for a credential. The full
@@ -63,14 +71,23 @@ func (p *grpcPool) getOrDialGRPC(serverURL, token string) (*grpc.ClientConn, err
 		return nil, fmt.Errorf("parse server URL: %w", err)
 	}
 
+	tlsCA := os.Getenv("ENGRAM_TLS_CA")
 	tlsMode := "plaintext"
-	if os.Getenv("ENGRAM_TLS_CA") != "" {
+	tlsCAHash := ""
+	switch {
+	case tlsCA != "":
 		tlsMode = "custom-ca"
-	} else if strings.HasPrefix(serverURL, "https") {
+		tlsCAHash = hashToken(tlsCA) // reuse the same short-hash helper
+	case strings.HasPrefix(serverURL, "https"):
 		tlsMode = "system-tls"
 	}
 
-	key := connKey{addr: grpcAddr, tlsMode: tlsMode, tokenHash: hashToken(token)}
+	key := connKey{
+		addr:      grpcAddr,
+		tlsMode:   tlsMode,
+		tlsCAHash: tlsCAHash,
+		tokenHash: hashToken(token),
+	}
 	if existing, ok := p.conns.Load(key); ok {
 		return existing.(*grpc.ClientConn), nil
 	}
