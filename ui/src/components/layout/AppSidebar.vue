@@ -57,7 +57,7 @@ async function handleLogout() {
 </script>
 
 <template>
-  <Sidebar collapsible="icon">
+  <Sidebar collapsible="icon" variant="inset">
     <SidebarHeader>
       <!-- Logo (links to home) -->
       <router-link to="/" class="flex items-center gap-3 px-1 py-1 rounded-md hover:bg-sidebar-accent transition-colors">

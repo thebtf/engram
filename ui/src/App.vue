@@ -54,7 +54,7 @@ onMounted(() => {
     <router-view v-else-if="!authenticated || isPublicRoute" />
 
     <!-- Authenticated layout -->
-    <SidebarProvider v-else>
+    <SidebarProvider v-else class="bg-sidebar">
       <AppSidebar />
       <SidebarInset>
         <!-- Top bar: sidebar trigger + update banner -->
