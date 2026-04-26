@@ -67,7 +67,7 @@ the `env` section. Use the Edit tool.
 {
   "env": {
     "ENGRAM_URL": "http://192.168.1.100:37777",
-    "ENGRAM_TOKEN": "engram_b1ec8a82bc02d2f2cbd0793d4de486e5"
+    "ENGRAM_TOKEN": "engram_<32hex-keycard-from-dashboard>"
   }
 }
 ```
