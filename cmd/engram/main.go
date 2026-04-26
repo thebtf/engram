@@ -64,6 +64,18 @@ func startupGate() {
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("engram %s — stdio MCP daemon for Claude Code\n", daemonVersion)
+		fmt.Println()
+		fmt.Println("This binary is invoked automatically by the engram plugin.")
+		fmt.Println("It is not intended to be run directly.")
+		fmt.Println()
+		fmt.Println("Environment:")
+		fmt.Printf("  %-28s  Server URL (e.g. http://host:37777)\n", config.EnvServerURL)
+		fmt.Printf("  %-28s  Workstation keycard (issued via dashboard /tokens)\n", config.EnvWorkstationToken)
+		os.Exit(0)
+	}
+
 	// FR-4 / ADR-005: fail-fast on missing workstation credential BEFORE
 	// any heavy initialisation. Loud failure beats silent loom_*-only
 	// graceful degradation that masked PR #203's regression for days.
