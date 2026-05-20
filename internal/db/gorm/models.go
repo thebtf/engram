@@ -311,21 +311,32 @@ type Memory struct {
 	SourceAgent     string                 `gorm:"type:text" json:"source_agent,omitempty"`
 	EditedBy        string                 `gorm:"type:text" json:"edited_by,omitempty"`
 	Status          string                 `gorm:"type:text;default:'active'" json:"status"`
+	Tier            string                 `gorm:"type:text;default:'semantic'" json:"tier"`
+	EpistemicType   string                 `gorm:"type:text;default:'observation'" json:"epistemic_type"`
+	Defeasibility   string                 `gorm:"type:text;default:'slow'" json:"defeasibility"`
+	PromotionTarget string                 `gorm:"type:text;default:'none'" json:"promotion_target"`
 	CreatedAt       time.Time              `gorm:"type:timestamptz;not null;default:now();index:idx_memories_project_created,priority:2,sort:desc" json:"created_at"`
 	UpdatedAt       time.Time              `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
 	DeletedAt       *time.Time             `gorm:"type:timestamptz" json:"deleted_at,omitempty"`
 	LastRetrievedAt *time.Time             `gorm:"type:timestamptz" json:"last_retrieved_at,omitempty"`
+	LastConfirmed   *time.Time             `gorm:"type:timestamptz" json:"last_confirmed,omitempty"`
+	ReviewAfter     *time.Time             `gorm:"type:timestamptz" json:"review_after,omitempty"`
 	ValidFrom       *time.Time             `gorm:"type:timestamptz;default:now()" json:"valid_from,omitempty"`
 	ValidUntil      *time.Time             `gorm:"type:timestamptz;default:'infinity'" json:"valid_until,omitempty"`
 	ID              int64                  `gorm:"primaryKey;autoIncrement" json:"id"`
 	SupersedesID    *int64                 `gorm:"type:bigint" json:"supersedes_id,omitempty"`
+	SupersededBy    *int64                 `gorm:"type:bigint" json:"superseded_by,omitempty"`
 	ImportanceBase  float64                `gorm:"type:real;default:0.5" json:"importance_base"`
 	TsAlpha         float64                `gorm:"type:real;default:1.0" json:"ts_alpha"`
 	TsBeta          float64                `gorm:"type:real;default:1.0" json:"ts_beta"`
+	Confidence      float64                `gorm:"type:real;default:0.5" json:"confidence"`
+	Stability       float64                `gorm:"type:real;default:30.0" json:"stability"`
+	Retrievability  float64                `gorm:"type:real;default:1.0" json:"retrievability"`
 	Version         int                    `gorm:"not null;default:1" json:"version"`
 	CitationCount   int                    `gorm:"default:0" json:"citation_count"`
 	InjectionCount  int                    `gorm:"default:0" json:"injection_count"`
 	AccessCount     int                    `gorm:"default:0" json:"access_count"`
+	RecurrenceCount int                    `gorm:"default:0" json:"recurrence_count"`
 }
 
 func (Memory) TableName() string { return "memories" }
