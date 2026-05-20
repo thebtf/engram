@@ -238,6 +238,13 @@ func (s *MemoryStore) Supersede(ctx context.Context, id int64) (oldImportance fl
 	return oldImportance, nil
 }
 
+// IncrementInjectionCount atomically increments injection_count for a memory.
+func (s *MemoryStore) IncrementInjectionCount(ctx context.Context, id int64) error {
+	return s.db.WithContext(ctx).Model(&Memory{}).
+		Where("id = ?", id).
+		UpdateColumn("injection_count", gorm.Expr("injection_count + 1")).Error
+}
+
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
 	return &models.Memory{
