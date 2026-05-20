@@ -4,6 +4,7 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/lib/pq"
@@ -126,13 +127,20 @@ func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limi
 	if limit <= 0 {
 		limit = 50
 	}
+	lifecycleEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
 	var rows []Memory
 	now := time.Now().UTC()
-	err := s.db.WithContext(ctx).
+	q := s.db.WithContext(ctx).
 		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
 		Where("valid_from IS NULL OR valid_from <= ?", now).
-		Where("valid_until IS NULL OR valid_until >= ?", now).
-		Order("importance_base DESC, created_at DESC").
+		Where("valid_until IS NULL OR valid_until >= ?", now)
+
+	if lifecycleEnabled {
+		q = q.Where("tier != 'working'").
+			Where("retrievability > ?", 0.3)
+	}
+
+	err := q.Order("importance_base DESC, created_at DESC").
 		Limit(limit).
 		Find(&rows).Error
 	if err != nil {
