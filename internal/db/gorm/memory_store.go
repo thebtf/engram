@@ -40,17 +40,30 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 
 	now := time.Now().UTC()
 	row := &Memory{
-		Project:     mem.Project,
-		Content:     mem.Content,
-		Tags:        models.JSONStringArray(mem.Tags),
-		SourceAgent: mem.SourceAgent,
-		EditedBy:    mem.EditedBy,
-		Version:     1,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		Project:        mem.Project,
+		Content:        mem.Content,
+		Tags:           models.JSONStringArray(mem.Tags),
+		SourceAgent:    mem.SourceAgent,
+		EditedBy:       mem.EditedBy,
+		Status:         "active",
+		ImportanceBase: 0.5,
+		TsAlpha:        1.0,
+		TsBeta:         1.0,
+		Version:        1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if mem.Version > 0 {
 		row.Version = mem.Version
+	}
+	if mem.Status != "" {
+		row.Status = mem.Status
+	}
+	if mem.ImportanceBase > 0 {
+		row.ImportanceBase = mem.ImportanceBase
+	}
+	if mem.SupersedesID != nil {
+		row.SupersedesID = mem.SupersedesID
 	}
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
@@ -169,15 +182,26 @@ func (s *MemoryStore) Delete(ctx context.Context, id int64) error {
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
 	return &models.Memory{
-		ID:          row.ID,
-		Project:     row.Project,
-		Content:     row.Content,
-		Tags:        []string(row.Tags),
-		SourceAgent: row.SourceAgent,
-		EditedBy:    row.EditedBy,
-		Version:     row.Version,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
-		DeletedAt:   row.DeletedAt,
+		ID:              row.ID,
+		Project:         row.Project,
+		Content:         row.Content,
+		Tags:            []string(row.Tags),
+		SourceAgent:     row.SourceAgent,
+		EditedBy:        row.EditedBy,
+		Status:          row.Status,
+		Version:         row.Version,
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
+		DeletedAt:       row.DeletedAt,
+		LastRetrievedAt: row.LastRetrievedAt,
+		ValidFrom:       row.ValidFrom,
+		ValidUntil:      row.ValidUntil,
+		SupersedesID:    row.SupersedesID,
+		ImportanceBase:  row.ImportanceBase,
+		TsAlpha:         row.TsAlpha,
+		TsBeta:          row.TsBeta,
+		CitationCount:   row.CitationCount,
+		InjectionCount:  row.InjectionCount,
+		AccessCount:     row.AccessCount,
 	}
 }
