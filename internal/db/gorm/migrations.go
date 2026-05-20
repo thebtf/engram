@@ -3552,6 +3552,52 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		// Migration 115: Audit log table (Milestone D).
+		{
+			ID: "115_audit_log",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`
+					CREATE TABLE IF NOT EXISTS audit_log (
+						id                BIGSERIAL PRIMARY KEY,
+						memory_id         BIGINT,
+						action            TEXT NOT NULL,
+						actor             TEXT NOT NULL DEFAULT 'system',
+						source_session_id TEXT NOT NULL DEFAULT '',
+						before_state      JSONB,
+						after_state       JSONB,
+						reason            TEXT NOT NULL DEFAULT '',
+						created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+					)
+				`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS audit_log").Error
+			},
+		},
+
+		// Migration 116: Audit log indexes.
+		{
+			ID: "116_audit_log_indexes",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE INDEX IF NOT EXISTS idx_audit_memory ON audit_log (memory_id) WHERE memory_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log (action)`,
+					`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log (created_at)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("116_audit_log_indexes: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				tx.Exec("DROP INDEX IF EXISTS idx_audit_memory")
+				tx.Exec("DROP INDEX IF EXISTS idx_audit_action")
+				tx.Exec("DROP INDEX IF EXISTS idx_audit_created")
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
