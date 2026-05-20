@@ -36,7 +36,7 @@ import (
 
 // daemonVersion is the string reported to gRPC Initialize and used in
 // structured logs. Tracks Constitution §15 unified engram + plugin version.
-const daemonVersion = "v6.1.0"
+const daemonVersion = "v6.2.0"
 
 // startupGate enforces FR-4 / Plan ADR-005. When the daemon process starts
 // with a configured server URL but no ENGRAM_TOKEN, exit non-zero with a
