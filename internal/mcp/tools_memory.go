@@ -51,6 +51,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	var params struct {
 		Tags         []string
 		Rejected     []string
+		Supersedes   []int64
 		Content      string
 		Title        string
 		Type         string
@@ -63,6 +64,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	params.Tags = coerceStringSlice(m["tags"])
 	params.Rejected = coerceStringSlice(m["rejected"])
+	params.Supersedes = coerceInt64Slice(m["supersedes"])
 	params.Content = coerceString(m["content"], "")
 	params.Title = coerceString(m["title"], "")
 	params.Type = coerceString(m["type"], "")
@@ -230,11 +232,38 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
+	// --- Supersession: mark old memories and compute inherited importance ---
+	// importanceBase starts at 0.5. When superseding, it is raised to
+	// max(0.5, oldImportance * 0.7) based on the first superseded memory.
+	inheritedImportance := 0.5
+	var primarySupersededID *int64
+	var supersededIDs []int64
+	for _, sid := range params.Supersedes {
+		if sid <= 0 {
+			continue
+		}
+		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
+		if supErr != nil {
+			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store_memory: supersede failed")
+			continue
+		}
+		supersededIDs = append(supersededIDs, sid)
+		if primarySupersededID == nil {
+			primarySupersededID = &sid
+			inherited := oldImportance * 0.7
+			if inherited > inheritedImportance {
+				inheritedImportance = inherited
+			}
+		}
+	}
+
 	memory := &models.Memory{
-		Project:     params.Project,
-		Content:     params.Content,
-		Tags:        tags,
-		SourceAgent: agentSource,
+		Project:        params.Project,
+		Content:        params.Content,
+		Tags:           tags,
+		SourceAgent:    agentSource,
+		ImportanceBase: inheritedImportance,
+		SupersedesID:   primarySupersededID,
 	}
 	created, err := s.memoryStore.Create(ctx, memory)
 	if err != nil {
@@ -248,6 +277,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"scope":   resolvedScope,
 		"storage": "memories",
 		"message": "Memory stored successfully",
+	}
+	if len(supersededIDs) > 0 {
+		result["superseded_ids"] = supersededIDs
 	}
 	if ttlApplied {
 		result["ttl_days"] = ttlDays

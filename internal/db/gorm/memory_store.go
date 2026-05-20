@@ -205,6 +205,39 @@ func (s *MemoryStore) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Supersede marks an existing memory as superseded and returns the memory's importance_base
+// BEFORE the penalty was applied (for the caller to compute the new memory's importance).
+//
+// The old memory receives status='superseded' and importance_base *= 0.1.
+// Returns an error when the memory is not found or is already superseded/deleted.
+func (s *MemoryStore) Supersede(ctx context.Context, id int64) (oldImportance float64, err error) {
+	if id == 0 {
+		return 0, fmt.Errorf("memory id must be non-zero")
+	}
+	// Read current importance before update.
+	var row Memory
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&row).Error; err != nil {
+		return 0, fmt.Errorf("supersede memory id=%d: %w", id, err)
+	}
+	oldImportance = row.ImportanceBase
+
+	now := time.Now().UTC()
+	result := s.db.WithContext(ctx).Model(&Memory{}).
+		Where("id = ? AND deleted_at IS NULL AND status = 'active'", id).
+		Updates(map[string]any{
+			"status":          "superseded",
+			"importance_base": row.ImportanceBase * 0.1,
+			"updated_at":      now,
+		})
+	if result.Error != nil {
+		return 0, fmt.Errorf("supersede memory id=%d: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return 0, fmt.Errorf("supersede memory id=%d: not found or already superseded", id)
+	}
+	return oldImportance, nil
+}
+
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
 	return &models.Memory{

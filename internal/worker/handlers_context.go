@@ -743,6 +743,11 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve project aliases: if the slug is a legacy ID, map it to the canonical one.
+	if s.store != nil {
+		project = gorm.ResolveProjectID(r.Context(), s.store.DB, project)
+	}
+
 	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
