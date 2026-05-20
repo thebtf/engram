@@ -115,6 +115,32 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 	return result, nil
 }
 
+// ListForInjection returns active memories for the given project ordered by
+// importance_base DESC, created_at DESC — suitable for context injection.
+// project must not be empty. limit defaults to 50 when <= 0.
+func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("project must not be empty")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	var rows []Memory
+	err := s.db.WithContext(ctx).
+		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+		Order("importance_base DESC, created_at DESC").
+		Limit(limit).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list memories for injection project=%q: %w", project, err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
+}
+
 // Update updates an existing memory row by ID.
 // Bumps version and sets updated_at. Returns a NEW populated model.
 // The caller's input struct is never mutated.
