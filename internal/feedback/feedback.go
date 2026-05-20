@@ -62,8 +62,9 @@ func DetectCitations(agentOutput string, memories []*models.Memory) []CitationRe
 }
 
 // findCitation checks whether any fragment of content can be found in the
-// normalised output. It first tries the full normalised content, then falls back
-// to sliding windows of sentences/clauses split on punctuation.
+// normalised output. Priority order per FR-A1:
+//   (a) Title match — first line of content appears in output.
+//   (b) Full content or clause match — sliding window fallback.
 //
 // Returns (excerpt, true) on the first match; ("", false) if no match is found.
 func findCitation(normOutput, content string) (string, bool) {
@@ -72,12 +73,19 @@ func findCitation(normOutput, content string) (string, bool) {
 		return "", false
 	}
 
-	// Fast path: full content match.
+	// (a) Title match: first line of content (FR-A1 bullet 3a).
+	title := extractTitle(content)
+	normTitle := normalise(title)
+	if len([]rune(normTitle)) >= minMatchLength && strings.Contains(normOutput, normTitle) {
+		return excerpt(normTitle, 200), true
+	}
+
+	// (b) Full content match.
 	if strings.Contains(normOutput, normContent) {
 		return excerpt(normContent, 200), true
 	}
 
-	// Split into clauses on sentence-ending punctuation and try each clause.
+	// (b) Clause-level fallback.
 	clauses := splitClauses(normContent)
 	for _, clause := range clauses {
 		if len([]rune(clause)) < minMatchLength {
@@ -89,6 +97,14 @@ func findCitation(normOutput, content string) (string, bool) {
 	}
 
 	return "", false
+}
+
+// extractTitle returns the first line of content, trimmed.
+func extractTitle(content string) string {
+	if idx := strings.IndexByte(content, '\n'); idx >= 0 {
+		return strings.TrimSpace(content[:idx])
+	}
+	return strings.TrimSpace(content)
 }
 
 // normalise lowercases the string and collapses all whitespace runs to a single

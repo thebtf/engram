@@ -57,9 +57,15 @@ func calculateImportance(currentBase float64, citationCount int) float64 {
 	if currentBase <= 0 {
 		currentBase = 0.5
 	}
+	if citationCount <= 0 {
+		return currentBase
+	}
 	scaled := currentBase * math.Log(1.0+float64(citationCount))
 	if scaled > 1.0 {
 		scaled = 1.0
+	}
+	if scaled < currentBase {
+		return currentBase
 	}
 	return scaled
 }
