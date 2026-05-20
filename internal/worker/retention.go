@@ -14,7 +14,9 @@ import (
 // The first run is delayed by 5 minutes after startup so it does not compete
 // with the main initialization path. Subsequent runs fire every 24 hours.
 func (s *Service) startRetentionCron(ctx context.Context) {
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		timer := time.NewTimer(5 * time.Minute)
 		defer timer.Stop()
 

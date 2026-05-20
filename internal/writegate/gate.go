@@ -84,7 +84,7 @@ func CheckCosine(
 		return
 	}
 
-	results, err := embStore.FindSimilar(ctx, vectors[0], 1, cosineThreshold)
+	results, err := embStore.FindSimilar(ctx, vectors[0], 5, cosineThreshold)
 	if err != nil {
 		log.Error().Err(err).Int64("memory_id", memoryID).Msg("writegate cosine: find similar failed")
 		return

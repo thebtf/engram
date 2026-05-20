@@ -71,7 +71,7 @@ func (s *Service) processCitationsAsync(
 	citationStore *gormdb.CitationLogStore,
 	feedbackUpdater *feedback.Updater,
 ) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
 	if injectionStore == nil || memStore == nil || citationStore == nil {

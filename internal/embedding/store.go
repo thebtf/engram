@@ -50,6 +50,9 @@ type SimilarResult struct {
 // FindSimilar queries for chunks closest to the given embedding vector.
 // Uses cosine distance (1 - cosine_similarity) via pgvector operator.
 func (s *Store) FindSimilar(ctx context.Context, queryVec []float32, limit int, threshold float64) ([]SimilarResult, error) {
+	if len(queryVec) == 0 {
+		return nil, fmt.Errorf("find similar: query vector must not be empty")
+	}
 	if limit <= 0 {
 		limit = 10
 	}

@@ -127,8 +127,11 @@ func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limi
 		limit = 50
 	}
 	var rows []Memory
+	now := time.Now().UTC()
 	err := s.db.WithContext(ctx).
 		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+		Where("valid_from IS NULL OR valid_from <= ?", now).
+		Where("valid_until IS NULL OR valid_until >= ?", now).
 		Order("importance_base DESC, created_at DESC").
 		Limit(limit).
 		Find(&rows).Error
@@ -252,13 +255,16 @@ func (s *MemoryStore) UpdateLifecycleFields(ctx context.Context, id int64, field
 	if result.Error != nil {
 		return fmt.Errorf("update lifecycle fields memory id=%d: %w", id, result.Error)
 	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update lifecycle fields: memory id=%d not found", id)
+	}
 	return nil
 }
 
 // IncrementInjectionCount atomically increments injection_count for a memory.
 func (s *MemoryStore) IncrementInjectionCount(ctx context.Context, id int64) error {
 	return s.db.WithContext(ctx).Model(&Memory{}).
-		Where("id = ?", id).
+		Where("id = ? AND deleted_at IS NULL", id).
 		UpdateColumn("injection_count", gorm.Expr("injection_count + 1")).Error
 }
 

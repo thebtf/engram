@@ -119,7 +119,7 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 
 		vectors := make([][]float32, len(texts))
 		for _, d := range result.Data {
-			if d.Index < len(vectors) {
+			if d.Index >= 0 && d.Index < len(vectors) {
 				vectors[d.Index] = d.Embedding
 			}
 		}

@@ -25,6 +25,9 @@ func Jaccard(a, b string) float64 {
 	intersection := 0
 	setB := make(map[string]struct{}, len(tokensB))
 	for _, t := range tokensB {
+		if _, seen := setB[t]; seen {
+			continue
+		}
 		setB[t] = struct{}{}
 		if _, ok := setA[t]; ok {
 			intersection++

@@ -3411,9 +3411,14 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 
 		// Migration 109: DiskANN index on content_chunks embedding column.
 		// pgvectorscale handles 4096-dim vectors (HNSW limit = 2000).
+		// Falls back gracefully when vectorscale is not installed.
 		{
 			ID: "109_content_chunks_diskann",
 			Migrate: func(tx *gorm.DB) error {
+				if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE").Error; err != nil {
+					log.Warn().Err(err).Msg("migration 109: vectorscale extension not available, skipping DiskANN index")
+					return nil
+				}
 				return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING diskann (embedding vector_cosine_ops)`).Error
 			},
 			Rollback: func(tx *gorm.DB) error {

@@ -33,7 +33,6 @@ func TestCalculateImportance_ZeroCitations(t *testing.T) {
 }
 
 func TestCalculateImportance_OneCitation(t *testing.T) {
-	const epsilon = 0.01
 	base := 0.5
 	// Spec formula with natural log: 0.5 × ln(1+1) = 0.5 × ln(2) ≈ 0.347
 	// With log₁₀: 0.5 × log₁₀(2) ≈ 0.150

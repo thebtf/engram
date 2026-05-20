@@ -85,9 +85,11 @@ function extractAgentOutput(filePath) {
     const chunkBytes = Buffer.byteLength(text, 'utf8');
     if (totalBytes + chunkBytes > MAX_OUTPUT_BYTES) {
       // Include as much of this chunk as fits, then stop.
+      // Use Buffer to slice by byte count (not JS string code units).
       const remaining = MAX_OUTPUT_BYTES - totalBytes;
       if (remaining > 0) {
-        parts.push(text.slice(0, remaining));
+        const buf = Buffer.from(text, 'utf8').subarray(0, remaining);
+        parts.push(buf.toString('utf8'));
       }
       truncated = true;
       break;
@@ -143,13 +145,15 @@ async function handleStop(ctx, input) {
   const transcriptPath = findTranscriptPath(input);
   if (!transcriptPath) {
     // No transcript path available — record a minimal stop event.
-    lib.requestPost('/api/hooks/session-end', {
-      session_id: sessionID,
-      project,
-      agent_output_text: '',
-    }, 25000).catch((err) => {
+    try {
+      await lib.requestPost('/api/hooks/session-end', {
+        session_id: sessionID,
+        project,
+        agent_output_text: '',
+      }, 25000);
+    } catch (err) {
       process.stderr.write(`engram stop hook: POST failed (no transcript): ${err.message}\n`);
-    });
+    }
     return '';
   }
 

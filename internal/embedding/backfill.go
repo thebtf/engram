@@ -13,6 +13,9 @@ import (
 // Backfill processes existing memories that don't have embedding chunks yet.
 // Runs in batches, interruptible via context cancellation.
 func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, batchSize int) error {
+	if db == nil {
+		return fmt.Errorf("backfill: db required")
+	}
 	if client == nil || store == nil {
 		return fmt.Errorf("backfill: client and store required")
 	}
@@ -66,8 +69,16 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 		vectors, err := client.Embed(ctx, texts)
 		if err != nil {
 			log.Error().Err(err).Msg("backfill: embed batch failed")
-			time.Sleep(5 * time.Second) // brief backoff before retry
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
 			continue
+		}
+		if len(vectors) == 0 {
+			log.Warn().Int("batch_size", len(texts)).Msg("backfill: embed returned zero vectors, skipping batch")
+			break
 		}
 
 		// Store chunks
@@ -83,8 +94,17 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 				})
 			}
 		}
+		if len(chunks) == 0 {
+			log.Warn().Int("batch_size", len(texts)).Msg("backfill: no valid chunks produced, skipping batch")
+			break
+		}
 		if err := store.StoreChunks(ctx, chunks); err != nil {
 			log.Error().Err(err).Msg("backfill: store chunks failed")
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
 			continue
 		}
 
@@ -93,4 +113,6 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 			log.Info().Int("processed", processed).Msg("backfill: progress")
 		}
 	}
+	log.Info().Int("total_processed", processed).Msg("backfill: complete")
+	return nil
 }

@@ -42,18 +42,19 @@ function extractTopic(input) {
 function formatReinjectionBlock(payload) {
   if (!payload || typeof payload !== 'object') return '';
 
-  const memories = Array.isArray(payload.memories) ? payload.memories : [];
-  const rules = Array.isArray(payload.rules) ? payload.rules : [];
+  const observations = Array.isArray(payload.observations) ? payload.observations : [];
+  const guidance = Array.isArray(payload.guidance) ? payload.guidance : [];
+  const alwaysInject = Array.isArray(payload.always_inject) ? payload.always_inject : [];
 
-  if (memories.length === 0 && rules.length === 0) return '';
+  if (observations.length === 0 && guidance.length === 0 && alwaysInject.length === 0) return '';
 
   let block = '<engram-reinjection>\n';
   block += '# Pre-Compact Memory Re-injection\n';
   block += 'Engram re-injected relevant context before context compaction.\n\n';
 
-  if (rules.length > 0) {
+  if (guidance.length > 0 || alwaysInject.length > 0) {
     block += '## Active Behavioral Rules\n';
-    for (const rule of rules) {
+    for (const rule of [...guidance, ...alwaysInject]) {
       if (!rule || typeof rule !== 'object') continue;
       const content =
         typeof rule.content === 'string' ? rule.content.trim() :
@@ -63,11 +64,11 @@ function formatReinjectionBlock(payload) {
     block += '\n';
   }
 
-  if (memories.length > 0) {
+  if (observations.length > 0) {
     block += '## Relevant Memories\n';
-    for (const memory of memories) {
-      if (!memory || typeof memory !== 'object') continue;
-      const content = typeof memory.content === 'string' ? memory.content.trim() : '';
+    for (const obs of observations) {
+      if (!obs || typeof obs !== 'object') continue;
+      const content = typeof obs.content === 'string' ? obs.content.trim() : '';
       if (content) block += `- ${content}\n`;
     }
     block += '\n';

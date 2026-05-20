@@ -296,7 +296,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// Async embedding: fire-and-forget goroutine so the MCP response is not blocked
 	// by the embedding HTTP call. Captures local copies of created fields and store
 	// pointers to avoid capturing the mutable request-scoped variables.
-	if s.embeddingClient != nil {
+	if s.embeddingClient != nil && s.embeddingStore != nil {
 		memID := created.ID
 		memContent := created.Content
 		embClient := s.embeddingClient

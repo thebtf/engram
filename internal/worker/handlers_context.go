@@ -1053,10 +1053,14 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 	if vnextEnabled && vnextMemStore != nil {
 		topK := 15
+		const maxTopK = 100
 		if v := os.Getenv("ENGRAM_INJECTION_TOP_K"); v != "" {
 			if n, parseErr := strconv.Atoi(v); parseErr == nil && n > 0 {
 				topK = n
 			}
+		}
+		if topK > maxTopK {
+			topK = maxTopK
 		}
 
 		vnextMems, vnextErr := vnextMemStore.ListForInjection(ctx, project, topK*3)
