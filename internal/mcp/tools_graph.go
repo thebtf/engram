@@ -55,6 +55,12 @@ func (s *Server) graphAddEdge(ctx context.Context, a graphArgs) (string, error) 
 	if a.SourceID == 0 || a.TargetID == 0 {
 		return "", fmt.Errorf("source_id and target_id required")
 	}
+	if a.EdgeType == "" {
+		return "", fmt.Errorf("edge_type required")
+	}
+	if !graph.ValidEdgeType(a.EdgeType) {
+		return "", fmt.Errorf("invalid edge_type: %s", a.EdgeType)
+	}
 	if a.Weight == 0 {
 		a.Weight = 1.0
 	}

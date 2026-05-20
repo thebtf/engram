@@ -68,6 +68,10 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 	if len(chunks) == 0 {
 		return "", fmt.Errorf("document produced no chunks (empty or whitespace-only)")
 	}
+	const maxChunks = 500
+	if len(chunks) > maxChunks {
+		return "", fmt.Errorf("document produces %d chunks (max %d) — split into smaller documents", len(chunks), maxChunks)
+	}
 
 	if a.DryRun {
 		return marshalJSON(map[string]any{
