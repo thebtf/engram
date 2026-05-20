@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/injection"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
@@ -1037,6 +1040,79 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				_ = injStore.RecordInjections(context.Background(), records)
 			}
 		}()
+	}
+
+	// --- vNext Thompson Sampling path (ENGRAM_VNEXT_ENABLED=true) ---
+	// When enabled, replaces the response with a Thompson-sampled memory selection.
+	// The existing legacy path above remains unchanged when the flag is not set.
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	if vnextEnabled && s.memoryStore != nil {
+		topK := 15
+		if v := os.Getenv("ENGRAM_INJECTION_TOP_K"); v != "" {
+			if n, parseErr := strconv.Atoi(v); parseErr == nil && n > 0 {
+				topK = n
+			}
+		}
+
+		vnextMems, vnextErr := s.memoryStore.ListForInjection(ctx, project, topK*3)
+		if vnextErr != nil {
+			log.Warn().Err(vnextErr).Str("project", project).Msg("vnext: ListForInjection failed, falling back to legacy path")
+		} else {
+			scored := injection.Score(vnextMems, topK)
+
+			// Fire-and-forget injection tracking.
+			if sessionID != "" && s.injectionTracker != nil {
+				capturedScored := scored
+				capturedSID := sessionID
+				capturedProj := project
+				tracker := s.injectionTracker
+				go tracker.Track(context.Background(), capturedSID, capturedProj, capturedScored)
+			}
+
+			// Build the selected memory slice for response.
+			selectedMems := make([]*models.Memory, 0, topK)
+			for _, sm := range scored {
+				if sm.Selected && sm.Memory != nil {
+					selectedMems = append(selectedMems, sm.Memory)
+				}
+			}
+
+			explorationRatio := injection.ExplorationRatio(scored)
+			vnextObs := memoriesToObservations(selectedMems)
+
+			injectionMetadata := map[string]any{
+				"strategy":         "thompson_sampling",
+				"injected_count":   len(selectedMems),
+				"candidate_pool":   len(vnextMems),
+				"exploration_ratio": explorationRatio,
+			}
+
+			log.Info().
+				Str("event", "vnext_inject").
+				Str("project", project).
+				Int("injected_count", len(selectedMems)).
+				Int("candidate_pool", len(vnextMems)).
+				Float64("exploration_ratio", explorationRatio).
+				Msg("vnext Thompson Sampling injection")
+
+			writeJSON(w, map[string]any{
+				"strategy":            "thompson_sampling",
+				"project":             project,
+				"observations":        vnextObs,
+				"recent":              compactObservations(recentFresh),
+				"relevant":            compactObservations(relevantObservations),
+				"guidance":            compactObservations(guidanceObservations),
+				"always_inject":       compactObservations(alwaysInjectObservations),
+				"project_briefing":    projectBriefingNarrative(false, projectBriefing),
+				"full_count":          fullCount,
+				"stale_excluded":      staleCount,
+				"duplicates_removed":  duplicatesRemoved,
+				"token_estimate":      tokenEstimate,
+				"budget_trimmed":      budgetTrimmed,
+				"injection_metadata":  injectionMetadata,
+			})
+			return
+		}
 	}
 
 	// Check if compact format is requested

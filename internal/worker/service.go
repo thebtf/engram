@@ -28,6 +28,7 @@ import (
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/grpcserver"
+	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/sessions"
@@ -115,6 +116,8 @@ type Service struct {
 	searchQueryLogStore    *gorm.SearchQueryLogStore
 	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
 	injectionStore         *gorm.InjectionStore
+	citationLogStore       *gorm.CitationLogStore
+	injectionTracker       *injection.Tracker
 	agentStatsStore        *gorm.AgentStatsStore
 	versionStore           *gorm.VersionStore
 	retrievalHooks         *retrievalHooks
@@ -351,6 +354,9 @@ func (s *Service) initializeAsync() {
 	// Create injection store for closed-loop learning
 	injectionStore := gorm.NewInjectionStore(store.GetDB())
 
+	// Create citation log store for vNext Phase A citation tracking (migration 107).
+	citationLogStore := gorm.NewCitationLogStore(store)
+
 	// Create agent stats store for Phase 4 agent-specific effectiveness tracking
 	agentStatsStore := gorm.NewAgentStatsStore(store.GetDB())
 
@@ -374,6 +380,8 @@ func (s *Service) initializeAsync() {
 	s.store = store
 	s.sessionStore = sessionStore
 	s.injectionStore = injectionStore
+	s.citationLogStore = citationLogStore
+	s.injectionTracker = injection.NewTracker(injectionStore)
 	s.issueStore = issueStore
 	s.credentialStore = credentialStore
 	s.memoryStore = memoryStore
@@ -842,6 +850,9 @@ func (s *Service) setupRoutes() {
 		// Session transcript indexing (client pushes JSONL for FTS)
 		r.Post("/api/sessions/index", s.handleIndexSession)
 		r.Post("/api/sessions/check", s.handleCheckSessions)
+
+		// Hook callbacks from Claude Code stop/session-end hooks
+		r.Post("/api/hooks/session-end", s.handleSessionEnd)
 
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
