@@ -256,6 +256,9 @@ func (s *MemoryStore) UpdateLifecycleFields(ctx context.Context, id int64, field
 	if id == 0 {
 		return fmt.Errorf("memory id must be non-zero")
 	}
+	if fields == nil {
+		return fmt.Errorf("fields must not be nil")
+	}
 	fields["updated_at"] = time.Now().UTC()
 	result := s.db.WithContext(ctx).Model(&Memory{}).
 		Where("id = ? AND deleted_at IS NULL", id).

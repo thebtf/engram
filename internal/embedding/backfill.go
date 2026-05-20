@@ -78,7 +78,7 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 		}
 		if len(vectors) == 0 {
 			log.Warn().Int("batch_size", len(texts)).Msg("backfill: embed returned zero vectors, skipping batch")
-			break
+			continue
 		}
 
 		// Store chunks
@@ -96,7 +96,7 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 		}
 		if len(chunks) == 0 {
 			log.Warn().Int("batch_size", len(texts)).Msg("backfill: no valid chunks produced, skipping batch")
-			break
+			continue
 		}
 		if err := store.StoreChunks(ctx, chunks); err != nil {
 			log.Error().Err(err).Msg("backfill: store chunks failed")
@@ -113,6 +113,4 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 			log.Info().Int("processed", processed).Msg("backfill: progress")
 		}
 	}
-	log.Info().Int("total_processed", processed).Msg("backfill: complete")
-	return nil
 }

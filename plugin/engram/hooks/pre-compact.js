@@ -108,15 +108,13 @@ async function handlePreCompact(ctx, input) {
     ? `/api/context/inject?project=${encodeURIComponent(project)}&query=${encodeURIComponent(topic)}`
     : `/api/context/inject?project=${encodeURIComponent(project)}`;
 
-  try {
-    const payload = await lib.requestGet(endpoint, 8000);
-    // Format the block (used in tests; CC drops it at runtime — see note above).
-    formatReinjectionBlock(payload);
-  } catch (err) {
+  // Fire-and-forget: CC ignores PreCompact additionalContext, so we don't
+  // need to await the response. The call primes the server cache for the
+  // subsequent session-start re-injection.
+  lib.requestGet(endpoint, 8000).catch((err) => {
     process.stderr.write(`engram pre-compact hook: inject fetch failed: ${err.message}\n`);
-  }
+  });
 
-  // Always return '' — PreCompact additionalContext is not delivered by CC.
   return '';
 }
 
