@@ -51,13 +51,14 @@ func (s *Service) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	injectionStore := s.injectionStore
 	memStore := s.memoryStore
 	citationStore := s.citationLogStore
+	feedbackUpdater := s.feedbackUpdater
 	s.initMu.RUnlock()
 
 	capturedSessionID := req.SessionID
 	capturedProject := req.Project
 	capturedOutput := req.AgentOutputText
 
-	go s.processCitationsAsync(capturedSessionID, capturedProject, capturedOutput, injectionStore, memStore, citationStore)
+	go s.processCitationsAsync(capturedSessionID, capturedProject, capturedOutput, injectionStore, memStore, citationStore, feedbackUpdater)
 }
 
 // processCitationsAsync performs citation detection for a finished session.
@@ -67,6 +68,7 @@ func (s *Service) processCitationsAsync(
 	injectionStore *gormdb.InjectionStore,
 	memStore *gormdb.MemoryStore,
 	citationStore *gormdb.CitationLogStore,
+	feedbackUpdater *feedback.Updater,
 ) {
 	ctx := context.Background()
 
@@ -145,7 +147,12 @@ func (s *Service) processCitationsAsync(
 		}
 	}
 
-	// Step 5: Log summary.
+	// Step 5: Update memory priors via feedback updater (vNext Phase A).
+	if feedbackUpdater != nil {
+		feedbackUpdater.Update(ctx, results)
+	}
+
+	// Step 6: Log summary.
 	citedCount := 0
 	for _, r := range results {
 		if r.Cited {

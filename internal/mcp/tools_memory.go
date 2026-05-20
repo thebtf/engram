@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -257,6 +259,21 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
+	// --- Write gate (vNext Phase A) ---
+	// When ENGRAM_VNEXT_ENABLED=true, evaluate novelty before creation.
+	// Low-novelty memories are stored with Status="flagged" so callers can
+	// detect duplicates; the quality_signals key is added to the response.
+	var gateResult writegate.GateResult
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	if vnextEnabled && params.Project != "" {
+		existing, listErr := s.memoryStore.List(ctx, params.Project, 100)
+		if listErr != nil {
+			log.Warn().Err(listErr).Msg("store_memory: write gate could not load existing memories, skipping gate")
+		} else {
+			gateResult = writegate.Check(ctx, params.Content, existing)
+		}
+	}
+
 	memory := &models.Memory{
 		Project:        params.Project,
 		Content:        params.Content,
@@ -265,6 +282,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		ImportanceBase: inheritedImportance,
 		SupersedesID:   primarySupersededID,
 	}
+	if vnextEnabled && gateResult.Decision == "flag" {
+		memory.Status = "flagged"
+	}
+
 	created, err := s.memoryStore.Create(ctx, memory)
 	if err != nil {
 		return "", fmt.Errorf("store memory: %w", err)
@@ -277,6 +298,14 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"scope":   resolvedScope,
 		"storage": "memories",
 		"message": "Memory stored successfully",
+	}
+	if vnextEnabled {
+		result["quality_signals"] = map[string]any{
+			"gate_result":      gateResult.Decision,
+			"novelty_score":    gateResult.NoveltyScore,
+			"max_jaccard":      gateResult.MaxJaccard,
+			"similar_existing": gateResult.SimilarExisting,
+		}
 	}
 	if len(supersededIDs) > 0 {
 		result["superseded_ids"] = supersededIDs
