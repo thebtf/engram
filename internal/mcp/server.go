@@ -19,6 +19,7 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
 	gorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
 )
@@ -38,6 +39,8 @@ type Server struct {
 	chunkManager           *chunking.Manager
 	reasoningStore         *gorm.ReasoningTraceStore
 	issueStore             *gorm.IssueStore
+	embeddingClient        *embedding.Client
+	embeddingStore         *embedding.Store
 	memoryStore            *gorm.MemoryStore
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	vault                  *crypto.Vault
@@ -106,6 +109,12 @@ func (s *Server) SetMemoryStore(ms *gorm.MemoryStore) {
 // SetBehavioralRulesStore sets the behavioral rules store (US3 Commit C).
 func (s *Server) SetBehavioralRulesStore(brs *gorm.BehavioralRulesStore) {
 	s.behavioralRulesStore = brs
+}
+
+// SetEmbeddingStores wires the embedding client and store for async memory embedding.
+func (s *Server) SetEmbeddingStores(client *embedding.Client, store *embedding.Store) {
+	s.embeddingClient = client
+	s.embeddingStore = store
 }
 
 // HandleRequest dispatches a JSON-RPC request and returns the response.

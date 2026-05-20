@@ -11,8 +11,10 @@ import (
 
 	gormlib "gorm.io/gorm"
 
+	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
@@ -289,6 +291,37 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	created, err := s.memoryStore.Create(ctx, memory)
 	if err != nil {
 		return "", fmt.Errorf("store memory: %w", err)
+	}
+
+	// Async embedding: fire-and-forget goroutine so the MCP response is not blocked
+	// by the embedding HTTP call. Captures local copies of created fields and store
+	// pointers to avoid capturing the mutable request-scoped variables.
+	if s.embeddingClient != nil {
+		memID := created.ID
+		memContent := created.Content
+		embClient := s.embeddingClient
+		embStore := s.embeddingStore
+		go func() {
+			gCtx := context.Background()
+			vectors, embErr := embClient.Embed(gCtx, []string{memContent})
+			if embErr != nil {
+				log.Error().Err(embErr).Int64("memory_id", memID).Msg("async embedding failed")
+				return
+			}
+			if len(vectors) == 0 || len(vectors[0]) == 0 {
+				return
+			}
+			chunk := embedding.Chunk{
+				MemoryID:  memID,
+				Seq:       0,
+				Text:      memContent,
+				Embedding: pgvector.NewVector(vectors[0]),
+				Model:     embClient.Model(),
+			}
+			if storeErr := embStore.StoreChunks(gCtx, []embedding.Chunk{chunk}); storeErr != nil {
+				log.Error().Err(storeErr).Int64("memory_id", memID).Msg("async embedding store failed")
+			}
+		}()
 	}
 
 	result := map[string]any{

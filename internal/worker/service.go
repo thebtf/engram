@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/soheilhy/cmux"
 	httpSwagger "github.com/swaggo/http-swagger"
+
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/chunking"
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
@@ -27,6 +29,7 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/feedback"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/injection"
@@ -501,6 +504,24 @@ func (s *Service) initializeAsync() {
 	// switched from observations to memories/behavioral_rules.
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
+
+	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
+	embClient, embErr := embedding.NewClient()
+	if embErr != nil {
+		if errors.Is(embErr, embedding.ErrEmbeddingDisabled) {
+			log.Info().Msg("embedding: disabled (ENGRAM_EMBEDDING_URL not set)")
+		} else {
+			log.Warn().Err(embErr).Msg("embedding: failed to initialize client")
+		}
+	} else {
+		embStore := embedding.NewStore(store.GetDB())
+		mcpServer.SetEmbeddingStores(embClient, embStore)
+		go func() {
+			if bfErr := embedding.Backfill(s.ctx, store.GetDB(), embClient, embStore, 50); bfErr != nil {
+				log.Warn().Err(bfErr).Msg("embedding backfill: stopped")
+			}
+		}()
+	}
 
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
 	// initMu protects s.grpcServer — the cmux goroutine polls for it.

@@ -55,6 +55,11 @@ type embeddingResponse struct {
 	} `json:"data"`
 }
 
+// Model returns the embedding model name configured for this client.
+func (c *Client) Model() string {
+	return c.model
+}
+
 // Embed generates embeddings for the given texts.
 // Returns one vector per input text, in the same order.
 func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
