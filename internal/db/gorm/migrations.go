@@ -3378,6 +3378,48 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec("DROP TABLE IF EXISTS citation_log").Error
 			},
 		},
+
+		// Migration 108: Restore content_chunks table for embedding storage.
+		// New schema: memory_id FK (not hash-based like v5's dropped table).
+		{
+			ID: "108_content_chunks",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS content_chunks (
+						id         BIGSERIAL PRIMARY KEY,
+						memory_id  BIGINT NOT NULL REFERENCES memories(id),
+						seq        INTEGER NOT NULL,
+						text       TEXT NOT NULL DEFAULT '',
+						embedding  vector(4096),
+						model      TEXT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						UNIQUE(memory_id, seq)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_chunks_memory ON content_chunks(memory_id)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("108_content_chunks: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS content_chunks").Error
+			},
+		},
+
+		// Migration 109: DiskANN index on content_chunks embedding column.
+		// pgvectorscale handles 4096-dim vectors (HNSW limit = 2000).
+		{
+			ID: "109_content_chunks_diskann",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING diskann (embedding vector_cosine_ops)`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP INDEX IF EXISTS idx_chunks_embedding").Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
