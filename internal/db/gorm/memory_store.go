@@ -323,3 +323,25 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		RecurrenceCount: row.RecurrenceCount,
 	}
 }
+
+// ListAllActive returns a batch of active memories for sleep cycle processing.
+func (s *MemoryStore) ListAllActive(ctx context.Context, batchSize int, offset int) ([]*models.Memory, error) {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	var rows []Memory
+	err := s.db.WithContext(ctx).
+		Where("status = 'active' AND deleted_at IS NULL").
+		Order("id ASC").
+		Limit(batchSize).
+		Offset(offset).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list all active memories: %w", err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
@@ -283,6 +284,30 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		SourceAgent:    agentSource,
 		ImportanceBase: inheritedImportance,
 		SupersedesID:   primarySupersededID,
+	}
+
+	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+		if tier := coerceString(m["tier"], ""); tier != "" {
+			if lifecycle.ValidTier(tier) {
+				memory.Tier = tier
+			}
+		}
+		if et := coerceString(m["epistemic_type"], ""); et != "" {
+			if lifecycle.ValidEpistemicType(et) {
+				memory.EpistemicType = et
+			}
+		}
+		if def := coerceString(m["defeasibility"], ""); def != "" {
+			if lifecycle.ValidDefeasibility(def) {
+				memory.Defeasibility = def
+			}
+		}
+		if memory.Stability == 0 {
+			memory.Stability = lifecycle.ComputeStability(30.0, memory.Tier, memory.EpistemicType, 0)
+		}
+		memory.Confidence = lifecycle.ComputeConfidence(lifecycle.ConfidenceInputs{})
+		memory.Retrievability = 1.0
 	}
 	if vnextEnabled && gateResult.Decision == "flag" {
 		memory.Status = "flagged"

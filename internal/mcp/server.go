@@ -43,6 +43,7 @@ type Server struct {
 	embeddingStore         *embedding.Store
 	memoryStore            *gorm.MemoryStore
 	behavioralRulesStore   *gorm.BehavioralRulesStore
+	promotionStore         *gorm.PromotionStore
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -109,6 +110,10 @@ func (s *Server) SetMemoryStore(ms *gorm.MemoryStore) {
 // SetBehavioralRulesStore sets the behavioral rules store (US3 Commit C).
 func (s *Server) SetBehavioralRulesStore(brs *gorm.BehavioralRulesStore) {
 	s.behavioralRulesStore = brs
+}
+
+func (s *Server) SetPromotionStore(ps *gorm.PromotionStore) {
+	s.promotionStore = ps
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.
@@ -937,6 +942,29 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
+	// Lifecycle tool — advertise when memory store + promotion store are available
+	// and ENGRAM_LIFECYCLE_ENABLED is true.
+	if s.memoryStore != nil && s.promotionStore != nil && os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+		tools = append(tools, Tool{
+			Name:        "lifecycle",
+			Description: "[Lifecycle] Manage memory lifecycle: view tier/decay info, promote/demote, set confidence, preview decay, check sleep cycle status.",
+			tier:        tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":         map[string]any{"type": "string", "description": "Action: info, promote, demote, set_confidence, set_defeasibility, sleep_status, decay_preview", "enum": []string{"info", "promote", "demote", "set_confidence", "set_defeasibility", "sleep_status", "decay_preview"}},
+					"memory_id":      map[string]any{"type": "integer", "description": "Memory ID (required for info, promote, demote, set_confidence, set_defeasibility, decay_preview)"},
+					"target_tier":    map[string]any{"type": "string", "description": "Target tier for promote/demote (working, episodic, semantic, procedural)"},
+					"confidence":     map[string]any{"type": "number", "description": "Confidence value for set_confidence (0.0-1.0)"},
+					"reason":         map[string]any{"type": "string", "description": "Reason for set_confidence"},
+					"defeasibility":  map[string]any{"type": "string", "description": "Defeasibility class for set_defeasibility (non_defeasible, slow, rapid)"},
+					"days_ahead":     map[string]any{"type": "integer", "description": "Days ahead for decay_preview (default: 30)"},
+				},
+			},
+		})
+	}
+
 	// Document / Collection tools — only advertise when dependencies are available
 	if s.documentStore != nil {
 		tools = append(tools,
@@ -1297,6 +1325,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleDeleteCredential(ctx, args)
 	case "vault_status":
 		return s.handleVaultStatus(ctx, args)
+	case "lifecycle":
+		return s.handleLifecycle(ctx, args)
 	// Vault tool aliases
 	case "vault_store":
 		return s.handleStoreCredential(ctx, args)
