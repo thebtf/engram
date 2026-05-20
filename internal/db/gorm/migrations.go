@@ -3598,6 +3598,29 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+
+		// Migration 117: Replace 'infinity' timestamps with far-future date.
+		// Go time.Time cannot represent PostgreSQL 'infinity'. Fixes GORM scan errors.
+		{
+			ID: "117_fix_infinity_timestamps",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE memories ALTER COLUMN valid_until SET DEFAULT '9999-12-31T23:59:59Z'`,
+					`UPDATE memories SET valid_until = '9999-12-31T23:59:59Z' WHERE valid_until = 'infinity'`,
+					`ALTER TABLE knowledge_edges ALTER COLUMN valid_until SET DEFAULT '9999-12-31T23:59:59Z'`,
+					`UPDATE knowledge_edges SET valid_until = '9999-12-31T23:59:59Z' WHERE valid_until = 'infinity'`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						log.Warn().Err(err).Str("stmt", stmt).Msg("migration 117: statement failed (table may not exist yet)")
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

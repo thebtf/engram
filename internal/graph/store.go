@@ -18,7 +18,7 @@ type Edge struct {
 	Reasoning       string     `gorm:"type:text;not null;default:''" json:"reasoning"`
 	SourceSessionID string     `gorm:"type:text;not null;default:''" json:"source_session_id"`
 	ValidFrom       time.Time  `gorm:"type:timestamptz;not null;default:now()" json:"valid_from"`
-	ValidUntil      time.Time  `gorm:"type:timestamptz;not null;default:'infinity'" json:"valid_until"`
+	ValidUntil      time.Time  `gorm:"type:timestamptz;not null;default:'9999-12-31T23:59:59Z'" json:"valid_until"`
 	CreatedAt       time.Time  `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
 	SupersededAt    *time.Time `gorm:"type:timestamptz" json:"superseded_at,omitempty"`
 }

@@ -322,7 +322,7 @@ type Memory struct {
 	LastConfirmed   *time.Time             `gorm:"type:timestamptz" json:"last_confirmed,omitempty"`
 	ReviewAfter     *time.Time             `gorm:"type:timestamptz" json:"review_after,omitempty"`
 	ValidFrom       *time.Time             `gorm:"type:timestamptz;default:now()" json:"valid_from,omitempty"`
-	ValidUntil      *time.Time             `gorm:"type:timestamptz;default:'infinity'" json:"valid_until,omitempty"`
+	ValidUntil      *time.Time             `gorm:"type:timestamptz;default:'9999-12-31T23:59:59Z'" json:"valid_until,omitempty"`
 	ID              int64                  `gorm:"primaryKey;autoIncrement" json:"id"`
 	SupersedesID    *int64                 `gorm:"type:bigint" json:"supersedes_id,omitempty"`
 	SupersededBy    *int64                 `gorm:"type:bigint" json:"superseded_by,omitempty"`
