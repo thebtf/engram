@@ -548,6 +548,26 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		}
 	}
 
+	// Reconsolidation: every retrieval updates access_count, last_retrieved_at,
+	// and recalculates stability (Nader 2000). Fire-and-forget to avoid blocking.
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(filtered) > 0 {
+		go func() {
+			for _, mem := range filtered {
+				fields := map[string]any{
+					"access_count":    gormlib.Expr("access_count + 1"),
+					"last_retrieved_at": gormlib.Expr("now()"),
+				}
+				if mem.Stability > 0 {
+					newStability := lifecycle.Reconsolidate(mem.Stability, mem.Retrievability)
+					if newStability != mem.Stability {
+						fields["stability"] = newStability
+					}
+				}
+				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), mem.ID, fields)
+			}
+		}()
+	}
+
 	switch format {
 	case "items":
 		type item struct {
