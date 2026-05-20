@@ -3,7 +3,118 @@
 
 const lib = require('./lib');
 
-async function handlePreCompact() {
+/**
+ * Extract a topic string from the hook input for context query.
+ * Claude Code may supply recent conversation summary or the last user message
+ * in the input payload. We use the best available signal.
+ *
+ * @param {Object} input - Raw hook input payload
+ * @returns {string} Topic string, or '' if none found
+ */
+function extractTopic(input) {
+  if (!input || typeof input !== 'object') return '';
+
+  // Claude Code pre-compact payload may include a summary or trigger reason.
+  if (typeof input.summary === 'string' && input.summary.trim() !== '') {
+    return input.summary.trim().slice(0, 200);
+  }
+
+  // Some CC versions include the last human message in the trigger context.
+  if (typeof input.last_human_message === 'string' && input.last_human_message.trim() !== '') {
+    return input.last_human_message.trim().slice(0, 200);
+  }
+
+  // Conversation title or description field.
+  if (typeof input.conversation_title === 'string' && input.conversation_title.trim() !== '') {
+    return input.conversation_title.trim().slice(0, 200);
+  }
+
+  return '';
+}
+
+/**
+ * Format inject API response as an <engram-reinjection> block.
+ * Mirrors the style used in session-start.js for consistency.
+ *
+ * @param {Object} payload - Response from /api/context/inject
+ * @returns {string} Formatted block, or '' if payload is empty
+ */
+function formatReinjectionBlock(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+
+  const observations = Array.isArray(payload.observations) ? payload.observations : [];
+  const guidance = Array.isArray(payload.guidance) ? payload.guidance : [];
+  const alwaysInject = Array.isArray(payload.always_inject) ? payload.always_inject : [];
+
+  if (observations.length === 0 && guidance.length === 0 && alwaysInject.length === 0) return '';
+
+  let block = '<engram-reinjection>\n';
+  block += '# Pre-Compact Memory Re-injection\n';
+  block += 'Engram re-injected relevant context before context compaction.\n\n';
+
+  if (guidance.length > 0 || alwaysInject.length > 0) {
+    block += '## Active Behavioral Rules\n';
+    for (const rule of [...guidance, ...alwaysInject]) {
+      if (!rule || typeof rule !== 'object') continue;
+      const content =
+        typeof rule.content === 'string' ? rule.content.trim() :
+        typeof rule.narrative === 'string' ? rule.narrative.trim() : '';
+      if (content) block += `- ${content}\n`;
+    }
+    block += '\n';
+  }
+
+  if (observations.length > 0) {
+    block += '## Relevant Memories\n';
+    for (const obs of observations) {
+      if (!obs || typeof obs !== 'object') continue;
+      const content = typeof obs.content === 'string' ? obs.content.trim() : '';
+      if (content) block += `- ${content}\n`;
+    }
+    block += '\n';
+  }
+
+  block += '</engram-reinjection>';
+  return block;
+}
+
+/**
+ * Pre-compact hook handler.
+ *
+ * Before Claude Code compacts the context window, this hook:
+ *   1. Extracts a topic from the input (best-effort)
+ *   2. Requests relevant memory re-injection from the engram server
+ *   3. Formats the response as an <engram-reinjection> block
+ *
+ * Note: the PreCompact hook is not in HOOKS_WITH_EVENT_NAME, so
+ * lib.writeResponse will silently drop any additionalContext string.
+ * The formatted block is returned for testing purposes and for future
+ * CC versions that may support PreCompact additionalContext.
+ *
+ * @param {Object} ctx   - Hook context from lib.RunHook
+ * @param {Object} input - Raw input payload from Claude Code
+ * @returns {string} Always '' (CC drops PreCompact context; see comment above)
+ */
+async function handlePreCompact(ctx, input) {
+  const project = typeof ctx.Project === 'string' ? ctx.Project : '';
+
+  if (!project) {
+    return '';
+  }
+
+  const topic = extractTopic(input);
+
+  const endpoint = topic
+    ? `/api/context/inject?project=${encodeURIComponent(project)}&query=${encodeURIComponent(topic)}`
+    : `/api/context/inject?project=${encodeURIComponent(project)}`;
+
+  // Fire-and-forget: CC ignores PreCompact additionalContext, so we don't
+  // need to await the response. The call primes the server cache for the
+  // subsequent session-start re-injection.
+  lib.requestGet(endpoint, 8000).catch((err) => {
+    process.stderr.write(`engram pre-compact hook: inject fetch failed: ${err.message}\n`);
+  });
+
   return '';
 }
 
@@ -15,4 +126,6 @@ if (require.main === module) {
 
 module.exports = {
   handlePreCompact,
+  extractTopic,
+  formatReinjectionBlock,
 };

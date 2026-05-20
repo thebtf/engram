@@ -4,8 +4,10 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/lib/pq"
 	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/pkg/models"
@@ -40,17 +42,30 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 
 	now := time.Now().UTC()
 	row := &Memory{
-		Project:     mem.Project,
-		Content:     mem.Content,
-		Tags:        models.JSONStringArray(mem.Tags),
-		SourceAgent: mem.SourceAgent,
-		EditedBy:    mem.EditedBy,
-		Version:     1,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		Project:        mem.Project,
+		Content:        mem.Content,
+		Tags:           models.JSONStringArray(mem.Tags),
+		SourceAgent:    mem.SourceAgent,
+		EditedBy:       mem.EditedBy,
+		Status:         "active",
+		ImportanceBase: 0.5,
+		TsAlpha:        1.0,
+		TsBeta:         1.0,
+		Version:        1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if mem.Version > 0 {
 		row.Version = mem.Version
+	}
+	if mem.Status != "" {
+		row.Status = mem.Status
+	}
+	if mem.ImportanceBase > 0 {
+		row.ImportanceBase = mem.ImportanceBase
+	}
+	if mem.SupersedesID != nil {
+		row.SupersedesID = mem.SupersedesID
 	}
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
@@ -94,6 +109,42 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 		Find(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("list memories for project %q: %w", project, err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
+}
+
+// ListForInjection returns active memories for the given project ordered by
+// importance_base DESC, created_at DESC — suitable for context injection.
+// project must not be empty. limit defaults to 50 when <= 0.
+func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("project must not be empty")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	lifecycleEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
+	var rows []Memory
+	now := time.Now().UTC()
+	q := s.db.WithContext(ctx).
+		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+		Where("valid_from IS NULL OR valid_from <= ?", now).
+		Where("valid_until IS NULL OR valid_until >= ?", now)
+
+	if lifecycleEnabled {
+		q = q.Where("tier != 'working'").
+			Where("retrievability > ?", 0.3)
+	}
+
+	err := q.Order("importance_base DESC, created_at DESC").
+		Limit(limit).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list memories for injection project=%q: %w", project, err)
 	}
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
@@ -166,18 +217,142 @@ func (s *MemoryStore) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Supersede marks an existing memory as superseded and returns the memory's importance_base
+// BEFORE the penalty was applied (for the caller to compute the new memory's importance).
+//
+// The old memory receives status='superseded' and importance_base *= 0.1.
+// Returns an error when the memory is not found or is already superseded/deleted.
+func (s *MemoryStore) Supersede(ctx context.Context, id int64) (oldImportance float64, err error) {
+	if id == 0 {
+		return 0, fmt.Errorf("memory id must be non-zero")
+	}
+	// Read current importance before update.
+	var row Memory
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&row).Error; err != nil {
+		return 0, fmt.Errorf("supersede memory id=%d: %w", id, err)
+	}
+	oldImportance = row.ImportanceBase
+
+	now := time.Now().UTC()
+	result := s.db.WithContext(ctx).Model(&Memory{}).
+		Where("id = ? AND deleted_at IS NULL AND status = 'active'", id).
+		Updates(map[string]any{
+			"status":          "superseded",
+			"importance_base": row.ImportanceBase * 0.1,
+			"updated_at":      now,
+		})
+	if result.Error != nil {
+		return 0, fmt.Errorf("supersede memory id=%d: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return 0, fmt.Errorf("supersede memory id=%d: not found or already superseded", id)
+	}
+	return oldImportance, nil
+}
+
+// UpdateLifecycleFields updates specific lifecycle fields on a memory without
+// touching content, tags, or version. Used by feedback and injection pipelines.
+func (s *MemoryStore) UpdateLifecycleFields(ctx context.Context, id int64, fields map[string]any) error {
+	if id == 0 {
+		return fmt.Errorf("memory id must be non-zero")
+	}
+	if fields == nil {
+		return fmt.Errorf("fields must not be nil")
+	}
+	fields["updated_at"] = time.Now().UTC()
+	result := s.db.WithContext(ctx).Model(&Memory{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		Updates(fields)
+	if result.Error != nil {
+		return fmt.Errorf("update lifecycle fields memory id=%d: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update lifecycle fields: memory id=%d not found", id)
+	}
+	return nil
+}
+
+// IncrementInjectionCount atomically increments injection_count for a memory.
+func (s *MemoryStore) IncrementInjectionCount(ctx context.Context, id int64) error {
+	return s.db.WithContext(ctx).Model(&Memory{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		UpdateColumn("injection_count", gorm.Expr("injection_count + 1")).Error
+}
+
+// BatchIncrementCited atomically increments ts_alpha, citation_count, and recalculates
+// importance_base for the given memory IDs. All updates are applied in a single SQL statement.
+func (s *MemoryStore) BatchIncrementCited(ctx context.Context, ids []int64) error {
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE memories SET ts_alpha = ts_alpha + 1, citation_count = citation_count + 1, importance_base = LEAST(1.0, GREATEST(importance_base, importance_base * ln(2.0 + citation_count))), updated_at = now() WHERE id = ANY(?)",
+		pq.Array(ids),
+	).Error
+}
+
+// BatchIncrementUncited atomically increments ts_beta for the given memory IDs.
+// All updates are applied in a single SQL statement.
+func (s *MemoryStore) BatchIncrementUncited(ctx context.Context, ids []int64) error {
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE memories SET ts_beta = ts_beta + 1, updated_at = now() WHERE id = ANY(?)",
+		pq.Array(ids),
+	).Error
+}
+
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
 	return &models.Memory{
-		ID:          row.ID,
-		Project:     row.Project,
-		Content:     row.Content,
-		Tags:        []string(row.Tags),
-		SourceAgent: row.SourceAgent,
-		EditedBy:    row.EditedBy,
-		Version:     row.Version,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
-		DeletedAt:   row.DeletedAt,
+		ID:              row.ID,
+		Project:         row.Project,
+		Content:         row.Content,
+		Tags:            []string(row.Tags),
+		SourceAgent:     row.SourceAgent,
+		EditedBy:        row.EditedBy,
+		Status:          row.Status,
+		Tier:            row.Tier,
+		EpistemicType:   row.EpistemicType,
+		Defeasibility:   row.Defeasibility,
+		PromotionTarget: row.PromotionTarget,
+		Version:         row.Version,
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
+		DeletedAt:       row.DeletedAt,
+		LastRetrievedAt: row.LastRetrievedAt,
+		LastConfirmed:   row.LastConfirmed,
+		ReviewAfter:     row.ReviewAfter,
+		ValidFrom:       row.ValidFrom,
+		ValidUntil:      row.ValidUntil,
+		SupersedesID:    row.SupersedesID,
+		SupersededBy:    row.SupersededBy,
+		ImportanceBase:  row.ImportanceBase,
+		TsAlpha:         row.TsAlpha,
+		TsBeta:          row.TsBeta,
+		Confidence:      row.Confidence,
+		Stability:       row.Stability,
+		Retrievability:  row.Retrievability,
+		CitationCount:   row.CitationCount,
+		InjectionCount:  row.InjectionCount,
+		AccessCount:     row.AccessCount,
+		RecurrenceCount: row.RecurrenceCount,
 	}
+}
+
+// ListAllActive returns a batch of active memories for sleep cycle processing.
+func (s *MemoryStore) ListAllActive(ctx context.Context, batchSize int, offset int) ([]*models.Memory, error) {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	var rows []Memory
+	err := s.db.WithContext(ctx).
+		Where("status = 'active' AND deleted_at IS NULL").
+		Order("id ASC").
+		Limit(batchSize).
+		Offset(offset).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list all active memories: %w", err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
 }

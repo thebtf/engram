@@ -3268,6 +3268,242 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return fmt.Errorf("104_drop_sdk_sessions: IRREVERSIBLE — pg_restore required (C3)")
 			},
 		},
+		// ── vNext Phase A migrations ──────────────────────────────────────
+
+		// Migration 105: Extend memories table with lifecycle columns for
+		// citation tracking, Thompson Sampling, supersession, and scope filtering.
+		// All columns nullable with defaults → online ALTER, no table lock.
+		{
+			ID: "105_memories_lifecycle_columns",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS importance_base REAL DEFAULT 0.5`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS ts_alpha REAL DEFAULT 1.0`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS ts_beta REAL DEFAULT 1.0`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS citation_count INTEGER DEFAULT 0`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS injection_count INTEGER DEFAULT 0`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS supersedes_id BIGINT REFERENCES memories(id)`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS access_count INTEGER DEFAULT 0`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_retrieved_at TIMESTAMPTZ`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ DEFAULT now()`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ DEFAULT 'infinity'`,
+
+					`DO $$ BEGIN
+						ALTER TABLE memories ADD CONSTRAINT chk_memories_status
+							CHECK (status IN ('active', 'superseded', 'flagged', 'archived'));
+					EXCEPTION WHEN duplicate_object THEN NULL;
+					END $$`,
+
+					`CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status) WHERE deleted_at IS NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_memories_supersedes ON memories(supersedes_id) WHERE supersedes_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_memories_injection ON memories(project, status, valid_until) WHERE deleted_at IS NULL AND status = 'active'`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("105_memories_lifecycle_columns: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				cols := []string{
+					"importance_base", "ts_alpha", "ts_beta", "citation_count",
+					"injection_count", "status", "supersedes_id", "access_count",
+					"last_retrieved_at", "valid_from", "valid_until",
+				}
+				for _, col := range cols {
+					if err := tx.Exec("ALTER TABLE memories DROP COLUMN IF EXISTS " + col).Error; err != nil {
+						return err
+					}
+				}
+				tx.Exec("DROP INDEX IF EXISTS idx_memories_status")
+				tx.Exec("DROP INDEX IF EXISTS idx_memories_supersedes")
+				tx.Exec("DROP INDEX IF EXISTS idx_memories_injection")
+				return nil
+			},
+		},
+
+		// Migration 106: Create injection_log table (append-only, 90-day retention).
+		{
+			ID: "106_injection_log",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS injection_log (
+						id          BIGSERIAL PRIMARY KEY,
+						session_id  TEXT NOT NULL,
+						project     TEXT NOT NULL,
+						memory_ids  BIGINT[] NOT NULL,
+						injected_at TIMESTAMPTZ NOT NULL DEFAULT now()
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_injection_log_session ON injection_log(session_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_injection_log_project_time ON injection_log(project, injected_at DESC)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("106_injection_log: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS injection_log").Error
+			},
+		},
+
+		// Migration 107: Create citation_log table (append-only, 90-day retention).
+		{
+			ID: "107_citation_log",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS citation_log (
+						id         BIGSERIAL PRIMARY KEY,
+						session_id TEXT NOT NULL,
+						memory_id  BIGINT NOT NULL REFERENCES memories(id),
+						cited      BOOLEAN NOT NULL,
+						match_type TEXT,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_citation_log_session ON citation_log(session_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_citation_log_memory ON citation_log(memory_id)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("107_citation_log: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS citation_log").Error
+			},
+		},
+
+		// Migration 108: Restore content_chunks table for embedding storage.
+		// New schema: memory_id FK (not hash-based like v5's dropped table).
+		{
+			ID: "108_content_chunks",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS content_chunks (
+						id         BIGSERIAL PRIMARY KEY,
+						memory_id  BIGINT NOT NULL REFERENCES memories(id),
+						seq        INTEGER NOT NULL,
+						text       TEXT NOT NULL DEFAULT '',
+						embedding  vector(4096),
+						model      TEXT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						UNIQUE(memory_id, seq)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_chunks_memory ON content_chunks(memory_id)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("108_content_chunks: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS content_chunks").Error
+			},
+		},
+
+		// Migration 109: DiskANN index on content_chunks embedding column.
+		// pgvectorscale handles 4096-dim vectors (HNSW limit = 2000).
+		// Falls back gracefully when vectorscale is not installed.
+		{
+			ID: "109_content_chunks_diskann",
+			Migrate: func(tx *gorm.DB) error {
+				if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE").Error; err != nil {
+					log.Warn().Err(err).Msg("migration 109: vectorscale extension not available, skipping DiskANN index")
+					return nil
+				}
+				return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING diskann (embedding vector_cosine_ops)`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP INDEX IF EXISTS idx_chunks_embedding").Error
+			},
+		},
+		// Migration 110: Lifecycle metadata columns on memories (Milestone B).
+		// Expand-and-contract: all nullable with defaults, catalog-only on PG 11+.
+		{
+			ID: "110_memories_lifecycle",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS tier TEXT DEFAULT 'semantic'`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS epistemic_type TEXT DEFAULT 'observation'`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS confidence REAL DEFAULT 0.5`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS stability REAL DEFAULT 30.0`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS retrievability REAL DEFAULT 1.0`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS recurrence_count INT DEFAULT 0`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_confirmed TIMESTAMPTZ`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS review_after TIMESTAMPTZ`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS defeasibility TEXT DEFAULT 'slow'`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS superseded_by BIGINT`,
+					`ALTER TABLE memories ADD COLUMN IF NOT EXISTS promotion_target TEXT DEFAULT 'none'`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("110_memories_lifecycle: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				cols := []string{"tier", "epistemic_type", "confidence", "stability", "retrievability",
+					"recurrence_count", "last_confirmed", "review_after", "defeasibility",
+					"superseded_by", "promotion_target"}
+				for _, col := range cols {
+					if err := tx.Exec("ALTER TABLE memories DROP COLUMN IF EXISTS " + col).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+
+		// Migration 111: Indexes for lifecycle queries.
+		{
+			ID: "111_memories_lifecycle_indexes",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories (tier) WHERE deleted_at IS NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_memories_retrievability ON memories (retrievability) WHERE deleted_at IS NULL AND status = 'active'`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("111_memories_lifecycle_indexes: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				tx.Exec("DROP INDEX IF EXISTS idx_memories_tier")
+				tx.Exec("DROP INDEX IF EXISTS idx_memories_retrievability")
+				return nil
+			},
+		},
+
+		// Migration 112: Promotion log table for audit trail.
+		{
+			ID: "112_promotion_log",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`
+					CREATE TABLE IF NOT EXISTS promotion_log (
+						id         BIGSERIAL PRIMARY KEY,
+						memory_id  BIGINT NOT NULL REFERENCES memories(id),
+						from_tier  TEXT NOT NULL,
+						to_tier    TEXT NOT NULL,
+						reason     TEXT NOT NULL DEFAULT '',
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+					)
+				`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS promotion_log").Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

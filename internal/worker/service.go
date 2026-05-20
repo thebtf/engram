@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/soheilhy/cmux"
 	httpSwagger "github.com/swaggo/http-swagger"
+
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/chunking"
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
@@ -27,7 +29,10 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/feedback"
 	"github.com/thebtf/engram/internal/grpcserver"
+	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/sessions"
@@ -115,6 +120,9 @@ type Service struct {
 	searchQueryLogStore    *gorm.SearchQueryLogStore
 	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
 	injectionStore         *gorm.InjectionStore
+	citationLogStore       *gorm.CitationLogStore
+	injectionTracker       *injection.Tracker
+	injectionLogStore      *gorm.InjectionLogStore
 	agentStatsStore        *gorm.AgentStatsStore
 	versionStore           *gorm.VersionStore
 	retrievalHooks         *retrievalHooks
@@ -136,6 +144,7 @@ type Service struct {
 	credentialStore        *gorm.CredentialStore
 	memoryStore            *gorm.MemoryStore
 	behavioralRulesStore   *gorm.BehavioralRulesStore
+	feedbackUpdater        *feedback.Updater
 	vaultOnce              sync.Once
 	vaultErr               error
 	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
@@ -351,6 +360,12 @@ func (s *Service) initializeAsync() {
 	// Create injection store for closed-loop learning
 	injectionStore := gorm.NewInjectionStore(store.GetDB())
 
+	// Create injection log store for vNext Phase A injection tracking (migration 106).
+	injectionLogStore := gorm.NewInjectionLogStore(store)
+
+	// Create citation log store for vNext Phase A citation tracking (migration 107).
+	citationLogStore := gorm.NewCitationLogStore(store)
+
 	// Create agent stats store for Phase 4 agent-specific effectiveness tracking
 	agentStatsStore := gorm.NewAgentStatsStore(store.GetDB())
 
@@ -369,15 +384,22 @@ func (s *Service) initializeAsync() {
 	behavioralRulesStore := gorm.NewBehavioralRulesStore(store)
 	credentialStore := gorm.NewCredentialStore(store)
 
+	// Create feedback updater for vNext Phase A closed-loop learning.
+	feedbackUpdater := feedback.NewUpdater(memoryStore)
+
 	// Set all the initialized components
 	s.initMu.Lock()
 	s.store = store
 	s.sessionStore = sessionStore
 	s.injectionStore = injectionStore
+	s.injectionLogStore = injectionLogStore
+	s.citationLogStore = citationLogStore
+	s.injectionTracker = injection.NewTracker(injectionLogStore)
 	s.issueStore = issueStore
 	s.credentialStore = credentialStore
 	s.memoryStore = memoryStore
 	s.behavioralRulesStore = behavioralRulesStore
+	s.feedbackUpdater = feedbackUpdater
 	s.agentStatsStore = agentStatsStore
 	s.versionStore = versionStore
 	s.tokenStore = tokenStore
@@ -483,6 +505,24 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
+	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
+	embClient, embErr := embedding.NewClient()
+	if embErr != nil {
+		if errors.Is(embErr, embedding.ErrEmbeddingDisabled) {
+			log.Info().Msg("embedding: disabled (ENGRAM_EMBEDDING_URL not set)")
+		} else {
+			log.Warn().Err(embErr).Msg("embedding: failed to initialize client")
+		}
+	} else {
+		embStore := embedding.NewStore(store.GetDB())
+		mcpServer.SetEmbeddingStores(embClient, embStore)
+		go func() {
+			if bfErr := embedding.Backfill(s.ctx, store.GetDB(), embClient, embStore, 50); bfErr != nil {
+				log.Warn().Err(bfErr).Msg("embedding backfill: stopped")
+			}
+		}()
+	}
+
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
 	// initMu protects s.grpcServer — the cmux goroutine polls for it.
 	//
@@ -525,6 +565,11 @@ func (s *Service) initializeAsync() {
 	projectReaper := reaper.New(store.DB)
 	s.projectReaper = projectReaper
 	projectReaper.Start(s.ctx)
+
+	// Start retention cron for injection_log and citation_log cleanup (vNext Phase A).
+	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+		s.startRetentionCron(s.ctx)
+	}
 
 	// Start queue processor if SDK processor is available
 	if processor != nil {
@@ -843,6 +888,9 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/sessions/index", s.handleIndexSession)
 		r.Post("/api/sessions/check", s.handleCheckSessions)
 
+		// Hook callbacks from Claude Code stop/session-end hooks
+		r.Post("/api/hooks/session-end", s.handleSessionEnd)
+
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
 
@@ -852,6 +900,7 @@ func (s *Service) setupRoutes() {
 		r.Delete("/api/projects/{id}", s.handleDeleteProject)
 		r.Get("/api/stats", s.handleGetStats)
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)
+		r.Get("/api/stats/vnext", s.handleStatsVnext)
 		r.Get("/api/types", s.handleGetTypes)
 		r.Get("/api/models", s.handleGetModels)
 

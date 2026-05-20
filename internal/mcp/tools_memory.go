@@ -5,14 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"unicode/utf8"
 
 	gormlib "gorm.io/gorm"
 
+	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -51,6 +56,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	var params struct {
 		Tags         []string
 		Rejected     []string
+		Supersedes   []int64
 		Content      string
 		Title        string
 		Type         string
@@ -63,6 +69,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	params.Tags = coerceStringSlice(m["tags"])
 	params.Rejected = coerceStringSlice(m["rejected"])
+	params.Supersedes = coerceInt64Slice(m["supersedes"])
 	params.Content = coerceString(m["content"], "")
 	params.Title = coerceString(m["title"], "")
 	params.Type = coerceString(m["type"], "")
@@ -230,15 +237,119 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
-	memory := &models.Memory{
-		Project:     params.Project,
-		Content:     params.Content,
-		Tags:        tags,
-		SourceAgent: agentSource,
+	// --- Supersession: mark old memories and compute inherited importance ---
+	// importanceBase starts at 0.5. When superseding, it is raised to
+	// max(0.5, oldImportance * 0.7) based on the first superseded memory.
+	inheritedImportance := 0.5
+	var primarySupersededID *int64
+	var supersededIDs []int64
+	for _, sid := range params.Supersedes {
+		if sid <= 0 {
+			continue
+		}
+		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
+		if supErr != nil {
+			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store_memory: supersede failed")
+			continue
+		}
+		supersededIDs = append(supersededIDs, sid)
+		if primarySupersededID == nil {
+			primarySupersededID = &sid
+			inherited := oldImportance * 0.7
+			if inherited > inheritedImportance {
+				inheritedImportance = inherited
+			}
+		}
 	}
+
+	// --- Write gate (vNext Phase A) ---
+	// When ENGRAM_VNEXT_ENABLED=true, evaluate novelty before creation.
+	// Low-novelty memories are stored with Status="flagged" so callers can
+	// detect duplicates; the quality_signals key is added to the response.
+	var gateResult writegate.GateResult
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	if vnextEnabled && params.Project != "" {
+		existing, listErr := s.memoryStore.List(ctx, params.Project, 100)
+		if listErr != nil {
+			log.Warn().Err(listErr).Msg("store_memory: write gate could not load existing memories, skipping gate")
+		} else {
+			gateResult = writegate.Check(ctx, params.Content, existing)
+		}
+	}
+
+	memory := &models.Memory{
+		Project:        params.Project,
+		Content:        params.Content,
+		Tags:           tags,
+		SourceAgent:    agentSource,
+		ImportanceBase: inheritedImportance,
+		SupersedesID:   primarySupersededID,
+	}
+
+	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+		if tier := coerceString(m["tier"], ""); tier != "" {
+			if lifecycle.ValidTier(tier) {
+				memory.Tier = tier
+			}
+		}
+		if et := coerceString(m["epistemic_type"], ""); et != "" {
+			if lifecycle.ValidEpistemicType(et) {
+				memory.EpistemicType = et
+			}
+		}
+		if def := coerceString(m["defeasibility"], ""); def != "" {
+			if lifecycle.ValidDefeasibility(def) {
+				memory.Defeasibility = def
+			}
+		}
+		if memory.Stability == 0 {
+			memory.Stability = lifecycle.ComputeStability(30.0, memory.Tier, memory.EpistemicType, 0)
+		}
+		memory.Confidence = lifecycle.ComputeConfidence(lifecycle.ConfidenceInputs{})
+		memory.Retrievability = 1.0
+	}
+	if vnextEnabled && gateResult.Decision == "flag" {
+		memory.Status = "flagged"
+	}
+
 	created, err := s.memoryStore.Create(ctx, memory)
 	if err != nil {
 		return "", fmt.Errorf("store memory: %w", err)
+	}
+
+	// Async embedding: fire-and-forget goroutine so the MCP response is not blocked
+	// by the embedding HTTP call. Captures local copies of created fields and store
+	// pointers to avoid capturing the mutable request-scoped variables.
+	if s.embeddingClient != nil && s.embeddingStore != nil {
+		memID := created.ID
+		memContent := created.Content
+		embClient := s.embeddingClient
+		embStore := s.embeddingStore
+		go func() {
+			gCtx := context.Background()
+			vectors, embErr := embClient.Embed(gCtx, []string{memContent})
+			if embErr != nil {
+				log.Error().Err(embErr).Int64("memory_id", memID).Msg("async embedding failed")
+				return
+			}
+			if len(vectors) == 0 || len(vectors[0]) == 0 {
+				return
+			}
+			chunk := embedding.Chunk{
+				MemoryID:  memID,
+				Seq:       0,
+				Text:      memContent,
+				Embedding: pgvector.NewVector(vectors[0]),
+				Model:     embClient.Model(),
+			}
+			if storeErr := embStore.StoreChunks(gCtx, []embedding.Chunk{chunk}); storeErr != nil {
+				log.Error().Err(storeErr).Int64("memory_id", memID).Msg("async embedding store failed")
+				return // don't run cosine check if store failed
+			}
+			// Async cosine duplicate guard
+			writegate.CheckCosine(gCtx, memID, memContent, embClient, embStore, s.memoryStore)
+		}()
 	}
 
 	result := map[string]any{
@@ -248,6 +359,17 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"scope":   resolvedScope,
 		"storage": "memories",
 		"message": "Memory stored successfully",
+	}
+	if vnextEnabled {
+		result["quality_signals"] = map[string]any{
+			"gate_result":      gateResult.Decision,
+			"novelty_score":    gateResult.NoveltyScore,
+			"max_jaccard":      gateResult.MaxJaccard,
+			"similar_existing": gateResult.SimilarExisting,
+		}
+	}
+	if len(supersededIDs) > 0 {
+		result["superseded_ids"] = supersededIDs
 	}
 	if ttlApplied {
 		result["ttl_days"] = ttlDays
@@ -424,6 +546,26 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		if len(filtered) == limit {
 			break
 		}
+	}
+
+	// Reconsolidation: every retrieval updates access_count, last_retrieved_at,
+	// and recalculates stability (Nader 2000). Fire-and-forget to avoid blocking.
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(filtered) > 0 {
+		go func() {
+			for _, mem := range filtered {
+				fields := map[string]any{
+					"access_count":    gormlib.Expr("access_count + 1"),
+					"last_retrieved_at": gormlib.Expr("now()"),
+				}
+				if mem.Stability > 0 {
+					newStability := lifecycle.Reconsolidate(mem.Stability, mem.Retrievability)
+					if newStability != mem.Stability {
+						fields["stability"] = newStability
+					}
+				}
+				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), mem.ID, fields)
+			}
+		}()
 	}
 
 	switch format {
