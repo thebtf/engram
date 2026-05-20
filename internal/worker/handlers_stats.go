@@ -26,20 +26,28 @@ type vnextStatsResponse struct {
 func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	s.initMu.RLock()
+	store := s.store
+	s.initMu.RUnlock()
+	if store == nil {
+		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
 	var injectionCount int64
-	if err := s.store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM injection_log`).Scan(&injectionCount).Error; err != nil {
+	if err := store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM injection_log`).Scan(&injectionCount).Error; err != nil {
 		http.Error(w, "failed to query injection_log", http.StatusInternalServerError)
 		return
 	}
 
 	var citationCount int64
-	if err := s.store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM citation_log WHERE cited = true`).Scan(&citationCount).Error; err != nil {
+	if err := store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM citation_log WHERE cited = true`).Scan(&citationCount).Error; err != nil {
 		http.Error(w, "failed to query citation_log (cited)", http.StatusInternalServerError)
 		return
 	}
 
 	var uncitedCount int64
-	if err := s.store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM citation_log WHERE cited = false`).Scan(&uncitedCount).Error; err != nil {
+	if err := store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM citation_log WHERE cited = false`).Scan(&uncitedCount).Error; err != nil {
 		http.Error(w, "failed to query citation_log (uncited)", http.StatusInternalServerError)
 		return
 	}
@@ -57,7 +65,7 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 		Count  int64
 	}
 	var rows []statusRow
-	if err := s.store.DB.WithContext(ctx).
+	if err := store.DB.WithContext(ctx).
 		Raw(`SELECT status, count(*) AS count FROM memories WHERE deleted_at IS NULL GROUP BY status`).
 		Scan(&rows).Error; err != nil {
 		http.Error(w, "failed to query memories write-gate stats", http.StatusInternalServerError)

@@ -6,6 +6,7 @@ package injection
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"sort"
 
@@ -108,103 +109,38 @@ func sampleBeta(alpha, beta float64) float64 {
 // sampleGamma draws from Gamma(shape, 1) using Marsaglia-Tsang's method.
 func sampleGamma(shape float64) float64 {
 	if shape < 1.0 {
-		return sampleGamma(shape+1) * gammaSmallShape(rand.Float64(), shape) //nolint:gosec
+		return sampleGamma(shape+1.0) * math.Pow(rand.Float64(), 1.0/shape) //nolint:gosec
 	}
 	d := shape - 1.0/3.0
-	c := 1.0 / mathSqrt(9.0*d)
+	c := 1.0 / math.Sqrt(9.0*d)
 	for {
-		x := rand.NormFloat64() //nolint:gosec
-		v := 1.0 + c*x
-		if v <= 0 {
-			continue
+		var x float64
+		for {
+			x = rand.NormFloat64() //nolint:gosec
+			if 1.0+c*x > 0 {
+				break
+			}
 		}
-		v = v * v * v
+		v := math.Pow(1.0+c*x, 3)
 		u := rand.Float64() //nolint:gosec
 		if u < 1.0-0.0331*(x*x)*(x*x) {
 			return d * v
 		}
-		if mathLog(u) < 0.5*x*x+d*(1.0-v+mathLog(v)) {
+		if math.Log(u) < 0.5*x*x+d*(1.0-v+math.Log(v)) {
 			return d * v
 		}
 	}
-}
-
-// gammaSmallShape computes u^(1/shape) for the shape < 1 reduction.
-func gammaSmallShape(u, shape float64) float64 {
-	if u <= 0 {
-		return 0
-	}
-	return mathExp(mathLog(u) / shape)
-}
-
-// mathSqrt computes sqrt(x) via Newton's method.
-func mathSqrt(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	z := x
-	for i := 0; i < 40; i++ {
-		z -= (z*z - x) / (2 * z)
-	}
-	return z
-}
-
-// mathLog computes ln(x) via range reduction + atanh series.
-func mathLog(x float64) float64 {
-	if x <= 0 {
-		return -1e300
-	}
-	e := 0
-	for x >= 2.0 {
-		x /= 2.0
-		e++
-	}
-	for x < 0.5 {
-		x *= 2.0
-		e--
-	}
-	y := (x - 1.0) / (x + 1.0)
-	y2 := y * y
-	ln := 2 * (y + y2*y/3 + y2*y2*y/5 + y2*y2*y2*y/7 + y2*y2*y2*y2*y/9)
-	const ln2 = 0.6931471805599453
-	return ln + float64(e)*ln2
-}
-
-// mathExp computes e^x via range reduction + Horner evaluation.
-func mathExp(x float64) float64 {
-	n := int(x)
-	if x < 0 && float64(n) != x {
-		n--
-	}
-	f := x - float64(n)
-	ef := 1.0 + f*(1+f*(0.5+f*(1.0/6+f*(1.0/24+f*(1.0/120+f*(1.0/720+f*(1.0/5040+f*(1.0/40320+f*(1.0/362880+f/3628800)))))))))
-	const e = 2.718281828459045
-	abs := n
-	base := e
-	if abs < 0 {
-		abs = -abs
-		base = 1.0 / e
-	}
-	en := 1.0
-	for abs > 0 {
-		if abs&1 == 1 {
-			en *= base
-		}
-		base *= base
-		abs >>= 1
-	}
-	return en * ef
 }
 
 // Tracker records injection events so the feedback loop can correlate them
 // with citation outcomes at session end.
 type Tracker struct {
-	store *gormdb.InjectionStore
+	store *gormdb.InjectionLogStore
 }
 
-// NewTracker creates a Tracker backed by the given InjectionStore.
+// NewTracker creates a Tracker backed by the given InjectionLogStore.
 // A nil store is accepted — Track becomes a no-op.
-func NewTracker(store *gormdb.InjectionStore) *Tracker {
+func NewTracker(store *gormdb.InjectionLogStore) *Tracker {
 	return &Tracker{store: store}
 }
 
@@ -215,21 +151,17 @@ func (t *Tracker) Track(ctx context.Context, sessionID, project string, scored [
 	if t.store == nil || sessionID == "" {
 		return
 	}
-	var records []gormdb.InjectionRecord
+	var ids []int64
 	for _, s := range scored {
 		if !s.Selected || s.Memory == nil {
 			continue
 		}
-		records = append(records, gormdb.InjectionRecord{
-			ObservationID:    s.Memory.ID,
-			SessionID:        sessionID,
-			InjectionSection: "vnext_thompson",
-		})
+		ids = append(ids, s.Memory.ID)
 	}
-	if len(records) == 0 {
+	if len(ids) == 0 {
 		return
 	}
-	if err := t.store.RecordInjections(ctx, records); err != nil {
+	if err := t.store.Record(ctx, sessionID, project, ids); err != nil {
 		log.Warn().Err(err).Str("session_id", sessionID).Str("project", project).
 			Msg("injection tracker: failed to record injections")
 	}

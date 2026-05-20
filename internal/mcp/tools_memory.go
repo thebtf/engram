@@ -320,7 +320,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			}
 			if storeErr := embStore.StoreChunks(gCtx, []embedding.Chunk{chunk}); storeErr != nil {
 				log.Error().Err(storeErr).Int64("memory_id", memID).Msg("async embedding store failed")
+				return // don't run cosine check if store failed
 			}
+			// Async cosine duplicate guard
+			writegate.CheckCosine(gCtx, memID, memContent, embClient, embStore, s.memoryStore)
 		}()
 	}
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -70,7 +71,8 @@ func (s *Service) processCitationsAsync(
 	citationStore *gormdb.CitationLogStore,
 	feedbackUpdater *feedback.Updater,
 ) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	if injectionStore == nil || memStore == nil || citationStore == nil {
 		log.Warn().

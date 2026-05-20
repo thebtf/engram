@@ -3361,7 +3361,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						session_id TEXT NOT NULL,
 						memory_id  BIGINT NOT NULL REFERENCES memories(id),
 						cited      BOOLEAN NOT NULL,
-						match_type TEXT CHECK (match_type IN ('title', 'keyword', 'both')),
+						match_type TEXT,
 						created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 					)`,
 					`CREATE INDEX IF NOT EXISTS idx_citation_log_session ON citation_log(session_id)`,

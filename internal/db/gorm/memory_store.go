@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
 	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/pkg/models"
@@ -259,6 +260,24 @@ func (s *MemoryStore) IncrementInjectionCount(ctx context.Context, id int64) err
 	return s.db.WithContext(ctx).Model(&Memory{}).
 		Where("id = ?", id).
 		UpdateColumn("injection_count", gorm.Expr("injection_count + 1")).Error
+}
+
+// BatchIncrementCited atomically increments ts_alpha, citation_count, and recalculates
+// importance_base for the given memory IDs. All updates are applied in a single SQL statement.
+func (s *MemoryStore) BatchIncrementCited(ctx context.Context, ids []int64) error {
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE memories SET ts_alpha = ts_alpha + 1, citation_count = citation_count + 1, importance_base = LEAST(1.0, GREATEST(importance_base, importance_base * ln(2.0 + citation_count))), updated_at = now() WHERE id = ANY(?)",
+		pq.Array(ids),
+	).Error
+}
+
+// BatchIncrementUncited atomically increments ts_beta for the given memory IDs.
+// All updates are applied in a single SQL statement.
+func (s *MemoryStore) BatchIncrementUncited(ctx context.Context, ids []int64) error {
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE memories SET ts_beta = ts_beta + 1, updated_at = now() WHERE id = ANY(?)",
+		pq.Array(ids),
+	).Error
 }
 
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.

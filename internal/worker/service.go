@@ -394,7 +394,7 @@ func (s *Service) initializeAsync() {
 	s.injectionStore = injectionStore
 	s.injectionLogStore = injectionLogStore
 	s.citationLogStore = citationLogStore
-	s.injectionTracker = injection.NewTracker(injectionStore)
+	s.injectionTracker = injection.NewTracker(injectionLogStore)
 	s.issueStore = issueStore
 	s.credentialStore = credentialStore
 	s.memoryStore = memoryStore

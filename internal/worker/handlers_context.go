@@ -1045,8 +1045,13 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	// --- vNext Thompson Sampling path (ENGRAM_VNEXT_ENABLED=true) ---
 	// When enabled, replaces the response with a Thompson-sampled memory selection.
 	// The existing legacy path above remains unchanged when the flag is not set.
+	s.initMu.RLock()
+	vnextMemStore := s.memoryStore
+	vnextTracker := s.injectionTracker
+	s.initMu.RUnlock()
+
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
-	if vnextEnabled && s.memoryStore != nil {
+	if vnextEnabled && vnextMemStore != nil {
 		topK := 15
 		if v := os.Getenv("ENGRAM_INJECTION_TOP_K"); v != "" {
 			if n, parseErr := strconv.Atoi(v); parseErr == nil && n > 0 {
@@ -1054,18 +1059,18 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		vnextMems, vnextErr := s.memoryStore.ListForInjection(ctx, project, topK*3)
+		vnextMems, vnextErr := vnextMemStore.ListForInjection(ctx, project, topK*3)
 		if vnextErr != nil {
 			log.Warn().Err(vnextErr).Str("project", project).Msg("vnext: ListForInjection failed, falling back to legacy path")
 		} else {
 			scored := injection.Score(vnextMems, topK)
 
 			// Fire-and-forget injection tracking.
-			if sessionID != "" && s.injectionTracker != nil {
+			if sessionID != "" && vnextTracker != nil {
 				capturedScored := scored
 				capturedSID := sessionID
 				capturedProj := project
-				tracker := s.injectionTracker
+				tracker := vnextTracker
 				go tracker.Track(context.Background(), capturedSID, capturedProj, capturedScored)
 			}
 
