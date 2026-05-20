@@ -1,0 +1,120 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/ingestion"
+	"github.com/thebtf/engram/pkg/models"
+)
+
+type ingestArgs struct {
+	Action        string `json:"action"`
+	Content       string `json:"content"`
+	SourceTitle   string `json:"source_title"`
+	SourceType    string `json:"source_type"`
+	Project       string `json:"project"`
+	ChunkStrategy string `json:"chunk_strategy"`
+	DryRun        bool   `json:"dry_run"`
+}
+
+func (s *Server) handleIngest(ctx context.Context, args json.RawMessage) (string, error) {
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("memory store not available")
+	}
+
+	var a ingestArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("parse ingest args: %w", err)
+	}
+
+	switch a.Action {
+	case "ingest":
+		return s.ingestDocument(ctx, a)
+	default:
+		return "", fmt.Errorf("unknown ingest action: %s", a.Action)
+	}
+}
+
+func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, error) {
+	if a.Content == "" {
+		return "", fmt.Errorf("content required")
+	}
+	if a.SourceTitle == "" {
+		return "", fmt.Errorf("source_title required")
+	}
+	if a.Project == "" {
+		a.Project = projectFromContext(ctx)
+	}
+	if a.Project == "" {
+		return "", fmt.Errorf("project required")
+	}
+
+	strategy := ingestion.StrategyParagraphs
+	switch a.ChunkStrategy {
+	case "sections":
+		strategy = ingestion.StrategySections
+	case "fixed":
+		strategy = ingestion.StrategyFixed
+	case "paragraphs", "":
+		strategy = ingestion.StrategyParagraphs
+	default:
+		return "", fmt.Errorf("invalid chunk_strategy: %s (use paragraphs, sections, or fixed)", a.ChunkStrategy)
+	}
+
+	chunks := ingestion.ChunkDocument(a.Content, strategy)
+	if len(chunks) == 0 {
+		return "", fmt.Errorf("document produced no chunks (empty or whitespace-only)")
+	}
+
+	if a.DryRun {
+		return marshalJSON(map[string]any{
+			"dry_run":     true,
+			"chunk_count": len(chunks),
+			"strategy":    string(strategy),
+			"message":     "dry run — no chunks stored",
+		})
+	}
+
+	stored := 0
+	flagged := 0
+	for _, chunk := range chunks {
+		memory := &models.Memory{
+			Project:     a.Project,
+			Content:     chunk.Text,
+			SourceAgent: "ingestion",
+			Tags: []string{
+				"ingested",
+				fmt.Sprintf("source:%s", a.SourceTitle),
+				fmt.Sprintf("chunk:%d", chunk.Index),
+			},
+			Tier:          "semantic",
+			EpistemicType: "fact",
+			Defeasibility: "slow",
+		}
+		if chunk.Section != "" {
+			memory.Tags = append(memory.Tags, fmt.Sprintf("section:%s", chunk.Section))
+		}
+
+		created, err := s.memoryStore.Create(ctx, memory)
+		if err != nil {
+			log.Error().Err(err).Int("chunk_index", chunk.Index).Msg("ingest: store chunk failed")
+			continue
+		}
+		if created.Status == "flagged" {
+			flagged++
+		}
+		stored++
+	}
+
+	return marshalJSON(map[string]any{
+		"source_title":  a.SourceTitle,
+		"strategy":      string(strategy),
+		"total_chunks":  len(chunks),
+		"stored":        stored,
+		"flagged":       flagged,
+		"message":       fmt.Sprintf("ingested %d chunks from '%s'", stored, a.SourceTitle),
+	})
+}

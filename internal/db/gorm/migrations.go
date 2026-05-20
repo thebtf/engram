@@ -3504,6 +3504,54 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec("DROP TABLE IF EXISTS promotion_log").Error
 			},
 		},
+		// Migration 113: Knowledge graph edges (Milestone C).
+		{
+			ID: "113_knowledge_edges",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`
+					CREATE TABLE IF NOT EXISTS knowledge_edges (
+						id                BIGSERIAL PRIMARY KEY,
+						source_id         BIGINT NOT NULL REFERENCES memories(id),
+						target_id         BIGINT NOT NULL REFERENCES memories(id),
+						edge_type         TEXT NOT NULL,
+						weight            REAL NOT NULL DEFAULT 1.0,
+						reasoning         TEXT NOT NULL DEFAULT '',
+						source_session_id TEXT NOT NULL DEFAULT '',
+						valid_from        TIMESTAMPTZ NOT NULL DEFAULT now(),
+						valid_until       TIMESTAMPTZ NOT NULL DEFAULT 'infinity',
+						created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+						superseded_at     TIMESTAMPTZ
+					)
+				`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS knowledge_edges").Error
+			},
+		},
+
+		// Migration 114: Indexes for knowledge_edges.
+		{
+			ID: "114_knowledge_edges_indexes",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE INDEX IF NOT EXISTS idx_ke_source ON knowledge_edges (source_id) WHERE superseded_at IS NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ke_target ON knowledge_edges (target_id) WHERE superseded_at IS NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ke_type ON knowledge_edges (edge_type) WHERE superseded_at IS NULL`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("114_knowledge_edges_indexes: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				tx.Exec("DROP INDEX IF EXISTS idx_ke_source")
+				tx.Exec("DROP INDEX IF EXISTS idx_ke_target")
+				tx.Exec("DROP INDEX IF EXISTS idx_ke_type")
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
