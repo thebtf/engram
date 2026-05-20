@@ -238,6 +238,22 @@ func (s *MemoryStore) Supersede(ctx context.Context, id int64) (oldImportance fl
 	return oldImportance, nil
 }
 
+// UpdateLifecycleFields updates specific lifecycle fields on a memory without
+// touching content, tags, or version. Used by feedback and injection pipelines.
+func (s *MemoryStore) UpdateLifecycleFields(ctx context.Context, id int64, fields map[string]any) error {
+	if id == 0 {
+		return fmt.Errorf("memory id must be non-zero")
+	}
+	fields["updated_at"] = time.Now().UTC()
+	result := s.db.WithContext(ctx).Model(&Memory{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		Updates(fields)
+	if result.Error != nil {
+		return fmt.Errorf("update lifecycle fields memory id=%d: %w", id, result.Error)
+	}
+	return nil
+}
+
 // IncrementInjectionCount atomically increments injection_count for a memory.
 func (s *MemoryStore) IncrementInjectionCount(ctx context.Context, id int64) error {
 	return s.db.WithContext(ctx).Model(&Memory{}).
