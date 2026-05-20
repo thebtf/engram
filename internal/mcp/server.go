@@ -20,6 +20,7 @@ import (
 	"github.com/thebtf/engram/internal/crypto"
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
 )
@@ -44,6 +45,7 @@ type Server struct {
 	memoryStore            *gorm.MemoryStore
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	promotionStore         *gorm.PromotionStore
+	graphStore             *graph.Store
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -114,6 +116,10 @@ func (s *Server) SetBehavioralRulesStore(brs *gorm.BehavioralRulesStore) {
 
 func (s *Server) SetPromotionStore(ps *gorm.PromotionStore) {
 	s.promotionStore = ps
+}
+
+func (s *Server) SetGraphStore(gs *graph.Store) {
+	s.graphStore = gs
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.
@@ -965,6 +971,54 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		})
 	}
 
+	// Graph tool — advertise when graph store is available and enabled
+	if s.graphStore != nil && os.Getenv("ENGRAM_GRAPH_ENABLED") == "true" {
+		tools = append(tools, Tool{
+			Name:        "graph",
+			Description: "[Graph] Navigate and manage the knowledge graph: add/remove edges, traverse relationships, find paths, discover synonyms.",
+			tier:        tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":     map[string]any{"type": "string", "description": "Action: add_edge, remove_edge, get_edges, traverse, find_path, synonyms", "enum": []string{"add_edge", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}},
+					"source_id":  map[string]any{"type": "integer", "description": "Source memory ID (for add_edge, find_path)"},
+					"target_id":  map[string]any{"type": "integer", "description": "Target memory ID (for add_edge, find_path)"},
+					"memory_id":  map[string]any{"type": "integer", "description": "Memory ID (for get_edges, traverse, synonyms)"},
+					"edge_id":    map[string]any{"type": "integer", "description": "Edge ID (for remove_edge)"},
+					"edge_type":  map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, contradicts, synonym_of)"},
+					"weight":     map[string]any{"type": "number", "description": "Edge confidence 0.0-1.0 (default 1.0)"},
+					"reasoning":  map[string]any{"type": "string", "description": "Why this edge exists"},
+					"direction":  map[string]any{"type": "string", "description": "Edge direction for get_edges: outgoing, incoming, both"},
+					"depth":      map[string]any{"type": "integer", "description": "Traversal depth (1-3, default 1)"},
+					"max_depth":  map[string]any{"type": "integer", "description": "Max path depth for find_path (1-3)"},
+				},
+			},
+		})
+	}
+
+	// Ingest tool — always available when memory store exists
+	if s.memoryStore != nil {
+		tools = append(tools, Tool{
+			Name:        "ingest",
+			Description: "[Ingest] Ingest documents into engram as chunked memories with source provenance. Level 1: raw chunking, no LLM needed.",
+			tier:        tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":         map[string]any{"type": "string", "description": "Action: ingest", "enum": []string{"ingest"}},
+					"content":        map[string]any{"type": "string", "description": "Document content to ingest"},
+					"source_title":   map[string]any{"type": "string", "description": "Human-readable source title"},
+					"source_type":    map[string]any{"type": "string", "description": "Source type: text, markdown, json, yaml"},
+					"project":        map[string]any{"type": "string", "description": "Target project"},
+					"chunk_strategy": map[string]any{"type": "string", "description": "Chunking strategy: paragraphs, sections, fixed"},
+					"dry_run":        map[string]any{"type": "boolean", "description": "Preview without storing"},
+				},
+			},
+		})
+	}
+
 	// Document / Collection tools — only advertise when dependencies are available
 	if s.documentStore != nil {
 		tools = append(tools,
@@ -1327,6 +1381,10 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleVaultStatus(ctx, args)
 	case "lifecycle":
 		return s.handleLifecycle(ctx, args)
+	case "graph":
+		return s.handleGraph(ctx, args)
+	case "ingest":
+		return s.handleIngest(ctx, args)
 	// Vault tool aliases
 	case "vault_store":
 		return s.handleStoreCredential(ctx, args)
