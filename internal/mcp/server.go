@@ -885,6 +885,26 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
+	// Adaptive memory tools — advertise only when memory store is available AND adaptive features are enabled.
+	if s.memoryStore != nil && os.Getenv("ENGRAM_ADAPTIVE_ENABLED") == "true" {
+		tools = append(tools,
+			Tool{
+				Name:        "get_memory_brief",
+				Description: "Get a compact memory context for sub-agent delegation briefs. Call before spawning sub-agents to give them relevant project memory. Returns top-N memories scored by Thompson Sampling.",
+				tier:        tierUseful,
+				InputSchema: map[string]any{
+					"type":     "object",
+					"required": []string{},
+					"properties": map[string]any{
+						"topic":   map[string]any{"type": "string", "description": "Topic hint for memory relevance filtering"},
+						"project": map[string]any{"type": "string", "description": "Project name (auto-detected if omitted)"},
+						"limit":   map[string]any{"type": "integer", "description": "Max memories to return (default: 5, max: 10)"},
+					},
+				},
+			},
+		)
+	}
+
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
 	if config.GetDatabaseDSN() != "" && crypto.VaultExists(config.Get()) {
 		tools = append(tools,
@@ -1404,6 +1424,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleSuppressMemory(ctx, args)
 	case "set_session_outcome":
 		return s.handleSetSessionOutcome(ctx, args)
+	case "get_memory_brief":
+		return s.handleGetMemoryBrief(ctx, args)
 	}
 
 	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/

@@ -336,7 +336,8 @@ type Memory struct {
 	CitationCount   int                    `gorm:"default:0" json:"citation_count"`
 	InjectionCount  int                    `gorm:"default:0" json:"injection_count"`
 	AccessCount     int                    `gorm:"default:0" json:"access_count"`
-	RecurrenceCount int                    `gorm:"default:0" json:"recurrence_count"`
+	RecurrenceCount          int                    `gorm:"default:0" json:"recurrence_count"`
+	ConsecutiveCitationCount int                    `gorm:"default:0" json:"consecutive_citation_count"`
 }
 
 func (Memory) TableName() string { return "memories" }

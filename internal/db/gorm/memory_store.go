@@ -102,8 +102,11 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 	}
 
 	var rows []Memory
+	now := time.Now().UTC()
 	err := s.db.WithContext(ctx).
-		Where("project = ? AND deleted_at IS NULL", project).
+		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+		Where("valid_from IS NULL OR valid_from <= ?", now).
+		Where("valid_until IS NULL OR valid_until >= ?", now).
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&rows).Error
@@ -327,18 +330,27 @@ func (s *MemoryStore) GetProjectCitationRate(ctx context.Context, project string
 	return rate, nil
 }
 
-// BatchIncrementCitedN increments ts_alpha by n for the given memory IDs.
+// BatchIncrementCitedN increments ts_alpha by a damped amount for the given memory IDs.
+// The actual boost is: n / (1 + consecutive_citation_count * damping_factor).
+// Also increments consecutive_citation_count for diminishing returns tracking.
 func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n float64) error {
 	return s.db.WithContext(ctx).Exec(
-		"UPDATE memories SET ts_alpha = ts_alpha + ?, citation_count = citation_count + 1, importance_base = LEAST(1.0, GREATEST(importance_base, importance_base * ln(2.0 + citation_count))), updated_at = now() WHERE id = ANY(?)",
+		`UPDATE memories SET
+			ts_alpha = ts_alpha + ? / (1.0 + consecutive_citation_count * 0.1),
+			citation_count = citation_count + 1,
+			consecutive_citation_count = consecutive_citation_count + 1,
+			importance_base = LEAST(1.0, GREATEST(importance_base, importance_base * ln(2.0 + citation_count))),
+			updated_at = now()
+		WHERE id = ANY(?)`,
 		n, pq.Array(ids),
 	).Error
 }
 
-// BatchIncrementUncitedN increments ts_beta by n for the given memory IDs.
+// BatchIncrementUncitedN increments ts_beta by n and resets the consecutive
+// citation counter for the given memory IDs.
 func (s *MemoryStore) BatchIncrementUncitedN(ctx context.Context, ids []int64, n float64) error {
 	return s.db.WithContext(ctx).Exec(
-		"UPDATE memories SET ts_beta = ts_beta + ?, updated_at = now() WHERE id = ANY(?)",
+		"UPDATE memories SET ts_beta = ts_beta + ?, consecutive_citation_count = 0, updated_at = now() WHERE id = ANY(?)",
 		n, pq.Array(ids),
 	).Error
 }
@@ -385,7 +397,8 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		CitationCount:   row.CitationCount,
 		InjectionCount:  row.InjectionCount,
 		AccessCount:     row.AccessCount,
-		RecurrenceCount: row.RecurrenceCount,
+		RecurrenceCount:          row.RecurrenceCount,
+		ConsecutiveCitationCount: row.ConsecutiveCitationCount,
 	}
 }
 

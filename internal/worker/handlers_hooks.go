@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -178,6 +179,16 @@ func (s *Service) processCitationsAsync(
 			violatedCount++
 		}
 	}
+	// Step 7: Close open segments and evict cached embeddings for this session.
+	if os.Getenv("ENGRAM_ADAPTIVE_ENABLED") == "true" {
+		if s.segmentStore != nil {
+			if err := s.segmentStore.CloseAllSegments(ctx, sessionID); err != nil {
+				log.Warn().Err(err).Str("session_id", sessionID).Msg("session_end: close segments failed")
+			}
+		}
+		s.clearSegmentEmbeddings(sessionID)
+	}
+
 	log.Info().
 		Str("event", "session_end_processed").
 		Str("session_id", sessionID).

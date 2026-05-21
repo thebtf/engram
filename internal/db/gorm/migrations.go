@@ -3630,6 +3630,42 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`ALTER TABLE citation_log DROP COLUMN IF EXISTS violated`).Error
 			},
 		},
+		{
+			ID: "119_consecutive_citation_count",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE memories ADD COLUMN IF NOT EXISTS consecutive_citation_count INT NOT NULL DEFAULT 0`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE memories DROP COLUMN IF EXISTS consecutive_citation_count`).Error
+			},
+		},
+		{
+			ID: "120_session_segments",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS session_segments (
+						id BIGSERIAL PRIMARY KEY,
+						session_id TEXT NOT NULL,
+						project TEXT NOT NULL,
+						segment_index INT NOT NULL DEFAULT 0,
+						topic_hint TEXT NOT NULL DEFAULT '',
+						started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						ended_at TIMESTAMPTZ,
+						UNIQUE(session_id, segment_index)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_session_segments_session ON session_segments (session_id)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS session_segments`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
