@@ -1,0 +1,38 @@
+name: Sync Plugin Marketplace
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout engram
+        uses: actions/checkout@v4
+
+      - name: Checkout marketplace
+        uses: actions/checkout@v4
+        with:
+          repository: thebtf/engram-marketplace
+          token: ${{ secrets.MARKETPLACE_PAT }}
+          path: marketplace
+
+      - name: Sync plugin files
+        run: |
+          rm -rf marketplace/engram
+          cp -r plugin/engram marketplace/engram
+          cd marketplace
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to sync"
+          else
+            VERSION=$(jq -r .version engram/.claude-plugin/plugin.json)
+            git commit -m "chore: sync engram plugin to v${VERSION}"
+            git push origin main
+          fi
