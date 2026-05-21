@@ -1067,7 +1067,13 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		if vnextErr != nil {
 			log.Warn().Err(vnextErr).Str("project", project).Msg("vnext: ListForInjection failed, falling back to legacy path")
 		} else {
-			scored := injection.Score(vnextMems, topK)
+			var scoreOpts injection.ScoreOpts
+			citRate, crErr := vnextMemStore.GetProjectCitationRate(ctx, project, 10)
+			if crErr == nil && citRate != 0.5 {
+				scoreOpts.DynamicPrior = true
+				scoreOpts.ProjectCitationRate = citRate
+			}
+			scored := injection.Score(vnextMems, topK, scoreOpts)
 
 			// Fire-and-forget injection tracking.
 			if sessionID != "" && vnextTracker != nil {

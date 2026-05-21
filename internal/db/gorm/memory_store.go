@@ -297,6 +297,36 @@ func (s *MemoryStore) BatchIncrementUncited(ctx context.Context, ids []int64) er
 	).Error
 }
 
+// GetProjectCitationRate returns the aggregate citation rate for a project:
+// sum(citation_count) / max(sum(injection_count), 1). Returns 0.5 when fewer
+// than minSamples memories exist (insufficient data for an informed prior).
+func (s *MemoryStore) GetProjectCitationRate(ctx context.Context, project string, minSamples int) (float64, error) {
+	var result struct {
+		TotalCitations  float64
+		TotalInjections float64
+		MemoryCount     int64
+	}
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT COALESCE(SUM(citation_count), 0) AS total_citations,
+		       COALESCE(SUM(injection_count), 0) AS total_injections,
+		       COUNT(*) AS memory_count
+		FROM memories
+		WHERE project = ? AND deleted_at IS NULL AND status != 'flagged'`,
+		project,
+	).Scan(&result).Error
+	if err != nil {
+		return 0.5, err
+	}
+	if result.MemoryCount < int64(minSamples) || result.TotalInjections < 1 {
+		return 0.5, nil
+	}
+	rate := result.TotalCitations / result.TotalInjections
+	if rate > 1.0 {
+		rate = 1.0
+	}
+	return rate, nil
+}
+
 // BatchIncrementCitedN increments ts_alpha by n for the given memory IDs.
 func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n float64) error {
 	return s.db.WithContext(ctx).Exec(
