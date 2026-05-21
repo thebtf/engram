@@ -45,6 +45,11 @@ func (s *Service) handleCodeExtraction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project and changes required", http.StatusBadRequest)
 		return
 	}
+	// Cap incoming slice at the store cap to avoid spinning the loop over
+	// unbounded payloads (security review S2 — CPU/memory amplifier).
+	if len(req.Changes) > maxExtractedPerRequest {
+		req.Changes = req.Changes[:maxExtractedPerRequest]
+	}
 
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]string{"status": "accepted"})

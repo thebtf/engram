@@ -60,6 +60,7 @@ func (s *Service) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	capturedProject := req.Project
 	capturedOutput := req.AgentOutputText
 
+	s.wg.Add(1)
 	go s.processCitationsAsync(capturedSessionID, capturedProject, capturedOutput, injectionStore, memStore, citationStore, feedbackUpdater)
 }
 
@@ -72,6 +73,7 @@ func (s *Service) processCitationsAsync(
 	citationStore *gormdb.CitationLogStore,
 	feedbackUpdater *feedback.Updater,
 ) {
+	defer s.wg.Done()
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 

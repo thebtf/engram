@@ -60,8 +60,9 @@ func (s *SegmentStore) CreateSegment(ctx context.Context, sessionID, project, to
 			return fmt.Errorf("close previous segment: %w", err)
 		}
 
-		// Get next index.
-		var maxIndex int
+		// Get next index. Initialize to -1 so a brand-new session starts at 0
+		// (Scan leaves maxIndex untouched when the result set is empty).
+		maxIndex := -1
 		if err := tx.Model(&SessionSegment{}).
 			Where("session_id = ?", sessionID).
 			Select("COALESCE(MAX(segment_index), -1)").

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -31,6 +32,7 @@ func (s *Service) handleCorrection(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+	req.UserMessage = strings.TrimSpace(req.UserMessage)
 	if req.Project == "" || req.UserMessage == "" {
 		http.Error(w, "project and user_message required", http.StatusBadRequest)
 		return

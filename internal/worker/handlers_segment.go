@@ -58,15 +58,24 @@ func (s *Service) handleSegmentCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]string{"status": "accepted"})
 
+	s.wg.Add(1)
 	go s.processSegmentCheckAsync(req, embClient, segStore)
 }
 
 func (s *Service) processSegmentCheckAsync(req segmentCheckRequest, embClient *embedding.Client, segStore *gormdb.SegmentStore) {
+	defer s.wg.Done()
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
+	// Truncate prompt_text before embedding call to bound payload size sent to
+	// the external embedding API (security review S4 — info-disclosure cap).
+	promptText := req.PromptText
+	if r := []rune(promptText); len(r) > 8000 {
+		promptText = string(r[:8000])
+	}
+
 	// Compute embedding for the current prompt.
-	vectors, err := embClient.Embed(ctx, []string{req.PromptText})
+	vectors, err := embClient.Embed(ctx, []string{promptText})
 	if err != nil {
 		log.Debug().Err(err).Str("session_id", req.SessionID).Msg("segment-check: embed failed, skipping")
 		return
