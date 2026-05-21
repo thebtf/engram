@@ -114,11 +114,13 @@ async function handlePreCompact(ctx, input) {
       limit: 10,
     }, 8000);
 
+    const fs = require('fs');
+    const path = require('path');
+    const cwd = typeof ctx.CWD === 'string' ? ctx.CWD : process.cwd();
+    const dir = path.join(cwd, '.engram');
+    const reinjectionFile = path.join(dir, 'reinjection.md');
+
     if (resp && resp.memories && resp.memories.length > 0) {
-      const fs = require('fs');
-      const path = require('path');
-      const cwd = typeof ctx.CWD === 'string' ? ctx.CWD : process.cwd();
-      const dir = path.join(cwd, '.engram');
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
@@ -127,7 +129,11 @@ async function handlePreCompact(ctx, input) {
         const tags = Array.isArray(mem.tags) ? mem.tags.join(', ') : '';
         lines.push(`- ${mem.content}${tags ? ` [${tags}]` : ''}`);
       }
-      fs.writeFileSync(path.join(dir, 'reinjection.md'), lines.join('\n'), 'utf8');
+      await fs.promises.writeFile(reinjectionFile, lines.join('\n'), 'utf8');
+    } else if (fs.existsSync(reinjectionFile)) {
+      // No memories returned — remove stale reinjection file to avoid replaying
+      // outdated guidance in subsequent compaction cycles.
+      await fs.promises.unlink(reinjectionFile).catch(() => {});
     }
   } catch (err) {
     process.stderr.write(`engram pre-compact hook: reinject failed: ${err.message}\n`);

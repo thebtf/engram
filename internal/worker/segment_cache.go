@@ -1,6 +1,9 @@
 package worker
 
-import "sync"
+import (
+	"strconv"
+	"sync"
+)
 
 // segmentEmbeddingCache stores per-session, per-segment running centroid
 // embeddings in memory. These are ephemeral — lost on server restart, which is
@@ -15,7 +18,7 @@ var globalSegmentCache = &segmentEmbeddingCache{
 }
 
 func segmentKey(sessionID string, segmentIndex int) string {
-	return sessionID + ":" + string(rune('0'+segmentIndex))
+	return sessionID + ":" + strconv.Itoa(segmentIndex)
 }
 
 func (s *Service) storeSegmentEmbedding(sessionID string, segmentIndex int, vec []float32) {
@@ -31,10 +34,11 @@ func (s *Service) getSegmentEmbedding(sessionID string, segmentIndex int) []floa
 }
 
 func (s *Service) clearSegmentEmbeddings(sessionID string) {
+	prefix := sessionID + ":"
 	globalSegmentCache.mu.Lock()
 	defer globalSegmentCache.mu.Unlock()
 	for k := range globalSegmentCache.cache {
-		if len(k) > len(sessionID) && k[:len(sessionID)] == sessionID {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
 			delete(globalSegmentCache.cache, k)
 		}
 	}

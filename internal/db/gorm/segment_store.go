@@ -50,19 +50,24 @@ func (s *SegmentStore) GetCurrentSegment(ctx context.Context, sessionID string) 
 // CreateSegment creates a new segment, closing the previous one if it exists.
 func (s *SegmentStore) CreateSegment(ctx context.Context, sessionID, project, topicHint string) (*SessionSegment, error) {
 	now := time.Now().UTC()
+	var result *SessionSegment
 
-	return &SessionSegment{}, s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Close the previous segment.
-		tx.Model(&SessionSegment{}).
+		if err := tx.Model(&SessionSegment{}).
 			Where("session_id = ? AND ended_at IS NULL", sessionID).
-			Update("ended_at", now)
+			Update("ended_at", now).Error; err != nil {
+			return fmt.Errorf("close previous segment: %w", err)
+		}
 
 		// Get next index.
 		var maxIndex int
-		tx.Model(&SessionSegment{}).
+		if err := tx.Model(&SessionSegment{}).
 			Where("session_id = ?", sessionID).
 			Select("COALESCE(MAX(segment_index), -1)").
-			Scan(&maxIndex)
+			Scan(&maxIndex).Error; err != nil {
+			return fmt.Errorf("get max index: %w", err)
+		}
 
 		seg := SessionSegment{
 			SessionID:    sessionID,
@@ -71,8 +76,13 @@ func (s *SegmentStore) CreateSegment(ctx context.Context, sessionID, project, to
 			TopicHint:    topicHint,
 			StartedAt:    now,
 		}
-		return tx.Create(&seg).Error
+		if err := tx.Create(&seg).Error; err != nil {
+			return err
+		}
+		result = &seg
+		return nil
 	})
+	return result, err
 }
 
 // GetSegments returns all segments for a session, ordered by index.

@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout engram
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Checkout marketplace
         uses: actions/checkout@v4
@@ -20,6 +22,8 @@ jobs:
           repository: thebtf/engram-marketplace
           token: ${{ secrets.MARKETPLACE_PAT }}
           path: marketplace
+          # persist-credentials must remain true (default) so the PAT is
+          # available for the git push inside the Sync step.
 
       - name: Sync plugin files
         run: |

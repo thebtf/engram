@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/injection"
-	"github.com/thebtf/engram/pkg/models"
 )
 
 type reinjectRequest struct {
@@ -35,6 +35,11 @@ func (s *Service) handleReinject(w http.ResponseWriter, r *http.Request) {
 		req.Project = r.URL.Query().Get("project")
 		req.Topic = r.URL.Query().Get("topic")
 		req.SessionID = r.URL.Query().Get("session_id")
+		if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+			if parsed, err := strconv.Atoi(limitStr); err == nil {
+				req.Limit = parsed
+			}
+		}
 	}
 
 	if req.Project == "" {
@@ -104,17 +109,3 @@ func truncate(s string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "..."
 }
 
-func mapMemoriesToBrief(memories []*models.Memory, limit int) []map[string]any {
-	var result []map[string]any
-	for i, m := range memories {
-		if i >= limit {
-			break
-		}
-		result = append(result, map[string]any{
-			"id":      m.ID,
-			"content": truncate(m.Content, 200),
-			"tags":    m.Tags,
-		})
-	}
-	return result
-}

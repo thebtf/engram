@@ -885,8 +885,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
-	// Adaptive memory tools — advertise when memory store is available and adaptive features enabled
-	if s.memoryStore != nil {
+	// Adaptive memory tools — advertise only when memory store is available AND adaptive features are enabled.
+	if s.memoryStore != nil && os.Getenv("ENGRAM_ADAPTIVE_ENABLED") == "true" {
 		tools = append(tools,
 			Tool{
 				Name:        "get_memory_brief",

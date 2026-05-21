@@ -24,7 +24,10 @@ type codeChangeItem struct {
 	Context       string `json:"context"`
 }
 
-const maxExtractedPerSession = 5
+// maxExtractedPerRequest caps the number of memories stored per individual
+// extraction request. Per-session enforcement across multiple requests would
+// require a persistent counter and is tracked separately.
+const maxExtractedPerRequest = 5
 
 // handleCodeExtraction processes coding decision extractions from the stop hook.
 func (s *Service) handleCodeExtraction(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +49,11 @@ func (s *Service) handleCodeExtraction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]string{"status": "accepted"})
 
-	go s.processCodeExtractionAsync(req)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.processCodeExtractionAsync(req)
+	}()
 }
 
 func (s *Service) processCodeExtractionAsync(req codeExtractionRequest) {
@@ -63,7 +70,7 @@ func (s *Service) processCodeExtractionAsync(req codeExtractionRequest) {
 
 	stored := 0
 	for _, change := range req.Changes {
-		if stored >= maxExtractedPerSession {
+		if stored >= maxExtractedPerRequest {
 			break
 		}
 		if change.Context == "" && change.CommitMessage == "" {
@@ -103,8 +110,11 @@ func formatCodeDecision(change codeChangeItem) string {
 	if change.Context != "" {
 		return change.Context
 	}
-	if change.CommitMessage != "" && change.FilePath != "" {
-		return change.FilePath + ": " + change.CommitMessage
+	if change.CommitMessage != "" {
+		if change.FilePath != "" {
+			return change.FilePath + ": " + change.CommitMessage
+		}
+		return change.CommitMessage
 	}
 	return ""
 }

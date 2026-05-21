@@ -104,7 +104,7 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 	var rows []Memory
 	now := time.Now().UTC()
 	err := s.db.WithContext(ctx).
-		Where("project = ? AND deleted_at IS NULL", project).
+		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
 		Where("valid_from IS NULL OR valid_from <= ?", now).
 		Where("valid_until IS NULL OR valid_until >= ?", now).
 		Order("created_at DESC").

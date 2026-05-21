@@ -24,10 +24,10 @@ function detectCorrection(text) {
   return correctionPatterns.some(p => p.test(text));
 }
 
-async function handleUserPrompt(ctx, input) {
+async function handleUserPrompt(ctx = {}, input = {}) {
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
   const sessionID = typeof ctx.SessionID === 'string' ? ctx.SessionID : '';
-  if (!project) return '';
+  if (!project || !sessionID) return '';
 
   const promptText = typeof input.user_message === 'string'
     ? input.user_message

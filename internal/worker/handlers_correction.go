@@ -48,7 +48,11 @@ func (s *Service) handleCorrection(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]string{"status": "accepted"})
 
-	go s.processCorrectionAsync(req)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.processCorrectionAsync(req)
+	}()
 }
 
 func (s *Service) processCorrectionAsync(req correctionRequest) {
@@ -105,8 +109,12 @@ func (s *Service) processCorrectionAsync(req correctionRequest) {
 	if updateErr := memStore.UpdateLifecycleFields(ctx, similarID, map[string]any{
 		"superseded_by": created.ID,
 		"valid_until":   now,
+		"status":        "superseded",
 	}); updateErr != nil {
-		log.Error().Err(updateErr).Int64("memory_id", similarID).Msg("correction: mark superseded failed")
+		log.Error().Err(updateErr).
+			Int64("old_memory_id", similarID).
+			Int64("new_memory_id", created.ID).
+			Msg("correction: mark superseded failed — new memory created but old not marked; manual reconciliation may be needed")
 	}
 
 	log.Info().
