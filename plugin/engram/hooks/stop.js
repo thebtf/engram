@@ -150,7 +150,7 @@ async function handleStop(ctx, input) {
         session_id: sessionID,
         project,
         agent_output_text: '',
-      }, 25000);
+      }, 60000);
     } catch (err) {
       process.stderr.write(`engram stop hook: POST failed (no transcript): ${err.message}\n`);
     }
@@ -164,7 +164,7 @@ async function handleStop(ctx, input) {
       session_id: sessionID,
       project,
       agent_output_text: agentOutput,
-    }, 25000);
+    }, 60000);
   } catch (err) {
     process.stderr.write(`engram stop hook: POST failed: ${err.message}\n`);
   }
