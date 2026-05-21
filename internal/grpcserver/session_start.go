@@ -2,9 +2,11 @@ package grpcserver
 
 import (
 	"context"
+	"os"
 	"time"
 
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/pkg/models"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc/codes"
@@ -66,9 +68,25 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 	}
 
 	memoryStore := dbgorm.NewMemoryStore(&dbgorm.Store{DB: s.db})
-	memoryRows, err := memoryStore.List(ctx, project, memoriesLimit)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to list session-start memories")
+	var memoryRows []*models.Memory
+	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+		allMemories, listErr := memoryStore.List(ctx, project, maxSessionStartMemoriesLimit)
+		if listErr != nil {
+			return nil, status.Error(codes.Internal, "failed to list session-start memories")
+		}
+		scored := injection.Score(allMemories, memoriesLimit)
+		for _, sm := range scored {
+			if !sm.Selected {
+				break
+			}
+			memoryRows = append(memoryRows, sm.Memory)
+		}
+	} else {
+		var listErr error
+		memoryRows, listErr = memoryStore.List(ctx, project, memoriesLimit)
+		if listErr != nil {
+			return nil, status.Error(codes.Internal, "failed to list session-start memories")
+		}
 	}
 
 	var ruleRows []dbgorm.BehavioralRule
