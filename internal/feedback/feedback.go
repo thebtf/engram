@@ -210,30 +210,64 @@ func isGuidanceMemory(m *models.Memory) bool {
 
 func detectViolation(normOutput, content string) bool {
 	normContent := normalise(content)
-	lines := strings.Split(normContent, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		for _, kw := range negativeKeywords {
-			idx := strings.Index(line, kw)
-			if idx < 0 {
+	for _, kw := range negativeKeywords {
+		normKw := normalise(kw)
+		idx := strings.Index(normContent, normKw)
+		if idx < 0 {
+			continue
+		}
+		prohibited := strings.TrimSpace(normContent[idx+len(normKw):])
+		if len([]rune(prohibited)) < minMatchLength {
+			continue
+		}
+		if strings.Contains(normOutput, prohibited) {
+			return true
+		}
+		clauses := splitClauses(prohibited)
+		for _, clause := range clauses {
+			if len([]rune(clause)) < minMatchLength {
 				continue
 			}
-			prohibited := strings.TrimSpace(line[idx+len(kw):])
-			if len([]rune(prohibited)) < minMatchLength {
+			if strings.Contains(normOutput, clause) {
+				return true
+			}
+		}
+		// Try phrase-level matching: split on "or"/"and" connectors.
+		phrases := splitOnConnectors(prohibited)
+		for _, phrase := range phrases {
+			if len([]rune(phrase)) < minMatchLength {
 				continue
 			}
-			clauses := splitClauses(prohibited)
-			for _, clause := range clauses {
-				if len([]rune(clause)) < minMatchLength {
-					continue
-				}
-				if strings.Contains(normOutput, clause) {
-					return true
-				}
+			if strings.Contains(normOutput, phrase) {
+				return true
+			}
+		}
+		// Try without leading verb (e.g., "use X" → "X").
+		if spaceIdx := strings.IndexByte(prohibited, ' '); spaceIdx > 0 {
+			tail := strings.TrimSpace(prohibited[spaceIdx:])
+			if len([]rune(tail)) >= minMatchLength && strings.Contains(normOutput, tail) {
+				return true
 			}
 		}
 	}
 	return false
+}
+
+func splitOnConnectors(s string) []string {
+	connectors := []string{" or ", " and ", " и ", " или "}
+	var parts []string
+	for _, conn := range connectors {
+		if strings.Contains(s, conn) {
+			for _, p := range strings.Split(s, conn) {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					parts = append(parts, p)
+				}
+			}
+			return parts
+		}
+	}
+	return nil
 }
 
 // excerpt returns up to maxRunes runes from s, appending "…" if truncated.
