@@ -3630,6 +3630,15 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`ALTER TABLE citation_log DROP COLUMN IF EXISTS violated`).Error
 			},
 		},
+		{
+			ID: "119_consecutive_citation_count",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE memories ADD COLUMN IF NOT EXISTS consecutive_citation_count INT NOT NULL DEFAULT 0`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE memories DROP COLUMN IF EXISTS consecutive_citation_count`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

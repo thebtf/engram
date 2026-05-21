@@ -42,5 +42,6 @@ type Memory struct {
 	CitationCount   int        `json:"citation_count,omitempty"`
 	InjectionCount  int        `json:"injection_count,omitempty"`
 	AccessCount     int        `json:"access_count,omitempty"`
-	RecurrenceCount int        `json:"recurrence_count,omitempty"`
+	RecurrenceCount          int        `json:"recurrence_count,omitempty"`
+	ConsecutiveCitationCount int        `json:"consecutive_citation_count,omitempty"`
 }
