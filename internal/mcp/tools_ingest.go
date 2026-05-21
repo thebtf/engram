@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/ingestion"
+	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -82,9 +84,27 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 		})
 	}
 
+	var existing []*models.Memory
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	if vnextEnabled && a.Project != "" {
+		var listErr error
+		existing, listErr = s.memoryStore.List(ctx, a.Project, 100)
+		if listErr != nil {
+			log.Warn().Err(listErr).Msg("ingest: write gate could not load existing memories, skipping gate")
+		}
+	}
+
 	stored := 0
 	flagged := 0
 	for _, chunk := range chunks {
+		var chunkFlagged bool
+		if vnextEnabled && existing != nil {
+			gateResult := writegate.Check(ctx, chunk.Text, existing)
+			if gateResult.Decision == "flag" {
+				chunkFlagged = true
+			}
+		}
+
 		memory := &models.Memory{
 			Project:     a.Project,
 			Content:     chunk.Text,
@@ -100,6 +120,9 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 		}
 		if chunk.Section != "" {
 			memory.Tags = append(memory.Tags, fmt.Sprintf("section:%s", chunk.Section))
+		}
+		if chunkFlagged {
+			memory.Status = "flagged"
 		}
 
 		created, err := s.memoryStore.Create(ctx, memory)

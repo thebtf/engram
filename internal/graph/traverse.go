@@ -15,6 +15,7 @@ func (s *Store) Traverse(ctx context.Context, startID int64, maxDepth int, edgeT
 	}
 
 	visited := map[int64]bool{startID: true}
+	visitedEdges := map[int64]bool{}
 	var results []TraversalResult
 	frontier := []int64{startID}
 
@@ -29,6 +30,10 @@ func (s *Store) Traverse(ctx context.Context, startID int64, maxDepth int, edgeT
 				return results, fmt.Errorf("traverse depth %d: %w", depth, err)
 			}
 			for _, e := range edges {
+				if visitedEdges[e.ID] {
+					continue
+				}
+				visitedEdges[e.ID] = true
 				if len(edgeTypes) > 0 && !containsStr(edgeTypes, e.EdgeType) {
 					continue
 				}

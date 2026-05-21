@@ -9,10 +9,17 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
+)
+
+const (
+	newcomerWindow    = 48 * time.Hour
+	newcomerBonus     = 1.2
+	minDynamicSamples = 10
 )
 
 // ScoredMemory pairs a memory with its Thompson-sampled score and whether it
@@ -23,22 +30,39 @@ type ScoredMemory struct {
 	Selected bool
 }
 
+// ScoreOpts configures optional behavior for Score.
+type ScoreOpts struct {
+	ProjectCitationRate float64 // aggregate citation rate (0-1); 0 or negative = use uniform prior
+	DynamicPrior        bool    // when true and ProjectCitationRate > 0, use informed priors for unseen memories
+}
+
 // Score applies Thompson Sampling to rank memories and selects the top topK.
 //
 // Each memory's reward probability is sampled from Beta(alpha, beta) where
 // alpha = TsAlpha and beta = TsBeta (both stored on the memory row; both
 // default to 1.0, yielding a uniform prior for unseen memories).
 //
+// When opts.DynamicPrior is true, unseen memories (alpha==1, beta==1) receive
+// an informed prior derived from the project's aggregate citation rate
+// (arXiv:2602.00943). Memories created within 48 hours receive a 1.2x score
+// multiplier (newcomer bonus) to ensure exploration.
+//
 // The returned slice contains ALL input memories annotated with their sampled
 // scores; the top topK are marked Selected=true. The slice is ordered by score
 // descending so callers can iterate and stop at the first Selected=false entry.
 //
 // If topK <= 0 or topK >= len(memories), all memories are selected.
-func Score(memories []*models.Memory, topK int) []ScoredMemory {
+func Score(memories []*models.Memory, topK int, opts ...ScoreOpts) []ScoredMemory {
 	if len(memories) == 0 {
 		return nil
 	}
 
+	var opt ScoreOpts
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	now := time.Now()
 	scored := make([]ScoredMemory, len(memories))
 	for i, m := range memories {
 		alpha := m.TsAlpha
@@ -49,9 +73,27 @@ func Score(memories []*models.Memory, topK int) []ScoredMemory {
 		if beta <= 0 {
 			beta = 1.0
 		}
+
+		// Dynamic prior: replace uniform (1,1) with informed prior for unseen memories.
+		if opt.DynamicPrior && alpha == 1.0 && beta == 1.0 && opt.ProjectCitationRate > 0 {
+			rate := opt.ProjectCitationRate
+			alpha = 1.0 + rate*2.0
+			beta = 1.0 + (1.0-rate)*2.0
+		}
+
+		score := sampleBeta(alpha, beta)
+
+		// Newcomer bonus: memories created within 48h get a score boost.
+		if !m.CreatedAt.IsZero() && now.Sub(m.CreatedAt) < newcomerWindow {
+			score *= newcomerBonus
+			if score > 1.0 {
+				score = 1.0
+			}
+		}
+
 		scored[i] = ScoredMemory{
 			Memory: m,
-			Score:  sampleBeta(alpha, beta),
+			Score:  score,
 		}
 	}
 

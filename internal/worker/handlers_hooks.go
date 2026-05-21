@@ -125,6 +125,9 @@ func (s *Service) processCitationsAsync(
 	// Step 3: Detect which memories appear in the agent output.
 	results := feedback.DetectCitations(agentOutput, memories)
 
+	// Step 3.5: Detect violations for guidance-type memories.
+	results = feedback.DetectViolations(agentOutput, results, memories)
+
 	// Step 4: Write citation results to citation_log.
 	var records []gormdb.CitationRecord
 	for _, res := range results {
@@ -136,6 +139,7 @@ func (s *Service) processCitationsAsync(
 			SessionID: sessionID,
 			MemoryID:  res.MemoryID,
 			Cited:     res.Cited,
+			Violated:  res.Violated,
 			MatchType: matchType,
 		})
 	}
@@ -149,23 +153,38 @@ func (s *Service) processCitationsAsync(
 		}
 	}
 
-	// Step 5: Update memory priors via feedback updater (vNext Phase A).
+	// Step 5: Look up session outcome and apply outcome-modulated feedback.
+	var outcome string
+	if s.sessionStore != nil {
+		var outErr error
+		outcome, outErr = s.sessionStore.GetOutcome(ctx, sessionID)
+		if outErr != nil {
+			log.Warn().Err(outErr).Str("session_id", sessionID).Msg("session_end: could not look up session outcome")
+		}
+	}
+
 	if feedbackUpdater != nil {
-		feedbackUpdater.Update(ctx, results)
+		feedbackUpdater.UpdateWithOutcome(ctx, results, outcome)
 	}
 
 	// Step 6: Log summary.
 	citedCount := 0
+	violatedCount := 0
 	for _, r := range results {
 		if r.Cited {
 			citedCount++
+		}
+		if r.Violated {
+			violatedCount++
 		}
 	}
 	log.Info().
 		Str("event", "session_end_processed").
 		Str("session_id", sessionID).
 		Str("project", project).
+		Str("outcome", outcome).
 		Int("cited_count", citedCount).
+		Int("violated_count", violatedCount).
 		Int("total_count", len(results)).
 		Msg("session-end citation detection complete")
 }

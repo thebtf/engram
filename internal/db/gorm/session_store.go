@@ -357,6 +357,29 @@ func (s *SessionStore) UpdateSessionOutcome(ctx context.Context, sessionIdentifi
 	})
 }
 
+// GetOutcome returns the recorded outcome for a session identified by Claude session ID.
+// Returns empty string when no outcome has been recorded yet.
+func (s *SessionStore) GetOutcome(ctx context.Context, sessionID string) (string, error) {
+	if sessionID == "" {
+		return "", nil
+	}
+	var sess SDKSession
+	err := s.db.WithContext(ctx).
+		Select("outcome").
+		Where("claude_session_id = ?", sessionID).
+		First(&sess).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	if sess.Outcome.Valid {
+		return sess.Outcome.String, nil
+	}
+	return "", nil
+}
+
 func resolveSessionForOutcome(tx *gorm.DB, sessionIdentifier string) (*SDKSession, bool, error) {
 	isNumericIDInput := false
 	if numericID, err := strconv.ParseInt(sessionIdentifier, 10, 64); err == nil && numericID > 0 {

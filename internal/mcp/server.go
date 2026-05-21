@@ -1402,6 +1402,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":
 		return s.handleSuppressMemory(ctx, args)
+	case "set_session_outcome":
+		return s.handleSetSessionOutcome(ctx, args)
 	}
 
 	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/

@@ -3621,6 +3621,15 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		{
+			ID: "118_citation_log_violated",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE citation_log ADD COLUMN IF NOT EXISTS violated BOOLEAN NOT NULL DEFAULT FALSE`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE citation_log DROP COLUMN IF EXISTS violated`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

@@ -16,6 +16,7 @@ import (
 type CitationResult struct {
 	MemoryID int64
 	Cited    bool
+	Violated bool
 	// Excerpt is the first matching phrase from the output, up to 200 runes.
 	// Empty when Cited is false.
 	Excerpt string
@@ -148,6 +149,125 @@ func splitClauses(s string) []string {
 		parts = append(parts, tail)
 	}
 	return parts
+}
+
+// negativeKeywords are phrases that indicate a prohibition in a behavioral rule.
+var negativeKeywords = []string{
+	"never ", "don't ", "do not ", "avoid ", "must not ", "should not ",
+	"не ", "никогда ", "запрещ", "нельзя ",
+}
+
+// DetectViolations checks whether guidance-type memories were violated in the
+// agent output. A violation is detected when a behavioral rule contains a
+// negative directive (e.g., "never use stubs") and the prohibited pattern
+// appears in the agent output.
+//
+// Only memories tagged as "guidance" or with EpistemicType "guidance" are
+// candidates for violation detection.
+func DetectViolations(agentOutput string, results []CitationResult, memories []*models.Memory) []CitationResult {
+	if len(results) == 0 || agentOutput == "" {
+		return results
+	}
+
+	memMap := make(map[int64]*models.Memory, len(memories))
+	for _, m := range memories {
+		if m != nil {
+			memMap[m.ID] = m
+		}
+	}
+
+	normOutput := normalise(agentOutput)
+
+	for i := range results {
+		if results[i].Cited {
+			continue
+		}
+		mem := memMap[results[i].MemoryID]
+		if mem == nil {
+			continue
+		}
+		if !isGuidanceMemory(mem) {
+			continue
+		}
+		if detectViolation(normOutput, mem.Content) {
+			results[i].Violated = true
+		}
+	}
+	return results
+}
+
+func isGuidanceMemory(m *models.Memory) bool {
+	if m.EpistemicType == "guidance" {
+		return true
+	}
+	for _, tag := range m.Tags {
+		if tag == "guidance" || tag == "rule" || tag == "behavioral" {
+			return true
+		}
+	}
+	return false
+}
+
+func detectViolation(normOutput, content string) bool {
+	normContent := normalise(content)
+	for _, kw := range negativeKeywords {
+		normKw := normalise(kw)
+		idx := strings.Index(normContent, normKw)
+		if idx < 0 {
+			continue
+		}
+		prohibited := strings.TrimSpace(normContent[idx+len(normKw):])
+		if len([]rune(prohibited)) < minMatchLength {
+			continue
+		}
+		if strings.Contains(normOutput, prohibited) {
+			return true
+		}
+		clauses := splitClauses(prohibited)
+		for _, clause := range clauses {
+			if len([]rune(clause)) < minMatchLength {
+				continue
+			}
+			if strings.Contains(normOutput, clause) {
+				return true
+			}
+		}
+		// Try phrase-level matching: split on "or"/"and" connectors.
+		phrases := splitOnConnectors(prohibited)
+		for _, phrase := range phrases {
+			if len([]rune(phrase)) < minMatchLength {
+				continue
+			}
+			if strings.Contains(normOutput, phrase) {
+				return true
+			}
+		}
+		// Try without leading verb (e.g., "use X" → "X").
+		if spaceIdx := strings.IndexByte(prohibited, ' '); spaceIdx > 0 {
+			tail := strings.TrimSpace(prohibited[spaceIdx:])
+			if len([]rune(tail)) >= minMatchLength && strings.Contains(normOutput, tail) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func splitOnConnectors(s string) []string {
+	connectors := []string{" or ", " and ", " и ", " или "}
+	var parts []string
+	for _, conn := range connectors {
+		if strings.Contains(s, conn) {
+			for _, p := range strings.Split(s, conn) {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					parts = append(parts, p)
+				}
+			}
+			return parts
+		}
+	}
+	return nil
 }
 
 // excerpt returns up to maxRunes runes from s, appending "…" if truncated.

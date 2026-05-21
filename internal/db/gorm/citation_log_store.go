@@ -16,6 +16,7 @@ type CitationRecord struct {
 	SessionID string    `gorm:"column:session_id;type:text;not null;index:idx_citation_log_session"`
 	MemoryID  int64     `gorm:"column:memory_id;not null;index:idx_citation_log_memory"`
 	Cited     bool      `gorm:"column:cited;not null"`
+	Violated  bool      `gorm:"column:violated;not null;default:false"`
 	MatchType string    `gorm:"column:match_type;type:text"`
 	CreatedAt time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now()"`
 }
