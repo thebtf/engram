@@ -104,16 +104,40 @@ async function handlePreCompact(ctx, input) {
 
   const topic = extractTopic(input);
 
+  // Adaptive re-injection: write topic-relevant memories to a file that
+  // survives context compaction. The agent reads it via @.engram/reinjection.md.
+  try {
+    const resp = await lib.requestPost('/api/context/reinject', {
+      project,
+      topic,
+      session_id: typeof ctx.SessionID === 'string' ? ctx.SessionID : '',
+      limit: 10,
+    }, 8000);
+
+    if (resp && resp.memories && resp.memories.length > 0) {
+      const fs = require('fs');
+      const path = require('path');
+      const cwd = typeof ctx.CWD === 'string' ? ctx.CWD : process.cwd();
+      const dir = path.join(cwd, '.engram');
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const lines = ['# Engram Re-Injection', '', `Topic: ${topic || '(project-wide)'}`, ''];
+      for (const mem of resp.memories) {
+        const tags = Array.isArray(mem.tags) ? mem.tags.join(', ') : '';
+        lines.push(`- ${mem.content}${tags ? ` [${tags}]` : ''}`);
+      }
+      fs.writeFileSync(path.join(dir, 'reinjection.md'), lines.join('\n'), 'utf8');
+    }
+  } catch (err) {
+    process.stderr.write(`engram pre-compact hook: reinject failed: ${err.message}\n`);
+  }
+
+  // Legacy: also prime the inject cache (fire-and-forget).
   const endpoint = topic
     ? `/api/context/inject?project=${encodeURIComponent(project)}&query=${encodeURIComponent(topic)}`
     : `/api/context/inject?project=${encodeURIComponent(project)}`;
-
-  // Fire-and-forget: CC ignores PreCompact additionalContext, so we don't
-  // need to await the response. The call primes the server cache for the
-  // subsequent session-start re-injection.
-  lib.requestGet(endpoint, 8000).catch((err) => {
-    process.stderr.write(`engram pre-compact hook: inject fetch failed: ${err.message}\n`);
-  });
+  lib.requestGet(endpoint, 8000).catch(() => {});
 
   return '';
 }

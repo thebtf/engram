@@ -891,6 +891,12 @@ func (s *Service) setupRoutes() {
 		// Hook callbacks from Claude Code stop/session-end hooks
 		r.Post("/api/hooks/session-end", s.handleSessionEnd)
 
+		// Adaptive memory endpoints (gated by ENGRAM_ADAPTIVE_ENABLED)
+		r.Post("/api/context/reinject", s.handleReinject)
+		r.Get("/api/context/reinject", s.handleReinject)
+		r.Post("/api/hooks/correction", s.handleCorrection)
+		r.Post("/api/hooks/code-extraction", s.handleCodeExtraction)
+
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
 
