@@ -145,6 +145,8 @@ type Service struct {
 	memoryStore            *gorm.MemoryStore
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	feedbackUpdater        *feedback.Updater
+	segmentStore           *gorm.SegmentStore
+	embeddingClient        *embedding.Client
 	vaultOnce              sync.Once
 	vaultErr               error
 	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
@@ -521,7 +523,16 @@ func (s *Service) initializeAsync() {
 				log.Warn().Err(bfErr).Msg("embedding backfill: stopped")
 			}
 		}()
+
+		s.initMu.Lock()
+		s.embeddingClient = embClient
+		s.initMu.Unlock()
 	}
+
+	segmentStore := gorm.NewSegmentStore(store)
+	s.initMu.Lock()
+	s.segmentStore = segmentStore
+	s.initMu.Unlock()
 
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
 	// initMu protects s.grpcServer — the cmux goroutine polls for it.
@@ -896,6 +907,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/context/reinject", s.handleReinject)
 		r.Post("/api/hooks/correction", s.handleCorrection)
 		r.Post("/api/hooks/code-extraction", s.handleCodeExtraction)
+		r.Post("/api/hooks/segment-check", s.handleSegmentCheck)
 
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
