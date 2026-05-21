@@ -16,6 +16,7 @@ import (
 type CitationResult struct {
 	MemoryID int64
 	Cited    bool
+	Violated bool
 	// Excerpt is the first matching phrase from the output, up to 200 runes.
 	// Empty when Cited is false.
 	Excerpt string
@@ -148,6 +149,91 @@ func splitClauses(s string) []string {
 		parts = append(parts, tail)
 	}
 	return parts
+}
+
+// negativeKeywords are phrases that indicate a prohibition in a behavioral rule.
+var negativeKeywords = []string{
+	"never ", "don't ", "do not ", "avoid ", "must not ", "should not ",
+	"не ", "никогда ", "запрещ", "нельзя ",
+}
+
+// DetectViolations checks whether guidance-type memories were violated in the
+// agent output. A violation is detected when a behavioral rule contains a
+// negative directive (e.g., "never use stubs") and the prohibited pattern
+// appears in the agent output.
+//
+// Only memories tagged as "guidance" or with EpistemicType "guidance" are
+// candidates for violation detection.
+func DetectViolations(agentOutput string, results []CitationResult, memories []*models.Memory) []CitationResult {
+	if len(results) == 0 || agentOutput == "" {
+		return results
+	}
+
+	memMap := make(map[int64]*models.Memory, len(memories))
+	for _, m := range memories {
+		if m != nil {
+			memMap[m.ID] = m
+		}
+	}
+
+	normOutput := normalise(agentOutput)
+
+	for i := range results {
+		if results[i].Cited {
+			continue
+		}
+		mem := memMap[results[i].MemoryID]
+		if mem == nil {
+			continue
+		}
+		if !isGuidanceMemory(mem) {
+			continue
+		}
+		if detectViolation(normOutput, mem.Content) {
+			results[i].Violated = true
+		}
+	}
+	return results
+}
+
+func isGuidanceMemory(m *models.Memory) bool {
+	if m.EpistemicType == "guidance" {
+		return true
+	}
+	for _, tag := range m.Tags {
+		if tag == "guidance" || tag == "rule" || tag == "behavioral" {
+			return true
+		}
+	}
+	return false
+}
+
+func detectViolation(normOutput, content string) bool {
+	normContent := normalise(content)
+	lines := strings.Split(normContent, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		for _, kw := range negativeKeywords {
+			idx := strings.Index(line, kw)
+			if idx < 0 {
+				continue
+			}
+			prohibited := strings.TrimSpace(line[idx+len(kw):])
+			if len([]rune(prohibited)) < minMatchLength {
+				continue
+			}
+			clauses := splitClauses(prohibited)
+			for _, clause := range clauses {
+				if len([]rune(clause)) < minMatchLength {
+					continue
+				}
+				if strings.Contains(normOutput, clause) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // excerpt returns up to maxRunes runes from s, appending "…" if truncated.

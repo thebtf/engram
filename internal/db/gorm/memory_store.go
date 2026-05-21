@@ -297,6 +297,30 @@ func (s *MemoryStore) BatchIncrementUncited(ctx context.Context, ids []int64) er
 	).Error
 }
 
+// BatchIncrementCitedN increments ts_alpha by n for the given memory IDs.
+func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n float64) error {
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE memories SET ts_alpha = ts_alpha + ?, citation_count = citation_count + 1, importance_base = LEAST(1.0, GREATEST(importance_base, importance_base * ln(2.0 + citation_count))), updated_at = now() WHERE id = ANY(?)",
+		n, pq.Array(ids),
+	).Error
+}
+
+// BatchIncrementUncitedN increments ts_beta by n for the given memory IDs.
+func (s *MemoryStore) BatchIncrementUncitedN(ctx context.Context, ids []int64, n float64) error {
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE memories SET ts_beta = ts_beta + ?, updated_at = now() WHERE id = ANY(?)",
+		n, pq.Array(ids),
+	).Error
+}
+
+// BatchIncrementViolated applies a strong ts_beta penalty for violated memories.
+func (s *MemoryStore) BatchIncrementViolated(ctx context.Context, ids []int64, n float64) error {
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE memories SET ts_beta = ts_beta + ?, updated_at = now() WHERE id = ANY(?)",
+		n, pq.Array(ids),
+	).Error
+}
+
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
 	return &models.Memory{
