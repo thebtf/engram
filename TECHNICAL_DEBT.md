@@ -4,7 +4,41 @@ Items deferred from active work with documented impact and fix path.
 
 ## Active
 
-### TD-008 — GoReleaser `Release` workflow broken since 2026-04-26 (FIX IN FLIGHT PR #219)
+### TD-009 — Duplicate Docker push workflows race on ghcr.io oauth token
+**Branch:** `main`
+**Severity:** LOW (image is published; one of two parallel runs fails cosmetically)
+**Source:** Observed on v6.4.1 release pipeline (2026-05-23)
+
+**What:** `.github/workflows/docker.yaml` ("Docker") and
+`.github/workflows/docker-publish.yml` ("Build and Publish Docker Image")
+are duplicates — both trigger on push to `main` and tags `v*`, both push
+`ghcr.io/thebtf/engram` with the same semver tag set. When they run in
+parallel on the same event, they race on the ghcr.io oauth token: one
+succeeds, the other fails with:
+
+```
+ERROR: failed to push ghcr.io/thebtf/engram:6.4.1: failed to authorize:
+failed to fetch oauth token: denied: denied
+```
+
+**Why this hasn't blocked anything:** The image IS published by whichever
+workflow wins the race. Verified for v6.4.1 by `curl http://unleashed.lan
+:37777/api/version` returning `v6.4.1` after Watchtower pulled the new
+image. The failure is workflow noise — one of two redundant runs reports
+red but the artefact is correct.
+
+**Upgrade path:** Delete one of the two workflows. `docker.yaml` is the
+simpler / more focused one (no PR event, no `type=sha` tag); keep it and
+drop `docker-publish.yml` (or vice versa, but pick one). Regression check:
+after the cull, `gh run list` on a release commit should show ONE Docker
+workflow run, all green.
+
+**Files:** `.github/workflows/docker.yaml`,
+`.github/workflows/docker-publish.yml`.
+
+---
+
+### TD-008 — GoReleaser `Release` workflow broken since 2026-04-26 (RESOLVED in v6.4.1)
 **Branch:** `main` → fixed on `fix/goreleaser-marketplace-cleanup`
 **Severity:** **MEDIUM — corrected.** Initial classification ("LOW, no
 user-facing impact") was wrong. Re-investigated 2026-05-23 after PM
@@ -49,15 +83,18 @@ verification stopped at the in-repo plugin/marketplace flow (which IS
 covered by `sync-marketplace.yml`) and didn't trace install.sh against the
 release artifact set.
 
-**Fix:** PR #219 opens with the minimal patch: drop the dead `cp` line
-from `scripts/generate-plugin-config.sh`. The canonical
+**Fix:** PR #219 (merged 2026-05-23, squash `d7ea9f9`) dropped the dead
+`cp` line from `scripts/generate-plugin-config.sh`. The canonical
 `.claude-plugin/marketplace.json` already lives at repo root (added by
 `9a9c5a0`) and is picked up by goreleaser's `archives.files[].src:
 .claude-plugin/*` glob — no copy step needed.
 
-**Release plan:** After PR #219 merges, cut v6.4.1 patch release. The
-goreleaser archives get published as part of v6.4.1, and install.sh
-starts working again. Re-tagging v6.4.0 would be destructive.
+**Release:** v6.4.1 cut 2026-05-23 with the fix. Verification:
+- `Release` (GoReleaser) workflow: **SUCCESS** in 4m39s — first success
+  in 9 releases.
+- `curl -sIL .../v6.4.1/engram_6.4.1_linux_amd64.tar.gz` → 302 → 200 OK,
+  14.3 MB.
+- `scripts/install.sh` now works.
 
 **Files:** `scripts/generate-plugin-config.sh`,
 `.github/workflows/release.yaml`, `.goreleaser.yaml`.
