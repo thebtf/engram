@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.2] - 2026-05-23
+
+### Fixed
+
+- **Dialog text color in light theme (#184).** Four portal-based content
+  components — `DialogContent`, `AlertDialogContent`, `DialogScrollContent`,
+  and the `sheetVariants` cva base in `components/ui/sheet/index.ts` — only
+  declared `bg-background` without the matching `text-foreground`. Because
+  `DialogPortal` teleports content out of the App tree, the
+  `body { @apply text-foreground }` cascade was not always inherited; the
+  user-agent default color (commonly white) won the cascade and produced
+  white-on-white in light theme. Affected paths included the Delete-Issue
+  confirm dialog, Tokens dialog, Vault dialogs, and any other
+  `Dialog` / `AlertDialog` / `Sheet` consumer.
+
+  Fix aligns with the shadcn-vue convention already used by
+  `DropdownMenuContent`, `DropdownMenuSubContent`, and `SelectContent`
+  (paired `bg-popover text-popover-foreground`). No dark-mode regression —
+  `--foreground` resolves to the light token there, identical to the
+  inherited color.
+
+  Closes engram-internal issue #184. PR #220.
+
 ## [6.4.1] - 2026-05-23
 
 ### Fixed
