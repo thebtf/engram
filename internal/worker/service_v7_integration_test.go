@@ -170,3 +170,70 @@ func TestPlatformWiring_FlagOff_NoOpsRegisteredButDisabled(t *testing.T) {
 		}
 	}
 }
+
+// TestPlatformWiring_FlagOn_NoOpsActivated mirrors the production NewService
+// activation pass: with ENGRAM_V7_PLUG_ENABLED=true the 5 NoOps are flipped
+// from "registered" to "enabled" and ResolveImpls returns them for their
+// respective interface names. This proves US1's runtime gating contract is
+// honoured (PM review finding 2).
+func TestPlatformWiring_FlagOn_NoOpsActivated(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+
+	cfg := core.LoadFlagConfigFromEnv()
+	if !cfg.IsPlugEnabled() {
+		t.Fatalf("IsPlugEnabled: got false, want true")
+	}
+
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+
+	// Mirror NewService's activation pass exactly.
+	noopNames := []string{
+		"core.noop.candidate_proposer",
+		"core.noop.hint_emitter",
+		"core.noop.state_writer",
+		"core.noop.attention_event_writer",
+		"core.noop.directive_distiller",
+	}
+	for _, name := range noopNames {
+		if err := registry.Enable(name); err != nil {
+			t.Fatalf("Enable(%s): %v", name, err)
+		}
+	}
+
+	infos := registry.List()
+	enabled := 0
+	for _, info := range infos {
+		if info.State == "enabled" {
+			enabled++
+		}
+	}
+	if enabled != 5 {
+		t.Errorf("enabled NoOp count: got %d, want 5", enabled)
+	}
+
+	// ResolveImpls is the dispatch-side contract — it must return enabled
+	// NoOps for each canonical interface. The check is via the
+	// SubsystemRegistry interface type-asserted to the implsResolver helper.
+	type implsResolver interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	}
+	resolver, ok := registry.(implsResolver)
+	if !ok {
+		t.Fatalf("registry does not expose ResolveImpls")
+	}
+	for _, iface := range []string{
+		"CandidateProposer",
+		"HintEmitter",
+		"StateWriter",
+		"AttentionEventWriter",
+		"DirectiveDistiller",
+	} {
+		impls := resolver.ResolveImpls(iface)
+		if len(impls) == 0 {
+			t.Errorf("ResolveImpls(%s) returned no impls; expected at least the NoOp", iface)
+		}
+	}
+}

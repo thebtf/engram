@@ -35,16 +35,22 @@ import (
 )
 
 // requireKeycardSource enforces the FR-8 source gate on stats endpoints.
-// Returns true when the caller is allowed to proceed (SourceClient or
-// SourceSession). When false is returned, the appropriate HTTP error response
-// has already been written; the caller MUST NOT write any further bytes.
+// Returns true when the caller carries an explicit whitelisted Source
+// (SourceClient or SourceSession). When false is returned, the appropriate
+// HTTP error response has already been written; the caller MUST NOT write
+// any further bytes.
+//
+// The whitelist is positive (not default-allow): any future auth.Source
+// added to internal/auth must be reviewed against this gate before it
+// reaches stats endpoints. Unknown or missing sources route to 401 so
+// the auth-failure path stays explicit.
 func requireKeycardSource(w http.ResponseWriter, r *http.Request) bool {
 	src := auth.SourceFrom(r.Context())
 	switch src {
-	case "":
-		// No identity → middleware would have rejected; treat as 401 defensively.
-		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return false
+	case string(auth.SourceClient), string(auth.SourceSession):
+		// Workstation keycard or browser session — both are legitimate
+		// callers for v7 stats endpoints per the T012 staged policy.
+		return true
 	case string(auth.SourceMaster):
 		// Operator key is server-host only — reject for workstation-scoped
 		// stats endpoints per the T012 staged policy.
@@ -52,8 +58,10 @@ func requireKeycardSource(w http.ResponseWriter, r *http.Request) bool {
 			"forbidden: stats endpoints require workstation keycard")
 		return false
 	default:
-		// SourceClient or SourceSession → permitted.
-		return true
+		// Empty (no identity) or any future-unknown source — middleware
+		// should have rejected first, but defend in depth with 401.
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return false
 	}
 }
 

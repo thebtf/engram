@@ -303,6 +303,47 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		cancel()
 		return nil, fmt.Errorf("register cognitive NoOps: %w", err)
 	}
+
+	// Inject the CORE-wide Dependencies bundle into the registry so subsystems
+	// receive real Bus/Queue/Meter handles at Enable time (PM review finding 3).
+	// Type-assert to access SetDependencies — the method lives on the concrete
+	// *registry rather than the SubsystemRegistry interface.
+	type depsSetter interface {
+		SetDependencies(deps cognitivecore.Dependencies)
+	}
+	if setter, ok := cRegistry.(depsSetter); ok {
+		setter.SetDependencies(cognitivecore.Dependencies{
+			Registry: cRegistry,
+			Bus:      cBus,
+			Queue:    cQueue,
+			Meter:    cMeter,
+			// DB and Logger remain opaque any; downstream subsystems unwrap.
+		})
+	} else {
+		cancel()
+		return nil, fmt.Errorf("cognitive registry does not implement SetDependencies — wiring broken")
+	}
+
+	// Master-flag activation (PM review finding 2 — spec FR-1, US1).
+	// When ENGRAM_V7_PLUG_ENABLED is on, the 5 NoOps become enabled and
+	// Dispatch routes through them. When the master flag is off, NoOps stay
+	// in the "registered" state and Dispatch returns nil (no impls resolved),
+	// preserving v6.3.0 behaviour byte-for-byte.
+	if flagCfg.IsPlugEnabled() {
+		for _, name := range []string{
+			"core.noop.candidate_proposer",
+			"core.noop.hint_emitter",
+			"core.noop.state_writer",
+			"core.noop.attention_event_writer",
+			"core.noop.directive_distiller",
+		} {
+			if err := cRegistry.Enable(name); err != nil {
+				cancel()
+				return nil, fmt.Errorf("enable %s: %w", name, err)
+			}
+		}
+	}
+
 	// cQueue is the concrete *cognitivecore.hintQueue which satisfies the
 	// worker-local lifecycleQueue interface; assert that here so a future
 	// signature change in CORE produces a build error rather than a panic.

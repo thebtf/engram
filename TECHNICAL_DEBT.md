@@ -74,4 +74,3 @@ canonical capture procedure in T021's `rebaseline-v6` Makefile target can be rep
 to also produce a Variant A benchmark binary.
 
 **Files:** `internal/cognitive/core/bench_test.go` (B + C variants present)
-

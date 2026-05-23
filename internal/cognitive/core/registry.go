@@ -30,6 +30,7 @@ type registry struct {
 	mu      sync.RWMutex
 	entries map[string]*subsystemEntry
 	order   []string
+	deps    Dependencies
 }
 
 // newRegistry returns a ready-to-use SubsystemRegistry backed by *registry.
@@ -43,8 +44,28 @@ func newRegistry() SubsystemRegistry {
 // SubsystemRegistry implementation. Worker-side wiring (T014) uses this to
 // build the per-service registry; tests inside the core package keep using
 // newRegistry directly when they want a freshly-allocated registry.
+//
+// The returned value also satisfies the optional RegistryWithDependencies
+// helper interface; callers that need to inject CORE-wide dependencies
+// before any Enable call can type-assert and invoke SetDependencies.
 func NewRegistry() SubsystemRegistry {
 	return newRegistry()
+}
+
+// SetDependencies installs the CORE-wide Dependencies bundle the registry
+// passes to Subsystem.Start at Enable time. Without this call, Enable invokes
+// Subsystem.Start with the zero Dependencies value — adequate for NoOps but
+// insufficient for real subsystems that need Bus/Queue/Meter/DB/Logger.
+// NewService is the canonical caller; it sets Dependencies after building
+// the platform pieces and before activating any subsystem.
+//
+// The method takes a value (not pointer): Dependencies is a small bundle
+// of interface handles, and copy semantics make it safe to share across
+// goroutines without locking.
+func (r *registry) SetDependencies(deps Dependencies) {
+	r.mu.Lock()
+	r.deps = deps
+	r.mu.Unlock()
 }
 
 // Register stores s under s.Name(). Duplicate names return an error; the
@@ -70,9 +91,14 @@ func (r *registry) Register(s Subsystem) error {
 }
 
 // Enable transitions a registered or disabled subsystem to "enabled" by
-// calling Subsystem.Start with an empty Dependencies value. Enabling an
-// already-enabled subsystem is a no-op. Returns an error if the subsystem is
-// unknown or if Start returns an error.
+// calling Subsystem.Start with the Dependencies bundle installed via
+// SetDependencies. Enabling an already-enabled subsystem is a no-op.
+// Returns an error if the subsystem is unknown or if Start returns an error.
+//
+// Callers that need real Dependencies (Bus/Queue/Meter/DB/Logger) MUST
+// install them via SetDependencies before invoking Enable. NoOps tolerate
+// the zero Dependencies value — see noop.go Start methods — so a test that
+// only exercises NoOps may skip SetDependencies safely.
 func (r *registry) Enable(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -91,8 +117,10 @@ func (r *registry) Enable(name string) error {
 		return nil
 	}
 
-	// Call Start before updating state; on error the state is not changed.
-	if err := entry.sub.Start(context.Background(), Dependencies{}); err != nil {
+	// Call Start with the registry-stored deps. Without SetDependencies the
+	// zero value is passed, which is acceptable for NoOps but should never
+	// happen in production — NewService installs deps before any Enable.
+	if err := entry.sub.Start(context.Background(), r.deps); err != nil {
 		return fmt.Errorf("subsystem %q Start: %w", name, err)
 	}
 
