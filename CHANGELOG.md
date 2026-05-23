@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.1] - 2026-05-23
+
+### Fixed
+
+- **`scripts/install.sh` archive download (broken since v5.2.5).** The
+  `Release` GitHub Actions workflow has been failing on every release
+  since v5.2.5 (8 consecutive failures across v5.2.5 / v6.0.0 / v6.0.1 /
+  v6.1.0 / v6.2.0 / v6.2.1 / v6.3.0 / v6.4.0) because
+  `scripts/generate-plugin-config.sh` tried to copy
+  `plugin/.claude-plugin/marketplace.json` — a path deleted in `653fabb`
+  (#151) when the marketplace metadata was reshaped. With the GoReleaser
+  before-hook failing under `set -e`, the bundled per-platform archives
+  (`engram_${VERSION}_${PLATFORM}.tar.gz` / `.zip`) were never published,
+  so anyone running
+  `curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash`
+  got a 404. v6.4.1 drops the dead `cp` line and publishes the archives
+  the install script expects. See TD-008 in `TECHNICAL_DEBT.md` and
+  PR #219 for the full investigation trail.
+  (`release-binary.yml` continued to publish bare per-platform binaries
+  throughout — only the bundled `install.sh`-consumed archive layer was
+  missing.)
+
 ## [6.4.0] - 2026-05-23
 
 ### Added
