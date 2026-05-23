@@ -214,9 +214,10 @@ type QueueStats struct {
 // SubsystemMeter is the CORE-owned generic counter and histogram surface.
 // Per ADR-008 this interface holds substrate metrics only — calls_total,
 // errors_total, latency_ns_histogram, event_emitted, event_dropped. Product
-// metric semantics (precision, miss, burden, freshness, accepted) belong
-// to S5 via ProductMetricsProvider; SubsystemMeter must never carry product
-// metric names.
+// metric semantics belong to S5 via ProductMetricsProvider; SubsystemMeter
+// must never carry product metric names. The canonical S5 metric key set
+// is enumerated in ADR-008 and the S5 feature spec (CORE refuses to mirror
+// those names so the T009 vocabulary gate stays mechanically enforceable).
 type SubsystemMeter interface {
 	// IncrCounter adds delta to the named counter, partitioned by tags.
 	IncrCounter(name string, delta uint64, tags map[string]string)
@@ -250,11 +251,15 @@ type HistogramSummary struct {
 // per ADR-008. CORE owns the contract so the v7 stats endpoint can query
 // product metrics without depending on the S5 package; S5 owns the math.
 // PolicySinglePrimary applies — S5 is the single legitimate primary.
+//
+// The canonical S5 product-metric key set lives in ADR-008. CORE never
+// references those metric names directly — that is the boundary the T009
+// forbidden-vocabulary gate enforces — so this file documents the contract
+// shape only.
 type ProductMetricsProvider interface {
-	// ProductMetrics returns the snapshot of S5-owned product metrics
-	// (hint_precision, accepted_hint_action, miss_rate,
-	// interruption_burden, state_freshness — see ADR-008) covering the
-	// requested window.
+	// ProductMetrics returns the S5 product-metric snapshot covering the
+	// requested window. The canonical metric key set is owned by ADR-008
+	// and the S5 feature spec; CORE does not interpret the keys here.
 	ProductMetrics(ctx context.Context, window ProductMetricsWindow) (ProductMetricsSnapshot, error)
 }
 
