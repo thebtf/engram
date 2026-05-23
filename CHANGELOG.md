@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.0] - 2026-05-23
+
+### Added
+
+- **v7 cognitive platform substrate (CR-001).** New `pkg/cognitive` public
+  package and `internal/cognitive/core` substrate package introduce a plug
+  architecture for future cognitive subsystems (S1-S6). All v6 behaviour is
+  preserved when `ENGRAM_V7_PLUG_ENABLED` is unset. The substrate ships in
+  an opt-in / NoOps-only state: enabling the master flag activates 5 NoOp
+  subsystems behind per-subsystem flags, but no production behaviour
+  changes until a real subsystem (S1+) lands in a future release.
+  - `pkg/cognitive` exports 6 cross-subsystem interfaces (`AttentionEventSource`,
+    `CandidateProposer`, `HintEmitter`, `StateWriter`, `AttentionEventWriter`,
+    `DirectiveDistiller`), 10 payload types, and `NormalizeForDiff` (FR-9
+    byte-identity gate helper).
+  - `internal/cognitive/core` exports `SubsystemRegistry` (8 methods),
+    `AttentionEventBus`, `HintQueue`, `SubsystemMeter`, `ProductMetricsProvider`,
+    8 DTOs, `SubsystemDispatcher` with PR-5 panic isolation, and 5 NoOp
+    subsystem implementations.
+  - `worker.Service` is wired with 4 explicit cognitive fields
+    (`cognitiveRegistry`, `cognitiveMeter`, `cognitiveQueue`, `cognitiveBus`)
+    plus the lifecycle handle for the hint queue.
+- **`/api/stats/v7/*` HTTP endpoints** (subsystems / substrate / product),
+  protected by a positive-whitelist auth gate
+  (`SourceClient` / `SourceSession` allowed; `SourceMaster` → 403;
+  no identity → 401). The endpoints expose registry state, meter snapshots,
+  and product-metric provider output when a provider is registered.
+- **`make rebaseline-v6` target** for the worktree-based v6.3.0 baseline
+  capture pipeline (FR-9 byte-identity gate scaffold).
+- **Per-subsystem flag activation.** `ENGRAM_V7_PLUG_ENABLED=true` plus
+  per-subsystem flags (`ENGRAM_V7_S1_STATE`, `ENGRAM_V7_S2_METAMEM`,
+  `ENGRAM_V7_S3_AMBIENT`, `ENGRAM_V7_S4A_DIRECTIVES_CAPTURE`, ...) gate
+  the corresponding NoOp into the `enabled` state. Master flag off keeps
+  every NoOp at `registered` and dispatch returns nothing — exactly the
+  v6.3.0 behaviour byte-for-byte.
+
+### Fixed
+
+- **Makefile cross-platform targets** built `./cmd/worker` which does not
+  exist; corrected to `./cmd/engram-server` across `worker`,
+  `build-linux`, `build-darwin`, `build-windows`, plus the swag init
+  reference. Cross-platform builds also now apply `$(BUILD_TAGS)`
+  consistently with the default `build` target.
+
+### Scope notes
+
+- **FR-9 release validation** ships gate **machinery** (idempotent
+  `NormalizeForDiff` + synthetic v6.3.0 baseline fixtures + worktree
+  `make rebaseline-v6`). The real v6.3.0 byte-identity proof is tracked
+  as **TD-004** and is a release-cutover prerequisite for the eventual
+  v7.0.0 major bump. v6.4.0 is intentionally NOT a v7 cutover.
+- Additional deferred items: TD-003 (Variant A pre-plug benchmark),
+  TD-005 (`ObserveHistogram` O(n) eviction), TD-006 (`foldKey` tag value
+  escaping), TD-007 (concurrent Enable/Disable same-name race). All LOW
+  severity, none reachable on current code paths.
+
+### Internal
+
+- 30 squashed commits (T001-T021 across SG-1 Foundation, SG-2 Substrate,
+  SG-3 Panic-resilient ops, SG-4 FR-9 gate machinery, plus 4 PM/CodeRabbit
+  review fix-forward cycles). PR #218.
+
 ## [6.0.0] - 2026-04-26
 
 ### BREAKING CHANGES
