@@ -14,9 +14,42 @@ GOARCH ?= $(shell go env GOARCH)
 export CGO_ENABLED=1
 BUILD_TAGS := -tags "fts5"
 
-.PHONY: all build clean test install lint worker stop-worker start-worker restart-worker dashboard website dev-website setup-libs proto
+.PHONY: all build clean test install lint worker stop-worker start-worker restart-worker dashboard website dev-website setup-libs proto rebaseline-v6
 
 all: build
+
+# rebaseline-v6 captures the FR-9 byte-identity baseline fixtures from a
+# v6.3.0 binary using an isolated git worktree (per post-tasks-review Fix #6 —
+# non-destructive, does NOT mutate the current branch). After running this
+# target, commit the updated fixtures ONLY with an explicit ADR amendment +
+# PR review (per Clarify C3). Fixture drift is a regression signal first; do
+# not rebaseline blindly.
+#
+# Pre-requisites:
+#   - PostgreSQL test stand running and reachable
+#   - ENGRAM_AUTH_DISABLED=true (for unauthenticated capture)
+#   - jq + curl available on PATH
+#   - scripts/capture-baseline.sh present (creates session, hits gRPC + MCP
+#     endpoints, runs payloads through NormalizeForDiff, emits tar to stdout)
+#
+# Steps automated:
+#   1. Materialise v6.3.0 in /tmp/engram-v6-rebaseline (isolated worktree)
+#   2. Build the v6.3.0 binary inside that worktree
+#   3. Run capture-baseline.sh against the v6.3.0 binary
+#   4. Extract normalized JSONs into the testdata directory
+#   5. Remove the worktree (current branch untouched)
+rebaseline-v6:
+	@echo "[rebaseline-v6] Materialising v6.3.0 in isolated worktree..."
+	git worktree add --detach /tmp/engram-v6-rebaseline v6.3.0
+	@echo "[rebaseline-v6] Building v6.3.0 binary..."
+	cd /tmp/engram-v6-rebaseline && go build -o /tmp/engram-v6-bin ./cmd/engram-server
+	@echo "[rebaseline-v6] Capturing normalized baseline payloads..."
+	./scripts/capture-baseline.sh /tmp/engram-v6-bin > /tmp/baseline.tar
+	@echo "[rebaseline-v6] Extracting fixtures..."
+	tar -xf /tmp/baseline.tar -C internal/cognitive/core/testdata/v6_3_0_baseline/
+	@echo "[rebaseline-v6] Cleaning up worktree..."
+	git worktree remove /tmp/engram-v6-rebaseline
+	@echo "[rebaseline-v6] Done. Commit with explicit ADR amendment + PR review per Clarify C3."
 
 # Generate protobuf Go code
 proto:
@@ -45,8 +78,8 @@ dashboard:
 worker:
 	@echo "Building worker..."
 	@mkdir -p $(BUILD_DIR)
-	swag init -g cmd/worker/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/worker
+	swag init -g cmd/engram-server/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
+	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/engram-server
 
 # Build for all platforms
 build-all: build-linux build-darwin build-windows
@@ -54,18 +87,18 @@ build-all: build-linux build-darwin build-windows
 build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(BUILD_DIR)/linux-amd64
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/engram-server ./cmd/worker
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/engram-server ./cmd/engram-server
 
 build-darwin:
 	@echo "Building for macOS..."
 	@mkdir -p $(BUILD_DIR)/darwin-amd64 $(BUILD_DIR)/darwin-arm64
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/engram-server ./cmd/worker
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/engram-server ./cmd/worker
+	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/engram-server ./cmd/engram-server
+	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/engram-server ./cmd/engram-server
 
 build-windows:
 	@echo "Building for Windows..."
 	@mkdir -p $(BUILD_DIR)/windows-amd64
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/engram-server.exe ./cmd/worker
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/engram-server.exe ./cmd/engram-server
 
 # Stop any running worker
 stop-worker:

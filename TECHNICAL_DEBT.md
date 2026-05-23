@@ -4,6 +4,49 @@ Items deferred from active work with documented impact and fix path.
 
 ## Active
 
+### TD-004 — T021 capture-baseline.sh + real v6.3.0 fixtures
+**Branch:** `feat/v7-core`
+**Severity:** MEDIUM (release-blocker once v6.3.0 → v7.0.0 cutover ships; not blocking SG-3/SG-4 internal gates)
+**Source:** Task T021 of CR-001-initial-scope (engram-v7-core)
+
+**What:** Two pieces of the FR-9 byte-identity baseline pipeline are scaffolded
+but not yet executable end-to-end:
+
+1. **`scripts/capture-baseline.sh`** — referenced by `make rebaseline-v6` but
+   does not yet exist. The script must (a) spin a clean PostgreSQL test stand,
+   (b) launch the supplied v6.3.0 binary with ENGRAM_AUTH_DISABLED=true,
+   (c) seed the curated test session described in
+   `internal/cognitive/core/testdata/v6_3_0_baseline/README.md`, (d) call
+   GetSessionStartContext via grpcurl + MCP `tools/list`, (e) pipe each payload
+   through a small Go helper that applies `pkg/cognitive.NormalizeForDiff`,
+   (f) emit a tarball with the two normalized JSONs.
+
+2. **Real captured fixtures** — current fixtures under
+   `internal/cognitive/core/testdata/v6_3_0_baseline/` are SYNTHETIC. They
+   enforce the FR-9 gate machinery (TestNormalizedByteIdentity_v6_3_0_Baseline
+   verifies (a) non-empty + opens with '{', (b) zero VolatileFields, (c)
+   NormalizeForDiff idempotence, (d) ≤ 50 KB) but do not yet prove
+   v7-master-off equals the real v6.3.0 binary output.
+
+**Why deferred:** Running v6.3.0 + PostgreSQL inline in this session would
+require CI infrastructure not available locally. The synthetic fixtures
+already exercise the gate logic; promoting to real captures is mechanical
+once the CI step exists.
+
+**Upgrade path:**
+1. Add `scripts/capture-baseline.sh` following the README capture procedure.
+2. Run `make rebaseline-v6` in CI (or a release-prep workstation).
+3. Commit the resulting real fixtures with explicit ADR amendment + PR review
+   (per Clarify C3).
+4. TestNormalizedByteIdentity_v6_3_0_Baseline does not change — it is fixture-
+   agnostic at the byte level.
+
+**Files:**
+- `Makefile` rebaseline-v6 target (present, references scripts/capture-baseline.sh)
+- `internal/cognitive/core/testdata/v6_3_0_baseline/{session_start_response.json, tools_list_response.json, README.md}` (synthetic now)
+
+---
+
 ### TD-003 — T017 Variant A (pre-plug build) benchmark gap
 **Branch:** `feat/v7-core`
 **Severity:** LOW (does not block release; NFR-2 verified via Variant B vs C delta)
