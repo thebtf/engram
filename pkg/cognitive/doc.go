@@ -65,12 +65,12 @@
 // # Reading the rest of the package
 //
 //   - types.go        — cross-subsystem payload types (AttentionEvent,
-//                       HintProposal, ResolutionPolicy, HintSurface,
-//                       HintDelivery, SessionStateSlots, ProjectStateRecord,
-//                       AttentionEventRecord, RawSignal, Distilled)
+//     HintProposal, ResolutionPolicy, HintSurface,
+//     HintDelivery, SessionStateSlots, ProjectStateRecord,
+//     AttentionEventRecord, RawSignal, Distilled)
 //   - interfaces.go   — the six cross-subsystem interfaces listed above
 //   - normalize.go    — NormalizeForDiff + VolatileFields + MemorySortKey
-//                       used by the FR-9 byte-identity gate
+//     used by the FR-9 byte-identity gate
 //
 // CORE-internal interfaces live alongside this package in
 // internal/cognitive/core/interfaces.go and are intentionally not re-exported
