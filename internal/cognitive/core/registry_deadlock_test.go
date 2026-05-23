@@ -77,23 +77,55 @@ func TestEnable_StartCallbackReentersRegistry_NoDeadlock(t *testing.T) {
 }
 
 // reentrantStopSubsystem mirrors the Enable test for Disable: Stop must run
-// outside the registry mutex so the impl can run shutdown-time queries.
+// outside the registry mutex so the impl can run shutdown-time queries
+// against sibling subsystems. The Stop callback captures a registry handle
+// during Start and uses it to call every read-side method during Stop. If
+// Disable holds r.mu across Stop, any of these calls deadlocks.
 type reentrantStopSubsystem struct {
 	name string
+	reg  SubsystemRegistry
 	hit  bool
 }
 
-func (s *reentrantStopSubsystem) Name() string                                       { return s.name }
-func (s *reentrantStopSubsystem) Version() string                                    { return "v1.0.0" }
-func (s *reentrantStopSubsystem) Start(ctx context.Context, deps Dependencies) error { return nil }
-func (s *reentrantStopSubsystem) Implements() []string                               { return []string{"CandidateProposer"} }
+func (s *reentrantStopSubsystem) Name() string    { return s.name }
+func (s *reentrantStopSubsystem) Version() string { return "v1.0.0" }
+func (s *reentrantStopSubsystem) Start(ctx context.Context, deps Dependencies) error {
+	// Capture the registry handle so Stop can re-enter it.
+	s.reg = deps.Registry
+	return nil
+}
+func (s *reentrantStopSubsystem) Implements() []string { return []string{"CandidateProposer"} }
 func (s *reentrantStopSubsystem) Stop() error {
+	// Re-enter every read-side registry method that takes r.mu. If Disable
+	// holds the lock across Stop, every one of these calls deadlocks and
+	// the test watchdog fires.
+	if s.reg != nil {
+		_ = s.reg.List()
+		_, _ = s.reg.Get(s.name)
+		_ = s.reg.Health()
+		_ = s.reg.ResolvePolicy("CandidateProposer")
+		if resolver, ok := s.reg.(interface {
+			ResolveImpls(interfaceName string) []Subsystem
+		}); ok {
+			_ = resolver.ResolveImpls("CandidateProposer")
+		}
+	}
 	s.hit = true
 	return nil
 }
 
 func TestDisable_StopCallbackReentersRegistry_NoDeadlock(t *testing.T) {
 	reg := newRegistry()
+
+	type depsSetter interface {
+		SetDependencies(deps Dependencies)
+	}
+	setter, ok := reg.(depsSetter)
+	if !ok {
+		t.Fatalf("registry concrete impl does not expose SetDependencies")
+	}
+	setter.SetDependencies(Dependencies{Registry: reg})
+
 	sub := &reentrantStopSubsystem{name: "stop-reentrant"}
 	if err := reg.Register(sub); err != nil {
 		t.Fatalf("Register: %v", err)
