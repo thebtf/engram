@@ -4,6 +4,84 @@ Items deferred from active work with documented impact and fix path.
 
 ## Active
 
+### TD-007 — Concurrent Enable/Disable race for same subsystem name
+**Branch:** `feat/v7-core`
+**Severity:** LOW (no current code path exercises it; advisory only)
+**Source:** PR #218 Gemini review findings (CodeRabbit did NOT flag — duplicate-call risk only)
+
+**What:** `registry.Enable(name)` and `registry.Disable(name)` snapshot impl+deps
+under `r.mu`, then RELEASE the lock around `Subsystem.Start/Stop` (the deadlock fix
+in c2a8fdc). Two concurrent goroutines calling `Enable("x")` for the same name
+can BOTH pass the state check and BOTH call `Start` before either commits the
+state change — `Start` would be invoked twice.
+
+**Why deferred:** Current code paths exercising Enable are sequential:
+- `NewService` activates NoOps in a single for-loop
+- No operator API exposes Enable concurrently
+
+The race is reachable only via future operator-restart endpoints calling
+Enable from concurrent HTTP handlers for the same subsystem name — a path
+that does not yet exist.
+
+**Upgrade path:** Add per-entry mutex OR intermediate "enabling"/"disabling"
+states to the ADR-009 state machine, with concurrent callers short-circuiting
+on detecting the in-progress state. Regression test:
+two goroutines call `Enable("x")` simultaneously — Start counter must equal 1.
+
+**Files:** `internal/cognitive/core/registry.go` Enable/Disable.
+
+---
+
+### TD-006 — `foldKey` tag value escaping
+**Branch:** `feat/v7-core`
+**Severity:** LOW (internal-only tag sources)
+**Source:** PR #218 Gemini review finding
+
+**What:** `internal/cognitive/core/meter.go::foldKey(name, tags)` joins tag
+key/value pairs as `name{k=v,k=v}` without escaping `=`, `,`, or `}` in
+values. A maliciously-crafted tag value containing `,subsystem=X` could
+produce a fold-key that the `filterSnapshotBySubsystem` parser would
+misinterpret as belonging to a different subsystem.
+
+**Why deferred:** Tag sources are all internal Go code paths (event names,
+subsystem names from RegisterNoOps, hardcoded counter names). No external
+input reaches `foldKey` in current v7 scope. The threat surface only opens
+if S5 product-metric tags accept user-supplied values.
+
+**Upgrade path:** When S5 lands, add `url.QueryEscape` or a custom escaper
+on values + matching unescaping in `foldKeyContainsTag`. Regression test:
+tag value containing `,evil=true` must NOT match filter for "evil" tag.
+
+**Files:** `internal/cognitive/core/meter.go::foldKey`,
+`internal/worker/handlers_stats_v7.go::foldKeyContainsTag`.
+
+---
+
+### TD-005 — `ObserveHistogram` O(n) eviction on overflow
+**Branch:** `feat/v7-core`
+**Severity:** LOW (eviction fires only at 10k-observation cap; not a v7 hot path)
+**Source:** PR #218 Gemini review finding
+
+**What:** When a histogram reaches `maxHistogramObservations` (10,000),
+`ObserveHistogram` uses `copy(obs, obs[1:])` + `obs[:n-1]` to drop the oldest
+observation — O(n) memcopy on every overflow write. At sustained overflow
+this is wasteful relative to a ring buffer with constant-time write.
+
+**Why deferred:** NoOps do not call ObserveHistogram; v7-core ships only
+NoOps as concrete subsystems. The eviction path is unreachable in current
+scope. When real subsystems start emitting histograms, refactor BEFORE the
+performance becomes a hot path.
+
+**Upgrade path:** Replace flat `[]float64` with a ring-buffer struct
+(`buf [N]float64; head int; size int`). Snapshot() materialises in
+chronological order. Regression test: existing
+`TestObserveHistogram_PercentilesCorrect` remains green; add
+`TestObserveHistogram_RingEviction_O1` measuring per-write ns.
+
+**Files:** `internal/cognitive/core/meter.go::ObserveHistogram`.
+
+---
+
 ### TD-004 — T021 capture-baseline.sh + real v6.3.0 fixtures
 **Branch:** `feat/v7-core`
 **Severity:** MEDIUM (release-blocker once v6.3.0 → v7.0.0 cutover ships; not blocking SG-3/SG-4 internal gates)
