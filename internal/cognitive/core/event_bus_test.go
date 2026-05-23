@@ -1,0 +1,283 @@
+package core
+
+import (
+	"context"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// testMeter is a minimal SubsystemMeter implementation for T007 tests.
+// It records IncrCounter calls so tests can assert drop counter behavior
+// without depending on T009's concrete meter.
+type testMeter struct {
+	mu       sync.Mutex
+	counters map[string]uint64 // key = "name{subscriber=X}"
+}
+
+func newTestMeter() *testMeter {
+	return &testMeter{counters: make(map[string]uint64)}
+}
+
+// IncrCounter records delta under a key derived from name + tags.
+// For drop counter assertions: name="event_dropped_total", tags={"subscriber": <name>}.
+func (m *testMeter) IncrCounter(name string, delta uint64, tags map[string]string) {
+	key := name
+	if sub, ok := tags["subscriber"]; ok {
+		key = name + "{subscriber=" + sub + "}"
+	}
+	m.mu.Lock()
+	m.counters[key] += delta
+	m.mu.Unlock()
+}
+
+// ObserveHistogram is a no-op for T007 tests.
+func (m *testMeter) ObserveHistogram(name string, value float64, tags map[string]string) {}
+
+// Snapshot returns a copy of the current counters.
+func (m *testMeter) Snapshot() MetricsSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snap := MetricsSnapshot{
+		Counters:   make(map[string]uint64, len(m.counters)),
+		Histograms: make(map[string]HistogramSummary),
+	}
+	for k, v := range m.counters {
+		snap.Counters[k] = v
+	}
+	return snap
+}
+
+// dropCount returns the accumulated drop counter for the named subscriber.
+func (m *testMeter) dropCount(subscriberName string) uint64 {
+	key := "event_dropped_total{subscriber=" + subscriberName + "}"
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.counters[key]
+}
+
+// --- Tests ------------------------------------------------------------------
+
+// TestPublish_FanOut verifies that Publish delivers the event to all 3
+// subscribers. Each handler increments a shared atomic counter; after
+// publishing 1 event, the counter must reach 3 within 100ms.
+func TestPublish_FanOut(t *testing.T) {
+	meter := newTestMeter()
+	bus := NewAttentionEventBus(meter)
+
+	var received atomic.Int64
+	done := make(chan struct{})
+
+	handler := func(ctx context.Context, event AttentionEventPayload) error {
+		if received.Add(1) == 3 {
+			close(done)
+		}
+		return nil
+	}
+
+	for _, name := range []string{"sub-a", "sub-b", "sub-c"} {
+		unsub, err := bus.Subscribe(name, handler)
+		if err != nil {
+			t.Fatalf("Subscribe(%q): unexpected error: %v", name, err)
+		}
+		t.Cleanup(unsub)
+	}
+
+	event := AttentionEventPayload{
+		Type:      "test.event",
+		SessionID: "sess-1",
+		Timestamp: time.Now(),
+	}
+
+	if err := bus.Publish(context.Background(), event); err != nil {
+		t.Fatalf("Publish: unexpected error: %v", err)
+	}
+
+	select {
+	case <-done:
+		// all 3 handlers delivered
+	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("fan-out timeout: only %d/3 handlers received the event", received.Load())
+	}
+}
+
+// TestSlowSubscriber_DropsEvents_OthersUnaffected (EC-3) verifies that a
+// subscriber whose handler is slow enough to fill its buffer 64 buffer causes
+// events to be dropped for it specifically, while a fast subscriber receives
+// all events. The drop counter for the slow subscriber must be ≥ 1; the fast
+// subscriber's drop counter must stay at 0.
+func TestSlowSubscriber_DropsEvents_OthersUnaffected(t *testing.T) {
+	const bufferCap = 64
+	// Publish well over capacity. The slow handler consumes 1 event immediately
+	// then sleeps 500ms, so the channel can hold cap+1 events before drops
+	// begin. Publishing 2×cap guarantees many drops while staying within the
+	// 200ms fast-handler timeout window below.
+	const publishCount = bufferCap * 2 // 128
+
+	meter := newTestMeter()
+	bus := NewAttentionEventBus(meter)
+
+	// fastReceived counts how many events the fast handler processed.
+	var fastReceived atomic.Int64
+	fastHandler := func(ctx context.Context, event AttentionEventPayload) error {
+		fastReceived.Add(1)
+		return nil
+	}
+
+	// slowHandler blocks for 500ms per event, ensuring the buffer fills.
+	slowHandler := func(ctx context.Context, event AttentionEventPayload) error {
+		time.Sleep(500 * time.Millisecond)
+		return nil
+	}
+
+	fastUnsub, err := bus.Subscribe("fast", fastHandler)
+	if err != nil {
+		t.Fatalf("Subscribe fast: %v", err)
+	}
+	defer fastUnsub()
+
+	slowUnsub, err := bus.Subscribe("slow", slowHandler)
+	if err != nil {
+		t.Fatalf("Subscribe slow: %v", err)
+	}
+	defer slowUnsub()
+
+	event := AttentionEventPayload{Type: "test.flood", Timestamp: time.Now()}
+
+	// Publish publishCount events as fast as possible. The slow subscriber's
+	// buffer will fill and the bus will drop overflow events.
+	for i := 0; i < publishCount; i++ {
+		if err := bus.Publish(context.Background(), event); err != nil {
+			t.Fatalf("Publish[%d]: %v", i, err)
+		}
+	}
+
+	// Give the fast handler time to process all its events.
+	deadline := time.After(200 * time.Millisecond)
+	for fastReceived.Load() < publishCount {
+		select {
+		case <-deadline:
+			t.Fatalf("fast handler timeout: received %d/%d events", fastReceived.Load(), publishCount)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	// Fast subscriber: drop counter must be 0.
+	if drop := meter.dropCount("fast"); drop != 0 {
+		t.Errorf("fast subscriber drop count = %d, want 0", drop)
+	}
+
+	// Slow subscriber: drop counter must be ≥ 1.
+	if drop := meter.dropCount("slow"); drop == 0 {
+		t.Errorf("slow subscriber drop count = 0, want ≥ 1")
+	}
+
+	// Fast subscriber received all publishCount events.
+	if got := fastReceived.Load(); got != publishCount {
+		t.Errorf("fast handler received %d events, want %d", got, publishCount)
+	}
+}
+
+// TestUnsubscribe_StopsDelivery subscribes a handler, immediately unsubscribes
+// it, then publishes an event. The handler must receive 0 deliveries within
+// 100ms.
+func TestUnsubscribe_StopsDelivery(t *testing.T) {
+	meter := newTestMeter()
+	bus := NewAttentionEventBus(meter)
+
+	var received atomic.Int64
+	unsub, err := bus.Subscribe("sub-x", func(ctx context.Context, event AttentionEventPayload) error {
+		received.Add(1)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Unsubscribe before publishing.
+	unsub()
+
+	event := AttentionEventPayload{Type: "test.after-unsub", Timestamp: time.Now()}
+	if err := bus.Publish(context.Background(), event); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	// Wait briefly and verify no delivery.
+	time.Sleep(50 * time.Millisecond)
+
+	if got := received.Load(); got != 0 {
+		t.Errorf("handler received %d events after Unsubscribe, want 0", got)
+	}
+}
+
+// TestGoroutineLeak_None_EventBus verifies that Subscribe starts exactly one
+// goroutine per subscriber and Unsubscribe terminates it without leaking. Uses
+// only runtime.NumGoroutine() (no external goleak dependency, per Fix #5).
+// Name disambiguated from the HintQueue sibling test in this same package.
+func TestGoroutineLeak_None_EventBus(t *testing.T) {
+	meter := newTestMeter()
+	bus := NewAttentionEventBus(meter)
+
+	// Allow existing goroutines (GC, test runner, etc.) to settle.
+	runtime.GC()
+	time.Sleep(10 * time.Millisecond)
+	baseline := runtime.NumGoroutine()
+
+	const subCount = 3
+	unsubs := make([]Unsubscribe, subCount)
+
+	handler := func(ctx context.Context, event AttentionEventPayload) error { return nil }
+
+	for i := 0; i < subCount; i++ {
+		name := []string{"leak-a", "leak-b", "leak-c"}[i]
+		u, err := bus.Subscribe(name, handler)
+		if err != nil {
+			t.Fatalf("Subscribe(%q): %v", name, err)
+		}
+		unsubs[i] = u
+	}
+
+	// After subscribing, goroutine count should have grown by subCount.
+	withSubs := runtime.NumGoroutine()
+	if withSubs < baseline+subCount {
+		t.Errorf("expected at least %d goroutines after Subscribe (baseline=%d + %d subs), got %d",
+			baseline+subCount, baseline, subCount, withSubs)
+	}
+
+	// Unsubscribe all.
+	for _, u := range unsubs {
+		u()
+	}
+
+	// Give goroutines time to exit (100ms grace period per task spec).
+	time.Sleep(100 * time.Millisecond)
+	runtime.GC()
+
+	after := runtime.NumGoroutine()
+	if after > baseline {
+		t.Errorf("goroutine leak: baseline=%d, after unsubscribe+100ms=%d (delta=%d)",
+			baseline, after, after-baseline)
+	}
+}
+
+// TestSubscribe_DuplicateName_Error verifies that a second Subscribe with the
+// same name returns a non-nil error (AC: "Duplicate names return an error").
+func TestSubscribe_DuplicateName_Error(t *testing.T) {
+	meter := newTestMeter()
+	bus := NewAttentionEventBus(meter)
+
+	noop := func(ctx context.Context, event AttentionEventPayload) error { return nil }
+
+	unsub, err := bus.Subscribe("dup", noop)
+	if err != nil {
+		t.Fatalf("first Subscribe: unexpected error: %v", err)
+	}
+	defer unsub()
+
+	_, err = bus.Subscribe("dup", noop)
+	if err == nil {
+		t.Error("second Subscribe with duplicate name: expected error, got nil")
+	}
+}
