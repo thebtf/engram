@@ -4,6 +4,51 @@ Items deferred from active work with documented impact and fix path.
 
 ## Active
 
+### TD-008 — GoReleaser `Release` workflow broken since 2026-04-26
+**Branch:** `main`
+**Severity:** LOW (no user-facing impact; pre-existing flake on 8 consecutive releases)
+**Source:** Discovered post v6.4.0 release verification (2026-05-23)
+
+**What:** `.github/workflows/release.yaml` runs `goreleaser release --clean`
+which invokes `scripts/generate-plugin-config.sh`. The script tries to copy
+`plugin/.claude-plugin/marketplace.json` to the goreleaser output dir, but
+that file was DELETED in commit `653fabb` (2026-04-something — "chore:
+deps update, migration fix, marketplace cleanup"). The script was never
+updated. As a result the `Release` workflow has failed on EVERY release
+since v5.2.5 (verified via `gh run list`):
+v5.2.5 / v6.0.0 / v6.0.1 / v6.1.0 / v6.2.0 / v6.2.1 / v6.3.0 / v6.4.0.
+
+**Why this hasn't blocked anything:** User-facing release artefacts
+(binaries, Docker images, plugin marketplace sync) are produced by SEPARATE
+workflows that all succeed:
+- `release-binary.yml` → uploads engram-{linux,darwin,windows} assets
+- `docker-publish.yml` / `docker.yaml` → push ghcr.io images
+- `sync-marketplace.yml` → mirror plugin/engram/ into engram-marketplace repo
+
+GoReleaser produces additional archives + cosign signatures that no
+downstream consumer requires. The failing workflow is dead weight.
+
+**Why deferred:** Pre-existing breakage older than CR-001. v6.4.0 release
+itself is functionally complete (verified via /api/version=v6.4.0 on the
+live server post-Watchtower). Fix can land in a separate small CR without
+blocking any in-flight work.
+
+**Upgrade path:** Two options:
+1. Remove the broken `cp ... marketplace.json` line from
+   `scripts/generate-plugin-config.sh` (the file lives in the separate
+   `thebtf/engram-marketplace` repo per MEMORY.md infrastructure note).
+2. Delete `.github/workflows/release.yaml` + `scripts/generate-plugin-config.sh`
+   entirely if GoReleaser is no longer needed (release-binary.yml +
+   docker-publish.yml + sync-marketplace.yml cover all user paths).
+
+Option 1 is the minimal fix; Option 2 is the clean-shop. Decide when
+opening the CR.
+
+**Files:** `.github/workflows/release.yaml`,
+`scripts/generate-plugin-config.sh`, `.goreleaser.yaml`.
+
+---
+
 ### TD-007 — Concurrent Enable/Disable race for same subsystem name
 **Branch:** `feat/v7-core`
 **Severity:** LOW (no current code path exercises it; advisory only)
