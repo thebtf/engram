@@ -33,6 +33,14 @@ func newRegistry() SubsystemRegistry {
 	}
 }
 
+// NewRegistry is the exported constructor for the canonical CORE-internal
+// SubsystemRegistry implementation. Worker-side wiring (T014) uses this to
+// build the per-service registry; tests inside the core package keep using
+// newRegistry directly when they want a freshly-allocated registry.
+func NewRegistry() SubsystemRegistry {
+	return newRegistry()
+}
+
 // Register stores s under s.Name(). Duplicate names return an error; the
 // original registration is preserved (EC-2). Registration sets state to
 // "registered" without activating the subsystem.

@@ -23,8 +23,10 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/chunking"
+
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
 	mdchunking "github.com/thebtf/engram/internal/chunking/markdown"
+	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
@@ -152,6 +154,29 @@ type Service struct {
 	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
 	eventBus               *projectevents.Bus
 	projectReaper          *reaper.Reaper
+
+	// Cognitive v7 platform substrate (FR-7). The four cross-subsystem
+	// primitives plus the resolved feature-flag snapshot. cognitiveQueueLifecycle
+	// holds the same value as cognitiveQueue but typed as the local
+	// lifecycleQueue interface so the worker can invoke Start/Stop on the
+	// hint queue without depending on the concrete CORE-internal type.
+	cognitiveRegistry       cognitivecore.SubsystemRegistry
+	cognitiveMeter          cognitivecore.SubsystemMeter
+	cognitiveQueue          cognitivecore.HintQueue
+	cognitiveBus            cognitivecore.AttentionEventBus
+	cognitiveQueueLifecycle lifecycleQueue
+	flagConfig              cognitivecore.FlagConfig
+}
+
+// lifecycleQueue combines the CORE HintQueue contract with the worker-side
+// Start/Stop lifecycle methods present on the concrete CORE hint-queue
+// implementation. The concrete type is unexported by design (per T008 AC);
+// the worker package satisfies the interface here via Go duck typing so it
+// can drive Start/Stop without leaking the implementation type.
+type lifecycleQueue interface {
+	cognitivecore.HintQueue
+	Start(ctx context.Context) error
+	Stop() error
 }
 
 // promptCacheEntry stores a user prompt with a timestamp for eviction.
@@ -266,6 +291,31 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		return nil, fmt.Errorf("init token auth: %w", err)
 	}
 
+	// Cognitive v7 platform: assemble the four CORE primitives and register the
+	// NoOps subsystem set before the Service struct is materialised so the
+	// fields can be assigned in the struct literal below (no nil-window).
+	flagCfg := cognitivecore.LoadFlagConfigFromEnv()
+	cMeter := cognitivecore.NewLocalMeter()
+	cBus := cognitivecore.NewAttentionEventBus(cMeter)
+	cQueue := cognitivecore.NewHintQueue()
+	cRegistry := cognitivecore.NewRegistry()
+	if err := cognitivecore.RegisterNoOps(cRegistry); err != nil {
+		cancel()
+		return nil, fmt.Errorf("register cognitive NoOps: %w", err)
+	}
+	// cQueue is the concrete *cognitivecore.hintQueue which satisfies the
+	// worker-local lifecycleQueue interface; assert that here so a future
+	// signature change in CORE produces a build error rather than a panic.
+	cQueueLifecycle, ok := any(cQueue).(lifecycleQueue)
+	if !ok {
+		cancel()
+		return nil, fmt.Errorf("cognitive hint queue does not satisfy lifecycleQueue interface")
+	}
+	if err := cQueueLifecycle.Start(ctx); err != nil {
+		cancel()
+		return nil, fmt.Errorf("start cognitive hint queue: %w", err)
+	}
+
 	svc := &Service{
 		version:            version,
 		config:             cfg,
@@ -285,6 +335,13 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		statsCacheTTL:      time.Minute, // Cache stats for 1 minute
 		mcpHealth:          mcp.NewMCPHealth(),
 		eventBus:           &projectevents.Bus{},
+
+		cognitiveRegistry:       cRegistry,
+		cognitiveMeter:          cMeter,
+		cognitiveQueue:          cQueue,
+		cognitiveBus:            cBus,
+		cognitiveQueueLifecycle: cQueueLifecycle,
+		flagConfig:              flagCfg,
 	}
 
 	// Setup middleware and routes (health endpoint works immediately)
@@ -875,6 +932,16 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/backfill/session", s.handleBackfillSession)
 		r.Get("/api/backfill/status", s.handleBackfillStatus)
 		r.Post("/api/import/feedback", s.handleImportFeedback)
+
+		// Cognitive v7 stats endpoints (FR-8 / Clarify C1).
+		// Routes inherit the auth middleware applied at the Group level.
+		// Per-handler enforcement rejects ENGRAM_AUTH_ADMIN_TOKEN callers
+		// (operator key) with 403; workstation keycards and session cookies
+		// proceed. The handlers themselves do not require DB readiness — they
+		// only read in-memory CORE platform state.
+		r.Get("/api/stats/v7/subsystems", s.handleStatsV7Subsystems)
+		r.Get("/api/stats/v7/substrate", s.handleStatsV7Substrate)
+		r.Get("/api/stats/v7/product", s.handleStatsV7Product)
 	})
 
 	// OpenAI-compatible model list endpoint. Intentionally outside requireReady group:
@@ -1453,6 +1520,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	// Phase 3: Stop background workers (drain queues)
 	log.Debug().Msg("Phase 3: Stopping background workers...")
+	if s.cognitiveQueueLifecycle != nil {
+		collectError("cognitive_hint_queue", s.cognitiveQueueLifecycle.Stop())
+	}
 
 	// Phase 4: Shutdown sessions (flush pending work)
 	log.Debug().Msg("Phase 4: Shutting down sessions...")
