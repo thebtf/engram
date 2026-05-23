@@ -45,23 +45,25 @@ func TestServiceFields_All4CoreAccessible(t *testing.T) {
 	}
 }
 
+// hasTypeSuffix compares the type-name part (everything after the LAST '.')
+// of actual to the type-name part of suffix. Both arguments are expected to
+// be of the form `pkg.TypeName` or just `TypeName`. The strict last-dot
+// split avoids false positives from substring matches against unrelated
+// types whose names happen to share a tail with the target.
 func hasTypeSuffix(actual, suffix string) bool {
-	// Strip the package qualifier; compare against the dotted suffix.
-	for i := len(actual) - 1; i >= 0; i-- {
-		if actual[i] == '.' {
-			// Compare the part after the last alias dot.
-			rest := actual[i+1:]
-			wantRest := suffix
-			for j := len(wantRest) - 1; j >= 0; j-- {
-				if wantRest[j] == '.' {
-					wantRest = wantRest[j+1:]
-					break
-				}
-			}
-			return rest == wantRest
+	return lastDotPart(actual) == lastDotPart(suffix)
+}
+
+// lastDotPart returns the substring after the final '.' in s, or s itself
+// when no '.' is present. Equivalent to filepath.Ext-style splitting but
+// without importing the path package for a one-line helper.
+func lastDotPart(s string) string {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '.' {
+			return s[i+1:]
 		}
 	}
-	return actual == suffix
+	return s
 }
 
 // TestPlatformWiring_NoOpsRegisteredWithCanonicalNames exercises the wiring

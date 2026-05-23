@@ -46,13 +46,29 @@ func (m *LocalMeter) IncrCounter(name string, delta uint64, tags map[string]stri
 	atomic.AddUint64(ptr, delta)
 }
 
+// maxHistogramObservations caps the per-metric observation buffer so a
+// long-running server cannot grow LocalMeter memory unboundedly. When the
+// buffer is full, the oldest observation is dropped (ring-buffer eviction).
+// 10k observations balance percentile accuracy against memory: at 16 bytes
+// per float64 entry, each metric key holds ~160 KB max.
+const maxHistogramObservations = 10_000
+
 // ObserveHistogram appends value to the histogram series identified by
-// (name, tags). The series grows unboundedly; percentiles are computed lazily
-// in Snapshot.
+// (name, tags). The series is capped at maxHistogramObservations per key
+// with drop-oldest eviction so percentiles stay representative of recent
+// behaviour without unbounded memory growth.
 func (m *LocalMeter) ObserveHistogram(name string, value float64, tags map[string]string) {
 	key := foldKey(name, tags)
 	m.mu.Lock()
-	m.histograms[key] = append(m.histograms[key], value)
+	obs := m.histograms[key]
+	if len(obs) >= maxHistogramObservations {
+		// Drop the oldest entry. The slice header is reused to keep the
+		// underlying array stable; the capacity stays at
+		// maxHistogramObservations after the first eviction.
+		copy(obs, obs[1:])
+		obs = obs[:len(obs)-1]
+	}
+	m.histograms[key] = append(obs, value)
 	m.mu.Unlock()
 }
 

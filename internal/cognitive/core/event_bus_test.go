@@ -281,3 +281,64 @@ func TestSubscribe_DuplicateName_Error(t *testing.T) {
 		t.Error("second Subscribe with duplicate name: expected error, got nil")
 	}
 }
+
+// TestRace_ConcurrentPublishUnsubscribe stresses the Publish/Unsubscribe race:
+// many goroutines repeatedly subscribe and unsubscribe while a publisher
+// goroutine flushes events as fast as possible. Without the safeNonBlockingSend
+// recover boundary this test panics with "send on closed channel" under
+// `-race`. With the fix in place every drop is counted (or successfully
+// delivered) and the test completes cleanly.
+func TestRace_ConcurrentPublishUnsubscribe(t *testing.T) {
+	meter := newTestMeter()
+	bus := NewAttentionEventBus(meter)
+
+	noop := func(ctx context.Context, event AttentionEventPayload) error { return nil }
+	event := AttentionEventPayload{Type: "race.flood", Timestamp: time.Now()}
+
+	const (
+		subCycles  = 200
+		publishers = 4
+		publishMs  = 100
+	)
+
+	var wg sync.WaitGroup
+
+	// Publisher goroutines.
+	stop := make(chan struct{})
+	for i := 0; i < publishers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = bus.Publish(context.Background(), event)
+				}
+			}
+		}()
+	}
+
+	// Sub/unsub churn goroutines.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < subCycles; i++ {
+			name := "churn"
+			unsub, err := bus.Subscribe(name, noop)
+			if err != nil {
+				// duplicate-name from racing iterations is acceptable; skip.
+				continue
+			}
+			// Yield briefly so publishers can snapshot then attempt sends.
+			time.Sleep(time.Microsecond)
+			unsub()
+		}
+	}()
+
+	// Bounded test duration.
+	time.Sleep(publishMs * time.Millisecond)
+	close(stop)
+	wg.Wait()
+}

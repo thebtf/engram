@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -221,46 +222,72 @@ func TestStop_StopsSweeper(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestImportBoundary_NoWorkerImport(t *testing.T) {
-	// Locate hint_queue.go relative to this test file's own source location.
+	// Locate the package directory via this test file's own source location.
+	// The boundary applies to EVERY non-test CORE source file, not just
+	// hint_queue.go — a future file under internal/cognitive/core/ that
+	// imports internal/worker would equally break the substrate boundary, so
+	// the test walks the whole directory rather than naming hint_queue.go.
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller(0) failed")
 	}
-	srcFile := filepath.Join(filepath.Dir(thisFile), "hint_queue.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, srcFile, nil, parser.ImportsOnly)
-	if err != nil {
-		t.Fatalf("parse %s: %v", srcFile, err)
-	}
+	packageDir := filepath.Dir(thisFile)
 
 	const forbidden = "github.com/thebtf/engram/internal/worker"
-	for _, imp := range f.Imports {
-		if imp.Path == nil {
-			continue
+
+	checkFile := func(t *testing.T, srcFile string) {
+		t.Helper()
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, srcFile, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("parse %s: %v", srcFile, err)
 		}
-		// Import paths are double-quoted string literals; strip the quotes.
-		path := strings.Trim(imp.Path.Value, `"`)
-		if path == forbidden || strings.HasPrefix(path, forbidden+"/") {
-			t.Errorf("hint_queue.go imports %q — CORE package MUST NOT import internal/worker", path)
+		base := filepath.Base(srcFile)
+		for _, imp := range f.Imports {
+			if imp.Path == nil {
+				continue
+			}
+			path := strings.Trim(imp.Path.Value, `"`)
+			if path == forbidden || strings.HasPrefix(path, forbidden+"/") {
+				t.Errorf("%s imports %q — CORE package MUST NOT import internal/worker", base, path)
+			}
 		}
+		// Defensive AST walk in case a future Go release changes ImportSpec
+		// placement (e.g., nested in conditional compilation blocks).
+		ast.Inspect(f, func(n ast.Node) bool {
+			spec, ok := n.(*ast.ImportSpec)
+			if !ok || spec.Path == nil {
+				return true
+			}
+			path := strings.Trim(spec.Path.Value, `"`)
+			if path == forbidden || strings.HasPrefix(path, forbidden+"/") {
+				t.Errorf("ast walk: %s imports %q", base, path)
+			}
+			return true
+		})
 	}
 
-	// Walk full AST to catch any import in nested nodes (defensive).
-	ast.Inspect(f, func(n ast.Node) bool {
-		spec, ok := n.(*ast.ImportSpec)
-		if !ok {
-			return true
+	walkErr := filepath.Walk(packageDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
 		}
-		if spec.Path == nil {
-			return true
+		if info.IsDir() {
+			if path != packageDir {
+				return filepath.SkipDir
+			}
+			return nil
 		}
-		path := strings.Trim(spec.Path.Value, `"`)
-		if path == forbidden || strings.HasPrefix(path, forbidden+"/") {
-			t.Errorf("ast walk: hint_queue.go imports %q", path)
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
 		}
-		return true
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			checkFile(t, path)
+		})
+		return nil
 	})
+	if walkErr != nil {
+		t.Fatalf("filepath.Walk: %v", walkErr)
+	}
 }
 
 // --------------------------------------------------------------------------
