@@ -4,48 +4,63 @@ Items deferred from active work with documented impact and fix path.
 
 ## Active
 
-### TD-008 — GoReleaser `Release` workflow broken since 2026-04-26
-**Branch:** `main`
-**Severity:** LOW (no user-facing impact; pre-existing flake on 8 consecutive releases)
-**Source:** Discovered post v6.4.0 release verification (2026-05-23)
+### TD-008 — GoReleaser `Release` workflow broken since 2026-04-26 (FIX IN FLIGHT PR #219)
+**Branch:** `main` → fixed on `fix/goreleaser-marketplace-cleanup`
+**Severity:** **MEDIUM — corrected.** Initial classification ("LOW, no
+user-facing impact") was wrong. Re-investigated 2026-05-23 after PM
+challenge.
+**Source:** Discovered post v6.4.0 release verification (2026-05-23).
 
 **What:** `.github/workflows/release.yaml` runs `goreleaser release --clean`
 which invokes `scripts/generate-plugin-config.sh`. The script tries to copy
 `plugin/.claude-plugin/marketplace.json` to the goreleaser output dir, but
-that file was DELETED in commit `653fabb` (2026-04-something — "chore:
-deps update, migration fix, marketplace cleanup"). The script was never
-updated. As a result the `Release` workflow has failed on EVERY release
-since v5.2.5 (verified via `gh run list`):
+that file was DELETED in commit `653fabb` (#151 — "chore: deps update,
+migration fix, marketplace cleanup"). The script was never updated. As a
+result the `Release` workflow has failed on EVERY release since v5.2.5
+(verified via `gh run list`):
 v5.2.5 / v6.0.0 / v6.0.1 / v6.1.0 / v6.2.0 / v6.2.1 / v6.3.0 / v6.4.0.
 
-**Why this hasn't blocked anything:** User-facing release artefacts
-(binaries, Docker images, plugin marketplace sync) are produced by SEPARATE
-workflows that all succeed:
-- `release-binary.yml` → uploads engram-{linux,darwin,windows} assets
-- `docker-publish.yml` / `docker.yaml` → push ghcr.io images
-- `sync-marketplace.yml` → mirror plugin/engram/ into engram-marketplace repo
+**Real user-facing impact (re-investigated, was misclassified):**
+`scripts/install.sh` at line 159 constructs an archive URL of the form:
+```
+https://github.com/thebtf/engram/releases/download/${version}/engram_${version#v}_${platform}.${ext}
+```
+This is the GoReleaser archive format. With the Release workflow failing,
+those archives are never published. Confirmed via:
+```
+$ curl -sI https://github.com/thebtf/engram/releases/download/v6.4.0/engram_6.4.0_linux_amd64.tar.gz
+HTTP/1.1 404 Not Found
+```
+So anyone running:
+```
+curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
+```
+hits a 404 on the archive download. This has been broken for 8 consecutive
+releases.
 
-GoReleaser produces additional archives + cosign signatures that no
-downstream consumer requires. The failing workflow is dead weight.
+`release-binary.yml` IS independent and DOES publish bare per-platform
+binaries (engram-darwin-arm64 / engram-linux-amd64 / engram-windows-amd64.exe),
+but those are NOT what install.sh consumes — the script expects the bundled
+tar.gz / zip containing `.claude-plugin/`, `hooks/`, `commands/`, `skills/`,
+and `.mcp.json` together.
 
-**Why deferred:** Pre-existing breakage older than CR-001. v6.4.0 release
-itself is functionally complete (verified via /api/version=v6.4.0 on the
-live server post-Watchtower). Fix can land in a separate small CR without
-blocking any in-flight work.
+The earlier "no user-facing impact" claim was wrong because the user-path
+verification stopped at the in-repo plugin/marketplace flow (which IS
+covered by `sync-marketplace.yml`) and didn't trace install.sh against the
+release artifact set.
 
-**Upgrade path:** Two options:
-1. Remove the broken `cp ... marketplace.json` line from
-   `scripts/generate-plugin-config.sh` (the file lives in the separate
-   `thebtf/engram-marketplace` repo per MEMORY.md infrastructure note).
-2. Delete `.github/workflows/release.yaml` + `scripts/generate-plugin-config.sh`
-   entirely if GoReleaser is no longer needed (release-binary.yml +
-   docker-publish.yml + sync-marketplace.yml cover all user paths).
+**Fix:** PR #219 opens with the minimal patch: drop the dead `cp` line
+from `scripts/generate-plugin-config.sh`. The canonical
+`.claude-plugin/marketplace.json` already lives at repo root (added by
+`9a9c5a0`) and is picked up by goreleaser's `archives.files[].src:
+.claude-plugin/*` glob — no copy step needed.
 
-Option 1 is the minimal fix; Option 2 is the clean-shop. Decide when
-opening the CR.
+**Release plan:** After PR #219 merges, cut v6.4.1 patch release. The
+goreleaser archives get published as part of v6.4.1, and install.sh
+starts working again. Re-tagging v6.4.0 would be destructive.
 
-**Files:** `.github/workflows/release.yaml`,
-`scripts/generate-plugin-config.sh`, `.goreleaser.yaml`.
+**Files:** `scripts/generate-plugin-config.sh`,
+`.github/workflows/release.yaml`, `.goreleaser.yaml`.
 
 ---
 
