@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -53,6 +54,21 @@ func NewRegistry() SubsystemRegistry {
 	return newRegistry()
 }
 
+// isNilSubsystemValue reports whether s wraps a nil concrete value, catching
+// the Go typed-nil interface trap. An interface variable assigned a nil
+// pointer (e.g. `var p *Impl = nil; var s Subsystem = p`) tests `s == nil`
+// as false because the interface's dynamic type is set; only the dynamic
+// value is nil. reflect.IsNil distinguishes the two cases on nilable kinds.
+func isNilSubsystemValue(s Subsystem) bool {
+	v := reflect.ValueOf(s)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Slice, reflect.Map, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
 // SetDependencies installs the CORE-wide Dependencies bundle the registry
 // passes to Subsystem.Start at Enable time. Without this call, Enable invokes
 // Subsystem.Start with the zero Dependencies value — adequate for NoOps but
@@ -73,11 +89,14 @@ func (r *registry) SetDependencies(deps Dependencies) {
 // original registration is preserved (EC-2). Registration sets state to
 // "registered" without activating the subsystem.
 //
-// A nil Subsystem returns an error rather than panicking on the Name() call —
-// the caller is expected to have constructed a real Subsystem value, but the
-// defensive check catches an accidental zero-pointer assignment cleanly.
+// A nil Subsystem returns an error rather than panicking on the Name() call.
+// The check covers both untyped nil (`var s Subsystem = nil`) AND the Go
+// "typed nil" trap where a nil pointer is wrapped in an interface
+// (`var p *Impl = nil; reg.Register(p)`) — the interface value is non-nil
+// but its dynamic value is nil, so a Name() call that dereferences the
+// receiver would panic. isNilSubsystemValue catches both forms.
 func (r *registry) Register(s Subsystem) error {
-	if s == nil {
+	if s == nil || isNilSubsystemValue(s) {
 		return fmt.Errorf("Register: subsystem is nil")
 	}
 

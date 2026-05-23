@@ -331,6 +331,34 @@ func TestRace_ConcurrentRegisterRead(t *testing.T) {
 	wg.Wait()
 }
 
+// TestRegister_TypedNil_Rejected pins the Go interface typed-nil guard added
+// to Register. A nil concrete pointer wrapped in the Subsystem interface
+// (e.g. `var p *mockSubsystem = nil; reg.Register(p)`) tests `s == nil` as
+// false because the interface's dynamic type is set, only its dynamic value
+// is nil. Without isNilSubsystemValue the subsequent s.Name() call would
+// dereference the nil receiver and panic. The test passes a typed-nil
+// pointer and asserts the error path without crashing.
+func TestRegister_TypedNil_Rejected(t *testing.T) {
+	r := newRegistry()
+
+	var typedNil *mockSubsystem
+	// Sanity: untyped Subsystem(typedNil) is the typed-nil case — interface
+	// non-nil, dynamic value nil. A pre-fix Register would crash here.
+	if Subsystem(typedNil) == nil {
+		t.Fatalf("test premise broken: Subsystem(typedNil) compares == nil; expected typed-nil case")
+	}
+
+	err := r.Register(Subsystem(typedNil))
+	if err == nil {
+		t.Fatalf("Register(typed-nil): got nil error, want non-nil")
+	}
+
+	// And plain untyped nil — the original guard.
+	if err := r.Register(nil); err == nil {
+		t.Errorf("Register(nil): got nil error, want non-nil")
+	}
+}
+
 // TestRecovery_FailedDisabledEnabled_Cycle pins the ADR-009 operator-driven
 // recovery path: after TransitionToFailed flips a subsystem to "failed",
 // Disable must bring it back to "disabled" WITHOUT calling Stop (the
