@@ -28,6 +28,7 @@ func (f *fakeRegistry) Health() map[string]SubsystemHealth { return nil }
 func (f *fakeRegistry) ResolvePolicy(_ string) cognitive.ResolutionPolicy {
 	return cognitive.PolicySinglePrimary
 }
+func (f *fakeRegistry) TransitionToFailed(_ string, _ string) error { return nil }
 
 // TestNoOps_FiveRegistered_CanonicalNames verifies that RegisterNoOps invokes
 // Register exactly 5 times and that each registered subsystem carries the

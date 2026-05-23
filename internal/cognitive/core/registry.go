@@ -21,9 +21,15 @@ type subsystemEntry struct {
 // Lifecycle states per ADR-009: registered → enabled ↔ disabled; any → failed.
 // The failed state is written externally by the panic-isolating dispatcher
 // (T015); registry itself only drives registered/enabled/disabled.
+//
+// order keeps insertion order so SinglePrimary dispatch can deterministically
+// pick the last-registered enabled impl. A map alone gives random iteration
+// which would make ResolvePolicy/PolicySinglePrimary nondeterministic — the
+// ADR-010 "last-registered-wins" rule requires explicit ordering tracking.
 type registry struct {
 	mu      sync.RWMutex
 	entries map[string]*subsystemEntry
+	order   []string
 }
 
 // newRegistry returns a ready-to-use SubsystemRegistry backed by *registry.
@@ -59,6 +65,7 @@ func (r *registry) Register(s Subsystem) error {
 			State: "registered",
 		},
 	}
+	r.order = append(r.order, name)
 	return nil
 }
 
@@ -195,14 +202,41 @@ func (r *registry) ResolvePolicy(interfaceName string) cognitive.ResolutionPolic
 // ResolveImpls returns the enabled subsystems whose Implements() slice
 // contains interfaceName. The returned slice is independent of internal
 // storage and may be empty. This is a concrete method on *registry; it is
+// TransitionToFailed flips the named subsystem into the ADR-009 "failed"
+// state and records the supplied reason on SubsystemHealth.PanicReason. Once
+// failed, ResolveImpls and Dispatch treat the subsystem as NoOp until the
+// operator runs Disable + Enable to recover it. Calling on an unknown name
+// is a no-op (returns nil) so concurrent Unregister/Failed sequences stay
+// idempotent at the caller.
+func (r *registry) TransitionToFailed(name string, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	e, ok := r.entries[name]
+	if !ok {
+		return nil
+	}
+	e.health.State = "failed"
+	e.health.PanicReason = reason
+	e.health.ErrorsTotal++
+	return nil
+}
+
 // not part of the SubsystemRegistry interface because callers that only need
 // lifecycle management should not need dispatch.
 func (r *registry) ResolveImpls(interfaceName string) []Subsystem {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	// Iterate via the registration-order slice so PolicySinglePrimary's
+	// "last-registered enabled wins" semantics stay deterministic (map
+	// iteration order is intentionally randomized in Go).
 	var out []Subsystem
-	for _, e := range r.entries {
+	for _, name := range r.order {
+		e, ok := r.entries[name]
+		if !ok {
+			continue
+		}
 		if e.health.State != "enabled" {
 			continue
 		}

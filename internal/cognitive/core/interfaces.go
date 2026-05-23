@@ -75,6 +75,15 @@ type SubsystemRegistry interface {
 	// PolicySinglePrimary for every other cross-subsystem contract.
 	// Unknown interface names return PolicySinglePrimary as a safe default.
 	ResolvePolicy(interfaceName string) cognitive.ResolutionPolicy
+
+	// TransitionToFailed flips the named subsystem to the ADR-009 "failed"
+	// state and records reason on SubsystemHealth.PanicReason. The Dispatch
+	// machinery in dispatcher.go uses this after recovering a handler panic
+	// (T015) so subsequent calls treat the subsystem as NoOp until the
+	// operator manually re-enables it via Disable+Enable. Calling on an
+	// unknown name is a no-op (returns nil to keep callers idempotent in
+	// the face of concurrent unregistration).
+	TransitionToFailed(name string, reason string) error
 }
 
 // Subsystem is the contract every cognitive subsystem implements. Name and

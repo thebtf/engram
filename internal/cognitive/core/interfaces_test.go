@@ -122,7 +122,7 @@ func joinLines(ss []string) string {
 func TestSubsystemRegistry_SignatureShape(t *testing.T) {
 	assertInterfaceMethods(t, "SubsystemRegistry",
 		reflect.TypeOf((*SubsystemRegistry)(nil)).Elem(),
-		[]string{"Disable", "Enable", "Get", "Health", "List", "Register", "ResolvePolicy"})
+		[]string{"Disable", "Enable", "Get", "Health", "List", "Register", "ResolvePolicy", "TransitionToFailed"})
 }
 
 // TestAttentionEventBus_SignatureShape pins Publish + Subscribe.
