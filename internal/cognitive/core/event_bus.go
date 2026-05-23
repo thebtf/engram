@@ -6,6 +6,9 @@ import (
 	"sync"
 )
 
+// Compile-time assertion: *attentionEventBus must satisfy AttentionEventBus.
+var _ AttentionEventBus = (*attentionEventBus)(nil)
+
 // attentionEventBus is the concrete implementation of AttentionEventBus.
 // It provides in-process buffered pub/sub for CORE substrate events per
 // ADR-003 (async fan-out only; synchronous CandidateProposer queries bypass
