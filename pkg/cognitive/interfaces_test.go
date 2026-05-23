@@ -95,3 +95,32 @@ func TestAttentionEventWriter_OneMethod(t *testing.T) {
 		t.Fatalf("AttentionEventWriter method name: got %q, want %q", got, want)
 	}
 }
+
+// TestSingleMethodInterfaces pins method count == 1 for every cross-subsystem
+// interface that ADR-010 defines with a single method. A phantom second
+// method silently added during SG-2 work (rebase mishap, AI worker drift)
+// would not be caught by TestInterfaceCount_Exactly6 alone — that test pins
+// the SET of interface names, not their internal shape. This test closes
+// the gap for the four single-method contracts.
+func TestSingleMethodInterfaces(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  reflect.Type
+		want string
+	}{
+		{"AttentionEventSource", reflect.TypeOf((*AttentionEventSource)(nil)).Elem(), "EventsProduced"},
+		{"CandidateProposer", reflect.TypeOf((*CandidateProposer)(nil)).Elem(), "Propose"},
+		{"HintEmitter", reflect.TypeOf((*HintEmitter)(nil)).Elem(), "Render"},
+		{"DirectiveDistiller", reflect.TypeOf((*DirectiveDistiller)(nil)).Elem(), "Distill"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.typ.NumMethod(); got != 1 {
+				t.Fatalf("%s.NumMethod: got %d, want 1", c.name, got)
+			}
+			if got := c.typ.Method(0).Name; got != c.want {
+				t.Fatalf("%s method name: got %q, want %q", c.name, got, c.want)
+			}
+		})
+	}
+}

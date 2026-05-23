@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"testing"
 )
 
@@ -37,6 +38,11 @@ var forbiddenCoreInternalIdents = map[string]struct{}{
 	"EventHandler": {},
 	"Unsubscribe":  {},
 	"Dependencies": {},
+	// CORE-internal mirrors of public payloads. The public package owns
+	// AttentionEvent and HintProposal; the CORE-internal *Payload variants
+	// stay inside core and must not leak across the boundary.
+	"AttentionEventPayload": {},
+	"HintProposalPayload":   {},
 }
 
 // TestBoundaryInvariant_PkgCognitiveDoesNotReferenceCoreInternals walks every
@@ -89,7 +95,7 @@ func TestBoundaryInvariant_PkgCognitiveDoesNotReferenceCoreInternals(t *testing.
 
 // formatViolation keeps the test failure message compact.
 func formatViolation(ident, path string, line int) string {
-	return ident + " @ " + path + ":" + itoa(line)
+	return ident + " @ " + path + ":" + strconv.Itoa(line)
 }
 
 func endsWith(s, suffix string) bool {
@@ -97,29 +103,6 @@ func endsWith(s, suffix string) bool {
 		return false
 	}
 	return s[len(s)-len(suffix):] == suffix
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
 
 func joinLines(ss []string) string {
@@ -139,7 +122,7 @@ func joinLines(ss []string) string {
 func TestSubsystemRegistry_SignatureShape(t *testing.T) {
 	assertInterfaceMethods(t, "SubsystemRegistry",
 		reflect.TypeOf((*SubsystemRegistry)(nil)).Elem(),
-		[]string{"Disable", "Enable", "Get", "Health", "List", "Register"})
+		[]string{"Disable", "Enable", "Get", "Health", "List", "Register", "ResolvePolicy"})
 }
 
 // TestAttentionEventBus_SignatureShape pins Publish + Subscribe.

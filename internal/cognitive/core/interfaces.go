@@ -28,6 +28,8 @@ package core
 import (
 	"context"
 	"time"
+
+	"github.com/thebtf/engram/pkg/cognitive"
 )
 
 // --- Subsystem lifecycle ----------------------------------------------------
@@ -65,6 +67,14 @@ type SubsystemRegistry interface {
 	// The map is independent of internal storage; absent entries mean the
 	// subsystem is not registered.
 	Health() map[string]SubsystemHealth
+
+	// ResolvePolicy reports the canonical ResolutionPolicy CORE applies when
+	// dispatching to the named cross-subsystem interface (per spec §FR-7 and
+	// Clarify C2). Subsystems and CORE coordinate by registering against the
+	// declared policy: PolicyFanOut for CandidateProposer (S2, S6, S4b);
+	// PolicySinglePrimary for every other cross-subsystem contract.
+	// Unknown interface names return PolicySinglePrimary as a safe default.
+	ResolvePolicy(interfaceName string) cognitive.ResolutionPolicy
 }
 
 // Subsystem is the contract every cognitive subsystem implements. Name and

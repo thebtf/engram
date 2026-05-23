@@ -146,3 +146,52 @@ func descendMap(root map[string]any, keys ...string) (map[string]any, bool) {
 	}
 	return cur, true
 }
+
+// TestVolatileFields_Immutable_CanonicalSet pins the FR-9 byte-identity gate
+// to the four canonical ADR-007 keys. VolatileFields is an exported var (Go
+// has no constant slices) — this test detects accidental mutation by any
+// caller that would silently break the gate's normalization invariant.
+func TestVolatileFields_Immutable_CanonicalSet(t *testing.T) {
+	want := []string{"generated_at", "server_version", "session_id", "log_ts"}
+
+	if len(VolatileFields) != len(want) {
+		t.Fatalf("VolatileFields length: got %d, want %d", len(VolatileFields), len(want))
+	}
+	for i, w := range want {
+		if VolatileFields[i] != w {
+			t.Fatalf("VolatileFields[%d]: got %q, want %q", i, VolatileFields[i], w)
+		}
+	}
+}
+
+// TestNormalize_MixedTypeSlice_LeftUntouched covers the documented "safer
+// than coercing" behavior of sortArraysByKey: if any slice element lacks
+// MemorySortKey or carries a non-string value, the original order survives.
+// The test pins both the no-key and non-string-value paths.
+func TestNormalize_MixedTypeSlice_LeftUntouched(t *testing.T) {
+	t.Run("element missing memory_id", func(t *testing.T) {
+		in := []byte(`{"memories":[{"memory_id":"c"},{"other":"x"},{"memory_id":"a"}]}`)
+		out, err := NormalizeForDiff(in)
+		if err != nil {
+			t.Fatalf("NormalizeForDiff: %v", err)
+		}
+		// Original order preserved (no sort applied) — note canonical key order
+		// inside each map will still alphabetize, but element order is unchanged.
+		want := []byte(`{"memories":[{"memory_id":"c"},{"other":"x"},{"memory_id":"a"}]}`)
+		if !bytes.Equal(out, want) {
+			t.Errorf("mixed-slice (missing key) order changed:\n  got:  %s\n  want: %s", out, want)
+		}
+	})
+
+	t.Run("memory_id with non-string value", func(t *testing.T) {
+		in := []byte(`{"memories":[{"memory_id":"b"},{"memory_id":42},{"memory_id":"a"}]}`)
+		out, err := NormalizeForDiff(in)
+		if err != nil {
+			t.Fatalf("NormalizeForDiff: %v", err)
+		}
+		want := []byte(`{"memories":[{"memory_id":"b"},{"memory_id":42},{"memory_id":"a"}]}`)
+		if !bytes.Equal(out, want) {
+			t.Errorf("mixed-slice (non-string id) order changed:\n  got:  %s\n  want: %s", out, want)
+		}
+	})
+}
