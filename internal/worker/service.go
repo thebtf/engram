@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -324,22 +325,48 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		return nil, fmt.Errorf("cognitive registry does not implement SetDependencies — wiring broken")
 	}
 
-	// Master-flag activation (PM review finding 2 — spec FR-1, US1).
-	// When ENGRAM_V7_PLUG_ENABLED is on, the 5 NoOps become enabled and
-	// Dispatch routes through them. When the master flag is off, NoOps stay
-	// in the "registered" state and Dispatch returns nil (no impls resolved),
-	// preserving v6.3.0 behaviour byte-for-byte.
+	// Flag-gated activation (PM re-review finding 1 — spec FR-1 / FR-5 / US1).
+	//
+	// Spec FR-5 requires "subsystem enabled IFF master flag AND per-subsystem
+	// flag". The 5 NoOps registered by RegisterNoOps act as the CORE baseline
+	// for the subsystem slot that owns each cross-subsystem interface:
+	//
+	//	s1  (state)               → core.noop.state_writer
+	//	s2  (meta-memory)         → core.noop.candidate_proposer
+	//	s3  (ambient)             → core.noop.hint_emitter
+	//	s4a (directives-capture)  → core.noop.attention_event_writer
+	//	                          + core.noop.directive_distiller
+	//	(s4b / s5 / s6 have no CORE NoOp at this scope.)
+	//
+	// Each per-subsystem flag gates whether ITS NoOp is enabled. Other
+	// subsystems' NoOps stay in the "registered" state and ResolveImpls
+	// returns nothing for their interfaces — exactly the FR-5 + US1
+	// semantics ("ENGRAM_V7_S2_METAMEM=true with master on → only S2's slot
+	// is enabled, others stay registered").
 	if flagCfg.IsPlugEnabled() {
-		for _, name := range []string{
-			"core.noop.candidate_proposer",
-			"core.noop.hint_emitter",
-			"core.noop.state_writer",
-			"core.noop.attention_event_writer",
-			"core.noop.directive_distiller",
-		} {
-			if err := cRegistry.Enable(name); err != nil {
-				cancel()
-				return nil, fmt.Errorf("enable %s: %w", name, err)
+		noopsBySubsystem := map[string][]string{
+			"s1":  {"core.noop.state_writer"},
+			"s2":  {"core.noop.candidate_proposer"},
+			"s3":  {"core.noop.hint_emitter"},
+			"s4a": {"core.noop.attention_event_writer", "core.noop.directive_distiller"},
+		}
+		// Sort subsystem keys for deterministic activation order
+		// (registration order otherwise drives SinglePrimary; we want
+		// activation order stable across runs).
+		subsystemKeys := make([]string, 0, len(noopsBySubsystem))
+		for k := range noopsBySubsystem {
+			subsystemKeys = append(subsystemKeys, k)
+		}
+		sort.Strings(subsystemKeys)
+		for _, subName := range subsystemKeys {
+			if !flagCfg.IsSubsystemEnabled(subName) {
+				continue
+			}
+			for _, noopName := range noopsBySubsystem[subName] {
+				if err := cRegistry.Enable(noopName); err != nil {
+					cancel()
+					return nil, fmt.Errorf("enable %s (for subsystem %s): %w", noopName, subName, err)
+				}
 			}
 		}
 	}

@@ -99,61 +99,88 @@ func (r *registry) Register(s Subsystem) error {
 // install them via SetDependencies before invoking Enable. NoOps tolerate
 // the zero Dependencies value — see noop.go Start methods — so a test that
 // only exercises NoOps may skip SetDependencies safely.
+// Enable runs Subsystem.Start OUTSIDE the registry lock so the subsystem
+// can call back into deps.Registry (List/Get/Health/ResolveImpls/ResolvePolicy)
+// during its Start without deadlocking. The lock is held only long enough to
+// validate the state transition and snapshot the impl + deps; after Start
+// returns, the lock is re-acquired to commit the state. A concurrent
+// Register/Disable between these two critical sections is tolerated — the
+// commit re-fetches the entry by name and silently skips if the subsystem
+// was removed in flight.
 func (r *registry) Enable(name string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	entry, exists := r.entries[name]
 	if !exists {
+		r.mu.Unlock()
 		return fmt.Errorf("subsystem %q not registered", name)
 	}
-
 	if err := stateTransition(entry.health.State, "enabled"); err != nil {
+		r.mu.Unlock()
 		return fmt.Errorf("Enable %q: %w", name, err)
 	}
-
-	// No-op: already enabled.
 	if entry.health.State == "enabled" {
+		// Already enabled — no Start, no state change.
+		r.mu.Unlock()
 		return nil
 	}
+	sub := entry.sub
+	deps := r.deps
+	r.mu.Unlock()
 
-	// Call Start with the registry-stored deps. Without SetDependencies the
-	// zero value is passed, which is acceptable for NoOps but should never
-	// happen in production — NewService installs deps before any Enable.
-	if err := entry.sub.Start(context.Background(), r.deps); err != nil {
+	// Call Start without the lock held. Subsystem.Start may now safely
+	// invoke deps.Registry.List/Get/Health/ResolvePolicy etc.
+	if err := sub.Start(context.Background(), deps); err != nil {
 		return fmt.Errorf("subsystem %q Start: %w", name, err)
 	}
 
-	entry.health.State = "enabled"
+	// Commit the state transition under the lock. Re-fetch in case the
+	// subsystem was unregistered or transitioned to "failed" concurrently.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.entries[name]; ok && cur == entry {
+		// Only commit if state still allows enable. A racing TransitionToFailed
+		// must win — operator must Disable+Enable to recover from failed.
+		if cur.health.State == "registered" || cur.health.State == "disabled" {
+			cur.health.State = "enabled"
+		}
+	}
 	return nil
 }
 
-// Disable transitions an enabled subsystem to "disabled" by calling
-// Subsystem.Stop. Disabling an already-disabled subsystem is a no-op.
-// Returns an error if the subsystem is unknown or if Stop returns an error.
+// Disable runs Subsystem.Stop OUTSIDE the registry lock for the same reason
+// Enable does: Stop may legitimately query deps.Registry to inspect sibling
+// subsystem state during teardown. The lock is held only for state-transition
+// validation and final commit.
 func (r *registry) Disable(name string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	entry, exists := r.entries[name]
 	if !exists {
+		r.mu.Unlock()
 		return fmt.Errorf("subsystem %q not registered", name)
 	}
-
 	if err := stateTransition(entry.health.State, "disabled"); err != nil {
+		r.mu.Unlock()
 		return fmt.Errorf("Disable %q: %w", name, err)
 	}
-
-	// No-op: already disabled (or registered, which is effectively inactive).
 	if entry.health.State != "enabled" {
+		// Already not-running — registered or disabled — nothing to Stop.
+		r.mu.Unlock()
 		return nil
 	}
+	sub := entry.sub
+	r.mu.Unlock()
 
-	if err := entry.sub.Stop(); err != nil {
+	if err := sub.Stop(); err != nil {
 		return fmt.Errorf("subsystem %q Stop: %w", name, err)
 	}
 
-	entry.health.State = "disabled"
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.entries[name]; ok && cur == entry {
+		if cur.health.State == "enabled" {
+			cur.health.State = "disabled"
+		}
+	}
 	return nil
 }
 

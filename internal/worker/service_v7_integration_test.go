@@ -171,37 +171,50 @@ func TestPlatformWiring_FlagOff_NoOpsRegisteredButDisabled(t *testing.T) {
 	}
 }
 
-// TestPlatformWiring_FlagOn_NoOpsActivated mirrors the production NewService
-// activation pass: with ENGRAM_V7_PLUG_ENABLED=true the 5 NoOps are flipped
-// from "registered" to "enabled" and ResolveImpls returns them for their
-// respective interface names. This proves US1's runtime gating contract is
-// honoured (PM review finding 2).
-func TestPlatformWiring_FlagOn_NoOpsActivated(t *testing.T) {
+// activateFromFlags mirrors the FR-5 per-subsystem gating logic implemented in
+// NewService. Tests use it to exercise the same decision table without
+// constructing a full Service. The mapping below MUST stay in sync with
+// service.go's noopsBySubsystem.
+func activateFromFlags(t *testing.T, registry core.SubsystemRegistry, cfg core.FlagConfig) {
+	t.Helper()
+	if !cfg.IsPlugEnabled() {
+		return
+	}
+	mapping := map[string][]string{
+		"s1":  {"core.noop.state_writer"},
+		"s2":  {"core.noop.candidate_proposer"},
+		"s3":  {"core.noop.hint_emitter"},
+		"s4a": {"core.noop.attention_event_writer", "core.noop.directive_distiller"},
+	}
+	for subName, noops := range mapping {
+		if !cfg.IsSubsystemEnabled(subName) {
+			continue
+		}
+		for _, n := range noops {
+			if err := registry.Enable(n); err != nil {
+				t.Fatalf("Enable(%s) for subsystem %s: %v", n, subName, err)
+			}
+		}
+	}
+}
+
+// TestPlatformWiring_FlagOn_AllSubsystems_NoOpsActivated mirrors the
+// "all subsystem flags enabled" path: with master + s1 + s2 + s3 + s4a all
+// true, the four owner-mapped NoOps reach "enabled" and ResolveImpls returns
+// them for each cross-subsystem interface.
+func TestPlatformWiring_FlagOn_AllSubsystems_NoOpsActivated(t *testing.T) {
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S1_STATE", "true")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
+	t.Setenv("ENGRAM_V7_S3_AMBIENT", "true")
+	t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "true")
 
 	cfg := core.LoadFlagConfigFromEnv()
-	if !cfg.IsPlugEnabled() {
-		t.Fatalf("IsPlugEnabled: got false, want true")
-	}
-
 	registry := core.NewRegistry()
 	if err := core.RegisterNoOps(registry); err != nil {
 		t.Fatalf("RegisterNoOps: %v", err)
 	}
-
-	// Mirror NewService's activation pass exactly.
-	noopNames := []string{
-		"core.noop.candidate_proposer",
-		"core.noop.hint_emitter",
-		"core.noop.state_writer",
-		"core.noop.attention_event_writer",
-		"core.noop.directive_distiller",
-	}
-	for _, name := range noopNames {
-		if err := registry.Enable(name); err != nil {
-			t.Fatalf("Enable(%s): %v", name, err)
-		}
-	}
+	activateFromFlags(t, registry, cfg)
 
 	infos := registry.List()
 	enabled := 0
@@ -210,13 +223,11 @@ func TestPlatformWiring_FlagOn_NoOpsActivated(t *testing.T) {
 			enabled++
 		}
 	}
+	// 5 NoOps mapped across 4 subsystems (s4a owns 2): all reach enabled.
 	if enabled != 5 {
 		t.Errorf("enabled NoOp count: got %d, want 5", enabled)
 	}
 
-	// ResolveImpls is the dispatch-side contract — it must return enabled
-	// NoOps for each canonical interface. The check is via the
-	// SubsystemRegistry interface type-asserted to the implsResolver helper.
 	type implsResolver interface {
 		ResolveImpls(interfaceName string) []core.Subsystem
 	}
@@ -234,6 +245,63 @@ func TestPlatformWiring_FlagOn_NoOpsActivated(t *testing.T) {
 		impls := resolver.ResolveImpls(iface)
 		if len(impls) == 0 {
 			t.Errorf("ResolveImpls(%s) returned no impls; expected at least the NoOp", iface)
+		}
+	}
+}
+
+// TestPlatformWiring_FlagOn_OnlyS2_OthersStayRegistered pins the spec FR-5
+// per-subsystem invariant the previous PM review flagged: with master ON and
+// only ENGRAM_V7_S2_METAMEM=true, the S2-owned NoOp (candidate_proposer)
+// reaches "enabled" and ResolveImpls("CandidateProposer") returns it, but
+// the other 4 NoOps stay in "registered" state and ResolveImpls for their
+// interfaces returns empty.
+func TestPlatformWiring_FlagOn_OnlyS2_OthersStayRegistered(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
+	// Explicitly ensure other per-subsystem flags are unset.
+	t.Setenv("ENGRAM_V7_S1_STATE", "")
+	t.Setenv("ENGRAM_V7_S3_AMBIENT", "")
+	t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "")
+	t.Setenv("ENGRAM_V7_S4B_DIRECTIVES_SURFACING", "")
+	t.Setenv("ENGRAM_V7_S5_TELEMETRY", "")
+	t.Setenv("ENGRAM_V7_S6_OUTCOME", "")
+
+	cfg := core.LoadFlagConfigFromEnv()
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+	activateFromFlags(t, registry, cfg)
+
+	stateByName := map[string]string{}
+	for _, info := range registry.List() {
+		stateByName[info.Name] = info.State
+	}
+	// Only S2 NoOp (candidate_proposer) enabled.
+	if got := stateByName["core.noop.candidate_proposer"]; got != "enabled" {
+		t.Errorf("core.noop.candidate_proposer state: got %q, want %q (S2 flag is set)", got, "enabled")
+	}
+	for _, name := range []string{
+		"core.noop.hint_emitter",
+		"core.noop.state_writer",
+		"core.noop.attention_event_writer",
+		"core.noop.directive_distiller",
+	} {
+		if got := stateByName[name]; got == "enabled" {
+			t.Errorf("%s state: got %q, want NOT enabled (its subsystem flag is unset)", name, got)
+		}
+	}
+
+	type implsResolver interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	}
+	resolver, _ := registry.(implsResolver)
+	if got := len(resolver.ResolveImpls("CandidateProposer")); got != 1 {
+		t.Errorf("ResolveImpls(CandidateProposer): got %d, want 1 (the S2 NoOp)", got)
+	}
+	for _, iface := range []string{"HintEmitter", "StateWriter", "AttentionEventWriter", "DirectiveDistiller"} {
+		if got := len(resolver.ResolveImpls(iface)); got != 0 {
+			t.Errorf("ResolveImpls(%s): got %d, want 0 (its subsystem flag is unset)", iface, got)
 		}
 	}
 }
