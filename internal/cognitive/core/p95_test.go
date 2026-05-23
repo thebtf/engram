@@ -94,14 +94,24 @@ func measureVariantC(t *testing.T, n int) []int64 {
 }
 
 // percentileNs returns the p-th percentile of durations using nearest-rank.
+// Nearest-rank: rank = ceil(p/100 * N); return the rank-th sorted value
+// (1-indexed). E.g. for N=10000, p=95 → rank 9500, sorted index 9499.
+// Earlier code used floor (idx = p*N/100) which produces the index ONE
+// position BELOW nearest-rank — an off-by-one that systematically
+// understates the percentile. The +99 numerator forces ceiling division
+// without floating-point arithmetic.
 func percentileNs(durations []int64, p int) int64 {
 	if len(durations) == 0 {
 		return 0
 	}
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	idx := (p * len(durations)) / 100
-	if idx >= len(durations) {
-		idx = len(durations) - 1
+	n := len(durations)
+	rank := (p*n + 99) / 100 // ceiling division for nearest-rank
+	if rank < 1 {
+		rank = 1
 	}
-	return durations[idx]
+	if rank > n {
+		rank = n
+	}
+	return durations[rank-1]
 }

@@ -93,6 +93,12 @@ func (q *hintQueue) Enqueue(_ context.Context, sessionID string, hint HintPropos
 // (oldest first) and returns them. The returned slice is independent of
 // internal storage.
 func (q *hintQueue) Drain(sessionID string, max int) []HintProposalPayload {
+	// Defensive: a negative max would cause `make([]T, n)` to panic below.
+	// Treat any non-positive max as "no events requested".
+	if max <= 0 {
+		return nil
+	}
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 

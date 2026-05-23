@@ -295,7 +295,10 @@ func TestPlatformWiring_FlagOn_OnlyS2_OthersStayRegistered(t *testing.T) {
 	type implsResolver interface {
 		ResolveImpls(interfaceName string) []core.Subsystem
 	}
-	resolver, _ := registry.(implsResolver)
+	resolver, ok := registry.(implsResolver)
+	if !ok {
+		t.Fatalf("registry does not expose ResolveImpls — concrete type changed?")
+	}
 	if got := len(resolver.ResolveImpls("CandidateProposer")); got != 1 {
 		t.Errorf("ResolveImpls(CandidateProposer): got %d, want 1 (the S2 NoOp)", got)
 	}

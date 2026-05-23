@@ -330,3 +330,57 @@ func TestRace_ConcurrentRegisterRead(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestRecovery_FailedDisabledEnabled_Cycle pins the ADR-009 operator-driven
+// recovery path: after TransitionToFailed flips a subsystem to "failed",
+// Disable must bring it back to "disabled" WITHOUT calling Stop (the
+// subsystem already panicked), then Enable returns it to "enabled". This
+// is the only recovery sequence available short of restarting the process.
+//
+// Without the failed→disabled state-machine entry the test fails at the
+// Disable step with "cannot transition from \"failed\" to \"disabled\"".
+func TestRecovery_FailedDisabledEnabled_Cycle(t *testing.T) {
+	r := newRegistry()
+	sub := newMock("recovery-target")
+	if err := r.Register(sub); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := r.Enable(sub.Name()); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+
+	// Simulate a panic flip — the dispatcher would call this under
+	// normal operation when Subsystem.Start/handler panics.
+	if err := r.TransitionToFailed(sub.Name(), "test-induced panic"); err != nil {
+		t.Fatalf("TransitionToFailed: %v", err)
+	}
+	healths := r.Health()
+	if got := healths[sub.Name()].State; got != "failed" {
+		t.Fatalf("state after TransitionToFailed: got %q, want %q", got, "failed")
+	}
+	if healths[sub.Name()].PanicReason != "test-induced panic" {
+		t.Errorf("PanicReason not recorded: got %q", healths[sub.Name()].PanicReason)
+	}
+	if healths[sub.Name()].LastPanic.IsZero() {
+		t.Errorf("LastPanic not recorded — TransitionToFailed should stamp time.Now()")
+	}
+
+	// failed → disabled: operator-driven recovery step 1. The Disable
+	// must succeed (without the stateTransition fix it errors with
+	// "cannot transition from \"failed\" to \"disabled\"").
+	if err := r.Disable(sub.Name()); err != nil {
+		t.Fatalf("Disable from failed state: %v", err)
+	}
+	if got := r.Health()[sub.Name()].State; got != "disabled" {
+		t.Errorf("state after Disable(failed): got %q, want %q", got, "disabled")
+	}
+
+	// disabled → enabled: operator-driven recovery step 2. Enable must
+	// succeed and bring the subsystem back to enabled.
+	if err := r.Enable(sub.Name()); err != nil {
+		t.Fatalf("Enable after recovery: %v", err)
+	}
+	if got := r.Health()[sub.Name()].State; got != "enabled" {
+		t.Errorf("state after recovery Enable: got %q, want %q", got, "enabled")
+	}
+}

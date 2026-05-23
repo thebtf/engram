@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/thebtf/engram/pkg/cognitive"
 )
@@ -71,11 +72,22 @@ func (r *registry) SetDependencies(deps Dependencies) {
 // Register stores s under s.Name(). Duplicate names return an error; the
 // original registration is preserved (EC-2). Registration sets state to
 // "registered" without activating the subsystem.
+//
+// A nil Subsystem returns an error rather than panicking on the Name() call —
+// the caller is expected to have constructed a real Subsystem value, but the
+// defensive check catches an accidental zero-pointer assignment cleanly.
 func (r *registry) Register(s Subsystem) error {
+	if s == nil {
+		return fmt.Errorf("Register: subsystem is nil")
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	name := s.Name()
+	if name == "" {
+		return fmt.Errorf("Register: subsystem returned empty Name()")
+	}
 	if _, exists := r.entries[name]; exists {
 		return fmt.Errorf("subsystem %q already registered", name)
 	}
@@ -162,8 +174,17 @@ func (r *registry) Disable(name string) error {
 		r.mu.Unlock()
 		return fmt.Errorf("Disable %q: %w", name, err)
 	}
+	// failed → disabled is the operator-driven recovery transition: the
+	// subsystem already panicked and the dispatcher has flipped it to
+	// "failed", so Stop must NOT run a second time. Update the state
+	// directly under the lock and return.
+	if entry.health.State == "failed" {
+		entry.health.State = "disabled"
+		r.mu.Unlock()
+		return nil
+	}
 	if entry.health.State != "enabled" {
-		// Already not-running — registered or disabled — nothing to Stop.
+		// registered or disabled — nothing to Stop.
 		r.mu.Unlock()
 		return nil
 	}
@@ -258,11 +279,12 @@ func (r *registry) ResolvePolicy(interfaceName string) cognitive.ResolutionPolic
 // contains interfaceName. The returned slice is independent of internal
 // storage and may be empty. This is a concrete method on *registry; it is
 // TransitionToFailed flips the named subsystem into the ADR-009 "failed"
-// state and records the supplied reason on SubsystemHealth.PanicReason. Once
-// failed, ResolveImpls and Dispatch treat the subsystem as NoOp until the
-// operator runs Disable + Enable to recover it. Calling on an unknown name
-// is a no-op (returns nil) so concurrent Unregister/Failed sequences stay
-// idempotent at the caller.
+// state and records the supplied reason on SubsystemHealth.PanicReason +
+// LastPanic timestamp + ErrorsTotal counter. Once failed, ResolveImpls and
+// Dispatch treat the subsystem as NoOp until the operator runs
+// Disable + Enable to recover it. Calling on an unknown name is a no-op
+// (returns nil) so concurrent Unregister/Failed sequences stay idempotent
+// at the caller.
 func (r *registry) TransitionToFailed(name string, reason string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -273,6 +295,7 @@ func (r *registry) TransitionToFailed(name string, reason string) error {
 	}
 	e.health.State = "failed"
 	e.health.PanicReason = reason
+	e.health.LastPanic = time.Now().UTC()
 	e.health.ErrorsTotal++
 	return nil
 }
@@ -328,7 +351,12 @@ func stateTransition(current, target string) error {
 		}
 	case "disabled":
 		switch current {
-		case "enabled", "disabled", "registered":
+		case "enabled", "disabled", "registered", "failed":
+			// "failed" → "disabled" is the operator-driven recovery path
+			// per ADR-009: a failed subsystem returns to "disabled" via
+			// Disable, then to "enabled" via Enable. Without this
+			// transition operators have no way to recover from panics
+			// short of restarting the process.
 			return nil
 		default:
 			return fmt.Errorf("cannot transition from %q to %q", current, target)

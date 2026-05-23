@@ -2,7 +2,11 @@ package core
 
 import (
 	"context"
+	"io"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/thebtf/engram/pkg/cognitive"
 )
@@ -64,6 +68,20 @@ func (d *directiveDistillerStub) Stop() error                                   
 func (d *directiveDistillerStub) Implements() []string                               { return d.implements }
 func (d *directiveDistillerStub) Distill(ctx context.Context, raw cognitive.RawSignal) (cognitive.Distilled, error) {
 	return d.distill(ctx, raw)
+}
+
+// silenceZerolog redirects the global zerolog logger to io.Discard for the
+// duration of the test. The chaos test intentionally panics 5 subsystems and
+// every recovered panic emits an ERROR-level log; piping that to CI output
+// makes the run look like it failed even when everything passed. Tests that
+// genuinely need log inspection can capture via zerolog.New(&buf) on their
+// own logger; suppression here is global because the dispatcher writes to
+// the package-level log.Logger sink.
+func silenceZerolog(t *testing.T) {
+	t.Helper()
+	original := log.Logger
+	log.Logger = zerolog.New(io.Discard)
+	t.Cleanup(func() { log.Logger = original })
 }
 
 // TestSubsystemPanicIsolation_FiveDispatchInvocable is the US4 acceptance gate.
@@ -242,6 +260,7 @@ func TestSubsystemPanicIsolation_FiveDispatchInvocable(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			silenceZerolog(t)
 			reg := newRegistry()
 			meter := NewLocalMeter()
 			dispatchFn, panicName := tc.install(t, reg)

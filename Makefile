@@ -87,18 +87,18 @@ build-all: build-linux build-darwin build-windows
 build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(BUILD_DIR)/linux-amd64
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/engram-server ./cmd/engram-server
+	GOOS=linux GOARCH=amd64 go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/linux-amd64/engram-server ./cmd/engram-server
 
 build-darwin:
 	@echo "Building for macOS..."
 	@mkdir -p $(BUILD_DIR)/darwin-amd64 $(BUILD_DIR)/darwin-arm64
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/engram-server ./cmd/engram-server
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/engram-server ./cmd/engram-server
+	GOOS=darwin GOARCH=amd64 go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/darwin-amd64/engram-server ./cmd/engram-server
+	GOOS=darwin GOARCH=arm64 go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/darwin-arm64/engram-server ./cmd/engram-server
 
 build-windows:
 	@echo "Building for Windows..."
 	@mkdir -p $(BUILD_DIR)/windows-amd64
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/engram-server.exe ./cmd/engram-server
+	GOOS=windows GOARCH=amd64 go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/windows-amd64/engram-server.exe ./cmd/engram-server
 
 # Stop any running worker
 stop-worker:

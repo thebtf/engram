@@ -142,6 +142,7 @@ func TestDispatch_SinglePrimary_LastWins(t *testing.T) {
 // --- TestDispatch_PanicIsolation_OthersUnaffected ---------------------------
 
 func TestDispatch_PanicIsolation_OthersUnaffected(t *testing.T) {
+	silenceZerolog(t)
 	reg := newRegistry()
 	meter := NewLocalMeter()
 
@@ -270,6 +271,7 @@ func TestDispatch_HandlerError_Propagated(t *testing.T) {
 // whose message contains the recovered reason, which proves the recover
 // boundary ran and serialized the reason exactly once.
 func TestDispatch_RecoverStackTrace_Logged(t *testing.T) {
+	silenceZerolog(t)
 	reg := newRegistry()
 	meter := NewLocalMeter()
 

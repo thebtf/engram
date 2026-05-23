@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/thebtf/engram/pkg/cognitive"
@@ -56,16 +55,22 @@ func TestNormalizedByteIdentity_v6_3_0_Baseline(t *testing.T) {
 				t.Fatalf("fixture %s does not start with '{'; got %q", path, raw[:min(40, len(raw))])
 			}
 
-			// (b) no volatile keys at any depth — string scan is sufficient
-			//     because VolatileFields are JSON object key tokens like
-			//     `"generated_at":` which cannot legitimately appear as
-			//     value substrings in a normalized payload.
-			body := string(trimmed)
+			// (b) no volatile keys at any depth. A naive string-scan would
+			// false-positive against values that happen to embed the key
+			// name (e.g. a payload field whose string value is literally
+			// "generated_at"). The robust check walks the parsed JSON tree
+			// and inspects only object keys, exactly matching how
+			// NormalizeForDiff itself decides what to strip.
+			var parsed any
+			if err := json.Unmarshal(trimmed, &parsed); err != nil {
+				t.Fatalf("fixture %s: json.Unmarshal: %v", path, err)
+			}
+			volatileSet := make(map[string]struct{}, len(cognitive.VolatileFields))
 			for _, vf := range cognitive.VolatileFields {
-				token := "\"" + vf + "\""
-				if strings.Contains(body, token) {
-					t.Errorf("fixture %s contains volatile key %q — capture pipeline must strip it", path, token)
-				}
+				volatileSet[vf] = struct{}{}
+			}
+			if hit := findVolatileKey(parsed, volatileSet); hit != "" {
+				t.Errorf("fixture %s contains volatile key %q at some depth — capture pipeline must strip it", path, hit)
 			}
 
 			// (c) idempotence: NormalizeForDiff(fixture) == fixture (modulo
@@ -99,8 +104,90 @@ func TestNormalizedByteIdentity_v6_3_0_Baseline(t *testing.T) {
 			if len(raw) > maxBytes {
 				t.Errorf("fixture %s exceeds 50 KB budget: got %d bytes", path, len(raw))
 			}
+
+			// (e) trailing newline — POSIX text-file convention required by
+			// the testdata README and enforced here so accidental no-LF
+			// commits fail the gate.
+			if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+				t.Errorf("fixture %s missing trailing newline (POSIX text-file convention)", path)
+			}
+
+			// (f) memories array sorted ascending by memory_id at every
+			// depth. NormalizeForDiff sorts these arrays during
+			// normalization, so a normalized fixture must already be sorted.
+			if violations := findMemorySortViolations(parsed); len(violations) > 0 {
+				t.Errorf("fixture %s has memories array(s) not sorted by memory_id: %v", path, violations)
+			}
 		})
 	}
+}
+
+// findMemorySortViolations walks the parsed JSON tree and returns any path
+// where a slice of objects containing "memory_id" string values is not in
+// ascending order. The expected order matches what NormalizeForDiff produces.
+func findMemorySortViolations(node any) []string {
+	var violations []string
+	var walk func(n any, breadcrumb string)
+	walk = func(n any, breadcrumb string) {
+		switch v := n.(type) {
+		case map[string]any:
+			for k, child := range v {
+				walk(child, breadcrumb+"."+k)
+			}
+		case []any:
+			ids := make([]string, 0, len(v))
+			allHaveID := true
+			for _, elem := range v {
+				m, ok := elem.(map[string]any)
+				if !ok {
+					allHaveID = false
+					break
+				}
+				id, ok := m["memory_id"].(string)
+				if !ok {
+					allHaveID = false
+					break
+				}
+				ids = append(ids, id)
+			}
+			if allHaveID {
+				for i := 1; i < len(ids); i++ {
+					if ids[i] < ids[i-1] {
+						violations = append(violations, breadcrumb+" not sorted: "+ids[i-1]+" > "+ids[i])
+						break
+					}
+				}
+			}
+			for i, elem := range v {
+				walk(elem, breadcrumb+"["+itoa(i)+"]")
+			}
+		}
+	}
+	walk(node, "")
+	return violations
+}
+
+// itoa is a local helper to avoid importing strconv just for trace strings.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [12]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }
 
 // TestNormalizedByteIdentity_NFR1_MasterOnAllOff verifies the NFR-1 sister
@@ -158,4 +245,29 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// findVolatileKey walks node depth-first and returns the first volatile key
+// found in any nested object, or "" if none. Only OBJECT KEYS are inspected;
+// string VALUES that happen to match are ignored (the AST shape matches what
+// NormalizeForDiff actually strips).
+func findVolatileKey(node any, volatile map[string]struct{}) string {
+	switch v := node.(type) {
+	case map[string]any:
+		for k, child := range v {
+			if _, hit := volatile[k]; hit {
+				return k
+			}
+			if found := findVolatileKey(child, volatile); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, elem := range v {
+			if found := findVolatileKey(elem, volatile); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }

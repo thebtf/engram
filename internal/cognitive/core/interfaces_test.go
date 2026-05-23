@@ -117,8 +117,10 @@ func joinLines(ss []string) string {
 }
 
 // TestSubsystemRegistry_SignatureShape pins the SubsystemRegistry method set
-// to the 6 methods enumerated in ADR-010. Any addition or removal at the
-// type level fails here, forcing an explicit ADR amendment.
+// to the 8 methods canonical for v7: the 6 from ADR-010 (Register, Enable,
+// Disable, Get, List, Health) plus ResolvePolicy (spec FR-7 / Clarify C2)
+// and TransitionToFailed (T015 dispatcher hook). Any addition or removal at
+// the type level fails here, forcing an explicit ADR amendment.
 func TestSubsystemRegistry_SignatureShape(t *testing.T) {
 	assertInterfaceMethods(t, "SubsystemRegistry",
 		reflect.TypeOf((*SubsystemRegistry)(nil)).Elem(),
