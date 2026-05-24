@@ -3666,6 +3666,56 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`DROP TABLE IF EXISTS session_segments`).Error
 			},
 		},
+		// 125_privacy_scope_addition — engram vNext Milestone F TG1/CR-F1/T001.
+		// Adds the 4-tier privacy_scope column and source_sessions[] array column
+		// to the memories table.
+		//
+		// privacy_scope replaces the legacy 2-tier scope:* tag convention (which
+		// remains parseable on read but is not written by the new path — see
+		// spec.md §FR-F1 REVISE block). Backfill from tags happens in T006 via
+		// JSONB containment.
+		//
+		// source_sessions tracks every session that confirmed the memory; used by
+		// the private-scope filter to bound visibility to writing workstation/
+		// session per spec §FR-F1 CHK005-ADDED.
+		//
+		// Schema delta is additive: column DEFAULT applies to existing rows
+		// without a row rewrite on PG 11+ (catalog-only DDL). NFR-F2-bis target:
+		// ≤ 50ms p95 AccessExclusiveLock on a 30M-row fixture under PG 17. If
+		// exceeded in pre-flight, split into 3 atomic ops per T001 IF-WRONG.
+		{
+			ID: "125_privacy_scope_addition",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE memories
+						ADD COLUMN IF NOT EXISTS privacy_scope TEXT NOT NULL DEFAULT 'project'`,
+					`ALTER TABLE memories
+						ADD COLUMN IF NOT EXISTS source_sessions TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]`,
+					`ALTER TABLE memories
+						ADD CONSTRAINT memories_privacy_scope_chk
+						CHECK (privacy_scope IN ('private', 'project', 'shared', 'global'))`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE memories DROP CONSTRAINT IF EXISTS memories_privacy_scope_chk`,
+					`ALTER TABLE memories DROP COLUMN IF EXISTS source_sessions`,
+					`ALTER TABLE memories DROP COLUMN IF EXISTS privacy_scope`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

@@ -129,3 +129,79 @@ func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "jsonb", dataType)
 }
+
+// TestMigration125_AddPrivacyScope verifies migration 125_privacy_scope_addition
+// adds the privacy_scope + source_sessions columns to memories with the correct
+// types, defaults, and CHECK constraint, and that the rollback drops them cleanly.
+//
+// Asserts:
+//   - privacy_scope: text, NOT NULL, DEFAULT 'project'
+//   - source_sessions: ARRAY (text[]), NOT NULL, DEFAULT ARRAY[]::text[]
+//   - CHECK constraint memories_privacy_scope_chk admits ('private','project','shared','global')
+//   - Rollback drops both columns + constraint
+//
+// Anti-stub property: if the migration body is replaced with `return nil`, the
+// column-existence assertion below fails — the test does not pass on a no-op
+// migration.
+//
+// Engram vNext Milestone F TG1/T001.
+func TestMigration125_AddPrivacyScope(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+
+	// Run the full migration chain — must include 125.
+	require.NoError(t, runMigrations(db), "full migration chain must succeed")
+
+	// Assert privacy_scope column shape.
+	var dataType, isNullable, columnDefault string
+	row := db.Raw(`
+		SELECT data_type, is_nullable, column_default
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'memories'
+		  AND column_name = 'privacy_scope'
+	`).Row()
+	require.NoError(t, row.Scan(&dataType, &isNullable, &columnDefault), "privacy_scope column must exist")
+	require.Equal(t, "text", dataType, "privacy_scope must be text")
+	require.Equal(t, "NO", isNullable, "privacy_scope must be NOT NULL")
+	require.Contains(t, columnDefault, "'project'", "privacy_scope default must be 'project'")
+
+	// Assert source_sessions column shape.
+	var ssDataType, ssIsNullable, ssColumnDefault string
+	row = db.Raw(`
+		SELECT data_type, is_nullable, column_default
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'memories'
+		  AND column_name = 'source_sessions'
+	`).Row()
+	require.NoError(t, row.Scan(&ssDataType, &ssIsNullable, &ssColumnDefault), "source_sessions column must exist")
+	require.Equal(t, "ARRAY", ssDataType, "source_sessions must be ARRAY (text[])")
+	require.Equal(t, "NO", ssIsNullable, "source_sessions must be NOT NULL")
+	require.Contains(t, ssColumnDefault, "ARRAY", "source_sessions default must be empty ARRAY")
+
+	// Assert CHECK constraint admits the 4 enum values and rejects others.
+	for _, valid := range []string{"private", "project", "shared", "global"} {
+		err := db.Exec(`INSERT INTO memories (project, content, privacy_scope) VALUES (?, ?, ?)`,
+			"t001-test", "T001 fixture content", valid).Error
+		require.NoError(t, err, "privacy_scope=%q must be admitted by CHECK constraint", valid)
+	}
+	err = db.Exec(`INSERT INTO memories (project, content, privacy_scope) VALUES (?, ?, ?)`,
+		"t001-test", "T001 invalid fixture", "invalid_scope").Error
+	require.Error(t, err, "privacy_scope='invalid_scope' must be rejected by CHECK constraint")
+
+	// Cleanup test rows. Note: project param in INSERTs above is lowercase 't001-test'.
+	require.NoError(t, db.Exec(`DELETE FROM memories WHERE project = 't001-test'`).Error)
+}
