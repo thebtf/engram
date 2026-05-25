@@ -51,6 +51,18 @@ func TestMemory_PrivacyScope_T002(t *testing.T) {
 		t.Errorf("Memory.SourceSessions json tag: want %q, got %q", want, got)
 	}
 
+	// SourceWorkstationID field (T003b — AMEND 2026-05-25 to close FR-F1 gap).
+	sourceWs, ok := memT.FieldByName("SourceWorkstationID")
+	if !ok {
+		t.Fatal("Memory.SourceWorkstationID field missing — T003b not implemented")
+	}
+	if sourceWs.Type.Kind() != reflect.String {
+		t.Errorf("Memory.SourceWorkstationID: want kind=string, got %s", sourceWs.Type.Kind())
+	}
+	if got, want := sourceWs.Tag.Get("json"), "source_workstation_id,omitempty"; got != want {
+		t.Errorf("Memory.SourceWorkstationID json tag: want %q, got %q", want, got)
+	}
+
 	// Pre-existing field tags survive (regression guard for accidental rename).
 	for _, prev := range []struct{ field, tag string }{
 		{"Project", "project"},

@@ -30,23 +30,25 @@ const (
 
 // KeycardContext identifies the caller's keycard identity for visibility checks.
 //
-// WorkstationID is reserved for the spec FR-F1 keycard identity invariant. The
-// existing `internal/auth/identity.go Identity` struct does not yet expose a
-// stable WorkstationID — and the memories table does not yet store
-// source_workstation_id. See .agent/specs/engram-vnext-milestone-f/
-// implementation-notes.html Needs Amend entry. Until the spec amendment lands,
-// workstation-only matching is NOT supported; Resolve requires SessionID
-// non-empty for private-scope visibility.
+// WorkstationID is populated by handler-level wiring from
+// `auth.Identity.WorkstationID()` (added in T003b per spec FR-F1 AMEND
+// 2026-05-25). For `auth.SourceClient` bearers this is the api_tokens.id
+// (one keycard per workstation); empty for `SourceMaster` + `SourceSession`.
+//
+// SessionID is the per-session identifier when available (handler-derived).
 type KeycardContext struct {
-	WorkstationID string // reserved — Needs Amend; not consulted in TG1
+	WorkstationID string
 	SessionID     string
 }
 
-// SourceMeta identifies the memory's source for visibility checks. Sessions
-// mirrors Memory.SourceSessions per spec FR-F1 schema delta (T002 / migration
-// 125).
+// SourceMeta identifies the memory's source for visibility checks.
+//
+// WorkstationID mirrors `Memory.SourceWorkstationID` (added by migration 130
+// in T001b). Sessions mirrors `Memory.SourceSessions` (added by migration
+// 125 in T001 / T002).
 type SourceMeta struct {
-	Sessions []string
+	WorkstationID string
+	Sessions      []string
 }
 
 // Resolve returns true iff the caller may see a memory with the given
@@ -59,22 +61,42 @@ type SourceMeta struct {
 //	ScopeGlobal  → always true (server-wide visibility)
 //	ScopeShared  → always true (cross-project; same surface as global in TG1)
 //	ScopeProject → always true (project filter is upstream)
-//	ScopePrivate → true iff caller.SessionID non-empty AND in memorySource.Sessions
+//	ScopePrivate → per the keycard identity invariant (FR-F1 AMEND 2026-05-25):
+//	   1. caller.WorkstationID empty               → false (caller unknown)
+//	   2. memorySource.WorkstationID empty         → false (memory unknown)
+//	   3. WorkstationID mismatch                   → false (different workstations)
+//	   4. caller.SessionID non-empty (session-required branch):
+//	        require caller.SessionID in memorySource.Sessions
+//	   5. caller.SessionID empty (workstation-only-suffices branch):
+//	        workstation match alone is enough
 //	unknown      → false (fail-closed against unrecognised scope strings)
 //
-// Anti-stub: a `return true` body would pass the project/shared/global cases
-// (12 of 16 in the TestResolve table) but would fail the 4 private cases that
-// expect FALSE (caller-session-mismatch, caller-without-session, empty
-// memory-sessions, scope-but-no-session-data). Exactly 4 false-positives —
-// matches the AC anti-stub bound.
+// The workstation-only-suffices branch is the spec text "When the writing
+// keycard exposes only `workstation_id` (no session), workstation match alone
+// suffices". T003 shipped a narrow interpretation that disabled this branch;
+// T003b restores it per spec FR-F1 AMEND 2026-05-25.
+//
+// Anti-stub: a `return true` body fails private-scope cases that expect FALSE
+// (workstation mismatch, empty workstation, session mismatch when session
+// required).
 func Resolve(caller KeycardContext, memoryScope string, memorySource SourceMeta) bool {
 	switch memoryScope {
 	case ScopeGlobal, ScopeShared, ScopeProject:
 		return true
 	case ScopePrivate:
-		if caller.SessionID == "" {
+		if caller.WorkstationID == "" || memorySource.WorkstationID == "" {
 			return false
 		}
+		if caller.WorkstationID != memorySource.WorkstationID {
+			return false
+		}
+		if caller.SessionID == "" {
+			// Workstation-only-suffices branch: workstation match without
+			// caller session_id is enough per spec FR-F1 AMEND 2026-05-25.
+			return true
+		}
+		// Session-required branch: session_id MUST appear in the memory's
+		// recorded sessions.
 		for _, s := range memorySource.Sessions {
 			if s == caller.SessionID {
 				return true

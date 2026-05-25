@@ -40,20 +40,27 @@ type Memory struct {
 	// Added by migration 125 (TG1 / T001+T002) as TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[].
 	// Consumed by internal/scope/filter.Resolve for private-scope visibility checks
 	// per spec §FR-F1 CHK005-ADDED keycard identity invariant.
-	SourceSessions           []string `json:"source_sessions,omitempty"`
-	ID                       int64    `json:"id"`
-	SupersedesID             *int64   `json:"supersedes_id,omitempty"`
-	SupersededBy             *int64   `json:"superseded_by,omitempty"`
-	ImportanceBase           float64  `json:"importance_base,omitempty"`
-	TsAlpha                  float64  `json:"ts_alpha,omitempty"`
-	TsBeta                   float64  `json:"ts_beta,omitempty"`
-	Confidence               float64  `json:"confidence,omitempty"`
-	Stability                float64  `json:"stability,omitempty"`
-	Retrievability           float64  `json:"retrievability,omitempty"`
-	Version                  int      `json:"version"`
-	CitationCount            int      `json:"citation_count,omitempty"`
-	InjectionCount           int      `json:"injection_count,omitempty"`
-	AccessCount              int      `json:"access_count,omitempty"`
-	RecurrenceCount          int      `json:"recurrence_count,omitempty"`
-	ConsecutiveCitationCount int      `json:"consecutive_citation_count,omitempty"`
+	SourceSessions []string `json:"source_sessions,omitempty"`
+	// SourceWorkstationID is the writing keycard's workstation identifier
+	// (api_tokens.id for SourceClient writers). Added by migration 130 (TG1 /
+	// T001b + T003b, AMEND 2026-05-25). Empty string is the "unknown
+	// workstation" sentinel — pre-existing rows + flag-OFF writes carry empty.
+	// Consumed by scope.Resolve ScopePrivate for the keycard identity
+	// invariant per spec §FR-F1 AMEND 2026-05-25 decision tree.
+	SourceWorkstationID      string  `json:"source_workstation_id,omitempty"`
+	ID                       int64   `json:"id"`
+	SupersedesID             *int64  `json:"supersedes_id,omitempty"`
+	SupersededBy             *int64  `json:"superseded_by,omitempty"`
+	ImportanceBase           float64 `json:"importance_base,omitempty"`
+	TsAlpha                  float64 `json:"ts_alpha,omitempty"`
+	TsBeta                   float64 `json:"ts_beta,omitempty"`
+	Confidence               float64 `json:"confidence,omitempty"`
+	Stability                float64 `json:"stability,omitempty"`
+	Retrievability           float64 `json:"retrievability,omitempty"`
+	Version                  int     `json:"version"`
+	CitationCount            int     `json:"citation_count,omitempty"`
+	InjectionCount           int     `json:"injection_count,omitempty"`
+	AccessCount              int     `json:"access_count,omitempty"`
+	RecurrenceCount          int     `json:"recurrence_count,omitempty"`
+	ConsecutiveCitationCount int     `json:"consecutive_citation_count,omitempty"`
 }
