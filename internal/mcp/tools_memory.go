@@ -56,6 +56,34 @@ func derivePrivacyScopeFromLegacy(legacy string) string {
 	}
 }
 
+// deriveLegacyScopeFromPrivacy is the inverse of derivePrivacyScopeFromLegacy:
+// when a caller supplies only the new 4-tier `privacy_scope` field, the legacy
+// 2-tier `scope` value used for downstream tagging + responses must be
+// back-derived so legacy consumers parsing `scope:project` / `scope:global`
+// (or the legacy `scope` JSON field) see a value consistent with the 4-tier
+// intent. Mapping per ADR-F-005 / RI-F2:
+//
+//	private -> project (legacy 2-tier has no `private`; collapse to the
+//	                    more conservative `project`)
+//	project -> project
+//	shared  -> global  (legacy 2-tier collapses `shared` into `global`)
+//	global  -> global
+//
+// Codex P2 cycle-7 fix on 209a06e: without this mapping, callers using only
+// the new field would see legacy `scope:project` tags / responses even when
+// they wrote `privacy_scope="shared"`, under-sharing data for legacy 2-tier
+// consumers.
+func deriveLegacyScopeFromPrivacy(privacy string) string {
+	switch privacy {
+	case "private", "project":
+		return "project"
+	case "shared", "global":
+		return "global"
+	default:
+		return ""
+	}
+}
+
 func isValidStoreObservationType(obsType models.ObservationType) bool {
 	switch obsType {
 	case models.ObsTypeDecision,
@@ -191,6 +219,19 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			// 'invalid_privacy_scope:' prefix as an error_code; the trailing
 			// message names the offending value + accepted enum.
 			return "", fmt.Errorf("invalid_privacy_scope: %q must be one of private, project, shared, global", resolvedPrivacyScope)
+		}
+		// Codex P2 cycle-7 fix on 209a06e: when the caller used only the new
+		// 4-tier `privacy_scope` field (legacy `scope` not provided), back-
+		// derive the legacy 2-tier `scope` from the resolved privacy tier so
+		// downstream tag synthesis (`scope:project` / `scope:global`) and
+		// response `scope` field stay consistent with the 4-tier intent.
+		// Without this, `privacy_scope="shared"` would still tag/report as
+		// `scope:project` because of the early default at line 167-170,
+		// under-sharing data for legacy 2-tier consumers (RI-F2 bridge).
+		if params.Scope == "" {
+			if derived := deriveLegacyScopeFromPrivacy(resolvedPrivacyScope); derived != "" {
+				resolvedScope = derived
+			}
 		}
 	}
 
