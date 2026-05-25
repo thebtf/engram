@@ -2,6 +2,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	gormlib "gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -171,7 +173,18 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
-	mems, err := s.memoryStore.List(r.Context(), project, limit)
+	// Codex P1 cycle-11 fix on 034f14f: REST GET /api/memories must enforce
+	// the same vNext-F visibility model as MCP recall surfaces, otherwise a
+	// private memory written via POST /api/memories (allowed since T004 +
+	// cycle-5 c6006f7) can be retrieved here by any caller knowing the
+	// project — bypassing scope.Resolve. This is the 4th cross-surface
+	// symmetry break the review cycles have closed (after MCP store, REST
+	// store, MCP recall, MCP recall_memory). Under flag ON: build caller
+	// KeycardContext from auth.Identity, use ListWithOffset batch-loop so
+	// scope-invisible newest rows do not truncate the visible result set
+	// before the requested limit is reached. Flag-OFF path preserves the
+	// original single-call List shape for v6.4.x byte-identity (RI-F1).
+	mems, err := listVisibleMemoriesREST(r.Context(), s.memoryStore, project, limit)
 	if err != nil {
 		log.Error().Err(err).Str("project", project).Msg("list memories failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -184,6 +197,71 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, mems)
+}
+
+// listVisibleMemoriesREST returns up to `limit` memories from the given
+// project that are visible to the caller. Behavior is gated by
+// ENGRAM_VNEXT_F_ENABLED:
+//
+//	flag OFF — single-call s.memoryStore.List(project, limit), preserving
+//	           v6.4.x byte-identity per RI-F1.
+//	flag ON  — ListWithOffset batch-loop (batchSize=500) accumulating up to
+//	           `limit` visible rows; scope-invisible rows are skipped without
+//	           truncating the visible result set. Mirrors the cycle-3
+//	           handleRecallSearch fix and the cycle-6 handleRecallMemory
+//	           fix so all three surfaces share identical visibility
+//	           semantics.
+func listVisibleMemoriesREST(ctx context.Context, store memoryListStore, project string, limit int) ([]*models.Memory, error) {
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
+		return store.List(ctx, project, limit)
+	}
+	var caller scope.KeycardContext
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+	}
+	visible := make([]*models.Memory, 0, limit)
+	const batchSize = 500
+	offset := 0
+	for len(visible) < limit {
+		batch, err := store.ListWithOffset(ctx, project, batchSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, mem := range batch {
+			memScope := mem.PrivacyScope
+			if memScope == "" {
+				memScope = "project"
+			}
+			meta := scope.SourceMeta{
+				WorkstationID: mem.SourceWorkstationID,
+				Sessions:      mem.SourceSessions,
+			}
+			if !scope.Resolve(caller, memScope, meta) {
+				continue
+			}
+			visible = append(visible, mem)
+			if len(visible) >= limit {
+				break
+			}
+		}
+		offset += len(batch)
+		if len(batch) < batchSize {
+			break
+		}
+	}
+	return visible, nil
+}
+
+// memoryListStore is the subset of the MemoryStore surface that
+// listVisibleMemoriesREST needs. Defined as a small interface so the
+// function can be unit-tested with a fake without pulling in the full
+// store dependency.
+type memoryListStore interface {
+	List(ctx context.Context, project string, limit int) ([]*models.Memory, error)
+	ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error)
 }
 
 // handleDeleteMemoryByID godoc
