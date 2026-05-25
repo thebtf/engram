@@ -3699,6 +3699,19 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					`ALTER TABLE memories
 						ADD CONSTRAINT memories_privacy_scope_chk
 						CHECK (privacy_scope IN ('private', 'project', 'shared', 'global'))`,
+					// T006 — tag-derived backfill. Existing rows received
+					// privacy_scope='project' via the ADD COLUMN DEFAULT above;
+					// promote those that carry the legacy `scope:global` tag to
+					// the matching 4-tier value. Rows with `scope:project` or
+					// without any scope tag keep the default. The UPDATE is
+					// idempotent: running again is a no-op because the WHERE
+					// matches the same set and the SET value equals the
+					// already-stored value. Documented in
+					// docs/migrations/125-privacy-scope.md.
+					`UPDATE memories
+						SET privacy_scope = 'global'
+						WHERE privacy_scope <> 'global'
+						  AND tags ? 'scope:global'`,
 				}
 				for _, stmt := range stmts {
 					if err := tx.Exec(stmt).Error; err != nil {
