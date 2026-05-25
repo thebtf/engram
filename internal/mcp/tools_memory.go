@@ -18,6 +18,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -582,19 +583,36 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("project is required for recall_memory in v5")
 	}
 
-	fetchLimit := limit
-	if query != "" || obsType != "" || len(tags) > 0 {
-		const candidateMultiplier = 10
-		const minCandidatePool = 1000
-		fetchLimit = limit * candidateMultiplier
-		if fetchLimit < minCandidatePool {
-			fetchLimit = minCandidatePool
+	// T004 + T005 + codex P1 cycle-6 fix on c6006f7: the recall_memory MCP
+	// tool advertises session_id + include_scopes in its schema (see
+	// server.go) and dispatches here. Without scope.Resolve enforcement, a
+	// caller knowing the project + query under ENGRAM_VNEXT_F_ENABLED=true
+	// could retrieve `privacy_scope="private"` rows owned by another
+	// workstation — bypassing the same visibility model handleRecallSearch
+	// enforces on the sibling `recall` tool. Mirror the gating + caller
+	// identity build, validate include_scopes behind the flag (T005
+	// contract: runtime behavior env-gated), and use the batch-loop
+	// ListWithOffset pattern when scope is active so invisible newest rows
+	// do not truncate visible recall.
+	callerSessionID := strings.TrimSpace(coerceString(m["session_id"], ""))
+	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
+	includeScopes := make(map[string]bool)
+	if scopeEnabled {
+		for _, sc := range coerceStringSlice(m["include_scopes"]) {
+			switch sc {
+			case "private", "project", "shared", "global":
+				includeScopes[sc] = true
+			default:
+				return "", fmt.Errorf("invalid_include_scopes: %q must be one of private, project, shared, global", sc)
+			}
 		}
 	}
-
-	memories, err := s.memoryStore.List(ctx, project, fetchLimit)
-	if err != nil {
-		return "", fmt.Errorf("recall_memory: %w", err)
+	var caller scope.KeycardContext
+	if scopeEnabled {
+		caller.SessionID = callerSessionID
+		if id, ok := auth.IdentityFrom(ctx); ok {
+			caller.WorkstationID = id.WorkstationID()
+		}
 	}
 
 	queryLower := strings.ToLower(query)
@@ -603,8 +621,10 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		tagSet[strings.ToLower(tag)] = struct{}{}
 	}
 
-	filtered := make([]*models.Memory, 0, min(limit, len(memories)))
-	for _, mem := range memories {
+	// keepMemory applies the existing query/type/tags filters AND the new
+	// vNext-F scope filter to a single memory. Returns true when it should
+	// be included in the response.
+	keepMemory := func(mem *models.Memory) bool {
 		contentLower := strings.ToLower(mem.Content)
 		if queryLower != "" && !strings.Contains(contentLower, queryLower) {
 			matchedTag := false
@@ -615,10 +635,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				}
 			}
 			if !matchedTag {
-				continue
+				return false
 			}
 		}
-
 		if obsType != "" {
 			typeTag := strings.ToLower("type:" + obsType)
 			typeMatched := false
@@ -629,10 +648,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				}
 			}
 			if !typeMatched {
-				continue
+				return false
 			}
 		}
-
 		if len(tagSet) > 0 {
 			tagMatched := false
 			for _, tag := range mem.Tags {
@@ -642,13 +660,79 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				}
 			}
 			if !tagMatched {
-				continue
+				return false
 			}
 		}
+		if scopeEnabled {
+			memScope := mem.PrivacyScope
+			if memScope == "" {
+				memScope = "project"
+			}
+			if len(includeScopes) > 0 && !includeScopes[memScope] {
+				return false
+			}
+			meta := scope.SourceMeta{
+				WorkstationID: mem.SourceWorkstationID,
+				Sessions:      mem.SourceSessions,
+			}
+			if !scope.Resolve(caller, memScope, meta) {
+				return false
+			}
+		}
+		return true
+	}
 
-		filtered = append(filtered, mem)
-		if len(filtered) == limit {
-			break
+	filtered := make([]*models.Memory, 0, limit)
+	if scopeEnabled {
+		// Batch-loop via ListWithOffset (codex P1 cycle-3 + cycle-4 pattern)
+		// so scope-invisible newest rows do not truncate visible recall
+		// before older eligible rows reach the requested limit.
+		const batchSize = 500
+		offset := 0
+		for len(filtered) < limit {
+			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+			if err != nil {
+				return "", fmt.Errorf("recall_memory: %w", err)
+			}
+			if len(batch) == 0 {
+				break
+			}
+			for _, mem := range batch {
+				if keepMemory(mem) {
+					filtered = append(filtered, mem)
+					if len(filtered) >= limit {
+						break
+					}
+				}
+			}
+			offset += len(batch)
+			if len(batch) < batchSize {
+				break
+			}
+		}
+	} else {
+		// Flag-OFF — original single-fetch shape preserves v6.4.x
+		// byte-identity for legacy callers using the recall_memory tool.
+		fetchLimit := limit
+		if query != "" || obsType != "" || len(tags) > 0 {
+			const candidateMultiplier = 10
+			const minCandidatePool = 1000
+			fetchLimit = limit * candidateMultiplier
+			if fetchLimit < minCandidatePool {
+				fetchLimit = minCandidatePool
+			}
+		}
+		memories, err := s.memoryStore.List(ctx, project, fetchLimit)
+		if err != nil {
+			return "", fmt.Errorf("recall_memory: %w", err)
+		}
+		for _, mem := range memories {
+			if keepMemory(mem) {
+				filtered = append(filtered, mem)
+				if len(filtered) >= limit {
+					break
+				}
+			}
 		}
 	}
 
