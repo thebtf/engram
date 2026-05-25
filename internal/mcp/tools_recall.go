@@ -107,6 +107,21 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	// rows from the caller's workstation per spec FR-F1 AMEND 2026-05-25.
 	callerSessionID := coerceString(m["session_id"], "")
 
+	// T005 — optional include_scopes filter (subset of 4-tier enum). Empty
+	// or omitted means all tiers admitted (subject to scope.Resolve). Each
+	// value is validated against the migration 125 CHECK enum; invalid
+	// values return the structured 'invalid_include_scopes:' error.
+	includeScopesRaw := coerceStringSlice(m["include_scopes"])
+	includeScopes := make(map[string]bool, len(includeScopesRaw))
+	for _, s := range includeScopesRaw {
+		switch s {
+		case "private", "project", "shared", "global":
+			includeScopes[s] = true
+		default:
+			return "", fmt.Errorf("invalid_include_scopes: %q must be one of private, project, shared, global", s)
+		}
+	}
+
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("recall: memory store not configured")
 	}
@@ -189,10 +204,15 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 			// flag-OFF code; treat empty as the DB default 'project'
 			// (migration 125 column DEFAULT). scope.Resolve handles that
 			// case via the Project/Shared/Global branch — never private —
-			// so empty privacy_scope always passes the filter.
+			// so empty privacy_scope always passes the visibility filter.
 			memScope := mem.PrivacyScope
 			if memScope == "" {
 				memScope = "project"
+			}
+			// T005 — apply include_scopes filter BEFORE visibility check.
+			// Empty includeScopes (omitted/empty array) admits all tiers.
+			if len(includeScopes) > 0 && !includeScopes[memScope] {
+				continue
 			}
 			if !scope.Resolve(caller, memScope, meta) {
 				continue

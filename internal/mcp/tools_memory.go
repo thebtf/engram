@@ -186,7 +186,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			resolvedPrivacyScope = "project"
 		}
 		if !isValidPrivacyScope(resolvedPrivacyScope) {
-			return "", fmt.Errorf("invalid privacy_scope %q: must be one of private, project, shared, global", resolvedPrivacyScope)
+			// Structured error per spec FR-F1 AMEND (T005): clients parse the
+			// 'invalid_privacy_scope:' prefix as an error_code; the trailing
+			// message names the offending value + accepted enum.
+			return "", fmt.Errorf("invalid_privacy_scope: %q must be one of private, project, shared, global", resolvedPrivacyScope)
 		}
 	}
 
