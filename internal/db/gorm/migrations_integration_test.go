@@ -258,6 +258,14 @@ func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
 		}
 	})
 
+	// Pre-clean any residual rows from a prior aborted run (CodeRabbit fix-forward
+	// on bfae983): t.Cleanup is post-fact and does not fire on panic/SIGKILL.
+	// Without this, a stale row from an aborted previous run would make the
+	// `require.Len(..., 3)` assertion below flaky on shared staging DBs.
+	require.NoError(t, db.Exec(
+		`DELETE FROM memories WHERE project = 't006-backfill-test'`,
+	).Error, "pre-test cleanup of residual fixtures")
+
 	// Seed three fixture rows. Because migration 125 has already run on a
 	// fresh DB, ADD COLUMN + DEFAULT 'project' applies on insert and the
 	// tag-derived UPDATE has executed before any T006 rows existed. To
