@@ -12,7 +12,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
+
+	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/scope"
 )
 
 // handleRecall is the consolidated recall tool handler. It parses the "action"
@@ -81,6 +85,14 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 // It filters the memories table by project (required when non-empty) and
 // optionally applies a case-insensitive substring match on content when a
 // query string is provided. Results are ordered by created_at DESC.
+//
+// T004 (engram vNext Milestone F TG1): when ENGRAM_VNEXT_F_ENABLED=true, the
+// fetched memory list is post-filtered by scope.Resolve against the caller's
+// keycard identity (auth.Identity.WorkstationID + optional session_id param).
+// Each surviving row carries `privacy_scope` + `source_workstation_id` in the
+// response per RI-F2 dual-field invariant. With the flag OFF, behavior is
+// byte-identical to v6.4.x — no filter applied, no new fields in the
+// response.
 func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (string, error) {
 	project := coerceString(m["project"], "")
 	query := coerceString(m["query"], "")
@@ -90,6 +102,10 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	} else if limit > 100 {
 		limit = 100
 	}
+	// T004 — caller's session_id (optional). Empty session_id means the
+	// resolver's workstation-only-suffices branch handles private-scope
+	// rows from the caller's workstation per spec FR-F1 AMEND 2026-05-25.
+	callerSessionID := coerceString(m["session_id"], "")
 
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("recall: memory store not configured")
@@ -137,24 +153,65 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		memories = filtered
 	}
 
+	// T004 — scope filter under vNext F flag. Build the caller KeycardContext
+	// once outside the loop; populate WorkstationID from auth.Identity (added
+	// in T003b). When the flag is OFF, scopeEnabled stays false and the loop
+	// below skips the Resolve call entirely — preserving byte-identical
+	// v6.4.x behavior.
+	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
+	var caller scope.KeycardContext
+	if scopeEnabled {
+		caller.SessionID = callerSessionID
+		if id, ok := auth.IdentityFrom(ctx); ok {
+			caller.WorkstationID = id.WorkstationID()
+		}
+	}
+
 	type memoryResult struct {
-		Tags        []string `json:"tags,omitempty"`
-		Content     string   `json:"content"`
-		SourceAgent string   `json:"source_agent,omitempty"`
-		Project     string   `json:"project"`
-		ID          int64    `json:"id"`
-		Version     int      `json:"version"`
+		Tags                []string `json:"tags,omitempty"`
+		Content             string   `json:"content"`
+		SourceAgent         string   `json:"source_agent,omitempty"`
+		PrivacyScope        string   `json:"privacy_scope,omitempty"`
+		SourceWorkstationID string   `json:"source_workstation_id,omitempty"`
+		SourceSessions      []string `json:"source_sessions,omitempty"`
+		Project             string   `json:"project"`
+		ID                  int64    `json:"id"`
+		Version             int      `json:"version"`
 	}
 	results := make([]memoryResult, 0, len(memories))
 	for _, mem := range memories {
-		results = append(results, memoryResult{
+		if scopeEnabled {
+			meta := scope.SourceMeta{
+				WorkstationID: mem.SourceWorkstationID,
+				Sessions:      mem.SourceSessions,
+			}
+			// Memory.PrivacyScope is empty on rows written before/under
+			// flag-OFF code; treat empty as the DB default 'project'
+			// (migration 125 column DEFAULT). scope.Resolve handles that
+			// case via the Project/Shared/Global branch — never private —
+			// so empty privacy_scope always passes the filter.
+			memScope := mem.PrivacyScope
+			if memScope == "" {
+				memScope = "project"
+			}
+			if !scope.Resolve(caller, memScope, meta) {
+				continue
+			}
+		}
+		mr := memoryResult{
 			ID:          mem.ID,
 			Project:     mem.Project,
 			Content:     mem.Content,
 			Tags:        mem.Tags,
 			SourceAgent: mem.SourceAgent,
 			Version:     mem.Version,
-		})
+		}
+		if scopeEnabled {
+			mr.PrivacyScope = mem.PrivacyScope
+			mr.SourceWorkstationID = mem.SourceWorkstationID
+			mr.SourceSessions = mem.SourceSessions
+		}
+		results = append(results, mr)
 	}
 
 	out := map[string]any{
@@ -171,7 +228,6 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	}
 	return string(output), nil
 }
-
 
 // handleReasoningSearch retrieves reasoning traces by project.
 func (s *Server) handleReasoningSearch(ctx context.Context, args json.RawMessage) (string, error) {

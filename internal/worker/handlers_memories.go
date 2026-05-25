@@ -6,21 +6,43 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 // storeMemoryRequest is the JSON body for POST /api/memories.
+//
+// T004 (engram vNext Milestone F TG1) added the optional `privacy_scope`
+// and `session_id` fields. Both are honored only when ENGRAM_VNEXT_F_ENABLED
+// is "true"; with the flag OFF the request shape is byte-identical to v6.4.x
+// (Go's encoding/json silently drops unknown fields by default, and the
+// existing fields are unchanged).
 type storeMemoryRequest struct {
-	Project     string   `json:"project"`
-	Content     string   `json:"content"`
-	Tags        []string `json:"tags,omitempty"`
-	SourceAgent string   `json:"source_agent,omitempty"`
+	Project      string   `json:"project"`
+	Content      string   `json:"content"`
+	Tags         []string `json:"tags,omitempty"`
+	SourceAgent  string   `json:"source_agent,omitempty"`
+	PrivacyScope string   `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
+	SessionID    string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
+}
+
+// isValidPrivacyScopeREST mirrors the migration 125 CHECK constraint enum.
+// Duplicated from internal/mcp/tools_memory.go to keep the worker layer
+// free of MCP imports; the canonical contract lives in the spec.
+func isValidPrivacyScopeREST(s string) bool {
+	switch s {
+	case "private", "project", "shared", "global":
+		return true
+	default:
+		return false
+	}
 }
 
 // handleStoreMemoryExplicit godoc
@@ -62,6 +84,28 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 		Content:     req.Content,
 		Tags:        req.Tags,
 		SourceAgent: req.SourceAgent,
+	}
+
+	// T004 (engram vNext Milestone F TG1) — populate the new lifecycle/
+	// identity fields when ENGRAM_VNEXT_F_ENABLED=true. With the flag OFF
+	// the new columns get their DB defaults (privacy_scope='project',
+	// source_workstation_id='', source_sessions=ARRAY[]::TEXT[]) and the
+	// response shape stays v6.4.x-identical via the omitempty JSON tags
+	// already on Memory.
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		if req.PrivacyScope != "" {
+			if !isValidPrivacyScopeREST(req.PrivacyScope) {
+				http.Error(w, "invalid privacy_scope: must be one of private, project, shared, global", http.StatusBadRequest)
+				return
+			}
+			mem.PrivacyScope = req.PrivacyScope
+		}
+		if id, ok := auth.IdentityFrom(r.Context()); ok {
+			mem.SourceWorkstationID = id.WorkstationID()
+		}
+		if req.SessionID != "" {
+			mem.SourceSessions = []string{req.SessionID}
+		}
 	}
 
 	created, err := s.memoryStore.Create(r.Context(), mem)

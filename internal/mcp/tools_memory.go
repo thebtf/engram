@@ -13,6 +13,7 @@ import (
 
 	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
@@ -20,6 +21,39 @@ import (
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+// vnextFEnabled reports whether the engram vNext Milestone F flag is on per
+// spec FR-F1 / RI-F1. Centralised so all flag-gated branches share the exact
+// truthy check ("true" — string equality with the env var).
+func vnextFEnabled() bool {
+	return os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
+}
+
+// isValidPrivacyScope validates the 4-tier privacy_scope enum added by
+// migration 125 (T001) and consumed by scope.Resolve (T003/T003b). Mirrors
+// the memories_privacy_scope_chk CHECK constraint exactly.
+func isValidPrivacyScope(s string) bool {
+	switch s {
+	case "private", "project", "shared", "global":
+		return true
+	default:
+		return false
+	}
+}
+
+// derivePrivacyScopeFromLegacy maps the legacy 2-tier scope tag value to the
+// 4-tier privacy_scope enum for the dual-field deprecation window (RI-F2).
+// Empty input returns empty (caller decides default handling).
+func derivePrivacyScopeFromLegacy(legacy string) string {
+	switch legacy {
+	case "project":
+		return "project"
+	case "global":
+		return "global"
+	default:
+		return ""
+	}
+}
 
 func isValidStoreObservationType(obsType models.ObservationType) bool {
 	switch obsType {
@@ -61,6 +95,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		Title        string
 		Type         string
 		Scope        string
+		PrivacyScope string // T004 — vNext F, 4-tier enum
+		SessionID    string // T004 — vNext F, caller's session for SourceSessions
 		Project      string
 		AgentSource  string
 		Importance   *float64
@@ -74,6 +110,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	params.Title = coerceString(m["title"], "")
 	params.Type = coerceString(m["type"], "")
 	params.Scope = coerceString(m["scope"], "")
+	params.PrivacyScope = coerceString(m["privacy_scope"], "")
+	params.SessionID = coerceString(m["session_id"], "")
 	params.AgentSource = coerceString(m["agent_source"], "")
 	if config.Get().EnforceSourceProject {
 		params.Project = projectFromContext(ctx)
@@ -131,6 +169,25 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	if resolvedScope != string(models.ScopeProject) && resolvedScope != string(models.ScopeGlobal) {
 		return "", fmt.Errorf("invalid scope %q: must be one of project, global", resolvedScope)
+	}
+
+	// T004 (engram vNext Milestone F TG1) — resolve the 4-tier privacy_scope.
+	// Flag OFF: leave empty so the DB DEFAULT 'project' from migration 125
+	// applies on the column. Flag ON: prefer explicit privacy_scope param;
+	// fall back to deriving from the legacy 2-tier scope (RI-F2 bridge).
+	// Validate against the migration 125 CHECK constraint enum.
+	var resolvedPrivacyScope string
+	if vnextFEnabled() {
+		resolvedPrivacyScope = params.PrivacyScope
+		if resolvedPrivacyScope == "" {
+			resolvedPrivacyScope = derivePrivacyScopeFromLegacy(resolvedScope)
+		}
+		if resolvedPrivacyScope == "" {
+			resolvedPrivacyScope = "project"
+		}
+		if !isValidPrivacyScope(resolvedPrivacyScope) {
+			return "", fmt.Errorf("invalid privacy_scope %q: must be one of private, project, shared, global", resolvedPrivacyScope)
+		}
 	}
 
 	if params.Project == "" && !(params.AlwaysInject && resolvedScope == string(models.ScopeGlobal)) {
@@ -286,6 +343,26 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		SupersedesID:   primarySupersededID,
 	}
 
+	// T004 — vNext F TG1: populate the new lifecycle/identity fields when the
+	// flag is ON. PrivacyScope falls through to DB DEFAULT 'project' when
+	// flag is OFF (empty Go string lets the column default apply). Workstation
+	// id is derived from the caller's keycard via auth.Identity.WorkstationID
+	// added in T003b. SourceSessions is populated from the explicit session_id
+	// param when supplied — the MCP layer has no implicit session-id ctx key
+	// in v6.4.x, so callers (e.g., the engram client proxy) advertise their
+	// session via the param. When absent, SourceSessions stays empty and
+	// scope.Resolve falls back to the workstation-only-suffices branch per
+	// spec FR-F1 AMEND 2026-05-25.
+	if vnextFEnabled() {
+		memory.PrivacyScope = resolvedPrivacyScope
+		if id, ok := auth.IdentityFrom(ctx); ok {
+			memory.SourceWorkstationID = id.WorkstationID()
+		}
+		if params.SessionID != "" {
+			memory.SourceSessions = []string{params.SessionID}
+		}
+	}
+
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
 		if tier := coerceString(m["tier"], ""); tier != "" {
@@ -359,6 +436,18 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"scope":   resolvedScope,
 		"storage": "memories",
 		"message": "Memory stored successfully",
+	}
+	// T004 — vNext F TG1: dual-field response per RI-F2. Legacy `scope`
+	// (2-tier) continues to appear above for backward compat; add new
+	// `privacy_scope` (4-tier) alongside when flag is ON.
+	if vnextFEnabled() {
+		result["privacy_scope"] = resolvedPrivacyScope
+		if created.SourceWorkstationID != "" {
+			result["source_workstation_id"] = created.SourceWorkstationID
+		}
+		if len(created.SourceSessions) > 0 {
+			result["source_sessions"] = created.SourceSessions
+		}
 	}
 	if vnextEnabled {
 		result["quality_signals"] = map[string]any{
@@ -554,7 +643,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		go func() {
 			for _, mem := range filtered {
 				fields := map[string]any{
-					"access_count":    gormlib.Expr("access_count + 1"),
+					"access_count":      gormlib.Expr("access_count + 1"),
 					"last_retrieved_at": gormlib.Expr("now()"),
 				}
 				if mem.Stability > 0 {
