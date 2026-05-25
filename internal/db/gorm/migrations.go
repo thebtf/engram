@@ -3691,6 +3691,11 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						ADD COLUMN IF NOT EXISTS privacy_scope TEXT NOT NULL DEFAULT 'project'`,
 					`ALTER TABLE memories
 						ADD COLUMN IF NOT EXISTS source_sessions TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]`,
+					// Drop-before-add pattern keeps the migration idempotent on retry
+					// (see prior constraint-modification migrations such as
+					// 077_extended_relation_types) — without this the second run
+					// after a mid-migration failure raises duplicate-constraint.
+					`ALTER TABLE memories DROP CONSTRAINT IF EXISTS memories_privacy_scope_chk`,
 					`ALTER TABLE memories
 						ADD CONSTRAINT memories_privacy_scope_chk
 						CHECK (privacy_scope IN ('private', 'project', 'shared', 'global'))`,

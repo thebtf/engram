@@ -164,6 +164,15 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 	// Run the full migration chain — must include 125.
 	require.NoError(t, runMigrations(db), "full migration chain must succeed")
 
+	// Register cleanup of any test rows BEFORE inserting them, so that even a
+	// panic or failure mid-test does not leave orphaned 't001-test' rows in the
+	// shared DB across runs.
+	t.Cleanup(func() {
+		if err := db.Exec(`DELETE FROM memories WHERE project = 't001-test'`).Error; err != nil {
+			t.Logf("TestMigration125 cleanup: failed to delete test rows: %v", err)
+		}
+	})
+
 	// Assert privacy_scope column shape.
 	var dataType, isNullable, columnDefault string
 	row := db.Raw(`
@@ -202,6 +211,5 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 		"t001-test", "T001 invalid fixture", "invalid_scope").Error
 	require.Error(t, err, "privacy_scope='invalid_scope' must be rejected by CHECK constraint")
 
-	// Cleanup test rows. Note: project param in INSERTs above is lowercase 't001-test'.
-	require.NoError(t, db.Exec(`DELETE FROM memories WHERE project = 't001-test'`).Error)
+	// Cleanup runs via t.Cleanup registered above — survives failure/panic.
 }
