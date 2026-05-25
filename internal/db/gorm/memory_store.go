@@ -382,7 +382,7 @@ func (s *MemoryStore) BatchIncrementViolated(ctx context.Context, ids []int64, n
 
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
-	return &models.Memory{
+	m := &models.Memory{
 		ID:                       row.ID,
 		Project:                  row.Project,
 		Content:                  row.Content,
@@ -416,14 +416,20 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		AccessCount:              row.AccessCount,
 		RecurrenceCount:          row.RecurrenceCount,
 		ConsecutiveCitationCount: row.ConsecutiveCitationCount,
-		// T002 + T001b + T003b (engram vNext Milestone F TG1): read-back of
-		// privacy metadata from migration-125/130 columns. Without these the
-		// MCP layer sees empty privacy_scope on rows persisted via Create —
-		// codex P1 fix-forward on 3e4a4b1.
-		PrivacyScope:        row.PrivacyScope,
-		SourceWorkstationID: row.SourceWorkstationID,
-		SourceSessions:      []string(row.SourceSessions),
 	}
+	// T002 + T001b + T003b (engram vNext Milestone F TG1): read-back of privacy
+	// metadata from migration-125/130 columns. Gated behind the vNext-F flag —
+	// under flag OFF we leave the privacy fields empty so the `omitempty` JSON
+	// tags on pkg/models.Memory preserve v6.4.x byte-identity for REST and MCP
+	// responses (RI-F1). Codex P1 cycle-3 fix-forward on 4cb71be: without the
+	// flag gate the field always reads back as 'project' (migration-125 DB
+	// DEFAULT) and leaks into every flag-OFF response.
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		m.PrivacyScope = row.PrivacyScope
+		m.SourceWorkstationID = row.SourceWorkstationID
+		m.SourceSessions = []string(row.SourceSessions)
+	}
+	return m
 }
 
 // ListAllActive returns a batch of active memories for sleep cycle processing.
