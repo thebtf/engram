@@ -9,7 +9,8 @@ import "time"
 // the database and not part of the domain interface.
 //
 // Migration 088 creates this table; migration 105 adds lifecycle columns for vNext Milestone A;
-// migration 110 adds lifecycle metadata for Milestone B.
+// migration 110 adds lifecycle metadata for Milestone B; migration 125 adds privacy_scope
+// + source_sessions[] for vNext Milestone F (TG1 / T001+T002).
 type Memory struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
@@ -28,20 +29,31 @@ type Memory struct {
 	EpistemicType   string     `json:"epistemic_type,omitempty"`
 	Defeasibility   string     `json:"defeasibility,omitempty"`
 	PromotionTarget string     `json:"promotion_target,omitempty"`
-	Tags            []string   `json:"tags"`
-	ID              int64      `json:"id"`
-	SupersedesID    *int64     `json:"supersedes_id,omitempty"`
-	SupersededBy    *int64     `json:"superseded_by,omitempty"`
-	ImportanceBase  float64    `json:"importance_base,omitempty"`
-	TsAlpha         float64    `json:"ts_alpha,omitempty"`
-	TsBeta          float64    `json:"ts_beta,omitempty"`
-	Confidence      float64    `json:"confidence,omitempty"`
-	Stability       float64    `json:"stability,omitempty"`
-	Retrievability  float64    `json:"retrievability,omitempty"`
-	Version         int        `json:"version"`
-	CitationCount   int        `json:"citation_count,omitempty"`
-	InjectionCount  int        `json:"injection_count,omitempty"`
-	AccessCount     int        `json:"access_count,omitempty"`
-	RecurrenceCount          int        `json:"recurrence_count,omitempty"`
-	ConsecutiveCitationCount int        `json:"consecutive_citation_count,omitempty"`
+	// PrivacyScope is one of 'private' | 'project' | 'shared' | 'global'.
+	// Added by migration 125 (TG1 / T001+T002). DEFAULT 'project' for legacy rows.
+	// Backward-compat: see spec.md §FR-F1 REVISE — the legacy `scope:*` tag + MCP
+	// response synthesis surface remains active for 2 minor versions (until v6.7.0)
+	// per RI-F2.
+	PrivacyScope string   `json:"privacy_scope,omitempty"`
+	Tags         []string `json:"tags"`
+	// SourceSessions lists every session_id that wrote or confirmed this memory.
+	// Added by migration 125 (TG1 / T001+T002) as TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[].
+	// Consumed by internal/scope/filter.Resolve for private-scope visibility checks
+	// per spec §FR-F1 CHK005-ADDED keycard identity invariant.
+	SourceSessions           []string `json:"source_sessions,omitempty"`
+	ID                       int64    `json:"id"`
+	SupersedesID             *int64   `json:"supersedes_id,omitempty"`
+	SupersededBy             *int64   `json:"superseded_by,omitempty"`
+	ImportanceBase           float64  `json:"importance_base,omitempty"`
+	TsAlpha                  float64  `json:"ts_alpha,omitempty"`
+	TsBeta                   float64  `json:"ts_beta,omitempty"`
+	Confidence               float64  `json:"confidence,omitempty"`
+	Stability                float64  `json:"stability,omitempty"`
+	Retrievability           float64  `json:"retrievability,omitempty"`
+	Version                  int      `json:"version"`
+	CitationCount            int      `json:"citation_count,omitempty"`
+	InjectionCount           int      `json:"injection_count,omitempty"`
+	AccessCount              int      `json:"access_count,omitempty"`
+	RecurrenceCount          int      `json:"recurrence_count,omitempty"`
+	ConsecutiveCitationCount int      `json:"consecutive_citation_count,omitempty"`
 }
