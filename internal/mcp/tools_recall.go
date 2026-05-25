@@ -111,14 +111,22 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	// or omitted means all tiers admitted (subject to scope.Resolve). Each
 	// value is validated against the migration 125 CHECK enum; invalid
 	// values return the structured 'invalid_include_scopes:' error.
-	includeScopesRaw := coerceStringSlice(m["include_scopes"])
-	includeScopes := make(map[string]bool, len(includeScopesRaw))
-	for _, s := range includeScopesRaw {
-		switch s {
-		case "private", "project", "shared", "global":
-			includeScopes[s] = true
-		default:
-			return "", fmt.Errorf("invalid_include_scopes: %q must be one of private, project, shared, global", s)
+	//
+	// codex P2 fix-forward on 3e4a4b1: validation is flag-gated. Under
+	// ENGRAM_VNEXT_F_ENABLED=false the parameter is not honored at all
+	// (T005 contract: "runtime behavior stays env-gated"), so unknown
+	// values must not surface a structured error to clients still on the
+	// v6.4.x contract who may send experimental fields.
+	includeScopes := make(map[string]bool)
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		includeScopesRaw := coerceStringSlice(m["include_scopes"])
+		for _, s := range includeScopesRaw {
+			switch s {
+			case "private", "project", "shared", "global":
+				includeScopes[s] = true
+			default:
+				return "", fmt.Errorf("invalid_include_scopes: %q must be one of private, project, shared, global", s)
+			}
 		}
 	}
 

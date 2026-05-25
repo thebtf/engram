@@ -68,6 +68,23 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 		row.SupersedesID = mem.SupersedesID
 	}
 
+	// T002 + T001b + T003b (engram vNext Milestone F TG1): persist privacy
+	// metadata into migration-125/130 columns. Without these copies the
+	// internal GORM Memory struct silently drops the values set in
+	// tools_memory.go (codex P1 fix-forward on 3e4a4b1). Empty PrivacyScope
+	// falls back to 'project' to satisfy the migration 125 CHECK constraint
+	// (DB DEFAULT applies only when the column is omitted from INSERT; GORM
+	// always emits the column for string fields, so we set it explicitly).
+	if mem.PrivacyScope != "" {
+		row.PrivacyScope = mem.PrivacyScope
+	} else {
+		row.PrivacyScope = "project"
+	}
+	row.SourceWorkstationID = mem.SourceWorkstationID
+	if len(mem.SourceSessions) > 0 {
+		row.SourceSessions = pq.StringArray(mem.SourceSessions)
+	}
+
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
 	}
@@ -366,39 +383,46 @@ func (s *MemoryStore) BatchIncrementViolated(ctx context.Context, ids []int64, n
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
 	return &models.Memory{
-		ID:              row.ID,
-		Project:         row.Project,
-		Content:         row.Content,
-		Tags:            []string(row.Tags),
-		SourceAgent:     row.SourceAgent,
-		EditedBy:        row.EditedBy,
-		Status:          row.Status,
-		Tier:            row.Tier,
-		EpistemicType:   row.EpistemicType,
-		Defeasibility:   row.Defeasibility,
-		PromotionTarget: row.PromotionTarget,
-		Version:         row.Version,
-		CreatedAt:       row.CreatedAt,
-		UpdatedAt:       row.UpdatedAt,
-		DeletedAt:       row.DeletedAt,
-		LastRetrievedAt: row.LastRetrievedAt,
-		LastConfirmed:   row.LastConfirmed,
-		ReviewAfter:     row.ReviewAfter,
-		ValidFrom:       row.ValidFrom,
-		ValidUntil:      row.ValidUntil,
-		SupersedesID:    row.SupersedesID,
-		SupersededBy:    row.SupersededBy,
-		ImportanceBase:  row.ImportanceBase,
-		TsAlpha:         row.TsAlpha,
-		TsBeta:          row.TsBeta,
-		Confidence:      row.Confidence,
-		Stability:       row.Stability,
-		Retrievability:  row.Retrievability,
-		CitationCount:   row.CitationCount,
-		InjectionCount:  row.InjectionCount,
-		AccessCount:     row.AccessCount,
+		ID:                       row.ID,
+		Project:                  row.Project,
+		Content:                  row.Content,
+		Tags:                     []string(row.Tags),
+		SourceAgent:              row.SourceAgent,
+		EditedBy:                 row.EditedBy,
+		Status:                   row.Status,
+		Tier:                     row.Tier,
+		EpistemicType:            row.EpistemicType,
+		Defeasibility:            row.Defeasibility,
+		PromotionTarget:          row.PromotionTarget,
+		Version:                  row.Version,
+		CreatedAt:                row.CreatedAt,
+		UpdatedAt:                row.UpdatedAt,
+		DeletedAt:                row.DeletedAt,
+		LastRetrievedAt:          row.LastRetrievedAt,
+		LastConfirmed:            row.LastConfirmed,
+		ReviewAfter:              row.ReviewAfter,
+		ValidFrom:                row.ValidFrom,
+		ValidUntil:               row.ValidUntil,
+		SupersedesID:             row.SupersedesID,
+		SupersededBy:             row.SupersededBy,
+		ImportanceBase:           row.ImportanceBase,
+		TsAlpha:                  row.TsAlpha,
+		TsBeta:                   row.TsBeta,
+		Confidence:               row.Confidence,
+		Stability:                row.Stability,
+		Retrievability:           row.Retrievability,
+		CitationCount:            row.CitationCount,
+		InjectionCount:           row.InjectionCount,
+		AccessCount:              row.AccessCount,
 		RecurrenceCount:          row.RecurrenceCount,
 		ConsecutiveCitationCount: row.ConsecutiveCitationCount,
+		// T002 + T001b + T003b (engram vNext Milestone F TG1): read-back of
+		// privacy metadata from migration-125/130 columns. Without these the
+		// MCP layer sees empty privacy_scope on rows persisted via Create —
+		// codex P1 fix-forward on 3e4a4b1.
+		PrivacyScope:        row.PrivacyScope,
+		SourceWorkstationID: row.SourceWorkstationID,
+		SourceSessions:      []string(row.SourceSessions),
 	}
 }
 
