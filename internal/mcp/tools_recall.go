@@ -17,6 +17,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/scope"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // handleRecall is the consolidated recall tool handler. It parses the "action"
@@ -141,46 +142,14 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		return `{"memories":[],"count":0,"note":"project parameter required for memory search in v5"}`, nil
 	}
 
-	// When a query filter is provided, fetch a wider candidate pool so that
-	// older matching memories are not excluded by the limit before filtering.
-	// The final result is capped at `limit` after filtering.
-	fetchLimit := limit
 	query = strings.TrimSpace(query)
-	if query != "" {
-		const candidateMultiplier = 10
-		const minCandidatePool = 1000
-		fetchLimit = limit * candidateMultiplier
-		if fetchLimit < minCandidatePool {
-			fetchLimit = minCandidatePool
-		}
-	}
-
-	memories, err := s.memoryStore.List(ctx, project, fetchLimit)
-	if err != nil {
-		return "", fmt.Errorf("recall search: %w", err)
-	}
-
-	// Apply optional query filter in-memory (case-insensitive substring),
-	// then cap at the originally requested limit.
-	if query != "" {
-		queryLower := strings.ToLower(query)
-		filtered := memories[:0:0] // same element type, zero length, zero cap (avoids models import)
-		for _, mem := range memories {
-			if strings.Contains(strings.ToLower(mem.Content), queryLower) {
-				filtered = append(filtered, mem)
-				if len(filtered) == limit {
-					break
-				}
-			}
-		}
-		memories = filtered
-	}
+	queryLower := strings.ToLower(query)
 
 	// T004 — scope filter under vNext F flag. Build the caller KeycardContext
 	// once outside the loop; populate WorkstationID from auth.Identity (added
-	// in T003b). When the flag is OFF, scopeEnabled stays false and the loop
-	// below skips the Resolve call entirely — preserving byte-identical
-	// v6.4.x behavior.
+	// in T003b). When the flag is OFF, scopeEnabled stays false and the
+	// filter helper below skips the Resolve call entirely — preserving
+	// byte-identical v6.4.x behavior.
 	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
 	var caller scope.KeycardContext
 	if scopeEnabled {
@@ -201,13 +170,16 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		ID                  int64    `json:"id"`
 		Version             int      `json:"version"`
 	}
-	results := make([]memoryResult, 0, len(memories))
-	for _, mem := range memories {
+
+	// filterMemory applies the optional substring query filter AND the
+	// vNext-F scope filter to a single memory. Returns (rendered result,
+	// true) when the memory should be included in the response, (zero,
+	// false) when it must be skipped.
+	filterMemory := func(mem *models.Memory) (memoryResult, bool) {
+		if queryLower != "" && !strings.Contains(strings.ToLower(mem.Content), queryLower) {
+			return memoryResult{}, false
+		}
 		if scopeEnabled {
-			meta := scope.SourceMeta{
-				WorkstationID: mem.SourceWorkstationID,
-				Sessions:      mem.SourceSessions,
-			}
 			// Memory.PrivacyScope is empty on rows written before/under
 			// flag-OFF code; treat empty as the DB default 'project'
 			// (migration 125 column DEFAULT). scope.Resolve handles that
@@ -220,10 +192,14 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 			// T005 — apply include_scopes filter BEFORE visibility check.
 			// Empty includeScopes (omitted/empty array) admits all tiers.
 			if len(includeScopes) > 0 && !includeScopes[memScope] {
-				continue
+				return memoryResult{}, false
+			}
+			meta := scope.SourceMeta{
+				WorkstationID: mem.SourceWorkstationID,
+				Sessions:      mem.SourceSessions,
 			}
 			if !scope.Resolve(caller, memScope, meta) {
-				continue
+				return memoryResult{}, false
 			}
 		}
 		mr := memoryResult{
@@ -239,7 +215,68 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 			mr.SourceWorkstationID = mem.SourceWorkstationID
 			mr.SourceSessions = mem.SourceSessions
 		}
-		results = append(results, mr)
+		return mr, true
+	}
+
+	results := make([]memoryResult, 0, limit)
+	if scopeEnabled {
+		// Codex P1 cycle-3 fix on 4cb71be: batch-loop with offset paging so
+		// that scope-invisible newest rows do not truncate recall before
+		// older visible rows reach the requested limit. The previous
+		// single-call List(fetchLimit) path would fetch only up to
+		// fetchLimit rows; if all of them were private to other callers the
+		// loop returned zero results even when visible matches existed in
+		// the same project (T004 contract honesty bug).
+		const batchSize = 500
+		offset := 0
+		for len(results) < limit {
+			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+			if err != nil {
+				return "", fmt.Errorf("recall search: %w", err)
+			}
+			if len(batch) == 0 {
+				break
+			}
+			for _, mem := range batch {
+				if mr, ok := filterMemory(mem); ok {
+					results = append(results, mr)
+					if len(results) >= limit {
+						break
+					}
+				}
+			}
+			offset += len(batch)
+			// Stop when the DB returned fewer rows than requested — that
+			// means we have reached the end of the project's active rows.
+			if len(batch) < batchSize {
+				break
+			}
+		}
+	} else {
+		// Flag OFF — single-fetch path preserves v6.4.x byte-identity. The
+		// query-mode candidate-pool multiplier is the original behavior
+		// shipped with v6.2.x recall.
+		fetchLimit := limit
+		if query != "" {
+			const candidateMultiplier = 10
+			const minCandidatePool = 1000
+			fetchLimit = limit * candidateMultiplier
+			if fetchLimit < minCandidatePool {
+				fetchLimit = minCandidatePool
+			}
+		}
+		memories, err := s.memoryStore.List(ctx, project, fetchLimit)
+		if err != nil {
+			return "", fmt.Errorf("recall search: %w", err)
+		}
+		for _, mem := range memories {
+			if mr, ok := filterMemory(mem); ok {
+				results = append(results, mr)
+				if len(results) >= limit {
+					break
+				}
+			}
+		}
 	}
 
 	out := map[string]any{

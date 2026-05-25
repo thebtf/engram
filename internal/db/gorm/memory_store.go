@@ -137,6 +137,48 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 	return result, nil
 }
 
+// ListWithOffset returns a page of active (non-soft-deleted) memories for the
+// given project, ordered by created_at DESC, limited to limit rows starting
+// from offset. project must not be empty. limit and offset default to safe
+// values when <= 0 / < 0.
+//
+// T004 + codex P1 cycle-3 fix on 4cb71be: introduced to support batch-loop
+// scope filtering in handleRecallSearch. The previous single-call List path
+// would fetch up to `limit` rows and then drop scope-invisible ones in Go,
+// truncating recall when the newest rows happened to be private to other
+// callers. ListWithOffset lets the caller keep paging until enough visible
+// rows accumulate or the DB stream is exhausted.
+func (s *MemoryStore) ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("project: must not be empty")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var rows []Memory
+	now := time.Now().UTC()
+	err := s.db.WithContext(ctx).
+		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+		Where("valid_from IS NULL OR valid_from <= ?", now).
+		Where("valid_until IS NULL OR valid_until >= ?", now).
+		Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list memories with offset for project %q: %w", project, err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
+}
+
 // ListForInjection returns active memories for the given project ordered by
 // importance_base DESC, created_at DESC — suitable for context injection.
 // project must not be empty. limit defaults to 50 when <= 0.
