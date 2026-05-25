@@ -364,6 +364,18 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		if params.SessionID != "" {
 			memory.SourceSessions = []string{params.SessionID}
 		}
+		// Codex P1 cycle-4 fix on 783c0be: reject private-scope writes when
+		// the caller has no non-empty workstation identity. scope.Resolve
+		// fail-closes private memories whose source_workstation_id is empty
+		// (`internal/scope/filter.go:85-87` — "if memorySource.WorkstationID
+		// == \"\" { return false }"), so persisting such a row would make
+		// it permanently unreadable to every caller including the writer
+		// itself. Master and bare-session sources cannot produce a
+		// non-empty WorkstationID (auth/identity.go:111-116 — returns
+		// KeycardID only when Source == SourceClient).
+		if resolvedPrivacyScope == "private" && memory.SourceWorkstationID == "" {
+			return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
+		}
 	}
 
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled

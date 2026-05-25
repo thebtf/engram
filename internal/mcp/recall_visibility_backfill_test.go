@@ -46,36 +46,42 @@ func TestRecall_ScopeInvisibleNewestDoNotTruncate_CodexP1Cycle3(t *testing.T) {
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 
-	// Insert 2 older project-scoped rows first (created_at DESC means newest
-	// last-inserted; older rows come first in chronological order). These are
+	// Insert 2 older project-scoped rows first with explicit created_at
+	// timestamps. CodeRabbit cycle-4 fix: previously the test relied on
+	// implicit `now()` ordering between back-to-back INSERTs, which is
+	// non-deterministic when multiple inserts complete within the same
+	// timestamp tick. Explicit timestamps with multi-minute gaps make the
+	// `ORDER BY created_at DESC, id DESC` recall pagination stable on any
+	// PostgreSQL instance regardless of clock resolution. These rows are
 	// always visible to anyone in the project.
 	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id)
-			VALUES (?, ?, ?::jsonb, ?, ?)`,
+		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, now() - interval '5 minutes')`,
 		project, "older project row A", `[]`, "project", "",
 	).Error)
 	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id)
-			VALUES (?, ?, ?::jsonb, ?, ?)`,
+		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, now() - interval '4 minutes')`,
 		project, "older project row B", `[]`, "project", "",
 	).Error)
 
-	// Insert 3 newest private rows owned by a DIFFERENT workstation. These
-	// are the rows that would truncate the recall under the old single-call
-	// path because they fail scope.Resolve and are the freshest by created_at.
+	// Insert 3 newest private rows owned by a DIFFERENT workstation with
+	// strictly later timestamps. These are the rows that would truncate the
+	// recall under the old single-call path because they fail scope.Resolve
+	// and are the freshest by created_at.
 	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id)
-			VALUES (?, ?, ?::jsonb, ?, ?)`,
+		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, now() - interval '3 minutes')`,
 		project, "newest private row 1", `[]`, "private", "other-workstation",
 	).Error)
 	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id)
-			VALUES (?, ?, ?::jsonb, ?, ?)`,
+		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, now() - interval '2 minutes')`,
 		project, "newest private row 2", `[]`, "private", "other-workstation",
 	).Error)
 	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id)
-			VALUES (?, ?, ?::jsonb, ?, ?)`,
+		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, now() - interval '1 minute')`,
 		project, "newest private row 3", `[]`, "private", "other-workstation",
 	).Error)
 
