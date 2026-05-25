@@ -3721,6 +3721,35 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		// 130_source_workstation_id — engram vNext Milestone F TG1/CR-F1/T001b.
+		// AMEND 2026-05-25: additive follow-up to migration 125 closing the
+		// FR-F1 CHK005-ADDED keycard identity invariant gap. The column stores
+		// the writing keycard's workstation identity (api_tokens.id for
+		// SourceClient bearers, empty for SourceMaster/SourceSession per
+		// auth.Identity.WorkstationID added in T003b).
+		//
+		// Empty-string DEFAULT means pre-existing rows AND rows written by
+		// flag-OFF code paths carry the explicit "unknown workstation"
+		// sentinel. scope.Resolve treats empty source_workstation_id as
+		// false-on-private (cannot match) per spec FR-F1 AMEND decision tree.
+		//
+		// New migration (not amend-of-125) chosen by PM directive 2026-05-25:
+		// additive fix-forward preserves PR #221 commit history, no force-push
+		// required. Migration 125 retains its current shape.
+		{
+			ID: "130_source_workstation_id",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(
+					`ALTER TABLE memories
+						ADD COLUMN IF NOT EXISTS source_workstation_id TEXT NOT NULL DEFAULT ''`,
+				).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(
+					`ALTER TABLE memories DROP COLUMN IF EXISTS source_workstation_id`,
+				).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

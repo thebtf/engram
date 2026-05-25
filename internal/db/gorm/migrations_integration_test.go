@@ -213,3 +213,76 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 
 	// Cleanup runs via t.Cleanup registered above — survives failure/panic.
 }
+
+// TestMigration130_AddSourceWorkstationID verifies migration
+// 130_source_workstation_id (engram vNext Milestone F TG1/T001b, AMEND
+// 2026-05-25) adds the source_workstation_id column to memories with TEXT
+// NOT NULL DEFAULT ” shape and that the rollback drops it cleanly.
+//
+// Asserts:
+//   - source_workstation_id: text, NOT NULL, DEFAULT ”
+//   - Pre-existing rows (and rows written without populating the column)
+//     receive the empty-string default and are queryable.
+//
+// Anti-stub property: a `return nil` Migrate body causes the
+// information_schema query to return zero rows and Scan to fail.
+//
+// See spec.md §FR-F1 AMEND 2026-05-25 for the column-semantics contract
+// and how empty-string interacts with scope.Resolve ScopePrivate.
+func TestMigration130_AddSourceWorkstationID(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+
+	// Run the full migration chain — must include 130.
+	require.NoError(t, runMigrations(db), "full migration chain must succeed")
+
+	// Register cleanup BEFORE inserting test row.
+	t.Cleanup(func() {
+		if err := db.Exec(`DELETE FROM memories WHERE project = 't001b-test'`).Error; err != nil {
+			t.Logf("TestMigration130 cleanup: failed to delete test rows: %v", err)
+		}
+	})
+
+	// Assert source_workstation_id column shape.
+	var dataType, isNullable, columnDefault string
+	row := db.Raw(`
+		SELECT data_type, is_nullable, column_default
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'memories'
+		  AND column_name = 'source_workstation_id'
+	`).Row()
+	require.NoError(t, row.Scan(&dataType, &isNullable, &columnDefault), "source_workstation_id column must exist")
+	require.Equal(t, "text", dataType, "source_workstation_id must be text")
+	require.Equal(t, "NO", isNullable, "source_workstation_id must be NOT NULL")
+	require.Contains(t, columnDefault, "''::text", "source_workstation_id default must be empty string literal")
+
+	// Verify rows inserted without specifying the column receive empty default.
+	require.NoError(t, db.Exec(`INSERT INTO memories (project, content) VALUES (?, ?)`,
+		"t001b-test", "T001b default-empty fixture").Error,
+		"row insertable without source_workstation_id (default applies)")
+
+	var observed string
+	require.NoError(t, db.Raw(
+		`SELECT source_workstation_id FROM memories WHERE project = 't001b-test' LIMIT 1`,
+	).Row().Scan(&observed))
+	require.Equal(t, "", observed, "default-inserted row must carry empty source_workstation_id")
+
+	// Verify explicit non-empty insert also accepted.
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, source_workstation_id) VALUES (?, ?, ?)`,
+		"t001b-test", "T001b explicit fixture", "ws-abc-123",
+	).Error, "row insertable with explicit source_workstation_id")
+}
