@@ -220,15 +220,23 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			// message names the offending value + accepted enum.
 			return "", fmt.Errorf("invalid_privacy_scope: %q must be one of private, project, shared, global", resolvedPrivacyScope)
 		}
-		// Codex P2 cycle-7 fix on 209a06e: when the caller used only the new
-		// 4-tier `privacy_scope` field (legacy `scope` not provided), back-
-		// derive the legacy 2-tier `scope` from the resolved privacy tier so
-		// downstream tag synthesis (`scope:project` / `scope:global`) and
-		// response `scope` field stay consistent with the 4-tier intent.
-		// Without this, `privacy_scope="shared"` would still tag/report as
-		// `scope:project` because of the early default at line 167-170,
-		// under-sharing data for legacy 2-tier consumers (RI-F2 bridge).
-		if params.Scope == "" {
+		// Codex P2 cycle-7 fix on 209a06e + cycle-9 fix on 69398d9: under
+		// flag ON, the 4-tier `privacy_scope` is the authoritative field;
+		// the legacy 2-tier `scope` must be a derived view of it so the two
+		// representations cannot disagree on a single write. Cycle-7
+		// originally only back-derived when `params.Scope` was empty, but
+		// that left conflicting explicit pairs intact (e.g.,
+		// `scope="project"` + `privacy_scope="shared"` would store shared
+		// visibility while emitting legacy `scope:project` — RI-F2 bridge
+		// gap). Always recompute `resolvedScope` from the resolved privacy
+		// tier when `params.PrivacyScope` was explicitly provided OR
+		// `params.Scope` was omitted. Mapping per ADR-F-005:
+		//   private/project -> project
+		//   shared/global   -> global
+		// If the caller provided ONLY legacy `scope` (no `privacy_scope`),
+		// the early derivation at line 184 already produced a consistent
+		// pair, so this block is a no-op in that case.
+		if params.PrivacyScope != "" || params.Scope == "" {
 			if derived := deriveLegacyScopeFromPrivacy(resolvedPrivacyScope); derived != "" {
 				resolvedScope = derived
 			}
