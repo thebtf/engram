@@ -106,6 +106,18 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 		if req.SessionID != "" {
 			mem.SourceSessions = []string{req.SessionID}
 		}
+		// Codex P1 cycle-5 fix on b5ac7ec: mirror the MCP-side guard
+		// (`internal/mcp/tools_memory.go` private-write check from
+		// `4cb71be`/`b5ac7ec`) on the REST surface so the two paths do
+		// not diverge. scope.Resolve fail-closes private memories whose
+		// source_workstation_id is empty (`internal/scope/filter.go`),
+		// so persisting a private write from a non-SourceClient caller
+		// (master/session, or no identity) would create a permanently-
+		// unreadable row.
+		if mem.PrivacyScope == "private" && mem.SourceWorkstationID == "" {
+			http.Error(w, "invalid privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)", http.StatusBadRequest)
+			return
+		}
 	}
 
 	created, err := s.memoryStore.Create(r.Context(), mem)

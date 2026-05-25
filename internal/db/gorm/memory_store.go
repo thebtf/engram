@@ -75,10 +75,24 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	// falls back to 'project' to satisfy the migration 125 CHECK constraint
 	// (DB DEFAULT applies only when the column is omitted from INSERT; GORM
 	// always emits the column for string fields, so we set it explicitly).
+	//
+	// Codex P2 cycle-5 fix on b5ac7ec: when PrivacyScope is empty (legacy /
+	// flag-OFF write), scan Tags for the v6.4.x `scope:global` marker and
+	// promote the row to `global` instead of the default `project`. This
+	// mirrors the migration-125 T006 backfill UPDATE at INSERT time so
+	// newly written legacy-tagged rows are not misclassified once
+	// `ENGRAM_VNEXT_F_ENABLED=true` flips on and `handleRecallSearch`
+	// filters by `mem.PrivacyScope` for `include_scopes`.
 	if mem.PrivacyScope != "" {
 		row.PrivacyScope = mem.PrivacyScope
 	} else {
 		row.PrivacyScope = "project"
+		for _, t := range mem.Tags {
+			if t == "scope:global" {
+				row.PrivacyScope = "global"
+				break
+			}
+		}
 	}
 	row.SourceWorkstationID = mem.SourceWorkstationID
 	if len(mem.SourceSessions) > 0 {
