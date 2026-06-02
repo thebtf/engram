@@ -7,6 +7,7 @@ import (
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
@@ -130,4 +131,4 @@ func buildInnerBlock(contentJSON []byte) (json.RawMessage, error) {
 
 // daemonClientVersion is the ClientVersion string sent in gRPC
 // InitializeRequest. Bumped alongside Constitution §15 unified version.
-const daemonClientVersion = "v5.0.0"
+const daemonClientVersion = version.Daemon

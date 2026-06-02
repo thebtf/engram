@@ -22,7 +22,7 @@ func (d *Dispatcher) handleInitialize(_ context.Context, _ muxcore.ProjectContex
 		},
 		"serverInfo": map[string]any{
 			"name":    "engram",
-			"version": "v5.0.0",
+			"version": d.serverVersion,
 		},
 	}
 	return marshalResult(req.ID, result), nil

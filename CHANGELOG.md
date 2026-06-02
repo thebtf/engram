@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.3] - 2026-06-02
+
+### Fixed
+
+- **Local MCP daemon owner identity with muxcore v0.25.0.** Updated
+  `github.com/thebtf/mcp-mux/muxcore` from `v0.24.3` to `v0.25.0`, adopting
+  the provider-side `ModeGlobal` default, cross-cwd admission hardening, and
+  stale isolated-owner cleanup behavior released for Engram #244
+  (`mcp-mux process explosion`). This patch targets the stale-owner/process
+  multiplication class observed during Desktop Codex Engram attach failures.
+  The Desktop tool-registry snapshot miss remains a separate client-side
+  failure mode when direct stdio JSON-RPC to `engram.exe` is healthy.
+- **Daemon version reporting.** Centralized the local daemon version used by
+  `--version`, MCP `initialize.serverInfo.version`, and the gRPC
+  `InitializeRequest.ClientVersion` path so release smoke tests and client
+  diagnostics report `v6.4.3` consistently.
+- **Fresh PostgreSQL migration startup.** Fixed JSON custom type annotations
+  and PostgreSQL boolean predicates so a clean PostgreSQL 17 database can pass
+  the fresh GORM AutoMigrate + migration chain used by the release playbook.
+
 ## [6.4.2] - 2026-05-23
 
 ### Fixed

@@ -30,13 +30,14 @@ import (
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
 	"github.com/thebtf/engram/internal/module/registry"
+	"github.com/thebtf/engram/internal/version"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
 	"github.com/thebtf/mcp-mux/muxcore/upgrade"
 )
 
 // daemonVersion is the string reported to gRPC Initialize and used in
 // structured logs. Tracks Constitution §15 unified engram + plugin version.
-const daemonVersion = "v6.3.0"
+const daemonVersion = version.Daemon
 
 // startupGate enforces FR-4 / Plan ADR-005. When the daemon process starts
 // with a configured server URL but no ENGRAM_TOKEN, exit non-zero with a
@@ -103,7 +104,7 @@ func main() {
 		"version", daemonVersion,
 	)
 
-	disp := dispatcher.New(reg, logger)
+	disp := dispatcher.NewWithVersion(reg, logger, daemonVersion)
 	pipeline := lifecycle.New(reg, logger)
 
 	// Init context is distinct from daemon context — see design.md §3.2

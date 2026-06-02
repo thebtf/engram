@@ -264,7 +264,7 @@ func (j JSONInt64Array) Value() (driver.Value, error) {
 
 // Observation represents a learning extracted from a Claude Code session.
 type Observation struct {
-	FileMtimes              JSONInt64Map     `db:"file_mtimes" json:"file_mtimes,omitempty"`
+	FileMtimes              JSONInt64Map     `db:"file_mtimes" gorm:"type:jsonb" json:"file_mtimes,omitempty"`
 	SDKSessionID            string           `db:"sdk_session_id" json:"sdk_session_id"`
 	Project                 string           `db:"project" json:"project"`
 	Scope                   ObservationScope `db:"scope" json:"scope"`
@@ -277,12 +277,12 @@ type Observation struct {
 	Subtitle                sql.NullString   `db:"subtitle" json:"subtitle,omitempty"`
 	Title                   sql.NullString   `db:"title" json:"title,omitempty"`
 	Narrative               sql.NullString   `db:"narrative" json:"narrative,omitempty"`
-	Concepts                JSONStringArray  `db:"concepts" json:"concepts,omitempty"`
-	FilesRead               JSONStringArray  `db:"files_read" json:"files_read,omitempty"`
-	FilesModified           JSONStringArray  `db:"files_modified" json:"files_modified,omitempty"`
-	CommandsRun             JSONStringArray  `db:"commands_run" json:"commands_run,omitempty"`
-	Facts                   JSONStringArray  `db:"facts" json:"facts,omitempty"`
-	Rejected                JSONStringArray  `db:"rejected" json:"rejected,omitempty"`
+	Concepts                JSONStringArray  `db:"concepts" gorm:"type:jsonb" json:"concepts,omitempty"`
+	FilesRead               JSONStringArray  `db:"files_read" gorm:"type:jsonb" json:"files_read,omitempty"`
+	FilesModified           JSONStringArray  `db:"files_modified" gorm:"type:jsonb" json:"files_modified,omitempty"`
+	CommandsRun             JSONStringArray  `db:"commands_run" gorm:"type:jsonb" json:"commands_run,omitempty"`
+	Facts                   JSONStringArray  `db:"facts" gorm:"type:jsonb" json:"facts,omitempty"`
+	Rejected                JSONStringArray  `db:"rejected" gorm:"type:jsonb" json:"rejected,omitempty"`
 	PromptNumber            sql.NullInt64    `db:"prompt_number" json:"prompt_number,omitempty"`
 	LastRetrievedAt         sql.NullInt64    `db:"last_retrieved_at_epoch" json:"last_retrieved_at_epoch,omitempty"`
 	ScoreUpdatedAt          sql.NullInt64    `db:"score_updated_at_epoch" json:"score_updated_at_epoch,omitempty"`
@@ -297,7 +297,7 @@ type Observation struct {
 	IsStale                 bool             `db:"-" json:"is_stale,omitempty"`
 	IsSuperseded            bool             `db:"is_superseded" json:"is_superseded,omitempty"`
 	EnrichmentLevel         int              `db:"enrichment_level" json:"enrichment_level"`
-	SourceEventIDs          JSONInt64Array   `db:"source_event_ids" json:"source_event_ids,omitempty"`
+	SourceEventIDs          JSONInt64Array   `db:"source_event_ids" gorm:"type:jsonb" json:"source_event_ids,omitempty"`
 	RawContent              sql.NullString   `db:"raw_content" json:"raw_content,omitempty"`
 	ExpiresAt               sql.NullTime     `db:"expires_at" json:"expires_at,omitempty"`
 	TtlDays                 sql.NullInt32    `db:"ttl_days" json:"ttl_days,omitempty"`
