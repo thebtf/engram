@@ -136,7 +136,7 @@ function buildCachedSessionStartPayload(overrides = {}) {
 
 async function handleSessionStart(ctx, input) {
   if (!process.env.ENGRAM_URL) {
-    return '<engram-setup>\nEngram plugin is installed but not configured.\nSet environment variables to connect to your Engram server:\n  export ENGRAM_URL=http://your-server:37777/mcp\n  export ENGRAM_AUTH_ADMIN_TOKEN=your-token\nThen restart Claude Code.\n</engram-setup>';
+    return '<engram-setup>\nEngram plugin is installed but not configured.\nSet ENGRAM_URL and ENGRAM_TOKEN to connect to your Engram server.\nClaude Code: run /engram:setup or edit ~/.claude/settings.json env.\nCodex: edit ~/.codex/config.toml [shell_environment_policy.set].\nNever put ENGRAM_AUTH_ADMIN_TOKEN on a workstation.\n</engram-setup>';
   }
 
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';

@@ -1,8 +1,8 @@
 # Engram Makefile
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-# Pass version to both main package and hooks package
-LDFLAGS := -ldflags "-X main.Version=$(VERSION) -s -w" -buildvcs=false
+# Pass version to both the server main package and local MCP daemon package.
+LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X github.com/thebtf/engram/internal/version.Daemon=$(VERSION) -s -w" -buildvcs=false
 BUILD_DIR := bin
 PLUGIN_DIR := plugin
 

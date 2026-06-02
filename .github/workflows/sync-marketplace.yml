@@ -3,17 +3,28 @@ name: Sync Plugin Marketplace
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Release Binary"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref, tag, or SHA to sync"
+        required: false
+        default: "main"
 
 permissions:
   contents: read
 
 jobs:
   sync:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout engram
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.ref || github.event.workflow_run.head_sha || github.event.release.tag_name || github.ref }}
           persist-credentials: false
 
       - name: Checkout marketplace
