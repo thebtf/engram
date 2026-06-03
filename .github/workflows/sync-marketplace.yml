@@ -38,11 +38,12 @@ jobs:
 
       - name: Sync plugin files
         run: |
-          rm -rf marketplace/engram marketplace/plugins/engram
-          mkdir -p marketplace/plugins
+          rm -rf marketplace/engram marketplace/plugins/engram marketplace/.agents/plugins/marketplace.json
+          rm -f marketplace/marketplace.json
+          mkdir -p marketplace/plugins marketplace/.agents/plugins
           cp -r plugin/engram marketplace/engram
           cp -r plugin/engram marketplace/plugins/engram
-          cat > marketplace/marketplace.json <<'JSON'
+          cat > marketplace/.agents/plugins/marketplace.json <<'JSON'
           {
             "name": "engram-marketplace",
             "interface": {
