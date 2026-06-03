@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.10] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin startup diagnostics.** The MCP wrapper now writes a redacted
+  startup environment line to stderr and `pluginData/logs/startup-env.log`, so
+  operators can prove whether `ENGRAM_URL` and `ENGRAM_TOKEN` reached the
+  plugin-provided MCP child without exposing the token.
+- **Codex binary freshness on Windows.** `ensure-binary.js` no longer treats a
+  current installed binary as stale when Windows denies Node's piped
+  `--version` probe with `EPERM`. It still rejects marker mismatches before the
+  fallback, preserving the stale-binary guard added in v6.4.7.
+
 ## [6.4.9] - 2026-06-03
 
 ### Fixed

@@ -6,9 +6,13 @@ const test = require("node:test");
 const { execFileSync } = require("node:child_process");
 
 const {
+  appendStartupDiagnosticLog,
+  describeEnvValue,
+  formatStartupDiagnostic,
   inferCodexPluginDataDir,
   resolvePluginData,
   spawnFailureMessage,
+  trimStartupDiagnosticLog,
 } = require("./run-engram.js");
 
 test("MCP config launches wrapper via Codex plugin-root interpolation", () => {
@@ -200,6 +204,59 @@ test("does not report spawn failure for normal numeric exit status", () => {
   );
 
   assert.equal(message, "");
+});
+
+test("startup diagnostic classifies env values without leaking token contents", () => {
+  const diagnostic = formatStartupDiagnostic({
+    ENGRAM_URL: " http://example.test:37777 ",
+    ENGRAM_TOKEN: "engram_secret_keycard_value",
+    ENGRAM_SERVER_URL: "",
+    ENGRAM_CLAUDE_USERCONFIG_URL: "${user_config.server_url}",
+  });
+
+  assert.match(diagnostic, /ENGRAM_URL=present\(len=25\)/);
+  assert.match(diagnostic, /ENGRAM_TOKEN=redacted\(len=27\)/);
+  assert.match(diagnostic, /ENGRAM_SERVER_URL=empty/);
+  assert.match(diagnostic, /ENGRAM_CLAUDE_USERCONFIG_URL=placeholder/);
+  assert.doesNotMatch(diagnostic, /engram_secret_keycard_value/);
+});
+
+test("describeEnvValue reports missing and placeholder states", () => {
+  assert.equal(describeEnvValue("MISSING", {}), "MISSING=missing");
+  assert.equal(
+    describeEnvValue("PLACEHOLDER", { PLACEHOLDER: "${secret.value}" }, true),
+    "PLACEHOLDER=placeholder"
+  );
+});
+
+test("appendStartupDiagnosticLog writes bounded plugin-data log", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-startup-log-"));
+  appendStartupDiagnosticLog(dir, "[engram] startup env: ENGRAM_TOKEN=redacted(len=10)", new Date("2026-06-03T18:00:00Z"));
+
+  const logPath = path.join(dir, "logs", "startup-env.log");
+  const content = fs.readFileSync(logPath, "utf8");
+  assert.match(content, /2026-06-03T18:00:00\.000Z pid=\d+ \[engram\] startup env:/);
+  assert.doesNotMatch(content, /secret/);
+});
+
+test("trimStartupDiagnosticLog keeps complete log entries after truncation", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-trim-log-"));
+  const logPath = path.join(dir, "startup-env.log");
+
+  fs.writeFileSync(
+    logPath,
+    [
+      "2026-06-03T18:00:00.000Z pid=1 [engram] startup env: ENGRAM_URL=present(len=26)",
+      "2026-06-03T18:00:01.000Z pid=2 [engram] startup env: ENGRAM_URL=present(len=26)",
+      "2026-06-03T18:00:02.000Z pid=3 [engram] startup env: ENGRAM_URL=present(len=26)",
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  trimStartupDiagnosticLog(logPath, 220);
+
+  const content = fs.readFileSync(logPath, "utf8");
+  assert.match(content, /^2026-06-03T18:00:02\.000Z pid=3 /);
 });
 
 function restoreEnv(key, value) {
