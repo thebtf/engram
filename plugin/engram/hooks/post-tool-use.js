@@ -7,6 +7,8 @@ async function handlePostToolUse() {
   return '';
 }
 
-(async () => {
-  await lib.RunHook('PostToolUse', handlePostToolUse);
-})();
+if (require.main === module) {
+  (async () => {
+    await lib.RunHook('PostToolUse', handlePostToolUse);
+  })();
+}
