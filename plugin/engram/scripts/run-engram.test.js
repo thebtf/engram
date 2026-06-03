@@ -12,6 +12,7 @@ const {
   inferCodexPluginDataDir,
   resolvePluginData,
   spawnFailureMessage,
+  trimStartupDiagnosticLog,
 } = require("./run-engram.js");
 
 test("MCP config launches wrapper via Codex plugin-root interpolation", () => {
@@ -236,6 +237,26 @@ test("appendStartupDiagnosticLog writes bounded plugin-data log", () => {
   const content = fs.readFileSync(logPath, "utf8");
   assert.match(content, /2026-06-03T18:00:00\.000Z pid=\d+ \[engram\] startup env:/);
   assert.doesNotMatch(content, /secret/);
+});
+
+test("trimStartupDiagnosticLog keeps complete log entries after truncation", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-trim-log-"));
+  const logPath = path.join(dir, "startup-env.log");
+
+  fs.writeFileSync(
+    logPath,
+    [
+      "2026-06-03T18:00:00.000Z pid=1 [engram] startup env: ENGRAM_URL=present(len=26)",
+      "2026-06-03T18:00:01.000Z pid=2 [engram] startup env: ENGRAM_URL=present(len=26)",
+      "2026-06-03T18:00:02.000Z pid=3 [engram] startup env: ENGRAM_URL=present(len=26)",
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  trimStartupDiagnosticLog(logPath, 220);
+
+  const content = fs.readFileSync(logPath, "utf8");
+  assert.match(content, /^2026-06-03T18:00:02\.000Z pid=3 /);
 });
 
 function restoreEnv(key, value) {

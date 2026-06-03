@@ -213,7 +213,12 @@ function trimStartupDiagnosticLog(logPath, maxBytes = 128 * 1024) {
     }
 
     const content = fs.readFileSync(logPath, "utf8");
-    fs.writeFileSync(logPath, content.slice(-Math.floor(maxBytes / 2)), "utf8");
+    let trimmed = content.slice(-Math.floor(maxBytes / 2));
+    const firstNewline = trimmed.indexOf("\n");
+    if (firstNewline !== -1) {
+      trimmed = trimmed.slice(firstNewline + 1);
+    }
+    fs.writeFileSync(logPath, trimmed, "utf8");
   } catch {
     // Best-effort only.
   }
@@ -256,4 +261,5 @@ module.exports = {
   resolvePluginData,
   resolvePluginRoot,
   spawnFailureMessage,
+  trimStartupDiagnosticLog,
 };
