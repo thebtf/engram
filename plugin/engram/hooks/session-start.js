@@ -135,8 +135,9 @@ function buildCachedSessionStartPayload(overrides = {}) {
 }
 
 async function handleSessionStart(ctx, input) {
-  if (!process.env.ENGRAM_URL) {
-    return '<engram-setup>\nEngram plugin is installed but not configured.\nSet environment variables to connect to your Engram server:\n  export ENGRAM_URL=http://your-server:37777/mcp\n  export ENGRAM_AUTH_ADMIN_TOKEN=your-token\nThen restart Claude Code.\n</engram-setup>';
+  const runtimeEnv = configureRuntimeEnv();
+  if (!runtimeEnv.serverURL || !runtimeEnv.token) {
+    return '<engram-setup>\nEngram plugin is installed but not configured.\nSet ENGRAM_URL and ENGRAM_TOKEN to connect to your Engram server.\nClaude Code: run /engram:setup or edit ~/.claude/settings.json env.\nCodex: edit ~/.codex/config.toml [shell_environment_policy.set].\nNever put ENGRAM_AUTH_ADMIN_TOKEN on a workstation.\n</engram-setup>';
   }
 
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
@@ -219,3 +220,45 @@ module.exports = {
   buildCachedSessionStartPayload,
   handleSessionStart,
 };
+
+function configureRuntimeEnv() {
+  const serverURL = configuredEnvValue(
+    process.env.ENGRAM_URL,
+    process.env.ENGRAM_SERVER_URL,
+    process.env.ENGRAM_CLAUDE_USERCONFIG_URL
+  );
+  const token = configuredEnvValue(
+    process.env.ENGRAM_TOKEN,
+    process.env.ENGRAM_CLAUDE_USERCONFIG_TOKEN
+  );
+
+  if (serverURL) {
+    process.env.ENGRAM_URL = serverURL;
+  }
+  if (token) {
+    process.env.ENGRAM_TOKEN = token;
+  }
+
+  return { serverURL, token };
+}
+
+function configuredEnvValue(...values) {
+  for (const value of values) {
+    if (!isConfiguredEnvValue(value)) {
+      continue;
+    }
+    return value.trim();
+  }
+  return '';
+}
+
+function isConfiguredEnvValue(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return false;
+  }
+  return !/^\$\{[^}]+\}$/.test(trimmed);
+}

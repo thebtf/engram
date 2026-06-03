@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.4] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin MCP startup configuration.** Added a native Codex plugin
+  manifest and a validator-compatible MCP entrypoint so Desktop Codex can
+  launch Engram with `ENGRAM_URL` and `ENGRAM_TOKEN` from the Codex shell
+  environment policy instead of inheriting Claude-only `userConfig` wiring.
+  The shared wrapper now also accepts Claude userConfig values through
+  separate compatibility variables, preserving the Claude install path while
+  making Codex fail fast with actionable setup errors when required
+  workstation credentials are missing.
+- **Codex plugin release packaging.** GoReleaser archives now include the
+  Codex manifest alongside the Claude manifest, and the release-binary workflow
+  verifies the Linux client binary reports the tagged version before uploading
+  assets. This keeps plugin installs from pointing at a version whose client
+  binary was never published.
+- **Marketplace sync after binary publication.** The plugin marketplace sync
+  workflow now also runs after a successful `Release Binary` workflow and can
+  be dispatched manually, avoiding the GitHub Actions `GITHUB_TOKEN` recursion
+  trap where a release created by the release workflow does not trigger the
+  downstream `release: published` marketplace workflow.
+
 ## [6.4.3] - 2026-06-02
 
 ### Fixed
@@ -724,7 +747,11 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.4...HEAD
+[6.4.4]: https://github.com/thebtf/engram/compare/v6.4.3...v6.4.4
+[6.4.3]: https://github.com/thebtf/engram/compare/v6.4.2...v6.4.3
+[6.4.2]: https://github.com/thebtf/engram/compare/v6.4.1...v6.4.2
+[6.4.1]: https://github.com/thebtf/engram/compare/v6.4.0...v6.4.1
 [5.0.0]: https://github.com/thebtf/engram/compare/v3.7.1...v5.0.0
 [3.7.0]: https://github.com/thebtf/engram/releases/tag/v3.7.0
 [2.4.0]: https://github.com/thebtf/engram/compare/v2.3.1...v2.4.0

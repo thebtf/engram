@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// ensure-binary.js — Downloads the engram binary if not present or outdated.
-// Called by SessionStart hook. Caches binary in CLAUDE_PLUGIN_DATA/bin/.
+// ensure-binary.js - Downloads the engram binary if not present or outdated.
+// Called by SessionStart hook and by the MCP wrapper when needed.
+// Caches binary in PLUGIN_DATA/bin/ or CLAUDE_PLUGIN_DATA/bin/.
 //
-// Environment (set by Claude Code):
-//   CLAUDE_PLUGIN_ROOT — plugin installation directory
-//   CLAUDE_PLUGIN_DATA — persistent data directory (~/.claude/plugins/data/{id}/)
+// Environment (set by Codex / Claude Code):
+//   PLUGIN_ROOT / CLAUDE_PLUGIN_ROOT - plugin installation directory
+//   PLUGIN_DATA / CLAUDE_PLUGIN_DATA - persistent plugin data directory
 
 const fs = require("fs");
 const path = require("path");
@@ -15,16 +16,19 @@ const { execSync } = require("child_process");
 const REPO = "thebtf/engram";
 
 async function main() {
-  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
-  const pluginData = process.env.CLAUDE_PLUGIN_DATA;
+  const pluginRoot = process.env.PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT;
+  const pluginData = process.env.PLUGIN_DATA || process.env.CLAUDE_PLUGIN_DATA;
 
   if (!pluginRoot || !pluginData) {
-    // Not running inside Claude Code plugin context — skip silently
+    // Not running inside plugin context - skip silently.
     return;
   }
 
   // Read desired version from plugin.json
-  const pluginJsonPath = path.join(pluginRoot, ".claude-plugin", "plugin.json");
+  const pluginJsonPath = firstExistingPath([
+    path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+    path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+  ]);
   let desiredVersion;
   try {
     const pluginJson = JSON.parse(fs.readFileSync(pluginJsonPath, "utf8"));
@@ -130,6 +134,15 @@ async function main() {
   // Signal the running daemon to gracefully restart so it picks up the new
   // binary without waiting for the next Claude Code session start.
   await notifyDaemonRestart(pluginData, platform);
+}
+
+function firstExistingPath(candidates) {
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[0];
 }
 
 // notifyDaemonRestart sends the "graceful-restart" command to the running

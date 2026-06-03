@@ -10,7 +10,26 @@ Configure the connection to your Engram server.
 > If you are upgrading from v5.x: you MUST issue a fresh keycard via the
 > dashboard before this session can authenticate. See step 2 below.
 
-## Why `settings.json` env vars (not `/config` UI)
+## Codex setup
+
+Codex does not use Claude Code `userConfig`. Configure the two required values
+in `~/.codex/config.toml` so the plugin MCP server can forward them via
+`env_vars`.
+
+Add or update:
+
+```toml
+[shell_environment_policy.set]
+ENGRAM_URL = "http://your-server:37777"
+ENGRAM_TOKEN = "engram_<32hex-keycard-from-dashboard>"
+```
+
+Then restart Codex or open a new Codex thread so MCP startup sees the new
+environment. If Codex offers plugin authentication during install, provide the
+same server URL and worker keycard there; the config values above remain the
+portable fallback for CLI, IDE, and Desktop.
+
+## Claude Code setup
 
 Claude Code supports two paths for plugin credentials:
 
@@ -24,7 +43,7 @@ Claude Code supports two paths for plugin credentials:
    `ENGRAM_TOKEN` in `~/.claude/settings.json`. Survives all of the above
    because it's a separate file touched only by your edits.
 
-The plugin accepts either path; this guide uses path 2.
+The Claude plugin accepts either path; this guide uses path 2.
 
 ## Instructions
 
@@ -56,10 +75,10 @@ If the user pastes a value that does NOT begin with `engram_`, refuse and
 explain that this looks like the operator key — that is forbidden on
 workstations as of v6. Ask them to issue a fresh keycard via the dashboard.
 
-### 3. Update settings.json
+### 3. Update local agent config
 
-Read `~/.claude/settings.json`, then add `ENGRAM_URL` and `ENGRAM_TOKEN` to
-the `env` section. Use the Edit tool.
+For Claude Code, read `~/.claude/settings.json`, then add `ENGRAM_URL` and
+`ENGRAM_TOKEN` to the `env` section. Use the Edit tool.
 
 **Example result (env section only):**
 
@@ -79,12 +98,15 @@ it there triggers a v6 warning at daemon startup.
 If the user has a stale `ENGRAM_API_TOKEN` entry, remove it too (v5-era
 name, no longer read).
 
-### 4. Restart Claude Code
+For Codex, update `~/.codex/config.toml` as shown in "Codex setup" above.
 
-> Settings are only read when Claude Code starts. Please **close and reopen
-> Claude Code** for the changes to take effect. The engram daemon will exit
-> non-zero on startup if `ENGRAM_TOKEN` is missing AND `ENGRAM_URL` is set,
-> so you'll see a clear error rather than silent partial-tool degradation.
+### 4. Restart the agent host
+
+> Settings are only read when the agent host starts. Please **close and reopen
+> Claude Code/Codex or start a new Codex thread** for the changes to take
+> effect. The plugin wrapper exits non-zero when `ENGRAM_URL` or
+> `ENGRAM_TOKEN` is missing, so you'll see a clear error rather than silent
+> partial-tool degradation.
 
 ### 5. Verify connection
 

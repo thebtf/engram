@@ -1,20 +1,43 @@
 #!/bin/bash
 # Copy static plugin configuration files to release directory.
 # Called from .goreleaser.yaml before hooks. The output goes into a
-# .claude-plugin/ directory that the goreleaser archive then bundles into
-# the per-platform tar.gz / zip artefacts consumed by scripts/install.sh.
+# .claude-plugin/ and .codex-plugin/ directories that the goreleaser archive
+# then bundles into the per-platform tar.gz / zip artefacts consumed by
+# scripts/install.sh.
 
 set -e
 
-OUTPUT_DIR=".claude-plugin"
-mkdir -p "$OUTPUT_DIR"
+CLAUDE_OUTPUT_DIR=".claude-plugin"
+CODEX_OUTPUT_DIR=".codex-plugin"
+CLAUDE_MANIFEST="plugin/engram/.claude-plugin/plugin.json"
+CODEX_MANIFEST="plugin/engram/.codex-plugin/plugin.json"
+
+read_manifest_version() {
+  node -e "const fs=require('fs'); const manifest=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(manifest.version || '');" "$1"
+}
+
+CLAUDE_VERSION="$(read_manifest_version "$CLAUDE_MANIFEST")"
+CODEX_VERSION="$(read_manifest_version "$CODEX_MANIFEST")"
+
+if [ "$CLAUDE_VERSION" != "$CODEX_VERSION" ]; then
+  echo "Plugin manifest version mismatch: $CLAUDE_MANIFEST=$CLAUDE_VERSION, $CODEX_MANIFEST=$CODEX_VERSION" >&2
+  exit 1
+fi
+
+mkdir -p "$CLAUDE_OUTPUT_DIR"
+mkdir -p "$CODEX_OUTPUT_DIR"
 
 # plugin.json single source of truth lives in plugin/engram/.claude-plugin/.
 # Copy it into the release-time OUTPUT_DIR so the goreleaser archive picks
 # up the freshly-bumped version (install.sh then unpacks it to
 # $INSTALL_DIR/.claude-plugin/plugin.json).
-cp "plugin/engram/.claude-plugin/plugin.json" "$OUTPUT_DIR/plugin.json"
-echo "Copied $OUTPUT_DIR/plugin.json"
+cp "$CLAUDE_MANIFEST" "$CLAUDE_OUTPUT_DIR/plugin.json"
+echo "Copied $CLAUDE_OUTPUT_DIR/plugin.json"
+
+# Codex has its own plugin manifest format. Keep it parallel to Claude's
+# manifest instead of trying to reuse Claude userConfig fields.
+cp "$CODEX_MANIFEST" "$CODEX_OUTPUT_DIR/plugin.json"
+echo "Copied $CODEX_OUTPUT_DIR/plugin.json"
 
 # History note: an earlier version of this script ran
 #   cp plugin/.claude-plugin/marketplace.json $OUTPUT_DIR/marketplace.json

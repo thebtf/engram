@@ -87,7 +87,7 @@ function ProjectIDWithName(cwd) {
 
 function buildRequestHeaders(includeJsonBody = false) {
   const headers = {};
-  const token = process.env.ENGRAM_AUTH_ADMIN_TOKEN;
+  const token = process.env.ENGRAM_TOKEN;
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
