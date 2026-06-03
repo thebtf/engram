@@ -65,6 +65,48 @@ test("explicit plugin data env takes precedence over inferred Codex path", () =>
   }
 });
 
+test("Claude plugin data env takes precedence when PLUGIN_DATA is absent", () => {
+  const previousPluginData = process.env.PLUGIN_DATA;
+  const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
+  const explicit = path.join(os.tmpdir(), "explicit-claude-engram-data");
+
+  try {
+    delete process.env.PLUGIN_DATA;
+    process.env.CLAUDE_PLUGIN_DATA = explicit;
+
+    const pluginRoot = path.join(
+      os.tmpdir(),
+      "plugins",
+      "cache",
+      "engram-marketplace",
+      "engram",
+      "6.4.4"
+    );
+
+    assert.equal(resolvePluginData(pluginRoot), explicit);
+  } finally {
+    restoreEnv("PLUGIN_DATA", previousPluginData);
+    restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
+  }
+});
+
+test("falls back to plugin-local data dir outside Codex cache layout", () => {
+  const previousPluginData = process.env.PLUGIN_DATA;
+  const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
+
+  try {
+    delete process.env.PLUGIN_DATA;
+    delete process.env.CLAUDE_PLUGIN_DATA;
+
+    const pluginRoot = path.join(os.tmpdir(), "engram-plugin-root");
+
+    assert.equal(resolvePluginData(pluginRoot), path.join(pluginRoot, ".data"));
+  } finally {
+    restoreEnv("PLUGIN_DATA", previousPluginData);
+    restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
+  }
+});
+
 test("reports spawnSync launch errors instead of treating them as exit status", () => {
   const message = spawnFailureMessage(
     { error: new Error("access denied"), status: null, signal: null },
@@ -81,6 +123,15 @@ test("reports signal termination from spawnSync results", () => {
   );
 
   assert.equal(message, "[engram] ensure-binary terminated by signal SIGTERM\n");
+});
+
+test("does not report spawn failure for normal numeric exit status", () => {
+  const message = spawnFailureMessage(
+    { error: undefined, status: 2, signal: null },
+    "ensure-binary"
+  );
+
+  assert.equal(message, "");
 });
 
 function restoreEnv(key, value) {
