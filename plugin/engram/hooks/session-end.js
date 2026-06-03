@@ -30,6 +30,8 @@ async function handleSessionEnd(ctx, input) {
   return '';
 }
 
-(async () => {
-  await lib.RunHook('SessionEnd', handleSessionEnd);
-})();
+if (require.main === module) {
+  (async () => {
+    await lib.RunHook('SessionEnd', handleSessionEnd);
+  })();
+}

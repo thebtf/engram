@@ -4,9 +4,9 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "-e",
-        "const path=require('path');const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd();const entry=path.join(root,'scripts','run-engram.js');process.argv=[process.argv[0],entry];require(entry);"
+        "./scripts/run-engram.js"
       ],
+      "cwd": ".",
       "env": {
         "ENGRAM_CLAUDE_USERCONFIG_URL": "${user_config.server_url}",
         "ENGRAM_CLAUDE_USERCONFIG_TOKEN": "${user_config.api_token}"
