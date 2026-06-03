@@ -21,6 +21,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -47,6 +49,7 @@ const muxcoreDaemonFlag = "--muxcore-daemon"
 type muxcoreDaemonVersionMarker struct {
 	Version string `json:"version"`
 	PID     int    `json:"pid"`
+	Exe     string `json:"exe"`
 }
 
 // startupGate enforces FR-4 / Plan ADR-005. When the daemon process starts
@@ -92,6 +95,15 @@ func muxcoreDaemonVersionPath() string {
 }
 
 func muxcoreDaemonVersionMatches(path string, want string, livePID int) bool {
+	currentExe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+
+	return muxcoreDaemonVersionMarkerMatches(path, want, livePID, currentExe)
+}
+
+func muxcoreDaemonVersionMarkerMatches(path string, want string, livePID int, currentExe string) bool {
 	got, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -101,7 +113,19 @@ func muxcoreDaemonVersionMatches(path string, want string, livePID int) bool {
 	if err := json.Unmarshal(got, &marker); err != nil {
 		return false
 	}
-	return marker.Version == want && marker.PID == livePID
+	return marker.Version == want && marker.PID == livePID && sameExecutablePath(marker.Exe, currentExe)
+}
+
+func sameExecutablePath(a string, b string) bool {
+	a = filepath.Clean(strings.TrimSpace(a))
+	b = filepath.Clean(strings.TrimSpace(b))
+	if a == "." || b == "." {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 func muxcoreDaemonStatusPID(ctlPath string) (int, bool) {
@@ -187,7 +211,12 @@ func writeMuxcoreDaemonVersionMarker(logger *slog.Logger) {
 		)
 		return
 	}
-	payload, err := json.Marshal(muxcoreDaemonVersionMarker{Version: daemonVersion, PID: os.Getpid()})
+	exePath, err := os.Executable()
+	if err != nil {
+		logger.Warn("could not resolve executable path for muxcore daemon version marker", "error", err)
+		return
+	}
+	payload, err := json.Marshal(muxcoreDaemonVersionMarker{Version: daemonVersion, PID: os.Getpid(), Exe: exePath})
 	if err != nil {
 		logger.Warn("could not marshal muxcore daemon version marker", "error", err)
 		return
