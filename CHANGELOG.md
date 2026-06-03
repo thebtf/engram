@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.9] - 2026-06-03
+
+### Fixed
+
+- **Repo-local Codex marketplace source.** Added a tracked
+  `.agents/plugins/marketplace.json` for local Codex marketplace installs from
+  the engram repository root. The local marketplace now uses the same
+  `engram-marketplace` marketplace name as the published marketplace so local
+  testing installs `engram@engram-marketplace` instead of creating a second
+  `engram@engram` identity with stale plugin data.
+- **Version bump for marketplace pickup.** Bumped the Claude and Codex plugin
+  manifests plus the daemon version source to `6.4.9` so consumer plugin caches
+  do not treat the marketplace correction as already installed content.
+
 ## [6.4.8] - 2026-06-03
 
 ### Fixed
@@ -812,7 +826,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.8...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.9...HEAD
+[6.4.9]: https://github.com/thebtf/engram/compare/v6.4.8...v6.4.9
 [6.4.8]: https://github.com/thebtf/engram/compare/v6.4.7...v6.4.8
 [6.4.7]: https://github.com/thebtf/engram/compare/v6.4.6...v6.4.7
 [6.4.6]: https://github.com/thebtf/engram/compare/v6.4.5...v6.4.6
