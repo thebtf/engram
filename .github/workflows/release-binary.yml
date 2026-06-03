@@ -49,11 +49,8 @@ jobs:
               *) echo "version output did not include ${VERSION}: ${version_output}" >&2; exit 1 ;;
             esac
 
-            init_output="$(
-              ENGRAM_DATA_DIR="${RUNNER_TEMP}/engram-release-smoke" timeout 20s ./engram-${{ matrix.suffix }} <<'JSON'
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
-JSON
-            )"
+            init_request='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+            init_output="$(ENGRAM_DATA_DIR="${RUNNER_TEMP}/engram-release-smoke" timeout 20s ./engram-${{ matrix.suffix }} <<<"$init_request")"
             case "$init_output" in
               *"\"serverInfo\""*"\"version\":\"${VERSION}\""*) ;;
               *) echo "initialize serverInfo.version did not include ${VERSION}: ${init_output}" >&2; exit 1 ;;
