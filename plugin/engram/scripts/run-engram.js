@@ -6,6 +6,8 @@ const { spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
+const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
+
 function main() {
   const pluginRoot = resolvePluginRoot();
   const pluginData = resolvePluginData(pluginRoot);
@@ -199,13 +201,16 @@ function appendStartupDiagnosticLog(pluginData, line, now = new Date()) {
     fs.mkdirSync(logsDir, { recursive: true });
     const logPath = path.join(logsDir, "startup-env.log");
     fs.appendFileSync(logPath, `${now.toISOString()} pid=${process.pid} ${line}\n`, "utf8");
-    trimStartupDiagnosticLog(logPath);
+    const stat = fs.statSync(logPath);
+    if (stat.size > 2 * STARTUP_DIAGNOSTIC_LOG_MAX_BYTES) {
+      trimStartupDiagnosticLog(logPath);
+    }
   } catch {
     // Diagnostics must never prevent MCP startup.
   }
 }
 
-function trimStartupDiagnosticLog(logPath, maxBytes = 128 * 1024) {
+function trimStartupDiagnosticLog(logPath, maxBytes = STARTUP_DIAGNOSTIC_LOG_MAX_BYTES) {
   try {
     const stat = fs.statSync(logPath);
     if (stat.size <= maxBytes) {

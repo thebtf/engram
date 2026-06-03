@@ -10,27 +10,53 @@ func TestMuxcoreDaemonVersionMatches(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "muxcore-daemon.version")
-	if muxcoreDaemonVersionMatches(path, "v6.4.6", 1234) {
+	currentExe := filepath.Join(t.TempDir(), "engram.exe")
+
+	if muxcoreDaemonVersionMarkerMatches(path, "v6.4.6", 1234, currentExe) {
 		t.Fatal("missing marker must not match")
 	}
 
 	if err := os.WriteFile(path, []byte("v6.4.6\n"), 0o600); err != nil {
 		t.Fatalf("write legacy marker: %v", err)
 	}
-	if muxcoreDaemonVersionMatches(path, "v6.4.6", 1234) {
+	if muxcoreDaemonVersionMarkerMatches(path, "v6.4.6", 1234, currentExe) {
 		t.Fatal("legacy version-only marker must not match")
 	}
 
 	if err := os.WriteFile(path, []byte(`{"version":"v6.4.6","pid":1234}`+"\n"), 0o600); err != nil {
-		t.Fatalf("write marker: %v", err)
+		t.Fatalf("write marker without exe: %v", err)
 	}
-	if !muxcoreDaemonVersionMatches(path, "v6.4.6", 1234) {
-		t.Fatal("marker with matching version and pid should match")
+	if muxcoreDaemonVersionMarkerMatches(path, "v6.4.6", 1234, currentExe) {
+		t.Fatal("marker without executable path must not match")
 	}
-	if muxcoreDaemonVersionMatches(path, "v6.4.7", 1234) {
+
+	if err := os.WriteFile(path, []byte(`{"version":"v6.4.6","pid":1234,"exe":"`+filepath.ToSlash(currentExe)+`"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write marker with exe: %v", err)
+	}
+	if !muxcoreDaemonVersionMarkerMatches(path, "v6.4.6", 1234, filepath.ToSlash(currentExe)) {
+		t.Fatal("marker with matching version, pid, and executable should match")
+	}
+	if muxcoreDaemonVersionMarkerMatches(path, "v6.4.7", 1234, currentExe) {
 		t.Fatal("different daemon version must not match")
 	}
-	if muxcoreDaemonVersionMatches(path, "v6.4.6", 5678) {
+	if muxcoreDaemonVersionMarkerMatches(path, "v6.4.6", 5678, currentExe) {
 		t.Fatal("different daemon pid must not match")
+	}
+	if muxcoreDaemonVersionMarkerMatches(path, "v6.4.6", 1234, filepath.Join(t.TempDir(), "other-engram.exe")) {
+		t.Fatal("different daemon executable must not match")
+	}
+}
+
+func TestExecutablePathsAreCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	if !executablePathsAreCaseInsensitive("windows") {
+		t.Fatal("Windows executable paths should be compared case-insensitively")
+	}
+	if !executablePathsAreCaseInsensitive("darwin") {
+		t.Fatal("macOS executable paths should be compared case-insensitively")
+	}
+	if executablePathsAreCaseInsensitive("linux") {
+		t.Fatal("Linux executable paths should stay case-sensitive")
 	}
 }
