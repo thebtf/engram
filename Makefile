@@ -85,7 +85,7 @@ worker:
 engram:
 	@echo "Building MCP client..."
 	@mkdir -p $(BUILD_DIR)
-	go build $(LDFLAGS) -o $(BUILD_DIR)/engram ./cmd/engram
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BUILD_DIR)/engram ./cmd/engram
 
 # Build for all platforms
 build-all: build-linux build-darwin build-windows
