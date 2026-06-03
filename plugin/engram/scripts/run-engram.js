@@ -177,6 +177,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  main,
   configuredEnvValue,
   inferCodexPluginDataDir,
   isConfiguredValue,

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.6] - 2026-06-03
+
+### Fixed
+
+- **Codex MCP entrypoint execution.** Fixed the marketplace `.mcp.json`
+  bootstrap so the `node -e` entrypoint actually invokes
+  `scripts/run-engram.js` instead of only importing it. In `6.4.5`, Desktop
+  Codex could install the correct cache slot but the MCP subprocess exited
+  before answering `initialize`, producing `connection closed: initialize
+  response`.
+- **Stale embedded muxcore daemon after client upgrades.** The local daemon now
+  records the muxcore daemon version beside the muxcore control socket, and the
+  client shim stops a missing-version or mismatched-version daemon before
+  connecting. This prevents a newly installed binary from reusing an older
+  persistent muxcore daemon and replaying stale MCP `initialize.serverInfo`
+  data such as `v5.0.0` while the visible binary reports `v6.4.5+`.
+- **Release binary initialize smoke.** The release-binary workflow now checks
+  the Linux release asset's MCP `initialize.serverInfo.version`, not only
+  `engram --version`, so version-source drift blocks publication.
+- **Entrypoint regression coverage.** Added a Node regression test that runs
+  the exact `.mcp.json` eval command against a temporary wrapper and verifies
+  the wrapper `main()` function executes.
+
 ## [6.4.5] - 2026-06-03
 
 ### Fixed
@@ -763,7 +786,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.5...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.6...HEAD
+[6.4.6]: https://github.com/thebtf/engram/compare/v6.4.5...v6.4.6
 [6.4.5]: https://github.com/thebtf/engram/compare/v6.4.4...v6.4.5
 [6.4.4]: https://github.com/thebtf/engram/compare/v6.4.3...v6.4.4
 [6.4.3]: https://github.com/thebtf/engram/compare/v6.4.2...v6.4.3

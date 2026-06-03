@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { execFileSync } = require("node:child_process");
 
 const {
   inferCodexPluginDataDir,
@@ -17,10 +18,85 @@ test("MCP config preserves plugin-root env fallback and Codex cwd fallback", () 
 
   assert.equal(server.command, "node");
   assert.equal(server.args[0], "-e");
+  assert.equal(server.args[2], "--");
   assert.match(server.args[1], /process\.env\.PLUGIN_ROOT/);
   assert.match(server.args[1], /process\.env\.CLAUDE_PLUGIN_ROOT/);
   assert.match(server.args[1], /process\.cwd\(\)/);
   assert.equal(server.cwd, ".");
+});
+
+test("MCP eval entrypoint invokes the wrapper main function", () => {
+  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
+  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
+  const server = payload.mcpServers.engram;
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "engram-mcp-entrypoint-"));
+  const scriptsDir = path.join(tmpRoot, "scripts");
+  const markerPath = path.join(tmpRoot, "main-ran.txt");
+
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(scriptsDir, "run-engram.js"),
+    [
+      "const fs = require('node:fs');",
+      "function main() {",
+      "  fs.writeFileSync(process.env.ENGRAM_TEST_MARKER, process.argv.slice(1).join('|'));",
+      "}",
+      "module.exports = { main };",
+      "",
+    ].join("\n")
+  );
+
+  execFileSync(process.execPath, server.args, {
+    cwd: tmpRoot,
+    env: {
+      ...process.env,
+      CLAUDE_PLUGIN_ROOT: "",
+      ENGRAM_TEST_MARKER: markerPath,
+      PLUGIN_ROOT: "",
+    },
+  });
+
+  assert.equal(
+    fs.readFileSync(markerPath, "utf8"),
+    path.join(tmpRoot, "scripts", "run-engram.js")
+  );
+});
+
+test("MCP eval entrypoint preserves host-provided argv", () => {
+  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
+  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
+  const server = payload.mcpServers.engram;
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "engram-mcp-argv-"));
+  const scriptsDir = path.join(tmpRoot, "scripts");
+  const markerPath = path.join(tmpRoot, "argv.txt");
+
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(scriptsDir, "run-engram.js"),
+    [
+      "const fs = require('node:fs');",
+      "function main() {",
+      "  fs.writeFileSync(process.env.ENGRAM_TEST_MARKER, process.argv.slice(1).join('|'));",
+      "}",
+      "module.exports = { main };",
+      "",
+    ].join("\n")
+  );
+
+  execFileSync(process.execPath, [...server.args, "--from-host", "value"], {
+    cwd: tmpRoot,
+    env: {
+      ...process.env,
+      CLAUDE_PLUGIN_ROOT: "",
+      ENGRAM_TEST_MARKER: markerPath,
+      PLUGIN_ROOT: "",
+    },
+  });
+
+  assert.equal(
+    fs.readFileSync(markerPath, "utf8"),
+    [path.join(tmpRoot, "scripts", "run-engram.js"), "--from-host", "value"].join("|")
+  );
 });
 
 test("infers Codex plugin data dir from installed cache root", () => {
