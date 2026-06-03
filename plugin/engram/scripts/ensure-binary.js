@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const http = require("http");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 
 const REPO = "thebtf/engram";
 
@@ -63,16 +63,8 @@ async function main() {
   const binaryPath = path.join(binDir, binaryName);
   const versionFile = path.join(binDir, ".version");
 
-  // Check if correct version already installed
-  if (fs.existsSync(binaryPath) && fs.existsSync(versionFile)) {
-    try {
-      const installed = fs.readFileSync(versionFile, "utf8").trim();
-      if (installed === desiredVersion) {
-        return; // Already up to date
-      }
-    } catch {
-      // Version file unreadable — re-download
-    }
+  if (installedBinaryMatches(binaryPath, versionFile, desiredVersion)) {
+    return; // Already up to date
   }
 
   process.stderr.write(
@@ -262,7 +254,64 @@ function download(url, destPath) {
   });
 }
 
-main().catch((err) => {
-  process.stderr.write(`[engram] ensure-binary error: ${err.message}\n`);
-  // Non-fatal — plugin hooks still work, just no MCP daemon
-});
+function installedBinaryMatches(binaryPath, versionFile, desiredVersion, readVersion = readBinaryVersion) {
+  if (!fs.existsSync(binaryPath)) {
+    return false;
+  }
+
+  if (fs.existsSync(versionFile)) {
+    try {
+      const installed = fs.readFileSync(versionFile, "utf8").trim();
+      if (installed !== desiredVersion) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  const actualVersion = readVersion(binaryPath);
+  return actualVersion === daemonVersionForPluginVersion(desiredVersion);
+}
+
+function readBinaryVersion(binaryPath) {
+  try {
+    const output = execFileSync(binaryPath, ["--version"], {
+      encoding: "utf8",
+      timeout: 5000,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ENGRAM_URL: "",
+        ENGRAM_TOKEN: "",
+      },
+    });
+    const match = output.match(/\b(v?\d+\.\d+\.\d+(?:[-+][^\s]+)?)/);
+    if (!match) {
+      return "";
+    }
+    return daemonVersionForPluginVersion(match[1]);
+  } catch {
+    return "";
+  }
+}
+
+function daemonVersionForPluginVersion(version) {
+  if (!version) {
+    return "";
+  }
+  return version.startsWith("v") ? version : `v${version}`;
+}
+
+if (require.main === module) {
+  main().catch((err) => {
+    process.stderr.write(`[engram] ensure-binary error: ${err.message}\n`);
+    // Non-fatal — plugin hooks still work, just no MCP daemon
+  });
+}
+
+module.exports = {
+  daemonVersionForPluginVersion,
+  installedBinaryMatches,
+  readBinaryVersion,
+};
