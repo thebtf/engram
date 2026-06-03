@@ -14,6 +14,8 @@ function main() {
   const binaryPath = path.join(pluginData, "bin", `engram${ext}`);
   const ensureBinary = path.join(pluginRoot, "scripts", "ensure-binary.js");
 
+  emitStartupDiagnostic(pluginData);
+
   if (fs.existsSync(ensureBinary)) {
     // ensure-binary owns freshness: it compares plugin.json with both the
     // marker file and the binary's own --version output.
@@ -152,6 +154,71 @@ function isConfiguredValue(value) {
   return !/^\$\{[^}]+\}$/.test(trimmed);
 }
 
+function emitStartupDiagnostic(pluginData) {
+  const line = formatStartupDiagnostic();
+  process.stderr.write(`${line}\n`);
+  appendStartupDiagnosticLog(pluginData, line);
+}
+
+function formatStartupDiagnostic(env = process.env) {
+  const keys = [
+    ["ENGRAM_URL", false],
+    ["ENGRAM_TOKEN", true],
+    ["ENGRAM_SERVER_URL", false],
+    ["ENGRAM_CLAUDE_USERCONFIG_URL", false],
+    ["ENGRAM_CLAUDE_USERCONFIG_TOKEN", true],
+    ["PLUGIN_ROOT", false],
+    ["CLAUDE_PLUGIN_ROOT", false],
+    ["PLUGIN_DATA", false],
+    ["CLAUDE_PLUGIN_DATA", false],
+  ];
+  return `[engram] startup env: ${keys.map(([key, sensitive]) => describeEnvValue(key, env, sensitive)).join("; ")}`;
+}
+
+function describeEnvValue(key, env = process.env, sensitive = false) {
+  const raw = env[key];
+  if (typeof raw !== "string") {
+    return `${key}=missing`;
+  }
+
+  const value = raw.trim();
+  if (!value) {
+    return `${key}=empty`;
+  }
+  if (/^\$\{[^}]+\}$/.test(value)) {
+    return `${key}=placeholder`;
+  }
+
+  const kind = sensitive ? "redacted" : "present";
+  return `${key}=${kind}(len=${value.length})`;
+}
+
+function appendStartupDiagnosticLog(pluginData, line, now = new Date()) {
+  try {
+    const logsDir = path.join(pluginData, "logs");
+    fs.mkdirSync(logsDir, { recursive: true });
+    const logPath = path.join(logsDir, "startup-env.log");
+    fs.appendFileSync(logPath, `${now.toISOString()} pid=${process.pid} ${line}\n`, "utf8");
+    trimStartupDiagnosticLog(logPath);
+  } catch {
+    // Diagnostics must never prevent MCP startup.
+  }
+}
+
+function trimStartupDiagnosticLog(logPath, maxBytes = 128 * 1024) {
+  try {
+    const stat = fs.statSync(logPath);
+    if (stat.size <= maxBytes) {
+      return;
+    }
+
+    const content = fs.readFileSync(logPath, "utf8");
+    fs.writeFileSync(logPath, content.slice(-Math.floor(maxBytes / 2)), "utf8");
+  } catch {
+    // Best-effort only.
+  }
+}
+
 function checkedSpawnSync(command, args, options, label) {
   const result = spawnSync(command, args, options);
   const failure = spawnFailureMessage(result, label);
@@ -180,6 +247,10 @@ if (require.main === module) {
 module.exports = {
   main,
   configuredEnvValue,
+  appendStartupDiagnosticLog,
+  describeEnvValue,
+  emitStartupDiagnostic,
+  formatStartupDiagnostic,
   inferCodexPluginDataDir,
   isConfiguredValue,
   resolvePluginData,

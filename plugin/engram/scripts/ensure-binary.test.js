@@ -42,6 +42,34 @@ test("installedBinaryMatches accepts matching marker and binary version", () => 
   );
 });
 
+test("installedBinaryMatches accepts matching marker when piped version probe is blocked", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-ensure-binary-"));
+  const binaryPath = path.join(dir, process.platform === "win32" ? "engram.exe" : "engram");
+  const versionFile = path.join(dir, ".version");
+
+  fs.writeFileSync(binaryPath, "fake");
+  fs.writeFileSync(versionFile, "6.4.7");
+
+  assert.equal(
+    installedBinaryMatches(binaryPath, versionFile, "6.4.7", () => "", () => true),
+    true
+  );
+});
+
+test("installedBinaryMatches rejects matching marker when fallback version probe cannot start", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-ensure-binary-"));
+  const binaryPath = path.join(dir, process.platform === "win32" ? "engram.exe" : "engram");
+  const versionFile = path.join(dir, ".version");
+
+  fs.writeFileSync(binaryPath, "fake");
+  fs.writeFileSync(versionFile, "6.4.7");
+
+  assert.equal(
+    installedBinaryMatches(binaryPath, versionFile, "6.4.7", () => "", () => false),
+    false
+  );
+});
+
 test("installedBinaryMatches rejects marker mismatch before binary version", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-ensure-binary-"));
   const binaryPath = path.join(dir, process.platform === "win32" ? "engram.exe" : "engram");
