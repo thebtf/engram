@@ -38,8 +38,32 @@ jobs:
 
       - name: Sync plugin files
         run: |
-          rm -rf marketplace/engram
+          rm -rf marketplace/engram marketplace/plugins/engram
+          mkdir -p marketplace/plugins
           cp -r plugin/engram marketplace/engram
+          cp -r plugin/engram marketplace/plugins/engram
+          cat > marketplace/marketplace.json <<'JSON'
+          {
+            "name": "engram-marketplace",
+            "interface": {
+              "displayName": "Engram Marketplace"
+            },
+            "plugins": [
+              {
+                "name": "engram",
+                "source": {
+                  "source": "local",
+                  "path": "./plugins/engram"
+                },
+                "policy": {
+                  "installation": "AVAILABLE",
+                  "authentication": "ON_INSTALL"
+                },
+                "category": "Development"
+              }
+            ]
+          }
+          JSON
           cd marketplace
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
