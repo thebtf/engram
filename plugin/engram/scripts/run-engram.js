@@ -15,7 +15,8 @@ function main() {
   const ensureBinary = path.join(pluginRoot, "scripts", "ensure-binary.js");
 
   if (fs.existsSync(ensureBinary)) {
-    // ensure-binary owns freshness: it compares plugin.json version with bin/.version.
+    // ensure-binary owns freshness: it compares plugin.json with both the
+    // marker file and the binary's own --version output.
     const ensureStatus = checkedSpawnSync(process.execPath, [ensureBinary], {
       stdio: "inherit",
       env: {

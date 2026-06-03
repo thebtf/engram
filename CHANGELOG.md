@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.7] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin binary freshness after reinstall.** The plugin installer now
+  verifies the existing `engram` client binary with `engram --version`, not
+  only `bin/.version`, before deciding it is current. This forces a refresh
+  when Codex has installed the new plugin cache slot but plugin data still
+  contains a stale `v6.4.5` binary, preventing repeated `connection closed:
+  initialize response` failures after an apparent update.
+
 ## [6.4.6] - 2026-06-03
 
 ### Fixed
@@ -786,7 +797,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.6...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.7...HEAD
+[6.4.7]: https://github.com/thebtf/engram/compare/v6.4.6...v6.4.7
 [6.4.6]: https://github.com/thebtf/engram/compare/v6.4.5...v6.4.6
 [6.4.5]: https://github.com/thebtf/engram/compare/v6.4.4...v6.4.5
 [6.4.4]: https://github.com/thebtf/engram/compare/v6.4.3...v6.4.4
