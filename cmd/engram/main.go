@@ -122,10 +122,14 @@ func sameExecutablePath(a string, b string) bool {
 	if a == "." || b == "." {
 		return false
 	}
-	if runtime.GOOS == "windows" {
+	if executablePathsAreCaseInsensitive(runtime.GOOS) {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
+}
+
+func executablePathsAreCaseInsensitive(goos string) bool {
+	return goos == "windows" || goos == "darwin"
 }
 
 func muxcoreDaemonStatusPID(ctlPath string) (int, bool) {

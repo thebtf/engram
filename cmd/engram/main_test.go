@@ -46,3 +46,17 @@ func TestMuxcoreDaemonVersionMatches(t *testing.T) {
 		t.Fatal("different daemon executable must not match")
 	}
 }
+
+func TestExecutablePathsAreCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	if !executablePathsAreCaseInsensitive("windows") {
+		t.Fatal("Windows executable paths should be compared case-insensitively")
+	}
+	if !executablePathsAreCaseInsensitive("darwin") {
+		t.Fatal("macOS executable paths should be compared case-insensitively")
+	}
+	if executablePathsAreCaseInsensitive("linux") {
+		t.Fatal("Linux executable paths should stay case-sensitive")
+	}
+}

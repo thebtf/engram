@@ -299,7 +299,7 @@ function readBinaryVersion(binaryPath) {
     env: versionProbeEnv(),
   });
 
-  if (result.error) {
+  if (result.error || result.status !== 0) {
     return "";
   }
 
