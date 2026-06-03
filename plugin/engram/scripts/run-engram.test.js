@@ -10,13 +10,16 @@ const {
   spawnFailureMessage,
 } = require("./run-engram.js");
 
-test("Codex MCP config launches the wrapper from the plugin root", () => {
+test("MCP config preserves plugin-root env fallback and Codex cwd fallback", () => {
   const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const server = payload.mcpServers.engram;
 
   assert.equal(server.command, "node");
-  assert.deepEqual(server.args, ["./scripts/run-engram.js"]);
+  assert.equal(server.args[0], "-e");
+  assert.match(server.args[1], /process\.env\.PLUGIN_ROOT/);
+  assert.match(server.args[1], /process\.env\.CLAUDE_PLUGIN_ROOT/);
+  assert.match(server.args[1], /process\.cwd\(\)/);
   assert.equal(server.cwd, ".");
 });
 
