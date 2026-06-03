@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.5] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin launch path from marketplace cache.** Added `cwd: "."` to the
+  shared MCP entry so Desktop Codex runs the bootstrap from the installed
+  plugin root instead of the agent workspace, allowing the wrapper to resolve
+  `scripts/run-engram.js` reliably from `plugins/cache/.../engram/<version>`.
+- **Codex plugin data directory inference.** The MCP wrapper now infers Codex's
+  plugin data directory from the installed cache layout when `PLUGIN_DATA` is
+  not provided, so `ensure-binary.js` can install and refresh the versioned
+  `engram` client binary before the MCP handshake.
+- **Hook testability.** Plugin hook modules now guard CLI execution with
+  `require.main === module`, preventing `node --test` from hanging while
+  importing hook files for regression coverage.
+
 ## [6.4.4] - 2026-06-03
 
 ### Fixed
@@ -747,7 +763,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.4...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.5...HEAD
+[6.4.5]: https://github.com/thebtf/engram/compare/v6.4.4...v6.4.5
 [6.4.4]: https://github.com/thebtf/engram/compare/v6.4.3...v6.4.4
 [6.4.3]: https://github.com/thebtf/engram/compare/v6.4.2...v6.4.3
 [6.4.2]: https://github.com/thebtf/engram/compare/v6.4.1...v6.4.2
