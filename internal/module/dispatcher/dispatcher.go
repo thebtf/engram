@@ -17,6 +17,7 @@ import (
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/module/registry"
+	"github.com/thebtf/engram/internal/version"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
@@ -43,16 +44,25 @@ import (
 //   - draining is an atomic.Bool.
 //   - tracked is a sync.Map — the HandleRequest path never touches it.
 type Dispatcher struct {
-	reg      *registry.Registry
-	logger   *slog.Logger
-	draining atomic.Bool
-	tracked  sync.Map // projectID (string) → struct{} — active sessions per US4
+	reg           *registry.Registry
+	logger        *slog.Logger
+	serverVersion string
+	draining      atomic.Bool
+	tracked       sync.Map // projectID (string) → struct{} — active sessions per US4
 }
 
 // New creates a Dispatcher bound to the given frozen registry and logger.
 // The registry MUST be frozen before the dispatcher processes any requests.
 func New(r *registry.Registry, logger *slog.Logger) *Dispatcher {
-	return &Dispatcher{reg: r, logger: logger}
+	return NewWithVersion(r, logger, version.Daemon)
+}
+
+// NewWithVersion creates a Dispatcher with an explicit MCP serverInfo.version.
+func NewWithVersion(r *registry.Registry, logger *slog.Logger, serverVersion string) *Dispatcher {
+	if serverVersion == "" {
+		serverVersion = version.Daemon
+	}
+	return &Dispatcher{reg: r, logger: logger, serverVersion: serverVersion}
 }
 
 // ConnectedProjectIDs returns a snapshot of all project IDs with an active

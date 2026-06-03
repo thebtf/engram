@@ -20,6 +20,8 @@ async function handleSubagentStop(ctx) {
   return '';
 }
 
-(async () => {
-  await lib.RunHook('SubagentStop', handleSubagentStop);
-})();
+if (require.main === module) {
+  (async () => {
+    await lib.RunHook('SubagentStop', handleSubagentStop);
+  })();
+}

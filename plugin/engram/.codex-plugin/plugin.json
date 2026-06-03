@@ -1,0 +1,37 @@
+{
+  "name": "engram",
+  "version": "6.4.8",
+  "description": "Persistent shared memory for Codex. Requires ENGRAM_URL and ENGRAM_TOKEN from a dashboard-issued worker keycard; the server operator key must stay on the server host.",
+  "author": {
+    "name": "thebtf"
+  },
+  "homepage": "https://github.com/thebtf/engram",
+  "repository": "https://github.com/thebtf/engram",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "codex",
+    "postgresql"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Engram",
+    "shortDescription": "Persistent shared memory for Codex workspaces",
+    "longDescription": "Engram connects Codex to a shared PostgreSQL-backed memory service. Configure ENGRAM_URL and ENGRAM_TOKEN with a worker keycard issued from the Engram dashboard /tokens page; never use the server operator key on a workstation.",
+    "developerName": "thebtf",
+    "category": "Development",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/thebtf/engram",
+    "privacyPolicyURL": "https://github.com/thebtf/engram/blob/main/README.md",
+    "termsOfServiceURL": "https://github.com/thebtf/engram/blob/main/LICENSE",
+    "defaultPrompt": [
+      "Configure Engram for Codex by asking for the server URL and dashboard-issued worker keycard, then write ENGRAM_URL and ENGRAM_TOKEN to ~/.codex/config.toml under shell_environment_policy.set.",
+      "Run Engram Doctor to verify the MCP connection and report the server version."
+    ]
+  }
+}

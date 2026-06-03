@@ -36,7 +36,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram-server ./cmd/engram-server
 
 # Build client-side binaries: engram local proxy
-RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -s -w" -o /out/engram ./cmd/engram
+RUN CGO_ENABLED=1 go build -tags fts5 -ldflags "-X main.Version=${VERSION} -X github.com/thebtf/engram/internal/version.Daemon=${VERSION} -s -w" -o /out/engram ./cmd/engram
 # --- Server image ---
 FROM debian:bookworm-slim AS server
 

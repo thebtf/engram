@@ -202,9 +202,11 @@ async function handlePreToolUse(ctx, input) {
   return '';
 }
 
-(async () => {
-  await lib.RunHook('PreToolUse', handlePreToolUse);
-})();
+if (require.main === module) {
+  (async () => {
+    await lib.RunHook('PreToolUse', handlePreToolUse);
+  })();
+}
 
 module.exports = {
   handlePreToolUse,

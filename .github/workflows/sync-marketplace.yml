@@ -3,21 +3,32 @@ name: Sync Plugin Marketplace
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Release Binary"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref, tag, or SHA to sync"
+        required: false
+        default: "main"
 
 permissions:
   contents: read
 
 jobs:
   sync:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout engram
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          ref: ${{ github.event.inputs.ref || github.event.workflow_run.head_sha || github.event.release.tag_name || github.ref }}
           persist-credentials: false
 
       - name: Checkout marketplace
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: thebtf/engram-marketplace
           token: ${{ secrets.MARKETPLACE_PAT }}
@@ -27,8 +38,33 @@ jobs:
 
       - name: Sync plugin files
         run: |
-          rm -rf marketplace/engram
+          rm -rf marketplace/engram marketplace/plugins/engram marketplace/.agents/plugins/marketplace.json
+          rm -f marketplace/marketplace.json
+          mkdir -p marketplace/plugins marketplace/.agents/plugins
           cp -r plugin/engram marketplace/engram
+          cp -r plugin/engram marketplace/plugins/engram
+          cat > marketplace/.agents/plugins/marketplace.json <<'JSON'
+          {
+            "name": "engram-marketplace",
+            "interface": {
+              "displayName": "Engram Marketplace"
+            },
+            "plugins": [
+              {
+                "name": "engram",
+                "source": {
+                  "source": "local",
+                  "path": "./plugins/engram"
+                },
+                "policy": {
+                  "installation": "AVAILABLE",
+                  "authentication": "ON_INSTALL"
+                },
+                "category": "Development"
+              }
+            ]
+          }
+          JSON
           cd marketplace
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

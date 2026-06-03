@@ -380,7 +380,7 @@ func runMigrations(db *gorm.DB) error {
 					// Allows index-only scans for listing queries
 					`CREATE INDEX IF NOT EXISTS idx_observations_project_covering
 					 ON observations(project, scope, is_superseded, importance_score DESC)
-					 WHERE is_superseded = 0 OR is_superseded IS NULL`,
+					 WHERE is_superseded IS NOT TRUE`,
 
 					// Index for session summary lookups
 					`CREATE INDEX IF NOT EXISTS idx_summaries_project_importance
@@ -538,7 +538,7 @@ func runMigrations(db *gorm.DB) error {
 					// Index for FTS search result ordering
 					`CREATE INDEX IF NOT EXISTS idx_observations_fts_ordering
 					 ON observations(project, importance_score DESC)
-					 WHERE (is_archived = 0 OR is_archived IS NULL) AND (is_superseded = 0 OR is_superseded IS NULL)`,
+					 WHERE (is_archived = 0 OR is_archived IS NULL) AND is_superseded IS NOT TRUE`,
 				}
 				for _, s := range sqls {
 					if err := tx.Exec(s).Error; err != nil {
@@ -580,7 +580,7 @@ func runMigrations(db *gorm.DB) error {
 					// Optimizes activeObservationFilter queries
 					`CREATE INDEX IF NOT EXISTS idx_observations_active
 					 ON observations(project, importance_score DESC, created_at_epoch DESC)
-					 WHERE (is_archived = 0 OR is_archived IS NULL) AND (is_superseded = 0 OR is_superseded IS NULL)`,
+					 WHERE (is_archived = 0 OR is_archived IS NULL) AND is_superseded IS NOT TRUE`,
 				}
 				for _, s := range sqls {
 					if err := tx.Exec(s).Error; err != nil {
@@ -1597,7 +1597,7 @@ func runMigrations(db *gorm.DB) error {
 					return err
 				}
 				// Composite index for temporal chain lookups
-				return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_session_prompt ON observations (sdk_session_id, prompt_number DESC) WHERE COALESCE(is_superseded, 0) = 0`).Error
+				return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_session_prompt ON observations (sdk_session_id, prompt_number DESC) WHERE is_superseded IS NOT TRUE`).Error
 			},
 			Rollback: func(tx *gorm.DB) error {
 				tx.Exec(`DROP INDEX IF EXISTS idx_observations_concepts_gin`)
@@ -3029,7 +3029,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					  AND title IS NOT NULL AND title != ''
 					  AND is_suppressed = false
 					  AND COALESCE(is_archived, 0) = 0
-					  AND COALESCE(is_superseded, 0) = 0
+					  AND is_superseded IS NOT TRUE
 				`).Error; err != nil {
 					return fmt.Errorf("migration 090_observations_to_static_entities: credentials INSERT: %w", err)
 				}
@@ -3055,7 +3055,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					  AND COALESCE(NULLIF(TRIM(narrative), ''), NULLIF(TRIM(title), '')) IS NOT NULL
 					  AND is_suppressed = false
 					  AND COALESCE(is_archived, 0) = 0
-					  AND COALESCE(is_superseded, 0) = 0
+					  AND is_superseded IS NOT TRUE
 				`).Error; err != nil {
 					return fmt.Errorf("migration 090_observations_to_static_entities: behavioral_rules INSERT: %w", err)
 				}
@@ -3078,7 +3078,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					  AND COALESCE(NULLIF(TRIM(narrative), ''), NULLIF(TRIM(title), '')) IS NOT NULL
 					  AND is_suppressed = false
 					  AND COALESCE(is_archived, 0) = 0
-					  AND COALESCE(is_superseded, 0) = 0
+					  AND is_superseded IS NOT TRUE
 				`).Error; err != nil {
 					return fmt.Errorf("migration 090_observations_to_static_entities: memories INSERT: %w", err)
 				}
@@ -3099,7 +3099,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						FROM observations
 						WHERE is_suppressed = false
 						  AND COALESCE(is_archived, 0) = 0
-						  AND COALESCE(is_superseded, 0) = 0;
+						  AND is_superseded IS NOT TRUE;
 
 						SELECT (SELECT COUNT(*) FROM credentials)
 							 + (SELECT COUNT(*) FROM memories)
@@ -3119,7 +3119,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						  AND title IS NOT NULL AND title != ''
 						  AND is_suppressed = false
 						  AND COALESCE(is_archived, 0) = 0
-						  AND COALESCE(is_superseded, 0) = 0;
+						  AND is_superseded IS NOT TRUE;
 
 						IF cred_count != cred_live_count THEN
 							RAISE EXCEPTION 'migration 090 credential invariant FAILED: credentials=% != live observations WHERE type=''credential''=% — every vault credential MUST migrate byte-for-byte',

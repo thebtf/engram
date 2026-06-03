@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.8] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin MCP launch root.** The Codex MCP config now launches
+  `scripts/run-engram.js` through Codex's plugin-root interpolation instead of
+  an inline `node -e` bootstrap that fell back to the workspace `cwd` when
+  `PLUGIN_ROOT` was not present in the MCP process environment. This fixes
+  Desktop Codex startup failures where the plugin cache was updated but MCP
+  initialize closed before a response because the wrapper was resolved from the
+  project directory.
+- **Daemon version source alignment.** The source `internal/version.Daemon`
+  default now matches the v6.4.8 plugin manifests, with a regression test to
+  prevent future `serverInfo.version` drift from the shipped plugin version.
+
+## [6.4.7] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin binary freshness after reinstall.** The plugin installer now
+  verifies the existing `engram` client binary with `engram --version`, not
+  only `bin/.version`, before deciding it is current. This forces a refresh
+  when Codex has installed the new plugin cache slot but plugin data still
+  contains a stale `v6.4.5` binary, preventing repeated `connection closed:
+  initialize response` failures after an apparent update.
+
+## [6.4.6] - 2026-06-03
+
+### Fixed
+
+- **Codex MCP entrypoint execution.** Fixed the marketplace `.mcp.json`
+  bootstrap so the `node -e` entrypoint actually invokes
+  `scripts/run-engram.js` instead of only importing it. In `6.4.5`, Desktop
+  Codex could install the correct cache slot but the MCP subprocess exited
+  before answering `initialize`, producing `connection closed: initialize
+  response`.
+- **Stale embedded muxcore daemon after client upgrades.** The local daemon now
+  records the muxcore daemon version beside the muxcore control socket, and the
+  client shim stops a missing-version or mismatched-version daemon before
+  connecting. This prevents a newly installed binary from reusing an older
+  persistent muxcore daemon and replaying stale MCP `initialize.serverInfo`
+  data such as `v5.0.0` while the visible binary reports `v6.4.5+`.
+- **Release binary initialize smoke.** The release-binary workflow now checks
+  the Linux release asset's MCP `initialize.serverInfo.version`, not only
+  `engram --version`, so version-source drift blocks publication.
+- **Entrypoint regression coverage.** Added a Node regression test that runs
+  the exact `.mcp.json` eval command against a temporary wrapper and verifies
+  the wrapper `main()` function executes.
+
+## [6.4.5] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin launch path from marketplace cache.** Added `cwd: "."` to the
+  shared MCP entry so Desktop Codex runs the bootstrap from the installed
+  plugin root instead of the agent workspace, allowing the wrapper to resolve
+  `scripts/run-engram.js` reliably from `plugins/cache/.../engram/<version>`.
+- **Codex plugin data directory inference.** The MCP wrapper now infers Codex's
+  plugin data directory from the installed cache layout when `PLUGIN_DATA` is
+  not provided, so `ensure-binary.js` can install and refresh the versioned
+  `engram` client binary before the MCP handshake.
+- **Hook testability.** Plugin hook modules now guard CLI execution with
+  `require.main === module`, preventing `node --test` from hanging while
+  importing hook files for regression coverage.
+
+## [6.4.4] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin MCP startup configuration.** Added a native Codex plugin
+  manifest and a validator-compatible MCP entrypoint so Desktop Codex can
+  launch Engram with `ENGRAM_URL` and `ENGRAM_TOKEN` from the Codex shell
+  environment policy instead of inheriting Claude-only `userConfig` wiring.
+  The shared wrapper now also accepts Claude userConfig values through
+  separate compatibility variables, preserving the Claude install path while
+  making Codex fail fast with actionable setup errors when required
+  workstation credentials are missing.
+- **Codex plugin release packaging.** GoReleaser archives now include the
+  Codex manifest alongside the Claude manifest, and the release-binary workflow
+  verifies the Linux client binary reports the tagged version before uploading
+  assets. This keeps plugin installs from pointing at a version whose client
+  binary was never published.
+- **Marketplace sync after binary publication.** The plugin marketplace sync
+  workflow now also runs after a successful `Release Binary` workflow and can
+  be dispatched manually, avoiding the GitHub Actions `GITHUB_TOKEN` recursion
+  trap where a release created by the release workflow does not trigger the
+  downstream `release: published` marketplace workflow.
+
+## [6.4.3] - 2026-06-02
+
+### Fixed
+
+- **Local MCP daemon owner identity with muxcore v0.25.0.** Updated
+  `github.com/thebtf/mcp-mux/muxcore` from `v0.24.3` to `v0.25.0`, adopting
+  the provider-side `ModeGlobal` default, cross-cwd admission hardening, and
+  stale isolated-owner cleanup behavior released for Engram #244
+  (`mcp-mux process explosion`). This patch targets the stale-owner/process
+  multiplication class observed during Desktop Codex Engram attach failures.
+  The Desktop tool-registry snapshot miss remains a separate client-side
+  failure mode when direct stdio JSON-RPC to `engram.exe` is healthy.
+- **Daemon version reporting.** Centralized the local daemon version used by
+  `--version`, MCP `initialize.serverInfo.version`, and the gRPC
+  `InitializeRequest.ClientVersion` path so release smoke tests and client
+  diagnostics report `v6.4.3` consistently.
+- **Fresh PostgreSQL migration startup.** Fixed JSON custom type annotations
+  and PostgreSQL boolean predicates so a clean PostgreSQL 17 database can pass
+  the fresh GORM AutoMigrate + migration chain used by the release playbook.
+
 ## [6.4.2] - 2026-05-23
 
 ### Fixed
@@ -704,7 +812,15 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.8...HEAD
+[6.4.8]: https://github.com/thebtf/engram/compare/v6.4.7...v6.4.8
+[6.4.7]: https://github.com/thebtf/engram/compare/v6.4.6...v6.4.7
+[6.4.6]: https://github.com/thebtf/engram/compare/v6.4.5...v6.4.6
+[6.4.5]: https://github.com/thebtf/engram/compare/v6.4.4...v6.4.5
+[6.4.4]: https://github.com/thebtf/engram/compare/v6.4.3...v6.4.4
+[6.4.3]: https://github.com/thebtf/engram/compare/v6.4.2...v6.4.3
+[6.4.2]: https://github.com/thebtf/engram/compare/v6.4.1...v6.4.2
+[6.4.1]: https://github.com/thebtf/engram/compare/v6.4.0...v6.4.1
 [5.0.0]: https://github.com/thebtf/engram/compare/v3.7.1...v5.0.0
 [3.7.0]: https://github.com/thebtf/engram/releases/tag/v3.7.0
 [2.4.0]: https://github.com/thebtf/engram/compare/v2.3.1...v2.4.0

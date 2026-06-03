@@ -12,7 +12,7 @@ before:
     - bash -c "sed 's/{{ .Version }}/{{ .Version }}/g' ui/package.json.tpl > ui/package.json"
     - bash -c "cd ui && npm install && npm run build"
     - bash -c "rm -rf internal/worker/static && mkdir -p internal/worker/static && cp -r ui/dist/* internal/worker/static/"
-    # Generate plugin config files for archives (in .claude-plugin/)
+    # Generate plugin config files for archives (Claude + Codex plugin manifests)
     - bash scripts/generate-plugin-config.sh
 
 builds:
@@ -56,6 +56,9 @@ archives:
     files:
       - src: .claude-plugin/*
         dst: .claude-plugin
+        strip_parent: true
+      - src: .codex-plugin/*
+        dst: .codex-plugin
         strip_parent: true
       - src: plugin/engram/hooks/*.js
         dst: hooks
