@@ -747,7 +747,11 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.4...HEAD
+[6.4.4]: https://github.com/thebtf/engram/compare/v6.4.3...v6.4.4
+[6.4.3]: https://github.com/thebtf/engram/compare/v6.4.2...v6.4.3
+[6.4.2]: https://github.com/thebtf/engram/compare/v6.4.1...v6.4.2
+[6.4.1]: https://github.com/thebtf/engram/compare/v6.4.0...v6.4.1
 [5.0.0]: https://github.com/thebtf/engram/compare/v3.7.1...v5.0.0
 [3.7.0]: https://github.com/thebtf/engram/releases/tag/v3.7.0
 [2.4.0]: https://github.com/thebtf/engram/compare/v2.3.1...v2.4.0

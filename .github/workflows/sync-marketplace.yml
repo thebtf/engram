@@ -22,13 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout engram
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.event.inputs.ref || github.event.workflow_run.head_sha || github.event.release.tag_name || github.ref }}
           persist-credentials: false
 
       - name: Checkout marketplace
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: thebtf/engram-marketplace
           token: ${{ secrets.MARKETPLACE_PAT }}

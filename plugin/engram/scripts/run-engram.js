@@ -19,22 +19,20 @@ if (!pluginData) {
 
 const ext = process.platform === "win32" ? ".exe" : "";
 const binaryPath = path.join(pluginData, "bin", `engram${ext}`);
+const ensureBinary = path.join(pluginRoot, "scripts", "ensure-binary.js");
 
-if (!fs.existsSync(binaryPath)) {
-  const ensureBinary = path.join(pluginRoot, "scripts", "ensure-binary.js");
-  if (fs.existsSync(ensureBinary)) {
-    process.stderr.write(`[engram] binary not found at ${binaryPath}; running ensure-binary.js\n`);
-    spawnSync(process.execPath, [ensureBinary], {
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        PLUGIN_ROOT: pluginRoot,
-        PLUGIN_DATA: pluginData,
-        CLAUDE_PLUGIN_ROOT: process.env.CLAUDE_PLUGIN_ROOT || pluginRoot,
-        CLAUDE_PLUGIN_DATA: process.env.CLAUDE_PLUGIN_DATA || pluginData,
-      },
-    });
-  }
+if (fs.existsSync(ensureBinary)) {
+  // ensure-binary owns freshness: it compares plugin.json version with bin/.version.
+  spawnSync(process.execPath, [ensureBinary], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      PLUGIN_ROOT: pluginRoot,
+      PLUGIN_DATA: pluginData,
+      CLAUDE_PLUGIN_ROOT: process.env.CLAUDE_PLUGIN_ROOT || pluginRoot,
+      CLAUDE_PLUGIN_DATA: process.env.CLAUDE_PLUGIN_DATA || pluginData,
+    },
+  });
 }
 
 if (!fs.existsSync(binaryPath)) {

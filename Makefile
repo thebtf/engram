@@ -14,7 +14,7 @@ GOARCH ?= $(shell go env GOARCH)
 export CGO_ENABLED=1
 BUILD_TAGS := -tags "fts5"
 
-.PHONY: all build clean test install lint worker stop-worker start-worker restart-worker dashboard website dev-website setup-libs proto rebaseline-v6
+.PHONY: all build clean test install lint worker engram stop-worker start-worker restart-worker dashboard website dev-website setup-libs proto rebaseline-v6
 
 all: build
 
@@ -62,7 +62,7 @@ setup-libs:
 	@echo "ONNX runtime libraries are no longer required. Skipping."
 
 # Build all binaries
-build: dashboard worker
+build: dashboard worker engram
 
 # Build Vue dashboard
 dashboard:
@@ -80,6 +80,12 @@ worker:
 	@mkdir -p $(BUILD_DIR)
 	swag init -g cmd/engram-server/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
 	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/engram-server
+
+# Build local MCP client
+engram:
+	@echo "Building MCP client..."
+	@mkdir -p $(BUILD_DIR)
+	go build $(LDFLAGS) -o $(BUILD_DIR)/engram ./cmd/engram
 
 # Build for all platforms
 build-all: build-linux build-darwin build-windows

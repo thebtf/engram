@@ -135,7 +135,7 @@ function buildCachedSessionStartPayload(overrides = {}) {
 }
 
 async function handleSessionStart(ctx, input) {
-  if (!process.env.ENGRAM_URL) {
+  if (!isConfiguredEnvValue(process.env.ENGRAM_URL) || !isConfiguredEnvValue(process.env.ENGRAM_TOKEN)) {
     return '<engram-setup>\nEngram plugin is installed but not configured.\nSet ENGRAM_URL and ENGRAM_TOKEN to connect to your Engram server.\nClaude Code: run /engram:setup or edit ~/.claude/settings.json env.\nCodex: edit ~/.codex/config.toml [shell_environment_policy.set].\nNever put ENGRAM_AUTH_ADMIN_TOKEN on a workstation.\n</engram-setup>';
   }
 
@@ -219,3 +219,14 @@ module.exports = {
   buildCachedSessionStartPayload,
   handleSessionStart,
 };
+
+function isConfiguredEnvValue(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return false;
+  }
+  return !/^\$\{[^}]+\}$/.test(trimmed);
+}

@@ -9,6 +9,21 @@ set -e
 
 CLAUDE_OUTPUT_DIR=".claude-plugin"
 CODEX_OUTPUT_DIR=".codex-plugin"
+CLAUDE_MANIFEST="plugin/engram/.claude-plugin/plugin.json"
+CODEX_MANIFEST="plugin/engram/.codex-plugin/plugin.json"
+
+read_manifest_version() {
+  node -e "const fs=require('fs'); const manifest=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(manifest.version || '');" "$1"
+}
+
+CLAUDE_VERSION="$(read_manifest_version "$CLAUDE_MANIFEST")"
+CODEX_VERSION="$(read_manifest_version "$CODEX_MANIFEST")"
+
+if [ "$CLAUDE_VERSION" != "$CODEX_VERSION" ]; then
+  echo "Plugin manifest version mismatch: $CLAUDE_MANIFEST=$CLAUDE_VERSION, $CODEX_MANIFEST=$CODEX_VERSION" >&2
+  exit 1
+fi
+
 mkdir -p "$CLAUDE_OUTPUT_DIR"
 mkdir -p "$CODEX_OUTPUT_DIR"
 
@@ -16,12 +31,12 @@ mkdir -p "$CODEX_OUTPUT_DIR"
 # Copy it into the release-time OUTPUT_DIR so the goreleaser archive picks
 # up the freshly-bumped version (install.sh then unpacks it to
 # $INSTALL_DIR/.claude-plugin/plugin.json).
-cp "plugin/engram/.claude-plugin/plugin.json" "$CLAUDE_OUTPUT_DIR/plugin.json"
+cp "$CLAUDE_MANIFEST" "$CLAUDE_OUTPUT_DIR/plugin.json"
 echo "Copied $CLAUDE_OUTPUT_DIR/plugin.json"
 
 # Codex has its own plugin manifest format. Keep it parallel to Claude's
 # manifest instead of trying to reuse Claude userConfig fields.
-cp "plugin/engram/.codex-plugin/plugin.json" "$CODEX_OUTPUT_DIR/plugin.json"
+cp "$CODEX_MANIFEST" "$CODEX_OUTPUT_DIR/plugin.json"
 echo "Copied $CODEX_OUTPUT_DIR/plugin.json"
 
 # History note: an earlier version of this script ran
