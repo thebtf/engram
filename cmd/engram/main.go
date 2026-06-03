@@ -149,6 +149,29 @@ func stopStaleMuxcoreDaemonForVersion() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	fmt.Fprintf(os.Stderr, "[engram] warning: stale muxcore daemon PID %d did not shut down gracefully; forcing termination\n", livePID)
+	proc, err := os.FindProcess(livePID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[engram] warning: could not find stale muxcore daemon PID %d: %v\n", livePID, err)
+		return
+	}
+	if err := proc.Kill(); err != nil {
+		fmt.Fprintf(os.Stderr, "[engram] warning: could not terminate stale muxcore daemon PID %d: %v\n", livePID, err)
+		_ = proc.Release()
+		return
+	}
+	_ = proc.Release()
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := muxcontrol.SendWithTimeout(ctlPath, muxcontrol.Request{Cmd: "ping"}, 500*time.Millisecond); err != nil {
+			fmt.Fprintf(os.Stderr, "[engram] terminated stale muxcore daemon so %s can start cleanly\n", daemonVersion)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	fmt.Fprintf(os.Stderr, "[engram] warning: stale muxcore daemon PID %d still responds after forced termination\n", livePID)
 }
 
 func writeMuxcoreDaemonVersionMarker(logger *slog.Logger) {
