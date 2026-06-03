@@ -5,7 +5,7 @@
       "command": "node",
       "args": [
         "-e",
-        "const path=require('path');const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd();const entry=path.join(root,'scripts','run-engram.js');process.argv=[process.argv[0],entry];require(entry);"
+        "const path=require('path');const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd();const entry=path.join(root,'scripts','run-engram.js');process.argv=[process.argv[0],entry];const mod=require(entry);if(!mod||typeof mod.main!=='function'){throw new Error('run-engram.js did not export main');}mod.main();"
       ],
       "cwd": ".",
       "env": {
