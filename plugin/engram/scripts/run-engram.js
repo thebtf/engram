@@ -16,7 +16,7 @@ function main() {
 
   if (fs.existsSync(ensureBinary)) {
     // ensure-binary owns freshness: it compares plugin.json version with bin/.version.
-    spawnSync(process.execPath, [ensureBinary], {
+    const ensureStatus = checkedSpawnSync(process.execPath, [ensureBinary], {
       stdio: "inherit",
       env: {
         ...process.env,
@@ -25,7 +25,10 @@ function main() {
         CLAUDE_PLUGIN_ROOT: process.env.CLAUDE_PLUGIN_ROOT || pluginRoot,
         CLAUDE_PLUGIN_DATA: process.env.CLAUDE_PLUGIN_DATA || pluginData,
       },
-    });
+    }, "ensure-binary");
+    if (ensureStatus !== 0) {
+      process.exit(ensureStatus);
+    }
   }
 
   if (!fs.existsSync(binaryPath)) {
@@ -77,16 +80,11 @@ function main() {
   }
 
   // Replace this process with the engram binary
-  try {
-    const result = spawnSync(binaryPath, process.argv.slice(2), {
-      stdio: "inherit",
-      env: process.env,
-    });
-    process.exit(result.status ?? 1);
-  } catch (err) {
-    process.stderr.write(`[engram] exec failed: ${err.message}\n`);
-    process.exit(1);
-  }
+  const status = checkedSpawnSync(binaryPath, process.argv.slice(2), {
+    stdio: "inherit",
+    env: process.env,
+  }, "engram exec");
+  process.exit(status);
 }
 
 function resolvePluginRoot() {
@@ -153,6 +151,27 @@ function isConfiguredValue(value) {
   return !/^\$\{[^}]+\}$/.test(trimmed);
 }
 
+function checkedSpawnSync(command, args, options, label) {
+  const result = spawnSync(command, args, options);
+  const failure = spawnFailureMessage(result, label);
+  if (failure) {
+    process.stderr.write(failure);
+    process.exit(1);
+  }
+  return result.status ?? 0;
+}
+
+function spawnFailureMessage(result, label) {
+  const prefix = `[engram] ${label}`;
+  if (result && result.error) {
+    return `${prefix} failed: ${result.error.message}\n`;
+  }
+  if (result && result.status === null) {
+    return `${prefix} terminated by signal ${result.signal || "unknown"}\n`;
+  }
+  return "";
+}
+
 if (require.main === module) {
   main();
 }
@@ -163,4 +182,5 @@ module.exports = {
   isConfiguredValue,
   resolvePluginData,
   resolvePluginRoot,
+  spawnFailureMessage,
 };

@@ -7,6 +7,7 @@ const test = require("node:test");
 const {
   inferCodexPluginDataDir,
   resolvePluginData,
+  spawnFailureMessage,
 } = require("./run-engram.js");
 
 test("Codex MCP config launches the wrapper from the plugin root", () => {
@@ -59,6 +60,24 @@ test("explicit plugin data env takes precedence over inferred Codex path", () =>
     restoreEnv("PLUGIN_DATA", previousPluginData);
     restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
   }
+});
+
+test("reports spawnSync launch errors instead of treating them as exit status", () => {
+  const message = spawnFailureMessage(
+    { error: new Error("access denied"), status: null, signal: null },
+    "engram exec"
+  );
+
+  assert.equal(message, "[engram] engram exec failed: access denied\n");
+});
+
+test("reports signal termination from spawnSync results", () => {
+  const message = spawnFailureMessage(
+    { error: undefined, status: null, signal: "SIGTERM" },
+    "ensure-binary"
+  );
+
+  assert.equal(message, "[engram] ensure-binary terminated by signal SIGTERM\n");
 });
 
 function restoreEnv(key, value) {
