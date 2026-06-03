@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -31,13 +32,22 @@ import (
 	"github.com/thebtf/engram/internal/module/lifecycle"
 	"github.com/thebtf/engram/internal/module/registry"
 	"github.com/thebtf/engram/internal/version"
+	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
+	"github.com/thebtf/mcp-mux/muxcore/serverid"
 	"github.com/thebtf/mcp-mux/muxcore/upgrade"
 )
 
 // daemonVersion is the string reported to gRPC Initialize and used in
 // structured logs. Tracks Constitution §15 unified engram + plugin version.
 var daemonVersion = version.Daemon
+
+const muxcoreDaemonFlag = "--muxcore-daemon"
+
+type muxcoreDaemonVersionMarker struct {
+	Version string `json:"version"`
+	PID     int    `json:"pid"`
+}
 
 // startupGate enforces FR-4 / Plan ADR-005. When the daemon process starts
 // with a configured server URL but no ENGRAM_TOKEN, exit non-zero with a
@@ -64,6 +74,107 @@ func startupGate() {
 	os.Exit(1)
 }
 
+func isMuxcoreDaemonMode() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == muxcoreDaemonFlag {
+			return true
+		}
+	}
+	return false
+}
+
+func isMuxcoreProxyMode() bool {
+	return os.Getenv("MCP_MUX_SESSION_ID") != ""
+}
+
+func muxcoreDaemonVersionPath() string {
+	return serverid.DaemonControlPath("", "engram") + ".version"
+}
+
+func muxcoreDaemonVersionMatches(path string, want string, livePID int) bool {
+	got, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+
+	var marker muxcoreDaemonVersionMarker
+	if err := json.Unmarshal(got, &marker); err != nil {
+		return false
+	}
+	return marker.Version == want && marker.PID == livePID
+}
+
+func muxcoreDaemonStatusPID(ctlPath string) (int, bool) {
+	resp, err := muxcontrol.SendWithTimeout(ctlPath, muxcontrol.Request{Cmd: "status"}, 2*time.Second)
+	if err != nil || resp == nil || !resp.OK || len(resp.Data) == 0 {
+		return 0, false
+	}
+
+	var status struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(resp.Data, &status); err != nil || status.PID <= 0 {
+		return 0, false
+	}
+	return status.PID, true
+}
+
+func stopStaleMuxcoreDaemonForVersion() {
+	if isMuxcoreDaemonMode() || isMuxcoreProxyMode() {
+		return
+	}
+
+	ctlPath := serverid.DaemonControlPath("", "engram")
+	livePID, ok := muxcoreDaemonStatusPID(ctlPath)
+	if !ok {
+		return
+	}
+	if muxcoreDaemonVersionMatches(muxcoreDaemonVersionPath(), daemonVersion, livePID) {
+		return
+	}
+
+	resp, err := muxcontrol.SendWithTimeout(ctlPath, muxcontrol.Request{
+		Cmd:            "shutdown",
+		DrainTimeoutMs: 5000,
+	}, 10*time.Second)
+	if err != nil || resp == nil || !resp.OK {
+		return
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := muxcontrol.SendWithTimeout(ctlPath, muxcontrol.Request{Cmd: "ping"}, 500*time.Millisecond); err != nil {
+			fmt.Fprintf(os.Stderr, "[engram] stopped stale muxcore daemon so %s can start cleanly\n", daemonVersion)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func writeMuxcoreDaemonVersionMarker(logger *slog.Logger) {
+	if !isMuxcoreDaemonMode() {
+		return
+	}
+
+	markerPath := muxcoreDaemonVersionPath()
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0o700); err != nil {
+		logger.Warn("could not create run directory for muxcore version marker",
+			"dir", filepath.Dir(markerPath),
+			"error", err,
+		)
+		return
+	}
+	payload, err := json.Marshal(muxcoreDaemonVersionMarker{Version: daemonVersion, PID: os.Getpid()})
+	if err != nil {
+		logger.Warn("could not marshal muxcore daemon version marker", "error", err)
+		return
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(markerPath, payload, 0o600); err != nil {
+		logger.Warn("could not write muxcore daemon version marker", "error", err)
+	}
+}
+
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("engram %s — stdio MCP daemon for Claude Code\n", daemonVersion)
@@ -81,6 +192,9 @@ func main() {
 	// any heavy initialisation. Loud failure beats silent loom_*-only
 	// graceful degradation that masked PR #203's regression for days.
 	startupGate()
+
+	dd := dataDir()
+	stopStaleMuxcoreDaemonForVersion()
 
 	// Clean stale binaries from previous upgrades (.old.* files).
 	if exePath, err := os.Executable(); err == nil {
@@ -125,7 +239,6 @@ func main() {
 	// connect immediately after the PID file appears. The socket path is
 	// ${ENGRAM_DATA_DIR}/run/engram.sock. On Windows the Start() call is a
 	// no-op (named-pipe support deferred to v4.4.0).
-	dd := dataDir()
 	sockPath := control.SocketPath(dd)
 	pidPath := control.PIDPath(dd)
 	if err := os.MkdirAll(control.SocketDir(dd), 0o700); err != nil {
@@ -153,6 +266,7 @@ func main() {
 		)
 	}
 	defer ctrlListener.Close()
+	writeMuxcoreDaemonVersionMarker(logger)
 
 	// --- muxcore engine boot ---------------------------------------------
 	// The dispatcher satisfies BOTH muxcore.SessionHandler (HandleRequest)
@@ -163,6 +277,8 @@ func main() {
 		Name:           "engram",
 		Persistent:     true,
 		SessionHandler: disp,
+		DaemonFlag:     muxcoreDaemonFlag,
+		SkipSnapshot:   true,
 	})
 	if err != nil {
 		logger.Error("engine.New failed", "error", err)

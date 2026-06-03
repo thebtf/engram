@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Codex could install the correct cache slot but the MCP subprocess exited
   before answering `initialize`, producing `connection closed: initialize
   response`.
+- **Stale embedded muxcore daemon after client upgrades.** The local daemon now
+  records the muxcore daemon version beside the muxcore control socket, and the
+  client shim stops a missing-version or mismatched-version daemon before
+  connecting. This prevents a newly installed binary from reusing an older
+  persistent muxcore daemon and replaying stale MCP `initialize.serverInfo`
+  data such as `v5.0.0` while the visible binary reports `v6.4.5+`.
+- **Release binary initialize smoke.** The release-binary workflow now checks
+  the Linux release asset's MCP `initialize.serverInfo.version`, not only
+  `engram --version`, so version-source drift blocks publication.
 - **Entrypoint regression coverage.** Added a Node regression test that runs
   the exact `.mcp.json` eval command against a temporary wrapper and verifies
   the wrapper `main()` function executes.
