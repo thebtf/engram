@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.8] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin MCP launch root.** The Codex MCP config now launches
+  `scripts/run-engram.js` through Codex's plugin-root interpolation instead of
+  an inline `node -e` bootstrap that fell back to the workspace `cwd` when
+  `PLUGIN_ROOT` was not present in the MCP process environment. This fixes
+  Desktop Codex startup failures where the plugin cache was updated but MCP
+  initialize closed before a response because the wrapper was resolved from the
+  project directory.
+- **Daemon version source alignment.** The source `internal/version.Daemon`
+  default now matches the v6.4.8 plugin manifests, with a regression test to
+  prevent future `serverInfo.version` drift from the shipped plugin version.
+
 ## [6.4.7] - 2026-06-03
 
 ### Fixed
@@ -797,7 +812,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.7...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.8...HEAD
+[6.4.8]: https://github.com/thebtf/engram/compare/v6.4.7...v6.4.8
 [6.4.7]: https://github.com/thebtf/engram/compare/v6.4.6...v6.4.7
 [6.4.6]: https://github.com/thebtf/engram/compare/v6.4.5...v6.4.6
 [6.4.5]: https://github.com/thebtf/engram/compare/v6.4.4...v6.4.5

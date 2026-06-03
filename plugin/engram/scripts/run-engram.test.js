@@ -11,21 +11,17 @@ const {
   spawnFailureMessage,
 } = require("./run-engram.js");
 
-test("MCP config preserves plugin-root env fallback and Codex cwd fallback", () => {
+test("MCP config launches wrapper via Codex plugin-root interpolation", () => {
   const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const server = payload.mcpServers.engram;
 
   assert.equal(server.command, "node");
-  assert.equal(server.args[0], "-e");
-  assert.equal(server.args[2], "--");
-  assert.match(server.args[1], /process\.env\.PLUGIN_ROOT/);
-  assert.match(server.args[1], /process\.env\.CLAUDE_PLUGIN_ROOT/);
-  assert.match(server.args[1], /process\.cwd\(\)/);
+  assert.deepEqual(server.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js"]);
   assert.equal(server.cwd, ".");
 });
 
-test("MCP eval entrypoint invokes the wrapper main function", () => {
+test("MCP config does not fall back to workspace cwd when launching wrapper", () => {
   const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const server = payload.mcpServers.engram;
@@ -38,16 +34,14 @@ test("MCP eval entrypoint invokes the wrapper main function", () => {
     path.join(scriptsDir, "run-engram.js"),
     [
       "const fs = require('node:fs');",
-      "function main() {",
-      "  fs.writeFileSync(process.env.ENGRAM_TEST_MARKER, process.argv.slice(1).join('|'));",
-      "}",
-      "module.exports = { main };",
+      "fs.writeFileSync(process.env.ENGRAM_TEST_MARKER, process.argv.slice(1).join('|'));",
       "",
     ].join("\n")
   );
 
-  execFileSync(process.execPath, server.args, {
-    cwd: tmpRoot,
+  const args = expandMcpArgsForTest(server.args, tmpRoot);
+  execFileSync(process.execPath, args, {
+    cwd: os.tmpdir(),
     env: {
       ...process.env,
       CLAUDE_PLUGIN_ROOT: "",
@@ -62,7 +56,7 @@ test("MCP eval entrypoint invokes the wrapper main function", () => {
   );
 });
 
-test("MCP eval entrypoint preserves host-provided argv", () => {
+test("MCP config preserves host-provided argv", () => {
   const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const server = payload.mcpServers.engram;
@@ -75,16 +69,14 @@ test("MCP eval entrypoint preserves host-provided argv", () => {
     path.join(scriptsDir, "run-engram.js"),
     [
       "const fs = require('node:fs');",
-      "function main() {",
-      "  fs.writeFileSync(process.env.ENGRAM_TEST_MARKER, process.argv.slice(1).join('|'));",
-      "}",
-      "module.exports = { main };",
+      "fs.writeFileSync(process.env.ENGRAM_TEST_MARKER, process.argv.slice(1).join('|'));",
       "",
     ].join("\n")
   );
 
-  execFileSync(process.execPath, [...server.args, "--from-host", "value"], {
-    cwd: tmpRoot,
+  const args = expandMcpArgsForTest(server.args, tmpRoot);
+  execFileSync(process.execPath, [...args, "--from-host", "value"], {
+    cwd: os.tmpdir(),
     env: {
       ...process.env,
       CLAUDE_PLUGIN_ROOT: "",
@@ -216,4 +208,8 @@ function restoreEnv(key, value) {
     return;
   }
   process.env[key] = value;
+}
+
+function expandMcpArgsForTest(args, pluginRoot) {
+  return args.map((arg) => arg.replace("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
 }
