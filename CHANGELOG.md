@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.12] - 2026-06-04
+
+### Fixed
+
+- **Codex remote tool surface behind blocked proxy environments.** The local
+  MCP daemon now disables gRPC proxy use for Engram backend connections, so
+  Desktop Codex sessions connect directly to `ENGRAM_URL` instead of falling
+  through a host/Codex proxy route such as `127.0.0.1:9`. This restores the
+  full remote `tools/list` surface after plugin startup.
+
+## [6.4.11] - 2026-06-04
+
+### Fixed
+
+- **Muxcore stale daemon owner detection.** The local MCP daemon marker now
+  records the executable path in addition to version and PID, and startup treats
+  same-version markers from a different `engram.exe` path as stale. This
+  prevents release-smoke or old plugin-data daemons from keeping the global
+  muxcore owner slot after a plugin reinstall.
+
 ## [6.4.10] - 2026-06-03
 
 ### Fixed
@@ -839,7 +859,10 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.9...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.12...HEAD
+[6.4.12]: https://github.com/thebtf/engram/compare/v6.4.11...v6.4.12
+[6.4.11]: https://github.com/thebtf/engram/compare/v6.4.10...v6.4.11
+[6.4.10]: https://github.com/thebtf/engram/compare/v6.4.9...v6.4.10
 [6.4.9]: https://github.com/thebtf/engram/compare/v6.4.8...v6.4.9
 [6.4.8]: https://github.com/thebtf/engram/compare/v6.4.7...v6.4.8
 [6.4.7]: https://github.com/thebtf/engram/compare/v6.4.6...v6.4.7

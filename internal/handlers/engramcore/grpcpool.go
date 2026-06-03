@@ -35,10 +35,10 @@ import (
 // because pool keys end up in heap dumps; a stable short hash is enough to
 // distinguish CA versions without leaking the path layout.
 type connKey struct {
-	addr       string
-	tlsMode    string // "custom-ca", "system-tls", "plaintext"
-	tlsCAHash  string // first 16 hex chars of sha256(ENGRAM_TLS_CA); empty for non-custom-ca
-	tokenHash  string // first 16 hex chars of sha256(token); empty for empty token
+	addr      string
+	tlsMode   string // "custom-ca", "system-tls", "plaintext"
+	tlsCAHash string // first 16 hex chars of sha256(ENGRAM_TLS_CA); empty for non-custom-ca
+	tokenHash string // first 16 hex chars of sha256(token); empty for empty token
 }
 
 // hashToken returns a stable short identifier for a credential. The full
@@ -145,6 +145,7 @@ func parseGRPCAddr(serverURL string) (string, error) {
 //  3. http:// / none    → plaintext (no TLS).
 func dialGRPC(addr, serverURL, token string) (*grpc.ClientConn, error) {
 	opts := []grpc.DialOption{
+		grpc.WithNoProxy(),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,

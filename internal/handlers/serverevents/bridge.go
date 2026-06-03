@@ -434,6 +434,7 @@ func (b *Bridge) dialGRPC() (*grpc.ClientConn, error) {
 	}
 
 	opts := []grpc.DialOption{
+		grpc.WithNoProxy(),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,
