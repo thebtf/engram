@@ -89,6 +89,13 @@ docs/dist
 .agent/
 .agent-archive-*/
 
+# Local agent/plugin runtime materialized by desktop harnesses
+.agents/skills/
+.codex/
+cont.txt
+*.pyc
+__pycache__/
+
 # Local Go caches (non-standard GOPATH layouts used in CI and Docker builds)
 .gocache/
 .gomodcache/

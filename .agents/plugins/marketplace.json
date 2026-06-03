@@ -1,0 +1,20 @@
+{
+  "name": "engram-marketplace",
+  "interface": {
+    "displayName": "Engram Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "engram",
+      "source": {
+        "source": "local",
+        "path": "./plugin/engram"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    }
+  ]
+}
