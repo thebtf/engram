@@ -34,6 +34,7 @@ import (
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/feedback"
+	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/logbuf"
@@ -150,6 +151,8 @@ type Service struct {
 	feedbackUpdater        *feedback.Updater
 	segmentStore           *gorm.SegmentStore
 	embeddingClient        *embedding.Client
+	promotionStore         *gorm.PromotionStore
+	graphStore             *graph.Store
 	vaultOnce              sync.Once
 	vaultErr               error
 	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
@@ -632,6 +635,20 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
+	// Wire promotion store for lifecycle tier-change audit trail (milestone-B T013/T014).
+	promotionStore := gorm.NewPromotionStore(store.GetDB())
+	mcpServer.SetPromotionStore(promotionStore)
+	s.initMu.Lock()
+	s.promotionStore = promotionStore
+	s.initMu.Unlock()
+
+	// Wire graph store for knowledge graph tool (milestone-C T005/T016).
+	graphStore := graph.NewStore(store.GetDB())
+	mcpServer.SetGraphStore(graphStore)
+	s.initMu.Lock()
+	s.graphStore = graphStore
+	s.initMu.Unlock()
+
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	embClient, embErr := embedding.NewClient()
 	if embErr != nil {
@@ -705,6 +722,17 @@ func (s *Service) initializeAsync() {
 	// Start retention cron for injection_log and citation_log cleanup (vNext Phase A).
 	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
 		s.startRetentionCron(s.ctx)
+	}
+
+	// Start sleep cycle goroutine when lifecycle is enabled (milestone-B T014).
+	// Trigger condition per T014 AC: >=10 new memories since last run AND >=4h since
+	// last session. Simplification note: exact "last session" timestamp tracking
+	// is not yet stored; this implementation uses a periodic check (every 4h) and
+	// queries whether the total active memory count has grown by >=10 since the last
+	// cycle. This satisfies the count trigger; last-session gating will tighten when
+	// session-end timestamps are persisted (future task).
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+		s.startSleepCycle(s.ctx)
 	}
 
 	// Start queue processor if SDK processor is available
