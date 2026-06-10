@@ -7,6 +7,7 @@ const { execFileSync } = require("node:child_process");
 
 const {
   appendStartupDiagnosticLog,
+  configuredEnvValue,
   describeEnvValue,
   formatStartupDiagnostic,
   inferCodexPluginDataDir,
@@ -23,6 +24,22 @@ test("MCP config launches wrapper via Codex plugin-root interpolation", () => {
   assert.equal(server.command, "node");
   assert.deepEqual(server.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js"]);
   assert.equal(server.cwd, ".");
+});
+
+test("MCP config never interpolates user_config in the env block", () => {
+  // Regression guard: ${user_config.*} inside a plugin .mcp.json env block
+  // makes Claude Code silently skip spawning the MCP server
+  // (anthropics/claude-code#51573). userConfig values reach plugin
+  // subprocesses as CLAUDE_PLUGIN_OPTION_<KEY> instead.
+  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
+  const raw = fs.readFileSync(mcpPath, "utf8");
+  assert.doesNotMatch(raw, /\$\{user_config\./);
+
+  const payload = JSON.parse(raw);
+  const server = payload.mcpServers.engram;
+  assert.equal(server.env, undefined);
+  assert.ok(server.env_vars.includes("ENGRAM_URL"));
+  assert.ok(server.env_vars.includes("ENGRAM_TOKEN"));
 });
 
 test("MCP config does not fall back to workspace cwd when launching wrapper", () => {
@@ -212,13 +229,39 @@ test("startup diagnostic classifies env values without leaking token contents", 
     ENGRAM_TOKEN: "engram_secret_keycard_value",
     ENGRAM_SERVER_URL: "",
     ENGRAM_CLAUDE_USERCONFIG_URL: "${user_config.server_url}",
+    CLAUDE_PLUGIN_OPTION_api_token: "engram_secret_keycard_value",
   });
 
   assert.match(diagnostic, /ENGRAM_URL=present\(len=25\)/);
   assert.match(diagnostic, /ENGRAM_TOKEN=redacted\(len=27\)/);
   assert.match(diagnostic, /ENGRAM_SERVER_URL=empty/);
   assert.match(diagnostic, /ENGRAM_CLAUDE_USERCONFIG_URL=placeholder/);
+  assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_api_token=redacted\(len=27\)/);
   assert.doesNotMatch(diagnostic, /engram_secret_keycard_value/);
+});
+
+test("wrapper falls back to CLAUDE_PLUGIN_OPTION userConfig env names", () => {
+  const previousToken = process.env.ENGRAM_TOKEN;
+  const previousOption = process.env.CLAUDE_PLUGIN_OPTION_api_token;
+
+  try {
+    delete process.env.ENGRAM_TOKEN;
+    process.env.CLAUDE_PLUGIN_OPTION_api_token = "engram_from_user_config";
+
+    assert.equal(
+      configuredEnvValue("ENGRAM_TOKEN", "CLAUDE_PLUGIN_OPTION_api_token"),
+      "engram_from_user_config"
+    );
+
+    process.env.ENGRAM_TOKEN = "engram_explicit_env_wins";
+    assert.equal(
+      configuredEnvValue("ENGRAM_TOKEN", "CLAUDE_PLUGIN_OPTION_api_token"),
+      "engram_explicit_env_wins"
+    );
+  } finally {
+    restoreEnv("ENGRAM_TOKEN", previousToken);
+    restoreEnv("CLAUDE_PLUGIN_OPTION_api_token", previousOption);
+  }
 });
 
 test("describeEnvValue reports missing and placeholder states", () => {

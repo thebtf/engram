@@ -225,10 +225,14 @@ function configureRuntimeEnv() {
   const serverURL = configuredEnvValue(
     process.env.ENGRAM_URL,
     process.env.ENGRAM_SERVER_URL,
+    process.env.CLAUDE_PLUGIN_OPTION_server_url,
+    process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL,
     process.env.ENGRAM_CLAUDE_USERCONFIG_URL
   );
   const token = configuredEnvValue(
     process.env.ENGRAM_TOKEN,
+    process.env.CLAUDE_PLUGIN_OPTION_api_token,
+    process.env.CLAUDE_PLUGIN_OPTION_API_TOKEN,
     process.env.ENGRAM_CLAUDE_USERCONFIG_TOKEN
   );
 
