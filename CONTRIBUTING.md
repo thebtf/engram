@@ -111,7 +111,7 @@ internal/
   mcp/             -- MCP protocol implementation and tool handlers (tools_*.go)
   worker/          -- HTTP handlers, middleware, server setup
   grpcserver/      -- gRPC service implementations
-  db/              -- GORM models + stores (memories, behavioral_rules, etc.)
+  db/gorm/         -- GORM models + stores (memories, behavioral_rules, etc.)
   auth/            -- authentication and token management
   crypto/          -- AES-256-GCM vault for credential encryption
   config/          -- server configuration and env parsing
@@ -123,12 +123,12 @@ internal/
   injection/       -- session-start context injection
   sessions/        -- session management and tracking
   collections/     -- document collections
-  loom/            -- background task engine
+  handlers/loom/   -- background task engine (Loom)
   telemetry/       -- telemetry snapshots
+  cognitive/       -- cognitive processing utilities (v7 platform substrate)
 pkg/
   models/          -- shared data models and domain types
   similarity/      -- clustering helpers for similarity workflows
-  cognitive/       -- cognitive processing utilities
   strutil/         -- string utility functions
 plugin/            -- Claude Code plugin definition and metadata
 ```

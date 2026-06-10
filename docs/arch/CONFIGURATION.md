@@ -82,13 +82,13 @@ are silently ignored (compiled defaults used).
 
 ### Removed in v5/v6
 
-v5 removals fall into two categories. **Permanent architectural shifts** (auth model, transport model) are gone for good. **Transitional strip-down items** (embedding, LLM, graph, retrieval) were removed because the pre-v5 implementations were non-functional; they are being rebuilt from scratch in the vnext milestone series (`.agent/specs/engram-vnext-milestone-{a..f}/`). Do not set transitional vars until the rebuilt subsystem ships.
+v5 removals fall into two categories. **Permanent architectural shifts** (auth model, transport model) are gone for good. **Transitional strip-down items** (embedding, LLM, graph, retrieval) were removed because the pre-v5 implementations were non-functional; they are being rebuilt from scratch across the vnext milestones (lifecycle, graph, retrieval, crystallization — see `internal/lifecycle`, `internal/graph`, `internal/retrieval`, `internal/crystallization` packages already landing on main). Do not set transitional vars until the rebuilt subsystem ships.
 
 These variables no longer exist — do not set them:
 
 - `ENGRAM_API_TOKEN` → replaced by `ENGRAM_AUTH_ADMIN_TOKEN` (v5 — permanent architectural shift)
-- `EMBEDDING_PROVIDER`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS` → removed in the v5 strip-down; server-side embedding is being rebuilt in vnext (Milestones A-C, `.agent/specs/engram-vnext-milestone-a/spec.md`). Do not set until the rebuilt subsystem ships.
-- `ENGRAM_LLM_*` → removed in the v5 strip-down; server-side LLM enhancement is planned to return in vnext Milestone D (FR-D6/D7, `.agent/specs/engram-vnext-milestone-d/spec.md`). Do not set until that ships.
+- `EMBEDDING_PROVIDER`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS` → removed in the v5 strip-down; server-side embedding is being rebuilt in vnext (`internal/embedding`). Do not set until the rebuilt subsystem ships.
+- `ENGRAM_LLM_*` → removed in the v5 strip-down; server-side LLM enhancement is planned to return in a later vnext milestone. Do not set until that ships.
 - `ENGRAM_MODEL`, `ENGRAM_CONTEXT_OBSERVATIONS`, `ENGRAM_CONTEXT_FULL_COUNT`, `ENGRAM_CONTEXT_SESSION_COUNT` → removed or renamed
 
 ## settings.json Keys
