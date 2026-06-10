@@ -47,6 +47,7 @@ type Server struct {
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
 	auditStore             *gorm.AuditStore
+	testAuditWriter        auditWriter // set only in tests via setTestAuditWriter
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -128,6 +129,12 @@ func (s *Server) SetGraphStore(gs *graph.Store) {
 // writes are gated at the handler level.
 func (s *Server) SetAuditStore(as *gorm.AuditStore) {
 	s.auditStore = as
+}
+
+// setTestAuditWriter injects a mock auditWriter for unit tests.
+// Must only be called from _test.go files.
+func (s *Server) setTestAuditWriter(w auditWriter) {
+	s.testAuditWriter = w
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.

@@ -247,11 +247,22 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		if sid <= 0 {
 			continue
 		}
+		// Read before-state for audit before calling Supersede (which mutates the row).
+		var beforeMem *models.Memory
+		if bm, getErr := s.memoryStore.Get(ctx, sid); getErr == nil {
+			beforeMem = bm
+		}
 		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
 		if supErr != nil {
 			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store_memory: supersede failed")
 			continue
 		}
+		// Audit: fire-and-forget supersede event.
+		if beforeMem == nil {
+			tmp := &models.Memory{ID: sid}
+			beforeMem = tmp
+		}
+		logAuditSupersede(ctx, s, beforeMem, actorFromContext(ctx))
 		supersededIDs = append(supersededIDs, sid)
 		if primarySupersededID == nil {
 			primarySupersededID = &sid
@@ -318,6 +329,11 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("store memory: %w", err)
 	}
 
+	// Audit: fire-and-forget create event (FR-D2 / NFR-D4). Actor derived from
+	// session context when available, else "agent".
+	actor := actorFromContext(ctx)
+	logAuditCreate(ctx, s, created, actor)
+
 	// Async embedding: fire-and-forget goroutine so the MCP response is not blocked
 	// by the embedding HTTP call. Captures local copies of created fields and store
 	// pointers to avoid capturing the mutable request-scoped variables.
@@ -379,6 +395,68 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	if len(params.Rejected) > 0 {
 		result["rejected_note"] = "rejected alternatives are not stored in v5 memories schema"
+	}
+	out, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal result: %w", err)
+	}
+	return string(out), nil
+}
+
+// handleEditMemory updates an existing memory's content and/or narrative.
+// Introduced in Milestone D T003 to fill the audit trail gap for the edit path.
+// Before-state is captured, Update is called, then logAuditEdit fires async.
+func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (string, error) {
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("memory store not available")
+	}
+
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+
+	id := coerceInt64(m["id"], 0)
+	if id == 0 {
+		return "", fmt.Errorf("id required for store_memory action=edit")
+	}
+	narrative := coerceString(m["narrative"], "")
+	tags := coerceStringSlice(m["tags"])
+
+	// Read before-state.
+	before, err := s.memoryStore.Get(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("edit_memory: memory %d not found: %w", id, err)
+	}
+	if before == nil {
+		return "", fmt.Errorf("edit_memory: memory %d not found", id)
+	}
+
+	// Build updated memory (preserve all existing fields, override only provided ones).
+	updated := *before
+	if narrative != "" {
+		updated.Content = narrative
+	}
+	if len(tags) > 0 {
+		updated.Tags = tags
+	}
+	if updated.Content == "" {
+		return "", fmt.Errorf("edit_memory: content must not be empty after edit")
+	}
+
+	after, err := s.memoryStore.Update(ctx, &updated)
+	if err != nil {
+		return "", fmt.Errorf("edit_memory: %w", err)
+	}
+
+	// Audit: fire-and-forget update event.
+	logAuditEdit(ctx, s, before, after, actorFromContext(ctx))
+
+	result := map[string]any{
+		"id":      after.ID,
+		"title":   truncateTitle(after.Content, 80),
+		"storage": "memories",
+		"message": "Memory updated successfully",
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -685,12 +763,24 @@ func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("id required")
 	}
 
+	// Read before-state for audit before deletion.
+	var beforeMem *models.Memory
+	if bm, getErr := s.memoryStore.Get(ctx, id); getErr == nil {
+		beforeMem = bm
+	}
+
 	if err := s.memoryStore.Delete(ctx, id); err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			return "", fmt.Errorf("suppress_memory: memory %d not found", id)
 		}
 		return "", fmt.Errorf("suppress_memory: %w", err)
 	}
+
+	// Audit: fire-and-forget delete event.
+	if beforeMem == nil {
+		beforeMem = &models.Memory{ID: id}
+	}
+	logAuditDelete(ctx, s, beforeMem, actorFromContext(ctx))
 
 	return fmt.Sprintf("Memory %d suppressed", id), nil
 }

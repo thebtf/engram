@@ -7,7 +7,10 @@ import (
 
 type contextKey string
 
-const projectContextKey contextKey = "engram-project"
+const (
+	projectContextKey contextKey = "engram-project"
+	sessionContextKey contextKey = "engram-session"
+)
 
 // extractProjectFromHeader reads the X-Engram-Project header from an HTTP request.
 // Returns empty string if header is absent.
@@ -32,4 +35,25 @@ func ContextWithProject(ctx context.Context, project string) context.Context {
 func projectFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(projectContextKey).(string)
 	return v
+}
+
+// contextWithSession stores session identity in context for audit actor derivation.
+func contextWithSession(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionContextKey, sessionID)
+}
+
+// sessionFromContext retrieves the session ID from context.
+// Returns empty string if not set.
+func sessionFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(sessionContextKey).(string)
+	return v
+}
+
+// actorFromContext derives an audit actor string from context.
+// Uses session_id if set; falls back to "agent".
+func actorFromContext(ctx context.Context) string {
+	if s := sessionFromContext(ctx); s != "" {
+		return s
+	}
+	return "agent"
 }
