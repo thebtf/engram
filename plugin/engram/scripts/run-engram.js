@@ -177,9 +177,13 @@ function configuredEnvValue(...keys) {
 /**
  * Resolve the engram config file path, in priority order:
  *   1. $ENGRAM_CONFIG_FILE if set and non-empty
- *   2. <pluginData>/config.json if pluginData is non-empty
- *   3. ~/.engram/config.json (home-directory fallback)
+ *   2. <pluginData>/config.json if that file exists
+ *   3. ~/.engram/config.json (home-directory universal fallback)
  * Returns the resolved path string (file may or may not exist).
+ *
+ * When pluginData is set but <pluginData>/config.json does not exist,
+ * we fall through to the home-directory path so users who create only
+ * ~/.engram/config.json (the documented Codex setup path) are found.
  */
 function resolveConfigFilePath(pluginData) {
   const explicit = process.env.ENGRAM_CONFIG_FILE;
@@ -187,7 +191,10 @@ function resolveConfigFilePath(pluginData) {
     return explicit.trim();
   }
   if (pluginData && typeof pluginData === "string" && pluginData.trim()) {
-    return path.join(pluginData.trim(), "config.json");
+    const candidate = path.join(pluginData.trim(), "config.json");
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
   }
   return path.join(require("os").homedir(), ".engram", "config.json");
 }
@@ -258,8 +265,11 @@ function describeConfigFile(configFilePath, configFile) {
   if (!configFilePath) {
     return "config_file=unresolved";
   }
-  if (configFile === null || configFile === undefined) {
+  if (!fs.existsSync(configFilePath)) {
     return `config_file=missing(${configFilePath})`;
+  }
+  if (configFile === null || configFile === undefined) {
+    return `config_file=malformed(${configFilePath})`;
   }
   return `config_file=present(${configFilePath})`;
 }

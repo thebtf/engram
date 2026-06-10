@@ -20,19 +20,26 @@ function configuredPluginEnv(...keys) {
 
 /**
  * Resolve the engram config file path, in priority order:
- *   1. $ENGRAM_CONFIG_FILE if set and non-empty
- *   2. <pluginData>/config.json if ENGRAM_DATA_DIR or CLAUDE_PLUGIN_DATA is set
+ *   1. $ENGRAM_CONFIG_FILE if set, non-empty, and not a bare placeholder
+ *   2. <pluginData>/config.json if that file exists
  *   3. ~/.engram/config.json (home-directory universal fallback)
  * Returns the resolved path string (file may or may not exist).
+ *
+ * When pluginData is set but <pluginData>/config.json does not exist,
+ * we fall through to the home-directory path so users who create only
+ * ~/.engram/config.json (the documented Codex setup path) are found.
  */
 function resolveConfigFilePath() {
-  const explicit = process.env.ENGRAM_CONFIG_FILE;
-  if (typeof explicit === 'string' && explicit.trim() !== '') {
-    return explicit.trim();
+  const explicit = configuredPluginEnv('ENGRAM_CONFIG_FILE');
+  if (explicit) {
+    return explicit;
   }
   const pluginData = (process.env.ENGRAM_DATA_DIR || process.env.CLAUDE_PLUGIN_DATA || '').trim();
   if (pluginData) {
-    return path.join(pluginData, 'config.json');
+    const candidate = path.join(pluginData, 'config.json');
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
   }
   return path.join(os.homedir(), '.engram', 'config.json');
 }
@@ -107,30 +114,33 @@ function writeEngramConfigFile(configFilePath, serverURL, apiToken) {
  * Returns { serverURL, token } — empty strings when unconfigured.
  */
 function getEngramConfig() {
-  const serverURL =
-    configuredPluginEnv(
-      'ENGRAM_URL',
-      'ENGRAM_SERVER_URL',
-      'CLAUDE_PLUGIN_OPTION_server_url',
-      'CLAUDE_PLUGIN_OPTION_SERVER_URL',
-      'ENGRAM_CLAUDE_USERCONFIG_URL'
-    ) ||
-    (() => {
-      const cf = readEngramConfigFile(resolveConfigFilePath());
-      return (cf && cf.server_url) ? cf.server_url : '';
-    })();
+  let serverURL = configuredPluginEnv(
+    'ENGRAM_URL',
+    'ENGRAM_SERVER_URL',
+    'CLAUDE_PLUGIN_OPTION_server_url',
+    'CLAUDE_PLUGIN_OPTION_SERVER_URL',
+    'ENGRAM_CLAUDE_USERCONFIG_URL'
+  );
 
-  const token =
-    configuredPluginEnv(
-      'ENGRAM_TOKEN',
-      'CLAUDE_PLUGIN_OPTION_api_token',
-      'CLAUDE_PLUGIN_OPTION_API_TOKEN',
-      'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
-    ) ||
-    (() => {
-      const cf = readEngramConfigFile(resolveConfigFilePath());
-      return (cf && cf.api_token) ? cf.api_token : '';
-    })();
+  let token = configuredPluginEnv(
+    'ENGRAM_TOKEN',
+    'CLAUDE_PLUGIN_OPTION_api_token',
+    'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+    'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
+  );
+
+  // Read config file at most once — only when at least one credential is missing.
+  if (!serverURL || !token) {
+    const cf = readEngramConfigFile(resolveConfigFilePath());
+    if (cf) {
+      if (!serverURL && cf.server_url) {
+        serverURL = cf.server_url;
+      }
+      if (!token && cf.api_token) {
+        token = cf.api_token;
+      }
+    }
+  }
 
   if (serverURL) {
     process.env.ENGRAM_URL = serverURL;
@@ -396,6 +406,12 @@ async function RunHook(hookName, handler) {
     writeResponse(hookName);
     return;
   }
+
+  // Hydrate ENGRAM_URL / ENGRAM_TOKEN from the config file for every hook
+  // process. Each hook runs in its own Node process so env changes from
+  // session-start.js do not carry over. This ensures config-file-only setups
+  // (e.g. ~/.engram/config.json for Codex ≥0.139) work in all hook handlers.
+  getEngramConfig();
 
   let rawInput = '';
   let input = {};
