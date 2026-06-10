@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.15] - 2026-06-10
+
+### Added
+
+- **Config file credential fallback for Codex ≥ 0.139 and other env-hostile
+  harnesses.** Codex 0.139 stopped forwarding `[shell_environment_policy.set]`
+  values to plugin MCP server children (openai/codex#24401 — no supported
+  replacement for plugin MCP servers). The plugin wrapper (`run-engram.js`)
+  and hooks (`lib.js`) now resolve `ENGRAM_URL` and `ENGRAM_TOKEN` from a
+  JSON config file as the final fallback in the credential chain:
+  `$ENGRAM_CONFIG_FILE` → `<pluginData>/config.json` →
+  `~/.engram/config.json`. File format: `{"server_url":"...","api_token":"..."}`.
+  On POSIX the file is created/chmod'd 0600; on Windows NTFS user-profile ACLs
+  suffice. Token values are never logged. The startup diagnostic line now
+  reports `config_file=present(<path>)` or `config_file=missing(<path>)`.
+
+### Changed
+
+- `session-start.js` now calls `lib.getEngramConfig()` (the shared resolver
+  with config file fallback) instead of its own `configureRuntimeEnv()`.
+- Codex setup docs rewritten: `~/.engram/config.json` is the documented path;
+  `shell_environment_policy.set` is noted as legacy/broken for plugin MCP
+  servers and retained only for Codex < 0.139.
+- FATAL error messages for missing URL/token now include the config file path
+  that was checked, so users know the new option without consulting docs.
+
 ## [6.4.14] - 2026-06-10
 
 ### Fixed

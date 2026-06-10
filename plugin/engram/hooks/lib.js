@@ -3,6 +3,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 function configuredPluginEnv(...keys) {
@@ -15,6 +16,130 @@ function configuredPluginEnv(...keys) {
     }
   }
   return '';
+}
+
+/**
+ * Resolve the engram config file path, in priority order:
+ *   1. $ENGRAM_CONFIG_FILE if set and non-empty
+ *   2. <pluginData>/config.json if ENGRAM_DATA_DIR or CLAUDE_PLUGIN_DATA is set
+ *   3. ~/.engram/config.json (home-directory universal fallback)
+ * Returns the resolved path string (file may or may not exist).
+ */
+function resolveConfigFilePath() {
+  const explicit = process.env.ENGRAM_CONFIG_FILE;
+  if (typeof explicit === 'string' && explicit.trim() !== '') {
+    return explicit.trim();
+  }
+  const pluginData = (process.env.ENGRAM_DATA_DIR || process.env.CLAUDE_PLUGIN_DATA || '').trim();
+  if (pluginData) {
+    return path.join(pluginData, 'config.json');
+  }
+  return path.join(os.homedir(), '.engram', 'config.json');
+}
+
+/**
+ * Read and parse the engram config file.
+ * Returns { server_url, api_token } on success (values trimmed, may be empty strings).
+ * Returns null on missing or malformed file — callers must treat null as "not configured here".
+ * Never throws.
+ */
+function readEngramConfigFile(configFilePath) {
+  try {
+    if (!configFilePath || !fs.existsSync(configFilePath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(configFilePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    return {
+      server_url: typeof parsed.server_url === 'string' ? parsed.server_url.trim() : '',
+      api_token: typeof parsed.api_token === 'string' ? parsed.api_token.trim() : '',
+    };
+  } catch {
+    // Missing file, permission error, or malformed JSON — skip silently.
+    return null;
+  }
+}
+
+/**
+ * Write the engram config file with restrictive permissions.
+ * On POSIX: chmod 0600 (owner read/write only).
+ * On Windows: the file is created in the user profile directory; NTFS ACLs
+ *   inherited from the parent directory (e.g. ~/.engram/) already restrict
+ *   access to the owner account — no explicit icacls call is made.
+ * Never logs the token value.
+ * @param {string} configFilePath - Absolute path to write
+ * @param {string} serverURL - Engram server URL
+ * @param {string} apiToken - Worker keycard token (never logged)
+ * @returns {boolean} true on success, false on failure
+ */
+function writeEngramConfigFile(configFilePath, serverURL, apiToken) {
+  try {
+    const dir = path.dirname(configFilePath);
+    fs.mkdirSync(dir, { recursive: true });
+    const content = JSON.stringify({ server_url: serverURL, api_token: apiToken }, null, 2);
+    fs.writeFileSync(configFilePath, content, { encoding: 'utf8', mode: 0o600 });
+    // On POSIX, enforce mode explicitly in case umask was permissive.
+    if (process.platform !== 'win32') {
+      try { fs.chmodSync(configFilePath, 0o600); } catch { /* best-effort */ }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve ENGRAM_URL and ENGRAM_TOKEN using the full credential chain:
+ *   1. Explicit env vars (ENGRAM_URL / ENGRAM_TOKEN)
+ *   2. Claude Code plugin option env (CLAUDE_PLUGIN_OPTION_*)
+ *   3. Legacy userConfig aliases (ENGRAM_CLAUDE_USERCONFIG_*)
+ *   4. Config file fallback (ENGRAM_CONFIG_FILE / <pluginData>/config.json /
+ *      ~/.engram/config.json) — added v6.4.15 for Codex ≥0.139 which stopped
+ *      forwarding shell_environment_policy.set values to plugin MCP children
+ *      (openai/codex#24401).
+ *
+ * Sets process.env.ENGRAM_URL and process.env.ENGRAM_TOKEN so child processes
+ * and subsequent code see the resolved values.
+ *
+ * Returns { serverURL, token } — empty strings when unconfigured.
+ */
+function getEngramConfig() {
+  const serverURL =
+    configuredPluginEnv(
+      'ENGRAM_URL',
+      'ENGRAM_SERVER_URL',
+      'CLAUDE_PLUGIN_OPTION_server_url',
+      'CLAUDE_PLUGIN_OPTION_SERVER_URL',
+      'ENGRAM_CLAUDE_USERCONFIG_URL'
+    ) ||
+    (() => {
+      const cf = readEngramConfigFile(resolveConfigFilePath());
+      return (cf && cf.server_url) ? cf.server_url : '';
+    })();
+
+  const token =
+    configuredPluginEnv(
+      'ENGRAM_TOKEN',
+      'CLAUDE_PLUGIN_OPTION_api_token',
+      'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+      'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
+    ) ||
+    (() => {
+      const cf = readEngramConfigFile(resolveConfigFilePath());
+      return (cf && cf.api_token) ? cf.api_token : '';
+    })();
+
+  if (serverURL) {
+    process.env.ENGRAM_URL = serverURL;
+  }
+  if (token) {
+    process.env.ENGRAM_TOKEN = token;
+  }
+
+  return { serverURL, token };
 }
 
 function getServerURL() {
@@ -410,7 +535,6 @@ function appendSessionFile(sessionID, filePath) {
 
 // --- Crash-safe session markers (gstack-insights FR-8) ---
 
-const os = require('os');
 const MARKER_PREFIX = '.engram-pending-';
 
 /**
@@ -544,10 +668,14 @@ function _timeAgo(date) {
 
 module.exports = {
   configuredPluginEnv,
+  getEngramConfig,
   getServerURL,
   getPluginDataDir,
   getSessionStartCachePath,
+  readEngramConfigFile,
   readJSONFile,
+  resolveConfigFilePath,
+  writeEngramConfigFile,
   writeJSONFile,
   ProjectIDWithName,
   LegacyProjectID,
