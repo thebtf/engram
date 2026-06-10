@@ -24,7 +24,8 @@ function getServerURL() {
     'ENGRAM_URL',
     'ENGRAM_SERVER_URL',
     'CLAUDE_PLUGIN_OPTION_server_url',
-    'CLAUDE_PLUGIN_OPTION_SERVER_URL'
+    'CLAUDE_PLUGIN_OPTION_SERVER_URL',
+    'ENGRAM_CLAUDE_USERCONFIG_URL'
   );
   if (customURL && customURL.trim() !== '') {
     try {
@@ -107,7 +108,8 @@ function buildRequestHeaders(includeJsonBody = false) {
   const token = configuredPluginEnv(
     'ENGRAM_TOKEN',
     'CLAUDE_PLUGIN_OPTION_api_token',
-    'CLAUDE_PLUGIN_OPTION_API_TOKEN'
+    'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+    'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
   );
   if (token) {
     headers.Authorization = `Bearer ${token}`;
