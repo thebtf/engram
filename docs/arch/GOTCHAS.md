@@ -91,13 +91,16 @@ simultaneously. Set `ENGRAM_INJECT_UNIFIED=false` only as an emergency rollback.
 
 ---
 
-## Embedding Removed in v5
+## Embedding Removed in v5 (rebuild in progress)
 
 **Severity: INFORMATIONAL**
 
 Server-side embedding (OpenAI, ONNX) was removed in v5. `EMBEDDING_*` env vars
 are ignored. The `content_chunks` table still exists but is populated externally
-(by the client-side daemon or import tools), not by the server.
+(by the client-side daemon or import tools), not by the server. This removal was
+the v5 transitional strip-down of the non-functional pre-v5 implementation; vnext
+is rebuilding embedding from scratch (Milestones A-C), and `EMBEDDING_*` vars
+will be inert until that subsystem ships.
 
 ---
 

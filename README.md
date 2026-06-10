@@ -287,7 +287,7 @@ v5.0.0 is a **breaking cleanup release**.
 What changed:
 - Engram now uses a static-only storage model for its primary runtime path
 - session-start inject is based on static issues + behavioral rules + memories
-- the old dynamic learning / graph / reranking / extraction stack is no longer part of the main product path
+- the old dynamic learning / graph / reranking / extraction stack was stripped in the v5 demolition phase and is being rebuilt incrementally across the vnext milestones (lifecycle, graph, retrieval, crystallization — see `internal/lifecycle`, `internal/graph`, `internal/retrieval`, `internal/crystallization` packages already landing on main)
 - client and server now negotiate major-version compatibility for the session-start path
 
 Upgrade steps:
@@ -341,7 +341,7 @@ Primary categories in v5:
 - documents
 - credentials / vault
 - loom background tasks
-The old dynamic search / graph / learning-oriented tool surface is no longer the primary v5 path.
+The old dynamic search / graph / learning-oriented tool surface was stripped in the v5 demolition phase and is being rebuilt incrementally across vnext milestones.
 
 ### `store` — Save and Organize
 
