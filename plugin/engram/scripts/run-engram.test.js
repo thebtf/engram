@@ -83,20 +83,24 @@ test("Codex MCP config launches wrapper when cwd is the plugin root", () => {
     ].join("\n")
   );
 
-  execFileSync(process.execPath, server.args, {
-    cwd: tmpRoot,
-    env: {
-      ...process.env,
-      CLAUDE_PLUGIN_ROOT: "",
-      ENGRAM_TEST_MARKER: markerPath,
-      PLUGIN_ROOT: "",
-    },
-  });
+  try {
+    execFileSync(process.execPath, server.args, {
+      cwd: tmpRoot,
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: "",
+        ENGRAM_TEST_MARKER: markerPath,
+        PLUGIN_ROOT: "",
+      },
+    });
 
-  assert.equal(
-    fs.readFileSync(markerPath, "utf8"),
-    path.join(tmpRoot, "scripts", "run-engram.js")
-  );
+    assert.equal(
+      fs.readFileSync(markerPath, "utf8"),
+      path.join(tmpRoot, "scripts", "run-engram.js")
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });
 
 test("Claude MCP config preserves host-provided argv", () => {
@@ -117,21 +121,25 @@ test("Claude MCP config preserves host-provided argv", () => {
     ].join("\n")
   );
 
-  const args = expandMcpArgsForTest(server.args, tmpRoot);
-  execFileSync(process.execPath, [...args, "--from-host", "value"], {
-    cwd: os.tmpdir(),
-    env: {
-      ...process.env,
-      CLAUDE_PLUGIN_ROOT: "",
-      ENGRAM_TEST_MARKER: markerPath,
-      PLUGIN_ROOT: "",
-    },
-  });
+  try {
+    const args = expandMcpArgsForTest(server.args, tmpRoot);
+    execFileSync(process.execPath, [...args, "--from-host", "value"], {
+      cwd: os.tmpdir(),
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: "",
+        ENGRAM_TEST_MARKER: markerPath,
+        PLUGIN_ROOT: "",
+      },
+    });
 
-  assert.equal(
-    fs.readFileSync(markerPath, "utf8"),
-    [path.join(tmpRoot, "scripts", "run-engram.js"), "--from-host", "value"].join("|")
-  );
+    assert.equal(
+      fs.readFileSync(markerPath, "utf8"),
+      [path.join(tmpRoot, "scripts", "run-engram.js"), "--from-host", "value"].join("|")
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });
 
 test("infers Codex plugin data dir from installed cache root", () => {
