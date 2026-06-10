@@ -67,11 +67,19 @@ func (s *Service) runRetentionCleanup(ctx context.Context) {
 	// T005: audit_log 90-day retention (FR-D2, EC-D4).
 	// auditRetainer is satisfied by *gorm.AuditStore; testAuditRetainer is
 	// used by unit tests to avoid a live DB connection.
+	//
+	// Finding 3 (second review): auditStore is written by initializeAsync under
+	// initMu write-lock; read it under read-lock to avoid a data race.
 	var ar auditRetainer
 	if s.testAuditRetainer != nil {
 		ar = s.testAuditRetainer
-	} else if s.auditStore != nil {
-		ar = s.auditStore
+	} else {
+		s.initMu.RLock()
+		as := s.auditStore
+		s.initMu.RUnlock()
+		if as != nil {
+			ar = as
+		}
 	}
 	if ar != nil {
 		n, err := ar.DeleteOlderThan(ctx, cutoff)

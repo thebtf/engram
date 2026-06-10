@@ -278,6 +278,124 @@ func TestEditMemory_AuditSourceSessionIDEmptyWhenNoSession(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// CRIT (second review): empty project context must be denied when
+// EnforceSourceProject=true
+// ---------------------------------------------------------------------------
+
+// TestEditMemory_EmptyProjectContextDeniedWhenEnforced verifies that when
+// EnforceSourceProject=true and ctx carries no project identity (context.Background()),
+// handleEditMemory returns not-found and does NOT edit the memory.  This closes the
+// authorization bypass: a caller arriving without ContextWithProject must not be able
+// to edit any memory by id.
+func TestEditMemory_EmptyProjectContextDeniedWhenEnforced(t *testing.T) {
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "true")
+	reloadConfig(t)
+
+	mem := newMockMemoryEditor()
+	mem.seed(&models.Memory{ID: 99, Project: "project-A", Content: "original"})
+
+	srv := newEditServer(t, mem)
+
+	// ctx has NO project injection — empty ctxProject must be treated as mismatch.
+	_, err := srv.handleEditMemory(context.Background(), editArgs(99, "attempted edit"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found",
+		"empty caller project must be denied with not-found when EnforceSourceProject=true")
+
+	// Verify content is unchanged.
+	assert.Equal(t, "original", mem.stored[99].Content,
+		"memory must not be modified when caller has no project context")
+}
+
+// ---------------------------------------------------------------------------
+// Finding 6 (second review): tag clearing — absent vs explicit []
+// ---------------------------------------------------------------------------
+
+// editArgsWithTags builds an edit args payload that explicitly sets tags.
+func editArgsWithTags(id int64, narrative string, tags []string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"action":    "edit",
+		"id":        id,
+		"narrative": narrative,
+		"tags":      tags,
+	})
+	return b
+}
+
+// editArgsNoTags builds an edit args payload with no tags field at all.
+func editArgsNoTags(id int64, narrative string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"action":    "edit",
+		"id":        id,
+		"narrative": narrative,
+		// "tags" key intentionally absent
+	})
+	return b
+}
+
+// TestEditMemory_TagsAbsent_KeepsExisting verifies that when "tags" is absent from
+// the args payload, the existing tags on the memory are preserved.
+func TestEditMemory_TagsAbsent_KeepsExisting(t *testing.T) {
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
+	reloadConfig(t)
+
+	mem := newMockMemoryEditor()
+	mem.seed(&models.Memory{ID: 200, Project: "proj", Content: "original", Tags: []string{"keep", "these"}})
+
+	srv := newEditServer(t, mem)
+
+	// No "tags" key in args — existing tags must be preserved.
+	_, err := srv.handleEditMemory(context.Background(), editArgsNoTags(200, "new content"))
+	require.NoError(t, err)
+
+	stored := mem.stored[200]
+	require.NotNil(t, stored)
+	assert.Equal(t, []string{"keep", "these"}, stored.Tags,
+		"absent tags field must not modify existing tags")
+}
+
+// TestEditMemory_TagsExplicitEmpty_ClearsTags verifies that when "tags": [] is
+// explicitly passed, the memory's tags are cleared to empty/nil.
+func TestEditMemory_TagsExplicitEmpty_ClearsTags(t *testing.T) {
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
+	reloadConfig(t)
+
+	mem := newMockMemoryEditor()
+	mem.seed(&models.Memory{ID: 201, Project: "proj", Content: "original", Tags: []string{"remove", "these"}})
+
+	srv := newEditServer(t, mem)
+
+	// Explicit empty array — tags must be cleared.
+	_, err := srv.handleEditMemory(context.Background(), editArgsWithTags(201, "new content", []string{}))
+	require.NoError(t, err)
+
+	stored := mem.stored[201]
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.Tags,
+		"explicit empty tags array must clear existing tags")
+}
+
+// TestEditMemory_TagsNonEmpty_ReplacesTags verifies that a non-empty tags array
+// replaces existing tags.
+func TestEditMemory_TagsNonEmpty_ReplacesTags(t *testing.T) {
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
+	reloadConfig(t)
+
+	mem := newMockMemoryEditor()
+	mem.seed(&models.Memory{ID: 202, Project: "proj", Content: "original", Tags: []string{"old"}})
+
+	srv := newEditServer(t, mem)
+
+	_, err := srv.handleEditMemory(context.Background(), editArgsWithTags(202, "new content", []string{"new", "tags"}))
+	require.NoError(t, err)
+
+	stored := mem.stored[202]
+	require.NotNil(t, stored)
+	assert.Equal(t, []string{"new", "tags"}, stored.Tags,
+		"non-empty tags array must replace existing tags")
+}
+
+// ---------------------------------------------------------------------------
 // Finding 4: runAuditAsync panic recovery — no process crash
 // ---------------------------------------------------------------------------
 

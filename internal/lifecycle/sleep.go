@@ -97,21 +97,27 @@ func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog Promot
 			m.Stability = stability
 
 			// Finding 5: capture promotion/demotion intent but defer audit until
-			// after UpdateLifecycleFields succeeds so we never record a tier change
-			// that did not actually persist.
+			// Findings 4-5 (second review): both promotionLog and auditLog must fire
+			// only after UpdateLifecycleFields succeeds.  Capture pending callbacks
+			// here; execute them in the success branch below.
 			var pendingAuditAction string
+			var pendingPromoLog func()
 			if promo := EvaluatePromotion(m); promo.Changed {
 				fields["tier"] = promo.NewTier
 				result.Promotions++
-				if promotionLog != nil {
-					_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, promo.NewTier, promo.Reason)
+				pendingPromoLog = func() {
+					if promotionLog != nil {
+						_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, promo.NewTier, promo.Reason)
+					}
 				}
 				pendingAuditAction = "promote"
 			} else if demo := EvaluateDemotion(m); demo.Changed {
 				fields["tier"] = demo.NewTier
 				result.Demotions++
-				if promotionLog != nil {
-					_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, demo.NewTier, demo.Reason)
+				pendingPromoLog = func() {
+					if promotionLog != nil {
+						_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, demo.NewTier, demo.Reason)
+					}
 				}
 				pendingAuditAction = "demote"
 			}
@@ -132,7 +138,12 @@ func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog Promot
 					log.Error().Err(err).Int64("memory_id", m.ID).Msg("sleep cycle: update failed")
 				} else {
 					result.MemoriesProcessed++
-					// Finding 5: audit tier changes only after successful persist.
+					// Findings 4-5: execute promotion/demotion log ONLY after
+					// the DB update succeeds, preventing phantom entries on rollback.
+					if pendingPromoLog != nil {
+						pendingPromoLog()
+					}
+					// Audit tier changes only after successful persist.
 					if pendingAuditAction != "" && auditLog != nil {
 						if auditErr := auditLog.LogAudit(ctx, m.ID, pendingAuditAction, "system"); auditErr != nil {
 							log.Error().Err(auditErr).Int64("memory_id", m.ID).Str("action", pendingAuditAction).Msg("sleep cycle: audit log failed")

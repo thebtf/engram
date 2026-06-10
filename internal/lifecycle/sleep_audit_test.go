@@ -254,3 +254,85 @@ func TestPromotion_AuditWrittenAfterSuccessfulPersist(t *testing.T) {
 	assert.Equal(t, int64(606), entries[0].memoryID)
 	assert.Equal(t, "promote", entries[0].action)
 }
+
+// ---------------------------------------------------------------------------
+// Findings 4-5 (second review): promotionLog deferred until after persist
+// ---------------------------------------------------------------------------
+
+// TestPromotion_PromoLogSkippedWhenPersistFails verifies that promotionLog.LogPromotion
+// is NOT called when UpdateLifecycleFields fails.  This is the second-review complement
+// to TestPromotion_AuditSkippedWhenPersistFails — both promotion log and audit log must
+// be deferred until after the DB write succeeds.
+func TestPromotion_PromoLogSkippedWhenPersistFails(t *testing.T) {
+	mem := &models.Memory{
+		ID:              707,
+		Tier:            TierEpisodic,
+		AccessCount:     5,
+		RecurrenceCount: 3,
+		Confidence:      0.9,
+		Retrievability:  0.95,
+		Stability:       30.0,
+		CreatedAt:       time.Now().Add(-24 * time.Hour),
+	}
+
+	store := &mockMemStore{
+		memories:  []*models.Memory{mem},
+		updateErr: fmt.Errorf("simulated db error"),
+	}
+	promoLog := &mockPromoLogger{}
+
+	RunSleepCycle(context.Background(), store, promoLog, nil)
+
+	time.Sleep(30 * time.Millisecond)
+	promoLog.mu.Lock()
+	n := len(promoLog.entries)
+	promoLog.mu.Unlock()
+	assert.Equal(t, 0, n,
+		"promotionLog must NOT be called when UpdateLifecycleFields fails (Findings 4-5)")
+}
+
+// TestPromotion_PromoLogCalledAfterSuccessfulPersist verifies that promotionLog.LogPromotion
+// IS called when UpdateLifecycleFields succeeds.
+func TestPromotion_PromoLogCalledAfterSuccessfulPersist(t *testing.T) {
+	mem := &models.Memory{
+		ID:              808,
+		Tier:            TierEpisodic,
+		AccessCount:     5,
+		RecurrenceCount: 3,
+		Confidence:      0.9,
+		Retrievability:  0.95,
+		Stability:       30.0,
+		CreatedAt:       time.Now().Add(-24 * time.Hour),
+	}
+
+	store := &mockMemStore{
+		memories:  []*models.Memory{mem},
+		updateErr: nil,
+	}
+	promoLog := &mockPromoLogger{}
+
+	RunSleepCycle(context.Background(), store, promoLog, nil)
+
+	// Give the synchronous path time to complete (RunSleepCycle is synchronous
+	// for the promo path; this sleep guards against any future async refactor).
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		promoLog.mu.Lock()
+		n := len(promoLog.entries)
+		promoLog.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	promoLog.mu.Lock()
+	entries := make([]promoEntry, len(promoLog.entries))
+	copy(entries, promoLog.entries)
+	promoLog.mu.Unlock()
+
+	require.Len(t, entries, 1,
+		"promotionLog must be called after successful UpdateLifecycleFields")
+	assert.Equal(t, int64(808), entries[0].memoryID)
+	assert.Equal(t, TierEpisodic, entries[0].fromTier)
+}

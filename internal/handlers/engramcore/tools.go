@@ -90,10 +90,18 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	}
 	client := pb.NewEngramServiceClient(conn)
 
+	// Finding 2 (codex second review): propagate the Claude session ID so the
+	// server-side audit helpers record the correct SourceSessionID.  The value
+	// comes from p.Env (per-session override) with os.Getenv fallback via
+	// envFor, which mirrors the token-resolution pattern used on the same call
+	// path.  An empty string is safe — the server only sets the context value
+	// when SessionId is non-empty (grpcserver/server.go).
+	sessionID := m.envFor(p, config.EnvClaudeSessionID)
 	resp, err := client.CallTool(ctx, &pb.CallToolRequest{
 		ToolName:      name,
 		ArgumentsJson: args,
 		Project:       project,
+		SessionId:     sessionID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gRPC CallTool: %w", err)

@@ -453,11 +453,17 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("edit_memory: memory %d not found", id)
 	}
 
-	// Finding 2: enforce project scope so a caller cannot edit another project's
-	// memory by id. Return not-found (don't leak existence) on mismatch.
+	// Finding 2 (first review) + CRIT (second review): enforce project scope so a
+	// caller cannot edit another project's memory by id. Return not-found (don't
+	// leak existence) on mismatch or on empty caller project.
+	//
+	// When EnforceSourceProject=true an empty ctxProject must DENY — the same
+	// treatment as handleStoreMemory — not silently skip the check.  A caller
+	// arriving without a project context (no ContextWithProject injection) cannot
+	// be authorised to edit an arbitrary memory by id.
 	if config.Get().EnforceSourceProject {
 		ctxProject := projectFromContext(ctx)
-		if ctxProject != "" && before.Project != ctxProject {
+		if ctxProject == "" || before.Project != ctxProject {
 			return "", fmt.Errorf("edit_memory: memory %d not found", id)
 		}
 	}
@@ -491,8 +497,11 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 		}
 		updated.Content = narrative
 	}
-	if len(tags) > 0 {
-		updated.Tags = tags
+	// Finding 6: distinguish absent "tags" key from explicit empty [].
+	// absent → keep existing tags; explicit [] → clear all tags.
+	// coerceStringSlice returns nil for both cases, so we use the raw map.
+	if _, tagsPresent := m["tags"]; tagsPresent {
+		updated.Tags = tags // tags is nil when [] was passed — clears the field
 	}
 	if updated.Content == "" {
 		return "", fmt.Errorf("edit_memory: content must not be empty after edit")
