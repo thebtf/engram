@@ -105,7 +105,12 @@ Shared utilities in `lib.js`. Tests: `*.test.js`.
 | `pkg/similarity` | Clustering helpers for similarity workflows. |
 | `pkg/strutil` | Shared string utilities: Truncate, TruncateTrimmed, ContainsAny. |
 
-## Removed in v5 (do not reference)
+## Removed in v5 strip-down (paths deleted; rebuilt equivalents live elsewhere)
+
+These paths were deleted in the v5 demolition phase and must not be referenced; vnext rebuilds
+equivalent capabilities in new packages (`internal/lifecycle`, `internal/graph`,
+`internal/retrieval`, `internal/crystallization`) — see `.agent/specs/` for the milestone
+specs governing each rebuild.
 
 These packages were deleted in v5 (~12,800 lines removed):
 `internal/search`, `internal/embedding`, `internal/vector/`,

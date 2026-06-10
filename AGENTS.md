@@ -11,8 +11,8 @@ STACKS: [GO]
 Persistent shared memory infrastructure for Claude Code workstations.
 Single server (Docker on Unraid/NAS) stores memories, behavioral rules, credentials,
 issues, and documents in PostgreSQL 17. MCP tools are exposed via the `engram` stdio
-client proxy (server-side HTTP MCP transports removed in v5); REST API + gRPC on
-port 37777 (cmux multiplexed).
+client proxy (server-side HTTP MCP transports removed in v5 — permanent architectural shift to the
+stdio daemon + gRPC model); REST API + gRPC on port 37777 (cmux multiplexed).
 
 ## RULES
 
