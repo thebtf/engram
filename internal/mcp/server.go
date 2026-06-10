@@ -46,6 +46,7 @@ type Server struct {
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
+	auditStore             *gorm.AuditStore
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -120,6 +121,13 @@ func (s *Server) SetPromotionStore(ps *gorm.PromotionStore) {
 
 func (s *Server) SetGraphStore(gs *graph.Store) {
 	s.graphStore = gs
+}
+
+// SetAuditStore sets the audit store for mutation audit logging (Milestone D FR-D2).
+// When ENGRAM_VNEXT_ENABLED != "true", this setter may still be called but audit
+// writes are gated at the handler level.
+func (s *Server) SetAuditStore(as *gorm.AuditStore) {
+	s.auditStore = as
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.
