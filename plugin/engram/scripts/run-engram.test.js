@@ -16,33 +16,56 @@ const {
   trimStartupDiagnosticLog,
 } = require("./run-engram.js");
 
-test("MCP config launches wrapper via Codex plugin-root interpolation", () => {
+test("Codex MCP config launches wrapper via plugin-root-relative path", () => {
+  // Codex does NOT interpolate ${CLAUDE_PLUGIN_ROOT} in plugin .mcp.json args —
+  // the literal string reaches node and the server dies with MODULE_NOT_FOUND.
+  // Codex resolves relative args against the plugin root via cwd ".".
   const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const server = payload.mcpServers.engram;
 
   assert.equal(server.command, "node");
-  assert.deepEqual(server.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js"]);
+  assert.deepEqual(server.args, ["./scripts/run-engram.js"]);
   assert.equal(server.cwd, ".");
 });
 
-test("MCP config never interpolates user_config in the env block", () => {
+test("Claude MCP config launches wrapper via CLAUDE_PLUGIN_ROOT interpolation", () => {
+  // Claude Code interpolates ${CLAUDE_PLUGIN_ROOT} but does NOT resolve
+  // relative args against the plugin root, so the Claude variant keeps the
+  // interpolated absolute path. .claude-plugin/plugin.json points here.
+  const manifestPath = path.resolve(__dirname, "..", ".claude-plugin", "plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  assert.equal(manifest.mcpServers, "./claude/.mcp.json");
+
+  const mcpPath = path.resolve(__dirname, "..", "claude", ".mcp.json");
+  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
+  const server = payload.mcpServers.engram;
+
+  assert.equal(server.command, "node");
+  assert.deepEqual(server.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js"]);
+});
+
+test("MCP configs never interpolate user_config in an env block", () => {
   // Regression guard: ${user_config.*} inside a plugin .mcp.json env block
   // makes Claude Code silently skip spawning the MCP server
   // (anthropics/claude-code#51573). userConfig values reach plugin
   // subprocesses as CLAUDE_PLUGIN_OPTION_<KEY> instead.
-  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
-  const raw = fs.readFileSync(mcpPath, "utf8");
-  assert.doesNotMatch(raw, /\$\{user_config\./);
+  for (const rel of ["../.mcp.json", "../claude/.mcp.json"]) {
+    const mcpPath = path.resolve(__dirname, rel);
+    const raw = fs.readFileSync(mcpPath, "utf8");
+    assert.doesNotMatch(raw, /\$\{user_config\./, `user_config leak in ${rel}`);
 
-  const payload = JSON.parse(raw);
-  const server = payload.mcpServers.engram;
-  assert.equal(server.env, undefined);
-  assert.ok(server.env_vars.includes("ENGRAM_URL"));
-  assert.ok(server.env_vars.includes("ENGRAM_TOKEN"));
+    const payload = JSON.parse(raw);
+    const server = payload.mcpServers.engram;
+    assert.equal(server.env, undefined, `env block present in ${rel}`);
+    assert.ok(server.env_vars.includes("ENGRAM_URL"), `ENGRAM_URL missing in ${rel}`);
+    assert.ok(server.env_vars.includes("ENGRAM_TOKEN"), `ENGRAM_TOKEN missing in ${rel}`);
+  }
 });
 
-test("MCP config does not fall back to workspace cwd when launching wrapper", () => {
+test("Codex MCP config launches wrapper when cwd is the plugin root", () => {
+  // Codex spawns the plugin MCP server with cwd resolved to the plugin root
+  // (the .mcp.json "cwd": "."), so the relative entrypoint must resolve there.
   const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const server = payload.mcpServers.engram;
@@ -60,25 +83,28 @@ test("MCP config does not fall back to workspace cwd when launching wrapper", ()
     ].join("\n")
   );
 
-  const args = expandMcpArgsForTest(server.args, tmpRoot);
-  execFileSync(process.execPath, args, {
-    cwd: os.tmpdir(),
-    env: {
-      ...process.env,
-      CLAUDE_PLUGIN_ROOT: "",
-      ENGRAM_TEST_MARKER: markerPath,
-      PLUGIN_ROOT: "",
-    },
-  });
+  try {
+    execFileSync(process.execPath, server.args, {
+      cwd: tmpRoot,
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: "",
+        ENGRAM_TEST_MARKER: markerPath,
+        PLUGIN_ROOT: "",
+      },
+    });
 
-  assert.equal(
-    fs.readFileSync(markerPath, "utf8"),
-    path.join(tmpRoot, "scripts", "run-engram.js")
-  );
+    assert.equal(
+      fs.readFileSync(markerPath, "utf8"),
+      path.join(tmpRoot, "scripts", "run-engram.js")
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });
 
-test("MCP config preserves host-provided argv", () => {
-  const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
+test("Claude MCP config preserves host-provided argv", () => {
+  const mcpPath = path.resolve(__dirname, "..", "claude", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const server = payload.mcpServers.engram;
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "engram-mcp-argv-"));
@@ -95,21 +121,25 @@ test("MCP config preserves host-provided argv", () => {
     ].join("\n")
   );
 
-  const args = expandMcpArgsForTest(server.args, tmpRoot);
-  execFileSync(process.execPath, [...args, "--from-host", "value"], {
-    cwd: os.tmpdir(),
-    env: {
-      ...process.env,
-      CLAUDE_PLUGIN_ROOT: "",
-      ENGRAM_TEST_MARKER: markerPath,
-      PLUGIN_ROOT: "",
-    },
-  });
+  try {
+    const args = expandMcpArgsForTest(server.args, tmpRoot);
+    execFileSync(process.execPath, [...args, "--from-host", "value"], {
+      cwd: os.tmpdir(),
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: "",
+        ENGRAM_TEST_MARKER: markerPath,
+        PLUGIN_ROOT: "",
+      },
+    });
 
-  assert.equal(
-    fs.readFileSync(markerPath, "utf8"),
-    [path.join(tmpRoot, "scripts", "run-engram.js"), "--from-host", "value"].join("|")
-  );
+    assert.equal(
+      fs.readFileSync(markerPath, "utf8"),
+      [path.join(tmpRoot, "scripts", "run-engram.js"), "--from-host", "value"].join("|")
+    );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });
 
 test("infers Codex plugin data dir from installed cache root", () => {

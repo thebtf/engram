@@ -74,6 +74,9 @@ archives:
       - src: plugin/engram/.mcp.json
         dst: .
         strip_parent: true
+      - src: plugin/engram/claude/.mcp.json
+        dst: claude
+        strip_parent: true
     format_overrides:
       - goos: windows
         formats:

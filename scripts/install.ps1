@@ -99,6 +99,12 @@ function Install-Release {
             Copy-Item "$TempDir\.mcp.json" "$InstallDir\.mcp.json" -Force
         }
 
+        # Copy the Claude-specific MCP config referenced by .claude-plugin/plugin.json
+        if (Test-Path "$TempDir\claude\.mcp.json") {
+            New-Item -ItemType Directory -Path "$InstallDir\claude" -Force | Out-Null
+            Copy-Item "$TempDir\claude\.mcp.json" "$InstallDir\claude\.mcp.json" -Force
+        }
+
         Write-Success "Binaries installed to $InstallDir"
     } finally {
         Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue

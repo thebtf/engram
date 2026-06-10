@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.14] - 2026-06-10
+
+### Fixed
+
+- **Codex plugin MCP server failing with MODULE_NOT_FOUND.** Codex does not
+  interpolate `${CLAUDE_PLUGIN_ROOT}` in plugin `.mcp.json` args — the literal
+  string reached node and the wrapper never started
+  (`Cannot find module '...\${CLAUDE_PLUGIN_ROOT}\scripts\run-engram.js'`).
+  The plugin now ships per-consumer MCP configs: the root `.mcp.json` (used by
+  Codex) launches the wrapper via a plugin-root-relative path resolved against
+  `cwd: "."`, while `.claude-plugin/plugin.json` points Claude Code at
+  `claude/.mcp.json`, which keeps the `${CLAUDE_PLUGIN_ROOT}` interpolated
+  entrypoint that Claude Code requires (Claude Code does not resolve relative
+  args against the plugin root).
+
 ## [6.4.13] - 2026-06-10
 
 ### Fixed
