@@ -34,6 +34,7 @@ import (
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/feedback"
+	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/logbuf"
@@ -150,11 +151,26 @@ type Service struct {
 	feedbackUpdater        *feedback.Updater
 	segmentStore           *gorm.SegmentStore
 	embeddingClient        *embedding.Client
+	promotionStore         *gorm.PromotionStore
+	graphStore             *graph.Store
 	vaultOnce              sync.Once
 	vaultErr               error
 	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
 	eventBus               *projectevents.Bus
 	projectReaper          *reaper.Reaper
+	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
+	// MCP/REST request handled by this server. Updated atomically in
+	// requestActivityMiddleware on every request.
+	// The sleep cycle uses this to implement the ">=4h since last active session"
+	// idle gate (T014 AC). Resets to zero on server restart — a fresh process
+	// with no requests yet is treated as "idle since epoch", which means the
+	// count gate alone determines the first cycle.
+	lastRequestAt atomic.Int64
+	// sleepCycleWatermarkID stores the maximum memory ID seen at the end of the last
+	// successful sleep cycle. CountActiveSince queries only rows with id > this value,
+	// ensuring new-memory counting is accurate regardless of total database size.
+	// In-process only — resets to 0 on server restart (documented behaviour).
+	sleepCycleWatermarkID atomic.Int64
 
 	// Cognitive v7 platform substrate (FR-7). The four cross-subsystem
 	// primitives plus the resolved feature-flag snapshot. cognitiveQueueLifecycle
@@ -632,6 +648,17 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
+	// Wire promotion and graph stores into the MCP server and record them on
+	// the Service for the sleep cycle goroutine. Extracted into wireVnextStores
+	// so the wiring is testable without a full service initialisation.
+	promotionStore := gorm.NewPromotionStore(store.GetDB())
+	graphStore := graph.NewStore(store.GetDB())
+	wireVnextStores(mcpServer, promotionStore, graphStore)
+	s.initMu.Lock()
+	s.promotionStore = promotionStore
+	s.graphStore = graphStore
+	s.initMu.Unlock()
+
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	embClient, embErr := embedding.NewClient()
 	if embErr != nil {
@@ -705,6 +732,14 @@ func (s *Service) initializeAsync() {
 	// Start retention cron for injection_log and citation_log cleanup (vNext Phase A).
 	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
 		s.startRetentionCron(s.ctx)
+	}
+
+	// Start sleep cycle goroutine when lifecycle is enabled (milestone-B T014).
+	// Trigger conditions per T014 AC: >=10 new memories since last cycle (tracked
+	// via watermark with CountActiveSince) AND >=4h idle (no HTTP/MCP requests).
+	// See sleep_cycle.go for implementation details.
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+		s.startSleepCycle(s.ctx)
 	}
 
 	// Start queue processor if SDK processor is available
@@ -889,6 +924,10 @@ func (a *mcpHandlerAdapter) ServerInfo() (string, string) {
 func (s *Service) setupMiddleware() {
 	// Add request ID first so all subsequent logs can include it
 	s.router.Use(RequestID)
+
+	// Stamp last-request timestamp for the sleep-cycle idle gate (T014 AC).
+	// Must be before the logger so even health-check traffic counts as activity.
+	s.router.Use(s.requestActivityMiddleware)
 
 	s.router.Use(debugRequestLogger)
 	s.router.Use(middleware.Recoverer)
@@ -1650,4 +1689,17 @@ func (s *Service) broadcastProcessingStatus() {
 
 func getPID() int {
 	return os.Getpid()
+}
+
+// wireVnextStores injects the promotion and graph stores into the MCP server.
+// Extracted from initializeAsync so the wiring path is unit-testable: a test
+// that calls wireVnextStores and then checks mcpServer tool advertise surface
+// will break if either SetPromotionStore or SetGraphStore is removed.
+//
+// Callers are responsible for storing the same *gorm.PromotionStore /
+// *graph.Store values on Service.promotionStore / Service.graphStore for the
+// sleep cycle goroutine.
+func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store) {
+	mcpServer.SetPromotionStore(promotionStore)
+	mcpServer.SetGraphStore(graphStore)
 }
