@@ -158,6 +158,14 @@ type Service struct {
 	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
 	eventBus               *projectevents.Bus
 	projectReaper          *reaper.Reaper
+	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
+	// MCP/REST request handled by this server. Updated atomically in
+	// debugRequestLogger (the outermost HTTP middleware) on every request.
+	// The sleep cycle uses this to implement the ">=4h since last active session"
+	// idle gate (T014 AC). Resets to zero on server restart — a fresh process
+	// with no requests yet is treated as "idle since epoch", which means the
+	// count gate alone determines the first cycle.
+	lastRequestAt atomic.Int64
 
 	// Cognitive v7 platform substrate (FR-7). The four cross-subsystem
 	// primitives plus the resolved feature-flag snapshot. cognitiveQueueLifecycle
@@ -635,17 +643,14 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
-	// Wire promotion store for lifecycle tier-change audit trail (milestone-B T013/T014).
+	// Wire promotion and graph stores into the MCP server and record them on
+	// the Service for the sleep cycle goroutine. Extracted into wireVnextStores
+	// so the wiring is testable without a full service initialisation.
 	promotionStore := gorm.NewPromotionStore(store.GetDB())
-	mcpServer.SetPromotionStore(promotionStore)
+	graphStore := graph.NewStore(store.GetDB())
+	wireVnextStores(mcpServer, promotionStore, graphStore)
 	s.initMu.Lock()
 	s.promotionStore = promotionStore
-	s.initMu.Unlock()
-
-	// Wire graph store for knowledge graph tool (milestone-C T005/T016).
-	graphStore := graph.NewStore(store.GetDB())
-	mcpServer.SetGraphStore(graphStore)
-	s.initMu.Lock()
 	s.graphStore = graphStore
 	s.initMu.Unlock()
 
@@ -917,6 +922,10 @@ func (a *mcpHandlerAdapter) ServerInfo() (string, string) {
 func (s *Service) setupMiddleware() {
 	// Add request ID first so all subsequent logs can include it
 	s.router.Use(RequestID)
+
+	// Stamp last-request timestamp for the sleep-cycle idle gate (T014 AC).
+	// Must be before the logger so even health-check traffic counts as activity.
+	s.router.Use(s.requestActivityMiddleware)
 
 	s.router.Use(debugRequestLogger)
 	s.router.Use(middleware.Recoverer)
@@ -1678,4 +1687,17 @@ func (s *Service) broadcastProcessingStatus() {
 
 func getPID() int {
 	return os.Getpid()
+}
+
+// wireVnextStores injects the promotion and graph stores into the MCP server.
+// Extracted from initializeAsync so the wiring path is unit-testable: a test
+// that calls wireVnextStores and then checks mcpServer tool advertise surface
+// will break if either SetPromotionStore or SetGraphStore is removed.
+//
+// Callers are responsible for storing the same *gorm.PromotionStore /
+// *graph.Store values on Service.promotionStore / Service.graphStore for the
+// sleep cycle goroutine.
+func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store) {
+	mcpServer.SetPromotionStore(promotionStore)
+	mcpServer.SetGraphStore(graphStore)
 }

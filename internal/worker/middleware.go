@@ -113,9 +113,9 @@ func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
 // readOnlyAllowedPosts is the set of POST endpoints that read-only client tokens may call.
 // These are search/analytics endpoints that use POST for request bodies but do not mutate state.
 var readOnlyAllowedPosts = map[string]bool{
-	"/api/context/search":         true,
-	"/api/context/inject":         true,
-	"/api/decisions/search":       true,
+	"/api/context/search":          true,
+	"/api/context/inject":          true,
+	"/api/decisions/search":        true,
 	"/api/analytics/search-misses": true,
 }
 
@@ -174,18 +174,18 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 		validator: authpkg.NewValidator(token, emptyTokenStore{}),
 		statsCh:   make(chan string, 256),
 		ExemptPaths: map[string]bool{
-			"/":                         true, // SPA index.html (dashboard handles auth client-side)
-			"/health":                   true,
-			"/api/health":               true,
-			"/api/ready":                true,
-			"/api/version":              true,
-			"/api/auth/login":           true,
-			"/api/auth/logout":          true,
-			"/api/auth/me":              true, // Must be accessible to check auth status (returns 401 if not authed)
-			"/api/auth/setup-needed":    true,
-			"/api/auth/setup":           true,
-			"/api/auth/user-login":      true,
-			"/api/auth/register":        true,
+			"/":                      true, // SPA index.html (dashboard handles auth client-side)
+			"/health":                true,
+			"/api/health":            true,
+			"/api/ready":             true,
+			"/api/version":           true,
+			"/api/auth/login":        true,
+			"/api/auth/logout":       true,
+			"/api/auth/me":           true, // Must be accessible to check auth status (returns 401 if not authed)
+			"/api/auth/setup-needed": true,
+			"/api/auth/setup":        true,
+			"/api/auth/user-login":   true,
+			"/api/auth/register":     true,
 		},
 	}
 
@@ -575,6 +575,8 @@ func GetRequestID(ctx context.Context) string {
 
 // debugRequestLogger logs HTTP requests at DEBUG level using zerolog.
 // Replaces chi's middleware.Logger which uses Go's log package at INFO level.
+// This is a package-level helper; use Service.requestActivityMiddleware to also
+// stamp the per-service last-request timestamp for the sleep-cycle idle gate.
 func debugRequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -588,6 +590,17 @@ func debugRequestLogger(next http.Handler) http.Handler {
 			Dur("duration", time.Since(start)).
 			Str("from", r.RemoteAddr).
 			Msg("HTTP request")
+	})
+}
+
+// requestActivityMiddleware returns an HTTP middleware that stamps s.lastRequestAt
+// with the current Unix nanosecond timestamp on each request. It is installed in
+// setupMiddleware so both MCP and REST traffic update the idle gate used by the
+// sleep cycle (T014 AC: ">=4h since last active session").
+func (s *Service) requestActivityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.lastRequestAt.Store(time.Now().UnixNano())
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -632,4 +645,3 @@ func ValidateProjectName(project string) error {
 
 	return nil
 }
-

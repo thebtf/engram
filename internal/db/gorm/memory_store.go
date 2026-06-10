@@ -366,40 +366,70 @@ func (s *MemoryStore) BatchIncrementViolated(ctx context.Context, ids []int64, n
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
 	return &models.Memory{
-		ID:              row.ID,
-		Project:         row.Project,
-		Content:         row.Content,
-		Tags:            []string(row.Tags),
-		SourceAgent:     row.SourceAgent,
-		EditedBy:        row.EditedBy,
-		Status:          row.Status,
-		Tier:            row.Tier,
-		EpistemicType:   row.EpistemicType,
-		Defeasibility:   row.Defeasibility,
-		PromotionTarget: row.PromotionTarget,
-		Version:         row.Version,
-		CreatedAt:       row.CreatedAt,
-		UpdatedAt:       row.UpdatedAt,
-		DeletedAt:       row.DeletedAt,
-		LastRetrievedAt: row.LastRetrievedAt,
-		LastConfirmed:   row.LastConfirmed,
-		ReviewAfter:     row.ReviewAfter,
-		ValidFrom:       row.ValidFrom,
-		ValidUntil:      row.ValidUntil,
-		SupersedesID:    row.SupersedesID,
-		SupersededBy:    row.SupersededBy,
-		ImportanceBase:  row.ImportanceBase,
-		TsAlpha:         row.TsAlpha,
-		TsBeta:          row.TsBeta,
-		Confidence:      row.Confidence,
-		Stability:       row.Stability,
-		Retrievability:  row.Retrievability,
-		CitationCount:   row.CitationCount,
-		InjectionCount:  row.InjectionCount,
-		AccessCount:     row.AccessCount,
+		ID:                       row.ID,
+		Project:                  row.Project,
+		Content:                  row.Content,
+		Tags:                     []string(row.Tags),
+		SourceAgent:              row.SourceAgent,
+		EditedBy:                 row.EditedBy,
+		Status:                   row.Status,
+		Tier:                     row.Tier,
+		EpistemicType:            row.EpistemicType,
+		Defeasibility:            row.Defeasibility,
+		PromotionTarget:          row.PromotionTarget,
+		Version:                  row.Version,
+		CreatedAt:                row.CreatedAt,
+		UpdatedAt:                row.UpdatedAt,
+		DeletedAt:                row.DeletedAt,
+		LastRetrievedAt:          row.LastRetrievedAt,
+		LastConfirmed:            row.LastConfirmed,
+		ReviewAfter:              row.ReviewAfter,
+		ValidFrom:                row.ValidFrom,
+		ValidUntil:               row.ValidUntil,
+		SupersedesID:             row.SupersedesID,
+		SupersededBy:             row.SupersededBy,
+		ImportanceBase:           row.ImportanceBase,
+		TsAlpha:                  row.TsAlpha,
+		TsBeta:                   row.TsBeta,
+		Confidence:               row.Confidence,
+		Stability:                row.Stability,
+		Retrievability:           row.Retrievability,
+		CitationCount:            row.CitationCount,
+		InjectionCount:           row.InjectionCount,
+		AccessCount:              row.AccessCount,
 		RecurrenceCount:          row.RecurrenceCount,
 		ConsecutiveCitationCount: row.ConsecutiveCitationCount,
 	}
+}
+
+// CountActiveSince returns the count of active memories with id > afterID.
+// Used by the sleep cycle to count new memories since the last cycle run
+// without fetching all rows. Pass afterID=0 to count all active memories.
+func (s *MemoryStore) CountActiveSince(ctx context.Context, afterID int64) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&Memory{}).
+		Where("status = 'active' AND deleted_at IS NULL AND id > ?", afterID).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("count active memories since id %d: %w", afterID, err)
+	}
+	return count, nil
+}
+
+// MaxActiveID returns the maximum id among active memories, or 0 if none exist.
+// Used by the sleep cycle to record a high-water mark at cycle completion.
+func (s *MemoryStore) MaxActiveID(ctx context.Context) (int64, error) {
+	var maxID int64
+	err := s.db.WithContext(ctx).
+		Model(&Memory{}).
+		Where("status = 'active' AND deleted_at IS NULL").
+		Select("COALESCE(MAX(id), 0)").
+		Scan(&maxID).Error
+	if err != nil {
+		return 0, fmt.Errorf("max active memory id: %w", err)
+	}
+	return maxID, nil
 }
 
 // ListAllActive returns a batch of active memories for sleep cycle processing.
