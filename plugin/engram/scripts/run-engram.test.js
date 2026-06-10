@@ -8,9 +8,13 @@ const { execFileSync } = require("node:child_process");
 const {
   appendStartupDiagnosticLog,
   configuredEnvValue,
+  describeConfigFile,
   describeEnvValue,
   formatStartupDiagnostic,
   inferCodexPluginDataDir,
+  isConfiguredValue,
+  readEngramConfigFile,
+  resolveConfigFilePath,
   resolvePluginData,
   spawnFailureMessage,
   trimStartupDiagnosticLog,
@@ -330,6 +334,166 @@ test("trimStartupDiagnosticLog keeps complete log entries after truncation", () 
 
   const content = fs.readFileSync(logPath, "utf8");
   assert.match(content, /^2026-06-03T18:00:02\.000Z pid=3 /);
+});
+
+// ── Config file credential tests ─────────────────────────────────────────────
+
+test("config file is read when env vars are absent", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-read-"));
+  const cfPath = path.join(tmpDir, "config.json");
+  fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://cfg-server:37777", api_token: "engram_cftoken" }), "utf8");
+
+  try {
+    const result = readEngramConfigFile(cfPath);
+    assert.ok(result !== null, "expected non-null result for valid config file");
+    assert.equal(result.server_url, "http://cfg-server:37777");
+    assert.equal(result.api_token, "engram_cftoken");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("env var wins over config file value", () => {
+  // isConfiguredValue returns true for a real env value, so the env-wins
+  // branch must be taken before touching the file.
+  assert.equal(isConfiguredValue("http://env-wins:37777"), true, "env value is configured");
+  // A placeholder value is NOT configured — file would win for that case.
+  assert.equal(isConfiguredValue("${user_config.server_url}"), false, "placeholder is not configured");
+  // Empty string is NOT configured.
+  assert.equal(isConfiguredValue(""), false, "empty string is not configured");
+  // Absent (undefined) is NOT configured.
+  assert.equal(isConfiguredValue(undefined), false, "undefined is not configured");
+});
+
+test("malformed JSON in config file returns null (silent skip)", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-bad-"));
+  const cfPath = path.join(tmpDir, "config.json");
+  fs.writeFileSync(cfPath, "{ this is not valid json", "utf8");
+
+  try {
+    const result = readEngramConfigFile(cfPath);
+    assert.strictEqual(result, null, "expected null for malformed JSON");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("non-object JSON in config file returns null (array root)", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-arr-"));
+  const cfPath = path.join(tmpDir, "config.json");
+  fs.writeFileSync(cfPath, JSON.stringify(["not", "an", "object"]), "utf8");
+
+  try {
+    const result = readEngramConfigFile(cfPath);
+    assert.strictEqual(result, null, "expected null for array root");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("ENGRAM_CONFIG_FILE env override controls config file path", () => {
+  const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
+  const previousPluginData = process.env.PLUGIN_DATA;
+  const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-env-"));
+  const customPath = path.join(tmpDir, "custom-config.json");
+
+  try {
+    process.env.ENGRAM_CONFIG_FILE = customPath;
+    delete process.env.PLUGIN_DATA;
+    delete process.env.CLAUDE_PLUGIN_DATA;
+
+    const resolved = resolveConfigFilePath(/* pluginData= */ "");
+    assert.equal(resolved, customPath, "ENGRAM_CONFIG_FILE must take priority");
+  } finally {
+    restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
+    restoreEnv("PLUGIN_DATA", previousPluginData);
+    restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("config file path uses pluginData/config.json when that file exists and ENGRAM_CONFIG_FILE is absent", () => {
+  const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-plugin-data-test-"));
+  const cfPath = path.join(tmpDir, "config.json");
+  fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://test:37777", api_token: "tok" }), "utf8");
+
+  try {
+    delete process.env.ENGRAM_CONFIG_FILE;
+    const resolved = resolveConfigFilePath(tmpDir);
+    assert.equal(resolved, cfPath, "must pick pluginData/config.json when the file exists");
+  } finally {
+    restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("config file path falls back to ~/.engram/config.json when pluginData config is absent", () => {
+  const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
+  const emptyTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-plugin-data-empty-"));
+
+  try {
+    delete process.env.ENGRAM_CONFIG_FILE;
+    // pluginData is set but config.json does not exist inside it — should fall to home
+    const resolved = resolveConfigFilePath(emptyTmpDir);
+    assert.equal(resolved, path.join(os.homedir(), ".engram", "config.json"),
+      "must fall through to home dir when pluginData/config.json is absent");
+  } finally {
+    restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
+    fs.rmSync(emptyTmpDir, { recursive: true, force: true });
+  }
+});
+
+test("config file path falls back to ~/.engram/config.json when pluginData is absent", () => {
+  const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
+
+  try {
+    delete process.env.ENGRAM_CONFIG_FILE;
+    const resolved = resolveConfigFilePath("");
+    assert.equal(resolved, path.join(os.homedir(), ".engram", "config.json"));
+  } finally {
+    restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
+  }
+});
+
+test("startup diagnostic config_file field does not expose token contents", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-diag-"));
+  const cfPath = path.join(tmpDir, "config.json");
+  const secretToken = "engram_supersecret_keycard_abc123def456";
+  fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://diag-server:37777", api_token: secretToken }), "utf8");
+
+  try {
+    const cfData = readEngramConfigFile(cfPath);
+    const cfDesc = describeConfigFile(cfPath, cfData);
+
+    assert.match(cfDesc, /config_file=present/, "must report config_file=present when file is valid");
+    assert.doesNotMatch(cfDesc, new RegExp(secretToken), "token must not appear in config_file descriptor");
+    assert.doesNotMatch(cfDesc, /supersecret/, "token must not appear in config_file descriptor (substring)");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("startup diagnostic config_file=missing when file does not exist", () => {
+  const nonexistentPath = path.join(os.tmpdir(), "engram-cfg-no-such-file.json");
+  const cfDesc = describeConfigFile(nonexistentPath, null);
+  assert.match(cfDesc, /config_file=missing/, "must report config_file=missing for absent file");
+  assert.match(cfDesc, new RegExp(nonexistentPath.replace(/\\/g, "\\\\")), "must include path in missing descriptor");
+});
+
+test("startup diagnostic config_file=malformed when file exists but contains invalid JSON", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-malformed-diag-"));
+  const cfPath = path.join(tmpDir, "config.json");
+  fs.writeFileSync(cfPath, "{ invalid json", "utf8");
+  try {
+    const cfData = readEngramConfigFile(cfPath);
+    const cfDesc = describeConfigFile(cfPath, cfData);
+    assert.match(cfDesc, /config_file=malformed/, "must report config_file=malformed for invalid JSON");
+    assert.match(cfDesc, new RegExp(cfPath.replace(/\\/g, "\\\\")), "must include path in malformed descriptor");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 function restoreEnv(key, value) {
