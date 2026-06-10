@@ -21,6 +21,26 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+// memoryEditor is the minimal interface over *gorm.MemoryStore that
+// handleEditMemory uses. Kept narrow so tests can inject a mock without
+// wiring a full database (mirrors the auditWriter test-injection pattern).
+type memoryEditor interface {
+	Get(ctx context.Context, id int64) (*models.Memory, error)
+	Update(ctx context.Context, m *models.Memory) (*models.Memory, error)
+}
+
+// effectiveMemoryEditor returns the active memoryEditor for s.
+// Precedence: testMemoryEditor (set in tests) → concrete memoryStore.
+func (s *Server) effectiveMemoryEditor() memoryEditor {
+	if s.testMemoryEditor != nil {
+		return s.testMemoryEditor
+	}
+	if s.memoryStore != nil {
+		return s.memoryStore
+	}
+	return nil
+}
+
 func isValidStoreObservationType(obsType models.ObservationType) bool {
 	switch obsType {
 	case models.ObsTypeDecision,
@@ -407,7 +427,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 // Introduced in Milestone D T003 to fill the audit trail gap for the edit path.
 // Before-state is captured, Update is called, then logAuditEdit fires async.
 func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.memoryStore == nil {
+	ms := s.effectiveMemoryEditor()
+	if ms == nil {
 		return "", fmt.Errorf("memory store not available")
 	}
 
@@ -424,7 +445,7 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 	tags := coerceStringSlice(m["tags"])
 
 	// Read before-state.
-	before, err := s.memoryStore.Get(ctx, id)
+	before, err := ms.Get(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("edit_memory: memory %d not found: %w", id, err)
 	}
@@ -432,9 +453,42 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("edit_memory: memory %d not found", id)
 	}
 
+	// Finding 2: enforce project scope so a caller cannot edit another project's
+	// memory by id. Return not-found (don't leak existence) on mismatch.
+	if config.Get().EnforceSourceProject {
+		ctxProject := projectFromContext(ctx)
+		if ctxProject != "" && before.Project != ctxProject {
+			return "", fmt.Errorf("edit_memory: memory %d not found", id)
+		}
+	}
+
 	// Build updated memory (preserve all existing fields, override only provided ones).
 	updated := *before
 	if narrative != "" {
+		// Finding 1: apply the same hard-limit, soft-truncation, and secret-redaction
+		// as the create path (tools_memory.go:104-126) before assigning content.
+		cfg := config.Get()
+		hardLimit := cfg.StoreMemoryHardLimit
+		if hardLimit <= 0 {
+			hardLimit = 10000
+		}
+		softLimit := cfg.StoreMemorySoftLimit
+		if softLimit <= 0 {
+			softLimit = 1000
+		}
+		if utf8.RuneCountInString(narrative) > hardLimit {
+			return "", fmt.Errorf("edit_memory: content exceeds maximum length of %d characters", hardLimit)
+		}
+		if utf8.RuneCountInString(narrative) > softLimit {
+			narrative = string([]rune(narrative)[:softLimit])
+			log.Debug().
+				Int("soft_limit", softLimit).
+				Msg("edit_memory: content truncated to soft limit")
+		}
+		if privacy.ContainsSecrets(narrative) {
+			log.Warn().Msg("edit_memory: content contains secrets — redacting before storage")
+			narrative = privacy.RedactSecrets(narrative)
+		}
 		updated.Content = narrative
 	}
 	if len(tags) > 0 {
@@ -444,7 +498,7 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("edit_memory: content must not be empty after edit")
 	}
 
-	after, err := s.memoryStore.Update(ctx, &updated)
+	after, err := ms.Update(ctx, &updated)
 	if err != nil {
 		return "", fmt.Errorf("edit_memory: %w", err)
 	}
@@ -632,7 +686,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		go func() {
 			for _, mem := range filtered {
 				fields := map[string]any{
-					"access_count":    gormlib.Expr("access_count + 1"),
+					"access_count":      gormlib.Expr("access_count + 1"),
 					"last_retrieved_at": gormlib.Expr("now()"),
 				}
 				if mem.Stability > 0 {

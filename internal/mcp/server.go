@@ -47,7 +47,8 @@ type Server struct {
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
 	auditStore             *gorm.AuditStore
-	testAuditWriter        auditWriter // set only in tests via setTestAuditWriter
+	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
+	testMemoryEditor       memoryEditor // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -135,6 +136,12 @@ func (s *Server) SetAuditStore(as *gorm.AuditStore) {
 // Must only be called from _test.go files.
 func (s *Server) setTestAuditWriter(w auditWriter) {
 	s.testAuditWriter = w
+}
+
+// setTestMemoryEditor injects a mock memoryEditor for unit tests.
+// Must only be called from _test.go files.
+func (s *Server) setTestMemoryEditor(me memoryEditor) {
+	s.testMemoryEditor = me
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.
@@ -994,13 +1001,13 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				"type":     "object",
 				"required": []string{"action"},
 				"properties": map[string]any{
-					"action":         map[string]any{"type": "string", "description": "Action: info, promote, demote, set_confidence, set_defeasibility, sleep_status, decay_preview", "enum": []string{"info", "promote", "demote", "set_confidence", "set_defeasibility", "sleep_status", "decay_preview"}},
-					"memory_id":      map[string]any{"type": "integer", "description": "Memory ID (required for info, promote, demote, set_confidence, set_defeasibility, decay_preview)"},
-					"target_tier":    map[string]any{"type": "string", "description": "Target tier for promote/demote (working, episodic, semantic, procedural)"},
-					"confidence":     map[string]any{"type": "number", "description": "Confidence value for set_confidence (0.0-1.0)"},
-					"reason":         map[string]any{"type": "string", "description": "Reason for set_confidence"},
-					"defeasibility":  map[string]any{"type": "string", "description": "Defeasibility class for set_defeasibility (non_defeasible, slow, rapid)"},
-					"days_ahead":     map[string]any{"type": "integer", "description": "Days ahead for decay_preview (default: 30)"},
+					"action":        map[string]any{"type": "string", "description": "Action: info, promote, demote, set_confidence, set_defeasibility, sleep_status, decay_preview", "enum": []string{"info", "promote", "demote", "set_confidence", "set_defeasibility", "sleep_status", "decay_preview"}},
+					"memory_id":     map[string]any{"type": "integer", "description": "Memory ID (required for info, promote, demote, set_confidence, set_defeasibility, decay_preview)"},
+					"target_tier":   map[string]any{"type": "string", "description": "Target tier for promote/demote (working, episodic, semantic, procedural)"},
+					"confidence":    map[string]any{"type": "number", "description": "Confidence value for set_confidence (0.0-1.0)"},
+					"reason":        map[string]any{"type": "string", "description": "Reason for set_confidence"},
+					"defeasibility": map[string]any{"type": "string", "description": "Defeasibility class for set_defeasibility (non_defeasible, slow, rapid)"},
+					"days_ahead":    map[string]any{"type": "integer", "description": "Days ahead for decay_preview (default: 30)"},
 				},
 			},
 		})
@@ -1016,17 +1023,17 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				"type":     "object",
 				"required": []string{"action"},
 				"properties": map[string]any{
-					"action":     map[string]any{"type": "string", "description": "Action: add_edge, remove_edge, get_edges, traverse, find_path, synonyms", "enum": []string{"add_edge", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}},
-					"source_id":  map[string]any{"type": "integer", "description": "Source memory ID (for add_edge, find_path)"},
-					"target_id":  map[string]any{"type": "integer", "description": "Target memory ID (for add_edge, find_path)"},
-					"memory_id":  map[string]any{"type": "integer", "description": "Memory ID (for get_edges, traverse, synonyms)"},
-					"edge_id":    map[string]any{"type": "integer", "description": "Edge ID (for remove_edge)"},
-					"edge_type":  map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, contradicts, synonym_of)"},
-					"weight":     map[string]any{"type": "number", "description": "Edge confidence 0.0-1.0 (default 1.0)"},
-					"reasoning":  map[string]any{"type": "string", "description": "Why this edge exists"},
-					"direction":  map[string]any{"type": "string", "description": "Edge direction for get_edges: outgoing, incoming, both"},
-					"depth":      map[string]any{"type": "integer", "description": "Traversal depth (1-3, default 1)"},
-					"max_depth":  map[string]any{"type": "integer", "description": "Max path depth for find_path (1-3)"},
+					"action":    map[string]any{"type": "string", "description": "Action: add_edge, remove_edge, get_edges, traverse, find_path, synonyms", "enum": []string{"add_edge", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}},
+					"source_id": map[string]any{"type": "integer", "description": "Source memory ID (for add_edge, find_path)"},
+					"target_id": map[string]any{"type": "integer", "description": "Target memory ID (for add_edge, find_path)"},
+					"memory_id": map[string]any{"type": "integer", "description": "Memory ID (for get_edges, traverse, synonyms)"},
+					"edge_id":   map[string]any{"type": "integer", "description": "Edge ID (for remove_edge)"},
+					"edge_type": map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, contradicts, synonym_of)"},
+					"weight":    map[string]any{"type": "number", "description": "Edge confidence 0.0-1.0 (default 1.0)"},
+					"reasoning": map[string]any{"type": "string", "description": "Why this edge exists"},
+					"direction": map[string]any{"type": "string", "description": "Edge direction for get_edges: outgoing, incoming, both"},
+					"depth":     map[string]any{"type": "integer", "description": "Traversal depth (1-3, default 1)"},
+					"max_depth": map[string]any{"type": "integer", "description": "Max path depth for find_path (1-3)"},
 				},
 			},
 		})
@@ -1812,5 +1819,3 @@ func (s *Server) handleSearchSessions(_ context.Context, _ json.RawMessage) (str
 func (s *Server) handleListSessions(_ context.Context, _ json.RawMessage) (string, error) {
 	return "", fmt.Errorf("list_sessions removed in v5 (US3) — indexed_sessions table dropped")
 }
-
-

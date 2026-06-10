@@ -42,6 +42,13 @@ func contextWithSession(ctx context.Context, sessionID string) context.Context {
 	return context.WithValue(ctx, sessionContextKey, sessionID)
 }
 
+// ContextWithSession is the exported variant of contextWithSession for use by
+// packages that inject session identity without importing internal/mcp fully
+// (e.g. internal/grpcserver).
+func ContextWithSession(ctx context.Context, sessionID string) context.Context {
+	return contextWithSession(ctx, sessionID)
+}
+
 // sessionFromContext retrieves the session ID from context.
 // Returns empty string if not set.
 func sessionFromContext(ctx context.Context) string {

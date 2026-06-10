@@ -96,24 +96,24 @@ func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog Promot
 			m.Confidence = confidence
 			m.Stability = stability
 
+			// Finding 5: capture promotion/demotion intent but defer audit until
+			// after UpdateLifecycleFields succeeds so we never record a tier change
+			// that did not actually persist.
+			var pendingAuditAction string
 			if promo := EvaluatePromotion(m); promo.Changed {
 				fields["tier"] = promo.NewTier
 				result.Promotions++
 				if promotionLog != nil {
 					_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, promo.NewTier, promo.Reason)
 				}
-				if auditLog != nil {
-					_ = auditLog.LogAudit(ctx, m.ID, "promote", "system")
-				}
+				pendingAuditAction = "promote"
 			} else if demo := EvaluateDemotion(m); demo.Changed {
 				fields["tier"] = demo.NewTier
 				result.Demotions++
 				if promotionLog != nil {
 					_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, demo.NewTier, demo.Reason)
 				}
-				if auditLog != nil {
-					_ = auditLog.LogAudit(ctx, m.ID, "demote", "system")
-				}
+				pendingAuditAction = "demote"
 			}
 
 			if m.Defeasibility == DefeasibilityRapid && m.ValidUntil != nil && now.After(*m.ValidUntil) {
@@ -130,8 +130,15 @@ func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog Promot
 			if len(fields) > 0 {
 				if err := store.UpdateLifecycleFields(ctx, m.ID, fields); err != nil {
 					log.Error().Err(err).Int64("memory_id", m.ID).Msg("sleep cycle: update failed")
+				} else {
+					result.MemoriesProcessed++
+					// Finding 5: audit tier changes only after successful persist.
+					if pendingAuditAction != "" && auditLog != nil {
+						if auditErr := auditLog.LogAudit(ctx, m.ID, pendingAuditAction, "system"); auditErr != nil {
+							log.Error().Err(auditErr).Int64("memory_id", m.ID).Str("action", pendingAuditAction).Msg("sleep cycle: audit log failed")
+						}
+					}
 				}
-				result.MemoriesProcessed++
 			}
 		}
 

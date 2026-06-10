@@ -4,6 +4,7 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -41,9 +42,9 @@ type mockAuditLogger struct {
 }
 
 type auditEntry struct {
-	memoryID        int64
-	action          string
-	actor           string
+	memoryID int64
+	action   string
+	actor    string
 }
 
 func (m *mockAuditLogger) LogAudit(_ context.Context, memoryID int64, action, actor string) error {
@@ -74,9 +75,11 @@ func (m *mockAuditLogger) waitN(n int) []auditEntry {
 }
 
 // mockMemStore satisfies MemoryUpdater with a single batch of memories.
+// Set updateErr to simulate a failed UpdateLifecycleFields call.
 type mockMemStore struct {
-	memories []*models.Memory
-	calls    int
+	memories  []*models.Memory
+	calls     int
+	updateErr error // if non-nil, UpdateLifecycleFields returns this error
 }
 
 func (m *mockMemStore) ListAllActive(_ context.Context, _ int, offset int) ([]*models.Memory, error) {
@@ -88,7 +91,7 @@ func (m *mockMemStore) ListAllActive(_ context.Context, _ int, offset int) ([]*m
 }
 
 func (m *mockMemStore) UpdateLifecycleFields(_ context.Context, _ int64, _ map[string]any) error {
-	return nil
+	return m.updateErr
 }
 
 // ---------------------------------------------------------------------------
@@ -189,4 +192,65 @@ func TestPromotion_NoAuditOnNoTierChange(t *testing.T) {
 
 	time.Sleep(30 * time.Millisecond)
 	assert.Empty(t, auditLog.waitN(0), "no audit entry when no tier change")
+}
+
+// ---------------------------------------------------------------------------
+// Finding 5: audit-after-persist ordering
+// ---------------------------------------------------------------------------
+
+// TestPromotion_AuditSkippedWhenPersistFails verifies that when UpdateLifecycleFields
+// returns an error, no audit entry is written (audit must not record a promotion
+// that did not actually persist).
+func TestPromotion_AuditSkippedWhenPersistFails(t *testing.T) {
+	mem := &models.Memory{
+		ID:              505,
+		Tier:            TierEpisodic,
+		AccessCount:     5,
+		RecurrenceCount: 3,
+		Confidence:      0.9,
+		Retrievability:  0.95,
+		Stability:       30.0,
+		CreatedAt:       time.Now().Add(-24 * time.Hour),
+	}
+
+	store := &mockMemStore{
+		memories:  []*models.Memory{mem},
+		updateErr: fmt.Errorf("simulated db error"),
+	}
+	auditLog := &mockAuditLogger{}
+
+	RunSleepCycle(context.Background(), store, nil, auditLog)
+
+	time.Sleep(30 * time.Millisecond)
+	assert.Empty(t, auditLog.waitN(0),
+		"audit must NOT be written when UpdateLifecycleFields fails (Finding 5)")
+}
+
+// TestPromotion_AuditWrittenAfterSuccessfulPersist verifies the normal path: when
+// UpdateLifecycleFields succeeds, the audit entry IS written.
+func TestPromotion_AuditWrittenAfterSuccessfulPersist(t *testing.T) {
+	mem := &models.Memory{
+		ID:              606,
+		Tier:            TierEpisodic,
+		AccessCount:     5,
+		RecurrenceCount: 3,
+		Confidence:      0.9,
+		Retrievability:  0.95,
+		Stability:       30.0,
+		CreatedAt:       time.Now().Add(-24 * time.Hour),
+	}
+
+	store := &mockMemStore{
+		memories:  []*models.Memory{mem},
+		updateErr: nil, // success
+	}
+	auditLog := &mockAuditLogger{}
+
+	RunSleepCycle(context.Background(), store, nil, auditLog)
+
+	entries := auditLog.waitN(1)
+	require.Len(t, entries, 1,
+		"audit must be written after successful UpdateLifecycleFields (Finding 5)")
+	assert.Equal(t, int64(606), entries[0].memoryID)
+	assert.Equal(t, "promote", entries[0].action)
 }
