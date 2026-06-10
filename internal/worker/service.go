@@ -149,6 +149,7 @@ type Service struct {
 	memoryStore            *gorm.MemoryStore
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	auditStore             *gorm.AuditStore
+	testAuditRetainer      auditRetainer // test-only override for retention unit tests
 	feedbackUpdater        *feedback.Updater
 	segmentStore           *gorm.SegmentStore
 	embeddingClient        *embedding.Client
