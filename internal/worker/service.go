@@ -160,12 +160,17 @@ type Service struct {
 	projectReaper          *reaper.Reaper
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
-	// debugRequestLogger (the outermost HTTP middleware) on every request.
+	// requestActivityMiddleware on every request.
 	// The sleep cycle uses this to implement the ">=4h since last active session"
 	// idle gate (T014 AC). Resets to zero on server restart — a fresh process
 	// with no requests yet is treated as "idle since epoch", which means the
 	// count gate alone determines the first cycle.
 	lastRequestAt atomic.Int64
+	// sleepCycleWatermarkID stores the maximum memory ID seen at the end of the last
+	// successful sleep cycle. CountActiveSince queries only rows with id > this value,
+	// ensuring new-memory counting is accurate regardless of total database size.
+	// In-process only — resets to 0 on server restart (documented behaviour).
+	sleepCycleWatermarkID atomic.Int64
 
 	// Cognitive v7 platform substrate (FR-7). The four cross-subsystem
 	// primitives plus the resolved feature-flag snapshot. cognitiveQueueLifecycle
@@ -730,12 +735,9 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Start sleep cycle goroutine when lifecycle is enabled (milestone-B T014).
-	// Trigger condition per T014 AC: >=10 new memories since last run AND >=4h since
-	// last session. Simplification note: exact "last session" timestamp tracking
-	// is not yet stored; this implementation uses a periodic check (every 4h) and
-	// queries whether the total active memory count has grown by >=10 since the last
-	// cycle. This satisfies the count trigger; last-session gating will tighten when
-	// session-end timestamps are persisted (future task).
+	// Trigger conditions per T014 AC: >=10 new memories since last cycle (tracked
+	// via watermark with CountActiveSince) AND >=4h idle (no HTTP/MCP requests).
+	// See sleep_cycle.go for implementation details.
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
 		s.startSleepCycle(s.ctx)
 	}

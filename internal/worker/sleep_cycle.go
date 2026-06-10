@@ -2,12 +2,13 @@ package worker
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/lifecycle"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // sleepCycleMemoryCountThreshold is the minimum number of new memories since the
@@ -64,11 +65,29 @@ func (s *Service) startSleepCycle(ctx context.Context) {
 	}()
 }
 
-// sleepCycleWatermarkID stores the maximum memory ID seen at the end of the last
-// successful sleep cycle. CountActiveSince queries only rows with id > this value,
-// ensuring new-memory counting is accurate regardless of total database size.
-// In-process only — resets to 0 on server restart (documented behaviour).
-var sleepCycleWatermarkID atomic.Int64
+// trackingMemoryStore wraps a *gorm.MemoryStore and records the first error
+// encountered during a sleep cycle run. The error is inspected after RunSleepCycle
+// returns to decide whether the watermark should be advanced.
+type trackingMemoryStore struct {
+	ms  *gorm.MemoryStore
+	err error
+}
+
+func (t *trackingMemoryStore) ListAllActive(ctx context.Context, batchSize int, offset int) ([]*models.Memory, error) {
+	res, err := t.ms.ListAllActive(ctx, batchSize, offset)
+	if err != nil && t.err == nil {
+		t.err = err
+	}
+	return res, err
+}
+
+func (t *trackingMemoryStore) UpdateLifecycleFields(ctx context.Context, id int64, fields map[string]any) error {
+	err := t.ms.UpdateLifecycleFields(ctx, id, fields)
+	if err != nil && t.err == nil {
+		t.err = err
+	}
+	return err
+}
 
 // maybeSleepCycle checks the trigger conditions and runs RunSleepCycle when met.
 func (s *Service) maybeSleepCycle(ctx context.Context) {
@@ -102,7 +121,7 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 	// Count gate (Finding 1): query only memories created after the watermark.
 	// This prevents the cycle from firing on a DB that already had many memories
 	// before this server process started, and prevents the cap-at-11 bug.
-	watermark := sleepCycleWatermarkID.Load()
+	watermark := s.sleepCycleWatermarkID.Load()
 	newCount, err := ms.CountActiveSince(ctx, watermark)
 	if err != nil {
 		log.Warn().Err(err).Msg("sleep cycle: count query failed, skipping")
@@ -123,7 +142,8 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		Int64("watermark_id", watermark).
 		Msg("sleep cycle: trigger conditions met, starting")
 
-	result := lifecycle.RunSleepCycle(ctx, ms, ps)
+	tracker := &trackingMemoryStore{ms: ms}
+	result := lifecycle.RunSleepCycle(ctx, tracker, ps)
 
 	log.Info().
 		Int("processed", result.MemoriesProcessed).
@@ -134,13 +154,25 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		Dur("duration", result.Duration).
 		Msg("sleep cycle: finished")
 
+	// Advance watermark only when the run completed without errors and the
+	// context was not cancelled. Skipping on failure ensures no memories are
+	// silently orphaned from future counts.
+	if ctx.Err() != nil {
+		log.Warn().Msg("sleep cycle: context cancelled or timed out, skipping watermark update")
+		return
+	}
+	if tracker.err != nil {
+		log.Warn().Err(tracker.err).Msg("sleep cycle: encountered errors during run, skipping watermark update")
+		return
+	}
+
 	// Advance watermark to max active ID so the next tick only counts memories
-	// created after this cycle completed. Update only on successful completion.
+	// created after this cycle completed.
 	newWatermark, err := ms.MaxActiveID(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("sleep cycle: could not fetch max id for watermark update, watermark unchanged")
 		return
 	}
-	sleepCycleWatermarkID.Store(newWatermark)
+	s.sleepCycleWatermarkID.Store(newWatermark)
 	log.Debug().Int64("new_watermark_id", newWatermark).Msg("sleep cycle: watermark advanced")
 }

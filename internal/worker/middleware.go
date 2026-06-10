@@ -593,13 +593,27 @@ func debugRequestLogger(next http.Handler) http.Handler {
 	})
 }
 
+// activityExemptPaths lists HTTP paths that must not update the sleep-cycle idle
+// gate. Health probes, readiness checks, and version endpoints are polled by load
+// balancers and container runtimes at regular intervals; treating them as user
+// activity would prevent the idle gate from ever firing in a normal deployment.
+var activityExemptPaths = map[string]bool{
+	"/health":      true,
+	"/api/health":  true,
+	"/api/ready":   true,
+	"/api/version": true,
+}
+
 // requestActivityMiddleware returns an HTTP middleware that stamps s.lastRequestAt
-// with the current Unix nanosecond timestamp on each request. It is installed in
-// setupMiddleware so both MCP and REST traffic update the idle gate used by the
-// sleep cycle (T014 AC: ">=4h since last active session").
+// with the current Unix nanosecond timestamp on genuine API/MCP requests. Health,
+// readiness, and version endpoints are excluded so that monitoring probes do not
+// prevent the sleep cycle's idle gate from firing (T014 AC: ">=4h since last active
+// session").
 func (s *Service) requestActivityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.lastRequestAt.Store(time.Now().UnixNano())
+		if !activityExemptPaths[r.URL.Path] {
+			s.lastRequestAt.Store(time.Now().UnixNano())
+		}
 		next.ServeHTTP(w, r)
 	})
 }

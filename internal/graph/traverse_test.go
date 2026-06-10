@@ -185,7 +185,7 @@ func TestTraverse_CycleDetection(t *testing.T) {
 	require.NoError(t, err)
 	// Both edges appear but the visited set prevents re-expanding node 1
 	// so we expect exactly 2 edge results (each edge appears once).
-	assert.LessOrEqual(t, len(results), 2, "cycle guard: no duplicate edges beyond 2")
+	assert.Len(t, results, 2, "cycle guard: expected exactly 2 unique edges")
 
 	// Verify no edge ID appears twice.
 	seen := map[int64]int{}
@@ -241,7 +241,7 @@ func TestTraverse_DepthLimitClamping(t *testing.T) {
 
 	results, err := ta.Traverse(ctx, 1, 0, nil)
 	require.NoError(t, err)
-	assert.Len(t, results, 3, "depth 0 should clamp to MaxTraverseDepth=3")
+	assert.Len(t, results, MaxTraverseDepth, "depth 0 should clamp to MaxTraverseDepth")
 }
 
 // TestSynonymLookup verifies that FindSynonyms returns synonym_of and
