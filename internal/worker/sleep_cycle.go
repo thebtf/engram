@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -94,6 +95,7 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 	s.initMu.RLock()
 	ms := s.memoryStore
 	ps := s.promotionStore
+	as := s.auditStore
 	s.initMu.RUnlock()
 
 	if ms == nil {
@@ -142,8 +144,15 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		Int64("watermark_id", watermark).
 		Msg("sleep cycle: trigger conditions met, starting")
 
+	// Pass auditStore as AuditLogger only when ENGRAM_VNEXT_ENABLED=true (T004).
+	// AuditStore satisfies lifecycle.AuditLogger via its LogAudit method.
+	var auditLog lifecycle.AuditLogger
+	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" && as != nil {
+		auditLog = as
+	}
+
 	tracker := &trackingMemoryStore{ms: ms}
-	result := lifecycle.RunSleepCycle(ctx, tracker, ps)
+	result := lifecycle.RunSleepCycle(ctx, tracker, ps, auditLog)
 
 	log.Info().
 		Int("processed", result.MemoriesProcessed).

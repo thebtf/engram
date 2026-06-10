@@ -29,8 +29,17 @@ type PromotionLogger interface {
 	LogPromotion(ctx context.Context, memoryID int64, fromTier, toTier, reason string) error
 }
 
+// AuditLogger abstracts audit_log writes for the sleep cycle (T004).
+// Accepts just the fields needed for promote/demote events. When nil,
+// no audit write occurs — nil-guard is applied at call sites.
+type AuditLogger interface {
+	LogAudit(ctx context.Context, memoryID int64, action, actor string) error
+}
+
 // RunSleepCycle executes a full decay + promotion + demotion + expiration cycle.
-func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog PromotionLogger) SleepResult {
+// auditLog may be nil (e.g. when ENGRAM_VNEXT_ENABLED is off); all call sites
+// nil-guard before invoking.
+func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog PromotionLogger, auditLog AuditLogger) SleepResult {
 	start := time.Now()
 	result := SleepResult{}
 
@@ -93,11 +102,17 @@ func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog Promot
 				if promotionLog != nil {
 					_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, promo.NewTier, promo.Reason)
 				}
+				if auditLog != nil {
+					_ = auditLog.LogAudit(ctx, m.ID, "promote", "system")
+				}
 			} else if demo := EvaluateDemotion(m); demo.Changed {
 				fields["tier"] = demo.NewTier
 				result.Demotions++
 				if promotionLog != nil {
 					_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, demo.NewTier, demo.Reason)
+				}
+				if auditLog != nil {
+					_ = auditLog.LogAudit(ctx, m.ID, "demote", "system")
 				}
 			}
 
