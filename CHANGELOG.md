@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.13] - 2026-06-10
+
+### Fixed
+
+- **Claude Code plugin MCP server silently not spawning.** The plugin
+  `.mcp.json` interpolated `${user_config.*}` inside the `env` block, which
+  makes Claude Code skip spawning the MCP server with no error
+  (anthropics/claude-code#51573). The env block is removed; the wrapper and
+  hooks now read userConfig values through the documented
+  `CLAUDE_PLUGIN_OPTION_<KEY>` plugin-subprocess environment variables, with
+  explicit `ENGRAM_URL`/`ENGRAM_TOKEN` env still taking precedence.
+
 ## [6.4.12] - 2026-06-04
 
 ### Fixed

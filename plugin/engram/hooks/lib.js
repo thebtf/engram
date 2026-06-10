@@ -5,10 +5,28 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+function configuredPluginEnv(...keys) {
+  // Claude Code exports plugin userConfig values to plugin subprocesses as
+  // CLAUDE_PLUGIN_OPTION_<KEY>; explicit ENGRAM_* env always wins.
+  for (const key of keys) {
+    const value = process.env[key];
+    if (typeof value === 'string' && value.trim() !== '' && !/^\$\{[^}]+\}$/.test(value.trim())) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
 function getServerURL() {
   // ENGRAM_URL may include a path (e.g. http://server:37777/mcp for MCP transport).
   // Hooks use REST API endpoints at the server root (/api/...), so we extract just the origin.
-  const customURL = process.env.ENGRAM_URL;
+  const customURL = configuredPluginEnv(
+    'ENGRAM_URL',
+    'ENGRAM_SERVER_URL',
+    'CLAUDE_PLUGIN_OPTION_server_url',
+    'CLAUDE_PLUGIN_OPTION_SERVER_URL',
+    'ENGRAM_CLAUDE_USERCONFIG_URL'
+  );
   if (customURL && customURL.trim() !== '') {
     try {
       const parsed = new URL(customURL.trim());
@@ -87,7 +105,12 @@ function ProjectIDWithName(cwd) {
 
 function buildRequestHeaders(includeJsonBody = false) {
   const headers = {};
-  const token = process.env.ENGRAM_TOKEN;
+  const token = configuredPluginEnv(
+    'ENGRAM_TOKEN',
+    'CLAUDE_PLUGIN_OPTION_api_token',
+    'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+    'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
+  );
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -520,6 +543,7 @@ function _timeAgo(date) {
 }
 
 module.exports = {
+  configuredPluginEnv,
   getServerURL,
   getPluginDataDir,
   getSessionStartCachePath,

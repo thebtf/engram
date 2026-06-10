@@ -222,14 +222,18 @@ module.exports = {
 };
 
 function configureRuntimeEnv() {
-  const serverURL = configuredEnvValue(
-    process.env.ENGRAM_URL,
-    process.env.ENGRAM_SERVER_URL,
-    process.env.ENGRAM_CLAUDE_USERCONFIG_URL
+  const serverURL = lib.configuredPluginEnv(
+    'ENGRAM_URL',
+    'ENGRAM_SERVER_URL',
+    'CLAUDE_PLUGIN_OPTION_server_url',
+    'CLAUDE_PLUGIN_OPTION_SERVER_URL',
+    'ENGRAM_CLAUDE_USERCONFIG_URL'
   );
-  const token = configuredEnvValue(
-    process.env.ENGRAM_TOKEN,
-    process.env.ENGRAM_CLAUDE_USERCONFIG_TOKEN
+  const token = lib.configuredPluginEnv(
+    'ENGRAM_TOKEN',
+    'CLAUDE_PLUGIN_OPTION_api_token',
+    'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+    'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
   );
 
   if (serverURL) {
@@ -240,25 +244,4 @@ function configureRuntimeEnv() {
   }
 
   return { serverURL, token };
-}
-
-function configuredEnvValue(...values) {
-  for (const value of values) {
-    if (!isConfiguredEnvValue(value)) {
-      continue;
-    }
-    return value.trim();
-  }
-  return '';
-}
-
-function isConfiguredEnvValue(value) {
-  if (typeof value !== 'string') {
-    return false;
-  }
-  const trimmed = value.trim();
-  if (trimmed === '') {
-    return false;
-  }
-  return !/^\$\{[^}]+\}$/.test(trimmed);
 }

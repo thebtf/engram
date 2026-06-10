@@ -49,6 +49,12 @@ function main() {
   const serverURL = configuredEnvValue(
     "ENGRAM_URL",
     "ENGRAM_SERVER_URL",
+    // Claude Code exports plugin userConfig values to plugin subprocesses as
+    // CLAUDE_PLUGIN_OPTION_<KEY>. Interpolating ${user_config.*} inside the
+    // .mcp.json env block is NOT used: it silently prevents the MCP server
+    // from spawning (anthropics/claude-code#51573).
+    "CLAUDE_PLUGIN_OPTION_server_url",
+    "CLAUDE_PLUGIN_OPTION_SERVER_URL",
     "ENGRAM_CLAUDE_USERCONFIG_URL"
   );
   if (!serverURL) {
@@ -64,7 +70,12 @@ function main() {
   // v6 model: ENGRAM_TOKEN is the per-workstation keycard issued via the
   // dashboard /tokens page. The operator key (ENGRAM_AUTH_ADMIN_TOKEN) lives
   // ONLY on the server host and MUST NOT be set on a workstation.
-  const token = configuredEnvValue("ENGRAM_TOKEN", "ENGRAM_CLAUDE_USERCONFIG_TOKEN");
+  const token = configuredEnvValue(
+    "ENGRAM_TOKEN",
+    "CLAUDE_PLUGIN_OPTION_api_token",
+    "CLAUDE_PLUGIN_OPTION_API_TOKEN",
+    "ENGRAM_CLAUDE_USERCONFIG_TOKEN"
+  );
   if (!token) {
     process.stderr.write(
       `[engram] FATAL: ENGRAM_TOKEN is empty. Open ${serverURL.replace(/\/+$/, "")}/tokens, ` +
@@ -167,6 +178,8 @@ function formatStartupDiagnostic(env = process.env) {
     ["ENGRAM_URL", false],
     ["ENGRAM_TOKEN", true],
     ["ENGRAM_SERVER_URL", false],
+    ["CLAUDE_PLUGIN_OPTION_server_url", false],
+    ["CLAUDE_PLUGIN_OPTION_api_token", true],
     ["ENGRAM_CLAUDE_USERCONFIG_URL", false],
     ["ENGRAM_CLAUDE_USERCONFIG_TOKEN", true],
     ["PLUGIN_ROOT", false],
