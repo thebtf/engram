@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/internal/chunking"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
@@ -51,7 +52,9 @@ type Server struct {
 	nodesStore             nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
 	auditStore             *gorm.AuditStore
 	purgeStore             *gorm.PurgeStore
-	candidateStore         *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	candidateStore         *gorm.CandidateStore  // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	snapshotStore          *gorm.SnapshotStore   // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	bulkFacade             *bulkops.Facade       // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
 	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
 	testMemoryEditor       memoryEditor // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
@@ -153,6 +156,18 @@ func (s *Server) SetPurgeStore(ps *gorm.PurgeStore) {
 // Must be called when ENGRAM_VNEXT_F_ENABLED=true to enable the 4 candidate MCP tools.
 func (s *Server) SetCandidateStore(cs *gorm.CandidateStore) {
 	s.candidateStore = cs
+}
+
+// SetSnapshotStore wires the bulk-op snapshot store (Milestone-F TG6 T043).
+// Must be called when ENGRAM_VNEXT_F_ENABLED=true to enable the 4 governance MCP tools.
+func (s *Server) SetSnapshotStore(ss *gorm.SnapshotStore) {
+	s.snapshotStore = ss
+}
+
+// SetBulkFacade wires the bulk-op facade (Milestone-F TG6 T044).
+// Enables bulk_promote, bulk_delete, bulk_supersede MCP tools with dry-run support.
+func (s *Server) SetBulkFacade(f *bulkops.Facade) {
+	s.bulkFacade = f
 }
 
 // setTestAuditWriter injects a mock auditWriter for unit tests.
@@ -557,6 +572,53 @@ If you need the full expanded tool list (50+ individual tools), call ` + "`tools
 
 `
 
+// storeMemoryTool returns the store_memory tool definition.
+//
+// Schema contract (per TestStoreMemoryToolSchema_FlagOff_HasNewProperties_ButRuntimeIgnores):
+//   - privacy_scope and session_id are advertised unconditionally so clients always
+//     discover them; the runtime handler honors them only when ENGRAM_VNEXT_F_ENABLED=true.
+//   - dry_run, force, resolution_token, option, target_memory_id are advertised only
+//     when ENGRAM_VNEXT_F_ENABLED=true (T044 FR-F6.b — write-lint phase fields).
+func storeMemoryTool() Tool {
+	props := map[string]any{
+		"content":       map[string]any{"type": "string", "description": "The content/knowledge to remember"},
+		"title":         map[string]any{"type": "string", "description": "Short title for the memory"},
+		"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
+		"rejected":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
+		"type":          map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
+		"importance":    map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
+		"scope":         map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
+		// privacy_scope and session_id are unconditional in schema (clients discover them at all
+		// times); the runtime handler ignores them when ENGRAM_VNEXT_F_ENABLED=false (RI-F1).
+		"privacy_scope": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
+		"session_id":    map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
+		"project":       map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
+		"ttl_days":      map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
+		"always_inject": map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
+		"agent_source":  map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
+		"supersedes":    map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
+	}
+	// dry_run and write-lint phase fields are only advertised when the flag is on.
+	// Advertising them unconditionally would imply they work on flag-off servers.
+	if vnextFEnabled() {
+		props["dry_run"]          = map[string]any{"type": "boolean", "description": "T044 FR-F6.b: when true, returns a preview of what would be stored (after redaction) without writing to DB. write_lint field in response indicates whether Phase1 would run on a live call."}
+		props["force"]            = map[string]any{"type": "boolean", "description": "T035: when true, bypasses write-lint Phase1/Phase2 and writes directly (legacy path). Logged as legacy_force_write in audit. Honored only when ENGRAM_VNEXT_F_ENABLED=true."}
+		props["resolution_token"] = map[string]any{"type": "string", "description": "T035 Phase2: resolution token minted by a prior Phase1 response. When set, commits the write using the chosen option. Cannot combine with force=true."}
+		props["option"]           = map[string]any{"type": "string", "description": "T035 Phase2: resolution option chosen by the caller (e.g. merge_with, supersede, link_contradiction, ignore_signals). Required when resolution_token is set."}
+		props["target_memory_id"] = map[string]any{"type": "integer", "description": "T035 Phase2: target memory ID for merge_with / supersede options. Required for those options."}
+	}
+	return Tool{
+		Name:        "store_memory",
+		Description: "Explicitly store a memory/observation. Use when you want to remember something specific across sessions.",
+		tier:        tierCore,
+		InputSchema: map[string]any{
+			"type":       "object",
+			"required":   []string{"content"},
+			"properties": props,
+		},
+	}
+}
+
 // recallMemoryTool returns the recall_memory tool definition.
 // Schema composition (two independent flags):
 //
@@ -934,31 +996,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	// Memory management tools — advertise when memory storage is available
 	if s.memoryStore != nil {
 		tools = append(tools,
-			Tool{
-				Name:        "store_memory",
-				Description: "Explicitly store a memory/observation. Use when you want to remember something specific across sessions.",
-				tier:        tierCore,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"content"},
-					"properties": map[string]any{
-						"content":       map[string]any{"type": "string", "description": "The content/knowledge to remember"},
-						"title":         map[string]any{"type": "string", "description": "Short title for the memory"},
-						"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
-						"rejected":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
-						"type":          map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
-						"importance":    map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
-						"scope":         map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
-						"privacy_scope": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
-						"session_id":    map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
-						"project":       map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
-						"ttl_days":      map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
-						"always_inject": map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
-						"agent_source":  map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
-						"supersedes":    map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
-					},
-				},
-			},
+			storeMemoryTool(),
 			recallMemoryTool(),
 			Tool{
 				Name:        "rate_memory",
@@ -1032,6 +1070,19 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	// and the candidate store is wired (Milestone-F TG4 T026).
 	if vnextFEnabled() && s.candidateStore != nil {
 		tools = append(tools, candidateTools()...)
+	}
+
+	// Governance tools (Milestone-F TG6 T043): snapshot list/rollback/pin + redaction status.
+	// Admin-gated at handler level; advertised only when snapshotStore is wired.
+	if vnextFEnabled() && s.snapshotStore != nil {
+		tools = append(tools, governanceTools()...)
+	}
+
+	// Bulk-op tools (Milestone-F TG6 T044): bulk_promote/delete/supersede with dry-run.
+	// Admin-gated at handler level. Advertised whenever ENGRAM_VNEXT_F_ENABLED=true
+	// (facade may be nil — dry_run still works with nil facade via seam).
+	if vnextFEnabled() {
+		tools = append(tools, bulkOpsTools()...)
 	}
 
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
@@ -1574,6 +1625,22 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRejectCandidate(ctx, args)
 	case "supersede_candidate":
 		return s.handleSupersedeCandidate(ctx, args)
+	// Governance tools (Milestone-F TG6 T043).
+	case "list_snapshots":
+		return s.handleListSnapshots(ctx, args)
+	case "rollback_snapshot":
+		return s.handleRollbackSnapshot(ctx, args)
+	case "pin_snapshot":
+		return s.handlePinSnapshot(ctx, args)
+	case "redaction_rules_status":
+		return s.handleRedactionRulesStatus(ctx, args)
+	// Bulk-op tools (Milestone-F TG6 T044).
+	case "bulk_promote":
+		return s.handleBulkPromote(ctx, args)
+	case "bulk_delete":
+		return s.handleBulkDelete(ctx, args)
+	case "bulk_supersede":
+		return s.handleBulkSupersede(ctx, args)
 	}
 
 	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/

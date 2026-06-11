@@ -4075,6 +4075,96 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`DROP TABLE IF EXISTS crystallization_candidates`).Error
 			},
 		},
+		// 133_bulk_op_snapshots — Milestone F TG6 (T039).
+		// Creates the bulk_op_snapshots table for pre-operation snapshots enabling
+		// rollback of bulk operations (promote/delete/supersede).
+		// Migration number: 132 was the last migration at branch-point; 133 is next.
+		// TG5 (write-lint) does NOT add migrations beyond 132 — verified by inspecting
+		// origin/feat/milestone-f-tg5-writelint migrations.go at branch tip.
+		{
+			ID: "133_bulk_op_snapshots",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS bulk_op_snapshots (
+						id                  BIGSERIAL PRIMARY KEY,
+						snapshot_id         TEXT NOT NULL UNIQUE,
+						op_type             TEXT NOT NULL
+							CHECK (op_type IN ('ingest_doc','bulk_promote','bulk_delete','bulk_supersede')),
+						actor               TEXT NOT NULL,
+						source_session_id   TEXT NOT NULL DEFAULT '',
+						parameters          JSONB NOT NULL DEFAULT '{}',
+						affected_memory_ids BIGINT[] NOT NULL DEFAULT ARRAY[]::BIGINT[],
+						before_state        JSONB NOT NULL DEFAULT '{}',
+						status              TEXT NOT NULL DEFAULT 'committed'
+							CHECK (status IN ('preview','committed','rolled_back')),
+						pinned              BOOLEAN NOT NULL DEFAULT false,
+						created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+						rolled_back_at      TIMESTAMPTZ
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_bulk_op_snapshots_status_created
+						ON bulk_op_snapshots(status, created_at)`,
+					`CREATE INDEX IF NOT EXISTS idx_bulk_op_snapshots_snapshot_id
+						ON bulk_op_snapshots(snapshot_id)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 133: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS bulk_op_snapshots`).Error
+			},
+		},
+		{
+			// Migration 134: add CHECK(jsonb_typeof = 'object') constraints on
+			// bulk_op_snapshots.parameters and before_state to enforce the object
+			// structure expected by rollback/restore code. A pre-migration coerce step
+			// resets any non-object values (NULL, scalars, arrays) to '{}' so the
+			// ADD CONSTRAINT never fails on existing rows.
+			ID: "134_bulk_op_snapshots_jsonb_checks",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					// Coerce existing rows so the CHECK never fails on apply.
+					`UPDATE bulk_op_snapshots
+					 SET parameters = '{}'::jsonb
+					 WHERE jsonb_typeof(parameters) IS DISTINCT FROM 'object'`,
+					`UPDATE bulk_op_snapshots
+					 SET before_state = '{}'::jsonb
+					 WHERE jsonb_typeof(before_state) IS DISTINCT FROM 'object'`,
+					// Add the constraints (drop-before-add for idempotency).
+					`ALTER TABLE bulk_op_snapshots
+					 DROP CONSTRAINT IF EXISTS chk_parameters_is_object`,
+					`ALTER TABLE bulk_op_snapshots
+					 ADD CONSTRAINT chk_parameters_is_object
+					 CHECK (jsonb_typeof(parameters) = 'object')`,
+					`ALTER TABLE bulk_op_snapshots
+					 DROP CONSTRAINT IF EXISTS chk_before_state_is_object`,
+					`ALTER TABLE bulk_op_snapshots
+					 ADD CONSTRAINT chk_before_state_is_object
+					 CHECK (jsonb_typeof(before_state) = 'object')`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 134: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE bulk_op_snapshots DROP CONSTRAINT IF EXISTS chk_parameters_is_object`,
+					`ALTER TABLE bulk_op_snapshots DROP CONSTRAINT IF EXISTS chk_before_state_is_object`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

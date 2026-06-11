@@ -417,6 +417,50 @@ func (s *CandidateStore) TransitionToDecayed(ctx context.Context, id int64) (*mo
 	return s.transitionStatus(ctx, id, models.CandidateStatusDecayed, "decay_candidate", nil, "")
 }
 
+// RevertRawTx restores a candidate row to its pre-op state within a transaction.
+//
+// Unlike the state-machine transitions, this method bypasses validTransitions —
+// it is intended exclusively for Rollback (internal/bulkops) to reverse a bulk_promote.
+// All mutable columns are written back from the provided candidate value.
+// The caller is responsible for supplying a valid, non-nil candidate with a non-zero ID.
+func (s *CandidateStore) RevertRawTx(ctx context.Context, tx *gorm.DB, c *models.CrystallizationCandidate) error {
+	if c == nil {
+		return fmt.Errorf("revertRawTx: candidate must not be nil")
+	}
+	if c.ID == 0 {
+		return fmt.Errorf("revertRawTx: candidate ID must be non-zero")
+	}
+	evidenceJSON, _ := json.Marshal(c.EvidenceHandles)
+	updates := map[string]any{
+		"status":                    string(c.Status),
+		"proposed_content":          c.ProposedContent,
+		"proposed_tier":             c.ProposedTier,
+		"proposed_epistemic_type":   c.ProposedEpistemicType,
+		"proposed_promotion_target": c.ProposedPromotionTarget,
+		"source_session_id":         c.SourceSessionID,
+		"fingerprint":               c.Fingerprint,
+		"privacy_scope":             c.PrivacyScope,
+		"evidence_handles":          JSONRaw(evidenceJSON),
+		"affected_projects":         pq.StringArray(c.AffectedProjects),
+		"confidence":                c.Confidence,
+		"recurrence_count":          c.RecurrenceCount,
+		"review_after":              c.ReviewAfter,
+		"promoted_memory_id":        c.PromotedMemoryID,
+		"updated_at":                c.UpdatedAt,
+	}
+	result := tx.WithContext(ctx).
+		Model(&candidateRow{}).
+		Where("id = ?", c.ID).
+		Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("revertRawTx candidate id=%d: %w", c.ID, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("revertRawTx candidate id=%d: row not found", c.ID)
+	}
+	return nil
+}
+
 // GetByFingerprintAnyStatus looks up any candidate (regardless of status) by fingerprint.
 // Used by the backfill path to prevent re-queuing a memory whose candidate has already
 // been processed (promoted, rejected, superseded, or decayed).

@@ -1,0 +1,141 @@
+// Package models contains domain models for engram.
+package models
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// SnapshotOpType is the type of bulk operation that produced a snapshot.
+// Valid values are enforced by the migration 133 CHECK constraint.
+type SnapshotOpType string
+
+const (
+	// SnapshotOpIngestDoc represents a document ingest operation.
+	SnapshotOpIngestDoc SnapshotOpType = "ingest_doc"
+	// SnapshotOpBulkPromote represents a bulk candidate promotion.
+	SnapshotOpBulkPromote SnapshotOpType = "bulk_promote"
+	// SnapshotOpBulkDelete represents a bulk memory deletion.
+	SnapshotOpBulkDelete SnapshotOpType = "bulk_delete"
+	// SnapshotOpBulkSupersede represents a bulk memory supersession.
+	SnapshotOpBulkSupersede SnapshotOpType = "bulk_supersede"
+)
+
+// IsValid returns true iff s is one of the 4 legal SnapshotOpType values.
+func (s SnapshotOpType) IsValid() bool {
+	switch s {
+	case SnapshotOpIngestDoc, SnapshotOpBulkPromote,
+		SnapshotOpBulkDelete, SnapshotOpBulkSupersede:
+		return true
+	}
+	return false
+}
+
+// SnapshotStatus is the lifecycle state of a bulk_op_snapshot row.
+type SnapshotStatus string
+
+const (
+	// SnapshotStatusPreview is the status for dry-run previews (no DB row created for dry-run).
+	SnapshotStatusPreview SnapshotStatus = "preview"
+	// SnapshotStatusCommitted is the default status after a bulk op completes.
+	SnapshotStatusCommitted SnapshotStatus = "committed"
+	// SnapshotStatusRolledBack is set after a successful rollback.
+	SnapshotStatusRolledBack SnapshotStatus = "rolled_back"
+)
+
+// IsValid returns true iff s is one of the 3 legal SnapshotStatus values.
+func (s SnapshotStatus) IsValid() bool {
+	switch s {
+	case SnapshotStatusPreview, SnapshotStatusCommitted, SnapshotStatusRolledBack:
+		return true
+	}
+	return false
+}
+
+// BulkOpSnapshot is the domain model for the bulk_op_snapshots table.
+// It captures the before-state of affected rows for rollback support.
+// Snapshots are created immediately before a destructive bulk operation
+// so that rollback can restore the exact pre-op state per ADR-F-003.
+type BulkOpSnapshot struct {
+	// CreatedAt is the wall-clock time when the snapshot was captured.
+	CreatedAt time.Time `json:"created_at"`
+	// RolledBackAt is set when the snapshot is rolled back.
+	RolledBackAt *time.Time `json:"rolled_back_at,omitempty"`
+	// SnapshotID is the ULID/UUID unique identifier for this snapshot.
+	SnapshotID string `json:"snapshot_id"`
+	// OpType is the type of bulk operation.
+	OpType SnapshotOpType `json:"op_type"`
+	// Actor is the auth.Identity.KeycardID or "master" identifying who ran the op.
+	Actor string `json:"actor"`
+	// SourceSessionID is the session that initiated the bulk op (may be empty).
+	SourceSessionID string `json:"source_session_id,omitempty"`
+	// Parameters is the raw JSON of the operation input parameters.
+	Parameters json.RawMessage `json:"parameters,omitempty"`
+	// AffectedMemoryIDs is the list of memory IDs affected by the op.
+	AffectedMemoryIDs []int64 `json:"affected_memory_ids"`
+	// BeforeState is the full JSONB snapshot of affected rows before the op.
+	// Structure: map[int64]json.RawMessage keyed by memory ID.
+	BeforeState json.RawMessage `json:"before_state"`
+	// Status tracks the snapshot lifecycle.
+	Status SnapshotStatus `json:"status"`
+	// Pinned exempts this snapshot from auto-pruning (T049).
+	Pinned bool `json:"pinned"`
+	// ID is the database primary key.
+	ID int64 `json:"id"`
+}
+
+// SnapshotEntryKind distinguishes how a rollback should handle each row captured in
+// before_state.
+//
+//   - EntryKindRestore: the row existed before the op; rollback must restore it from BeforeData.
+//   - EntryKindDelete: the row was CREATED by the op (e.g., memory promoted from a candidate);
+//     rollback must hard-delete it.
+//
+// The kind is stored inline inside before_state JSONB so no schema migration is needed:
+//
+//	"<id>": {"kind": "restore", "before": <row JSON>}
+//	"<id>": {"kind": "delete"}
+type SnapshotEntryKind string
+
+const (
+	EntryKindRestore SnapshotEntryKind = "restore"
+	EntryKindDelete  SnapshotEntryKind = "delete"
+)
+
+// SnapshotEntry is the typed unit stored inside before_state for each affected row.
+// Stored as JSONB — no new column required.
+type SnapshotEntry struct {
+	Kind   SnapshotEntryKind `json:"kind"`
+	Before json.RawMessage   `json:"before,omitempty"` // populated only for EntryKindRestore
+}
+
+// NewBulkOpSnapshot constructs a BulkOpSnapshot with validation.
+// Returns an error if required fields are absent or if OpType/Status are invalid.
+// SnapshotID must be provided by the caller (ULID or UUID).
+// Anti-stub: returning an empty snapshot without validation will fail the
+// NewBulkOpSnapshot_Validation test in snapshot_test.go.
+func NewBulkOpSnapshot(snapshotID string, opType SnapshotOpType, actor string, beforeState json.RawMessage) (*BulkOpSnapshot, error) {
+	if snapshotID == "" {
+		return nil, fmt.Errorf("new_bulk_op_snapshot: snapshot_id is required")
+	}
+	if !opType.IsValid() {
+		return nil, fmt.Errorf("new_bulk_op_snapshot: invalid op_type %q", opType)
+	}
+	if actor == "" {
+		return nil, fmt.Errorf("new_bulk_op_snapshot: actor is required")
+	}
+	if len(beforeState) == 0 {
+		// allow empty JSON object but require non-nil
+		beforeState = json.RawMessage(`{}`)
+	}
+	return &BulkOpSnapshot{
+		SnapshotID:        snapshotID,
+		OpType:            opType,
+		Actor:             actor,
+		BeforeState:       beforeState,
+		Status:            SnapshotStatusCommitted,
+		AffectedMemoryIDs: []int64{},
+		CreatedAt:         time.Now().UTC(),
+	}, nil
+}

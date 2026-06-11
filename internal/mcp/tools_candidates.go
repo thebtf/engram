@@ -167,7 +167,7 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 // It creates a memory with epistemic_type=decision from the candidate content,
 // then transitions the candidate to status='promoted' with a back-reference to the new memory.
 func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
+	if !vnextFEnabled() {
 		return "", fmt.Errorf("promote_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
 	}
 	m, err := parseArgs(args)
@@ -177,6 +177,36 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 	id := coerceInt64(m["id"], 0)
 	if id <= 0 {
 		return "", fmt.Errorf("promote_candidate: id is required")
+	}
+
+	// T044 dry-run early return (FR-F6.b): before any DB access.
+	// When candidateStore is nil, dry_run returns a preview with the id only
+	// (TG5-absent nil-safe seam — no live candidate data available).
+	dryRun := coerceBool(m["dry_run"], false)
+	if dryRun {
+		preview := map[string]any{
+			"dry_run":      true,
+			"candidate_id": id,
+			"note":         "dry_run preview — no promotion executed",
+		}
+		// If we have a live candidate store, enrich the preview.
+		if s.candidateStore != nil {
+			if c, getErr := s.candidateStore.Get(ctx, id); getErr == nil && c != nil {
+				preview["proposed_content"] = c.ProposedContent
+				preview["status"] = string(c.Status)
+				preview["proposed_tier"] = c.ProposedTier
+			}
+		}
+		b, jsonErr := json.Marshal(preview)
+		if jsonErr != nil {
+			return "", fmt.Errorf("promote_candidate dry_run marshal: %w", jsonErr)
+		}
+		return string(b), nil
+	}
+
+	// Non-dry-run requires candidateStore.
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("promote_candidate requires candidateStore to be wired")
 	}
 
 	// Load candidate.

@@ -23,6 +23,7 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/internal/chunking"
 
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
@@ -132,6 +133,7 @@ type Service struct {
 	injectionLogStore      *gorm.InjectionLogStore
 	crystallizeFunc        func(context.Context, string, string, string, *gorm.MemoryStore) // test hook; nil uses runCrystallization
 	candidateStore         *gorm.CandidateStore     // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	snapshotStore          *gorm.SnapshotStore      // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	writelintTokenStore    writelint.TokenStore     // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	redactionRules         []redaction.CompiledRule // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
 	agentStatsStore        *gorm.AgentStatsStore
@@ -590,6 +592,12 @@ func (s *Service) initializeAsync() {
 		candidateStore := gorm.NewCandidateStore(store.GetDB(), auditStore)
 		s.SetCandidateStore(candidateStore)
 
+		// TG6 — snapshot store for bulk-op rollback and auto-pruning (T043/T049).
+		snapshotStore := gorm.NewSnapshotStore(store.GetDB())
+		s.initMu.Lock()
+		s.snapshotStore = snapshotStore
+		s.initMu.Unlock()
+
 		// TG5 — redaction layer (ADR-F-004, EC-F9: startup-only, no hot-reload).
 		// Rules are compiled once here; any rule-change requires a process restart.
 		rulesPath := os.Getenv("ENGRAM_REDACTION_RULES_PATH")
@@ -752,6 +760,19 @@ func (s *Service) initializeAsync() {
 	wlCandidateStore := s.candidateStore
 	s.initMu.RUnlock()
 	wireVnextF(mcpServer, memoryStore, auditStore, wlTS, graphStore, wlCandidateStore, wlRedRules)
+
+	// TG6 — wire snapshot governance tools into the MCP server (T043/T044).
+	// snapshotStore was created in initializeAsync when ENGRAM_VNEXT_F_ENABLED=true.
+	// Both SetSnapshotStore and SetBulkFacade are required: ListTools gates on
+	// snapshotStore != nil, and non-dry-run bulk_* calls route through the facade.
+	s.initMu.RLock()
+	existingSnapshotStore := s.snapshotStore
+	s.initMu.RUnlock()
+	if existingSnapshotStore != nil {
+		mcpServer.SetSnapshotStore(existingSnapshotStore)
+		bulkFacade := bulkops.NewFacade(existingSnapshotStore, existingCandidateStore, memoryStore, auditStore)
+		mcpServer.SetBulkFacade(bulkFacade)
+	}
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	embClient, embErr := embedding.NewClient()

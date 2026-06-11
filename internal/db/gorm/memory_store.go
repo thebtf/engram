@@ -904,6 +904,130 @@ func (s *MemoryStore) MaxActiveID(ctx context.Context) (int64, error) {
 	return maxID, nil
 }
 
+// RestoreRaw performs a full field restore of a memory row for rollback operations.
+//
+// Unlike Update (which only touches 4 fields and bumps version), RestoreRaw writes
+// back all fields captured in the before_state JSONB during snapshot capture.
+// It operates directly on the memories table, including clearing deleted_at when
+// the pre-op row was not deleted.
+//
+// RestoreRaw is intended exclusively for Rollback (internal/bulkops) — do not use
+// for normal update workflows.
+func (s *MemoryStore) RestoreRaw(ctx context.Context, mem *models.Memory) error {
+	if mem == nil {
+		return fmt.Errorf("restoreRaw: memory must not be nil")
+	}
+	if mem.ID == 0 {
+		return fmt.Errorf("restoreRaw: memory ID must be non-zero")
+	}
+	updates := map[string]any{
+		"content":          mem.Content,
+		"tags":             models.JSONStringArray(mem.Tags),
+		"source_agent":     mem.SourceAgent,
+		"edited_by":        mem.EditedBy,
+		"status":           mem.Status,
+		"tier":             mem.Tier,
+		"epistemic_type":   mem.EpistemicType,
+		"defeasibility":    mem.Defeasibility,
+		"promotion_target": mem.PromotionTarget,
+		"privacy_scope":    mem.PrivacyScope,
+		"importance_base":  mem.ImportanceBase,
+		"ts_alpha":         mem.TsAlpha,
+		"ts_beta":          mem.TsBeta,
+		"confidence":       mem.Confidence,
+		"stability":        mem.Stability,
+		"retrievability":   mem.Retrievability,
+		"supersedes_id":    mem.SupersedesID,
+		"superseded_by":    mem.SupersededBy,
+		"deleted_at":       mem.DeletedAt,
+		"updated_at":       mem.UpdatedAt,
+		// version is deliberately not restored — keep current row version so conflicts are auditable.
+	}
+	result := s.db.WithContext(ctx).
+		Unscoped().
+		Model(&Memory{}).
+		Where("id = ?", mem.ID).
+		Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("restoreRaw memory id=%d: %w", mem.ID, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("restoreRaw memory id=%d: row not found", mem.ID)
+	}
+	return nil
+}
+
+// RestoreRawTx is the transactional variant of RestoreRaw.
+// It operates on the provided *gorm.DB transaction (tx) instead of s.db.
+// Use inside db.Transaction closures where all rollback mutations must be atomic.
+func (s *MemoryStore) RestoreRawTx(ctx context.Context, tx *gorm.DB, mem *models.Memory) error {
+	if mem == nil {
+		return fmt.Errorf("restoreRawTx: memory must not be nil")
+	}
+	if mem.ID == 0 {
+		return fmt.Errorf("restoreRawTx: memory ID must be non-zero")
+	}
+	updates := map[string]any{
+		"content":          mem.Content,
+		"tags":             models.JSONStringArray(mem.Tags),
+		"source_agent":     mem.SourceAgent,
+		"edited_by":        mem.EditedBy,
+		"status":           mem.Status,
+		"tier":             mem.Tier,
+		"epistemic_type":   mem.EpistemicType,
+		"defeasibility":    mem.Defeasibility,
+		"promotion_target": mem.PromotionTarget,
+		"privacy_scope":    mem.PrivacyScope,
+		"importance_base":  mem.ImportanceBase,
+		"ts_alpha":         mem.TsAlpha,
+		"ts_beta":          mem.TsBeta,
+		"confidence":       mem.Confidence,
+		"stability":        mem.Stability,
+		"retrievability":   mem.Retrievability,
+		"supersedes_id":    mem.SupersedesID,
+		"superseded_by":    mem.SupersededBy,
+		"deleted_at":       mem.DeletedAt,
+		"updated_at":       mem.UpdatedAt,
+	}
+	result := tx.WithContext(ctx).
+		Unscoped().
+		Model(&Memory{}).
+		Where("id = ?", mem.ID).
+		Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("restoreRawTx memory id=%d: %w", mem.ID, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("restoreRawTx memory id=%d: row not found", mem.ID)
+	}
+	return nil
+}
+
+// HardDeleteTx permanently removes a memory row within a transaction.
+// Used by rollback to remove memories that were CREATED by a bulk_promote op
+// (EntryKindDelete rows) — these have no pre-op state to restore.
+// candidate.promoted_memory_id is SET NULL by the FK constraint (ON DELETE SET NULL),
+// consistent with EC-F4, so the candidate row naturally returns to a restorable state.
+func (s *MemoryStore) HardDeleteTx(ctx context.Context, tx *gorm.DB, id int64) error {
+	if id == 0 {
+		return fmt.Errorf("hardDeleteTx: memory ID must be non-zero")
+	}
+	result := tx.WithContext(ctx).
+		Unscoped().
+		Delete(&Memory{}, "id = ?", id)
+	if result.Error != nil {
+		return fmt.Errorf("hardDeleteTx memory id=%d: %w", id, result.Error)
+	}
+	// RowsAffected == 0 is not an error — the memory may have already been deleted.
+	return nil
+}
+
+// GetDB returns the underlying *gorm.DB, used by the rollback path to open a transaction
+// that spans MemoryStore + SnapshotStore mutations atomically.
+func (s *MemoryStore) GetDB() *gorm.DB {
+	return s.db
+}
+
 // ListAllActive returns a batch of active memories for sleep cycle processing.
 func (s *MemoryStore) ListAllActive(ctx context.Context, batchSize int, offset int) ([]*models.Memory, error) {
 	if batchSize <= 0 {

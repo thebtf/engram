@@ -160,14 +160,18 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		Int("demotions", result.Demotions).
 		Int("expirations", result.Expirations).
 		Int("review_flagged", result.ReviewFlagged).
+		Int("snapshots_pruned", result.SnapshotsPruned).
 		Dur("duration", result.Duration).
 		Msg("sleep cycle: finished")
 
-	// Milestone-F TG4 T028: run candidate decay batch when flag is on.
+	// Milestone-F TG4 T028 + TG6 T049: when the Milestone-F flag is on, run
+	// candidate decay AND snapshot auto-pruning alongside the memory sleep cycle.
 	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
 		s.initMu.RLock()
 		cs := s.candidateStore
+		ss := s.snapshotStore
 		s.initMu.RUnlock()
+
 		if cs != nil {
 			decayResult := lifecycle.RunCandidateDecayCycle(ctx, cs)
 			log.Info().
@@ -175,6 +179,17 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 				Int("decay_errors", decayResult.Errors).
 				Dur("decay_duration", decayResult.Duration).
 				Msg("sleep cycle: candidate decay finished")
+		}
+
+		// T049: prune bulk_op_snapshots older than retention window (default 30 days).
+		// Pinned snapshots are exempt — enforced at the store layer.
+		if ss != nil {
+			pruned, pruneErr := lifecycle.PruneSnapshots(ctx, ss)
+			if pruneErr != nil {
+				log.Warn().Err(pruneErr).Msg("sleep cycle: snapshot prune failed")
+			} else {
+				result.SnapshotsPruned = int(pruned)
+			}
 		}
 	}
 

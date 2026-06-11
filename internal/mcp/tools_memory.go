@@ -130,14 +130,15 @@ func isValidStoreObservationType(obsType models.ObservationType) bool {
 }
 
 // handleStoreMemory explicitly stores a memory in the v5 memories table.
+// T044 (FR-F6.b): dry_run=true returns a legacy-path preview JSON without any DB writes.
+// The nil-store guard is deferred until after dry_run is parsed so that dry_run=true
+// always succeeds (TG5-absent nil-safe seam).
 func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (string, error) {
 	// T035: write-lint orchestrator has its own MemoryStoreInterface; nil memoryStore
-	// is only fatal on the legacy create path, which is guarded below at the point of use.
-	// When writeLint is nil (the default), memoryStore is required for the legacy path.
+	// is only fatal on the legacy create path. writeLintEnabled and dry_run are both
+	// exemptions; the nil-store guard is deferred until after params are parsed so both
+	// exemptions can be evaluated together.
 	writeLintEnabled := s.writeLint != nil && vnextFEnabled()
-	if s.memoryStore == nil && !writeLintEnabled {
-		return "", fmt.Errorf("memory store not available")
-	}
 
 	m, err := parseArgs(args)
 	if err != nil {
@@ -159,6 +160,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		Importance   *float64
 		TtlDays      *int
 		AlwaysInject bool
+		DryRun       bool // T044 — FR-F6.b dry-run preview
 	}
 	params.Tags = coerceStringSlice(m["tags"])
 	params.Rejected = coerceStringSlice(m["rejected"])
@@ -179,6 +181,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		params.Project = coerceString(m["project"], "")
 	}
 	params.AlwaysInject = coerceBool(m["always_inject"], false)
+	params.DryRun = coerceBool(m["dry_run"], false)
 	if v, ok := m["importance"]; ok && v != nil {
 		f := coerceFloat64(v, 0)
 		params.Importance = &f
@@ -194,6 +197,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	if params.Importance != nil && (*params.Importance < 0 || *params.Importance > 1) {
 		return "", fmt.Errorf("importance must be between 0 and 1")
+	}
+
+	// Deferred nil-store guard: runs after params are parsed so all exemptions are known.
+	// Exemptions: writeLintEnabled (T035 — orchestrator manages its own store) and
+	// dry_run=true (T044 — preview exits before any DB access; no store required).
+	if s.memoryStore == nil && !writeLintEnabled && !params.DryRun {
+		return "", fmt.Errorf("memory store not available")
 	}
 
 	cfg := config.Get()
@@ -234,6 +244,43 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			return "", fmt.Errorf("redaction: %w", scrubErr)
 		}
 		params.Content = scrubbed
+	}
+
+	// T044 dry-run return (FR-F6.b): after content size limits AND redaction so
+	// would_store reflects the post-redacted content (honest preview per ADR-F-004).
+	//
+	// Composition with TG5 write-lint (ADR: dry_run×write-lint design):
+	//   - write-lint active (writeLintEnabled=true): Phase1 would run signal detection
+	//     (duplicate / conflict / supersession) before committing. dry_run does NOT
+	//     invoke Phase1 because that would either commit on the no-signal path or mint
+	//     a resolution token that expires unused — both are write side-effects
+	//     incompatible with preview semantics. Instead, the preview declares that
+	//     lint signals are "deferred" — the caller knows lint would intercept but
+	//     must use a live (non-dry-run) call to see actual signals.
+	//   - write-lint absent (writeLintEnabled=false / flag OFF): legacy-path preview
+	//     with no lint signals (original TG6 T044 behavior).
+	//
+	// No DB write, no token mint, no snapshot row for dry_run in either case.
+	if params.DryRun {
+		dryRunNote := "dry_run preview — no memory row written; redaction applied above"
+		if writeLintEnabled {
+			dryRunNote = "dry_run preview — no memory row written; redaction applied; write-lint Phase1 (duplicate/conflict detection) would run on live call — signals deferred"
+		}
+		preview := map[string]any{
+			"dry_run":     true,
+			"would_store": params.Content,
+			"project":     params.Project,
+			"type":        params.Type,
+			"scope":       params.Scope,
+			"tags":        params.Tags,
+			"write_lint":  writeLintEnabled,
+			"note":        dryRunNote,
+		}
+		out, jsonErr := json.MarshalIndent(preview, "", "  ")
+		if jsonErr != nil {
+			return "", fmt.Errorf("store_memory dry_run marshal: %w", jsonErr)
+		}
+		return string(out), nil
 	}
 
 	// T035 (engram vNext Milestone F TG5) — two-phase write-lint protocol.
