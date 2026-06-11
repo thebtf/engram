@@ -274,17 +274,23 @@ func runCrystallizationAuditAsync(auditStore *gormdb.AuditStore, sessionID strin
 	}()
 }
 
-// runCrystallization extracts decision patterns from agent output and persists them
-// as episodic memories. It is spawned as an independent goroutine from handleSessionEnd
-// and must not panic or propagate errors upward — all failures are logged and swallowed.
+// runCrystallization extracts decision patterns from agent output and persists them.
+//
+// Routing (T025 / B9 resolution):
+//   - ENGRAM_VNEXT_F_ENABLED=true AND candidateStore ready → extracted decisions land in
+//     crystallization_candidates (status='pending') for explicit operator promotion.
+//     This IS the B9 resolution: no auto-promotion; the candidate path is the gated
+//     promotion surface (operator decision #2766).
+//   - Otherwise → legacy path: extracted decisions written to memories as episodic
+//     via CreateWithLifecycleIfTagAbsent (W2-TG3 idempotency preserved).
 //
 // Independence contract: this function requires only memStore, sessionID, project, and
 // agentOutput. It is NOT gated by citation pipeline prerequisites.
 //
-// Idempotency: each decision memory is fingerprinted by sha256(sessionID+":"+content)
-// stored as a tag "fp:<hex>". Before inserting, the store checks the exact
-// fingerprint tag under a transaction-level lock so concurrent session-end
-// replays cannot both pass the pre-read before either insert commits.
+// Idempotency:
+//   - Legacy path: sha256 fingerprint stored as tag "fp:<hex>" with partial unique check.
+//   - Candidate path: sha256 fingerprint stored in the fingerprint column with a partial
+//     unique index on status='pending' (migration 132).
 func (s *Service) runCrystallization(
 	ctx context.Context,
 	sessionID, project, agentOutput string,
@@ -305,12 +311,21 @@ func (s *Service) runCrystallization(
 		return
 	}
 
-	mems := crystallization.BuildMemories(decisions, sessionID, project)
-
 	s.initMu.RLock()
 	auditStore := s.auditStore
+	candidateStore := s.candidateStore
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 	s.initMu.RUnlock()
+
+	// ENGRAM_VNEXT_F_ENABLED=true: route to candidate store (B9 resolution).
+	// Pass memStore as MemoryFingerprintChecker for flag-flip ON-direction dup guard (TG4 finding 4).
+	if crystallization.VnextFEnabled() && candidateStore != nil {
+		s.runCrystallizationCandidatePath(ctx, decisions, sessionID, project, candidateStore, memStore)
+		return
+	}
+
+	// Legacy path: write directly to memories table.
+	mems := crystallization.BuildMemories(decisions, sessionID, project)
 
 	existingFPs := make(map[string]struct{})
 
@@ -369,4 +384,54 @@ func (s *Service) runCrystallization(
 		Int("memories_stored", storedCount).
 		Int("memories_skipped_dup", skippedCount).
 		Msg("crystallization: stored decisions as episodic memories")
+}
+
+// runCrystallizationCandidatePath handles the ENGRAM_VNEXT_F_ENABLED candidate routing path.
+// Each extracted decision is routed via crystallization.RouteDecision which enforces
+// fingerprint-based idempotency and writes to crystallization_candidates.
+// Satisfies B9: no auto-promotion to memories; operator must call promote_candidate explicitly.
+// memStore is passed as a MemoryFingerprintChecker to guard flag-flip ON-direction duplicates.
+func (s *Service) runCrystallizationCandidatePath(
+	ctx context.Context,
+	decisions []crystallization.ExtractedDecision,
+	sessionID, project string,
+	candidateStore *gormdb.CandidateStore,
+	memStore *gormdb.MemoryStore,
+) {
+	createdCount := 0
+	dupCount := 0
+	for _, decision := range decisions {
+		result, err := crystallization.RouteDecision(ctx, decision, sessionID, project, candidateStore, memStore)
+		if err != nil {
+			log.Error().Err(err).
+				Str("session_id", sessionID).
+				Msg("crystallization: candidate route failed")
+			continue
+		}
+		if result == nil {
+			// Flag flipped to off between check and here — fall through to caller's return.
+			continue
+		}
+		if result.Duplicate {
+			dupCount++
+			log.Debug().
+				Str("session_id", sessionID).
+				Msg("crystallization: skipping duplicate candidate (fingerprint exists)")
+		} else {
+			createdCount++
+			log.Debug().
+				Str("session_id", sessionID).
+				Int64("candidate_id", result.CandidateID).
+				Msg("crystallization: created pending candidate")
+		}
+	}
+
+	log.Info().
+		Str("event", "crystallization_candidates_complete").
+		Str("session_id", sessionID).
+		Str("project", project).
+		Int("decisions_found", len(decisions)).
+		Int("candidates_created", createdCount).
+		Int("candidates_skipped_dup", dupCount).
+		Msg("crystallization: decisions routed to pending candidates (vnext-f)")
 }

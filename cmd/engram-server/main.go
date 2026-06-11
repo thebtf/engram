@@ -27,6 +27,12 @@ var Version = "dev"
 // @in header
 // @name X-Auth-Token
 func main() {
+	// Sub-command dispatch: engram-server backfill-candidates [flags]
+	if len(os.Args) > 1 && os.Args[1] == "backfill-candidates" {
+		runBackfillCandidates(os.Args[2:])
+		return
+	}
+
 	// Setup logging with ring buffer for /api/logs endpoint
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	cfg := config.Get()
