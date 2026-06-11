@@ -56,6 +56,9 @@ type RankingRationale struct {
 // Measured overhead is well within the ≤5ms p95 budget. See benchmark in
 // rationale_test.go (BenchmarkAssembleRationale).
 func AssembleRationale(memory *models.Memory, queryText string, matched bool, filters []string) RankingRationale {
+	if memory == nil {
+		return RankingRationale{}
+	}
 	recencyDays := time.Since(memory.CreatedAt).Hours() / 24
 	if recencyDays < 0 {
 		recencyDays = 0

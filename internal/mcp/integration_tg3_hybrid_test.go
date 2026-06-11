@@ -104,13 +104,16 @@ func TestHybridTG3_ConfidenceMin_FloorEnforced_T022(t *testing.T) {
 	for _, memAny := range memories {
 		memObj, _ := memAny.(map[string]any)
 		if content, _ := memObj["content"].(string); content != "" {
-			if assert.ObjectsAreEqual(true, contains(content, "high alpha")) {
+			if contains(content, "high alpha") {
 				found = true
 				break
 			}
 		}
 	}
-	_ = found // Presence of high-confidence row is best-effort (FTS-dependent)
+	// Best-effort check (FTS-dependent): log if not found but don't fail.
+	if !found {
+		t.Logf("high-confidence content not found (FTS may not have matched)")
+	}
 }
 
 // contains is a simple substring check helper for test assertions.

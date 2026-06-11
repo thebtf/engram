@@ -961,6 +961,18 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		// When scope is NOT enabled, a single-fetch candidate pool is safe
 		// (no invisible rows), so we keep the efficient over-fetch path.
 		if scopeEnabled {
+			// T018 MAJOR fix (review hardening): include_superseded cannot be
+			// honoured by the scoped batch-loop because ListWithOffset is
+			// hardcoded to status='active'. Silently returning only active rows
+			// when the caller requested superseded rows is the same degradation
+			// fixed in the hybrid path (line ~1274). Return a structured error
+			// so the caller knows to use the non-scope path or omit the flag.
+			//
+			// Design choice: structured error > silent no-op (option B from
+			// coderabbit MAJOR review; mirrors hybrid-path treatment).
+			if tg3IncludeSuperseded {
+				return "", fmt.Errorf("include_superseded is not supported with scope-enabled recall; omit include_superseded or disable ENGRAM_VNEXT_F_ENABLED scope")
+			}
 			// Batch-loop: scope-invisible rows must not truncate visible recall
 			// (same guarantee as the scopeEnabled-only branch below).
 			// keepMemory applies all in-memory predicates including the TG3
@@ -1623,7 +1635,7 @@ func (s *Server) handleRecallMemoryHybrid(
 			if !ok {
 				continue
 			}
-			contentMatched := strings.Contains(strings.ToLower(sm.Memory.Content), strings.ToLower(query))
+			contentMatched := strings.Contains(strings.ToLower(sm.Memory.Content), queryLower)
 			rat := retrieval.AssembleRationale(sm.Memory, query, contentMatched, filterDescs)
 			r := hybridRationaleResult{
 				ID:               item.ID,

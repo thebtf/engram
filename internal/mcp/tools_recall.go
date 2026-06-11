@@ -283,37 +283,91 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 
 	results := make([]memoryResult, 0, limit)
 	if tg3Active {
-		// T018 TG3 fetch path: use ListWithFilters to apply confidence_min /
-		// include_superseded at the SQL layer. A generous candidate multiplier
-		// ensures the substring-query filter still sees enough rows.
-		const tg3CandidateMultiplier = 10
-		const tg3MinPool = 1000
-		fetchLimit := limit * tg3CandidateMultiplier
-		if fetchLimit < tg3MinPool {
-			fetchLimit = tg3MinPool
-		}
-		tg3Opts := engramgorm.ListOptions{
-			ConfidenceMin:     tg3ConfidenceMin,
-			IncludeSuperseded: tg3IncludeSuperseded,
-			Limit:             fetchLimit,
-		}
-		candidates, err := s.memoryStore.ListWithFilters(ctx, project, tg3Opts)
-		if err != nil {
-			return "", fmt.Errorf("recall search tg3: %w", err)
-		}
-		for _, mem := range candidates {
-			mr, ok := filterMemory(mem)
-			if !ok {
-				continue
+		if scopeEnabled {
+			// T018 MAJOR fix (review hardening): when both tg3Active and
+			// scopeEnabled are true, ListWithFilters cannot be used safely
+			// because scope-invisible rows at the head of the result set
+			// truncate visible recall before older eligible rows are reached
+			// (same truncation problem as the non-TG3 scope path — fixed by
+			// batch-looping via ListWithOffset).
+			//
+			// include_superseded cannot be honoured by ListWithOffset (hardcoded
+			// status='active'). Return a structured error so the caller knows to
+			// use the non-scope path or omit the flag — option B from coderabbit
+			// MAJOR review, matching hybrid-path and recall_memory treatment.
+			if tg3IncludeSuperseded {
+				return "", fmt.Errorf("include_superseded is not supported with scope-enabled recall search; omit include_superseded or disable ENGRAM_VNEXT_F_ENABLED scope")
 			}
-			if tg3IncludeRationale {
-				contentMatched := queryLower != "" && strings.Contains(strings.ToLower(mem.Content), queryLower)
-				rat := retrieval.AssembleRationale(mem, query, contentMatched, tg3FilterDescs)
-				mr.RankingRationale = &rat
+			// Batch-loop via ListWithOffset: scope-invisible rows must not
+			// truncate recall. confidence_min is applied in-memory below (SQL
+			// push is not available without ListWithFilters).
+			const batchSize = 500
+			offset := 0
+			for len(results) < limit {
+				batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+				if err != nil {
+					return "", fmt.Errorf("recall search tg3 scoped: %w", err)
+				}
+				if len(batch) == 0 {
+					break
+				}
+				for _, mem := range batch {
+					if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
+						continue
+					}
+					mr, ok := filterMemory(mem)
+					if !ok {
+						continue
+					}
+					if tg3IncludeRationale {
+						contentMatched := queryLower != "" && strings.Contains(strings.ToLower(mem.Content), queryLower)
+						rat := retrieval.AssembleRationale(mem, query, contentMatched, tg3FilterDescs)
+						mr.RankingRationale = &rat
+					}
+					results = append(results, mr)
+					if len(results) >= limit {
+						break
+					}
+				}
+				offset += len(batch)
+				if len(batch) < batchSize {
+					break
+				}
 			}
-			results = append(results, mr)
-			if len(results) >= limit {
-				break
+		} else {
+			// T018 TG3 fetch path (non-scoped): use ListWithFilters to apply
+			// confidence_min / include_superseded at the SQL layer. A generous
+			// candidate multiplier ensures the substring-query filter still
+			// sees enough rows. No scope-invisible rows exist here.
+			const tg3CandidateMultiplier = 10
+			const tg3MinPool = 1000
+			fetchLimit := limit * tg3CandidateMultiplier
+			if fetchLimit < tg3MinPool {
+				fetchLimit = tg3MinPool
+			}
+			tg3Opts := engramgorm.ListOptions{
+				ConfidenceMin:     tg3ConfidenceMin,
+				IncludeSuperseded: tg3IncludeSuperseded,
+				Limit:             fetchLimit,
+			}
+			candidates, err := s.memoryStore.ListWithFilters(ctx, project, tg3Opts)
+			if err != nil {
+				return "", fmt.Errorf("recall search tg3: %w", err)
+			}
+			for _, mem := range candidates {
+				mr, ok := filterMemory(mem)
+				if !ok {
+					continue
+				}
+				if tg3IncludeRationale {
+					contentMatched := queryLower != "" && strings.Contains(strings.ToLower(mem.Content), queryLower)
+					rat := retrieval.AssembleRationale(mem, query, contentMatched, tg3FilterDescs)
+					mr.RankingRationale = &rat
+				}
+				results = append(results, mr)
+				if len(results) >= limit {
+					break
+				}
 			}
 		}
 	} else if scopeEnabled {
