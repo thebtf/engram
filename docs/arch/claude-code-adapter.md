@@ -67,6 +67,7 @@ reads stdin, parses it, derives a context object, and calls the handler with
 | `ctx.HookEventName` | `input.hook_event_name` or hook name | Discriminated event name |
 | `ctx.GitRemote` | `git remote get-url origin` | Remote URL if in a git repo |
 | `ctx.RelativePath` | `git rev-parse --show-prefix` | Path within the repo |
+| `ctx.RawInput` | stdin string | Original JSON stdin payload (for debugging or custom parsing) |
 
 **Project identity algorithm** (mirrors `internal/proxy/identity.go:ResolveProjectSlug`):
 
@@ -102,7 +103,7 @@ constant `HOOKS_WITH_EVENT_NAME` in `lib.js` tracks which hooks support it:
 PreToolUse, UserPromptSubmit, PostToolUse, SessionStart
 ```
 
-For all other hooks (`Stop`, `PreCompact`, `SubagentStop`, `PostCompact`,
+For all other hooks (`Stop`, `PreCompact`, `SubagentStop`,
 `SessionEnd`) the `hookSpecificOutput` key is omitted entirely; including it
 would fail Claude Code's discriminated-union validation. These hooks deliver
 their output as side effects (POST requests, file writes) rather than through
@@ -266,16 +267,21 @@ swallowed. The hook always exits 0.
 {
   "session_id": "string",
   "cwd": "string",
-  "summary": "string",
-  "last_human_message": "string",
-  "conversation_title": "string",
+  "trigger": "manual|auto",
+  "custom_instructions": "string",
   "hook_event_name": "PreCompact"
 }
 ```
 
-All three topic-hint fields (`summary`, `last_human_message`,
-`conversation_title`) are optional. The hook uses the first non-empty one,
-truncated to 200 characters, as the topic for re-injection.
+`trigger` is `"manual"` when the user ran `/compact` and `"auto"` when
+Claude Code compacted automatically. `custom_instructions` carries any
+instructions the user passed to `/compact` (empty string when none).
+
+`extractTopic` in `pre-compact.js` reads `input.summary`,
+`input.last_human_message`, and `input.conversation_title` as fallback
+sources that earlier Claude Code versions may have populated; current
+Claude Code sends neither, so `extractTopic` returns `""` and the
+reinject request uses a project-wide query instead of a topic-scoped one.
 
 **Server interaction:**
 
@@ -368,10 +374,15 @@ Fires before tool calls matching `Edit|Write` (1 s timeout). For `Edit` and
 `Write`, fetches file-level context from `GET /api/context/by-file` (200 ms) and
 trigger-based context from `POST /api/memory/triggers` (200 ms) in parallel.
 Returns a `systemMessage` JSON string containing a `<file-context>` block with
-warnings and context observations classified by type. For `Bash` and `Read`,
-fetches trigger context only. Returns `""` on cache miss, skip path (temp dirs,
-`node_modules`), or fetch error. `PreToolUse` is in `HOOKS_WITH_EVENT_NAME` so
-the `systemMessage` payload is valid.
+warnings and context observations classified by type. Returns `""` on cache miss,
+skip path (temp dirs, `node_modules`), or fetch error. `PreToolUse` is in
+`HOOKS_WITH_EVENT_NAME` so the `systemMessage` payload is valid.
+
+> **Matcher limitation:** `hooks.json` registers `PreToolUse` with matcher
+> `Edit|Write`. The handler in `pre-tool-use.js` also contains code branches for
+> `Bash` and `Read` (trigger-context-only path), but Claude Code never invokes
+> the hook for those tools with the current registration. Those branches are
+> inactive unless the matcher is extended.
 
 ### `session-end.js` — `SessionEnd`
 
