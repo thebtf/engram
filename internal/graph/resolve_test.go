@@ -60,9 +60,10 @@ func TestEdgeResolve_T013_ShapeAndErrors(t *testing.T) {
 // discriminators behave as memory-type edges (backward compat).
 func TestEdgeResolve_T013_DefaultTypes(t *testing.T) {
 	// An edge with empty SourceType / TargetType should be treated as 'memory'.
+	src, tgt := int64(1), int64(2)
 	e := Edge{
-		SourceID: 1,
-		TargetID: 2,
+		SourceID: &src,
+		TargetID: &tgt,
 	}
 	// Default to 'memory' when blank.
 	if e.SourceType != "" {

@@ -29,13 +29,14 @@ func resolveDiscriminator(d string) string {
 // Edge is the GORM row struct for knowledge_edges.
 // Migration 127 extended the table with discriminator columns (source_type,
 // target_type) and nullable FK columns (node_source_id, node_target_id).
-// The pre-127 columns (SourceID, TargetID) are retained for backward compat
-// but are now nullable at the DB level; GORM tags keep them non-nullable in Go
-// for existing code paths that assert source_id/target_id are set for memory edges.
+// SourceID and TargetID are nullable at the DB level (migration 127 dropped
+// NOT NULL): they are NULL for node-typed endpoints and populated only for
+// memory-typed endpoints. *int64 forces discriminator-aware access and prevents
+// silent 0-reads when GORM scans NULL from Postgres.
 type Edge struct {
 	ID              int64      `gorm:"primaryKey;autoIncrement" json:"id"`
-	SourceID        int64      `gorm:"column:source_id" json:"source_id"`
-	TargetID        int64      `gorm:"column:target_id" json:"target_id"`
+	SourceID        *int64     `gorm:"column:source_id" json:"source_id,omitempty"`
+	TargetID        *int64     `gorm:"column:target_id" json:"target_id,omitempty"`
 	EdgeType        string     `gorm:"type:text;not null" json:"edge_type"`
 	Weight          float64    `gorm:"type:real;not null;default:1.0" json:"weight"`
 	Reasoning       string     `gorm:"type:text;not null;default:''" json:"reasoning"`
@@ -89,13 +90,31 @@ func (memoryRow) TableName() string { return "memories" }
 // Empty discriminator is normalised to "memory" for backward compat with
 // edges written before migration 127.
 //
+// Node-typed endpoints are fetched with includePrivate=false: private nodes
+// are not visible via the public Resolve path (same contract as ListByType).
+// Use ResolvePrivileged for administrative callers that need private visibility.
+//
 // Anti-stub: replacing with `return nil, nil, nil` breaks T015 integration
 // tests that assert resolved types, and T016 dangling acceptance test.
 func (s *Store) Resolve(ctx context.Context, e *Edge) (source any, target any, err error) {
+	return s.resolve(ctx, e, false)
+}
+
+// ResolvePrivileged is the privileged variant of Resolve that returns private nodes.
+// Use only for internal/administrative callers that have already verified access.
+func (s *Store) ResolvePrivileged(ctx context.Context, e *Edge) (source any, target any, err error) {
+	return s.resolve(ctx, e, true)
+}
+
+func (s *Store) resolve(ctx context.Context, e *Edge, includePrivate bool) (source any, target any, err error) {
 	srcType := resolveDiscriminator(e.SourceType)
 	tgtType := resolveDiscriminator(e.TargetType)
 
-	source, err = s.resolveEndpoint(ctx, srcType, e.SourceID, e.NodeSourceID)
+	var srcMemID int64
+	if e.SourceID != nil {
+		srcMemID = *e.SourceID
+	}
+	source, err = s.resolveEndpoint(ctx, srcType, srcMemID, e.NodeSourceID, includePrivate)
 	if err != nil {
 		if errors.Is(err, ErrDangling) {
 			return nil, nil, ErrDangling
@@ -103,7 +122,11 @@ func (s *Store) Resolve(ctx context.Context, e *Edge) (source any, target any, e
 		return nil, nil, fmt.Errorf("resolve source: %w", err)
 	}
 
-	target, err = s.resolveEndpoint(ctx, tgtType, e.TargetID, e.NodeTargetID)
+	var tgtMemID int64
+	if e.TargetID != nil {
+		tgtMemID = *e.TargetID
+	}
+	target, err = s.resolveEndpoint(ctx, tgtType, tgtMemID, e.NodeTargetID, includePrivate)
 	if err != nil {
 		if errors.Is(err, ErrDangling) {
 			return source, nil, ErrDangling
@@ -117,18 +140,21 @@ func (s *Store) Resolve(ctx context.Context, e *Edge) (source any, target any, e
 // resolveEndpoint looks up one edge endpoint based on its discriminator.
 // endpointType is "memory" or "node"; memoryID and nodeID are the respective
 // FK columns (one should be zero/nil, the other populated).
-func (s *Store) resolveEndpoint(ctx context.Context, endpointType string, memoryID int64, nodeID *int64) (any, error) {
+// includePrivate controls whether node-typed endpoints with privacy_scope='private'
+// are visible; callers should pass false for all MCP/public-facing paths.
+func (s *Store) resolveEndpoint(ctx context.Context, endpointType string, memoryID int64, nodeID *int64, includePrivate bool) (any, error) {
 	switch endpointType {
 	case "node":
 		if nodeID == nil {
-			return nil, fmt.Errorf("%w: source_type='node' but node_source_id is nil", ErrDangling)
+			return nil, fmt.Errorf("graph: edge integrity violation: source_type='node' with nil node_source_id")
 		}
 		if s.nodes == nil {
 			return nil, fmt.Errorf("NodesStore not configured on graph.Store")
 		}
-		node, err := s.nodes.Get(ctx, *nodeID)
+		node, err := s.nodes.Get(ctx, *nodeID, includePrivate)
 		if err != nil {
-			// Treat "not found" as dangling; other errors propagate.
+			// Treat "not found" (including privacy-filtered not-found) as dangling;
+			// other errors propagate.
 			return nil, fmt.Errorf("%w: %s", ErrDangling, err.Error())
 		}
 		return node, nil
@@ -160,9 +186,21 @@ func (s *Store) resolveEndpoint(ctx context.Context, endpointType string, memory
 }
 
 // Create inserts a new edge.
+// Validation is discriminator-aware: memory-typed endpoints require a non-nil,
+// non-zero source_id/target_id; node-typed endpoints require node_source_id /
+// node_target_id instead and must have source_id/target_id nil.
 func (s *Store) Create(ctx context.Context, e *Edge) (*Edge, error) {
-	if e.SourceID == 0 || e.TargetID == 0 {
-		return nil, fmt.Errorf("source_id and target_id required")
+	srcType := resolveDiscriminator(e.SourceType)
+	tgtType := resolveDiscriminator(e.TargetType)
+	if srcType == "memory" {
+		if e.SourceID == nil || *e.SourceID == 0 {
+			return nil, fmt.Errorf("source_id required when source_type='memory'")
+		}
+	}
+	if tgtType == "memory" {
+		if e.TargetID == nil || *e.TargetID == 0 {
+			return nil, fmt.Errorf("target_id required when target_type='memory'")
+		}
 	}
 	if !ValidEdgeType(e.EdgeType) {
 		return nil, fmt.Errorf("invalid edge type: %s", e.EdgeType)

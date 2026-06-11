@@ -46,7 +46,7 @@ type Server struct {
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
-	nodesStore             *graph.NodesStore // T014: Milestone F TG2 add_node action
+	nodesStore             nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
 	auditStore             *gorm.AuditStore
 	purgeStore             *gorm.PurgeStore
 	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
@@ -1078,7 +1078,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				"type":     "object",
 				"required": []string{"action"},
 				"properties": map[string]any{
-					"action":         map[string]any{"type": "string", "description": "Action: add_edge, add_node, remove_edge, get_edges, traverse, find_path, synonyms", "enum": []string{"add_edge", "add_node", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}},
+					"action":         map[string]any{"type": "string", "description": "Action: add_edge, remove_edge, get_edges, traverse, find_path, synonyms" + func() string { if vnextFEnabled() { return ", add_node" }; return "" }(), "enum": func() []string { base := []string{"add_edge", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}; if vnextFEnabled() { base = append(base, "add_node") }; return base }()},
 					"source_id":      map[string]any{"type": "integer", "description": "Source memory ID (for add_edge memory→memory, find_path)"},
 					"target_id":      map[string]any{"type": "integer", "description": "Target memory ID (for add_edge memory→memory, find_path)"},
 					"memory_id":      map[string]any{"type": "integer", "description": "Memory ID (for get_edges, traverse, synonyms)"},

@@ -27,7 +27,7 @@ func TestNodesStore_T012_UnitShape(t *testing.T) {
 		Create(ctx context.Context, node *models.KnowledgeNode) (*models.KnowledgeNode, error)
 	}
 	type getter interface {
-		Get(ctx context.Context, id int64) (*models.KnowledgeNode, error)
+		Get(ctx context.Context, id int64, includePrivate bool) (*models.KnowledgeNode, error)
 	}
 	type lister interface {
 		ListByType(ctx context.Context, nodeType, project string, includePrivate bool) ([]models.KnowledgeNode, error)
@@ -118,4 +118,47 @@ func TestNodesStore_T012_ValidateUpdate(t *testing.T) {
 	if err == nil {
 		t.Error("Update with ID=0 should return an error")
 	}
+}
+
+// TestNodesStore_Get_IncludePrivateParam verifies that the Get method signature
+// includes the includePrivate bool parameter, consistent with ListByType
+// (7th-alternate-read-path bypass pattern fix, Finding 3).
+//
+// This is a compile-time shape test; live privacy filtering requires DATABASE_DSN.
+func TestNodesStore_Get_IncludePrivateParam(t *testing.T) {
+	// Verify the interface shape includes includePrivate via the getter interface
+	// defined in TestNodesStore_T012_UnitShape.
+	type privacyAwareGetter interface {
+		Get(ctx context.Context, id int64, includePrivate bool) (*models.KnowledgeNode, error)
+	}
+	var _ privacyAwareGetter = (*NodesStore)(nil)
+	t.Log("NodesStore.Get includePrivate parameter shape verified")
+}
+
+// TestNodesStore_SoftDelete_MethodShape verifies that SoftDelete has the
+// correct method signature (id int64) → error and reaches the DB call on
+// valid input (no early-return guard for non-zero IDs).
+//
+// WHERE-clause correctness (id = ? AND deleted_at IS NULL) and the
+// "not found or already deleted" error path require a real Postgres instance.
+// Those assertions live in the DSN-gated integration suite; this offline test
+// only confirms the method is reachable with a valid ID.
+//
+// Note: SQLite is not used in this repo — offline WHERE-clause assertion is
+// not feasible. The DSN integration test (TestPathC_T015_SkillNodeEdgeRoundtrip
+// and TestDangling_T016_DanglingEdgeReturnsFlag) provide the live round-trip.
+func TestNodesStore_SoftDelete_MethodShape(t *testing.T) {
+	ns := &NodesStore{db: nil}
+	ctx := context.Background()
+
+	// Calling SoftDelete with a valid ID (non-zero) on a nil-db store reaches
+	// the gorm DB call and panics on nil pointer dereference. This confirms:
+	//   (a) no early-return guard intercepts a valid ID before the WHERE clause, and
+	//   (b) the method signature matches the deleter interface.
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("SoftDelete on nil db with valid ID must reach the DB call")
+		}
+	}()
+	_ = ns.SoftDelete(ctx, 1) // reaches nil-db → panic expected
 }

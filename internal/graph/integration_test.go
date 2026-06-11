@@ -68,10 +68,11 @@ func TestPathC_T015_SkillNodeEdgeRoundtrip(t *testing.T) {
 	assert.Equal(t, "project", node.PrivacyScope) // default
 
 	// Step 2: Create edge skill→memory (source_type='node', target_type='memory').
+	// TargetID is *int64 (nullable); set via pointer for memory-typed endpoint.
 	edge := &Edge{
 		SourceType:      "node",
 		TargetType:      "memory",
-		TargetID:        memID,
+		TargetID:        &memID,
 		NodeSourceID:    &node.ID,
 		EdgeType:        "uses",
 		Weight:          1.0,
@@ -152,7 +153,7 @@ func TestPathC_T015_NodeTypedEdgeListFilter(t *testing.T) {
 		_, err := gs.Create(ctx, &Edge{
 			SourceType:      "node",
 			TargetType:      "memory",
-			TargetID:        id,
+			TargetID:        &id,
 			NodeSourceID:    &node.ID,
 			EdgeType:        "references",
 			Weight:          1.0,

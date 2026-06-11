@@ -27,17 +27,25 @@ func (m *memStore) ListByMemory(_ context.Context, memoryID int64, dir Direction
 		if e.SupersededAt != nil {
 			continue
 		}
+		// SourceID/TargetID are *int64; nil means node-typed endpoint (no memory ID).
+		var srcID, tgtID int64
+		if e.SourceID != nil {
+			srcID = *e.SourceID
+		}
+		if e.TargetID != nil {
+			tgtID = *e.TargetID
+		}
 		switch dir {
 		case Outgoing:
-			if e.SourceID != memoryID {
+			if srcID != memoryID {
 				continue
 			}
 		case Incoming:
-			if e.TargetID != memoryID {
+			if tgtID != memoryID {
 				continue
 			}
 		default: // Both
-			if e.SourceID != memoryID && e.TargetID != memoryID {
+			if srcID != memoryID && tgtID != memoryID {
 				continue
 			}
 		}
@@ -56,8 +64,15 @@ func (m *memStore) FindSynonyms(_ context.Context, memoryID int64) ([]Edge, erro
 		if e.SupersededAt != nil {
 			continue
 		}
+		var srcID, tgtID int64
+		if e.SourceID != nil {
+			srcID = *e.SourceID
+		}
+		if e.TargetID != nil {
+			tgtID = *e.TargetID
+		}
 		isSynonymType := e.EdgeType == EdgeSynonymOf || e.EdgeType == EdgeSameConceptAs
-		touches := e.SourceID == memoryID || e.TargetID == memoryID
+		touches := srcID == memoryID || tgtID == memoryID
 		if isSynonymType && touches {
 			out = append(out, e)
 		}
@@ -109,14 +124,21 @@ func (a *traverseAdapter) Traverse(ctx context.Context, startID int64, maxDepth 
 				if len(edgeTypes) > 0 && !containsStr(edgeTypes, e.EdgeType) {
 					continue
 				}
-				neighborID := e.TargetID
+				var srcID, tgtID int64
+				if e.SourceID != nil {
+					srcID = *e.SourceID
+				}
+				if e.TargetID != nil {
+					tgtID = *e.TargetID
+				}
+				neighborID := tgtID
 				if neighborID == nodeID {
-					neighborID = e.SourceID
+					neighborID = srcID
 				}
 				results = append(results, TraversalResult{
 					EdgeID:   e.ID,
-					SourceID: e.SourceID,
-					TargetID: e.TargetID,
+					SourceID: srcID,
+					TargetID: tgtID,
 					EdgeType: e.EdgeType,
 					Weight:   e.Weight,
 					Depth:    depth,
@@ -136,9 +158,9 @@ func (a *traverseAdapter) FindSynonyms(ctx context.Context, memoryID int64) ([]E
 	return a.ms.FindSynonyms(ctx, memoryID)
 }
 
-// edge is a helper to build a test Edge.
+// edge is a helper to build a memory-typed test Edge with non-nil SourceID/TargetID.
 func edge(id, src, tgt int64, t string) Edge {
-	return Edge{ID: id, SourceID: src, TargetID: tgt, EdgeType: t, Weight: 1.0}
+	return Edge{ID: id, SourceID: &src, TargetID: &tgt, EdgeType: t, Weight: 1.0}
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -3956,6 +3956,12 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: func(tx *gorm.DB) error {
 				stmts := []string{
+					// Node-typed edges have NULL source_id/target_id (source_type='node').
+					// SET NOT NULL below would fail if any such rows exist, so purge them
+					// first. Rollback to the pre-127 memory-only schema intentionally
+					// discards node edges — callers must re-create them after re-migrating.
+					`DELETE FROM knowledge_edges WHERE source_type = 'node' OR target_type = 'node'`,
+
 					`DROP INDEX IF EXISTS idx_ke_target_node`,
 					`DROP INDEX IF EXISTS idx_ke_target_memory`,
 					`DROP INDEX IF EXISTS idx_ke_source_node`,
@@ -3977,7 +3983,8 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					}
 				}
 				return nil
-
+			},
+		},
 		// 131_tier_default_episodic — B4 triage resolution (2026-06-11).
 		// Operator decision: spec FR-B2 is right — new memories default to 'episodic'
 		// because they represent fresh, unverified knowledge. Migration 110 set the

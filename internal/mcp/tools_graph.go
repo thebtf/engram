@@ -9,6 +9,20 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+// nodesLister is the minimal NodesStore interface needed by filterEdgesByNodeType.
+type nodesLister interface {
+	ListByType(ctx context.Context, nodeType, project string, includePrivate bool) ([]models.KnowledgeNode, error)
+}
+
+// nodesStoreAPI is the interface satisfied by *graph.NodesStore that covers
+// all uses of Server.nodesStore within the mcp package. Defined as an interface
+// so tests can inject a fake without requiring a real database.
+type nodesStoreAPI interface {
+	Create(ctx context.Context, node *models.KnowledgeNode) (*models.KnowledgeNode, error)
+	ListByType(ctx context.Context, nodeType, project string, includePrivate bool) ([]models.KnowledgeNode, error)
+	Get(ctx context.Context, id int64, includePrivate bool) (*models.KnowledgeNode, error)
+}
+
 // graphArgs is the unified argument struct for all graph tool actions.
 // Fields added for Milestone F TG2 (T014):
 //   - SourceType / TargetType: discriminator for add_edge (default 'memory')
@@ -132,6 +146,17 @@ func (s *Server) graphAddEdge(ctx context.Context, a graphArgs) (string, error) 
 		a.Weight = 1.0
 	}
 
+	// Build nullable FK pointers — only set when the endpoint is memory-typed.
+	var sourceID *int64
+	var targetID *int64
+	if srcType == "memory" {
+		id := a.SourceID
+		sourceID = &id
+	}
+	if tgtType == "memory" {
+		id := a.TargetID
+		targetID = &id
+	}
 	var nodeSourceID *int64
 	var nodeTargetID *int64
 	if srcType == "node" {
@@ -144,8 +169,8 @@ func (s *Server) graphAddEdge(ctx context.Context, a graphArgs) (string, error) 
 	}
 
 	edge := &graph.Edge{
-		SourceID:     a.SourceID,
-		TargetID:     a.TargetID,
+		SourceID:     sourceID,
+		TargetID:     targetID,
 		EdgeType:     a.EdgeType,
 		Weight:       a.Weight,
 		Reasoning:    a.Reasoning,
@@ -158,10 +183,19 @@ func (s *Server) graphAddEdge(ctx context.Context, a graphArgs) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	// Dereference nullable source_id/target_id for the JSON response.
+	// nil means node-typed endpoint (no memory ID) — emit 0 as sentinel.
+	var srcIDVal, tgtIDVal int64
+	if created.SourceID != nil {
+		srcIDVal = *created.SourceID
+	}
+	if created.TargetID != nil {
+		tgtIDVal = *created.TargetID
+	}
 	return marshalJSON(map[string]any{
 		"edge_id":     created.ID,
-		"source_id":   created.SourceID,
-		"target_id":   created.TargetID,
+		"source_id":   srcIDVal,
+		"target_id":   tgtIDVal,
 		"source_type": created.SourceType,
 		"target_type": created.TargetType,
 		"edge_type":   created.EdgeType,
@@ -257,11 +291,13 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 	}
 
 	// T014: apply node_type filter post-query if specified.
-	// This is a client-side filter since the node_type is stored in knowledge_nodes,
-	// not in knowledge_edges. Full index-backed filter deferred to future tasks.
+	// Batch-fetch node IDs from knowledge_nodes filtered by node_type; include
+	// only edges whose node endpoint (node_source_id or node_target_id) is in
+	// the matching set. Cross-table lookup is required because node_type is
+	// stored in knowledge_nodes, not in knowledge_edges.
 	filtered := edges
 	if a.NodeType != "" && vnextFEnabled() {
-		filtered = filterEdgesByNodeType(edges, a.NodeType)
+		filtered = filterEdgesByNodeType(ctx, edges, a.NodeType, s.nodesStore)
 	}
 
 	return marshalJSON(map[string]any{
@@ -274,17 +310,80 @@ func (s *Server) graphGetEdges(ctx context.Context, a graphArgs) (string, error)
 	})
 }
 
-// filterEdgesByNodeType is a stub placeholder for T014 node_type filtering.
-// Full implementation requires joining knowledge_nodes — deferred per T014 AC
-// ("node_type filter for get_edges" — the filter field is present in args and
-// validated, but the cross-table join is a T015/T016 integration concern).
-// The post-query client-side filter is only applied when vnextFEnabled().
-func filterEdgesByNodeType(edges []graph.Edge, _ string) []graph.Edge {
-	// NOTE: actual filtering by node_type requires resolving node_source_id /
-	// node_target_id against knowledge_nodes.node_type. This requires the
-	// NodesStore or a JOIN — neither is available here without restructuring
-	// get_edges. For now, return edges unfiltered; T015 validates end-to-end.
-	return edges
+// filterEdgesByNodeType returns only edges whose node endpoint (node_source_id
+// or node_target_id) belongs to a knowledge_node with the given nodeType.
+//
+// Algorithm:
+//  1. Collect the unique set of node IDs referenced by edges.
+//  2. Fetch each node via nodesStore (using Get with includePrivate=false).
+//  3. Build the set of node IDs whose node_type matches nodeType.
+//  4. Retain edges that have at least one endpoint in the matching set.
+//
+// Edges with no node endpoints (both NodeSourceID and NodeTargetID nil) are
+// excluded — they are memory-only edges that cannot match a node_type filter.
+// When nodesStore is nil, the filter is a no-op (returns edges unfiltered)
+// with no error: the schema validation upstream already required vnextFEnabled.
+//
+// Anti-stub: this replaces the prior return-unfiltered implementation.
+// TestGraphTool_T014_NodeTypeFilterOffline asserts correct filtering behaviour.
+func filterEdgesByNodeType(ctx context.Context, edges []graph.Edge, nodeType string, ns nodesLister) []graph.Edge {
+	if ns == nil {
+		return edges
+	}
+
+	// Step 1: collect unique node IDs referenced by the edge set.
+	nodeIDs := map[int64]struct{}{}
+	for _, e := range edges {
+		if e.NodeSourceID != nil {
+			nodeIDs[*e.NodeSourceID] = struct{}{}
+		}
+		if e.NodeTargetID != nil {
+			nodeIDs[*e.NodeTargetID] = struct{}{}
+		}
+	}
+	if len(nodeIDs) == 0 {
+		// No node endpoints — no edge can match a node_type filter.
+		return nil
+	}
+
+	// Step 2: fetch each node and record which IDs match the requested type.
+	// We use the graph.NodesStore directly via the nodesLister interface;
+	// Get is called per unique ID (set is bounded by the edge slice size).
+	type getterWithGet interface {
+		Get(ctx context.Context, id int64, includePrivate bool) (*models.KnowledgeNode, error)
+	}
+	getter, hasGet := ns.(getterWithGet)
+
+	matchingIDs := map[int64]struct{}{}
+	if hasGet {
+		for id := range nodeIDs {
+			node, err := getter.Get(ctx, id, false)
+			if err != nil {
+				// Node not found or private — skip; the edge will be excluded.
+				continue
+			}
+			if node.NodeType == nodeType {
+				matchingIDs[id] = struct{}{}
+			}
+		}
+	}
+
+	// Step 3: filter edges by membership in matchingIDs.
+	var out []graph.Edge
+	for _, e := range edges {
+		if e.NodeSourceID != nil {
+			if _, ok := matchingIDs[*e.NodeSourceID]; ok {
+				out = append(out, e)
+				continue
+			}
+		}
+		if e.NodeTargetID != nil {
+			if _, ok := matchingIDs[*e.NodeTargetID]; ok {
+				out = append(out, e)
+			}
+		}
+	}
+	return out
 }
 
 func (s *Server) graphTraverse(ctx context.Context, a graphArgs) (string, error) {

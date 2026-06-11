@@ -114,11 +114,16 @@ func (s *NodesStore) Create(ctx context.Context, node *models.KnowledgeNode) (*m
 }
 
 // Get retrieves an active (deleted_at IS NULL) knowledge_node by ID.
-func (s *NodesStore) Get(ctx context.Context, id int64) (*models.KnowledgeNode, error) {
+// When includePrivate is false, rows with privacy_scope='private' are excluded,
+// matching the ListByType visibility contract (T012 AC / 7th-bypass pattern fix).
+// Callers that need full access (administrative paths) may pass includePrivate=true.
+func (s *NodesStore) Get(ctx context.Context, id int64, includePrivate bool) (*models.KnowledgeNode, error) {
+	q := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id)
+	if !includePrivate {
+		q = q.Where("privacy_scope != ?", scope.ScopePrivate)
+	}
 	var row nodeRow
-	err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", id).
-		First(&row).Error
+	err := q.First(&row).Error
 	if err != nil {
 		return nil, fmt.Errorf("get knowledge_node %d: %w", id, err)
 	}
