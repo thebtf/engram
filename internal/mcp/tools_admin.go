@@ -131,7 +131,7 @@ func (s *Server) handlePurgeProject(ctx context.Context, m map[string]any) (stri
 	if project == "" {
 		return "", fmt.Errorf("project required for purge_project")
 	}
-	confirm := coerceString(m["confirm"], "")
+	confirm := strings.TrimSpace(coerceString(m["confirm"], ""))
 	if confirm == "" {
 		return "", fmt.Errorf("confirmation required: set confirm=%q to confirm purge of project %q", project, project)
 	}
