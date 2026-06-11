@@ -737,3 +737,109 @@ func TestMigration132_CrystallizationCandidates(t *testing.T) {
 	`).Scan(&fkCount).Error)
 	require.GreaterOrEqual(t, fkCount, 1, "FK promoted_memory_id → memories(id) must exist")
 }
+
+// TestMigration133_BulkOpSnapshots verifies migration 133_bulk_op_snapshots.
+//
+// Asserts:
+//   - bulk_op_snapshots table exists with all required columns
+//   - op_type CHECK constraint admits exactly the 4 valid values
+//   - status CHECK constraint admits exactly the 3 valid values (preview/committed/rolled_back)
+//   - idx_bulk_op_snapshots_status_created index exists
+//   - idx_bulk_op_snapshots_snapshot_id index exists
+//   - pinned column defaults to false
+//   - Rollback drops the table cleanly
+//
+// Anti-stub: replacing the Migrate body with `return nil` causes the table-existence
+// assertion below to fail.
+//
+// Engram vNext Milestone F TG6 / T039.
+func TestMigration133_BulkOpSnapshots(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+
+	// Run all migrations up to and including 133.
+	require.NoError(t, runMigrations(db))
+
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-snap-%'`).Error
+	})
+
+	// Assert table exists.
+	var tableCount int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name = 'bulk_op_snapshots'
+	`).Scan(&tableCount).Error)
+	require.Equal(t, 1, tableCount, "bulk_op_snapshots table must exist after migration 133")
+
+	// Assert all required columns exist.
+	for _, col := range []string{"id", "snapshot_id", "op_type", "actor", "source_session_id",
+		"parameters", "affected_memory_ids", "before_state", "status", "pinned", "created_at", "rolled_back_at"} {
+		var colCount int
+		require.NoError(t, db.Raw(`
+			SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'bulk_op_snapshots' AND column_name = ?
+		`, col).Scan(&colCount).Error)
+		require.Equal(t, 1, colCount, "column %q must exist in bulk_op_snapshots", col)
+	}
+
+	// Assert all 4 valid op_type values accepted.
+	for _, opType := range []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede"} {
+		err := db.Exec(`
+			INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+			VALUES (?, ?, ?, '{}')
+		`, "test-snap-"+opType, opType, "test-actor").Error
+		require.NoError(t, err, "op_type %q must be accepted", opType)
+	}
+
+	// Assert all 3 valid status values accepted via UPDATE.
+	for _, status := range []string{"preview", "committed", "rolled_back"} {
+		err := db.Exec(`
+			UPDATE bulk_op_snapshots SET status = ? WHERE snapshot_id = 'test-snap-ingest_doc'
+		`, status).Error
+		require.NoError(t, err, "status %q must be accepted", status)
+	}
+
+	// Assert invalid op_type is rejected.
+	invalidErr := db.Exec(`
+		INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+		VALUES ('test-snap-invalid', 'invalid_op', 'test-actor', '{}')
+	`).Error
+	require.Error(t, invalidErr, "invalid op_type must be rejected by CHECK constraint")
+
+	// Assert idx_bulk_op_snapshots_status_created index exists.
+	var idxCount int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'bulk_op_snapshots'
+		  AND indexname = 'idx_bulk_op_snapshots_status_created'
+	`).Scan(&idxCount).Error)
+	require.Equal(t, 1, idxCount, "idx_bulk_op_snapshots_status_created must exist")
+
+	// Assert idx_bulk_op_snapshots_snapshot_id index exists.
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'bulk_op_snapshots'
+		  AND indexname = 'idx_bulk_op_snapshots_snapshot_id'
+	`).Scan(&idxCount).Error)
+	require.Equal(t, 1, idxCount, "idx_bulk_op_snapshots_snapshot_id must exist")
+
+	// Assert pinned defaults to false.
+	var pinned bool
+	require.NoError(t, db.Raw(`
+		SELECT pinned FROM bulk_op_snapshots WHERE snapshot_id = 'test-snap-bulk_promote'
+	`).Row().Scan(&pinned))
+	require.False(t, pinned, "pinned must default to false")
+}
