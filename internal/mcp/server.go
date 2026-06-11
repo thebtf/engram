@@ -47,6 +47,7 @@ type Server struct {
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
 	auditStore             *gorm.AuditStore
+	purgeStore             *gorm.PurgeStore
 	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
 	testMemoryEditor       memoryEditor // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
@@ -130,6 +131,11 @@ func (s *Server) SetGraphStore(gs *graph.Store) {
 // writes are gated at the handler level.
 func (s *Server) SetAuditStore(as *gorm.AuditStore) {
 	s.auditStore = as
+}
+
+// SetPurgeStore sets the purge store for the purge_project admin action (Milestone D T008).
+func (s *Server) SetPurgeStore(ps *gorm.PurgeStore) {
+	s.purgeStore = ps
 }
 
 // setTestAuditWriter injects a mock auditWriter for unit tests.
@@ -623,8 +629,9 @@ func (s *Server) primaryTools() []Tool {
 				"required": []string{"action"},
 				"properties": map[string]any{
 					"action":  map[string]any{"type": "string", "description": "Action to perform (required). See tool description for valid actions."},
-					"project": map[string]any{"type": "string", "description": "Project name (for stats, search_analytics)"},
+					"project": map[string]any{"type": "string", "description": "Project name (for stats, search_analytics, purge_project)"},
 					"days":    map[string]any{"type": "number", "description": "Days to analyze (for search_analytics)"},
+					"confirm": map[string]any{"type": "string", "description": "Double-entry confirmation: must equal project name (for purge_project)"},
 				},
 			},
 		},
