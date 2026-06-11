@@ -18,6 +18,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
@@ -744,7 +745,14 @@ func truncateTitle(content string, maxLen int) string {
 	return truncated + "..."
 }
 
-// handleRecallMemory retrieves memories from the v5 memories table using list + in-memory filtering.
+// handleRecallMemory retrieves memories from the v5 memories table.
+//
+// Flag-OFF (ENGRAM_VNEXT_ENABLED != "true"): byte-identical to the previous
+// List-based in-memory-filter path. No schema change; no new parameters accepted.
+//
+// Flag-ON (ENGRAM_VNEXT_ENABLED == "true"): uses the HybridSearch pipeline
+// (FR-C4: FTS+vector RRF + FR-C4 scoring + optional Tier2 graph expansion).
+// New parameters: expand_graph, min_confidence, tier_filter, explain.
 func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("recall_memory: memory store not configured")
@@ -781,17 +789,13 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("project is required for recall_memory in v5")
 	}
 
-	// T004 + T005 + codex P1 cycle-6 fix on c6006f7: the recall_memory MCP
-	// tool advertises session_id + include_scopes in its schema (see
-	// server.go) and dispatches here. Without scope.Resolve enforcement, a
-	// caller knowing the project + query under ENGRAM_VNEXT_F_ENABLED=true
-	// could retrieve `privacy_scope="private"` rows owned by another
-	// workstation — bypassing the same visibility model handleRecallSearch
-	// enforces on the sibling `recall` tool. Mirror the gating + caller
-	// identity build, validate include_scopes behind the flag (T005
-	// contract: runtime behavior env-gated), and use the batch-loop
-	// ListWithOffset pattern when scope is active so invisible newest rows
-	// do not truncate visible recall.
+	// ── Scope params — parsed unconditionally so both hybrid and legacy paths
+	// can enforce privacy_scope visibility (T004+T005 / F-TG1 / d9eea82 contract).
+	// The hybrid path passes caller+scopeEnabled+includeScopes into
+	// handleRecallMemoryHybrid so HybridSearch results get the SAME scope
+	// predicate the legacy batch-loop applies below. Without this wiring the
+	// hybrid path would bypass scope.Resolve and re-introduce the cross-
+	// workstation privacy leak fixed in d9eea82.
 	callerSessionID := strings.TrimSpace(coerceString(m["session_id"], ""))
 	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
 	includeScopes := make(map[string]bool)
@@ -812,6 +816,17 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 			caller.WorkstationID = id.WorkstationID()
 		}
 	}
+
+	// ── vnext hybrid path ───────────────────────────────────────────────────
+	// Caller identity + scope context are fully built above; pass them into
+	// handleRecallMemoryHybrid so hybrid results are subject to the same
+	// privacy_scope visibility predicate as the legacy List path below.
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	if vnextEnabled {
+		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, scopeEnabled, includeScopes)
+	}
+	// ── legacy List-based path (flag-OFF; byte-identical behaviour when both
+	// flags are OFF; scope-aware batch-loop when ENGRAM_VNEXT_F_ENABLED=true) ─
 
 	queryLower := strings.ToLower(query)
 	tagSet := make(map[string]struct{}, len(tags))
@@ -1019,6 +1034,423 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 			sb.WriteString(fmt.Sprintf("   %s\n", content))
 			if len(mem.Tags) > 0 {
 				sb.WriteString(fmt.Sprintf("   tags: %s\n", strings.Join(mem.Tags, ", ")))
+			}
+			sb.WriteString("\n")
+		}
+		return sb.String(), nil
+	}
+}
+
+// handleRecallMemoryHybrid is the vnext path for recall_memory.
+// Called only when ENGRAM_VNEXT_ENABLED == "true".
+// It accepts the vnext-gated parameters (expand_graph, min_confidence,
+// tier_filter, explain) in addition to the base recall_memory params.
+//
+// caller, scopeEnabled, and includeScopes are forwarded from handleRecallMemory
+// so that privacy_scope visibility (scope.Resolve) is enforced on hybrid results.
+// This is required by the integration contract established in d9eea82: the hybrid
+// path MUST NOT bypass scope filtering (same predicate as the legacy List path).
+// Scope filter runs BEFORE final limit truncation so the limit reflects visible
+// memories only, consistent with d9eea82 fix #4.
+func (s *Server) handleRecallMemoryHybrid(
+	ctx context.Context,
+	m map[string]any,
+	query, project, format string,
+	limit int,
+	obsType string,
+	tags []string,
+	caller scope.KeycardContext,
+	scopeEnabled bool,
+	includeScopes map[string]bool,
+) (string, error) {
+	expandGraph := coerceBool(m["expand_graph"], false)
+	minConfidence := coerceFloat64(m["min_confidence"], 0.0)
+	vecThreshold := coerceFloat64(m["vec_threshold"], 0.0) // translated from min_similarity by recall(similar)
+	tierFilter := coerceStringSlice(m["tier_filter"])
+	explain := coerceBool(m["explain"], false)
+
+	// Attempt to embed the query for Tier1 vector search.
+	// When the embedding client is nil (ENGRAM_EMBEDDING_URL not set),
+	// HybridSearch degrades gracefully to FTS-only.
+	var queryVec []float32
+	if s.embeddingClient != nil {
+		vecs, embErr := s.embeddingClient.Embed(ctx, []string{query})
+		if embErr == nil && len(vecs) > 0 {
+			queryVec = vecs[0]
+		}
+		// Non-fatal: log at debug level and continue without vector.
+		if embErr != nil {
+			log.Debug().Err(embErr).Msg("recall_memory: embedding unavailable, falling back to FTS-only")
+		}
+	}
+
+	opts := retrieval.HybridOptions{
+		QueryVec:      queryVec,
+		TierFilter:    tierFilter,
+		MinConfidence: minConfidence,
+		VecThreshold:  vecThreshold,
+		ExpandGraph:   expandGraph,
+		Explain:       explain,
+	}
+
+	var gStore retrieval.GraphStoreInterface
+	if s.graphStore != nil {
+		gStore = s.graphStore
+	}
+
+	var embStore retrieval.EmbeddingStoreInterface
+	if s.embeddingStore != nil {
+		embStore = s.embeddingStore
+	}
+
+	// When type/tag filters are active, request a wider candidate pool so that
+	// post-filter truncation does not hide matching memories. The pool is capped
+	// at limit*4 to bound over-fetching while ensuring filters have material to
+	// work with. HybridSearch respects this as its hard limit, then we filter below.
+	fetchLimit := limit
+	if obsType != "" || len(tags) > 0 {
+		const filterCandidateMultiplier = 4
+		fetchLimit = limit * filterCandidateMultiplier
+		if fetchLimit > 200 {
+			fetchLimit = 200
+		}
+	}
+
+	scored, explanations, err := retrieval.HybridSearch(
+		ctx,
+		project, query,
+		fetchLimit,
+		s.memoryStore,
+		embStore,
+		gStore,
+		opts,
+	)
+	if err != nil {
+		return "", fmt.Errorf("recall_memory hybrid: %w", err)
+	}
+
+	// Build result: filter by obsType / tags post-scoring (same semantics as legacy).
+	// Filters run BEFORE reconsolidation so lifecycle updates only touch memories
+	// returned to the caller (not the wider candidate set).
+	queryLower := strings.ToLower(query)
+	tagSet := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tagSet[strings.ToLower(tag)] = struct{}{}
+	}
+
+	type hybridResult struct {
+		RankingExplanation *retrieval.RankingExplanation `json:"ranking_explanation,omitempty"`
+		Tags               []string                      `json:"tags,omitempty"`
+		Title              string                        `json:"title"`
+		Type               string                        `json:"type,omitempty"`
+		Content            string                        `json:"content"`
+		SourceAgent        string                        `json:"source_agent,omitempty"`
+		Project            string                        `json:"project"`
+		ID                 int64                         `json:"id"`
+		Score              float64                       `json:"score"`
+	}
+
+	explByID := make(map[int64]retrieval.RankingExplanation, len(explanations))
+	for _, e := range explanations {
+		explByID[e.MemoryID] = e
+	}
+
+	items := make([]hybridResult, 0, limit)
+	for _, sm := range scored {
+		mem := sm.Memory
+
+		// Post-score obsType filter.
+		if obsType != "" {
+			typeTag := strings.ToLower("type:" + obsType)
+			typeMatched := false
+			for _, tag := range mem.Tags {
+				if strings.ToLower(tag) == typeTag {
+					typeMatched = true
+					break
+				}
+			}
+			if !typeMatched {
+				continue
+			}
+		}
+
+		// Post-score tag filter.
+		if len(tagSet) > 0 {
+			tagMatched := false
+			for _, tag := range mem.Tags {
+				if _, ok := tagSet[strings.ToLower(tag)]; ok {
+					tagMatched = true
+					break
+				}
+			}
+			if !tagMatched {
+				continue
+			}
+		}
+
+		// ── Privacy-scope filter (d9eea82 integration contract) ──────────────
+		// Runs BEFORE limit truncation so the returned limit reflects only
+		// memories visible to the caller — same semantics as the legacy
+		// batch-loop in handleRecallMemory. Without this check the hybrid path
+		// would re-introduce the cross-workstation leak that d9eea82 fixed.
+		if scopeEnabled {
+			memScope := mem.PrivacyScope
+			if memScope == "" {
+				memScope = "project"
+			}
+			if len(includeScopes) > 0 && !includeScopes[memScope] {
+				continue
+			}
+			meta := scope.SourceMeta{
+				WorkstationID: mem.SourceWorkstationID,
+				Sessions:      mem.SourceSessions,
+			}
+			if !scope.Resolve(caller, memScope, meta) {
+				continue
+			}
+		}
+
+		// Suppress unused-variable warning; queryLower reserved for future FTS safety net.
+		_ = queryLower
+
+		memoryType := ""
+		for _, tag := range mem.Tags {
+			if strings.HasPrefix(tag, "type:") {
+				memoryType = strings.TrimPrefix(tag, "type:")
+				break
+			}
+		}
+
+		r := hybridResult{
+			ID:          mem.ID,
+			Title:       truncateTitle(mem.Content, 80),
+			Type:        memoryType,
+			Content:     mem.Content,
+			Tags:        mem.Tags,
+			SourceAgent: mem.SourceAgent,
+			Project:     mem.Project,
+			Score:       sm.Score,
+		}
+		if explain {
+			if e, ok := explByID[mem.ID]; ok {
+				r.RankingExplanation = &e
+			}
+		}
+		items = append(items, r)
+		if len(items) == limit {
+			break
+		}
+	}
+
+	// Tier0 fall-through: if HybridSearch returned results but every candidate
+	// was filtered out above (by scope, obsType, or tag predicates) AND the
+	// initial call did NOT already skip Tier0, the Tier0 exact-hash hit may be
+	// the only reason Tier1 never ran. Re-run with SkipTier0=true so FTS+vector
+	// Tier1 candidates get a chance to pass the same filter pipeline.
+	// This is a rare path (Tier0 hit + invisible to caller) so the extra
+	// HybridSearch call is acceptable. The SkipTier0 flag on the opts struct
+	// prevents a second re-run if Tier1 results are also fully filtered.
+	if len(scored) > 0 && len(items) == 0 && !opts.SkipTier0 {
+		opts.SkipTier0 = true
+		scored, explanations, err = retrieval.HybridSearch(
+			ctx,
+			project, query,
+			fetchLimit,
+			s.memoryStore,
+			embStore,
+			gStore,
+			opts,
+		)
+		if err != nil {
+			return "", fmt.Errorf("recall_memory hybrid (tier0 fallthrough): %w", err)
+		}
+		// Re-build the explanation lookup for the new result set.
+		explByID = make(map[int64]retrieval.RankingExplanation, len(explanations))
+		for _, e := range explanations {
+			explByID[e.MemoryID] = e
+		}
+		// Re-apply all post-score filters over the new candidate set.
+		items = make([]hybridResult, 0, limit)
+		for _, sm := range scored {
+			mem := sm.Memory
+			if obsType != "" {
+				typeTag := strings.ToLower("type:" + obsType)
+				typeMatched := false
+				for _, tag := range mem.Tags {
+					if strings.ToLower(tag) == typeTag {
+						typeMatched = true
+						break
+					}
+				}
+				if !typeMatched {
+					continue
+				}
+			}
+			if len(tagSet) > 0 {
+				tagMatched := false
+				for _, tag := range mem.Tags {
+					if _, ok := tagSet[strings.ToLower(tag)]; ok {
+						tagMatched = true
+						break
+					}
+				}
+				if !tagMatched {
+					continue
+				}
+			}
+			if scopeEnabled {
+				memScope := mem.PrivacyScope
+				if memScope == "" {
+					memScope = "project"
+				}
+				if len(includeScopes) > 0 && !includeScopes[memScope] {
+					continue
+				}
+				meta := scope.SourceMeta{
+					WorkstationID: mem.SourceWorkstationID,
+					Sessions:      mem.SourceSessions,
+				}
+				if !scope.Resolve(caller, memScope, meta) {
+					continue
+				}
+			}
+			memoryType := ""
+			for _, tag := range mem.Tags {
+				if strings.HasPrefix(tag, "type:") {
+					memoryType = strings.TrimPrefix(tag, "type:")
+					break
+				}
+			}
+			r := hybridResult{
+				ID:          mem.ID,
+				Title:       truncateTitle(mem.Content, 80),
+				Type:        memoryType,
+				Content:     mem.Content,
+				Tags:        mem.Tags,
+				SourceAgent: mem.SourceAgent,
+				Project:     mem.Project,
+				Score:       sm.Score,
+			}
+			if explain {
+				if e, ok := explByID[mem.ID]; ok {
+					r.RankingExplanation = &e
+				}
+			}
+			items = append(items, r)
+			if len(items) == limit {
+				break
+			}
+		}
+	}
+
+	// Build a lookup from memory ID → ScoredMemory used by both the
+	// reconsolidation block (lifecycle) and the detailed format serializer.
+	scoredByID := make(map[int64]retrieval.ScoredMemory, len(scored))
+	for _, sm := range scored {
+		scoredByID[sm.Memory.ID] = sm
+	}
+
+	// Reconsolidation: fire-and-forget lifecycle updates on the FINAL response set only
+	// (not the wider candidate pool). This ensures access_count reflects actual retrieval.
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(items) > 0 {
+		// Snapshot item IDs before the goroutine runs to avoid data races.
+		type reconItem struct {
+			id            int64
+			stability     float64
+			retrievability float64
+		}
+		toRecon := make([]reconItem, 0, len(items))
+		for _, item := range items {
+			if sm, ok := scoredByID[item.ID]; ok {
+				toRecon = append(toRecon, reconItem{
+					id:            sm.Memory.ID,
+					stability:     sm.Memory.Stability,
+					retrievability: sm.Memory.Retrievability,
+				})
+			}
+		}
+		go func() {
+			for _, ri := range toRecon {
+				fields := map[string]any{
+					"access_count":      gormlib.Expr("access_count + 1"),
+					"last_retrieved_at": gormlib.Expr("now()"),
+				}
+				if ri.stability > 0 {
+					newStability := lifecycle.Reconsolidate(ri.stability, ri.retrievability)
+					if newStability != ri.stability {
+						fields["stability"] = newStability
+					}
+				}
+				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), ri.id, fields)
+			}
+		}()
+	}
+
+	switch format {
+	case "items":
+		out, marshalErr := json.MarshalIndent(items, "", "  ")
+		if marshalErr != nil {
+			return "", fmt.Errorf("marshal hybrid result: %w", marshalErr)
+		}
+		return string(out), nil
+
+	case "detailed":
+		// detailed returns full models.Memory records (matching legacy flag-OFF
+		// behaviour) plus per-memory score and optional ranking explanation.
+		// items + scoredByID + explByID are already built by the reconsolidation
+		// block above, so we can reconstruct the ordered detailed slice here
+		// without duplicating the filter pipeline.
+		type detailedHybridResult struct {
+			*models.Memory
+			Score              float64                       `json:"score"`
+			RankingExplanation *retrieval.RankingExplanation `json:"ranking_explanation,omitempty"`
+		}
+		detailed := make([]detailedHybridResult, 0, len(items))
+		for _, item := range items {
+			sm, ok := scoredByID[item.ID]
+			if !ok {
+				continue
+			}
+			dr := detailedHybridResult{
+				Memory: sm.Memory,
+				Score:  sm.Score,
+			}
+			if explain {
+				if e, ok := explByID[item.ID]; ok {
+					dr.RankingExplanation = &e
+				}
+			}
+			detailed = append(detailed, dr)
+		}
+		out, marshalErr := json.MarshalIndent(detailed, "", "  ")
+		if marshalErr != nil {
+			return "", fmt.Errorf("marshal hybrid detailed result: %w", marshalErr)
+		}
+		return string(out), nil
+	default: // "text"
+		if len(items) == 0 {
+			return "No memories found matching the query.", nil
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Found %d memories for query: %q\n\n", len(items), query))
+		for i, r := range items {
+			typeLabel := "MEMORY"
+			if r.Type != "" {
+				typeLabel = strings.ToUpper(r.Type)
+			}
+			sb.WriteString(fmt.Sprintf("%d. [%s] %s (score: %.3f)\n", i+1, typeLabel, r.Title, r.Score))
+			content := r.Content
+			if len(content) > 300 {
+				content = content[:300] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("   %s\n", content))
+			if len(r.Tags) > 0 {
+				sb.WriteString(fmt.Sprintf("   tags: %s\n", strings.Join(r.Tags, ", ")))
+			}
+			if explain && r.RankingExplanation != nil {
+				e := r.RankingExplanation
+				sb.WriteString(fmt.Sprintf("   explanation: relevance=%.3f recency=%.3f importance=%.3f fused=%.3f tier=%s\n",
+					e.Relevance, e.Recency, e.Importance, e.FusedScore, e.SourceTier))
 			}
 			sb.WriteString("\n")
 		}
