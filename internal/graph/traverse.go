@@ -37,14 +37,25 @@ func (s *Store) Traverse(ctx context.Context, startID int64, maxDepth int, edgeT
 				if len(edgeTypes) > 0 && !containsStr(edgeTypes, e.EdgeType) {
 					continue
 				}
-				neighborID := e.TargetID
+				// SourceID/TargetID are nullable (*int64); dereference safely for
+				// memory-typed traverse (node-typed edges are excluded by ListByMemory
+				// which filters by source_id/target_id, so nil values are not expected
+				// on this code path — guard defensively).
+				var srcID, tgtID int64
+				if e.SourceID != nil {
+					srcID = *e.SourceID
+				}
+				if e.TargetID != nil {
+					tgtID = *e.TargetID
+				}
+				neighborID := tgtID
 				if neighborID == nodeID {
-					neighborID = e.SourceID
+					neighborID = srcID
 				}
 				results = append(results, TraversalResult{
 					EdgeID:    e.ID,
-					SourceID:  e.SourceID,
-					TargetID:  e.TargetID,
+					SourceID:  srcID,
+					TargetID:  tgtID,
 					EdgeType:  e.EdgeType,
 					Weight:    e.Weight,
 					Reasoning: e.Reasoning,
@@ -89,9 +100,16 @@ func (s *Store) FindPath(ctx context.Context, sourceID, targetID int64, maxDepth
 				return nil, fmt.Errorf("find path depth %d: %w", depth, err)
 			}
 			for _, e := range edges {
-				neighborID := e.TargetID
+				var srcID, tgtID int64
+				if e.SourceID != nil {
+					srcID = *e.SourceID
+				}
+				if e.TargetID != nil {
+					tgtID = *e.TargetID
+				}
+				neighborID := tgtID
 				if neighborID == node.id {
-					neighborID = e.SourceID
+					neighborID = srcID
 				}
 				if visited[neighborID] {
 					continue
@@ -99,8 +117,8 @@ func (s *Store) FindPath(ctx context.Context, sourceID, targetID int64, maxDepth
 				visited[neighborID] = true
 				step := TraversalResult{
 					EdgeID:   e.ID,
-					SourceID: e.SourceID,
-					TargetID: e.TargetID,
+					SourceID: srcID,
+					TargetID: tgtID,
 					EdgeType: e.EdgeType,
 					Weight:   e.Weight,
 					Depth:    depth,

@@ -675,8 +675,9 @@ func (s *Service) initializeAsync() {
 	// the Service for the sleep cycle goroutine and audit logging. Extracted into
 	// wireVnextStores so the wiring is testable without a full service initialisation.
 	promotionStore := gorm.NewPromotionStore(store.GetDB())
-	graphStore := graph.NewStore(store.GetDB())
-	wireVnextStores(mcpServer, promotionStore, graphStore, auditStore)
+	nodesStore := graph.NewNodesStore(store.GetDB())
+	graphStore := graph.NewStore(store.GetDB(), nodesStore)
+	wireVnextStores(mcpServer, promotionStore, graphStore, nodesStore, auditStore)
 	s.initMu.Lock()
 	s.promotionStore = promotionStore
 	s.graphStore = graphStore
@@ -1721,16 +1722,20 @@ func getPID() int {
 	return os.Getpid()
 }
 
-// wireVnextStores injects the promotion, graph, and audit stores into the MCP server.
-// Extracted from initializeAsync so the wiring path is unit-testable: a test
-// that calls wireVnextStores and then checks mcpServer tool advertise surface
-// will break if any Set* call is removed.
+// wireVnextStores injects the promotion, graph, audit, and nodes stores into
+// the MCP server. Extracted from initializeAsync so the wiring path is unit-
+// testable: a test that calls wireVnextStores and then checks mcpServer tool
+// advertise surface will break if any Set* call is removed.
 //
 // Callers are responsible for storing the same *gorm.PromotionStore /
 // *graph.Store values on Service.promotionStore / Service.graphStore for the
 // sleep cycle goroutine, and *gorm.AuditStore on Service.auditStore for audit logging.
-func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store, auditStore *gorm.AuditStore) {
+// nodesStore does NOT need a separate Service field: it is accessed via
+// graphStore (graph.Store.nodes, used by Resolve) and mcpServer (Server.nodesStore,
+// used by add_node / get_edges). No other Service method references it directly.
+func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store, nodesStore *graph.NodesStore, auditStore *gorm.AuditStore) {
 	mcpServer.SetPromotionStore(promotionStore)
 	mcpServer.SetGraphStore(graphStore)
+	mcpServer.SetNodesStore(nodesStore)
 	mcpServer.SetAuditStore(auditStore)
 }
