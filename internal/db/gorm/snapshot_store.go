@@ -304,9 +304,23 @@ func (s *SnapshotStore) AmendPromoteEntries(ctx context.Context, snapshotID stri
 			existing[key] = json.RawMessage(deleteEntry)
 		}
 
-		// Merge promoted memory IDs into AffectedMemoryIDs for conflict detection.
-		allMemoryIDs := Int64Array(row.AffectedMemoryIDs)
-		allMemoryIDs = append(allMemoryIDs, promotedMemoryIDs...)
+		// Merge promoted memory IDs into AffectedMemoryIDs as a set (no duplicates).
+		seen := make(map[int64]struct{}, len(row.AffectedMemoryIDs)+len(promotedMemoryIDs))
+		allMemoryIDs := make(Int64Array, 0, len(row.AffectedMemoryIDs)+len(promotedMemoryIDs))
+		for _, id := range row.AffectedMemoryIDs {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			allMemoryIDs = append(allMemoryIDs, id)
+		}
+		for _, id := range promotedMemoryIDs {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			allMemoryIDs = append(allMemoryIDs, id)
+		}
 
 		// Serialize and write back within the same transaction.
 		amended, err := json.Marshal(existing)

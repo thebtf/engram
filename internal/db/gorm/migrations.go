@@ -4133,10 +4133,14 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					`UPDATE bulk_op_snapshots
 					 SET before_state = '{}'::jsonb
 					 WHERE jsonb_typeof(before_state) IS DISTINCT FROM 'object'`,
-					// Add the constraints.
+					// Add the constraints (drop-before-add for idempotency).
+					`ALTER TABLE bulk_op_snapshots
+					 DROP CONSTRAINT IF EXISTS chk_parameters_is_object`,
 					`ALTER TABLE bulk_op_snapshots
 					 ADD CONSTRAINT chk_parameters_is_object
 					 CHECK (jsonb_typeof(parameters) = 'object')`,
+					`ALTER TABLE bulk_op_snapshots
+					 DROP CONSTRAINT IF EXISTS chk_before_state_is_object`,
 					`ALTER TABLE bulk_op_snapshots
 					 ADD CONSTRAINT chk_before_state_is_object
 					 CHECK (jsonb_typeof(before_state) = 'object')`,
