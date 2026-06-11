@@ -264,6 +264,54 @@ type memoryListStore interface {
 	ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error)
 }
 
+// injectionCandidateStore is the subset of the MemoryStore surface that
+// listVisibleForInjection needs. Defined as a small interface to allow
+// unit-testing without the full store dependency.
+type injectionCandidateStore interface {
+	ListForInjection(ctx context.Context, project string, limit int) ([]*models.Memory, error)
+}
+
+// listVisibleForInjection fetches injection candidates and, when
+// ENGRAM_VNEXT_F_ENABLED=true, removes rows that the caller cannot see per
+// scope.Resolve. Mirrors the visibility-filter logic of listVisibleMemoriesREST
+// but operates on the injection candidate set (importance-ordered, topK*3
+// pre-inflated by the caller).
+//
+// T004 (codex P1 PR #221): ListForInjection previously returned every active
+// row for the project without checking privacy_scope, so a private memory
+// written by workstation A could be injected into context for workstation B in
+// the same project (handlers_context.go vnext path, handlers_reinject.go, and
+// mcp/tools_brief.go handleGetMemoryBrief). This helper closes that gap at the
+// worker/mcp boundary without adding auth/scope imports to the db/gorm layer.
+func listVisibleForInjection(ctx context.Context, store injectionCandidateStore, project string, limit int) ([]*models.Memory, error) {
+	candidates, err := store.ListForInjection(ctx, project, limit)
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
+		return candidates, nil
+	}
+	var caller scope.KeycardContext
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+	}
+	visible := make([]*models.Memory, 0, len(candidates))
+	for _, mem := range candidates {
+		memScope := mem.PrivacyScope
+		if memScope == "" {
+			memScope = "project"
+		}
+		meta := scope.SourceMeta{
+			WorkstationID: mem.SourceWorkstationID,
+			Sessions:      mem.SourceSessions,
+		}
+		if scope.Resolve(caller, memScope, meta) {
+			visible = append(visible, mem)
+		}
+	}
+	return visible, nil
+}
+
 // handleDeleteMemoryByID godoc
 // @Summary Delete a memory note by ID
 // @Description Soft-deletes a memory entry by its numeric ID.

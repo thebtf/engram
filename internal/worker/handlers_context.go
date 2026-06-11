@@ -1063,9 +1063,9 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			topK = maxTopK
 		}
 
-		vnextMems, vnextErr := vnextMemStore.ListForInjection(ctx, project, topK*3)
+		vnextMems, vnextErr := listVisibleForInjection(ctx, vnextMemStore, project, topK*3)
 		if vnextErr != nil {
-			log.Warn().Err(vnextErr).Str("project", project).Msg("vnext: ListForInjection failed, falling back to legacy path")
+			log.Warn().Err(vnextErr).Str("project", project).Msg("vnext: listVisibleForInjection failed, falling back to legacy path")
 		} else {
 			var scoreOpts injection.ScoreOpts
 			citRate, crErr := vnextMemStore.GetProjectCitationRate(ctx, project, 10)

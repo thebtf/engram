@@ -86,6 +86,33 @@ func memoryRowForCreate(mem *models.Memory, now time.Time, includeLifecycle bool
 	return row
 }
 
+// copyPrivacyFields transfers privacy_scope, source_workstation_id, and
+// source_sessions from mem to row. Called by Create, CreateWithLifecycle, and
+// CreateWithLifecycleIfTagAbsent to ensure all insert paths persist the
+// migration-125/130 columns consistently (codex P1 review #221 finding:
+// CreateWithLifecycle omitted these copies that Create already performed).
+//
+// When mem.PrivacyScope is empty the row is set to 'project' (the DB DEFAULT),
+// unless the Tags slice contains the legacy "scope:global" marker in which case
+// the row is promoted to 'global' (mirrors the migration-125 T006 backfill).
+func copyPrivacyFields(row *Memory, mem *models.Memory) {
+	if mem.PrivacyScope != "" {
+		row.PrivacyScope = mem.PrivacyScope
+	} else {
+		row.PrivacyScope = "project"
+		for _, t := range mem.Tags {
+			if t == "scope:global" {
+				row.PrivacyScope = "global"
+				break
+			}
+		}
+	}
+	row.SourceWorkstationID = mem.SourceWorkstationID
+	if len(mem.SourceSessions) > 0 {
+		row.SourceSessions = pq.StringArray(mem.SourceSessions)
+	}
+}
+
 func advisoryLockKey(parts ...string) int64 {
 	h := sha256.New()
 	for _, part := range parts {
@@ -122,35 +149,9 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	// NOT copied here. Use CreateWithLifecycle for flag-gated paths.
 
 	// T002 + T001b + T003b (engram vNext Milestone F TG1): persist privacy
-	// metadata into migration-125/130 columns. Without these copies the
-	// internal GORM Memory struct silently drops the values set in
-	// tools_memory.go (codex P1 fix-forward on 3e4a4b1). Empty PrivacyScope
-	// falls back to 'project' to satisfy the migration 125 CHECK constraint
-	// (DB DEFAULT applies only when the column is omitted from INSERT; GORM
-	// always emits the column for string fields, so we set it explicitly).
-	//
-	// Codex P2 cycle-5 fix on b5ac7ec: when PrivacyScope is empty (legacy /
-	// flag-OFF write), scan Tags for the v6.4.x `scope:global` marker and
-	// promote the row to `global` instead of the default `project`. This
-	// mirrors the migration-125 T006 backfill UPDATE at INSERT time so
-	// newly written legacy-tagged rows are not misclassified once
-	// `ENGRAM_VNEXT_F_ENABLED=true` flips on and `handleRecallSearch`
-	// filters by `mem.PrivacyScope` for `include_scopes`.
-	if mem.PrivacyScope != "" {
-		row.PrivacyScope = mem.PrivacyScope
-	} else {
-		row.PrivacyScope = "project"
-		for _, t := range mem.Tags {
-			if t == "scope:global" {
-				row.PrivacyScope = "global"
-				break
-			}
-		}
-	}
-	row.SourceWorkstationID = mem.SourceWorkstationID
-	if len(mem.SourceSessions) > 0 {
-		row.SourceSessions = pq.StringArray(mem.SourceSessions)
-	}
+	// metadata into migration-125/130 columns. See copyPrivacyFields for
+	// the detailed rationale (codex P1 fix-forward on 3e4a4b1 / PR #221).
+	copyPrivacyFields(row, mem)
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
@@ -175,6 +176,11 @@ func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memor
 	row := memoryRowForCreate(mem, now, true)
 	// Lifecycle fields: only override when caller supplies non-empty value so
 	// that DB schema defaults remain authoritative for unspecified fields.
+
+	// T002 + T001b + T003b: persist privacy metadata. Previously omitted on
+	// this path, causing privacy_scope to fall back to the DB default 'project'
+	// even when the caller set a non-project scope (codex P1 PR #221 fix).
+	copyPrivacyFields(row, mem)
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
@@ -228,6 +234,9 @@ func (s *MemoryStore) CreateWithLifecycleIfTagAbsent(
 		}
 
 		row := memoryRowForCreate(mem, time.Now().UTC(), true)
+		// T002 + T001b + T003b: persist privacy metadata (same fix as
+		// CreateWithLifecycle — codex P1 PR #221).
+		copyPrivacyFields(row, mem)
 		if err := tx.Create(row).Error; err != nil {
 			return fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 		}

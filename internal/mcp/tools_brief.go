@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/injection"
+	"github.com/thebtf/engram/internal/scope"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 type memoryBriefArgs struct {
@@ -41,10 +44,16 @@ func (s *Server) handleGetMemoryBrief(ctx context.Context, args json.RawMessage)
 		a.Limit = 10
 	}
 
-	candidates, err := s.memoryStore.ListForInjection(ctx, a.Project, a.Limit*3)
+	raw, err := s.memoryStore.ListForInjection(ctx, a.Project, a.Limit*3)
 	if err != nil {
 		return "", fmt.Errorf("list memories: %w", err)
 	}
+
+	// T004 (codex P1 PR #221): apply scope.Resolve filter when
+	// ENGRAM_VNEXT_F_ENABLED=true so private memories are not included in
+	// briefs for callers that cannot see them.
+	candidates := filterInjectionByScope(ctx, raw)
+
 	if len(candidates) == 0 {
 		return marshalJSON(map[string]any{
 			"project":  a.Project,
@@ -85,4 +94,32 @@ func (s *Server) handleGetMemoryBrief(ctx context.Context, args json.RawMessage)
 		"topic":    a.Topic,
 		"memories": memories,
 	})
+}
+
+// filterInjectionByScope applies scope.Resolve to a slice of injection
+// candidates. When ENGRAM_VNEXT_F_ENABLED is not set the slice is returned
+// unchanged (flag-off byte-identity contract).
+func filterInjectionByScope(ctx context.Context, mems []*models.Memory) []*models.Memory {
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
+		return mems
+	}
+	var caller scope.KeycardContext
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+	}
+	visible := make([]*models.Memory, 0, len(mems))
+	for _, mem := range mems {
+		memScope := mem.PrivacyScope
+		if memScope == "" {
+			memScope = "project"
+		}
+		meta := scope.SourceMeta{
+			WorkstationID: mem.SourceWorkstationID,
+			Sessions:      mem.SourceSessions,
+		}
+		if scope.Resolve(caller, memScope, meta) {
+			visible = append(visible, mem)
+		}
+	}
+	return visible
 }
