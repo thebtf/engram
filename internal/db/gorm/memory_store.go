@@ -268,24 +268,77 @@ func (s *MemoryStore) Get(ctx context.Context, id int64) (*models.Memory, error)
 // List returns active (non-soft-deleted) memories for the given project,
 // ordered by created_at DESC, limited to limit rows.
 // project must not be empty.
+//
+// T017a: List now delegates to ListWithFilters with zero-value opts so there
+// is a single WHERE-clause implementation path. Behavior is byte-identical to
+// the previous standalone implementation (status='active', no confidence floor).
 func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
+	result, err := s.ListWithFilters(ctx, project, ListOptions{Limit: limit})
+	if err != nil {
+		return nil, fmt.Errorf("list memories for project %q: %w", project, err)
+	}
+	return result, nil
+}
+
+// ListOptions controls the optional filters applied by ListWithFilters.
+// Zero-value opts replicate the exact WHERE clause of the legacy List method
+// (status='active', no confidence floor), ensuring byte-identical behavior when
+// callers delegate from List to ListWithFilters with default opts.
+//
+// T017a (engram vNext Milestone F TG3): store-level extension prerequisite.
+type ListOptions struct {
+	// ConfidenceMin, when > 0, adds WHERE confidence >= ConfidenceMin.
+	// Default 0.0 means no confidence filter applied.
+	ConfidenceMin float64
+	// IncludeSuperseded, when true, relaxes the status filter to
+	// WHERE status IN ('active','superseded'). Default false means
+	// only 'active' rows are returned (same as legacy List).
+	IncludeSuperseded bool
+	// Limit caps the number of returned rows. Values <= 0 default to 50.
+	Limit int
+}
+
+// ListWithFilters returns memories for the given project with optional filters
+// applied at the SQL layer. This is the TG3 store-level extension:
+//
+//   - IncludeSuperseded=false (default): WHERE status='active' — byte-identical to List.
+//   - IncludeSuperseded=true: WHERE status IN ('active','superseded').
+//   - ConfidenceMin > 0: AND confidence >= ConfidenceMin on the Memory.Confidence column.
+//
+// Legacy List now delegates here with zero-value opts to guarantee a single
+// implementation path and remove the risk of WHERE-clause divergence.
+//
+// T017a: anti-stub guarantee — replacing the body with the original List
+// returns no rows for IncludeSuperseded=true test cases.
+func (s *MemoryStore) ListWithFilters(ctx context.Context, project string, opts ListOptions) ([]*models.Memory, error) {
 	if project == "" {
 		return nil, fmt.Errorf("project: must not be empty")
 	}
+	limit := opts.Limit
 	if limit <= 0 {
 		limit = 50
 	}
 
-	var rows []Memory
-	err := s.db.WithContext(ctx).
-		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+	q := s.db.WithContext(ctx).
+		Where("project = ? AND deleted_at IS NULL", project).
 		Where("valid_from IS NULL OR valid_from <= NOW()").
-		Where("valid_until IS NULL OR valid_until >= NOW()").
-		Order("created_at DESC").
+		Where("valid_until IS NULL OR valid_until >= NOW()")
+
+	if opts.IncludeSuperseded {
+		q = q.Where("status IN ('active','superseded')")
+	} else {
+		q = q.Where("status = 'active'")
+	}
+	if opts.ConfidenceMin > 0 {
+		q = q.Where("confidence >= ?", opts.ConfidenceMin)
+	}
+
+	var rows []Memory
+	err := q.Order("created_at DESC").
 		Limit(limit).
 		Find(&rows).Error
 	if err != nil {
-		return nil, fmt.Errorf("list memories for project %q: %w", project, err)
+		return nil, fmt.Errorf("list memories with filters for project %q: %w", project, err)
 	}
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
