@@ -68,7 +68,7 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 			// Restrict to vector tier only so callers get the promised cosine floor.
 			// Without this, FTS matches that pass text criteria but are below the
 			// cosine threshold would still appear in results (codex finding W3-#7).
-			mArgs["tier_filter"] = "tier1_vector"
+			mArgs["tier_filter"] = []string{"tier1_vector"}
 			patched, marshalErr := json.Marshal(mArgs)
 			if marshalErr != nil {
 				return "", fmt.Errorf("recall similar: patch args: %w", marshalErr)

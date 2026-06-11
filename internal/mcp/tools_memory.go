@@ -1343,6 +1343,13 @@ func (s *Server) handleRecallMemoryHybrid(
 		}
 	}
 
+	// Build a lookup from memory ID → ScoredMemory used by both the
+	// reconsolidation block (lifecycle) and the detailed format serializer.
+	scoredByID := make(map[int64]retrieval.ScoredMemory, len(scored))
+	for _, sm := range scored {
+		scoredByID[sm.Memory.ID] = sm
+	}
+
 	// Reconsolidation: fire-and-forget lifecycle updates on the FINAL response set only
 	// (not the wider candidate pool). This ensures access_count reflects actual retrieval.
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(items) > 0 {
@@ -1353,11 +1360,6 @@ func (s *Server) handleRecallMemoryHybrid(
 			retrievability float64
 		}
 		toRecon := make([]reconItem, 0, len(items))
-		// Map back from items to scored memories to access lifecycle fields.
-		scoredByID := make(map[int64]retrieval.ScoredMemory, len(scored))
-		for _, sm := range scored {
-			scoredByID[sm.Memory.ID] = sm
-		}
 		for _, item := range items {
 			if sm, ok := scoredByID[item.ID]; ok {
 				toRecon = append(toRecon, reconItem{
@@ -1385,10 +1387,44 @@ func (s *Server) handleRecallMemoryHybrid(
 	}
 
 	switch format {
-	case "items", "detailed":
+	case "items":
 		out, marshalErr := json.MarshalIndent(items, "", "  ")
 		if marshalErr != nil {
 			return "", fmt.Errorf("marshal hybrid result: %w", marshalErr)
+		}
+		return string(out), nil
+
+	case "detailed":
+		// detailed returns full models.Memory records (matching legacy flag-OFF
+		// behaviour) plus per-memory score and optional ranking explanation.
+		// items + scoredByID + explByID are already built by the reconsolidation
+		// block above, so we can reconstruct the ordered detailed slice here
+		// without duplicating the filter pipeline.
+		type detailedHybridResult struct {
+			*models.Memory
+			Score              float64                       `json:"score"`
+			RankingExplanation *retrieval.RankingExplanation `json:"ranking_explanation,omitempty"`
+		}
+		detailed := make([]detailedHybridResult, 0, len(items))
+		for _, item := range items {
+			sm, ok := scoredByID[item.ID]
+			if !ok {
+				continue
+			}
+			dr := detailedHybridResult{
+				Memory: sm.Memory,
+				Score:  sm.Score,
+			}
+			if explain {
+				if e, ok := explByID[item.ID]; ok {
+					dr.RankingExplanation = &e
+				}
+			}
+			detailed = append(detailed, dr)
+		}
+		out, marshalErr := json.MarshalIndent(detailed, "", "  ")
+		if marshalErr != nil {
+			return "", fmt.Errorf("marshal hybrid detailed result: %w", marshalErr)
 		}
 		return string(out), nil
 	default: // "text"

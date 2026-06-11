@@ -99,8 +99,11 @@ func (s *Store) FindSimilarForProject(ctx context.Context, project string, query
 	vec := pgvector.NewVector(queryVec)
 	var results []SimilarResult
 	// JOIN to memories to enforce project scope — content_chunks has no project column.
-	// The memories.status and deleted_at filters are applied here to avoid surfacing
-	// deleted/suppressed memories through the vector path.
+	// The memories.status, deleted_at, and validity-window filters are applied here to
+	// avoid surfacing deleted/suppressed/expired memories through the vector path.
+	// valid_from/valid_until predicates match SearchFTS and GetByIDs (memory_store.go)
+	// so that time-bounded memories do not consume the fixed vector limit before
+	// GetByIDs post-filtering drops them.
 	err := s.db.WithContext(ctx).Raw(`
         SELECT cc.memory_id,
                1 - (cc.embedding <=> ?::vector) as similarity,
@@ -110,6 +113,8 @@ func (s *Store) FindSimilarForProject(ctx context.Context, project string, query
         WHERE m.project    = ?
           AND m.status     = 'active'
           AND m.deleted_at IS NULL
+          AND (m.valid_from  IS NULL OR m.valid_from  <= NOW())
+          AND (m.valid_until IS NULL OR m.valid_until >= NOW())
           AND 1 - (cc.embedding <=> ?::vector) >= ?
         ORDER BY cc.embedding <=> ?::vector
         LIMIT ?
