@@ -32,7 +32,7 @@ Minimum additive schema for P0:
 
 Implementation intent for this phase:
 - add migration(s) for the new columns,
-- update the GORM `Memory` model and the memory_store row <-> model mapping for every new field,
+- update `internal/db/gorm/models.go` `Memory` and `internal/db/gorm/memory_store.go` write/mapping paths (`Create`, update paths, `memoryRowToModel`) for every new field,
 - backfill safe defaults for existing rows where required,
 - keep read paths tolerant of null or default values,
 - define initial status vocabulary and lifecycle semantics,
@@ -42,8 +42,8 @@ Implementation intent for this phase:
 ### Exit Criteria
 
 - Schema migration is additive and safe for existing v5 data.
-- Existing `store_memory` clients continue to succeed unchanged.
-- Existing `recall_memory` clients continue to return results unchanged in shape.
+- Existing `store_memory` clients continue to succeed with the same behavior.
+- Existing `recall_memory` clients return backward-compatible results: existing fields and semantics remain unchanged; additive optional fields are allowed.
 - New rows receive deterministic defaults for belief-revision metadata.
 - No decay column or other denormalized retrieval score is introduced.
 

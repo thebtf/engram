@@ -67,12 +67,10 @@ The following state is already verified for v5:
 
 ### Prior art
 
-- Internal design context exists in:
-  - `.agent/arch/decisions/ADR-001-belief-revision.md`
-  - `.agent/specs/engram-v2-memory-evolution.md`
-  - `.agent/specs/self-learning.md`
-  - `.agent/specs/memory-excellence-roadmap.md`
-- External patterns already verified this session:
+- This PR contains the reproducible planning artifacts for this rollout:
+  - `.agent/specs/memory-belief-revision.md`
+  - `.agent/plans/memory-belief-revision-roadmap.md`
+- External patterns informing this proposal:
   - Mem0-style conflict handling retrieves semantically similar memories, then classifies whether to add, revise, drop, or ignore a candidate; for Engram, this proposal narrows that into the explicitly non-lossy vocabulary `ADD / SUPERSEDE / INVALIDATE / NOOP`.
   - Graphiti/Zep-style temporal validity is non-lossy: facts are invalidated by closing their validity window rather than deleting them.
 
@@ -91,7 +89,7 @@ On memory creation, Engram should perform a bounded similarity-based candidate l
 - **ADD** — create a new independent memory.
 - **SUPERSEDE** — create a new memory revision and mark the older belief as `superseded` while keeping both rows.
 - **NOOP** — reject near-duplicate creation while preserving the existing belief.
-- **INVALIDATE** — create a new memory that marks a previous belief as `invalidated` and closes its validity window without deleting history.
+- **INVALIDATE** — transition a previous belief to `status=invalidated` and close its validity window without creating a replacement memory or deleting history.
 
 For the first rollout, Engram should prefer deterministic heuristics plus bounded model assistance only where needed. The key architectural rule is that conflict resolution is **non-lossy**: older memories are not deleted, and belief-state transitions do not imply soft-delete. `status` captures belief semantics (`active`, `superseded`, `invalidated`, `needs_reverification`), while existing `deleted_at` remains the separate storage-layer tombstone used only for actual record retirement.
 
@@ -172,6 +170,7 @@ This is intentionally narrower than a final long-term lifecycle. The action voca
 - `source_agent`, `source_type`, and `source_ref` serve different roles: `source_agent` identifies who emitted the memory, `source_type` classifies what kind of source produced it, and `source_ref` points to the specific source instance.
 - `source_ref` must not store raw secrets or raw PII. Prefer opaque IDs or redacted handles, redact before persistence/logging, and cap the stored value to a reasonable bounded length (for example 255-512 chars) to avoid unbounded payload leakage.
 - `supersedes_id` should be nullable `int64` and point from the newer belief row to the prior belief row it supersedes. This is a self-reference on `memories.id`, making lineage direction explicit: child revision -> superseded parent.
+- The `memories` table should enforce lineage integrity for `supersedes_id`: add a foreign key to `memories(id)`, add `CHECK (supersedes_id IS NULL OR supersedes_id <> id)`, and reject insert/update/delete or soft-delete operations that would retire a parent row while active revisions still reference it.
 - Add DB indexes that support the first retrieval/write-path queries rather than indexing every new column blindly. At minimum, document indexes for active-belief recall and supersession traversal.
 - Retrieval-time decay must **not** be stored as a column.
 
