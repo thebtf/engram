@@ -22,6 +22,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/writelint"
 )
@@ -57,7 +58,8 @@ type Server struct {
 	vaultInitErr           error
 	vaultOnce              sync.Once
 	backfillStatusFunc     func() (any, error)
-	writeLint              *writelint.Orchestrator // T035: two-phase write-lint protocol (nil → legacy path)
+	writeLint              *writelint.Orchestrator  // T035: two-phase write-lint protocol (nil → legacy path)
+	redactionRules         []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
 	version                string
 }
 
@@ -171,6 +173,15 @@ func (s *Server) setTestMemoryEditor(me memoryEditor) {
 // Call this only when ENGRAM_VNEXT_F_ENABLED=true is expected at runtime.
 func (s *Server) SetWriteLintOrchestrator(o *writelint.Orchestrator) {
 	s.writeLint = o
+}
+
+// SetRedactionRules wires pre-compiled operator redaction rules (T036, ADR-F-004).
+// Rules are compiled once at startup from ENGRAM_REDACTION_RULES_PATH; this setter
+// transfers the compiled slice from the service to the MCP server so handleStoreMemory
+// can run ScrubCompiled on the hot path without per-call regexp.Compile.
+// An empty/nil slice is a valid no-op (redaction layer disabled).
+func (s *Server) SetRedactionRules(rules []redaction.CompiledRule) {
+	s.redactionRules = rules
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.

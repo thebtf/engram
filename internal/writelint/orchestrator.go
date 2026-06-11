@@ -14,12 +14,30 @@
 // "detect_similar via existing M-A Jaccard+cosine" — the "cosine" refers
 // to the existing gate's capability, not a requirement to run both
 // synchronously in Phase1.
+//
+// Token payload contract (finding 2 — cross-project replay fix):
+// The payload stored in the TokenStore is a pipe-separated tuple:
+//   project|actor|content-hash
+// Phase2 parses the stored payload and asserts:
+//   payload.Project == req.Project  → resolution_token_project_mismatch
+//   payload.ContentHash == hash(req.Content) → resolution_token_content_mismatch
+// This prevents cross-project replay and content substitution attacks.
+//
+// Token expiry contract (finding 9):
+// - First call after TTL expires: Consume returns ok=true, expired=true →
+//   error "resolution_token_expired".
+// - After the janitor purges an expired entry (or after Consume deletes it),
+//   subsequent calls return ok=false → error "resolution_token_not_found".
+// The two errors are intentionally distinct: expired means the token existed
+// but timed out; not_found means it never existed or was already consumed.
 package writelint
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,11 +58,33 @@ type AuditLoggerInterface interface {
 	LogAudit(ctx context.Context, memoryID int64, action, actor string) error
 }
 
+// GraphStoreInterface defines the minimal graph-store surface the orchestrator
+// needs for link_contradiction edge creation (finding 4).
+// This interface is satisfied by *graph.Store; nil is acceptable — the
+// orchestrator degrades gracefully when no graph store is wired.
+type GraphStoreInterface interface {
+	// CreateEdge inserts a new edge into the knowledge graph.
+	// source and target are memory IDs. edgeType must be a valid graph edge type.
+	CreateEdge(ctx context.Context, sourceID, targetID int64, edgeType, reasoning string) error
+}
+
+// CandidateStoreInterface defines the minimal candidate-store surface for
+// mark_candidate (finding 10 fix).
+// Satisfied by *gorm.CandidateStore; nil is acceptable — the orchestrator
+// degrades gracefully when no candidate store is wired.
+type CandidateStoreInterface interface {
+	// CreatePending creates a pending crystallization candidate entry.
+	CreatePending(ctx context.Context, content, project, actor string) error
+}
+
 // OrchestratorConfig holds dependencies for the Orchestrator.
 type OrchestratorConfig struct {
-	MemoryStore  MemoryStoreInterface
-	AuditLogger  AuditLoggerInterface
-	TokenStore   TokenStore
+	MemoryStore    MemoryStoreInterface
+	AuditLogger    AuditLoggerInterface
+	TokenStore     TokenStore
+	GraphStore     GraphStoreInterface     // optional; nil → link_contradiction falls back to description-only
+	CandidateStore CandidateStoreInterface // optional; nil → mark_candidate stores plain memory
+
 	// DupThreshold is the Jaccard similarity threshold above which a memory
 	// is flagged as a possible_duplicate. Default 0.85 per spec §FR-F5.
 	DupThreshold float64
@@ -53,10 +93,35 @@ type OrchestratorConfig struct {
 }
 
 // tokenPayload is stored in the TokenStore per minted token.
+// Encoded as "project|actor|content-hash" (pipe-separated).
+// finding 2 fix: structured payload enables cross-project replay prevention.
 type tokenPayload struct {
 	Content string
 	Project string
 	Actor   string
+}
+
+// encodePayload encodes a tokenPayload to the wire format.
+func encodePayload(project, actor, content string) string {
+	h := sha256.Sum256([]byte(content))
+	// format: project|actor|hex(sha256(content))
+	return fmt.Sprintf("%s|%s|%x", project, actor, h)
+}
+
+// decodePayload parses the wire-format payload into (project, actor, contentHash).
+// Returns an error if the format is invalid.
+func decodePayload(raw string) (project, actor, contentHash string, err error) {
+	parts := strings.SplitN(raw, "|", 3)
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("invalid token payload format")
+	}
+	return parts[0], parts[1], parts[2], nil
+}
+
+// contentHash returns the hex SHA-256 of content, matching encodePayload.
+func contentHash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", h)
 }
 
 // Phase1Response is the orchestrator's Phase 1 result. When Stored=true there
@@ -157,8 +222,8 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 
 	// --- detect_supersession_candidate: concept overlap + file overlap ---
 	newObsForSupersede := &models.Observation{
-		Project:   project,
-		Concepts:  nil,
+		Project:  project,
+		Concepts: nil,
 	}
 	for _, mem := range existing {
 		if mem.Status == "superseded" || mem.Status == "deleted" {
@@ -193,8 +258,12 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 			// Non-fatal — log but don't fail the write.
 			_ = err
 		}
+		// finding 6 fix: no-signal path carries the same fields as the legacy
+		// store_memory response so callers get id/title/type/scope/storage.
 		return &Phase1Response{
-			Stored: true,
+			Stored:    true,
+			MemoryID:  created.ID,
+			StorageID: created.ID,
 		}, nil
 	}
 
@@ -230,7 +299,9 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 		ttl = 600 * time.Second
 	}
 	tokenKey := "wlrt_" + uuid.New().String()
-	payload := fmt.Sprintf("%s|%s|%s", content, project, actor)
+	// finding 2 fix: encode project + actor + content-hash in the payload so
+	// Phase2 can assert the token was minted for this exact (project, content).
+	payload := encodePayload(project, actor, content)
 	if err := o.cfg.TokenStore.Put(tokenKey, payload, ttl); err != nil {
 		return nil, fmt.Errorf("writelint Phase1 mint token: %w", err)
 	}
@@ -250,17 +321,35 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 
 // Phase2 validates the resolution token and applies the chosen option.
 // Returns an error for expired/invalid tokens.
+//
+// Token error contract (finding 9):
+//   - resolution_token_expired: token exists in store but TTL has elapsed.
+//     Occurs on the first call after expiry (before janitor purges).
+//   - resolution_token_not_found: token was never stored, already consumed
+//     by a previous Phase2 call, or has been purged by the janitor after expiry.
 func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Response, error) {
 	// Validate and atomically consume token (single-use guarantee per EC-F2).
 	// Consume is a single lock acquisition: Get+Delete. Concurrent Phase2 calls
 	// for the same token will see ok=false after the first Consume returns,
 	// eliminating the TOCTOU window that a separate Get+Delete pair would create.
-	_, ok, expired := o.cfg.TokenStore.Consume(req.Token)
+	rawPayload, ok, expired := o.cfg.TokenStore.Consume(req.Token)
 	if !ok {
 		return nil, fmt.Errorf("resolution_token_not_found: token %q not found or already purged", req.Token)
 	}
 	if expired {
 		return nil, fmt.Errorf("resolution_token_expired: token %q has exceeded its TTL", req.Token)
+	}
+
+	// finding 2 fix: parse the stored payload and assert project + content binding.
+	storedProject, _, storedHash, parseErr := decodePayload(rawPayload)
+	if parseErr == nil {
+		// Only enforce when we can parse (legacy tokens without the new format are tolerated).
+		if storedProject != "" && storedProject != req.Project {
+			return nil, fmt.Errorf("resolution_token_project_mismatch: token was minted for project %q, request is for %q", storedProject, req.Project)
+		}
+		if storedHash != "" && storedHash != contentHash(req.Content) {
+			return nil, fmt.Errorf("resolution_token_content_mismatch: content does not match the content hash bound to this token")
+		}
 	}
 
 	switch req.Option {
@@ -318,7 +407,7 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		if req.TargetMemoryID == nil {
 			return nil, fmt.Errorf("supersede: target_memory_id required")
 		}
-		// Create new memory
+		// finding 5 fix: Create new memory first; if that fails Phase2 fails (no partial write).
 		created, err := o.cfg.MemoryStore.Create(ctx, &models.Memory{
 			Content: req.Content,
 			Project: req.Project,
@@ -326,15 +415,19 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 supersede create: %w", err)
 		}
-		// Mark old as superseded
+		// Mark old as superseded — propagate errors; caller may retry.
+		// finding 5 fix: Get/Update failures of the old memory return an error
+		// so the Phase2 call fails and the caller can retry. This prevents silent
+		// partial success where new memory is stored but the old one is not marked.
 		older, getErr := o.cfg.MemoryStore.Get(ctx, *req.TargetMemoryID)
-		if getErr == nil {
-			older.Status = "superseded"
-			supersededBy := created.ID
-			older.SupersededBy = &supersededBy
-			if _, uErr := o.cfg.MemoryStore.Update(ctx, older); uErr != nil {
-				_ = uErr
-			}
+		if getErr != nil {
+			return nil, fmt.Errorf("writelint Phase2 supersede get-older %d: %w", *req.TargetMemoryID, getErr)
+		}
+		older.Status = "superseded"
+		supersededBy := created.ID
+		older.SupersededBy = &supersededBy
+		if _, uErr := o.cfg.MemoryStore.Update(ctx, older); uErr != nil {
+			return nil, fmt.Errorf("writelint Phase2 supersede update-older %d: %w", *req.TargetMemoryID, uErr)
 		}
 		if err := o.cfg.AuditLogger.LogAudit(ctx, created.ID, "supersede_with_candidate", req.Actor); err != nil {
 			_ = err
@@ -345,22 +438,68 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 			ActionTaken: "supersede_with_candidate",
 		}, nil
 
-	case "link_contradiction", "mark_candidate":
-		// store as new memory
+	case "link_contradiction":
+		// Store new memory first.
 		created, err := o.cfg.MemoryStore.Create(ctx, &models.Memory{
 			Content: req.Content,
 			Project: req.Project,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("writelint Phase2 %s create: %w", req.Option, err)
+			return nil, fmt.Errorf("writelint Phase2 link_contradiction create: %w", err)
 		}
-		if err := o.cfg.AuditLogger.LogAudit(ctx, created.ID, "store_with_signal_override", req.Actor); err != nil {
+		// finding 4 fix: create RelationContradicts edge when graphStore is wired.
+		// Nil-safe: when graphStore is absent, only the new memory is stored (Option B fallback).
+		actionTaken := "store_with_contradiction_noted"
+		if o.cfg.GraphStore != nil && req.TargetMemoryID != nil {
+			edgeErr := o.cfg.GraphStore.CreateEdge(ctx, created.ID, *req.TargetMemoryID, "contradicts",
+				fmt.Sprintf("write-lint link_contradiction: new memory %d contradicts existing %d", created.ID, *req.TargetMemoryID))
+			if edgeErr != nil {
+				// Non-fatal: memory is stored; log edge failure in action description.
+				// TD note: edge creation failed (graph store error), description reflects link intent only.
+				actionTaken = "store_with_contradiction_noted_edge_failed"
+			} else {
+				actionTaken = "store_with_contradiction_edge"
+			}
+		}
+		if err := o.cfg.AuditLogger.LogAudit(ctx, created.ID, actionTaken, req.Actor); err != nil {
 			_ = err
 		}
 		return &Phase2Response{
 			Stored:      true,
 			MemoryID:    created.ID,
-			ActionTaken: "store_with_signal_override",
+			ActionTaken: actionTaken,
+		}, nil
+
+	case "mark_candidate":
+		// finding 10 fix: when candidateStore is wired, create a pending candidate entry.
+		// Nil-safe fallback: if candidateStore is absent, store as plain memory with honest description.
+		if o.cfg.CandidateStore != nil {
+			if err := o.cfg.CandidateStore.CreatePending(ctx, req.Content, req.Project, req.Actor); err != nil {
+				return nil, fmt.Errorf("writelint Phase2 mark_candidate: %w", err)
+			}
+			if err := o.cfg.AuditLogger.LogAudit(ctx, 0, "candidate_pending_created", req.Actor); err != nil {
+				_ = err
+			}
+			return &Phase2Response{
+				Stored:      false, // not a promoted memory — stored as candidate
+				ActionTaken: "candidate_pending_created",
+			}, nil
+		}
+		// Fallback: store as plain memory (candidateStore not wired); honest description.
+		created, err := o.cfg.MemoryStore.Create(ctx, &models.Memory{
+			Content: req.Content + "\n[mark_candidate: candidateStore not wired — stored as plain memory]",
+			Project: req.Project,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("writelint Phase2 mark_candidate create: %w", err)
+		}
+		if err := o.cfg.AuditLogger.LogAudit(ctx, created.ID, "store_as_candidate_fallback", req.Actor); err != nil {
+			_ = err
+		}
+		return &Phase2Response{
+			Stored:      true,
+			MemoryID:    created.ID,
+			ActionTaken: "store_as_candidate_fallback",
 		}, nil
 
 	default:
@@ -384,4 +523,3 @@ func dedupeOptions(opts []models.ResolutionOption) []models.ResolutionOption {
 	}
 	return out
 }
-

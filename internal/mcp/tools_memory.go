@@ -19,6 +19,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writegate"
@@ -219,6 +220,22 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		params.Content = privacy.RedactSecrets(params.Content)
 	}
 
+	// ADR-F-004: operator redaction layer — runs AFTER privacy.RedactSecrets,
+	// BEFORE write-lint gate. Rules are pre-compiled at startup from
+	// ENGRAM_REDACTION_RULES_PATH (EC-F9: no hot-reload; restart required).
+	// ScrubCompiled is the hot path: no per-call regexp.Compile (finding 7 fix).
+	if len(s.redactionRules) > 0 {
+		scrubbed, _, scrubErr := redaction.ScrubCompiled(params.Content, s.redactionRules)
+		if scrubErr != nil {
+			if errors.Is(scrubErr, redaction.ErrContentFullyRedacted) {
+				// EC-F5: all content was removed by operator redaction rules.
+				return "", fmt.Errorf("content_fully_redacted: all content was removed by operator redaction rules")
+			}
+			return "", fmt.Errorf("redaction: %w", scrubErr)
+		}
+		params.Content = scrubbed
+	}
+
 	// T035 (engram vNext Milestone F TG5) — two-phase write-lint protocol.
 	//
 	// Gate conditions:
@@ -227,74 +244,80 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	//   3. force=true → bypass write-lint, proceed to legacy create path + audit.
 	//   4. resolution_token non-empty → Phase2 delegation; return result directly.
 	//   5. Otherwise → Phase1; if not stored, return Phase1 JSON; if stored, format as success.
-	//
-	// Redaction (ADR-F-004) ran above; write-lint sees the already-scrubbed content.
-	var (
-		wlForce           = coerceBool(m["force"], false)
-		wlResolutionToken = coerceString(m["resolution_token"], "")
-		wlOption          = coerceString(m["option"], "")
-	)
-	if s.writeLint != nil && vnextFEnabled() && !wlForce {
-		wlActor := actorFromContext(ctx)
-		wlProject := coerceString(m["project"], "")
-		if wlProject == "" {
-			wlProject = projectFromContext(ctx)
-		}
-
-		if wlResolutionToken != "" {
-			// Phase2: caller is committing with a previously minted token.
-			p2req := writelint.Phase2Request{
-				Token:          wlResolutionToken,
-				Option:         wlOption,
-				Content:        params.Content,
-				Project:        wlProject,
-				Actor:          wlActor,
-				TargetMemoryID: nil,
+	if s.writeLint != nil && vnextFEnabled() {
+		// finding 12 fix: declare write-lint locals inside the gate block so they
+		// are not allocated on the common non-writelint path.
+		wlForce := coerceBool(m["force"], false)
+		wlResolutionToken := coerceString(m["resolution_token"], "")
+		wlOption := coerceString(m["option"], "")
+		if !wlForce {
+			wlActor := actorFromContext(ctx)
+			wlProject := coerceString(m["project"], "")
+			if wlProject == "" {
+				wlProject = projectFromContext(ctx)
 			}
-			if tv, ok := m["target_memory_id"]; ok && tv != nil {
-				tid := coerceInt(tv, 0)
-				if tid > 0 {
-					tid64 := int64(tid)
-					p2req.TargetMemoryID = &tid64
+
+			if wlResolutionToken != "" {
+				// Phase2: caller is committing with a previously minted token.
+				p2req := writelint.Phase2Request{
+					Token:          wlResolutionToken,
+					Option:         wlOption,
+					Content:        params.Content,
+					Project:        wlProject,
+					Actor:          wlActor,
+					TargetMemoryID: nil,
 				}
+				if tv, ok := m["target_memory_id"]; ok && tv != nil {
+					tid := coerceInt(tv, 0)
+					if tid > 0 {
+						tid64 := int64(tid)
+						p2req.TargetMemoryID = &tid64
+					}
+				}
+				p2resp, p2err := s.writeLint.Phase2(ctx, p2req)
+				if p2err != nil {
+					return "", fmt.Errorf("write_lint_phase2: %w", p2err)
+				}
+				out, marshalErr := json.MarshalIndent(p2resp, "", "  ")
+				if marshalErr != nil {
+					return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
+				}
+				return string(out), nil
 			}
-			p2resp, p2err := s.writeLint.Phase2(ctx, p2req)
-			if p2err != nil {
-				return "", fmt.Errorf("write_lint_phase2: %w", p2err)
-			}
-			out, marshalErr := json.MarshalIndent(p2resp, "", "  ")
-			if marshalErr != nil {
-				return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
-			}
-			return string(out), nil
-		}
 
-		// Phase1: inspect for duplicates/conflicts/supersessions.
-		p1resp, p1err := s.writeLint.Phase1(ctx, params.Content, wlProject, wlActor)
-		if p1err != nil {
-			return "", fmt.Errorf("write_lint_phase1: %w", p1err)
-		}
-		if !p1resp.Stored {
-			// Signals detected — return Phase1 response to caller for resolution.
-			out, marshalErr := json.MarshalIndent(p1resp, "", "  ")
+			// Phase1: inspect for duplicates/conflicts/supersessions.
+			p1resp, p1err := s.writeLint.Phase1(ctx, params.Content, wlProject, wlActor)
+			if p1err != nil {
+				return "", fmt.Errorf("write_lint_phase1: %w", p1err)
+			}
+			if !p1resp.Stored {
+				// Signals detected — return Phase1 response to caller for resolution.
+				out, marshalErr := json.MarshalIndent(p1resp, "", "  ")
+				if marshalErr != nil {
+					return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
+				}
+				return string(out), nil
+			}
+			// finding 6 fix: no-signal stored=true carries the same fields as the
+			// legacy store_memory response (NFR-F1): id, storage, scope, privacy_scope,
+			// quality_signals. Phase1 returns MemoryID when Stored=true.
+			out, marshalErr := json.MarshalIndent(map[string]any{
+				"stored":         true,
+				"id":             p1resp.MemoryID,
+				"storage":        "memories",
+				"scope":          params.Scope,
+				"privacy_scope":  params.PrivacyScope,
+				"quality_signals": []any{},
+				"message":        "Memory stored successfully via write-lint (no conflicts detected)",
+			}, "", "  ")
 			if marshalErr != nil {
 				return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
 			}
 			return string(out), nil
 		}
-		// Stored=true means Phase1 created the memory (no conflicts detected).
-		// Return a success envelope consistent with the legacy create response.
-		out, marshalErr := json.MarshalIndent(map[string]any{
-			"stored":  true,
-			"storage": "memories",
-			"message": "Memory stored successfully via write-lint (no conflicts detected)",
-		}, "", "  ")
-		if marshalErr != nil {
-			return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
-		}
-		return string(out), nil
+		// wlForce=true: fall through to legacy create path; audit "legacy_force_write" below.
 	}
-	// force=true: fall through to legacy create path; audit "legacy_force_write" below.
+	// force=true OR writeLint not wired: fall through to legacy create path.
 	// Require a live memoryStore for the legacy create path.
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("memory store not available")
@@ -602,7 +625,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 
 	// T035: when write-lint is wired AND force=true was set, emit an additional
 	// "legacy_force_write" audit entry to record that the lint gate was bypassed.
-	if s.writeLint != nil && vnextFEnabled() && wlForce {
+	// finding 12 fix: wlForce is now scoped inside the gate block; re-derive here.
+	if s.writeLint != nil && vnextFEnabled() && coerceBool(m["force"], false) {
 		logAuditGeneric(ctx, s, created, actor, "legacy_force_write")
 	}
 
