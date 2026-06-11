@@ -49,7 +49,8 @@ type Server struct {
 	nodesStore             nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
 	auditStore             *gorm.AuditStore
 	purgeStore             *gorm.PurgeStore
-	candidateStore         *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	candidateStore         *gorm.CandidateStore  // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	snapshotStore          *gorm.SnapshotStore   // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
 	testMemoryEditor       memoryEditor // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
@@ -149,6 +150,12 @@ func (s *Server) SetPurgeStore(ps *gorm.PurgeStore) {
 // Must be called when ENGRAM_VNEXT_F_ENABLED=true to enable the 4 candidate MCP tools.
 func (s *Server) SetCandidateStore(cs *gorm.CandidateStore) {
 	s.candidateStore = cs
+}
+
+// SetSnapshotStore wires the bulk-op snapshot store (Milestone-F TG6 T043).
+// Must be called when ENGRAM_VNEXT_F_ENABLED=true to enable the 4 governance MCP tools.
+func (s *Server) SetSnapshotStore(ss *gorm.SnapshotStore) {
+	s.snapshotStore = ss
 }
 
 // setTestAuditWriter injects a mock auditWriter for unit tests.
@@ -1013,6 +1020,12 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, candidateTools()...)
 	}
 
+	// Governance tools (Milestone-F TG6 T043): snapshot list/rollback/pin + redaction status.
+	// Admin-gated at handler level; advertised only when snapshotStore is wired.
+	if vnextFEnabled() && s.snapshotStore != nil {
+		tools = append(tools, governanceTools()...)
+	}
+
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
 	if config.GetDatabaseDSN() != "" && crypto.VaultExists(config.Get()) {
 		tools = append(tools,
@@ -1553,6 +1566,15 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRejectCandidate(ctx, args)
 	case "supersede_candidate":
 		return s.handleSupersedeCandidate(ctx, args)
+	// Governance tools (Milestone-F TG6 T043).
+	case "list_snapshots":
+		return s.handleListSnapshots(ctx, args)
+	case "rollback_snapshot":
+		return s.handleRollbackSnapshot(ctx, args)
+	case "pin_snapshot":
+		return s.handlePinSnapshot(ctx, args)
+	case "redaction_rules_status":
+		return s.handleRedactionRulesStatus(ctx, args)
 	}
 
 	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/
