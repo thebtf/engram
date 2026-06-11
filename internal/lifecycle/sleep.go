@@ -179,3 +179,75 @@ func absDiff(a, b float64) float64 {
 	}
 	return d
 }
+
+// --- Milestone-F TG4: crystallization candidate decay (T028) ---
+
+// DecayBatchSize is the number of expired candidates processed per RunCandidateDecayCycle call.
+const DecayBatchSize = 100
+
+// DecayRecurrenceThreshold is the recurrence_count below which a candidate that has
+// passed its review_after window is eligible for decay.  Candidates that have
+// recurred DecayRecurrenceThreshold or more times are left pending so that an
+// operator can manually review high-signal candidates.
+const DecayRecurrenceThreshold = 3
+
+// CandidateDecayResult holds the outcome of a single candidate decay cycle.
+type CandidateDecayResult struct {
+	Decayed  int
+	Errors   int
+	Duration time.Duration
+}
+
+// CandidateDecayer abstracts the candidate store operations needed by the decay cycle.
+// Satisfied by *gorm.CandidateStore.
+type CandidateDecayer interface {
+	ListExpiredPending(ctx context.Context, threshold int, batchSize int) ([]*models.CrystallizationCandidate, error)
+	TransitionToDecayed(ctx context.Context, id int64) (*models.CrystallizationCandidate, error)
+}
+
+// RunCandidateDecayCycle processes one batch of expired pending candidates.
+// A candidate is eligible for decay when:
+//   - status = 'pending'
+//   - review_after < now
+//   - recurrence_count < DecayRecurrenceThreshold
+//
+// Each eligible candidate is transitioned to 'decayed' via the state machine
+// (SELECT...FOR UPDATE per EC-F10; audit_log entry written per §FR-F5).
+// This function is a no-op when ENGRAM_VNEXT_F_ENABLED is false — callers
+// are expected to gate via crystallization.VnextFEnabled() before invoking.
+func RunCandidateDecayCycle(ctx context.Context, decayer CandidateDecayer) CandidateDecayResult {
+	start := time.Now()
+	result := CandidateDecayResult{}
+
+	candidates, err := decayer.ListExpiredPending(ctx, DecayRecurrenceThreshold, DecayBatchSize)
+	if err != nil {
+		log.Error().Err(err).Msg("candidate decay: list expired pending failed")
+		result.Errors++
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	for _, c := range candidates {
+		select {
+		case <-ctx.Done():
+			result.Duration = time.Since(start)
+			return result
+		default:
+		}
+
+		if _, transErr := decayer.TransitionToDecayed(ctx, c.ID); transErr != nil {
+			log.Warn().Err(transErr).Int64("candidate_id", c.ID).Msg("candidate decay: transition failed")
+			result.Errors++
+			continue
+		}
+		result.Decayed++
+	}
+
+	result.Duration = time.Since(start)
+	log.Info().
+		Int("decayed", result.Decayed).
+		Int("errors", result.Errors).
+		Dur("duration", result.Duration).
+		Msg("candidate decay cycle: complete")
+	return result
+}
