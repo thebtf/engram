@@ -634,10 +634,10 @@ func TestHybridSearch_SkipTier0_FallsThrough(t *testing.T) {
 			foundB = true
 		}
 	}
-	// memA must NOT appear as a Tier0 exact-score singleton.
-	// (It may appear via FTS if ftsResults contained it, but our mock does not.)
-	if foundA && len(scoredSkip) == 1 && scoredSkip[0].Score == 1.0 {
-		t.Error("SkipTier0=true must not return memA as a Tier0 singleton (score=1.0)")
+	// memA must NOT appear at all: it is absent from ftsResults and Tier0 is
+	// skipped, so there is no path for memA to enter the result set.
+	if foundA {
+		t.Error("SkipTier0=true: memA (id=1) must not appear (not in FTS results, Tier0 should be skipped)")
 	}
 	// memB must be present: FTS ran and returned it.
 	if !foundB {
