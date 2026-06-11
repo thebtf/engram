@@ -18,6 +18,7 @@ type SleepResult struct {
 	Demotions         int
 	Expirations       int
 	ReviewFlagged     int
+	SnapshotsPruned   int
 	Duration          time.Duration
 }
 
@@ -173,6 +174,38 @@ func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog Promot
 		Msg("sleep cycle: complete")
 
 	return result
+}
+
+// defaultSnapshotRetentionDays is the fallback retention period for bulk_op_snapshots.
+const defaultSnapshotRetentionDays = 30
+
+// snapshotRetentionDays reads ENGRAM_SNAPSHOT_RETENTION_DAYS.
+// Falls back to defaultSnapshotRetentionDays on absent, empty, or invalid values.
+func snapshotRetentionDays() int {
+	return decayIntEnv("ENGRAM_SNAPSHOT_RETENTION_DAYS", defaultSnapshotRetentionDays)
+}
+
+// SnapshotPruner abstracts snapshot deletion for the sleep cycle.
+// Satisfied by *gorm.SnapshotStore.
+// Pinned snapshots (pinned=true) must NOT be deleted regardless of age —
+// that invariant is enforced by the implementation.
+type SnapshotPruner interface {
+	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// PruneSnapshots deletes bulk_op_snapshots older than the configured retention
+// period (default 30 days; override via ENGRAM_SNAPSHOT_RETENTION_DAYS).
+// Pinned snapshots are exempt — that contract is enforced by the store layer.
+// Returns the number of rows deleted.
+func PruneSnapshots(ctx context.Context, pruner SnapshotPruner) (int64, error) {
+	days := snapshotRetentionDays()
+	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	deleted, err := pruner.DeleteOlderThan(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune snapshots: %w", err)
+	}
+	log.Info().Int64("deleted", deleted).Int("retention_days", days).Msg("snapshot prune: complete")
+	return deleted, nil
 }
 
 func absDiff(a, b float64) float64 {
