@@ -688,12 +688,15 @@ func (s *Service) initializeAsync() {
 		mcpServer.SetPurgeStore(purgeStore)
 	}
 
-	// Wire crystallization candidate store into MCP server (Milestone-F TG4 T026).
-	// Gated on ENGRAM_VNEXT_F_ENABLED; the MCP handler gates individual tool calls
-	// with the same check so schema + runtime are consistent.
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
-		mcpCandidateStore := gorm.NewCandidateStore(store.GetDB(), auditStore)
-		mcpServer.SetCandidateStore(mcpCandidateStore)
+	// Wire the shared candidateStore into the MCP server (Milestone-F TG4 T026).
+	// Re-use the instance already wired above (lines ~584-587) to avoid a second
+	// allocation. Gated on ENGRAM_VNEXT_F_ENABLED; the MCP handler gates individual
+	// tool calls with the same check so schema + runtime are consistent.
+	s.initMu.RLock()
+	existingCandidateStore := s.candidateStore
+	s.initMu.RUnlock()
+	if existingCandidateStore != nil {
+		mcpServer.SetCandidateStore(existingCandidateStore)
 	}
 
 	// Wire promotion, graph, and audit stores into the MCP server and record them on

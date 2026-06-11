@@ -104,6 +104,9 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 		return "", err
 	}
 	project := coerceString(m["project"], "")
+	if project == "" {
+		return "", fmt.Errorf("list_candidates: project is required")
+	}
 	status := coerceString(m["status"], "pending")
 	limit := coerceInt(m["limit"], 20)
 	if limit > 100 {
@@ -164,9 +167,6 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 	if !vnextFEnabled() || s.candidateStore == nil {
 		return "", fmt.Errorf("promote_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
 	}
-	if s.memoryStore == nil {
-		return "", fmt.Errorf("promote_candidate: memory store not ready")
-	}
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -187,6 +187,7 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 
 	// Build a memory from the candidate's proposed content.
 	// epistemic_type="decision" per spec §FR-F4 promotion semantics.
+	// source_agent="crystallization" per FR-F4 (NIT-8 review finding).
 	// Back-reference to the candidate via tag "candidate:<id>".
 	project := ""
 	if len(candidate.AffectedProjects) > 0 {
@@ -198,22 +199,19 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 		Tier:          candidate.ProposedTier,
 		EpistemicType: "decision",
 		Tags:          []string{fmt.Sprintf("candidate:%d", id), "crystallized"},
-		SourceAgent:   "promote_candidate",
+		SourceAgent:   "crystallization",
 	}
 
-	// Use CreateWithLifecycle (gated path; this tool is only callable when ENGRAM_VNEXT_F_ENABLED=true).
-	created, err := s.memoryStore.CreateWithLifecycle(ctx, mem)
+	// PromoteWithMemory creates the memory AND transitions the candidate within a single
+	// DB transaction — closing the partial-failure dual-write gap (TG4 MAJOR finding 2).
+	// A transient Step-B failure rolls back both writes; client retry is safe because
+	// TransitionToPromoted rejects an already-promoted candidate.
+	updated, created, err := s.candidateStore.PromoteWithMemory(ctx, id, mem)
 	if err != nil {
-		return "", fmt.Errorf("promote_candidate create memory: %w", err)
-	}
-
-	// Transition candidate to promoted.
-	updated, err := s.candidateStore.TransitionToPromoted(ctx, id, created.ID)
-	if err != nil {
-		// Memory was created but transition failed — log and surface the error.
-		// Caller can retry; idempotent: TransitionToPromoted with row-lock will reject
-		// if already promoted.
-		return "", fmt.Errorf("promote_candidate transition %d: %w (memory %d created)", id, err, created.ID)
+		if errors.Is(err, gormdb.ErrInvalidTransition) {
+			return "", fmt.Errorf("promote_candidate: %w", err)
+		}
+		return "", fmt.Errorf("promote_candidate %d: %w", id, err)
 	}
 
 	out := map[string]any{

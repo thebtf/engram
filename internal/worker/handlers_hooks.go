@@ -318,8 +318,9 @@ func (s *Service) runCrystallization(
 	s.initMu.RUnlock()
 
 	// ENGRAM_VNEXT_F_ENABLED=true: route to candidate store (B9 resolution).
+	// Pass memStore as MemoryFingerprintChecker for flag-flip ON-direction dup guard (TG4 finding 4).
 	if crystallization.VnextFEnabled() && candidateStore != nil {
-		s.runCrystallizationCandidatePath(ctx, decisions, sessionID, project, candidateStore)
+		s.runCrystallizationCandidatePath(ctx, decisions, sessionID, project, candidateStore, memStore)
 		return
 	}
 
@@ -389,16 +390,18 @@ func (s *Service) runCrystallization(
 // Each extracted decision is routed via crystallization.RouteDecision which enforces
 // fingerprint-based idempotency and writes to crystallization_candidates.
 // Satisfies B9: no auto-promotion to memories; operator must call promote_candidate explicitly.
+// memStore is passed as a MemoryFingerprintChecker to guard flag-flip ON-direction duplicates.
 func (s *Service) runCrystallizationCandidatePath(
 	ctx context.Context,
 	decisions []crystallization.ExtractedDecision,
 	sessionID, project string,
 	candidateStore *gormdb.CandidateStore,
+	memStore *gormdb.MemoryStore,
 ) {
 	createdCount := 0
 	dupCount := 0
 	for _, decision := range decisions {
-		result, err := crystallization.RouteDecision(ctx, decision, sessionID, project, candidateStore)
+		result, err := crystallization.RouteDecision(ctx, decision, sessionID, project, candidateStore, memStore)
 		if err != nil {
 			log.Error().Err(err).
 				Str("session_id", sessionID).

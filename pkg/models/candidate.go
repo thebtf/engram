@@ -66,10 +66,11 @@ func ReviewAfterForTarget(target string) time.Duration {
 // CrystallizationCandidate is the domain model for the crystallization_candidates table.
 // It represents an extracted decision that has not yet been promoted to a full Memory.
 //
-// Idempotency: the Fingerprint field (sha256 of source_session_id+proposed_content)
+// Idempotency: the Fingerprint field (sha256(session_id+":"+content)[:16], 16 hex chars)
 // carries a partial unique index on status='pending' (migration 132), preventing
-// duplicate pending candidates for the same session+content — same concept as
-// CreateWithLifecycleIfTagAbsent's fp-tag mechanism on the memories table.
+// duplicate pending candidates for the same session+content. The same algorithm is used
+// by the legacy crystallizationFingerprint() in handlers_hooks.go so that fp: tags on
+// memories and candidate fingerprints are directly comparable across flag-flip scenarios.
 type CrystallizationCandidate struct {
 	CreatedAt               time.Time    `json:"created_at"`
 	UpdatedAt               time.Time    `json:"updated_at"`
@@ -82,8 +83,9 @@ type CrystallizationCandidate struct {
 	EvidenceHandles         []string     `json:"evidence_handles,omitempty"`
 	PrivacyScope            string       `json:"privacy_scope,omitempty"`
 	Status                  CandidateStatus `json:"status"`
-	// Fingerprint is sha256(source_session_id + "\x00" + proposed_content) hex-encoded.
-	// Empty string disables idempotency guard (used when session_id unknown).
+	// Fingerprint is sha256(source_session_id + ":" + proposed_content)[:16] — 16 hex chars.
+	// Matches the legacy crystallizationFingerprint() algorithm for cross-layer comparability
+	// (TG4 finding 4 unification). Empty string disables idempotency guard (session_id unknown).
 	Fingerprint             string       `json:"fingerprint,omitempty"`
 	AffectedProjects        []string     `json:"affected_projects,omitempty"`
 	// PromotedMemoryID is set when status='promoted'. ON DELETE SET NULL via FK.
@@ -166,15 +168,16 @@ func NewCrystallizationCandidate(
 	}, nil
 }
 
-// computeFingerprint returns a sha256 hex fingerprint of session+content.
+// computeFingerprint returns a 16-hex-char sha256 fingerprint of session+content.
+// The algorithm is sha256(sessionID + ":" + content) truncated to 16 hex chars —
+// identical to the legacy crystallizationFingerprint() in internal/worker/handlers_hooks.go.
+// Using the same algorithm makes fingerprint values comparable across the candidate and
+// legacy memory paths, enabling flag-flip idempotency checks (TG4 finding 4).
 // Empty session_id produces an empty fingerprint (idempotency guard disabled).
 func computeFingerprint(sessionID, content string) string {
 	if sessionID == "" {
 		return ""
 	}
-	h := sha256.New()
-	h.Write([]byte(sessionID))
-	h.Write([]byte{0}) // NUL separator
-	h.Write([]byte(content))
-	return fmt.Sprintf("%x", h.Sum(nil))
+	h := sha256.Sum256([]byte(sessionID + ":" + content))
+	return fmt.Sprintf("%x", h[:])[:16]
 }

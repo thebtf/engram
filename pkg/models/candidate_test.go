@@ -117,9 +117,10 @@ func TestNewCrystallizationCandidate_Fingerprint(t *testing.T) {
 	if c1.Fingerprint == c4.Fingerprint {
 		t.Error("different contents must produce different fingerprints")
 	}
-	// Non-empty fingerprint looks like a hex sha256 (64 chars).
-	if len(c1.Fingerprint) != 64 {
-		t.Errorf("fingerprint should be 64 hex chars, got %d: %s", len(c1.Fingerprint), c1.Fingerprint)
+	// Non-empty fingerprint is 16 hex chars (truncated sha256, matching the legacy
+	// crystallizationFingerprint() algorithm — TG4 finding 4 unification).
+	if len(c1.Fingerprint) != 16 {
+		t.Errorf("fingerprint should be 16 hex chars, got %d: %s", len(c1.Fingerprint), c1.Fingerprint)
 	}
 	if !isHex(c1.Fingerprint) {
 		t.Errorf("fingerprint should be hex, got %q", c1.Fingerprint)

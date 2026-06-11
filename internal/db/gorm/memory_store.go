@@ -188,6 +188,22 @@ func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memor
 	return memoryRowToModel(row), nil
 }
 
+// createMemoryWithLifecycleTx inserts a lifecycle memory row using an existing
+// GORM transaction (tx). This is a package-internal helper used by
+// CandidateStore.PromoteWithMemory to create the promoted memory atomically
+// within the same database transaction as the candidate status update.
+//
+// Callers MUST validate mem before calling (validateMemoryForCreate).
+func createMemoryWithLifecycleTx(ctx context.Context, tx *gorm.DB, mem *models.Memory) (*models.Memory, error) {
+	now := time.Now().UTC()
+	row := memoryRowForCreate(mem, now, true)
+	copyPrivacyFields(row, mem)
+	if err := tx.WithContext(ctx).Create(row).Error; err != nil {
+		return nil, fmt.Errorf("create memory with lifecycle (tx) for project %q: %w", mem.Project, err)
+	}
+	return memoryRowToModel(row), nil
+}
+
 // CreateWithLifecycleIfTagAbsent inserts a lifecycle memory only when no active
 // memory from the same project/source_agent already carries uniqueTag. The
 // check and insert are protected by a PostgreSQL transaction-level advisory

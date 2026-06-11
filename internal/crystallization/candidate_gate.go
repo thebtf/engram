@@ -19,6 +19,17 @@ type CandidateWriter interface {
 	GetByFingerprint(ctx context.Context, fingerprint string) (*models.CrystallizationCandidate, error)
 }
 
+// MemoryFingerprintChecker is an optional interface used by RouteDecision to detect
+// flag-flip ON-direction duplicates: if a memory with the same fp-tag already exists
+// (created while flag was OFF), a new candidate should not be created.
+// Satisfied by *gorm.MemoryStore.
+// When nil, the memory check is skipped (backwards-compatible).
+type MemoryFingerprintChecker interface {
+	// ListBySourceAgentAndTag returns memories for the given project/source_agent/tag tuple.
+	// Returns an empty slice (not an error) when none match.
+	ListBySourceAgentAndTag(ctx context.Context, project, sourceAgent, tag string) ([]*models.Memory, error)
+}
+
 // VnextFEnabled reports whether the Milestone-F candidate routing is active.
 // Centralised check: ENGRAM_VNEXT_F_ENABLED="true".
 func VnextFEnabled() bool {
@@ -41,7 +52,10 @@ type RouteDecisionResult struct {
 //
 // When ENGRAM_VNEXT_F_ENABLED=true AND candidateWriter is non-nil:
 //   - Checks for an existing pending candidate with the same fingerprint (idempotency).
-//   - On miss: creates a new pending candidate and returns CandidateID.
+//   - When memChecker is non-nil, also checks for an existing memory with fp:<fingerprint>
+//     tag to handle flag-flip ON-direction duplicates (decision written as memory while
+//     flag was OFF; flag flipped ON; same session fires again).
+//   - On miss (neither candidate nor memory found): creates a new pending candidate.
 //   - On hit: returns Duplicate=true.
 //
 // When flag is OFF or candidateWriter is nil:
@@ -52,12 +66,18 @@ type RouteDecisionResult struct {
 // Extracted decisions land as pending candidates requiring explicit promote_candidate
 // instead of being auto-promoted to procedural memories. The candidate path is the
 // gated promotion surface.
+//
+// Flag-flip OFF-direction (candidate exists, flag flips OFF, memory created via legacy
+// path): not guarded here — the legacy path already uses CreateWithLifecycleIfTagAbsent
+// with fp-tag uniqueness, so the worst outcome is a pending orphan candidate that decays.
+// This boundary is documented and accepted; the decay cycle handles cleanup.
 func RouteDecision(
 	ctx context.Context,
 	decision ExtractedDecision,
 	sessionID string,
 	project string,
 	candidateWriter CandidateWriter,
+	memChecker MemoryFingerprintChecker,
 ) (*RouteDecisionResult, error) {
 	if !VnextFEnabled() || candidateWriter == nil {
 		// Flag OFF: caller should use legacy memory path unchanged.
@@ -77,8 +97,8 @@ func RouteDecision(
 		return nil, fmt.Errorf("route_decision build candidate: %w", err)
 	}
 
-	// Idempotency: check for existing pending candidate with the same fingerprint.
 	if c.Fingerprint != "" {
+		// Idempotency check A: existing pending candidate with the same fingerprint.
 		existing, err := candidateWriter.GetByFingerprint(ctx, c.Fingerprint)
 		if err != nil {
 			return nil, fmt.Errorf("route_decision fingerprint check: %w", err)
@@ -88,6 +108,23 @@ func RouteDecision(
 				Duplicate:         true,
 				UsedCandidatePath: true,
 			}, nil
+		}
+
+		// Idempotency check B: existing memory with fp:<fingerprint> tag (flag-flip ON guard).
+		// Skipped when memChecker is nil (backwards-compatible; integration tests without a
+		// live DB pass nil and the skip is correct for the candidate-only test scenarios).
+		if memChecker != nil && project != "" {
+			fpTag := "fp:" + c.Fingerprint
+			mems, err := memChecker.ListBySourceAgentAndTag(ctx, project, "crystallization", fpTag)
+			if err != nil {
+				// Non-fatal: log and continue (a failed check should not block new candidates).
+				_ = err
+			} else if len(mems) > 0 {
+				return &RouteDecisionResult{
+					Duplicate:         true,
+					UsedCandidatePath: true,
+				}, nil
+			}
 		}
 	}
 

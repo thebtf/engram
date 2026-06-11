@@ -2,6 +2,9 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -182,14 +185,44 @@ func absDiff(a, b float64) float64 {
 
 // --- Milestone-F TG4: crystallization candidate decay (T028) ---
 
-// DecayBatchSize is the number of expired candidates processed per RunCandidateDecayCycle call.
-const DecayBatchSize = 100
+// defaultDecayBatchSize is the fallback for DecayBatchSize when the env var is absent.
+const defaultDecayBatchSize = 100
 
-// DecayRecurrenceThreshold is the recurrence_count below which a candidate that has
-// passed its review_after window is eligible for decay.  Candidates that have
-// recurred DecayRecurrenceThreshold or more times are left pending so that an
+// defaultDecayRecurrenceThreshold is the fallback for DecayRecurrenceThreshold
+// when the env var is absent.
+const defaultDecayRecurrenceThreshold = 3
+
+// DecayBatchSize returns the number of expired candidates processed per
+// RunCandidateDecayCycle call. Configurable via ENGRAM_DECAY_BATCH_SIZE (positive int).
+func DecayBatchSize() int {
+	return decayIntEnv("ENGRAM_DECAY_BATCH_SIZE", defaultDecayBatchSize)
+}
+
+// DecayRecurrenceThreshold returns the recurrence_count below which a candidate that
+// has passed its review_after window is eligible for decay.  Candidates that have
+// recurred DecayRecurrenceThreshold() or more times are left pending so that an
 // operator can manually review high-signal candidates.
-const DecayRecurrenceThreshold = 3
+// Configurable via ENGRAM_DECAY_RECURRENCE_THRESHOLD (positive int).
+func DecayRecurrenceThreshold() int {
+	return decayIntEnv("ENGRAM_DECAY_RECURRENCE_THRESHOLD", defaultDecayRecurrenceThreshold)
+}
+
+// decayIntEnv parses a positive integer from an environment variable.
+// Returns defaultVal when the variable is absent, empty, or invalid.
+func decayIntEnv(key string, defaultVal int) int {
+	s := os.Getenv(key)
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v <= 0 {
+		log.Warn().Str("key", key).Str("value", s).
+			Err(fmt.Errorf("invalid value for %s: must be a positive integer", key)).
+			Msg("lifecycle: using default for invalid env var")
+		return defaultVal
+	}
+	return v
+}
 
 // CandidateDecayResult holds the outcome of a single candidate decay cycle.
 type CandidateDecayResult struct {
@@ -219,7 +252,7 @@ func RunCandidateDecayCycle(ctx context.Context, decayer CandidateDecayer) Candi
 	start := time.Now()
 	result := CandidateDecayResult{}
 
-	candidates, err := decayer.ListExpiredPending(ctx, DecayRecurrenceThreshold, DecayBatchSize)
+	candidates, err := decayer.ListExpiredPending(ctx, DecayRecurrenceThreshold(), DecayBatchSize())
 	if err != nil {
 		log.Error().Err(err).Msg("candidate decay: list expired pending failed")
 		result.Errors++

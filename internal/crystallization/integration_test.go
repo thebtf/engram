@@ -64,7 +64,9 @@ func TestCrystallizationLifecycle_FullPath(t *testing.T) {
 	decision := decisions[0]
 
 	// Step 2: RouteDecision → should create a pending candidate.
-	result, err := crystallization.RouteDecision(ctx, decision, sessionID, project, cs)
+	// Pass nil memChecker — integration test focus is candidate path; memory check is
+	// covered by unit tests in candidate_gate_test.go.
+	result, err := crystallization.RouteDecision(ctx, decision, sessionID, project, cs, nil)
 	require.NoError(t, err, "RouteDecision must not return an error")
 	require.NotNil(t, result, "RouteDecision must return a non-nil result when flag is ON")
 	assert.True(t, result.UsedCandidatePath, "must use candidate path when flag is ON")
@@ -105,8 +107,8 @@ func TestCrystallizationLifecycle_FullPath(t *testing.T) {
 	require.NotNil(t, promoted.PromotedMemoryID)
 	assert.Equal(t, createdMem.ID, *promoted.PromotedMemoryID, "promoted_memory_id must match created memory")
 
-	// Step 5: second RouteDecision with same session+content → Duplicate=true.
-	result2, err := crystallization.RouteDecision(ctx, decision, sessionID, project, cs)
+	// Step 5: second RouteDecision with same session+content → candidate-path idempotency.
+	result2, err := crystallization.RouteDecision(ctx, decision, sessionID, project, cs, nil)
 	require.NoError(t, err, "second RouteDecision must not error")
 	require.NotNil(t, result2)
 	// The pending candidate is now promoted, so GetByFingerprint returns nil (it only looks at pending).
@@ -130,7 +132,7 @@ func TestCrystallizationLifecycle_FlagOff(t *testing.T) {
 	decisions := crystallization.ExtractDecisions(content)
 	require.NotEmpty(t, decisions)
 
-	result, err := crystallization.RouteDecision(ctx, decisions[0], "sess-flag-off", "proj-flag-off", cs)
+	result, err := crystallization.RouteDecision(ctx, decisions[0], "sess-flag-off", "proj-flag-off", cs, nil)
 	assert.NoError(t, err, "flag-off RouteDecision must not error")
 	assert.Nil(t, result, "flag-off RouteDecision must return nil (legacy path signal)")
 }

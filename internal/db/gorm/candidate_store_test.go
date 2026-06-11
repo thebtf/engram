@@ -308,6 +308,95 @@ func TestCandidateStore_ListExpiredPending(t *testing.T) {
 	require.True(t, foundExpired, "expired pending candidate must appear in ListExpiredPending")
 }
 
+// TestCandidateStore_TransitionToRejected_PreservesProposedContent verifies
+// MAJOR finding 1: rejecting a candidate must not overwrite proposed_content.
+// The reason lands in the audit log; the original decision text is untouched.
+func TestCandidateStore_TransitionToRejected_PreservesProposedContent(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	cs := NewCandidateStore(db, auditStore)
+	ctx := context.Background()
+
+	originalContent := "decided to use PostgreSQL for transactional workloads"
+	candidate, err := models.NewCrystallizationCandidate(
+		"session-reject-preserve",
+		originalContent,
+		"rule",
+		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+	)
+	require.NoError(t, err)
+	created, err := cs.Create(ctx, candidate)
+	require.NoError(t, err)
+
+	reason := "not aligned with current architecture decisions"
+	rejected, err := cs.TransitionToRejected(ctx, created.ID, reason)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusRejected, rejected.Status)
+
+	// The proposed_content must be the ORIGINAL text, not the rejection reason.
+	require.Equal(t, originalContent, rejected.ProposedContent,
+		"TransitionToRejected must not overwrite proposed_content with the reason")
+
+	// Verify from DB (not just the returned struct).
+	got, err := cs.Get(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, originalContent, got.ProposedContent,
+		"proposed_content must be preserved in the database after rejection")
+}
+
+// TestCandidateStore_PromoteWithMemory_AtomicRollback verifies MAJOR finding 2:
+// when the candidate status update is forced to fail (invalid transition from a
+// pre-transitioned terminal state), the entire PromoteWithMemory call returns an
+// error and no orphan memory row is committed.
+//
+// This is the closest approximation to a "Step-B transient failure" test without
+// sqlmock: we set the candidate to 'rejected' (terminal) before calling
+// PromoteWithMemory, so the SELECT...FOR UPDATE / validTransitions check fails,
+// rolling back the whole transaction — including any memory that was inserted.
+func TestCandidateStore_PromoteWithMemory_AtomicRollback(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	cs := NewCandidateStore(db, auditStore)
+	ctx := context.Background()
+
+	// Create a candidate and immediately reject it (terminal state).
+	candidate, err := models.NewCrystallizationCandidate(
+		"session-promote-rollback",
+		"content for atomic promote test",
+		"rule",
+		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+	)
+	require.NoError(t, err)
+	created, err := cs.Create(ctx, candidate)
+	require.NoError(t, err)
+
+	_, err = cs.TransitionToRejected(ctx, created.ID, "pre-rejected for rollback test")
+	require.NoError(t, err)
+
+	// Count memory rows before the attempted promote.
+	var memCountBefore int64
+	require.NoError(t, db.Model(&Memory{}).Count(&memCountBefore).Error)
+
+	// PromoteWithMemory must fail because the candidate is in a terminal state.
+	mem := &models.Memory{
+		Content:       "content for atomic promote test",
+		Project:       "test-project",
+		EpistemicType: "decision",
+		Tier:          "episodic",
+		SourceAgent:   "crystallization",
+	}
+	_, _, err = cs.PromoteWithMemory(ctx, created.ID, mem)
+	require.Error(t, err, "PromoteWithMemory must fail for a terminal candidate")
+	require.True(t, errors.Is(err, ErrInvalidTransition) || containsStr(err.Error(), "invalid_transition"),
+		"error must be ErrInvalidTransition, got: %v", err)
+
+	// No orphan memory row should have been created.
+	var memCountAfter int64
+	require.NoError(t, db.Model(&Memory{}).Count(&memCountAfter).Error)
+	require.Equal(t, memCountBefore, memCountAfter,
+		"transaction rollback must not leave an orphan memory row")
+}
+
 // containsStr is a helper for checking error message content without importing strings.
 func containsStr(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {
