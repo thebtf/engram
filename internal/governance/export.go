@@ -218,11 +218,69 @@ func exportZIP(bundle *ExportBundle, opts ExportOptions, exportedAt time.Time) (
 	return buf.Bytes(), nil
 }
 
-// exportJSONL is a stub placeholder; T046 implements the full JSONL export.
-// Returning an error here keeps T045 + T046 cleanly separated — T046 will
-// replace this stub with the real implementation.
-func exportJSONL(_ *ExportBundle, _ ExportOptions, _ time.Time) ([]byte, error) {
-	return nil, fmt.Errorf("exportJSONL: not implemented (T046 implements JSONL format)")
+// exportJSONL produces the primary JSONL stream (one memory per line).
+// The primary stream contains memories. Edges and candidates are in sidecars
+// accessible via ExportWithSidecars. Format is streaming-friendly (no buffering).
+func exportJSONL(bundle *ExportBundle, _ ExportOptions, _ time.Time) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+
+	for _, mem := range bundle.Memories {
+		if err := enc.Encode(mem); err != nil {
+			return nil, fmt.Errorf("export JSONL: encode memory %d: %w", mem.ID, err)
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+// ExportWithSidecars returns the primary JSONL bytes plus a map of sidecar files.
+// Keys are sidecar suffixes (".edges.jsonl", ".candidates.jsonl").
+// Sidecars enable independent streaming import of edges and candidates.
+func ExportWithSidecars(bundle *ExportBundle, opts ExportOptions) (map[string][]byte, error) {
+	if bundle == nil {
+		return nil, fmt.Errorf("ExportWithSidecars: bundle must not be nil")
+	}
+
+	exportedAt := opts.ExportedAt
+	if exportedAt.IsZero() {
+		exportedAt = time.Now().UTC()
+	}
+
+	primary, err := exportJSONL(bundle, opts, exportedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	sidecars := map[string][]byte{
+		"":                  primary, // primary stream
+		".edges.jsonl":      nil,
+		".candidates.jsonl": nil,
+	}
+
+	// .edges.jsonl
+	var edgeBuf bytes.Buffer
+	edgeEnc := json.NewEncoder(&edgeBuf)
+	edgeEnc.SetEscapeHTML(false)
+	for _, edge := range bundle.Edges {
+		if err := edgeEnc.Encode(edge); err != nil {
+			return nil, fmt.Errorf("ExportWithSidecars: encode edge: %w", err)
+		}
+	}
+	sidecars[".edges.jsonl"] = edgeBuf.Bytes()
+
+	// .candidates.jsonl
+	var candBuf bytes.Buffer
+	candEnc := json.NewEncoder(&candBuf)
+	candEnc.SetEscapeHTML(false)
+	for _, cand := range bundle.Candidates {
+		if err := candEnc.Encode(cand); err != nil {
+			return nil, fmt.Errorf("ExportWithSidecars: encode candidate: %w", err)
+		}
+	}
+	sidecars[".candidates.jsonl"] = candBuf.Bytes()
+
+	return sidecars, nil
 }
 
 // sha256hex returns the hex-encoded SHA-256 checksum of data.
