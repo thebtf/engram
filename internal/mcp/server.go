@@ -517,6 +517,57 @@ If you need the full expanded tool list (50+ individual tools), call ` + "`tools
 
 `
 
+// recallMemoryTool returns the recall_memory tool definition.
+// When ENGRAM_VNEXT_ENABLED == "true", the schema is extended with the vnext-gated
+// parameters (expand_graph, min_confidence, tier_filter, explain).
+// Flag-OFF clients see the original 6-field schema; flag-ON clients see the full schema.
+// This dynamic schema approach follows the same pattern as adminActionsBase/Vnext split
+// used elsewhere in this server.
+func recallMemoryTool() Tool {
+	props := map[string]any{
+		"query":   map[string]any{"type": "string", "description": "Natural language query"},
+		"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Filter by concept tags"},
+		"type":    map[string]any{"type": "string", "description": "Filter by observation type"},
+		"limit":   map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
+		"format":  map[string]any{"type": "string", "enum": []string{"text", "items", "detailed"}, "default": "text"},
+		"project": map[string]any{"type": "string", "description": "Project ID to scope results (includes project-scoped and global observations)"},
+	}
+	desc := "Recall memories/observations by semantic search. Use to retrieve previously stored knowledge."
+	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+		// Vnext-gated additional parameters (FR-C4 hybrid retrieval).
+		props["expand_graph"] = map[string]any{
+			"type":        "boolean",
+			"description": "Enable Tier2 graph expansion: fetches 1-hop neighbours of top-5 results (opt-in, <200ms budget). Requires knowledge graph edges to be present.",
+		}
+		props["min_confidence"] = map[string]any{
+			"type":        "number",
+			"minimum":     0,
+			"maximum":     1,
+			"description": "Minimum composite score floor [0,1]. Results below this threshold are excluded from the response.",
+		}
+		props["tier_filter"] = map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string", "enum": []string{"tier0_exact", "tier1_fts", "tier1_vector", "tier2_graph"}},
+			"description": "Restrict results to specific retrieval tiers. Empty = all tiers. Values: tier0_exact, tier1_fts, tier1_vector, tier2_graph.",
+		}
+		props["explain"] = map[string]any{
+			"type":        "boolean",
+			"description": "Include per-result ranking_explanation {relevance, recency, importance, fused_score, source_tier} in the response.",
+		}
+		desc = "Recall memories/observations using FR-C4 hybrid retrieval (FTS+vector RRF + recency + importance scoring). Supports tier filtering, graph expansion, and score explanations."
+	}
+	return Tool{
+		Name:        "recall_memory",
+		Description: desc,
+		tier:        tierCore,
+		InputSchema: map[string]any{
+			"type":       "object",
+			"required":   []string{"query"},
+			"properties": props,
+		},
+	}
+}
+
 // primaryTools returns the 7 consolidated primary tools shown by default.
 func (s *Server) primaryTools() []Tool {
 	return []Tool{
@@ -842,23 +893,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					},
 				},
 			},
-			Tool{
-				Name:        "recall_memory",
-				Description: "Recall memories/observations by semantic search. Use to retrieve previously stored knowledge.",
-				tier:        tierCore,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"query"},
-					"properties": map[string]any{
-						"query":   map[string]any{"type": "string", "description": "Natural language query"},
-						"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Filter by concept tags"},
-						"type":    map[string]any{"type": "string", "description": "Filter by observation type"},
-						"limit":   map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
-						"format":  map[string]any{"type": "string", "enum": []string{"text", "items", "detailed"}, "default": "text"},
-						"project": map[string]any{"type": "string", "description": "Project ID to scope results (includes project-scoped and global observations)"},
-					},
-				},
-			},
+			recallMemoryTool(),
 			Tool{
 				Name:        "rate_memory",
 				Description: "Rate a memory as useful or not useful. Affects future ranking in search results.",

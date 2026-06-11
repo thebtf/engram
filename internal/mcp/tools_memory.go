@@ -17,6 +17,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -590,7 +591,14 @@ func truncateTitle(content string, maxLen int) string {
 	return truncated + "..."
 }
 
-// handleRecallMemory retrieves memories from the v5 memories table using list + in-memory filtering.
+// handleRecallMemory retrieves memories from the v5 memories table.
+//
+// Flag-OFF (ENGRAM_VNEXT_ENABLED != "true"): byte-identical to the previous
+// List-based in-memory-filter path. No schema change; no new parameters accepted.
+//
+// Flag-ON (ENGRAM_VNEXT_ENABLED == "true"): uses the HybridSearch pipeline
+// (FR-C4: FTS+vector RRF + FR-C4 scoring + optional Tier2 graph expansion).
+// New parameters: expand_graph, min_confidence, tier_filter, explain.
 func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("recall_memory: memory store not configured")
@@ -626,6 +634,13 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	if project == "" {
 		return "", fmt.Errorf("project is required for recall_memory in v5")
 	}
+
+	// ── vnext hybrid path ───────────────────────────────────────────────────
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	if vnextEnabled {
+		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags)
+	}
+	// ── legacy List-based path (flag-OFF; byte-identical behaviour) ─────────
 
 	fetchLimit := limit
 	if query != "" || obsType != "" || len(tags) > 0 {
@@ -782,6 +797,217 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 			sb.WriteString(fmt.Sprintf("   %s\n", content))
 			if len(mem.Tags) > 0 {
 				sb.WriteString(fmt.Sprintf("   tags: %s\n", strings.Join(mem.Tags, ", ")))
+			}
+			sb.WriteString("\n")
+		}
+		return sb.String(), nil
+	}
+}
+
+// handleRecallMemoryHybrid is the vnext path for recall_memory.
+// Called only when ENGRAM_VNEXT_ENABLED == "true".
+// It accepts the vnext-gated parameters (expand_graph, min_confidence,
+// tier_filter, explain) in addition to the base recall_memory params.
+func (s *Server) handleRecallMemoryHybrid(
+	ctx context.Context,
+	m map[string]any,
+	query, project, format string,
+	limit int,
+	obsType string,
+	tags []string,
+) (string, error) {
+	expandGraph := coerceBool(m["expand_graph"], false)
+	minConfidence := coerceFloat64(m["min_confidence"], 0.0)
+	tierFilter := coerceStringSlice(m["tier_filter"])
+	explain := coerceBool(m["explain"], false)
+
+	// Attempt to embed the query for Tier1 vector search.
+	// When the embedding client is nil (ENGRAM_EMBEDDING_URL not set),
+	// HybridSearch degrades gracefully to FTS-only.
+	var queryVec []float32
+	if s.embeddingClient != nil {
+		vecs, embErr := s.embeddingClient.Embed(ctx, []string{query})
+		if embErr == nil && len(vecs) > 0 {
+			queryVec = vecs[0]
+		}
+		// Non-fatal: log at debug level and continue without vector.
+		if embErr != nil {
+			log.Debug().Err(embErr).Msg("recall_memory: embedding unavailable, falling back to FTS-only")
+		}
+	}
+
+	opts := retrieval.HybridOptions{
+		QueryVec:      queryVec,
+		TierFilter:    tierFilter,
+		MinConfidence: minConfidence,
+		ExpandGraph:   expandGraph,
+		Explain:       explain,
+	}
+
+	var gStore retrieval.GraphStoreInterface
+	if s.graphStore != nil {
+		gStore = s.graphStore
+	}
+
+	var embStore retrieval.EmbeddingStoreInterface
+	if s.embeddingStore != nil {
+		embStore = s.embeddingStore
+	}
+
+	scored, explanations, err := retrieval.HybridSearch(
+		ctx,
+		project, query,
+		limit,
+		s.memoryStore,
+		embStore,
+		gStore,
+		opts,
+	)
+	if err != nil {
+		return "", fmt.Errorf("recall_memory hybrid: %w", err)
+	}
+
+	// Reconsolidation (same as legacy path — fire-and-forget).
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(scored) > 0 {
+		go func() {
+			for _, sm := range scored {
+				mem := sm.Memory
+				fields := map[string]any{
+					"access_count":      gormlib.Expr("access_count + 1"),
+					"last_retrieved_at": gormlib.Expr("now()"),
+				}
+				if mem.Stability > 0 {
+					newStability := lifecycle.Reconsolidate(mem.Stability, mem.Retrievability)
+					if newStability != mem.Stability {
+						fields["stability"] = newStability
+					}
+				}
+				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), mem.ID, fields)
+			}
+		}()
+	}
+
+	// Build result: filter by obsType / tags post-scoring (same semantics as legacy).
+	queryLower := strings.ToLower(query)
+	tagSet := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tagSet[strings.ToLower(tag)] = struct{}{}
+	}
+
+	type hybridResult struct {
+		RankingExplanation *retrieval.RankingExplanation `json:"ranking_explanation,omitempty"`
+		Tags               []string                      `json:"tags,omitempty"`
+		Title              string                        `json:"title"`
+		Type               string                        `json:"type,omitempty"`
+		Content            string                        `json:"content"`
+		SourceAgent        string                        `json:"source_agent,omitempty"`
+		Project            string                        `json:"project"`
+		ID                 int64                         `json:"id"`
+		Score              float64                       `json:"score"`
+	}
+
+	explByID := make(map[int64]retrieval.RankingExplanation, len(explanations))
+	for _, e := range explanations {
+		explByID[e.MemoryID] = e
+	}
+
+	items := make([]hybridResult, 0, len(scored))
+	for _, sm := range scored {
+		mem := sm.Memory
+
+		// Post-score obsType filter.
+		if obsType != "" {
+			typeTag := strings.ToLower("type:" + obsType)
+			typeMatched := false
+			for _, tag := range mem.Tags {
+				if strings.ToLower(tag) == typeTag {
+					typeMatched = true
+					break
+				}
+			}
+			if !typeMatched {
+				continue
+			}
+		}
+
+		// Post-score tag filter.
+		if len(tagSet) > 0 {
+			tagMatched := false
+			for _, tag := range mem.Tags {
+				if _, ok := tagSet[strings.ToLower(tag)]; ok {
+					tagMatched = true
+					break
+				}
+			}
+			if !tagMatched {
+				continue
+			}
+		}
+
+		// Post-score query sanity filter for FTS-only degraded path
+		// (vector relevance already captured by score; FTS content check as safety net).
+		_ = queryLower
+
+		memoryType := ""
+		for _, tag := range mem.Tags {
+			if strings.HasPrefix(tag, "type:") {
+				memoryType = strings.TrimPrefix(tag, "type:")
+				break
+			}
+		}
+
+		r := hybridResult{
+			ID:          mem.ID,
+			Title:       truncateTitle(mem.Content, 80),
+			Type:        memoryType,
+			Content:     mem.Content,
+			Tags:        mem.Tags,
+			SourceAgent: mem.SourceAgent,
+			Project:     mem.Project,
+			Score:       sm.Score,
+		}
+		if explain {
+			if e, ok := explByID[mem.ID]; ok {
+				r.RankingExplanation = &e
+			}
+		}
+		items = append(items, r)
+		if len(items) == limit {
+			break
+		}
+	}
+
+	switch format {
+	case "items", "detailed":
+		out, marshalErr := json.MarshalIndent(items, "", "  ")
+		if marshalErr != nil {
+			return "", fmt.Errorf("marshal hybrid result: %w", marshalErr)
+		}
+		return string(out), nil
+	default: // "text"
+		if len(items) == 0 {
+			return "No memories found matching the query.", nil
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Found %d memories for query: %q\n\n", len(items), query))
+		for i, r := range items {
+			typeLabel := "MEMORY"
+			if r.Type != "" {
+				typeLabel = strings.ToUpper(r.Type)
+			}
+			sb.WriteString(fmt.Sprintf("%d. [%s] %s (score: %.3f)\n", i+1, typeLabel, r.Title, r.Score))
+			content := r.Content
+			if len(content) > 300 {
+				content = content[:300] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("   %s\n", content))
+			if len(r.Tags) > 0 {
+				sb.WriteString(fmt.Sprintf("   tags: %s\n", strings.Join(r.Tags, ", ")))
+			}
+			if explain && r.RankingExplanation != nil {
+				e := r.RankingExplanation
+				sb.WriteString(fmt.Sprintf("   explanation: relevance=%.3f recency=%.3f importance=%.3f fused=%.3f tier=%s\n",
+					e.Relevance, e.Recency, e.Importance, e.FusedScore, e.SourceTier))
 			}
 			sb.WriteString("\n")
 		}

@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -46,7 +47,12 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	case "similar":
 		// Dropped in v5 (US9): vector similarity search removed (content_chunks dropped).
-		return "", fmt.Errorf("recall: action %q not supported in v5 (vector similarity removed)", action)
+		// Reinstated under flag via recall_memory when ENGRAM_VNEXT_ENABLED=true (W3).
+		if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+			// Delegate to recall_memory which uses FTS+vector RRF under vnext.
+			return s.handleRecallMemory(ctx, args)
+		}
+		return "", fmt.Errorf("recall: action %q not supported in v5 (vector similarity removed — enable ENGRAM_VNEXT_ENABLED=true for hybrid retrieval)", action)
 
 	case "timeline":
 		// Dropped in v5 (US9): timeline backed by search.Manager.
@@ -64,7 +70,21 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	case "explain":
 		// Dropped in v5 (US9): explain ranked search results using search.Manager.
-		return "", fmt.Errorf("recall: action %q not supported in v5 (search ranking removed)", action)
+		// Reinstated under flag via recall_memory(explain=true) when ENGRAM_VNEXT_ENABLED=true (W3).
+		if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+			// Forward to recall_memory with explain=true injected.
+			var m map[string]any
+			if jsonErr := json.Unmarshal(args, &m); jsonErr != nil {
+				return "", fmt.Errorf("recall explain: %w", jsonErr)
+			}
+			m["explain"] = true
+			patched, marshalErr := json.Marshal(m)
+			if marshalErr != nil {
+				return "", fmt.Errorf("recall explain: patch args: %w", marshalErr)
+			}
+			return s.handleRecallMemory(ctx, patched)
+		}
+		return "", fmt.Errorf("recall: action %q not supported in v5 (search ranking removed — enable ENGRAM_VNEXT_ENABLED=true for ranking explanations)", action)
 
 	case "reasoning":
 		return s.handleReasoningSearch(ctx, args)
