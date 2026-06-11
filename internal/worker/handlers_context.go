@@ -14,8 +14,10 @@ import (
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/injection"
+	"github.com/thebtf/engram/internal/scope"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
@@ -913,6 +915,17 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		if memErr != nil {
 			http.Error(w, memErr.Error(), http.StatusInternalServerError)
 			return
+		}
+		// W4 P2: apply privacy-scope filter when ENGRAM_VNEXT_F_ENABLED=true so
+		// private-scope rows from other workstations are not included in the
+		// backward-compat fallback. Flag-OFF: path is byte-identical to pre-fix
+		// behavior (scope.FilterMemories is not called).
+		if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+			var callerCtx scope.KeycardContext
+			if id, ok := auth.IdentityFrom(ctx); ok {
+				callerCtx.WorkstationID = id.WorkstationID()
+			}
+			mems = scope.FilterMemories(callerCtx, mems)
 		}
 		allRecentRaw = memoriesToObservations(mems)
 	}

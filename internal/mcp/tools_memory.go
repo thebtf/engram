@@ -466,6 +466,14 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			if lifecycle.ValidTier(tier) {
 				memory.Tier = tier
 			}
+		} else {
+			// B4 resolution (2026-06-11): spec FR-B2 specifies 'episodic' as the default
+			// tier for new memories — fresh, unverified knowledge is episodic until promoted.
+			// DB column default is now 'episodic' (migration 131), but memoryRowForCreate
+			// only copies Tier when it is non-empty. Set the explicit default here so
+			// CreateWithLifecycle persists 'episodic' rather than relying on the DB default
+			// (belt-and-suspenders: explicit intent is clearer than relying on DB default).
+			memory.Tier = lifecycle.TierEpisodic
 		}
 		if et := coerceString(m["epistemic_type"], ""); et != "" {
 			if lifecycle.ValidEpistemicType(et) {
@@ -770,6 +778,20 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	project := strings.TrimSpace(coerceString(m["project"], ""))
 	tags := coerceStringSlice(m["tags"])
 
+	// B4 resolution (2026-06-11): tier_filter for recall_memory — spec FR-B2 requires
+	// recall_memory to accept an optional tier filter. Gated behind ENGRAM_LIFECYCLE_ENABLED.
+	tierFilterEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
+	tierFilterSet := make(map[string]bool)
+	if tierFilterEnabled {
+		for _, tf := range coerceStringSlice(m["tier_filter"]) {
+			if lifecycle.ValidTier(tf) {
+				tierFilterSet[tf] = true
+			} else {
+				return "", fmt.Errorf("invalid_tier_filter: %q must be one of working, episodic, semantic, procedural", tf)
+			}
+		}
+	}
+
 	if query == "" {
 		return "", fmt.Errorf("query is required")
 	}
@@ -889,6 +911,17 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				Sessions:      mem.SourceSessions,
 			}
 			if !scope.Resolve(caller, memScope, meta) {
+				return false
+			}
+		}
+		// B4 resolution: tier_filter (ENGRAM_LIFECYCLE_ENABLED path).
+		// Empty tierFilterSet means no tier restriction — all tiers pass.
+		if len(tierFilterSet) > 0 {
+			tier := mem.Tier
+			if tier == "" {
+				tier = lifecycle.TierEpisodic // treat unset as episodic (migration 131 default)
+			}
+			if !tierFilterSet[tier] {
 				return false
 			}
 		}
