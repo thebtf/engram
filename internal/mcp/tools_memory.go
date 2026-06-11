@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
+	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
@@ -839,13 +840,28 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		}
 	}
 
+	// ── T018 (engram vNext Milestone F TG3) — new filter + rationale params ──
+	// Parsed unconditionally from the args map; gated on vnextFEnabled() at
+	// the dispatch point below.  Default values (false / 0.0) produce
+	// byte-identical behaviour to v6.4.x — no response-shape change, no
+	// ListWithFilters dispatch — satisfying NFR-F1 backward-compat invariant.
+	tg3ConfidenceMin := coerceFloat64(m["confidence_min"], 0.0)
+	tg3IncludeSuperseded := coerceBool(m["include_superseded"], false)
+	tg3IncludeRationale := coerceBool(m["include_rationale"], false)
+
+	// tg3Active is true only when at least one TG3 param is non-default AND the
+	// vNext-F flag is on.  Flag-OFF callers that accidentally pass the new params
+	// still get the legacy path — a defensive gate that mirrors the include_scopes
+	// flag-gate pattern in T005.
+	tg3Active := vnextFEnabled() && (tg3ConfidenceMin > 0 || tg3IncludeSuperseded || tg3IncludeRationale)
+
 	// ── vnext hybrid path ───────────────────────────────────────────────────
 	// Caller identity + scope context are fully built above; pass them into
 	// handleRecallMemoryHybrid so hybrid results are subject to the same
 	// privacy_scope visibility predicate as the legacy List path below.
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 	if vnextEnabled {
-		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, scopeEnabled, includeScopes)
+		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, scopeEnabled, includeScopes, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
 	}
 	// ── legacy List-based path (flag-OFF; byte-identical behaviour when both
 	// flags are OFF; scope-aware batch-loop when ENGRAM_VNEXT_F_ENABLED=true) ─
@@ -929,7 +945,42 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	}
 
 	filtered := make([]*models.Memory, 0, limit)
-	if scopeEnabled {
+	if tg3Active {
+		// T018 (Milestone F TG3): when any non-default TG3 filter is set, push
+		// confidence_min and include_superseded to the store layer via
+		// ListWithFilters. We fetch a generous candidate pool and apply the
+		// remaining in-memory filters (query substring, type, tags, scope) in
+		// keepMemory as usual.
+		//
+		// The candidate pool is limit*candidateMultiplier, capped at 1000, so that
+		// in-memory post-filters have sufficient rows to fill the requested limit.
+		// This mirrors the query-mode candidate-pool pattern on the legacy path.
+		const (
+			tg3CandidateMultiplier = 10
+			tg3MinPool             = 1000
+		)
+		fetchLimit := limit * tg3CandidateMultiplier
+		if fetchLimit < tg3MinPool {
+			fetchLimit = tg3MinPool
+		}
+		tg3Opts := engramgorm.ListOptions{
+			ConfidenceMin:     tg3ConfidenceMin,
+			IncludeSuperseded: tg3IncludeSuperseded,
+			Limit:             fetchLimit,
+		}
+		candidates, err := s.memoryStore.ListWithFilters(ctx, project, tg3Opts)
+		if err != nil {
+			return "", fmt.Errorf("recall_memory: %w", err)
+		}
+		for _, mem := range candidates {
+			if keepMemory(mem) {
+				filtered = append(filtered, mem)
+				if len(filtered) >= limit {
+					break
+				}
+			}
+		}
+	} else if scopeEnabled {
 		// Batch-loop via ListWithOffset (codex P1 cycle-3 + cycle-4 pattern)
 		// so scope-invisible newest rows do not truncate visible recall
 		// before older eligible rows reach the requested limit.
@@ -1000,6 +1051,55 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), mem.ID, fields)
 			}
 		}()
+	}
+
+	// T018 (TG3): when include_rationale=true, emit a structured JSON response
+	// regardless of format — the rationale block only makes sense in structured
+	// output. This path overrides the format switch below.
+	//
+	// The response shape matches spec §FR-F3 (REVISE 2026-05-25):
+	//   { "memories": [..., { ..., "ranking_rationale": { 6 fields } }], "count": N,
+	//     "query_metadata": { "candidates_before_filter", "candidates_after_filter",
+	//                         "elapsed_ms" } }
+	//
+	// Backward-compat: this branch is only entered when tg3IncludeRationale=true
+	// AND tg3Active=true (vnextFEnabled() check is inside tg3Active). Zero-flags
+	// callers never reach this branch — their response is byte-identical v6.4.x.
+	if tg3IncludeRationale && tg3Active {
+		// Build active filter descriptors for rationale.filters_applied.
+		var filterDescs []string
+		filterDescs = append(filterDescs, "project="+project)
+		if tg3ConfidenceMin > 0 {
+			filterDescs = append(filterDescs, fmt.Sprintf("confidence_min=%.4g", tg3ConfidenceMin))
+		}
+		if tg3IncludeSuperseded {
+			filterDescs = append(filterDescs, "include_superseded=true")
+		}
+
+		type memWithRationale struct {
+			*models.Memory
+			RankingRationale retrieval.RankingRationale `json:"ranking_rationale"`
+		}
+		results := make([]memWithRationale, 0, len(filtered))
+		for _, mem := range filtered {
+			// substring_match: true when query found in content (mirrors keepMemory logic).
+			contentMatched := queryLower != "" && strings.Contains(strings.ToLower(mem.Content), queryLower)
+			rat := retrieval.AssembleRationale(mem, query, contentMatched, filterDescs)
+			results = append(results, memWithRationale{Memory: mem, RankingRationale: rat})
+		}
+
+		response := map[string]any{
+			"memories": results,
+			"count":    len(results),
+		}
+		if query != "" {
+			response["query"] = query
+		}
+		out, err := json.Marshal(response)
+		if err != nil {
+			return "", fmt.Errorf("recall_memory rationale marshal: %w", err)
+		}
+		return string(out), nil
 	}
 
 	switch format {
@@ -1095,6 +1195,10 @@ func (s *Server) handleRecallMemoryHybrid(
 	caller scope.KeycardContext,
 	scopeEnabled bool,
 	includeScopes map[string]bool,
+	tg3Active bool,
+	tg3ConfidenceMin float64,
+	tg3IncludeSuperseded bool,
+	tg3IncludeRationale bool,
 ) (string, error) {
 	expandGraph := coerceBool(m["expand_graph"], false)
 	minConfidence := coerceFloat64(m["min_confidence"], 0.0)
@@ -1417,6 +1521,72 @@ func (s *Server) handleRecallMemoryHybrid(
 				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), ri.id, fields)
 			}
 		}()
+	}
+
+	// T018+T019 TG3: hybrid path include_rationale — when set, emit v5-surface
+	// RankingRationale alongside W3's existing ranking_explanation. The two
+	// fields coexist: ranking_explanation carries W3 FR-C4 scores (relevance,
+	// recency, importance, fused_score, source_tier); ranking_rationale carries
+	// the 6 TG3 v5-surface fields (recency_days, confidence, citation_count,
+	// tier, substring_match, filters_applied). See T019 schema description.
+	if tg3IncludeRationale && tg3Active {
+		var filterDescs []string
+		filterDescs = append(filterDescs, "project="+project)
+		if tg3ConfidenceMin > 0 {
+			filterDescs = append(filterDescs, fmt.Sprintf("confidence_min=%.4g", tg3ConfidenceMin))
+		}
+		if tg3IncludeSuperseded {
+			filterDescs = append(filterDescs, "include_superseded=true")
+		}
+
+		type hybridRationaleResult struct {
+			RankingExplanation *retrieval.RankingExplanation `json:"ranking_explanation,omitempty"`
+			RankingRationale   *retrieval.RankingRationale   `json:"ranking_rationale"`
+			Tags               []string                      `json:"tags,omitempty"`
+			Title              string                        `json:"title"`
+			Type               string                        `json:"type,omitempty"`
+			Content            string                        `json:"content"`
+			SourceAgent        string                        `json:"source_agent,omitempty"`
+			Project            string                        `json:"project"`
+			ID                 int64                         `json:"id"`
+			Score              float64                       `json:"score"`
+		}
+		rationaleItems := make([]hybridRationaleResult, 0, len(items))
+		for _, item := range items {
+			sm, ok := scoredByID[item.ID]
+			if !ok {
+				continue
+			}
+			contentMatched := strings.Contains(strings.ToLower(sm.Memory.Content), strings.ToLower(query))
+			rat := retrieval.AssembleRationale(sm.Memory, query, contentMatched, filterDescs)
+			r := hybridRationaleResult{
+				ID:               item.ID,
+				Title:            item.Title,
+				Type:             item.Type,
+				Content:          item.Content,
+				Tags:             item.Tags,
+				SourceAgent:      item.SourceAgent,
+				Project:          item.Project,
+				Score:            item.Score,
+				RankingRationale: &rat,
+			}
+			if explain {
+				if e, ok := explByID[item.ID]; ok {
+					r.RankingExplanation = &e
+				}
+			}
+			rationaleItems = append(rationaleItems, r)
+		}
+		response := map[string]any{
+			"memories": rationaleItems,
+			"count":    len(rationaleItems),
+			"query":    query,
+		}
+		out, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			return "", fmt.Errorf("marshal hybrid rationale result: %w", marshalErr)
+		}
+		return string(out), nil
 	}
 
 	switch format {
