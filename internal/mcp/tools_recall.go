@@ -49,10 +49,26 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 		// Dropped in v5 (US9): vector similarity search removed (content_chunks dropped).
 		// Reinstated under flag via recall_memory when ENGRAM_VNEXT_ENABLED=true (W3).
 		if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
-			// Delegate to recall_memory which uses FTS+vector RRF under vnext.
-			return s.handleRecallMemory(ctx, args)
+			// Under flag-ON: translate min_similarity into the hybrid vector threshold
+			// (VecThreshold on HybridOptions) and forward to recall_memory.
+			// This preserves legacy min_similarity semantics: callers that relied on
+			// a cosine floor will see the same filtering under the hybrid path.
+			var mArgs map[string]any
+			if jsonErr := json.Unmarshal(args, &mArgs); jsonErr != nil {
+				return "", fmt.Errorf("recall similar: %w", jsonErr)
+			}
+			// Map min_similarity → vec_threshold so handleRecallMemoryHybrid picks it up.
+			if ms, ok := mArgs["min_similarity"]; ok {
+				mArgs["vec_threshold"] = ms
+			}
+			patched, marshalErr := json.Marshal(mArgs)
+			if marshalErr != nil {
+				return "", fmt.Errorf("recall similar: patch args: %w", marshalErr)
+			}
+			return s.handleRecallMemory(ctx, patched)
 		}
-		return "", fmt.Errorf("recall: action %q not supported in v5 (vector similarity removed — enable ENGRAM_VNEXT_ENABLED=true for hybrid retrieval)", action)
+		// Flag-OFF: exact tombstone string from origin/main (byte-identical).
+		return "", fmt.Errorf("recall: action %q not supported in v5 (vector similarity removed)", action)
 
 	case "timeline":
 		// Dropped in v5 (US9): timeline backed by search.Manager.
@@ -84,7 +100,8 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 			}
 			return s.handleRecallMemory(ctx, patched)
 		}
-		return "", fmt.Errorf("recall: action %q not supported in v5 (search ranking removed — enable ENGRAM_VNEXT_ENABLED=true for ranking explanations)", action)
+		// Flag-OFF: exact tombstone string from origin/main (byte-identical).
+		return "", fmt.Errorf("recall: action %q not supported in v5 (search ranking removed)", action)
 
 	case "reasoning":
 		return s.handleReasoningSearch(ctx, args)

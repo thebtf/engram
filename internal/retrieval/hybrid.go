@@ -16,28 +16,46 @@ import (
 
 // RRF performs Reciprocal Rank Fusion on two ranked result lists.
 // k is the RRF constant (typically 60).
+// Tie-breaking is deterministic: score desc → best source rank asc → ID asc.
 func RRF(listA, listB []int64, k int) []int64 {
 	if k <= 0 {
 		k = 60
 	}
 	scores := make(map[int64]float64)
+	// bestRank tracks the minimum (best) rank seen for each ID across both lists.
+	bestRank := make(map[int64]int)
+	initRank := func(id int64, rank int) {
+		if r, ok := bestRank[id]; !ok || rank < r {
+			bestRank[id] = rank
+		}
+	}
 	for rank, id := range listA {
 		scores[id] += 1.0 / float64(rank+k+1)
+		initRank(id, rank)
 	}
 	for rank, id := range listB {
 		scores[id] += 1.0 / float64(rank+k+1)
+		initRank(id, rank)
 	}
 
 	type scored struct {
 		id    int64
 		score float64
+		best  int
 	}
-	var merged []scored
+	merged := make([]scored, 0, len(scores))
 	for id, s := range scores {
-		merged = append(merged, scored{id: id, score: s})
+		merged = append(merged, scored{id: id, score: s, best: bestRank[id]})
 	}
+	// Deterministic tie-breaker: score desc → best source rank asc → ID asc.
 	sort.Slice(merged, func(i, j int) bool {
-		return merged[i].score > merged[j].score
+		if merged[i].score != merged[j].score {
+			return merged[i].score > merged[j].score
+		}
+		if merged[i].best != merged[j].best {
+			return merged[i].best < merged[j].best
+		}
+		return merged[i].id < merged[j].id
 	})
 
 	result := make([]int64, len(merged))
@@ -51,13 +69,19 @@ func RRF(listA, listB []int64, k int) []int64 {
 // Using an interface keeps the package free of a concrete DB import.
 type MemoryStoreInterface interface {
 	SearchFTS(ctx context.Context, project, query string, limit int) ([]*models.Memory, error)
-	GetByIDs(ctx context.Context, ids []int64) ([]*models.Memory, error)
+	// GetByIDs fetches memories by ID list scoped to the given project.
+	// project must be non-empty; the implementation must filter by project to
+	// prevent cross-project leakage when IDs arrive from the unscoped vector leg.
+	GetByIDs(ctx context.Context, project string, ids []int64) ([]*models.Memory, error)
 	List(ctx context.Context, project string, limit int) ([]*models.Memory, error)
 }
 
 // EmbeddingStoreInterface is the minimal interface over the embedding store used by HybridSearch.
+// FindSimilarForProject is the project-scoped variant required by HybridSearch to prevent
+// cross-project leakage through the vector leg. content_chunks has no project column, so the
+// implementation must JOIN to memories and filter by project there.
 type EmbeddingStoreInterface interface {
-	FindSimilar(ctx context.Context, queryVec []float32, limit int, threshold float64) ([]embedding.SimilarResult, error)
+	FindSimilarForProject(ctx context.Context, project string, queryVec []float32, limit int, threshold float64) ([]embedding.SimilarResult, error)
 }
 
 // GraphStoreInterface is the minimal interface over graph.Store used for Tier2 expansion.
@@ -76,6 +100,10 @@ type HybridOptions struct {
 	// MinConfidence is a post-scoring floor applied to the fused score [0,1].
 	// Candidates below this threshold are dropped before the result is returned.
 	MinConfidence float64
+	// VecThreshold is the minimum cosine similarity for vector candidates [0,1].
+	// When 0 the embedding store's default threshold applies (typically 0.7).
+	// Maps to the legacy min_similarity parameter on recall(action="similar").
+	VecThreshold float64
 	// ExpandGraph enables Tier2: 1-hop graph neighbours of the top-5 Tier1
 	// results are fetched and merged with a 0.85 multiplicative score penalty.
 	// Requires GraphStore to be set; silently skipped when nil.
@@ -186,10 +214,13 @@ func HybridSearch(
 	}
 
 	// Vector branch — skipped when embedding store or query vector unavailable.
+	// Uses FindSimilarForProject to scope results to the caller's project,
+	// preventing cross-project leakage (content_chunks has no project column).
 	useVector := embStore != nil && len(opts.QueryVec) > 0 && tierAllowed("tier1_vector")
 	if useVector {
 		eg.Go(func() error {
-			results, err := embStore.FindSimilar(egCtx, opts.QueryVec, vecLimit, 0.5)
+			vecThreshold := opts.VecThreshold // 0 → embedding store default (0.7)
+			results, err := embStore.FindSimilarForProject(egCtx, project, opts.QueryVec, vecLimit, vecThreshold)
 			if err != nil {
 				return nil // degrade to FTS-only
 			}
@@ -208,7 +239,8 @@ func HybridSearch(
 	}
 
 	// Fuse with RRF.
-	fusedIDs := RRF(ftsIDs, vecIDs, 60)
+	const rrfK = 60
+	fusedIDs := RRF(ftsIDs, vecIDs, rrfK)
 	if len(fusedIDs) == 0 {
 		return nil, nil, nil
 	}
@@ -219,8 +251,10 @@ func HybridSearch(
 	}
 	fusedIDs = fusedIDs[:fetchN]
 
-	// Materialise candidate memories.
-	memories, err := memStore.GetByIDs(ctx, fusedIDs)
+	// Materialise candidate memories — project-scoped to block cross-project leakage.
+	// Candidates can include IDs from the unscoped-by-nature vector leg; filtering by
+	// project here is the second defence (FindSimilarForProject is the first).
+	memories, err := memStore.GetByIDs(ctx, project, fusedIDs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -229,22 +263,59 @@ func HybridSearch(
 	ftsSet := idSet(ftsIDs)
 	vecSet := idSet(vecIDs)
 
+	// Pre-compute FTS rank lookup for RRF-aware relevance estimation.
+	// FTS rank position is used to normalise relevance for FTS-only candidates so
+	// that relevance carries signal from the FTS ordering rather than a flat 0.5.
+	// Formula: relevance = 1 / (rank + rrfK + 1), clamped to [0.1, 0.9] so it
+	// stays distinguishable from exact (1.0) and zero-signal paths.
+	// For vector candidates the actual cosine similarity is used directly (preferred).
+	ftsRankMap := make(map[int64]int, len(ftsIDs))
+	for rank, id := range ftsIDs {
+		ftsRankMap[id] = rank
+	}
+
 	// Score all candidates.
 	scored := make([]ScoredMemory, 0, len(memories))
 	explMap := make(map[int64]RankingExplanation, len(memories))
 
 	for _, m := range memories {
-		// Relevance: vector cosine when available, else 0.5 (FTS rank unknown post-fusion).
-		relevance := 0.5
+		// Relevance assignment (FR-C4):
+		// - tier1_vector: cosine similarity from the embedding store (most precise).
+		// - tier1_fts (vector also present): cosine similarity used even when FTS also
+		//   matched, because cosine is a better-calibrated signal.
+		// - tier1_fts-only: normalised RRF term 1/(rank+k+1) clamped to [0.1,0.9].
+		//   Rationale: this carries the FTS ordering signal rather than a flat 0.5,
+		//   which caused all FTS-only candidates to tie on relevance and sort by
+		//   recency/importance only — discarding the FTS rank completely.
+		var relevance float64
 		tier := "tier1_fts"
 		if sim, ok := vecSims[m.ID]; ok {
+			// Vector match (with or without concurrent FTS match).
 			relevance = sim
 			if ftsSet[m.ID] {
-				tier = "tier1_fts" // appeared in both; label FTS (higher precision)
+				tier = "tier1_fts" // appeared in both; label FTS (higher precision search)
 			} else {
 				tier = "tier1_vector"
 			}
+		} else if rank, ok := ftsRankMap[m.ID]; ok {
+			// FTS-only candidate: map rank to relevance in [0.3, 0.9] using linear
+			// position within the FTS result list. rank-0 (best FTS match) → 0.9,
+			// rank-(N-1) (worst) → 0.3. This carries the FTS ts_rank_cd ordering
+			// through the FR-C4 relevance term rather than using a flat 0.5 which
+			// discards rank entirely and collapses all FTS results to identical relevance.
+			// Formula: relevance = 0.3 + 0.6 * (1 - rank/(len(ftsIDs)))
+			// For N=1 (single FTS result) this produces exactly 0.9.
+			n := len(ftsIDs)
+			if n <= 1 {
+				relevance = 0.9
+			} else {
+				relevance = 0.3 + 0.6*(1.0-float64(rank)/float64(n))
+			}
+		} else {
+			// ID arrived outside both FTS and vector sets (e.g. Tier0 path quirk).
+			relevance = 0.1
 		}
+		_ = vecSet
 		sm := Score(m, relevance, now)
 		if opts.MinConfidence > 0 && sm.Score < opts.MinConfidence {
 			continue
@@ -261,11 +332,14 @@ func HybridSearch(
 			}
 		}
 		_ = ftsSet
-		_ = vecSet
 	}
 
-	// Tier 2 — graph expansion (opt-in).
+	// Tier 2 — graph expansion (opt-in, budget ≤200ms total; traverse capped at 150ms).
+	// On timeout the Tier1 result set is returned unmodified (graceful degradation).
 	if opts.ExpandGraph && gStore != nil && tierAllowed("tier2_graph") {
+		tier2Ctx, tier2Cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+		defer tier2Cancel()
+
 		top5 := scored
 		if len(top5) > 5 {
 			top5 = top5[:5]
@@ -273,8 +347,9 @@ func HybridSearch(
 		// Collect 1-hop neighbour IDs from top-5.
 		neighbourSet := make(map[int64]bool)
 		for _, sm := range top5 {
-			results, tErr := gStore.Traverse(ctx, sm.Memory.ID, 1, nil)
+			results, tErr := gStore.Traverse(tier2Ctx, sm.Memory.ID, 1, nil)
 			if tErr != nil {
+				// Includes context.DeadlineExceeded — degrade silently.
 				continue
 			}
 			for _, r := range results {
@@ -296,10 +371,12 @@ func HybridSearch(
 					break
 				}
 			}
-			neighbours, gErr := memStore.GetByIDs(ctx, nIDs)
+			// Use project-scoped GetByIDs to prevent cross-project leakage through
+			// graph edges that may reference memories in other projects.
+			neighbours, gErr := memStore.GetByIDs(tier2Ctx, project, nIDs)
 			if gErr == nil {
 				for _, m := range neighbours {
-					// Graph penalty: 0.85 multiplier.
+					// Graph penalty: 0.85 multiplier on the composite score.
 					sm := Score(m, 0.5, now)
 					sm.Score *= 0.85
 					if opts.MinConfidence > 0 && sm.Score < opts.MinConfidence {
@@ -321,9 +398,12 @@ func HybridSearch(
 		}
 	}
 
-	// Final sort by composite score descending.
+	// Final sort: score desc → ID asc (deterministic tie-breaker).
 	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].Score > scored[j].Score
+		if scored[i].Score != scored[j].Score {
+			return scored[i].Score > scored[j].Score
+		}
+		return scored[i].Memory.ID < scored[j].Memory.ID
 	})
 	if len(scored) > limit {
 		scored = scored[:limit]

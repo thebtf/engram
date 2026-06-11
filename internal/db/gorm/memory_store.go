@@ -625,16 +625,21 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 	return result, nil
 }
 
-// GetByIDs fetches active memories by a list of IDs, preserving the ID order.
-// Used by HybridSearch to materialise the fused candidate set.
-func (s *MemoryStore) GetByIDs(ctx context.Context, ids []int64) ([]*models.Memory, error) {
+// GetByIDs fetches active memories by a list of IDs scoped to project, preserving the ID order.
+// The project filter prevents cross-project leakage when IDs originate from the vector leg
+// (content_chunks has no project column; project scoping must be enforced here as second defence).
+// project must be non-empty; an empty project returns an error.
+func (s *MemoryStore) GetByIDs(ctx context.Context, project string, ids []int64) ([]*models.Memory, error) {
 	if len(ids) == 0 {
 		return nil, nil
+	}
+	if project == "" {
+		return nil, fmt.Errorf("GetByIDs: project must be non-empty")
 	}
 	now := time.Now().UTC()
 	var rows []Memory
 	err := s.db.WithContext(ctx).
-		Where("id = ANY(?) AND status = 'active' AND deleted_at IS NULL", pq.Array(ids)).
+		Where("id = ANY(?) AND project = ? AND status = 'active' AND deleted_at IS NULL", pq.Array(ids), project).
 		Where("valid_from IS NULL OR valid_from <= ?", now).
 		Where("valid_until IS NULL OR valid_until >= ?", now).
 		Find(&rows).Error

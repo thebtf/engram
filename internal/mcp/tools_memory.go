@@ -818,6 +818,7 @@ func (s *Server) handleRecallMemoryHybrid(
 ) (string, error) {
 	expandGraph := coerceBool(m["expand_graph"], false)
 	minConfidence := coerceFloat64(m["min_confidence"], 0.0)
+	vecThreshold := coerceFloat64(m["vec_threshold"], 0.0) // translated from min_similarity by recall(similar)
 	tierFilter := coerceStringSlice(m["tier_filter"])
 	explain := coerceBool(m["explain"], false)
 
@@ -840,6 +841,7 @@ func (s *Server) handleRecallMemoryHybrid(
 		QueryVec:      queryVec,
 		TierFilter:    tierFilter,
 		MinConfidence: minConfidence,
+		VecThreshold:  vecThreshold,
 		ExpandGraph:   expandGraph,
 		Explain:       explain,
 	}
@@ -854,10 +856,23 @@ func (s *Server) handleRecallMemoryHybrid(
 		embStore = s.embeddingStore
 	}
 
+	// When type/tag filters are active, request a wider candidate pool so that
+	// post-filter truncation does not hide matching memories. The pool is capped
+	// at limit*4 to bound over-fetching while ensuring filters have material to
+	// work with. HybridSearch respects this as its hard limit, then we filter below.
+	fetchLimit := limit
+	if obsType != "" || len(tags) > 0 {
+		const filterCandidateMultiplier = 4
+		fetchLimit = limit * filterCandidateMultiplier
+		if fetchLimit > 200 {
+			fetchLimit = 200
+		}
+	}
+
 	scored, explanations, err := retrieval.HybridSearch(
 		ctx,
 		project, query,
-		limit,
+		fetchLimit,
 		s.memoryStore,
 		embStore,
 		gStore,
@@ -867,27 +882,9 @@ func (s *Server) handleRecallMemoryHybrid(
 		return "", fmt.Errorf("recall_memory hybrid: %w", err)
 	}
 
-	// Reconsolidation (same as legacy path — fire-and-forget).
-	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(scored) > 0 {
-		go func() {
-			for _, sm := range scored {
-				mem := sm.Memory
-				fields := map[string]any{
-					"access_count":      gormlib.Expr("access_count + 1"),
-					"last_retrieved_at": gormlib.Expr("now()"),
-				}
-				if mem.Stability > 0 {
-					newStability := lifecycle.Reconsolidate(mem.Stability, mem.Retrievability)
-					if newStability != mem.Stability {
-						fields["stability"] = newStability
-					}
-				}
-				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), mem.ID, fields)
-			}
-		}()
-	}
-
 	// Build result: filter by obsType / tags post-scoring (same semantics as legacy).
+	// Filters run BEFORE reconsolidation so lifecycle updates only touch memories
+	// returned to the caller (not the wider candidate set).
 	queryLower := strings.ToLower(query)
 	tagSet := make(map[string]struct{}, len(tags))
 	for _, tag := range tags {
@@ -911,7 +908,7 @@ func (s *Server) handleRecallMemoryHybrid(
 		explByID[e.MemoryID] = e
 	}
 
-	items := make([]hybridResult, 0, len(scored))
+	items := make([]hybridResult, 0, limit)
 	for _, sm := range scored {
 		mem := sm.Memory
 
@@ -944,8 +941,7 @@ func (s *Server) handleRecallMemoryHybrid(
 			}
 		}
 
-		// Post-score query sanity filter for FTS-only degraded path
-		// (vector relevance already captured by score; FTS content check as safety net).
+		// Suppress unused-variable warning; queryLower reserved for future FTS safety net.
 		_ = queryLower
 
 		memoryType := ""
@@ -975,6 +971,47 @@ func (s *Server) handleRecallMemoryHybrid(
 		if len(items) == limit {
 			break
 		}
+	}
+
+	// Reconsolidation: fire-and-forget lifecycle updates on the FINAL response set only
+	// (not the wider candidate pool). This ensures access_count reflects actual retrieval.
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(items) > 0 {
+		// Snapshot item IDs before the goroutine runs to avoid data races.
+		type reconItem struct {
+			id            int64
+			stability     float64
+			retrievability float64
+		}
+		toRecon := make([]reconItem, 0, len(items))
+		// Map back from items to scored memories to access lifecycle fields.
+		scoredByID := make(map[int64]retrieval.ScoredMemory, len(scored))
+		for _, sm := range scored {
+			scoredByID[sm.Memory.ID] = sm
+		}
+		for _, item := range items {
+			if sm, ok := scoredByID[item.ID]; ok {
+				toRecon = append(toRecon, reconItem{
+					id:            sm.Memory.ID,
+					stability:     sm.Memory.Stability,
+					retrievability: sm.Memory.Retrievability,
+				})
+			}
+		}
+		go func() {
+			for _, ri := range toRecon {
+				fields := map[string]any{
+					"access_count":      gormlib.Expr("access_count + 1"),
+					"last_retrieved_at": gormlib.Expr("now()"),
+				}
+				if ri.stability > 0 {
+					newStability := lifecycle.Reconsolidate(ri.stability, ri.retrievability)
+					if newStability != ri.stability {
+						fields["stability"] = newStability
+					}
+				}
+				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), ri.id, fields)
+			}
+		}()
 	}
 
 	switch format {

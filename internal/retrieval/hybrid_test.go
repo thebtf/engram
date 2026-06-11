@@ -118,14 +118,21 @@ type mockMemStore struct {
 	byIDResults []*models.Memory
 	listResults []*models.Memory
 	ftsErr      error
+	// project filter enforced in GetByIDs when non-empty (for cross-project tests)
+	allowedProject string
 }
 
 func (m *mockMemStore) SearchFTS(_ context.Context, _, _ string, _ int) ([]*models.Memory, error) {
 	return m.ftsResults, m.ftsErr
 }
-func (m *mockMemStore) GetByIDs(_ context.Context, ids []int64) ([]*models.Memory, error) {
+func (m *mockMemStore) GetByIDs(_ context.Context, project string, ids []int64) ([]*models.Memory, error) {
 	result := make([]*models.Memory, 0)
 	for _, r := range m.byIDResults {
+		// Enforce project scope: skip memories not belonging to the requested project.
+		// When allowedProject is empty the mock skips the project check (backwards compat).
+		if m.allowedProject != "" && r.Project != "" && r.Project != project {
+			continue
+		}
 		for _, id := range ids {
 			if r.ID == id {
 				result = append(result, r)
@@ -142,10 +149,19 @@ func (m *mockMemStore) List(_ context.Context, _ string, _ int) ([]*models.Memor
 type mockEmbStore struct {
 	results []embedding.SimilarResult
 	err     error
+	// allowedProject enforces project filtering in FindSimilarForProject (for cross-project tests).
+	allowedProject string
 }
 
-func (m *mockEmbStore) FindSimilar(_ context.Context, _ []float32, _ int, _ float64) ([]embedding.SimilarResult, error) {
-	return m.results, m.err
+func (m *mockEmbStore) FindSimilarForProject(_ context.Context, project string, _ []float32, _ int, _ float64) ([]embedding.SimilarResult, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.allowedProject != "" && project != m.allowedProject {
+		// Simulate project-scoped filtering: return nothing for other projects.
+		return nil, nil
+	}
+	return m.results, nil
 }
 
 type mockGraphStore struct {
@@ -402,6 +418,166 @@ func TestHybridSearch_TierFilter_VectorOnly(t *testing.T) {
 		if sm.Memory.ID == 1 {
 			t.Error("id=1 (FTS-only) must not appear when tier_filter=tier1_vector")
 		}
+	}
+}
+
+// ── cross-project isolation (CRIT finding) ───────────────────────────────────
+
+// TestHybridSearch_CrossProjectIsolation_VectorLeg verifies that vector-leg results
+// belonging to a different project are NOT returned when the caller requests "proj-A".
+// This tests both the EmbeddingStoreInterface (FindSimilarForProject) and the
+// MemoryStoreInterface (GetByIDs with project filter) acting as two independent layers.
+func TestHybridSearch_CrossProjectIsolation_VectorLeg(t *testing.T) {
+	ctx := context.Background()
+
+	// Memory belonging to project-B (should NOT appear in proj-A results).
+	mB := &models.Memory{
+		ID:             99,
+		Project:        "proj-B",
+		Content:        "secret from another project",
+		CreatedAt:      time.Now().Add(-time.Hour),
+		ImportanceBase: 0.9,
+	}
+	// Memory belonging to project-A (should appear).
+	mA := &models.Memory{
+		ID:             1,
+		Project:        "proj-A",
+		Content:        "public content in proj-A",
+		CreatedAt:      time.Now().Add(-time.Hour),
+		ImportanceBase: 0.5,
+	}
+
+	// The embedding store returns mB's ID as the top vector hit.
+	// With proper project scoping, FindSimilarForProject for "proj-A" must NOT
+	// return mB. The mock enforces this via allowedProject.
+	embStore := &mockEmbStore{
+		results: []embedding.SimilarResult{
+			{MemoryID: 99, Similarity: 0.95}, // cross-project hit
+		},
+		allowedProject: "proj-A", // scoped → returns empty for proj-A since mB is proj-B
+	}
+
+	// Memory store has both mA and mB; GetByIDs enforces project=proj-A.
+	store := &mockMemStore{
+		ftsResults:     []*models.Memory{mA},
+		byIDResults:    []*models.Memory{mA, mB},
+		listResults:    []*models.Memory{mA},
+		allowedProject: "proj-A",
+	}
+
+	scored, _, err := HybridSearch(ctx, "proj-A", "content", 10, store, embStore, nil, HybridOptions{
+		QueryVec: []float32{0.1, 0.2},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, sm := range scored {
+		if sm.Memory.ID == 99 || sm.Memory.Project == "proj-B" {
+			t.Errorf("cross-project memory (id=99, project=proj-B) leaked into proj-A results")
+		}
+	}
+	// proj-A memory should still be present.
+	found := false
+	for _, sm := range scored {
+		if sm.Memory.ID == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("proj-A memory (id=1) must appear in results for proj-A")
+	}
+}
+
+// TestHybridSearch_CrossProjectIsolation_GraphLeg verifies that Tier2 graph expansion
+// does not surface memories from other projects even when graph edges cross projects.
+func TestHybridSearch_CrossProjectIsolation_GraphLeg(t *testing.T) {
+	ctx := context.Background()
+
+	mA := &models.Memory{
+		ID:             1,
+		Project:        "proj-A",
+		Content:        "primary in proj-A",
+		CreatedAt:      time.Now().Add(-time.Hour),
+		ImportanceBase: 0.5,
+	}
+	mOther := &models.Memory{
+		ID:             50,
+		Project:        "proj-other",
+		Content:        "neighbour in other project",
+		CreatedAt:      time.Now().Add(-time.Hour),
+		ImportanceBase: 0.8,
+	}
+
+	store := &mockMemStore{
+		ftsResults:     []*models.Memory{mA},
+		byIDResults:    []*models.Memory{mA, mOther},
+		listResults:    []*models.Memory{mA},
+		allowedProject: "proj-A",
+	}
+	gStore := &mockGraphStore{
+		// Graph edge points to a memory in another project.
+		results: []graph.TraversalResult{
+			{SourceID: 1, TargetID: 50, EdgeType: "related_to", Depth: 1},
+		},
+	}
+
+	scored, _, err := HybridSearch(ctx, "proj-A", "primary", 10, store, nil, gStore, HybridOptions{
+		ExpandGraph: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, sm := range scored {
+		if sm.Memory.ID == 50 {
+			t.Errorf("cross-project graph neighbour (id=50) leaked into proj-A results")
+		}
+	}
+}
+
+// TestHybridSearch_FTSRelevanceCarriesRank verifies that FTS-only candidates receive
+// a relevance derived from their FTS rank rather than a flat 0.5, so that rank-1 FTS
+// results score strictly higher (on the relevance term) than lower-ranked ones.
+func TestHybridSearch_FTSRelevanceCarriesRank(t *testing.T) {
+	ctx := context.Background()
+
+	// Two FTS results: m1 ranks first (better FTS score), m2 ranks second.
+	m1 := mem(1, "high rank fts result")
+	m2 := mem(2, "lower rank fts result")
+	// Make both memories identical in recency and importance so score differences
+	// come purely from relevance.
+	now := time.Now()
+	m1.CreatedAt = now.Add(-time.Hour)
+	m1.ImportanceBase = 0.5
+	m2.CreatedAt = now.Add(-time.Hour)
+	m2.ImportanceBase = 0.5
+
+	store := &mockMemStore{
+		ftsResults:  []*models.Memory{m1, m2}, // m1 is rank-0 (best)
+		byIDResults: []*models.Memory{m1, m2},
+		listResults: []*models.Memory{},
+	}
+
+	// Pure FTS (no embedding).
+	scored, _, err := HybridSearch(ctx, "proj", "rank", 10, store, nil, nil, HybridOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(scored) < 2 {
+		t.Fatalf("expected 2 results, got %d", len(scored))
+	}
+	// Rank-0 FTS result (m1) must have strictly higher relevance than rank-1 (m2),
+	// and therefore a higher final score.
+	var scoreM1, scoreM2 float64
+	for _, sm := range scored {
+		if sm.Memory.ID == 1 {
+			scoreM1 = sm.Score
+		}
+		if sm.Memory.ID == 2 {
+			scoreM2 = sm.Score
+		}
+	}
+	if scoreM1 <= scoreM2 {
+		t.Errorf("FTS rank-0 (m1, score=%.4f) must score higher than rank-1 (m2, score=%.4f)", scoreM1, scoreM2)
 	}
 }
 

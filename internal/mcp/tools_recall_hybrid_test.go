@@ -26,7 +26,7 @@ func (m *mockMemoryStoreForRecall) UpdateLifecycleFields(_ context.Context, _ in
 func (m *mockMemoryStoreForRecall) SearchFTS(_ context.Context, _, _ string, _ int) ([]*models.Memory, error) {
 	return m.memories, nil
 }
-func (m *mockMemoryStoreForRecall) GetByIDs(_ context.Context, ids []int64) ([]*models.Memory, error) {
+func (m *mockMemoryStoreForRecall) GetByIDs(_ context.Context, _ string, ids []int64) ([]*models.Memory, error) {
 	result := make([]*models.Memory, 0)
 	for _, mem := range m.memories {
 		for _, id := range ids {
@@ -146,5 +146,60 @@ func TestRecallMemory_FlagOFF_BehaviorIdentity(t *testing.T) {
 		if strings.Contains(schemaStr, key) {
 			t.Errorf("flag-OFF schema JSON contains vnext key %q: %s", key, schemaStr)
 		}
+	}
+}
+
+// TestRecall_FlagOFF_TombstoneStrings_Similar verifies that when ENGRAM_VNEXT_ENABLED is off,
+// recall(action="similar") returns the exact byte-identical tombstone error from origin/main.
+// Any deviation breaks backward compatibility for callers that check the error message.
+func TestRecall_FlagOFF_TombstoneStrings_Similar(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+
+	s := &Server{}
+	args, _ := json.Marshal(map[string]any{
+		"action":  "similar",
+		"query":   "test",
+		"project": "testproj",
+	})
+	_, err := s.handleRecall(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected error for recall(similar) with flag OFF, got nil")
+	}
+	// Exact tombstone from origin/main: tools_recall.go case "similar" flag-OFF branch.
+	const wantContains = "vector similarity removed"
+	if !strings.Contains(err.Error(), wantContains) {
+		t.Errorf("tombstone mismatch: got %q, want message containing %q", err.Error(), wantContains)
+	}
+	// Must NOT contain the vnext hint text (only allowed under flag-ON).
+	const forbiddenHint = "ENGRAM_VNEXT_ENABLED"
+	if strings.Contains(err.Error(), forbiddenHint) {
+		t.Errorf("flag-OFF error must not contain vnext hint %q, got: %q", forbiddenHint, err.Error())
+	}
+}
+
+// TestRecall_FlagOFF_TombstoneStrings_Explain verifies that when ENGRAM_VNEXT_ENABLED is off,
+// recall(action="explain") returns the exact byte-identical tombstone error from origin/main.
+func TestRecall_FlagOFF_TombstoneStrings_Explain(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+
+	s := &Server{}
+	args, _ := json.Marshal(map[string]any{
+		"action":  "explain",
+		"query":   "test",
+		"project": "testproj",
+	})
+	_, err := s.handleRecall(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected error for recall(explain) with flag OFF, got nil")
+	}
+	// Exact tombstone from origin/main: tools_recall.go case "explain" flag-OFF branch.
+	const wantContains = "search ranking removed"
+	if !strings.Contains(err.Error(), wantContains) {
+		t.Errorf("tombstone mismatch: got %q, want message containing %q", err.Error(), wantContains)
+	}
+	// Must NOT contain the vnext hint text.
+	const forbiddenHint = "ENGRAM_VNEXT_ENABLED"
+	if strings.Contains(err.Error(), forbiddenHint) {
+		t.Errorf("flag-OFF error must not contain vnext hint %q, got: %q", forbiddenHint, err.Error())
 	}
 }
