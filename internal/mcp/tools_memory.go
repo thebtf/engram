@@ -941,42 +941,81 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				return false
 			}
 		}
+		// T018 TG3 (MINOR fix): confidence floor applied in keepMemory so that
+		// the tg3Active+scopeEnabled batch-loop path honours confidence_min
+		// even when paging via ListWithOffset (which has no SQL confidence filter).
+		if tg3Active && tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
+			return false
+		}
 		return true
 	}
 
 	filtered := make([]*models.Memory, 0, limit)
 	if tg3Active {
-		// T018 (Milestone F TG3): when any non-default TG3 filter is set, push
-		// confidence_min and include_superseded to the store layer via
-		// ListWithFilters. We fetch a generous candidate pool and apply the
-		// remaining in-memory filters (query substring, type, tags, scope) in
-		// keepMemory as usual.
+		// T018 (Milestone F TG3) + MINOR fix (review hardening): when any
+		// non-default TG3 filter is set AND scope is enabled, use the same
+		// batch-loop pattern as the scopeEnabled-only branch so that
+		// scope-invisible rows do not truncate visible recall before older
+		// eligible rows reach the requested limit.
 		//
-		// The candidate pool is limit*candidateMultiplier, capped at 1000, so that
-		// in-memory post-filters have sufficient rows to fill the requested limit.
-		// This mirrors the query-mode candidate-pool pattern on the legacy path.
-		const (
-			tg3CandidateMultiplier = 10
-			tg3MinPool             = 1000
-		)
-		fetchLimit := limit * tg3CandidateMultiplier
-		if fetchLimit < tg3MinPool {
-			fetchLimit = tg3MinPool
-		}
-		tg3Opts := engramgorm.ListOptions{
-			ConfidenceMin:     tg3ConfidenceMin,
-			IncludeSuperseded: tg3IncludeSuperseded,
-			Limit:             fetchLimit,
-		}
-		candidates, err := s.memoryStore.ListWithFilters(ctx, project, tg3Opts)
-		if err != nil {
-			return "", fmt.Errorf("recall_memory: %w", err)
-		}
-		for _, mem := range candidates {
-			if keepMemory(mem) {
-				filtered = append(filtered, mem)
-				if len(filtered) >= limit {
+		// When scope is NOT enabled, a single-fetch candidate pool is safe
+		// (no invisible rows), so we keep the efficient over-fetch path.
+		if scopeEnabled {
+			// Batch-loop: scope-invisible rows must not truncate visible recall
+			// (same guarantee as the scopeEnabled-only branch below).
+			// keepMemory applies all in-memory predicates including the TG3
+			// confidence floor (added in keepMemory above). SQL-layer push of
+			// confidence_min is an optimisation reserved for the non-scope path
+			// where ListWithFilters can be used without offset.
+			const batchSize = 500
+			offset := 0
+			for len(filtered) < limit {
+				batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+				if err != nil {
+					return "", fmt.Errorf("recall_memory: %w", err)
+				}
+				if len(batch) == 0 {
 					break
+				}
+				for _, mem := range batch {
+					if keepMemory(mem) {
+						filtered = append(filtered, mem)
+						if len(filtered) >= limit {
+							break
+						}
+					}
+				}
+				offset += len(batch)
+				if len(batch) < batchSize {
+					break
+				}
+			}
+		} else {
+			// Non-scope path: single over-fetch via ListWithFilters (SQL-layer
+			// confidence_min + include_superseded push; no invisible rows).
+			const (
+				tg3CandidateMultiplier = 10
+				tg3MinPool             = 1000
+			)
+			fetchLimit := limit * tg3CandidateMultiplier
+			if fetchLimit < tg3MinPool {
+				fetchLimit = tg3MinPool
+			}
+			tg3Opts := engramgorm.ListOptions{
+				ConfidenceMin:     tg3ConfidenceMin,
+				IncludeSuperseded: tg3IncludeSuperseded,
+				Limit:             fetchLimit,
+			}
+			candidates, err := s.memoryStore.ListWithFilters(ctx, project, tg3Opts)
+			if err != nil {
+				return "", fmt.Errorf("recall_memory: %w", err)
+			}
+			for _, mem := range candidates {
+				if keepMemory(mem) {
+					filtered = append(filtered, mem)
+					if len(filtered) >= limit {
+						break
+					}
 				}
 			}
 		}
@@ -1221,6 +1260,21 @@ func (s *Server) handleRecallMemoryHybrid(
 		}
 	}
 
+	// T018 MAJOR fix (review hardening): include_superseded cannot be honored by
+	// the hybrid path because HybridSearch legs (FTS, vector, graph) query only
+	// active rows and the retrieval package is explicitly filter-agnostic (see
+	// SkipTier0 comment in HybridOptions). Silently no-oping the param was the
+	// bug — explicit rejection is better than silent degradation.
+	//
+	// Design choice: structured error > transparent downgrade.
+	// Rationale: the caller passed include_superseded=true expecting superseded
+	// memories to be included; silently dropping the flag returns a smaller,
+	// inconsistent result set with no indication of the gap. An error tells the
+	// caller to use the legacy path (ENGRAM_VNEXT_ENABLED=false) or omit the flag.
+	if tg3IncludeSuperseded {
+		return "", fmt.Errorf("include_superseded is not supported with ENGRAM_VNEXT_ENABLED hybrid retrieval; disable ENGRAM_VNEXT_ENABLED or omit include_superseded")
+	}
+
 	opts := retrieval.HybridOptions{
 		QueryVec:      queryVec,
 		TierFilter:    tierFilter,
@@ -1347,6 +1401,15 @@ func (s *Server) handleRecallMemoryHybrid(
 			}
 		}
 
+		// ── TG3 confidence_min post-fetch filter ──────────────────────────────
+		// Applied BEFORE limit truncation, consistent with the filter-before-limit
+		// contract. HybridOptions.MinConfidence filters on the fused hybrid score,
+		// not the raw confidence column; tg3ConfidenceMin filters on the stored
+		// memory.Confidence field (the v5-surface TG3 semantic). Both can coexist.
+		if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
+			continue
+		}
+
 		// Suppress unused-variable warning; queryLower reserved for future FTS safety net.
 		_ = queryLower
 
@@ -1451,6 +1514,10 @@ func (s *Server) handleRecallMemoryHybrid(
 					continue
 				}
 			}
+			// TG3 confidence_min post-fetch filter (Tier0 fall-through path).
+			if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
+				continue
+			}
 			memoryType := ""
 			for _, tag := range mem.Tags {
 				if strings.HasPrefix(tag, "type:") {
@@ -1535,9 +1602,8 @@ func (s *Server) handleRecallMemoryHybrid(
 		if tg3ConfidenceMin > 0 {
 			filterDescs = append(filterDescs, fmt.Sprintf("confidence_min=%.4g", tg3ConfidenceMin))
 		}
-		if tg3IncludeSuperseded {
-			filterDescs = append(filterDescs, "include_superseded=true")
-		}
+		// Note: include_superseded is rejected before reaching here (structured
+		// error at hybrid-path entry), so it is never listed as applied.
 
 		type hybridRationaleResult struct {
 			RankingExplanation *retrieval.RankingExplanation `json:"ranking_explanation,omitempty"`

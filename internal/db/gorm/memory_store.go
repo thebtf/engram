@@ -273,7 +273,11 @@ func (s *MemoryStore) Get(ctx context.Context, id int64) (*models.Memory, error)
 // is a single WHERE-clause implementation path. Behavior is byte-identical to
 // the previous standalone implementation (status='active', no confidence floor).
 func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
-	return s.ListWithFilters(ctx, project, ListOptions{Limit: limit})
+	result, err := s.ListWithFilters(ctx, project, ListOptions{Limit: limit})
+	if err != nil {
+		return nil, fmt.Errorf("list memories for project %q: %w", project, err)
+	}
+	return result, nil
 }
 
 // ListOptions controls the optional filters applied by ListWithFilters.
