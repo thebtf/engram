@@ -62,16 +62,38 @@ func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 	require.NoError(t, sqlDB.Ping())
 	defer sqlDB.Close()
 
-	// Apply all migrations up to and including 090 so both observations and
-	// credentials tables exist. runMigrations is package-private to internal/db/gorm,
-	// so we call it via the exported wrapper (NewStore invokes the same migrator).
-	// Capture the returned *Store so its internal sql.DB pool is closeable.
+	// Apply all migrations so tables exist. runMigrations is package-private to
+	// internal/db/gorm, so we call it via the exported wrapper (NewStore invokes
+	// the same migrator). Capture the returned *Store so its internal sql.DB pool
+	// is closeable.
 	gormStore, err := localgorm.NewStore(localgorm.Config{
 		DSN:      dsn,
 		LogLevel: logger.Silent,
 	})
 	require.NoError(t, err, "NewStore (applies migrations)")
 	defer gormStore.Close()
+
+	// Skip when the observations table no longer exists.
+	//
+	// This test was written to gate migration 090 (observations → credentials
+	// data migration) before migration 099 (DROP TABLE observations) shipped.
+	// In v5 (US3 PR-B) migration 099 is now in the standard migration chain,
+	// so any database that has run all migrations does not have an observations
+	// table — the code path this test exercises has been permanently applied.
+	// Running the test against a post-v5 DB would fail with
+	// "relation observations does not exist" on the INSERT statements below,
+	// which is not a signal about correctness — it is a signal that the
+	// migration is done. Skip instead of failing.
+	var obsExists bool
+	if err := db.Raw(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='observations')`,
+	).Scan(&obsExists).Error; err != nil {
+		t.Fatalf("check observations table: %v", err)
+	}
+	if !obsExists {
+		t.Skip("observations table not present (migration 099 has already dropped it — " +
+			"this test only applies to databases migrated before v5 US3 PR-B)")
+	}
 
 	// Deterministic 32-byte test key so the test is reproducible and does not
 	// depend on the Docker vault.key or the production fingerprint.

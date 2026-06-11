@@ -13,13 +13,76 @@ import (
 
 	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+// vnextFEnabled reports whether the engram vNext Milestone F flag is on per
+// spec FR-F1 / RI-F1. Centralised so all flag-gated branches share the exact
+// truthy check ("true" — string equality with the env var).
+func vnextFEnabled() bool {
+	return os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
+}
+
+// isValidPrivacyScope validates the 4-tier privacy_scope enum added by
+// migration 125 (T001) and consumed by scope.Resolve (T003/T003b). Mirrors
+// the memories_privacy_scope_chk CHECK constraint exactly.
+func isValidPrivacyScope(s string) bool {
+	switch s {
+	case "private", "project", "shared", "global":
+		return true
+	default:
+		return false
+	}
+}
+
+// derivePrivacyScopeFromLegacy maps the legacy 2-tier scope tag value to the
+// 4-tier privacy_scope enum for the dual-field deprecation window (RI-F2).
+// Empty input returns empty (caller decides default handling).
+func derivePrivacyScopeFromLegacy(legacy string) string {
+	switch legacy {
+	case "project":
+		return "project"
+	case "global":
+		return "global"
+	default:
+		return ""
+	}
+}
+
+// deriveLegacyScopeFromPrivacy is the inverse of derivePrivacyScopeFromLegacy:
+// when a caller supplies only the new 4-tier `privacy_scope` field, the legacy
+// 2-tier `scope` value used for downstream tagging + responses must be
+// back-derived so legacy consumers parsing `scope:project` / `scope:global`
+// (or the legacy `scope` JSON field) see a value consistent with the 4-tier
+// intent. Mapping per ADR-F-005 / RI-F2:
+//
+//	private -> project (legacy 2-tier has no `private`; collapse to the
+//	                    more conservative `project`)
+//	project -> project
+//	shared  -> global  (legacy 2-tier collapses `shared` into `global`)
+//	global  -> global
+//
+// Codex P2 cycle-7 fix on 209a06e: without this mapping, callers using only
+// the new field would see legacy `scope:project` tags / responses even when
+// they wrote `privacy_scope="shared"`, under-sharing data for legacy 2-tier
+// consumers.
+func deriveLegacyScopeFromPrivacy(privacy string) string {
+	switch privacy {
+	case "private", "project":
+		return "project"
+	case "shared", "global":
+		return "global"
+	default:
+		return ""
+	}
+}
 
 // memoryEditor is the minimal interface over *gorm.MemoryStore that
 // handleEditMemory uses. Kept narrow so tests can inject a mock without
@@ -81,6 +144,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		Title        string
 		Type         string
 		Scope        string
+		PrivacyScope string // T004 — vNext F, 4-tier enum
+		SessionID    string // T004 — vNext F, caller's session for SourceSessions
 		Project      string
 		AgentSource  string
 		Importance   *float64
@@ -94,6 +159,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	params.Title = coerceString(m["title"], "")
 	params.Type = coerceString(m["type"], "")
 	params.Scope = coerceString(m["scope"], "")
+	params.PrivacyScope = coerceString(m["privacy_scope"], "")
+	params.SessionID = coerceString(m["session_id"], "")
 	params.AgentSource = coerceString(m["agent_source"], "")
 	if config.Get().EnforceSourceProject {
 		params.Project = projectFromContext(ctx)
@@ -151,6 +218,49 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	if resolvedScope != string(models.ScopeProject) && resolvedScope != string(models.ScopeGlobal) {
 		return "", fmt.Errorf("invalid scope %q: must be one of project, global", resolvedScope)
+	}
+
+	// T004 (engram vNext Milestone F TG1) — resolve the 4-tier privacy_scope.
+	// Flag OFF: leave empty so the DB DEFAULT 'project' from migration 125
+	// applies on the column. Flag ON: prefer explicit privacy_scope param;
+	// fall back to deriving from the legacy 2-tier scope (RI-F2 bridge).
+	// Validate against the migration 125 CHECK constraint enum.
+	var resolvedPrivacyScope string
+	if vnextFEnabled() {
+		resolvedPrivacyScope = params.PrivacyScope
+		if resolvedPrivacyScope == "" {
+			resolvedPrivacyScope = derivePrivacyScopeFromLegacy(resolvedScope)
+		}
+		if resolvedPrivacyScope == "" {
+			resolvedPrivacyScope = "project"
+		}
+		if !isValidPrivacyScope(resolvedPrivacyScope) {
+			// Structured error per spec FR-F1 AMEND (T005): clients parse the
+			// 'invalid_privacy_scope:' prefix as an error_code; the trailing
+			// message names the offending value + accepted enum.
+			return "", fmt.Errorf("invalid_privacy_scope: %q must be one of private, project, shared, global", resolvedPrivacyScope)
+		}
+		// Codex P2 cycle-7 fix on 209a06e + cycle-9 fix on 69398d9: under
+		// flag ON, the 4-tier `privacy_scope` is the authoritative field;
+		// the legacy 2-tier `scope` must be a derived view of it so the two
+		// representations cannot disagree on a single write. Cycle-7
+		// originally only back-derived when `params.Scope` was empty, but
+		// that left conflicting explicit pairs intact (e.g.,
+		// `scope="project"` + `privacy_scope="shared"` would store shared
+		// visibility while emitting legacy `scope:project` — RI-F2 bridge
+		// gap). Always recompute `resolvedScope` from the resolved privacy
+		// tier when `params.PrivacyScope` was explicitly provided OR
+		// `params.Scope` was omitted. Mapping per ADR-F-005:
+		//   private/project -> project
+		//   shared/global   -> global
+		// If the caller provided ONLY legacy `scope` (no `privacy_scope`),
+		// the early derivation at line 184 already produced a consistent
+		// pair, so this block is a no-op in that case.
+		if params.PrivacyScope != "" || params.Scope == "" {
+			if derived := deriveLegacyScopeFromPrivacy(resolvedPrivacyScope); derived != "" {
+				resolvedScope = derived
+			}
+		}
 	}
 
 	if params.Project == "" && !(params.AlwaysInject && resolvedScope == string(models.ScopeGlobal)) {
@@ -317,6 +427,38 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		SupersedesID:   primarySupersededID,
 	}
 
+	// T004 — vNext F TG1: populate the new lifecycle/identity fields when the
+	// flag is ON. PrivacyScope falls through to DB DEFAULT 'project' when
+	// flag is OFF (empty Go string lets the column default apply). Workstation
+	// id is derived from the caller's keycard via auth.Identity.WorkstationID
+	// added in T003b. SourceSessions is populated from the explicit session_id
+	// param when supplied — the MCP layer has no implicit session-id ctx key
+	// in v6.4.x, so callers (e.g., the engram client proxy) advertise their
+	// session via the param. When absent, SourceSessions stays empty and
+	// scope.Resolve falls back to the workstation-only-suffices branch per
+	// spec FR-F1 AMEND 2026-05-25.
+	if vnextFEnabled() {
+		memory.PrivacyScope = resolvedPrivacyScope
+		if id, ok := auth.IdentityFrom(ctx); ok {
+			memory.SourceWorkstationID = id.WorkstationID()
+		}
+		if params.SessionID != "" {
+			memory.SourceSessions = []string{params.SessionID}
+		}
+		// Codex P1 cycle-4 fix on 783c0be: reject private-scope writes when
+		// the caller has no non-empty workstation identity. scope.Resolve
+		// fail-closes private memories whose source_workstation_id is empty
+		// (`internal/scope/filter.go:85-87` — "if memorySource.WorkstationID
+		// == \"\" { return false }"), so persisting such a row would make
+		// it permanently unreadable to every caller including the writer
+		// itself. Master and bare-session sources cannot produce a
+		// non-empty WorkstationID (auth/identity.go:111-116 — returns
+		// KeycardID only when Source == SourceClient).
+		if resolvedPrivacyScope == "private" && memory.SourceWorkstationID == "" {
+			return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
+		}
+	}
+
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
 		if tier := coerceString(m["tier"], ""); tier != "" {
@@ -403,6 +545,18 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		"scope":   resolvedScope,
 		"storage": "memories",
 		"message": "Memory stored successfully",
+	}
+	// T004 — vNext F TG1: dual-field response per RI-F2. Legacy `scope`
+	// (2-tier) continues to appear above for backward compat; add new
+	// `privacy_scope` (4-tier) alongside when flag is ON.
+	if vnextFEnabled() {
+		result["privacy_scope"] = resolvedPrivacyScope
+		if created.SourceWorkstationID != "" {
+			result["source_workstation_id"] = created.SourceWorkstationID
+		}
+		if len(created.SourceSessions) > 0 {
+			result["source_sessions"] = created.SourceSessions
+		}
 	}
 	if vnextEnabled {
 		result["quality_signals"] = map[string]any{
@@ -627,19 +781,36 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("project is required for recall_memory in v5")
 	}
 
-	fetchLimit := limit
-	if query != "" || obsType != "" || len(tags) > 0 {
-		const candidateMultiplier = 10
-		const minCandidatePool = 1000
-		fetchLimit = limit * candidateMultiplier
-		if fetchLimit < minCandidatePool {
-			fetchLimit = minCandidatePool
+	// T004 + T005 + codex P1 cycle-6 fix on c6006f7: the recall_memory MCP
+	// tool advertises session_id + include_scopes in its schema (see
+	// server.go) and dispatches here. Without scope.Resolve enforcement, a
+	// caller knowing the project + query under ENGRAM_VNEXT_F_ENABLED=true
+	// could retrieve `privacy_scope="private"` rows owned by another
+	// workstation — bypassing the same visibility model handleRecallSearch
+	// enforces on the sibling `recall` tool. Mirror the gating + caller
+	// identity build, validate include_scopes behind the flag (T005
+	// contract: runtime behavior env-gated), and use the batch-loop
+	// ListWithOffset pattern when scope is active so invisible newest rows
+	// do not truncate visible recall.
+	callerSessionID := strings.TrimSpace(coerceString(m["session_id"], ""))
+	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
+	includeScopes := make(map[string]bool)
+	if scopeEnabled {
+		for _, sc := range coerceStringSlice(m["include_scopes"]) {
+			switch sc {
+			case "private", "project", "shared", "global":
+				includeScopes[sc] = true
+			default:
+				return "", fmt.Errorf("invalid_include_scopes: %q must be one of private, project, shared, global", sc)
+			}
 		}
 	}
-
-	memories, err := s.memoryStore.List(ctx, project, fetchLimit)
-	if err != nil {
-		return "", fmt.Errorf("recall_memory: %w", err)
+	var caller scope.KeycardContext
+	if scopeEnabled {
+		caller.SessionID = callerSessionID
+		if id, ok := auth.IdentityFrom(ctx); ok {
+			caller.WorkstationID = id.WorkstationID()
+		}
 	}
 
 	queryLower := strings.ToLower(query)
@@ -648,8 +819,10 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		tagSet[strings.ToLower(tag)] = struct{}{}
 	}
 
-	filtered := make([]*models.Memory, 0, min(limit, len(memories)))
-	for _, mem := range memories {
+	// keepMemory applies the existing query/type/tags filters AND the new
+	// vNext-F scope filter to a single memory. Returns true when it should
+	// be included in the response.
+	keepMemory := func(mem *models.Memory) bool {
 		contentLower := strings.ToLower(mem.Content)
 		if queryLower != "" && !strings.Contains(contentLower, queryLower) {
 			matchedTag := false
@@ -660,10 +833,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				}
 			}
 			if !matchedTag {
-				continue
+				return false
 			}
 		}
-
 		if obsType != "" {
 			typeTag := strings.ToLower("type:" + obsType)
 			typeMatched := false
@@ -674,10 +846,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				}
 			}
 			if !typeMatched {
-				continue
+				return false
 			}
 		}
-
 		if len(tagSet) > 0 {
 			tagMatched := false
 			for _, tag := range mem.Tags {
@@ -687,13 +858,79 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				}
 			}
 			if !tagMatched {
-				continue
+				return false
 			}
 		}
+		if scopeEnabled {
+			memScope := mem.PrivacyScope
+			if memScope == "" {
+				memScope = "project"
+			}
+			if len(includeScopes) > 0 && !includeScopes[memScope] {
+				return false
+			}
+			meta := scope.SourceMeta{
+				WorkstationID: mem.SourceWorkstationID,
+				Sessions:      mem.SourceSessions,
+			}
+			if !scope.Resolve(caller, memScope, meta) {
+				return false
+			}
+		}
+		return true
+	}
 
-		filtered = append(filtered, mem)
-		if len(filtered) == limit {
-			break
+	filtered := make([]*models.Memory, 0, limit)
+	if scopeEnabled {
+		// Batch-loop via ListWithOffset (codex P1 cycle-3 + cycle-4 pattern)
+		// so scope-invisible newest rows do not truncate visible recall
+		// before older eligible rows reach the requested limit.
+		const batchSize = 500
+		offset := 0
+		for len(filtered) < limit {
+			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+			if err != nil {
+				return "", fmt.Errorf("recall_memory: %w", err)
+			}
+			if len(batch) == 0 {
+				break
+			}
+			for _, mem := range batch {
+				if keepMemory(mem) {
+					filtered = append(filtered, mem)
+					if len(filtered) >= limit {
+						break
+					}
+				}
+			}
+			offset += len(batch)
+			if len(batch) < batchSize {
+				break
+			}
+		}
+	} else {
+		// Flag-OFF — original single-fetch shape preserves v6.4.x
+		// byte-identity for legacy callers using the recall_memory tool.
+		fetchLimit := limit
+		if query != "" || obsType != "" || len(tags) > 0 {
+			const candidateMultiplier = 10
+			const minCandidatePool = 1000
+			fetchLimit = limit * candidateMultiplier
+			if fetchLimit < minCandidatePool {
+				fetchLimit = minCandidatePool
+			}
+		}
+		memories, err := s.memoryStore.List(ctx, project, fetchLimit)
+		if err != nil {
+			return "", fmt.Errorf("recall_memory: %w", err)
+		}
+		for _, mem := range memories {
+			if keepMemory(mem) {
+				filtered = append(filtered, mem)
+				if len(filtered) >= limit {
+					break
+				}
+			}
 		}
 	}
 

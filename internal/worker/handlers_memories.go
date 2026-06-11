@@ -2,25 +2,49 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 // storeMemoryRequest is the JSON body for POST /api/memories.
+//
+// T004 (engram vNext Milestone F TG1) added the optional `privacy_scope`
+// and `session_id` fields. Both are honored only when ENGRAM_VNEXT_F_ENABLED
+// is "true"; with the flag OFF the request shape is byte-identical to v6.4.x
+// (Go's encoding/json silently drops unknown fields by default, and the
+// existing fields are unchanged).
 type storeMemoryRequest struct {
-	Project     string   `json:"project"`
-	Content     string   `json:"content"`
-	Tags        []string `json:"tags,omitempty"`
-	SourceAgent string   `json:"source_agent,omitempty"`
+	Project      string   `json:"project"`
+	Content      string   `json:"content"`
+	Tags         []string `json:"tags,omitempty"`
+	SourceAgent  string   `json:"source_agent,omitempty"`
+	PrivacyScope string   `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
+	SessionID    string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
+}
+
+// isValidPrivacyScopeREST mirrors the migration 125 CHECK constraint enum.
+// Duplicated from internal/mcp/tools_memory.go to keep the worker layer
+// free of MCP imports; the canonical contract lives in the spec.
+func isValidPrivacyScopeREST(s string) bool {
+	switch s {
+	case "private", "project", "shared", "global":
+		return true
+	default:
+		return false
+	}
 }
 
 // handleStoreMemoryExplicit godoc
@@ -62,6 +86,40 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 		Content:     req.Content,
 		Tags:        req.Tags,
 		SourceAgent: req.SourceAgent,
+	}
+
+	// T004 (engram vNext Milestone F TG1) — populate the new lifecycle/
+	// identity fields when ENGRAM_VNEXT_F_ENABLED=true. With the flag OFF
+	// the new columns get their DB defaults (privacy_scope='project',
+	// source_workstation_id='', source_sessions=ARRAY[]::TEXT[]) and the
+	// response shape stays v6.4.x-identical via the omitempty JSON tags
+	// already on Memory.
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		if req.PrivacyScope != "" {
+			if !isValidPrivacyScopeREST(req.PrivacyScope) {
+				http.Error(w, "invalid privacy_scope: must be one of private, project, shared, global", http.StatusBadRequest)
+				return
+			}
+			mem.PrivacyScope = req.PrivacyScope
+		}
+		if id, ok := auth.IdentityFrom(r.Context()); ok {
+			mem.SourceWorkstationID = id.WorkstationID()
+		}
+		if req.SessionID != "" {
+			mem.SourceSessions = []string{req.SessionID}
+		}
+		// Codex P1 cycle-5 fix on b5ac7ec: mirror the MCP-side guard
+		// (`internal/mcp/tools_memory.go` private-write check from
+		// `4cb71be`/`b5ac7ec`) on the REST surface so the two paths do
+		// not diverge. scope.Resolve fail-closes private memories whose
+		// source_workstation_id is empty (`internal/scope/filter.go`),
+		// so persisting a private write from a non-SourceClient caller
+		// (master/session, or no identity) would create a permanently-
+		// unreadable row.
+		if mem.PrivacyScope == "private" && mem.SourceWorkstationID == "" {
+			http.Error(w, "invalid privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)", http.StatusBadRequest)
+			return
+		}
 	}
 
 	created, err := s.memoryStore.Create(r.Context(), mem)
@@ -115,7 +173,18 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
-	mems, err := s.memoryStore.List(r.Context(), project, limit)
+	// Codex P1 cycle-11 fix on 034f14f: REST GET /api/memories must enforce
+	// the same vNext-F visibility model as MCP recall surfaces, otherwise a
+	// private memory written via POST /api/memories (allowed since T004 +
+	// cycle-5 c6006f7) can be retrieved here by any caller knowing the
+	// project — bypassing scope.Resolve. This is the 4th cross-surface
+	// symmetry break the review cycles have closed (after MCP store, REST
+	// store, MCP recall, MCP recall_memory). Under flag ON: build caller
+	// KeycardContext from auth.Identity, use ListWithOffset batch-loop so
+	// scope-invisible newest rows do not truncate the visible result set
+	// before the requested limit is reached. Flag-OFF path preserves the
+	// original single-call List shape for v6.4.x byte-identity (RI-F1).
+	mems, err := listVisibleMemoriesREST(r.Context(), s.memoryStore, project, limit)
 	if err != nil {
 		log.Error().Err(err).Str("project", project).Msg("list memories failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -128,6 +197,119 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, mems)
+}
+
+// listVisibleMemoriesREST returns up to `limit` memories from the given
+// project that are visible to the caller. Behavior is gated by
+// ENGRAM_VNEXT_F_ENABLED:
+//
+//	flag OFF — single-call s.memoryStore.List(project, limit), preserving
+//	           v6.4.x byte-identity per RI-F1.
+//	flag ON  — ListWithOffset batch-loop (batchSize=500) accumulating up to
+//	           `limit` visible rows; scope-invisible rows are skipped without
+//	           truncating the visible result set. Mirrors the cycle-3
+//	           handleRecallSearch fix and the cycle-6 handleRecallMemory
+//	           fix so all three surfaces share identical visibility
+//	           semantics.
+func listVisibleMemoriesREST(ctx context.Context, store memoryListStore, project string, limit int) ([]*models.Memory, error) {
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
+		return store.List(ctx, project, limit)
+	}
+	var caller scope.KeycardContext
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+	}
+	visible := make([]*models.Memory, 0, limit)
+	const batchSize = 500
+	offset := 0
+	for len(visible) < limit {
+		batch, err := store.ListWithOffset(ctx, project, batchSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, mem := range batch {
+			memScope := mem.PrivacyScope
+			if memScope == "" {
+				memScope = "project"
+			}
+			meta := scope.SourceMeta{
+				WorkstationID: mem.SourceWorkstationID,
+				Sessions:      mem.SourceSessions,
+			}
+			if !scope.Resolve(caller, memScope, meta) {
+				continue
+			}
+			visible = append(visible, mem)
+			if len(visible) >= limit {
+				break
+			}
+		}
+		offset += len(batch)
+		if len(batch) < batchSize {
+			break
+		}
+	}
+	return visible, nil
+}
+
+// memoryListStore is the subset of the MemoryStore surface that
+// listVisibleMemoriesREST needs. Defined as a small interface so the
+// function can be unit-tested with a fake without pulling in the full
+// store dependency.
+type memoryListStore interface {
+	List(ctx context.Context, project string, limit int) ([]*models.Memory, error)
+	ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error)
+}
+
+// injectionCandidateStore is the subset of the MemoryStore surface that
+// listVisibleForInjection needs. Defined as a small interface to allow
+// unit-testing without the full store dependency.
+type injectionCandidateStore interface {
+	ListForInjection(ctx context.Context, project string, limit int) ([]*models.Memory, error)
+}
+
+// listVisibleForInjection fetches injection candidates and, when
+// ENGRAM_VNEXT_F_ENABLED=true, removes rows that the caller cannot see per
+// scope.Resolve. Mirrors the visibility-filter logic of listVisibleMemoriesREST
+// but operates on the injection candidate set (importance-ordered, topK*3
+// pre-inflated by the caller).
+//
+// T004 (codex P1 PR #221): ListForInjection previously returned every active
+// row for the project without checking privacy_scope, so a private memory
+// written by workstation A could be injected into context for workstation B in
+// the same project (handlers_context.go vnext path, handlers_reinject.go, and
+// mcp/tools_brief.go handleGetMemoryBrief). This helper closes that gap at the
+// worker/mcp boundary without adding auth/scope imports to the db/gorm layer.
+func listVisibleForInjection(ctx context.Context, store injectionCandidateStore, project string, limit int) ([]*models.Memory, error) {
+	candidates, err := store.ListForInjection(ctx, project, limit)
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
+		return candidates, nil
+	}
+	var caller scope.KeycardContext
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+	}
+	visible := make([]*models.Memory, 0, len(candidates))
+	for _, mem := range candidates {
+		memScope := mem.PrivacyScope
+		if memScope == "" {
+			memScope = "project"
+		}
+		meta := scope.SourceMeta{
+			WorkstationID: mem.SourceWorkstationID,
+			Sessions:      mem.SourceSessions,
+		}
+		if scope.Resolve(caller, memScope, meta) {
+			visible = append(visible, mem)
+		}
+	}
+	return visible, nil
 }
 
 // handleDeleteMemoryByID godoc

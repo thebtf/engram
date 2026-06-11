@@ -86,6 +86,33 @@ func memoryRowForCreate(mem *models.Memory, now time.Time, includeLifecycle bool
 	return row
 }
 
+// copyPrivacyFields transfers privacy_scope, source_workstation_id, and
+// source_sessions from mem to row. Called by Create, CreateWithLifecycle, and
+// CreateWithLifecycleIfTagAbsent to ensure all insert paths persist the
+// migration-125/130 columns consistently (codex P1 review #221 finding:
+// CreateWithLifecycle omitted these copies that Create already performed).
+//
+// When mem.PrivacyScope is empty the row is set to 'project' (the DB DEFAULT),
+// unless the Tags slice contains the legacy "scope:global" marker in which case
+// the row is promoted to 'global' (mirrors the migration-125 T006 backfill).
+func copyPrivacyFields(row *Memory, mem *models.Memory) {
+	if mem.PrivacyScope != "" {
+		row.PrivacyScope = mem.PrivacyScope
+	} else {
+		row.PrivacyScope = "project"
+		for _, t := range mem.Tags {
+			if t == "scope:global" {
+				row.PrivacyScope = "global"
+				break
+			}
+		}
+	}
+	row.SourceWorkstationID = mem.SourceWorkstationID
+	if len(mem.SourceSessions) > 0 {
+		row.SourceSessions = pq.StringArray(mem.SourceSessions)
+	}
+}
+
 func advisoryLockKey(parts ...string) int64 {
 	h := sha256.New()
 	for _, part := range parts {
@@ -121,6 +148,11 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	// Lifecycle fields (Tier, EpistemicType, Defeasibility) are intentionally
 	// NOT copied here. Use CreateWithLifecycle for flag-gated paths.
 
+	// T002 + T001b + T003b (engram vNext Milestone F TG1): persist privacy
+	// metadata into migration-125/130 columns. See copyPrivacyFields for
+	// the detailed rationale (codex P1 fix-forward on 3e4a4b1 / PR #221).
+	copyPrivacyFields(row, mem)
+
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
 	}
@@ -144,6 +176,11 @@ func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memor
 	row := memoryRowForCreate(mem, now, true)
 	// Lifecycle fields: only override when caller supplies non-empty value so
 	// that DB schema defaults remain authoritative for unspecified fields.
+
+	// T002 + T001b + T003b: persist privacy metadata. Previously omitted on
+	// this path, causing privacy_scope to fall back to the DB default 'project'
+	// even when the caller set a non-project scope (codex P1 PR #221 fix).
+	copyPrivacyFields(row, mem)
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
@@ -197,6 +234,9 @@ func (s *MemoryStore) CreateWithLifecycleIfTagAbsent(
 		}
 
 		row := memoryRowForCreate(mem, time.Now().UTC(), true)
+		// T002 + T001b + T003b: persist privacy metadata (same fix as
+		// CreateWithLifecycle — codex P1 PR #221).
+		copyPrivacyFields(row, mem)
 		if err := tx.Create(row).Error; err != nil {
 			return fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 		}
@@ -237,16 +277,68 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 	}
 
 	var rows []Memory
-	now := time.Now().UTC()
 	err := s.db.WithContext(ctx).
 		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
-		Where("valid_from IS NULL OR valid_from <= ?", now).
-		Where("valid_until IS NULL OR valid_until >= ?", now).
+		Where("valid_from IS NULL OR valid_from <= NOW()").
+		Where("valid_until IS NULL OR valid_until >= NOW()").
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("list memories for project %q: %w", project, err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
+}
+
+// ListWithOffset returns a page of active (non-soft-deleted) memories for the
+// given project, ordered by created_at DESC, limited to limit rows starting
+// from offset. project must not be empty. limit and offset default to safe
+// values when <= 0 / < 0.
+//
+// T004 + codex P1 cycle-3 fix on 4cb71be: introduced to support batch-loop
+// scope filtering in handleRecallSearch. The previous single-call List path
+// would fetch up to `limit` rows and then drop scope-invisible ones in Go,
+// truncating recall when the newest rows happened to be private to other
+// callers. ListWithOffset lets the caller keep paging until enough visible
+// rows accumulate or the DB stream is exhausted.
+func (s *MemoryStore) ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("project: must not be empty")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var rows []Memory
+	// Codex P2 cycle-4 fix on 783c0be: add `id DESC` as a deterministic
+	// secondary order key so offset-paged scans cannot skip or repeat rows
+	// when multiple memories share the same created_at value. handleRecallSearch
+	// invokes ListWithOffset in a loop with changing OFFSET, and ties on
+	// created_at would otherwise destabilise page boundaries — eligible rows
+	// could be missed before the visible-result limit is reached.
+	//
+	// Use NOW() (DB server clock) instead of a Go-side timestamp for valid_from /
+	// valid_until comparisons. The DB DEFAULT for valid_from is now(), evaluated
+	// at INSERT time. If we compare against a Go-side time.Now() captured before
+	// the SELECT, a just-inserted row's valid_from can be fractionally newer than
+	// the Go clock value, causing the row to be excluded from the first List call.
+	err := s.db.WithContext(ctx).
+		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+		Where("valid_from IS NULL OR valid_from <= NOW()").
+		Where("valid_until IS NULL OR valid_until >= NOW()").
+		Order("created_at DESC, id DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list memories with offset for project %q: %w", project, err)
 	}
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
@@ -267,11 +359,10 @@ func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limi
 	}
 	lifecycleEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
 	var rows []Memory
-	now := time.Now().UTC()
 	q := s.db.WithContext(ctx).
 		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
-		Where("valid_from IS NULL OR valid_from <= ?", now).
-		Where("valid_until IS NULL OR valid_until >= ?", now)
+		Where("valid_from IS NULL OR valid_from <= NOW()").
+		Where("valid_until IS NULL OR valid_until >= NOW()")
 
 	if lifecycleEnabled {
 		q = q.Where("tier != 'working'").
@@ -500,7 +591,7 @@ func (s *MemoryStore) BatchIncrementViolated(ctx context.Context, ids []int64, n
 
 // memoryRowToModel converts an internal GORM Memory row to the pkg/models.Memory type.
 func memoryRowToModel(row *Memory) *models.Memory {
-	return &models.Memory{
+	m := &models.Memory{
 		ID:                       row.ID,
 		Project:                  row.Project,
 		Content:                  row.Content,
@@ -535,6 +626,19 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		RecurrenceCount:          row.RecurrenceCount,
 		ConsecutiveCitationCount: row.ConsecutiveCitationCount,
 	}
+	// T002 + T001b + T003b (engram vNext Milestone F TG1): read-back of privacy
+	// metadata from migration-125/130 columns. Gated behind the vNext-F flag —
+	// under flag OFF we leave the privacy fields empty so the `omitempty` JSON
+	// tags on pkg/models.Memory preserve v6.4.x byte-identity for REST and MCP
+	// responses (RI-F1). Codex P1 cycle-3 fix-forward on 4cb71be: without the
+	// flag gate the field always reads back as 'project' (migration-125 DB
+	// DEFAULT) and leaks into every flag-OFF response.
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		m.PrivacyScope = row.PrivacyScope
+		m.SourceWorkstationID = row.SourceWorkstationID
+		m.SourceSessions = []string(row.SourceSessions)
+	}
+	return m
 }
 
 // ListBySourceAgentAndTag returns active memories for a project where source_agent
