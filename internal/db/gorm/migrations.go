@@ -3807,6 +3807,36 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				).Error
 			},
 		},
+		// 131_tier_default_episodic — B4 triage resolution (2026-06-11).
+		// Operator decision: spec FR-B2 is right — new memories default to 'episodic'
+		// because they represent fresh, unverified knowledge. Migration 110 set the
+		// column default to 'semantic'; this migration corrects it.
+		//
+		// Flag-OFF identity analysis: the tier column is only consulted by
+		// lifecycle-gated code paths (ListForInjection behind ENGRAM_LIFECYCLE_ENABLED,
+		// GORM model tag annotation only). Flag-OFF callers (Create, not
+		// CreateWithLifecycle) never filter or read tier in queries; changing the column
+		// default is cosmetically different for flag-OFF rows but functionally invisible.
+		// No flag-OFF behaviour change.
+		//
+		// Existing rows: ALTER COLUMN … SET DEFAULT does not rewrite rows — only future
+		// INSERTs without an explicit tier value will receive 'episodic'. Existing rows
+		// keep their current 'semantic' default value (set by migration-110 backfill).
+		// This is correct: existing memories were created as semantic knowledge; the
+		// 'episodic' default applies only to newly created memories going forward.
+		{
+			ID: "131_tier_default_episodic",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(
+					`ALTER TABLE memories ALTER COLUMN tier SET DEFAULT 'episodic'`,
+				).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(
+					`ALTER TABLE memories ALTER COLUMN tier SET DEFAULT 'semantic'`,
+				).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

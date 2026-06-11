@@ -853,6 +853,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"project":        map[string]any{"type": "string", "description": "Project ID to scope results (includes project-scoped and global observations)"},
 						"session_id":     map[string]any{"type": "string", "description": "Caller's session identifier. Used by scope.Resolve to admit private-scope rows that name this session in source_sessions. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used (per spec FR-F1 AMEND 2026-05-25)."},
 						"include_scopes": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}}, "description": "Restrict returned memories to the named privacy_scope tiers. Empty/omitted means all 4 tiers are returned (subject to scope.Resolve visibility). Honored only when ENGRAM_VNEXT_F_ENABLED=true. Unknown enum values return 'invalid_include_scopes:' structured error."},
+						"tier_filter":    map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"working", "episodic", "semantic", "procedural"}}, "description": "Filter recalled memories to the specified cognitive tiers (FR-B2). Empty/omitted means all tiers are returned. Honored only when ENGRAM_LIFECYCLE_ENABLED=true. Unknown tier values return 'invalid_tier_filter:' structured error."},
 					},
 				},
 			},

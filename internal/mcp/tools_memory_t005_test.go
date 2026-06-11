@@ -210,3 +210,66 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 	require.NoError(t, err)
 	return b
 }
+
+// ---- B4 tier_filter tests -------------------------------------------------------
+
+// TestRecallMemoryToolSchema_B4_HasTierFilter verifies that recall_memory InputSchema
+// advertises the tier_filter property added by B4 resolution (spec FR-B2).
+func TestRecallMemoryToolSchema_B4_HasTierFilter(t *testing.T) {
+	s := NewServer(ServerOptions{Version: "test"})
+	s.memoryStore = nonNilMemoryStore()
+
+	props := findToolProperties(t, s.ListTools(), "recall_memory")
+	tierFilter, ok := props["tier_filter"]
+	require.True(t, ok, "recall_memory schema must expose tier_filter property (spec FR-B2)")
+
+	tfMap, ok := tierFilter.(map[string]any)
+	require.True(t, ok, "tier_filter must be an object")
+	require.Equal(t, "array", tfMap["type"], "tier_filter must be type=array")
+
+	items, ok := tfMap["items"].(map[string]any)
+	require.True(t, ok, "tier_filter items must be an object")
+	enum := toStringSlice(items["enum"])
+	require.ElementsMatch(t, []string{"working", "episodic", "semantic", "procedural"}, enum,
+		"tier_filter enum must cover all four cognitive tiers")
+}
+
+// TestRecallMemoryTierFilter_InvalidTier_B4 verifies that recall_memory returns
+// an 'invalid_tier_filter:' structured error for unknown tier values when
+// ENGRAM_LIFECYCLE_ENABLED=true.
+func TestRecallMemoryTierFilter_InvalidTier_B4(t *testing.T) {
+	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "true")
+
+	s := NewServer(ServerOptions{Version: "test"})
+	s.memoryStore = nonNilMemoryStore()
+
+	args := mustJSON(t, map[string]any{
+		"query":       "test query",
+		"project":     "test-project",
+		"tier_filter": []string{"INVALID_TIER"},
+	})
+
+	_, err := s.handleRecallMemory(context.Background(), args)
+	require.Error(t, err)
+	require.True(t, strings.HasPrefix(err.Error(), "invalid_tier_filter:"),
+		"error must start with 'invalid_tier_filter:' structured prefix; got %q", err.Error())
+	require.Contains(t, err.Error(), `"INVALID_TIER"`, "error must echo offending value")
+}
+
+// TestRecallMemoryTierFilter_FlagOff_SchemaStillPresent_B4 verifies that the
+// tier_filter schema property is advertised unconditionally — schema discovery is
+// not env-gated (same pattern as include_scopes in T005).
+// The runtime ignores tier_filter when ENGRAM_LIFECYCLE_ENABLED is off; that
+// behavior is verified only in DB-integration tests since it requires a live store.
+func TestRecallMemoryTierFilter_FlagOff_SchemaStillPresent_B4(t *testing.T) {
+	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "")
+
+	s := NewServer(ServerOptions{Version: "test"})
+	s.memoryStore = nonNilMemoryStore()
+
+	// Schema must always advertise tier_filter — clients need a stable schema
+	// regardless of server-side flag state.
+	props := findToolProperties(t, s.ListTools(), "recall_memory")
+	require.Contains(t, props, "tier_filter",
+		"recall_memory schema must advertise tier_filter even when ENGRAM_LIFECYCLE_ENABLED=false")
+}

@@ -73,10 +73,11 @@ func TestMemoryStore_Create_StripsLifecycleFields(t *testing.T) {
 	fetched, err := ms.Get(ctx, created.ID)
 	require.NoError(t, err)
 
-	// The DB schema default for tier is "semantic"; we assert that the caller's
-	// "episodic" value was NOT persisted by plain Create.
-	assert.Equal(t, "semantic", fetched.Tier,
-		"plain Create must leave Tier at DB default")
+	// The DB schema default for tier is "episodic" (migration 131, B4 resolution);
+	// we assert that the caller's "episodic" value was NOT persisted by plain Create
+	// (Create strips lifecycle fields), and the DB default 'episodic' is returned.
+	assert.Equal(t, "episodic", fetched.Tier,
+		"plain Create must leave Tier at DB default (episodic per migration 131)")
 	assert.Equal(t, "observation", fetched.EpistemicType,
 		"plain Create must leave EpistemicType at DB default")
 	assert.Equal(t, "slow", fetched.Defeasibility,
@@ -124,6 +125,39 @@ func TestMemoryStore_CreateWithLifecycle_PersistsFields(t *testing.T) {
 
 // TestMemoryStore_ListBySourceAgentAndTag_FindsFingerprint verifies the idempotency
 // query used by the crystallization pipeline (P2-5).
+// TestMemoryStore_CreateWithLifecycle_DefaultTierEpisodic verifies B4 resolution:
+// when CreateWithLifecycle is called with no Tier supplied, the DB default
+// (migration 131: 'episodic') is used. This is the spec FR-B2 assertion:
+// new memories default to tier='episodic'.
+func TestMemoryStore_CreateWithLifecycle_DefaultTierEpisodic(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-lifecycle-default-tier'`)
+
+	store := &Store{DB: db}
+	ms := NewMemoryStore(store)
+	ctx := context.Background()
+
+	// No Tier set — must receive the DB default.
+	mem := &models.Memory{
+		Project:     "test-lifecycle-default-tier",
+		Content:     "a fresh observation without explicit tier",
+		SourceAgent: "test-b4",
+	}
+
+	created, err := ms.CreateWithLifecycle(ctx, mem)
+	require.NoError(t, err)
+	assert.Greater(t, created.ID, int64(0))
+
+	// Reload from DB to confirm the DB column default is 'episodic'.
+	fetched, err := ms.Get(ctx, created.ID)
+	require.NoError(t, err)
+
+	// B4 assertion: DB default is 'episodic' per migration 131.
+	assert.Equal(t, "episodic", fetched.Tier,
+		"new memory with no tier supplied must receive DB default 'episodic' (migration 131, spec FR-B2)")
+}
+
 func TestMemoryStore_ListBySourceAgentAndTag_FindsFingerprint(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
