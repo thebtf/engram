@@ -1242,6 +1242,107 @@ func (s *Server) handleRecallMemoryHybrid(
 		}
 	}
 
+	// Tier0 fall-through: if HybridSearch returned results but every candidate
+	// was filtered out above (by scope, obsType, or tag predicates) AND the
+	// initial call did NOT already skip Tier0, the Tier0 exact-hash hit may be
+	// the only reason Tier1 never ran. Re-run with SkipTier0=true so FTS+vector
+	// Tier1 candidates get a chance to pass the same filter pipeline.
+	// This is a rare path (Tier0 hit + invisible to caller) so the extra
+	// HybridSearch call is acceptable. The SkipTier0 flag on the opts struct
+	// prevents a second re-run if Tier1 results are also fully filtered.
+	if len(scored) > 0 && len(items) == 0 && !opts.SkipTier0 {
+		opts.SkipTier0 = true
+		scored, explanations, err = retrieval.HybridSearch(
+			ctx,
+			project, query,
+			fetchLimit,
+			s.memoryStore,
+			embStore,
+			gStore,
+			opts,
+		)
+		if err != nil {
+			return "", fmt.Errorf("recall_memory hybrid (tier0 fallthrough): %w", err)
+		}
+		// Re-build the explanation lookup for the new result set.
+		explByID = make(map[int64]retrieval.RankingExplanation, len(explanations))
+		for _, e := range explanations {
+			explByID[e.MemoryID] = e
+		}
+		// Re-apply all post-score filters over the new candidate set.
+		items = make([]hybridResult, 0, limit)
+		for _, sm := range scored {
+			mem := sm.Memory
+			if obsType != "" {
+				typeTag := strings.ToLower("type:" + obsType)
+				typeMatched := false
+				for _, tag := range mem.Tags {
+					if strings.ToLower(tag) == typeTag {
+						typeMatched = true
+						break
+					}
+				}
+				if !typeMatched {
+					continue
+				}
+			}
+			if len(tagSet) > 0 {
+				tagMatched := false
+				for _, tag := range mem.Tags {
+					if _, ok := tagSet[strings.ToLower(tag)]; ok {
+						tagMatched = true
+						break
+					}
+				}
+				if !tagMatched {
+					continue
+				}
+			}
+			if scopeEnabled {
+				memScope := mem.PrivacyScope
+				if memScope == "" {
+					memScope = "project"
+				}
+				if len(includeScopes) > 0 && !includeScopes[memScope] {
+					continue
+				}
+				meta := scope.SourceMeta{
+					WorkstationID: mem.SourceWorkstationID,
+					Sessions:      mem.SourceSessions,
+				}
+				if !scope.Resolve(caller, memScope, meta) {
+					continue
+				}
+			}
+			memoryType := ""
+			for _, tag := range mem.Tags {
+				if strings.HasPrefix(tag, "type:") {
+					memoryType = strings.TrimPrefix(tag, "type:")
+					break
+				}
+			}
+			r := hybridResult{
+				ID:          mem.ID,
+				Title:       truncateTitle(mem.Content, 80),
+				Type:        memoryType,
+				Content:     mem.Content,
+				Tags:        mem.Tags,
+				SourceAgent: mem.SourceAgent,
+				Project:     mem.Project,
+				Score:       sm.Score,
+			}
+			if explain {
+				if e, ok := explByID[mem.ID]; ok {
+					r.RankingExplanation = &e
+				}
+			}
+			items = append(items, r)
+			if len(items) == limit {
+				break
+			}
+		}
+	}
+
 	// Reconsolidation: fire-and-forget lifecycle updates on the FINAL response set only
 	// (not the wider candidate pool). This ensures access_count reflects actual retrieval.
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(items) > 0 {

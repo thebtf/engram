@@ -115,6 +115,13 @@ type HybridOptions struct {
 	ExpandGraph bool
 	// Explain enables per-result score breakdown. Populated in each ScoredMemory.
 	Explain bool
+	// SkipTier0 disables the Tier0 exact content-hash short-circuit when true.
+	// The caller sets this to re-run the pipeline via Tier1/Tier2 only after a
+	// Tier0 hit was returned but then filtered out (e.g. by scope or tag
+	// predicates at the MCP layer). Keeping this option here rather than moving
+	// MCP-layer predicates into HybridSearch preserves the layer boundary: the
+	// retrieval package stays filter-agnostic.
+	SkipTier0 bool
 }
 
 // HybridSearch runs the tiered retrieval pipeline (FR-C4) for a project and query.
@@ -153,7 +160,10 @@ func HybridSearch(
 	tierAllowed := buildTierSet(opts.TierFilter)
 
 	// Tier 0 — exact content-hash match.
-	if tierAllowed("tier0_exact") {
+	// Skipped when SkipTier0 is set so callers can fall through to Tier1 after
+	// a prior Tier0 result was fully filtered at the MCP layer (e.g. scope or
+	// tag mismatch). See HybridOptions.SkipTier0 for rationale.
+	if !opts.SkipTier0 && tierAllowed("tier0_exact") {
 		queryHash := contentHash(query)
 		// Fetch a candidate pool via List (no index on content; practical for small projects).
 		// For large deployments an indexed content_hash column would be preferred; that is

@@ -581,6 +581,93 @@ func TestHybridSearch_FTSRelevanceCarriesRank(t *testing.T) {
 	}
 }
 
+// ── SkipTier0 fall-through ───────────────────────────────────────────────────
+
+// TestHybridSearch_SkipTier0_FallsThrough verifies that when SkipTier0=true,
+// the Tier0 exact-hash short-circuit is bypassed and Tier1 FTS/vector runs
+// instead. This is the retrieval-layer half of the fix for PR #245: the MCP
+// layer sets SkipTier0=true when a Tier0 hit was fully filtered out by scope
+// or tag predicates, allowing Tier1 candidates to surface.
+func TestHybridSearch_SkipTier0_FallsThrough(t *testing.T) {
+	ctx := context.Background()
+	const query = "exact query content"
+
+	// memA matches the query exactly — would be a Tier0 hit normally.
+	// In the PR #245 scenario this memory is private to another workstation;
+	// at the retrieval layer we simply verify it is NOT returned as a Tier0
+	// singleton when SkipTier0=true.
+	memA := mem(1, query)
+
+	// memB does not match the query exactly but appears in FTS results.
+	// This is the memory the caller should see when Tier0 is skipped.
+	memB := mem(2, "tier1 fts candidate")
+
+	store := &mockMemStore{
+		listResults: []*models.Memory{memA, memB}, // Tier0 would hit memA via List
+		ftsResults:  []*models.Memory{memB},        // FTS returns only memB
+		byIDResults: []*models.Memory{memA, memB},
+	}
+
+	// Without SkipTier0: Tier0 short-circuits and returns memA as a singleton.
+	scoredDefault, _, err := HybridSearch(ctx, "proj", query, 10, store, nil, nil, HybridOptions{})
+	if err != nil {
+		t.Fatalf("default run: unexpected error: %v", err)
+	}
+	if len(scoredDefault) != 1 || scoredDefault[0].Memory.ID != 1 {
+		t.Fatalf("default run: expected Tier0 singleton id=1, got %v", scoredDefault)
+	}
+
+	// With SkipTier0=true: Tier0 is bypassed; Tier1 FTS runs and returns memB.
+	scoredSkip, _, err := HybridSearch(ctx, "proj", query, 10, store, nil, nil, HybridOptions{
+		SkipTier0: true,
+	})
+	if err != nil {
+		t.Fatalf("SkipTier0 run: unexpected error: %v", err)
+	}
+	foundA := false
+	foundB := false
+	for _, sm := range scoredSkip {
+		if sm.Memory.ID == 1 {
+			foundA = true
+		}
+		if sm.Memory.ID == 2 {
+			foundB = true
+		}
+	}
+	// memA must NOT appear as a Tier0 exact-score singleton.
+	// (It may appear via FTS if ftsResults contained it, but our mock does not.)
+	if foundA && len(scoredSkip) == 1 && scoredSkip[0].Score == 1.0 {
+		t.Error("SkipTier0=true must not return memA as a Tier0 singleton (score=1.0)")
+	}
+	// memB must be present: FTS ran and returned it.
+	if !foundB {
+		t.Error("SkipTier0=true: memB (id=2) must be in results via Tier1 FTS, got none")
+	}
+}
+
+// TestHybridSearch_SkipTier0_Tier0NotInList verifies that SkipTier0=true does not
+// break the common case where no exact-hash match exists: Tier1 still runs normally.
+func TestHybridSearch_SkipTier0_NoExactMatch_Tier1Runs(t *testing.T) {
+	ctx := context.Background()
+
+	m1 := mem(1, "regular fts result")
+	store := &mockMemStore{
+		listResults: []*models.Memory{m1},
+		ftsResults:  []*models.Memory{m1},
+		byIDResults: []*models.Memory{m1},
+	}
+
+	scored, _, err := HybridSearch(ctx, "proj", "query with no exact match", 10, store, nil, nil, HybridOptions{
+		SkipTier0: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(scored) == 0 {
+		t.Error("SkipTier0=true with no exact match: Tier1 FTS must still return results")
+	}
+}
+
 // ── helper ───────────────────────────────────────────────────────────────────
 
 func assertClose(t *testing.T, name string, want, got, tol float64) {
