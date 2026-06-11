@@ -6,6 +6,7 @@ package writelint_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -380,6 +381,114 @@ func TestOrchestrator_Signal_Abort_T034(t *testing.T) {
 	}
 	if !found {
 		t.Error("Phase2 abort: expected audit entry with action='write_lint_aborted'")
+	}
+}
+
+// --- round-4 finding 1: merge_with cross-project binding ---
+
+// TestOrchestrator_MergeWith_ProjectMismatch_Round4 verifies that Phase2 merge_with
+// rejects a target memory belonging to a different project than the token's project.
+// This mirrors the supersede_project_mismatch guard added in round 3.
+func TestOrchestrator_MergeWith_ProjectMismatch_Round4(t *testing.T) {
+	// target is seeded in "project-b"; token is minted via Phase1 for "project-a"
+	targetMemB := &models.Memory{
+		ID:      77,
+		Project: "project-b",
+		Content: "some content in project B that should be unreachable from project A",
+		Status:  "active",
+	}
+	// A near-dup in "project-a" so Phase1 fires a signal and mints a token
+	nearDupA := &models.Memory{
+		ID:      78,
+		Project: "project-a",
+		Content: "PostgreSQL connection pool tuning set max connections 200 for production database",
+		Status:  "active",
+	}
+	orc, _, closer := buildOrchestrator([]*models.Memory{targetMemB, nearDupA})
+	defer closer()
+	ctx := context.Background()
+
+	// Phase1 with project-a content — should fire duplicate signal against nearDupA
+	resp, err := orc.Phase1(ctx, &models.Memory{
+		Content: dupContent,
+		Project: "project-a",
+	}, "system")
+	if err != nil {
+		t.Fatalf("Phase1: unexpected error: %v", err)
+	}
+	if resp.Stored {
+		t.Skip("no signal fired — cross-project merge test not applicable without a token")
+	}
+	if resp.ResolutionToken == "" {
+		t.Fatal("Phase1: expected a resolution token")
+	}
+
+	// Phase2: attempt merge_with targeting project-b memory using a project-a token
+	memID := int64(77)
+	_, err = orc.Phase2(ctx, writelint.Phase2Request{
+		Token:          resp.ResolutionToken,
+		Option:         "merge_with",
+		TargetMemoryID: &memID,
+		Content:        dupContent,
+		Project:        "project-a",
+		Actor:          "system",
+	})
+	if err == nil {
+		t.Fatal("Phase2 merge_with cross-project: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "merge_project_mismatch") {
+		t.Errorf("Phase2 merge_with cross-project: expected 'merge_project_mismatch' error, got: %v", err)
+	}
+}
+
+// TestOrchestrator_Supersede_ProjectMismatch_Round4 verifies that Phase2 supersede
+// rejects a target memory belonging to a different project (guard added in round 3).
+func TestOrchestrator_Supersede_ProjectMismatch_Round4(t *testing.T) {
+	// target is seeded in "project-b"
+	targetMemB := &models.Memory{
+		ID:      88,
+		Project: "project-b",
+		Content: "old content in project B",
+		Status:  "active",
+	}
+	nearDupA := &models.Memory{
+		ID:      89,
+		Project: "project-a",
+		Content: "PostgreSQL connection pool tuning set max connections 200 for production database",
+		Status:  "active",
+	}
+	orc, _, closer := buildOrchestrator([]*models.Memory{targetMemB, nearDupA})
+	defer closer()
+	ctx := context.Background()
+
+	resp, err := orc.Phase1(ctx, &models.Memory{
+		Content: dupContent,
+		Project: "project-a",
+	}, "system")
+	if err != nil {
+		t.Fatalf("Phase1: unexpected error: %v", err)
+	}
+	if resp.Stored {
+		t.Skip("no signal fired — cross-project supersede test not applicable without a token")
+	}
+	if resp.ResolutionToken == "" {
+		t.Fatal("Phase1: expected a resolution token")
+	}
+
+	memID := int64(88)
+	_, err = orc.Phase2(ctx, writelint.Phase2Request{
+		Token:          resp.ResolutionToken,
+		Option:         "supersede",
+		TargetMemoryID: &memID,
+		Content:        dupContent,
+		Project:        "project-a",
+		Actor:          "system",
+	})
+	if err == nil {
+		t.Fatal("Phase2 supersede cross-project: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "supersede_project_mismatch") {
+		t.Errorf("Phase2 supersede cross-project: expected 'supersede_project_mismatch' error, got: %v", err)
 	}
 }
 

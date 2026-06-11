@@ -145,8 +145,9 @@ func TestConcurrency_TwoGoroutines_SameToken(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Phase1 to get a token
-	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
+	// Phase1 to get a token — use the same project as makeDupMemory() ("test")
+	// so the project-binding check introduced in round-4 passes on Phase2.
+	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
@@ -168,9 +169,9 @@ func TestConcurrency_TwoGoroutines_SameToken(t *testing.T) {
 				Token:          token,
 				Option:         "merge_with",
 				Content:        dupContent,
-				Project:        "testproj",
+				Project:        "test",
 				Actor:          "agent",
-				TargetMemoryID: func() *int64 { v := int64(1); return &v }(),
+				TargetMemoryID: func() *int64 { v := int64(42); return &v }(), // makeDupMemory() ID
 			})
 		}()
 	}

@@ -447,6 +447,15 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		if target == nil {
 			return nil, fmt.Errorf("merge_with: target memory %d not found", *req.TargetMemoryID)
 		}
+		// round-4 finding 1 fix: verify the target memory belongs to the token's
+		// project before merging. Without this check a token minted for project A
+		// could append project-A content into a project-B memory (cross-project
+		// clobber attack). Mirrors the supersede_project_mismatch check added in
+		// round 3.
+		if target.Project != req.Project {
+			return nil, fmt.Errorf("merge_project_mismatch: target memory %d belongs to project %q, token is for project %q",
+				*req.TargetMemoryID, target.Project, req.Project)
+		}
 		// Merge: append new content to target (simple merge strategy)
 		target.Content = target.Content + "\n\n[merged] " + req.Content
 		updated, err := o.cfg.MemoryStore.Update(ctx, target)

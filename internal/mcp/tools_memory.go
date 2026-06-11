@@ -285,6 +285,19 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				wlMem.SourceWorkstationID = id.WorkstationID()
 			}
 
+			// round-4 finding 2 fix: reject private-scope writes that lack a
+			// workstation identity before reaching Phase1/Phase2. The legacy
+			// path performs this check at line 597 (Codex P1 cycle-4 fix).
+			// Without mirroring it here, a no-signal write-lint path (Phase1
+			// returns stored=true) or a Phase2 create path (ignore_signals /
+			// supersede) persists a private memory with empty
+			// source_workstation_id. scope.Resolve fail-closes such rows
+			// (internal/scope/filter.go:85-87), making them permanently
+			// unreadable — including to the writer itself.
+			if wlMem.PrivacyScope == "private" && wlMem.SourceWorkstationID == "" {
+				return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
+			}
+
 			if wlResolutionToken != "" {
 				// Phase2: caller is committing with a previously minted token.
 				p2req := writelint.Phase2Request{

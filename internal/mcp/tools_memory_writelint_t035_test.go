@@ -13,12 +13,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -317,4 +319,63 @@ func TestWriteLint_T035_TokenExpired(t *testing.T) {
 	_, err := srv.handleStoreMemory(context.Background(), args)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "write_lint_phase2")
+}
+
+// ---------------------------------------------------------------------------
+// round-4 finding 2: private-scope enforcement on write-lint path
+// ---------------------------------------------------------------------------
+
+// TestWriteLint_T035_PrivateScope_NoWorkstation_Rejected verifies that a
+// store_memory request with privacy_scope="private" and no workstation identity
+// (i.e., no SourceClient keycard in context) is rejected before reaching
+// Phase1/Phase2. This mirrors the legacy path guard at tools_memory.go:597.
+func TestWriteLint_T035_PrivateScope_NoWorkstation_Rejected(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	orch, _, closer := buildWLOrchestrator()
+	defer closer()
+
+	srv := NewServer(ServerOptions{Version: "test-t035"})
+	srv.SetWriteLintOrchestrator(orch)
+
+	// No auth identity in context — SourceWorkstationID will be empty.
+	args, _ := json.Marshal(map[string]any{
+		"content":       "private memory content",
+		"project":       "testproj",
+		"privacy_scope": "private",
+	})
+	_, err := srv.handleStoreMemory(context.Background(), args)
+	require.Error(t, err, "private write without workstation identity must be rejected")
+	assert.True(t, strings.Contains(err.Error(), "invalid_privacy_scope"),
+		"error must carry the invalid_privacy_scope prefix, got: %v", err)
+	assert.True(t, strings.Contains(err.Error(), "private"),
+		"error must mention 'private', got: %v", err)
+}
+
+// TestWriteLint_T035_PrivateScope_WithWorkstation_Allowed verifies that the
+// same private write is accepted when a SourceClient workstation identity is
+// present. The Phase1 path will proceed and attempt to store the memory.
+// With no existing memories the no-signal path stores it immediately.
+func TestWriteLint_T035_PrivateScope_WithWorkstation_Allowed(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	orch, _, closer := buildWLOrchestrator()
+	defer closer()
+
+	srv := NewServer(ServerOptions{Version: "test-t035"})
+	srv.SetWriteLintOrchestrator(orch)
+
+	// SourceClient identity provides a non-empty WorkstationID.
+	ctx := auth.WithIdentity(context.Background(), auth.Client("read-write", "ws-uuid-abc"))
+
+	args, _ := json.Marshal(map[string]any{
+		"content":       "private memory content",
+		"project":       "testproj",
+		"privacy_scope": "private",
+	})
+	result, err := srv.handleStoreMemory(ctx, args)
+	require.NoError(t, err, "private write with valid workstation identity must succeed")
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result), &resp))
+	assert.Equal(t, true, resp["stored"], "private write with workstation identity must store")
 }
