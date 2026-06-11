@@ -17,6 +17,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,6 +25,18 @@ import (
 
 	"github.com/thebtf/engram/pkg/models"
 )
+
+func TestTagContainmentJSONHandlesControlCharacters(t *testing.T) {
+	tag := "section:\x1f"
+
+	tagJSON, err := tagContainmentJSON(tag)
+	require.NoError(t, err)
+	assert.NotContains(t, tagJSON, `\x`, "JSON must not use Go-only hex escapes")
+
+	var decoded []string
+	require.NoError(t, json.Unmarshal([]byte(tagJSON), &decoded))
+	require.Equal(t, []string{tag}, decoded)
+}
 
 // TestMemoryStore_Create_StripsLifecycleFields verifies that plain Create ignores
 // Tier, EpistemicType, and Defeasibility fields supplied by the caller (P1-3).
@@ -62,12 +75,12 @@ func TestMemoryStore_Create_StripsLifecycleFields(t *testing.T) {
 
 	// The DB schema default for tier is "semantic"; we assert that the caller's
 	// "episodic" value was NOT persisted by plain Create.
-	assert.NotEqual(t, "episodic", fetched.Tier,
-		"plain Create must not persist caller-supplied Tier (milestone-B byte-identity contract)")
-	assert.NotEqual(t, "decision", fetched.EpistemicType,
-		"plain Create must not persist caller-supplied EpistemicType")
-	assert.NotEqual(t, "tentative", fetched.Defeasibility,
-		"plain Create must not persist caller-supplied Defeasibility")
+	assert.Equal(t, "semantic", fetched.Tier,
+		"plain Create must leave Tier at DB default")
+	assert.Equal(t, "observation", fetched.EpistemicType,
+		"plain Create must leave EpistemicType at DB default")
+	assert.Equal(t, "slow", fetched.Defeasibility,
+		"plain Create must leave Defeasibility at DB default")
 
 	// Input struct must not be mutated.
 	assert.Equal(t, "episodic", mem.Tier, "caller's input struct must not be mutated")
@@ -146,4 +159,46 @@ func TestMemoryStore_ListBySourceAgentAndTag_FindsFingerprint(t *testing.T) {
 	notFound, err := ms.ListBySourceAgentAndTag(ctx, "test-list-by-tag", "crystallization", "session:sess-other")
 	require.NoError(t, err)
 	assert.Empty(t, notFound, "different session tag must not match")
+}
+
+func TestMemoryStore_CreateWithLifecycleIfTagAbsent_SkipsDuplicate(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-create-if-tag-absent'`)
+
+	store := &Store{DB: db}
+	ms := NewMemoryStore(store)
+	ctx := context.Background()
+	fpTag := "fp:abc123deadbeef00"
+
+	first := &models.Memory{
+		Project:       "test-create-if-tag-absent",
+		Content:       "decided to use PostgreSQL because it scales.",
+		SourceAgent:   "crystallization",
+		Tags:          []string{"crystallization", "session:sess-dedup", fpTag},
+		Tier:          "episodic",
+		EpistemicType: "decision",
+	}
+	created, duplicate, err := ms.CreateWithLifecycleIfTagAbsent(ctx, first, fpTag)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	require.NotNil(t, created)
+
+	second := &models.Memory{
+		Project:       "test-create-if-tag-absent",
+		Content:       "decided to use Redis because it is fast.",
+		SourceAgent:   "crystallization",
+		Tags:          []string{"crystallization", "session:sess-dedup", fpTag},
+		Tier:          "episodic",
+		EpistemicType: "decision",
+	}
+	created, duplicate, err = ms.CreateWithLifecycleIfTagAbsent(ctx, second, fpTag)
+	require.NoError(t, err)
+	require.True(t, duplicate)
+	require.Nil(t, created)
+
+	found, err := ms.ListBySourceAgentAndTag(ctx, "test-create-if-tag-absent", "crystallization", fpTag)
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	assert.Equal(t, first.Content, found[0].Content)
 }

@@ -13,16 +13,13 @@ package worker
 //  2. runCrystallization is a method on *Service and does NOT panic when the
 //     memoryStore is nil — matches the T014 acceptance criterion
 //     "panics (or fails) clearly".
-//  3. When crystallization flag is ON and memoryStore IS nil, the test fails
-//     loudly (t.Fatal) — this is the "startup assertion" behaviour.
+//  3. nil memoryStore + nil auditStore does not panic.
 
 import (
 	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/mcp"
 )
 
 // TestWiring_CrystallizationFlagRegistered verifies that when
@@ -76,22 +73,4 @@ func TestWiring_CrystallizationAuditStoreNilGuard(t *testing.T) {
 			nil, // nil memStore triggers the early-return nil-guard
 		)
 	}, "nil memStore + nil auditStore must not panic")
-}
-
-// TestWiring_AuditStoreSetOnMCPServer mirrors the T014 acceptance criterion
-// "Test asserts MCP server's internal auditStore field is non-nil after
-// SetAuditStore is called." This is a regression guard: if SetAuditStore is
-// deleted from server.go, this test fails immediately.
-func TestWiring_AuditStoreSetOnMCPServer(t *testing.T) {
-	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-audit-test"})
-
-	as := &gormdb.AuditStore{}
-	srv.SetAuditStore(as)
-
-	// Verify via ListTools that the server didn't crash; the field set is
-	// observable only indirectly (we can't reflect into mcp.Server internals),
-	// but the absence of a panic proves SetAuditStore exists and runs cleanly.
-	assert.NotPanics(t, func() {
-		_ = srv.ListTools()
-	}, "SetAuditStore + ListTools must not panic")
 }

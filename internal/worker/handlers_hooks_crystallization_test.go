@@ -20,9 +20,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
 // ---------------------------------------------------------------------------
@@ -66,8 +68,13 @@ func TestRunCrystallization_NoDecisions(t *testing.T) {
 func TestHandleSessionEnd_CrystallizationFlagOff(t *testing.T) {
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "false")
 
+	var crystallizationCalled atomic.Bool
 	svc := &Service{}
 	svc.ctx = context.Background()
+	svc.memoryStore = new(gormdb.MemoryStore)
+	svc.crystallizeFunc = func(context.Context, string, string, string, *gormdb.MemoryStore) {
+		crystallizationCalled.Store(true)
+	}
 
 	body, _ := json.Marshal(sessionEndRequest{
 		SessionID:       "sess-flag-off",
@@ -82,6 +89,7 @@ func TestHandleSessionEnd_CrystallizationFlagOff(t *testing.T) {
 	svc.wg.Wait()
 
 	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.False(t, crystallizationCalled.Load(), "flag-off must not invoke crystallization")
 }
 
 // TestHandleSessionEnd_CrystallizationFlagOn_NilStores verifies that even with

@@ -96,6 +96,7 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 
 	stored := 0
 	flagged := 0
+	lifecycleEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
 	for _, chunk := range chunks {
 		var chunkFlagged bool
 		if vnextEnabled && existing != nil {
@@ -125,10 +126,15 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 			memory.Status = "flagged"
 		}
 
-		// Ingest always supplies lifecycle fields (Tier/EpistemicType/Defeasibility);
-		// use CreateWithLifecycle so they are persisted without touching the plain
-		// Create path (preserves default-off byte-identity contract).
-		created, err := s.memoryStore.CreateWithLifecycle(ctx, memory)
+		// Ingest supplies lifecycle fields, but the default-off path must leave
+		// DB defaults authoritative for ordinary callers.
+		var created *models.Memory
+		var err error
+		if vnextEnabled || lifecycleEnabled {
+			created, err = s.memoryStore.CreateWithLifecycle(ctx, memory)
+		} else {
+			created, err = s.memoryStore.Create(ctx, memory)
+		}
 		if err != nil {
 			log.Error().Err(err).Int("chunk_index", chunk.Index).Msg("ingest: store chunk failed")
 			continue

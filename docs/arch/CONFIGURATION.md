@@ -91,7 +91,7 @@ have been applied.
 | `ENGRAM_VNEXT_ENABLED` | `false` | Master vNext gate. Enables retention cron for injection_log and citation_log cleanup (Milestone A). |
 | `ENGRAM_LIFECYCLE_ENABLED` | `false` | Enables the sleep cycle (tier promotion/demotion) for memory lifecycle management (Milestone B). |
 | `ENGRAM_GRAPH_ENABLED` | `false` | Enables the knowledge graph subsystem and `graph` MCP tool (Milestone C). |
-| `ENGRAM_ADAPTIVE_ENABLED` | `false` | Enables adaptive memory segmentation (Milestone C). |
+| `ENGRAM_ADAPTIVE_ENABLED` | `false` | Enables adaptive memory segmentation and adaptive brief retrieval (`get_memory_brief`). |
 | `ENGRAM_CRYSTALLIZATION_ENABLED` | `false` | Enables session-end crystallization pipeline: deterministic extraction of decisions from agent output, stored as `epistemic_type=decision, tier=episodic` memories (Milestone D). Requires `ENGRAM_VNEXT_ENABLED=true` for the audit trail to fire. |
 
 ### Removed in v5/v6

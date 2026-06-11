@@ -4,16 +4,14 @@ package worker
 //
 // Tests addressing the cross-model review findings:
 //
-//   P1-2: Crystallization is independent of the citation pipeline.
-//         - When injectionStore/citationStore are nil, crystallization still runs
-//           (previously it was gated by citation pipeline early-returns).
-//         - When injections are empty, crystallization still runs.
+//   P1-2: Session-end accepts citation-pipeline nil-store cases. DB-backed
+//         crystallization side effects are covered by the DSN-gated integration
+//         tests in handlers_hooks_crystallization_integration_test.go.
 //
 //   P2-5: Idempotency — crystallizationFingerprint and skip logic.
 //         - Same sessionID+content pair produces a stable fingerprint.
 //         - Different content produces a different fingerprint.
-//         - runCrystallization logs skipped duplicate count on double-fire
-//           (unit-level: verified via nil memStore short-circuit).
+//         - runCrystallization nil memStore guard does not panic.
 
 import (
 	"bytes"
@@ -25,26 +23,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/privacy"
 )
 
 // ---------------------------------------------------------------------------
-// P1-2: Crystallization runs independently of the citation pipeline.
+// P1-2: Nil-store session-end acceptance.
 // ---------------------------------------------------------------------------
 
-// TestHandleSessionEnd_CrystallizationIndependentOfNilInjectionStore verifies that
-// when injectionStore and citationStore are nil (citation pipeline cannot run),
-// crystallization is still launched as its own goroutine.
+// TestHandleSessionEnd_AcceptsNilCitationStores verifies that session-end still
+// accepts the request when citation stores are nil.
 //
-// With nil memStore the crystallization goroutine exits at the nil-guard, but the
-// key assertion is that handleSessionEnd returns 202 (not 4xx) and does not panic,
-// proving the crystallization path was attempted independently.
-func TestHandleSessionEnd_CrystallizationIndependentOfNilInjectionStore(t *testing.T) {
+// With nil memStore this unit test does not assert DB side effects; the
+// DB-backed independence check lives in the integration test file.
+func TestHandleSessionEnd_AcceptsNilCitationStores(t *testing.T) {
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
 
 	svc := &Service{}
 	svc.ctx = context.Background()
-	// injectionStore, citationStore, memStore all nil — old code would return before
-	// crystallization; new code spawns crystallization independently.
+	// injectionStore, citationStore, memStore all nil.
 
 	body, _ := json.Marshal(sessionEndRequest{
 		SessionID:       "sess-crystal-indep",
@@ -63,10 +59,9 @@ func TestHandleSessionEnd_CrystallizationIndependentOfNilInjectionStore(t *testi
 		"must return 202 even when injection/citation stores are nil")
 }
 
-// TestHandleSessionEnd_CrystallizationIndependentOfEmptyOutput verifies that when
-// agent_output_text is empty, crystallization is NOT spawned (no-op guard in
-// handleSessionEnd: "memStore != nil && capturedOutput != ”").
-func TestHandleSessionEnd_CrystallizationSkippedOnEmptyOutput(t *testing.T) {
+// TestHandleSessionEnd_AcceptsEmptyOutputWithoutStores verifies that empty output
+// still returns the session-end 202 response in the nil-store unit harness.
+func TestHandleSessionEnd_AcceptsEmptyOutputWithoutStores(t *testing.T) {
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
 
 	svc := &Service{}
@@ -88,10 +83,9 @@ func TestHandleSessionEnd_CrystallizationSkippedOnEmptyOutput(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, w.Code)
 }
 
-// TestHandleSessionEnd_CrystallizationFlagOff_NoCrystallizationGoroutine verifies
-// that when the flag is off, no crystallization goroutine is started regardless of
-// output content.
-func TestHandleSessionEnd_CrystallizationFlagOff_NoCrystallizationGoroutine(t *testing.T) {
+// TestHandleSessionEnd_AcceptsFlagOffWithoutStores verifies that flag-off
+// session-end requests still return the session-end 202 response.
+func TestHandleSessionEnd_AcceptsFlagOffWithoutStores(t *testing.T) {
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "false")
 
 	svc := &Service{}
@@ -150,10 +144,28 @@ func TestCrystallizationFingerprint_SessionIsolation(t *testing.T) {
 		"same decision content from different sessions must have different fingerprints")
 }
 
-// TestRunCrystallization_IdempotencySkipsOnNilMemStore verifies that when
-// ListBySourceAgentAndTag fails (nil memStore short-circuits before it) the
-// function still returns without panicking. This exercises the nil-guard path
-// which is the same code path that also handles the dedup-query failure branch.
+// TestCrystallizationFingerprint_RedactedSecretMarkersStayDistinct verifies the
+// current privacy redaction contract: different secret values are not collapsed
+// into a generic marker before fingerprinting.
+func TestCrystallizationFingerprint_RedactedSecretMarkersStayDistinct(t *testing.T) {
+	first := "decided to rotate SECRET_KEY=aaaaaaaaaaaaaaaaaaaaaaaa because it leaked."
+	second := "decided to rotate SECRET_KEY=bbbbbbbbbbbbbbbbbbbbbbbb because it leaked."
+
+	redactedFirst := privacy.RedactSecrets(first)
+	redactedSecond := privacy.RedactSecrets(second)
+
+	require.Contains(t, redactedFirst, "[REDACTED:")
+	require.Contains(t, redactedSecond, "[REDACTED:")
+	require.NotEqual(t, redactedFirst, redactedSecond, "different secrets retain distinct redaction markers")
+
+	fpFirst := crystallizationFingerprint("sess-redacted", redactedFirst)
+	fpSecond := crystallizationFingerprint("sess-redacted", redactedSecond)
+	assert.NotEqual(t, fpFirst, fpSecond, "redacted decisions with different secret values must remain distinct")
+}
+
+// TestRunCrystallization_IdempotencyNilGuardNoPanic verifies the nil memStore
+// guard only. Real idempotency/dedup behavior is DB-backed and covered in the
+// integration tests.
 func TestRunCrystallization_IdempotencyNilGuardNoPanic(t *testing.T) {
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
 
@@ -166,5 +178,5 @@ func TestRunCrystallization_IdempotencyNilGuardNoPanic(t *testing.T) {
 			"decided to use PostgreSQL because it scales.",
 			nil, // nil memStore triggers nil-guard before any dedup logic
 		)
-	}, "nil memStore must not panic (idempotency dedup path included)")
+	}, "nil memStore must not panic")
 }

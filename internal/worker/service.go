@@ -127,6 +127,7 @@ type Service struct {
 	citationLogStore       *gorm.CitationLogStore
 	injectionTracker       *injection.Tracker
 	injectionLogStore      *gorm.InjectionLogStore
+	crystallizeFunc        func(context.Context, string, string, string, *gorm.MemoryStore) // test hook; nil uses runCrystallization
 	agentStatsStore        *gorm.AgentStatsStore
 	versionStore           *gorm.VersionStore
 	retrievalHooks         *retrievalHooks

@@ -8,7 +8,7 @@ package worker
 //
 // Run with:
 //   DATABASE_DSN="postgres://user:pass@host:5432/db?sslmode=disable" \
-//     go test ./internal/worker/ -run TestCrystallizationIntegration -v
+//     go test ./... -run TestCrystallizationIntegration -v
 
 import (
 	"bytes"
@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,14 +40,14 @@ func openIntegrationStore(t *testing.T) *gormdb.Store {
 }
 
 // cleanCrystallizationRows deletes test memories created by crystallization for a
-// given session tag so tests are idempotent.
-func cleanCrystallizationRows(t *testing.T, store *gormdb.Store, sessionTag string) {
+// given project and session tag so tests are idempotent.
+func cleanCrystallizationRows(t *testing.T, store *gormdb.Store, project, sessionTag string) {
 	t.Helper()
-	// best-effort; ignore error
-	store.DB.Exec(
-		"DELETE FROM memories WHERE source_agent = 'crystallization' AND tags::text LIKE ?",
-		"%"+sessionTag+"%",
+	res := store.DB.Exec(
+		"DELETE FROM memories WHERE source_agent = 'crystallization' AND project = ? AND tags::text LIKE ?",
+		project, "%"+sessionTag+"%",
 	)
+	require.NoError(t, res.Error)
 }
 
 // buildIntegrationService wires a minimal Service with a real MemoryStore for
@@ -67,7 +68,7 @@ func buildIntegrationService(t *testing.T, store *gormdb.Store) *Service {
 func countCrystallizationMemories(t *testing.T, store *gormdb.Store, project, sessionTag string) int64 {
 	t.Helper()
 	var count int64
-	store.DB.Raw(`
+	res := store.DB.Raw(`
 		SELECT COUNT(*) FROM memories
 		WHERE source_agent = 'crystallization'
 		  AND project      = ?
@@ -77,6 +78,7 @@ func countCrystallizationMemories(t *testing.T, store *gormdb.Store, project, se
 		  AND deleted_at IS NULL`,
 		project, "%"+sessionTag+"%",
 	).Scan(&count)
+	require.NoError(t, res.Error)
 	return count
 }
 
@@ -85,7 +87,9 @@ func countCrystallizationMemories(t *testing.T, store *gormdb.Store, project, se
 // ---------------------------------------------------------------------------
 
 // TestCrystallizationIntegration_DecisionsStoredWithCorrectFields is the primary
-// end-to-end test: 3 decision patterns → 3 DB rows with correct metadata.
+// end-to-end test: 3 decision patterns → 3 DB rows with correct metadata. The
+// test service intentionally leaves citation stores nil, proving crystallization
+// runs independently when memoryStore is available.
 func TestCrystallizationIntegration_DecisionsStoredWithCorrectFields(t *testing.T) {
 	store := openIntegrationStore(t)
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
@@ -93,7 +97,7 @@ func TestCrystallizationIntegration_DecisionsStoredWithCorrectFields(t *testing.
 	const sessionID = "integ-cryst-sess-001"
 	const project = "integ-cryst-project"
 	sessionTag := "session:" + sessionID
-	t.Cleanup(func() { cleanCrystallizationRows(t, store, sessionTag) })
+	t.Cleanup(func() { cleanCrystallizationRows(t, store, project, sessionTag) })
 
 	svc := buildIntegrationService(t, store)
 
@@ -120,7 +124,8 @@ Going forward, all new services will follow the same pattern.`
 }
 
 // TestCrystallizationIntegration_FlagOff_NothingStored verifies that with the
-// flag off no memories are written even when decision patterns exist.
+// flag off no memories are written even when decision patterns exist and
+// memoryStore is available.
 func TestCrystallizationIntegration_FlagOff_NothingStored(t *testing.T) {
 	store := openIntegrationStore(t)
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "false")
@@ -128,7 +133,7 @@ func TestCrystallizationIntegration_FlagOff_NothingStored(t *testing.T) {
 	const sessionID = "integ-cryst-sess-002"
 	const project = "integ-cryst-project-off"
 	sessionTag := "session:" + sessionID
-	t.Cleanup(func() { cleanCrystallizationRows(t, store, sessionTag) })
+	t.Cleanup(func() { cleanCrystallizationRows(t, store, project, sessionTag) })
 
 	svc := buildIntegrationService(t, store)
 
@@ -149,6 +154,36 @@ func TestCrystallizationIntegration_FlagOff_NothingStored(t *testing.T) {
 	assert.Equal(t, int64(0), count, "flag off: must not write any crystallization memories")
 }
 
+// TestCrystallizationIntegration_EmptyOutput_NothingStored verifies that empty
+// agent output does not spawn crystallization even when memoryStore is wired.
+func TestCrystallizationIntegration_EmptyOutput_NothingStored(t *testing.T) {
+	store := openIntegrationStore(t)
+	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
+
+	const sessionID = "integ-cryst-sess-empty-003"
+	const project = "integ-cryst-project-empty"
+	sessionTag := "session:" + sessionID
+	t.Cleanup(func() { cleanCrystallizationRows(t, store, project, sessionTag) })
+
+	svc := buildIntegrationService(t, store)
+
+	body, _ := json.Marshal(sessionEndRequest{
+		SessionID:       sessionID,
+		Project:         project,
+		AgentOutputText: "",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/session-end", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	svc.handleSessionEnd(w, req)
+	svc.wg.Wait()
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+
+	count := countCrystallizationMemories(t, store, project, sessionTag)
+	assert.Equal(t, int64(0), count, "empty output: must not write any crystallization memories")
+}
+
 // TestCrystallizationIntegration_PrivacyRedaction verifies that secrets in agent
 // output are redacted before the memory row is written to the database.
 func TestCrystallizationIntegration_PrivacyRedaction(t *testing.T) {
@@ -158,7 +193,7 @@ func TestCrystallizationIntegration_PrivacyRedaction(t *testing.T) {
 	const sessionID = "integ-cryst-sess-003"
 	const project = "integ-cryst-project-redact"
 	sessionTag := "session:" + sessionID
-	t.Cleanup(func() { cleanCrystallizationRows(t, store, sessionTag) })
+	t.Cleanup(func() { cleanCrystallizationRows(t, store, project, sessionTag) })
 
 	svc := buildIntegrationService(t, store)
 
@@ -179,7 +214,7 @@ func TestCrystallizationIntegration_PrivacyRedaction(t *testing.T) {
 	// Retrieve stored content and verify redaction.
 	type row struct{ Content string }
 	var rows []row
-	store.DB.Raw(`
+	res := store.DB.Raw(`
 		SELECT content FROM memories
 		WHERE source_agent = 'crystallization'
 		  AND project = ?
@@ -187,6 +222,7 @@ func TestCrystallizationIntegration_PrivacyRedaction(t *testing.T) {
 		  AND deleted_at IS NULL`,
 		project, "%"+sessionTag+"%",
 	).Scan(&rows)
+	require.NoError(t, res.Error)
 
 	require.NotEmpty(t, rows, "expected at least one memory row")
 	for _, r := range rows {
@@ -195,4 +231,41 @@ func TestCrystallizationIntegration_PrivacyRedaction(t *testing.T) {
 		assert.Contains(t, r.Content, "[REDACTED",
 			"stored content must contain redaction marker")
 	}
+}
+
+// TestCrystallizationIntegration_ConcurrentReplaySkipsDuplicateFingerprint
+// verifies that duplicate session-end deliveries for the same session do not
+// insert duplicate crystallization memories.
+func TestCrystallizationIntegration_ConcurrentReplaySkipsDuplicateFingerprint(t *testing.T) {
+	store := openIntegrationStore(t)
+	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
+
+	const sessionID = "integ-cryst-sess-replay-004"
+	const project = "integ-cryst-project-replay"
+	sessionTag := "session:" + sessionID
+	t.Cleanup(func() { cleanCrystallizationRows(t, store, project, sessionTag) })
+
+	svc := buildIntegrationService(t, store)
+	body, _ := json.Marshal(sessionEndRequest{
+		SessionID:       sessionID,
+		Project:         project,
+		AgentOutputText: "decided to use PostgreSQL because it is battle-tested.",
+	})
+
+	var handlers sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		handlers.Add(1)
+		go func() {
+			defer handlers.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/hooks/session-end", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			svc.handleSessionEnd(w, req)
+			assert.Equal(t, http.StatusAccepted, w.Code)
+		}()
+	}
+	handlers.Wait()
+	svc.wg.Wait()
+
+	count := countCrystallizationMemories(t, store, project, sessionTag)
+	assert.Equal(t, int64(1), count, "concurrent replay must persist one crystallized decision")
 }

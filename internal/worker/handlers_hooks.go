@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -69,12 +68,16 @@ func (s *Service) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	// citation pipeline's prerequisite checks (nil injectionStore/citationStore,
 	// zero injection records, or citation insert failure).
 	if isCrystallizationEnabled() && memStore != nil && capturedOutput != "" {
+		crystallize := s.runCrystallization
+		if s.crystallizeFunc != nil {
+			crystallize = s.crystallizeFunc
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
 			ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 			defer cancel()
-			s.runCrystallization(ctx, capturedSessionID, capturedProject, capturedOutput, memStore)
+			crystallize(ctx, capturedSessionID, capturedProject, capturedOutput, memStore)
 		}()
 	}
 
@@ -279,9 +282,9 @@ func runCrystallizationAuditAsync(auditStore *gormdb.AuditStore, sessionID strin
 // agentOutput. It is NOT gated by citation pipeline prerequisites.
 //
 // Idempotency: each decision memory is fingerprinted by sha256(sessionID+":"+content)
-// stored as a tag "fp:<hex>". Before inserting, we check whether a memory with
-// source_agent=crystallization and that fingerprint tag already exists for this
-// session, and skip duplicates (guards against double-fire from session-end replay).
+// stored as a tag "fp:<hex>". Before inserting, the store checks the exact
+// fingerprint tag under a transaction-level lock so concurrent session-end
+// replays cannot both pass the pre-read before either insert commits.
 func (s *Service) runCrystallization(
 	ctx context.Context,
 	sessionID, project, agentOutput string,
@@ -309,30 +312,12 @@ func (s *Service) runCrystallization(
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 	s.initMu.RUnlock()
 
-	// Load existing crystallization memories for this session for idempotency check.
-	// We look for memories with source_agent="crystallization" and a "session:<id>" tag.
-	// The fingerprint tags ("fp:<hex>") among them let us skip duplicates on double-fire.
-	sessionTag := fmt.Sprintf("session:%s", sessionID)
 	existingFPs := make(map[string]struct{})
-	existing, listErr := memStore.ListBySourceAgentAndTag(ctx, project, "crystallization", sessionTag)
-	if listErr != nil {
-		// Non-fatal: if we cannot query, proceed without dedup (worst case: duplicate row).
-		log.Warn().Err(listErr).Str("session_id", sessionID).
-			Msg("crystallization: idempotency check failed, proceeding without dedup")
-	} else {
-		for _, m := range existing {
-			for _, tag := range m.Tags {
-				if len(tag) > 3 && tag[:3] == "fp:" {
-					existingFPs[tag[3:]] = struct{}{}
-				}
-			}
-		}
-	}
 
 	storedCount := 0
 	skippedCount := 0
-	for _, mem := range mems {
-		fp := crystallizationFingerprint(sessionID, mem.Content)
+	for i, mem := range mems {
+		fp := crystallizationFingerprint(sessionID, decisions[i].Text)
 		if _, dup := existingFPs[fp]; dup {
 			skippedCount++
 			log.Debug().
@@ -343,18 +328,29 @@ func (s *Service) runCrystallization(
 		}
 
 		// Embed the fingerprint tag so future runs can detect this decision.
-		mem.Tags = append(mem.Tags, "fp:"+fp)
+		fpTag := "fp:" + fp
+		mem.Tags = append(mem.Tags, fpTag)
 
 		// Crystallization memories carry lifecycle fields (Tier="episodic",
 		// EpistemicType="decision"); use CreateWithLifecycle so they are persisted
 		// without touching the plain Create path (flag-gated: ENGRAM_CRYSTALLIZATION_ENABLED).
-		created, err := memStore.CreateWithLifecycle(ctx, mem)
+		created, duplicate, err := memStore.CreateWithLifecycleIfTagAbsent(ctx, mem, fpTag)
 		if err != nil {
 			log.Error().Err(err).
 				Str("session_id", sessionID).
 				Msg("crystallization: failed to store decision memory")
 			continue
 		}
+		if duplicate {
+			existingFPs[fp] = struct{}{}
+			skippedCount++
+			log.Debug().
+				Str("session_id", sessionID).
+				Str("fingerprint", fp).
+				Msg("crystallization: skipping duplicate decision memory")
+			continue
+		}
+		existingFPs[fp] = struct{}{}
 		storedCount++
 
 		// Emit audit event asynchronously — matches the runAuditAsync pattern from
