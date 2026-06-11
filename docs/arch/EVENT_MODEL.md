@@ -22,7 +22,7 @@ native hook/plugin system.
 **Server endpoint:** `GET/POST /api/context/session-start`
 **Claude Code hook:** `plugin/engram/hooks/session-start.js`
 
-> **AMEND 2026-06-11 (W4 triage E1 — doc fix):** Original doc text used `/api/context/inject`. The actual registered route for session_start is `/api/context/session-start` (verified `internal/worker/service.go:1132-1133`). `/api/context/inject` exists as a separate route (service.go:1130-1131) serving the pre-compact priming path, not session_start. The hook (`session-start.js:124`) correctly calls `/api/context/session-start`. Doc corrected to match code.
+> **AMEND 2026-06-11 (W4 triage E1 — doc fix):** Original doc text used `/api/context/inject`. The actual registered route for session_start is `/api/context/session-start` (verified `internal/worker/service.go:1133-1134`). `/api/context/inject` exists as a separate route (service.go:1131-1132) serving the pre-compact priming path, not session_start. The hook (`session-start.js:124`) correctly calls `/api/context/session-start`. Doc corrected to match code.
 
 ### session_end
 

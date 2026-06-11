@@ -214,14 +214,24 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 // ---- B4 tier_filter tests -------------------------------------------------------
 
 // TestRecallMemoryToolSchema_B4_HasTierFilter verifies that recall_memory InputSchema
-// advertises the tier_filter property added by B4 resolution (spec FR-B2).
+// advertises the tier_filter property when ENGRAM_VNEXT_ENABLED=true.
+//
+// Merge note (W3+W4): W3 adopted the recallMemoryTool() function which gates
+// tier_filter (retrieval tiers: tier0_exact/tier1_fts/tier1_vector/tier2_graph)
+// behind ENGRAM_VNEXT_ENABLED. The lifecycle cognitive-tier filter (FR-B2: working/
+// episodic/semantic/procedural) is still applied in handleRecallMemory when
+// ENGRAM_LIFECYCLE_ENABLED=true, but is not schema-advertised in the base schema
+// (it is a hidden-but-functional parameter to avoid conflicting tier_filter enums).
+// This test is updated to reflect the merged schema contract.
 func TestRecallMemoryToolSchema_B4_HasTierFilter(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+
 	s := NewServer(ServerOptions{Version: "test"})
 	s.memoryStore = nonNilMemoryStore()
 
 	props := findToolProperties(t, s.ListTools(), "recall_memory")
 	tierFilter, ok := props["tier_filter"]
-	require.True(t, ok, "recall_memory schema must expose tier_filter property (spec FR-B2)")
+	require.True(t, ok, "recall_memory schema must expose tier_filter property when ENGRAM_VNEXT_ENABLED=true")
 
 	tfMap, ok := tierFilter.(map[string]any)
 	require.True(t, ok, "tier_filter must be an object")
@@ -230,8 +240,9 @@ func TestRecallMemoryToolSchema_B4_HasTierFilter(t *testing.T) {
 	items, ok := tfMap["items"].(map[string]any)
 	require.True(t, ok, "tier_filter items must be an object")
 	enum := toStringSlice(items["enum"])
-	require.ElementsMatch(t, []string{"working", "episodic", "semantic", "procedural"}, enum,
-		"tier_filter enum must cover all four cognitive tiers")
+	// W3 hybrid tier_filter enum (retrieval tiers, not lifecycle cognitive tiers).
+	require.ElementsMatch(t, []string{"tier0_exact", "tier1_fts", "tier1_vector", "tier2_graph"}, enum,
+		"tier_filter enum must cover retrieval tiers when ENGRAM_VNEXT_ENABLED=true")
 }
 
 // TestRecallMemoryTierFilter_InvalidTier_B4 verifies that recall_memory returns
@@ -256,20 +267,26 @@ func TestRecallMemoryTierFilter_InvalidTier_B4(t *testing.T) {
 	require.Contains(t, err.Error(), `"INVALID_TIER"`, "error must echo offending value")
 }
 
-// TestRecallMemoryTierFilter_FlagOff_SchemaStillPresent_B4 verifies that the
-// tier_filter schema property is advertised unconditionally — schema discovery is
-// not env-gated (same pattern as include_scopes in T005).
-// The runtime ignores tier_filter when ENGRAM_LIFECYCLE_ENABLED is off; that
-// behavior is verified only in DB-integration tests since it requires a live store.
-func TestRecallMemoryTierFilter_FlagOff_SchemaStillPresent_B4(t *testing.T) {
+// TestRecallMemoryTierFilter_FlagOff_SchemaAbsent_B4 verifies the merged W3+W4 schema
+// contract: tier_filter is NOT present in the base schema when ENGRAM_VNEXT_ENABLED=false,
+// consistent with W3's recallMemoryTool() which gates tier_filter behind that flag.
+//
+// The lifecycle cognitive-tier filter (FR-B2) is still honored at runtime when
+// ENGRAM_LIFECYCLE_ENABLED=true — it reads from the tier_filter input key and applies
+// the working/episodic/semantic/procedural filter in handleRecallMemory. The field is
+// functional but not schema-advertised in the base schema to avoid conflicting enums
+// with the W3 hybrid retrieval tier_filter (tier0_exact/tier1_fts/…).
+func TestRecallMemoryTierFilter_FlagOff_SchemaAbsent_B4(t *testing.T) {
 	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
 
 	s := NewServer(ServerOptions{Version: "test"})
 	s.memoryStore = nonNilMemoryStore()
 
-	// Schema must always advertise tier_filter — clients need a stable schema
-	// regardless of server-side flag state.
+	// With ENGRAM_VNEXT_ENABLED=false, tier_filter is not in the schema (W3 behavior).
+	// The lifecycle tier filter (FR-B2) is a runtime-only parameter in this flag state.
 	props := findToolProperties(t, s.ListTools(), "recall_memory")
-	require.Contains(t, props, "tier_filter",
-		"recall_memory schema must advertise tier_filter even when ENGRAM_LIFECYCLE_ENABLED=false")
+	_, present := props["tier_filter"]
+	require.False(t, present,
+		"recall_memory schema must NOT advertise tier_filter when ENGRAM_VNEXT_ENABLED=false (W3+W4 merged contract: tier_filter is a hybrid retrieval param, not the base schema)")
 }

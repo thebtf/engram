@@ -60,7 +60,9 @@ func TestMemoryStore_Create_StripsLifecycleFields(t *testing.T) {
 		Content:     "test content with lifecycle fields",
 		SourceAgent: "test-strip",
 		// These MUST NOT be persisted by plain Create.
-		Tier:          "episodic",
+		// Use "semantic" (non-default) so that the assertion below proves the field
+		// was actually stripped (not just coincidentally equal to the DB default "episodic").
+		Tier:          "semantic",
 		EpistemicType: "decision",
 		Defeasibility: "tentative",
 	}
@@ -74,8 +76,9 @@ func TestMemoryStore_Create_StripsLifecycleFields(t *testing.T) {
 	require.NoError(t, err)
 
 	// The DB schema default for tier is "episodic" (migration 131, B4 resolution);
-	// we assert that the caller's "episodic" value was NOT persisted by plain Create
+	// we assert that the caller's "semantic" value was NOT persisted by plain Create
 	// (Create strips lifecycle fields), and the DB default 'episodic' is returned.
+	// Using a non-default input ("semantic") makes this assertion non-vacuous.
 	assert.Equal(t, "episodic", fetched.Tier,
 		"plain Create must leave Tier at DB default (episodic per migration 131)")
 	assert.Equal(t, "observation", fetched.EpistemicType,
@@ -84,7 +87,7 @@ func TestMemoryStore_Create_StripsLifecycleFields(t *testing.T) {
 		"plain Create must leave Defeasibility at DB default")
 
 	// Input struct must not be mutated.
-	assert.Equal(t, "episodic", mem.Tier, "caller's input struct must not be mutated")
+	assert.Equal(t, "semantic", mem.Tier, "caller's input struct must not be mutated")
 }
 
 // TestMemoryStore_CreateWithLifecycle_PersistsFields verifies that CreateWithLifecycle

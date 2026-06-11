@@ -218,22 +218,66 @@ func (s *Service) searchFallbackObservations(ctx context.Context, query string, 
 
 	observations := make([]*models.Observation, 0, fetchLimit)
 	if lister := s.memListStore(); lister != nil && scopeFilter.Project != "" {
-		memories, err := lister.List(ctx, scopeFilter.Project, fetchLimit)
-		if err != nil {
-			return nil, err
-		}
 		// W4 P3: apply privacy-scope filter when ENGRAM_VNEXT_F_ENABLED=true so
 		// the dashboard /api/observations endpoint does not expose private-scope
 		// rows from other workstations. Flag-OFF: path is byte-identical to the
 		// pre-fix behavior (scope.FilterMemories is not called).
-		if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" && trimmedQuery == "" {
+			// Queryless fallback: fetchLimit == limit, so a single List() page filtered
+			// by scope may underfill the response when private rows from other
+			// workstations occupy the first page. Use ListWithOffset batch-loop
+			// (same pattern as listVisibleMemoriesREST / handleRecallMemory) to
+			// accumulate fetchLimit visible rows before scope-invisible rows
+			// truncate the result.
 			var callerCtx scope.KeycardContext
 			if id, ok := auth.IdentityFrom(ctx); ok {
 				callerCtx.WorkstationID = id.WorkstationID()
 			}
-			memories = scope.FilterMemories(callerCtx, memories)
+			const batchSize = 500
+			offset := 0
+			var visible []*models.Memory
+			for len(visible) < fetchLimit {
+				batch, err := lister.ListWithOffset(ctx, scopeFilter.Project, batchSize, offset)
+				if err != nil {
+					return nil, err
+				}
+				if len(batch) == 0 {
+					break
+				}
+				for _, mem := range batch {
+					memScope := mem.PrivacyScope
+					if memScope == "" {
+						memScope = "project"
+					}
+					meta := scope.SourceMeta{
+						WorkstationID: mem.SourceWorkstationID,
+						Sessions:      mem.SourceSessions,
+					}
+					if !scope.Resolve(callerCtx, memScope, meta) {
+						continue
+					}
+					visible = append(visible, mem)
+					if len(visible) >= fetchLimit {
+						break
+					}
+				}
+				offset += batchSize
+			}
+			observations = append(observations, memoriesToObservations(visible)...)
+		} else {
+			memories, err := lister.List(ctx, scopeFilter.Project, fetchLimit)
+			if err != nil {
+				return nil, err
+			}
+			if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+				var callerCtx scope.KeycardContext
+				if id, ok := auth.IdentityFrom(ctx); ok {
+					callerCtx.WorkstationID = id.WorkstationID()
+				}
+				memories = scope.FilterMemories(callerCtx, memories)
+			}
+			observations = append(observations, memoriesToObservations(memories)...)
 		}
-		observations = append(observations, memoriesToObservations(memories)...)
 	}
 	if s.behavioralRulesStore != nil {
 		var projectPtr *string

@@ -102,14 +102,48 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 			memoryRows = append(memoryRows, sm.Memory)
 		}
 	} else {
-		raw, listErr := memoryStore.List(ctx, project, memoriesLimit)
-		if listErr != nil {
-			return nil, status.Error(codes.Internal, "failed to list session-start memories")
-		}
 		if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
-			raw = scope.FilterMemories(callerCtx, raw)
+			// W4 batch-loop (flag-ON): page until memoriesLimit visible rows are
+			// accumulated so private rows from other workstations in the newest
+			// batch do not underfill the response. Mirrors the listVisibleMemoriesREST
+			// and handleRecallMemory batch-loop patterns.
+			// Flag-OFF: uses single List call below (byte-identical to pre-fix).
+			const batchSize = 500
+			offset := 0
+			for len(memoryRows) < memoriesLimit {
+				batch, listErr := memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+				if listErr != nil {
+					return nil, status.Error(codes.Internal, "failed to list session-start memories")
+				}
+				if len(batch) == 0 {
+					break
+				}
+				for _, mem := range batch {
+					memScope := mem.PrivacyScope
+					if memScope == "" {
+						memScope = "project"
+					}
+					meta := scope.SourceMeta{
+						WorkstationID: mem.SourceWorkstationID,
+						Sessions:      mem.SourceSessions,
+					}
+					if !scope.Resolve(callerCtx, memScope, meta) {
+						continue
+					}
+					memoryRows = append(memoryRows, mem)
+					if len(memoryRows) >= memoriesLimit {
+						break
+					}
+				}
+				offset += batchSize
+			}
+		} else {
+			raw, listErr := memoryStore.List(ctx, project, memoriesLimit)
+			if listErr != nil {
+				return nil, status.Error(codes.Internal, "failed to list session-start memories")
+			}
+			memoryRows = raw
 		}
-		memoryRows = raw
 	}
 
 	var ruleRows []dbgorm.BehavioralRule
