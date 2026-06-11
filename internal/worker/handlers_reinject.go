@@ -64,7 +64,7 @@ func (s *Service) handleReinject(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	candidates, err := memStore.ListForInjection(ctx, req.Project, req.Limit*3)
+	candidates, err := listVisibleForInjection(ctx, memStore, req.Project, req.Limit*3)
 	if err != nil {
 		log.Error().Err(err).Str("project", req.Project).Msg("reinject: list failed")
 		http.Error(w, "internal error", http.StatusInternalServerError)

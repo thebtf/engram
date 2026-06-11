@@ -524,12 +524,20 @@ If you need the full expanded tool list (50+ individual tools), call ` + "`tools
 `
 
 // recallMemoryTool returns the recall_memory tool definition.
-// When ENGRAM_VNEXT_ENABLED == "true", the schema is extended with the vnext-gated
-// parameters (expand_graph, min_confidence, tier_filter, explain).
-// Flag-OFF clients see the original 6-field schema; flag-ON clients see the full schema.
-// This dynamic schema approach follows the same pattern as adminActionsBase/Vnext split
-// used elsewhere in this server.
+// Schema composition (two independent flags):
+//
+//   - ENGRAM_VNEXT_ENABLED=true: adds expand_graph/min_confidence/tier_filter/explain
+//     (W3 hybrid retrieval FR-C4 params).
+//   - ENGRAM_VNEXT_F_ENABLED=true: adds session_id/include_scopes
+//     (F-TG1 privacy_scope filtering per T005).
+//
+// Flags are independent; both may be on simultaneously (ON/ON = hybrid + scope params).
+// Flag-OFF clients see only the base 6-field schema (byte-identical to pre-W3/pre-F).
 func recallMemoryTool() Tool {
+	// session_id and include_scopes are always in the schema (unconditional,
+	// matching the store_memory design precedent in TestStoreMemoryToolSchema_FlagOff):
+	// schema discovery is deterministic regardless of runtime env; ENGRAM_VNEXT_F_ENABLED
+	// gates runtime behavior only (same pattern as store_memory privacy_scope/session_id).
 	props := map[string]any{
 		"query":   map[string]any{"type": "string", "description": "Natural language query"},
 		"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Filter by concept tags"},
@@ -537,10 +545,21 @@ func recallMemoryTool() Tool {
 		"limit":   map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
 		"format":  map[string]any{"type": "string", "enum": []string{"text", "items", "detailed"}, "default": "text"},
 		"project": map[string]any{"type": "string", "description": "Project ID to scope results (includes project-scoped and global observations)"},
+		"session_id": map[string]any{
+			"type":        "string",
+			"description": "Caller's session identifier. Used by scope.Resolve to admit private-scope rows that name this session in source_sessions. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used (per spec FR-F1 AMEND 2026-05-25).",
+		},
+		"include_scopes": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}},
+			"description": "Restrict returned memories to the named privacy_scope tiers. Empty/omitted means all 4 tiers are returned (subject to scope.Resolve visibility). Honored only when ENGRAM_VNEXT_F_ENABLED=true. Unknown enum values return 'invalid_include_scopes:' structured error.",
+		},
 	}
 	desc := "Recall memories/observations by semantic search. Use to retrieve previously stored knowledge."
 	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
-		// Vnext-gated additional parameters (FR-C4 hybrid retrieval).
+		// Vnext-gated additional parameters (FR-C4 hybrid retrieval, W3).
+		// Independent of ENGRAM_VNEXT_F_ENABLED; both flags may be active simultaneously
+		// (ON/ON = hybrid retrieval + scope filtering enforced per d9eea82 contract).
 		props["expand_graph"] = map[string]any{
 			"type":        "boolean",
 			"description": "Enable Tier2 graph expansion: fetches 1-hop neighbours of top-5 results (opt-in, <200ms budget). Requires knowledge graph edges to be present.",
@@ -877,7 +896,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"rejected":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
 						"type":          map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
 						"importance":    map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
-						"scope":         map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Visibility scope"},
+						"scope":         map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
+						"privacy_scope": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
+						"session_id":    map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
 						"project":       map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
 						"ttl_days":      map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
 						"always_inject": map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},

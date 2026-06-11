@@ -66,33 +66,97 @@ func (m *mockMemoryStoreForRecall) Suppress(_ context.Context, _ int64) error { 
 func (m *mockMemoryStoreForRecall) Rate(_ context.Context, _ int64, _ string) error { return nil }
 
 // TestRecallMemory_FlagOFF_SchemaNoVnextParams verifies that when ENGRAM_VNEXT_ENABLED is off,
-// the recall_memory tool schema does NOT include vnext-gated parameters.
+// the recall_memory tool schema does NOT include vnext-gated hybrid parameters,
+// but DOES include session_id and include_scopes (always-present, unconditional).
+// Flag matrix: OFF/OFF (ENGRAM_VNEXT_ENABLED=false, ENGRAM_VNEXT_F_ENABLED=false).
 func TestRecallMemory_FlagOFF_SchemaNoVnextParams(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
 	tool := recallMemoryTool()
 	props, _ := tool.InputSchema["properties"].(map[string]any)
 
+	// Vnext hybrid params must be absent.
 	vnextParams := []string{"expand_graph", "min_confidence", "tier_filter", "explain"}
 	for _, p := range vnextParams {
 		if _, ok := props[p]; ok {
-			t.Errorf("flag-OFF schema must not include vnext param %q", p)
+			t.Errorf("OFF/OFF schema must not include vnext param %q", p)
+		}
+	}
+	// Scope params are unconditional — always in schema regardless of F flag.
+	for _, p := range []string{"session_id", "include_scopes"} {
+		if _, ok := props[p]; !ok {
+			t.Errorf("OFF/OFF schema must always include scope param %q (schema unconditional per store_memory precedent)", p)
 		}
 	}
 }
 
 // TestRecallMemory_FlagON_SchemaHasVnextParams verifies that when ENGRAM_VNEXT_ENABLED=true,
-// the recall_memory tool schema includes all four vnext-gated parameters.
+// the recall_memory tool schema includes all four vnext-gated parameters and the scope params.
+// Flag matrix: ON/OFF (ENGRAM_VNEXT_ENABLED=true, ENGRAM_VNEXT_F_ENABLED=false).
 func TestRecallMemory_FlagON_SchemaHasVnextParams(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
 	tool := recallMemoryTool()
 	props, _ := tool.InputSchema["properties"].(map[string]any)
 
+	// Vnext hybrid params present.
 	vnextParams := []string{"expand_graph", "min_confidence", "tier_filter", "explain"}
 	for _, p := range vnextParams {
 		if _, ok := props[p]; !ok {
-			t.Errorf("flag-ON schema must include vnext param %q", p)
+			t.Errorf("ON/OFF schema must include vnext param %q", p)
+		}
+	}
+	// Scope params unconditional.
+	for _, p := range []string{"session_id", "include_scopes"} {
+		if _, ok := props[p]; !ok {
+			t.Errorf("ON/OFF schema must always include scope param %q", p)
+		}
+	}
+}
+
+// TestRecallMemory_FlagMatrix_FEnabled_SchemaHasScopeParams verifies that
+// ENGRAM_VNEXT_F_ENABLED=true (with ENGRAM_VNEXT_ENABLED=false) produces a
+// schema with session_id/include_scopes but WITHOUT vnext hybrid params.
+// Flag matrix: OFF/ON (ENGRAM_VNEXT_ENABLED=false, ENGRAM_VNEXT_F_ENABLED=true).
+func TestRecallMemory_FlagMatrix_FEnabled_SchemaHasScopeParams(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	tool := recallMemoryTool()
+	props, _ := tool.InputSchema["properties"].(map[string]any)
+
+	// Vnext hybrid params absent (ENGRAM_VNEXT_ENABLED is off).
+	for _, p := range []string{"expand_graph", "min_confidence", "tier_filter", "explain"} {
+		if _, ok := props[p]; ok {
+			t.Errorf("OFF/ON schema must not include vnext hybrid param %q", p)
+		}
+	}
+	// Scope params present (always unconditional, runtime gated by F flag).
+	for _, p := range []string{"session_id", "include_scopes"} {
+		if _, ok := props[p]; !ok {
+			t.Errorf("OFF/ON schema must include scope param %q", p)
+		}
+	}
+}
+
+// TestRecallMemory_FlagMatrix_BothEnabled_SchemaCombinesParams verifies that
+// both ENGRAM_VNEXT_ENABLED=true and ENGRAM_VNEXT_F_ENABLED=true together produce
+// a schema that composes all hybrid params AND scope params.
+// Flag matrix: ON/ON (both flags true).
+func TestRecallMemory_FlagMatrix_BothEnabled_SchemaCombinesParams(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	tool := recallMemoryTool()
+	props, _ := tool.InputSchema["properties"].(map[string]any)
+
+	// All six params (4 hybrid + 2 scope) must be present.
+	allParams := []string{"expand_graph", "min_confidence", "tier_filter", "explain", "session_id", "include_scopes"}
+	for _, p := range allParams {
+		if _, ok := props[p]; !ok {
+			t.Errorf("ON/ON schema must include param %q (hybrid+scope composition)", p)
 		}
 	}
 }

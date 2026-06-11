@@ -80,3 +80,65 @@ func TestIdentity_IsSessionAdmin_RejectsSessionNonAdmin(t *testing.T) {
 
 	assert.False(t, id.IsSessionAdmin())
 }
+
+// TestIdentity_WorkstationID_T003b verifies the WorkstationID accessor added
+// by engram vNext Milestone F T003b (AMEND 2026-05-25). Per spec FR-F1 AMEND
+// 2026-05-25 contract:
+//
+//   - SourceClient bearers return their KeycardID (per-workstation keycard)
+//   - SourceMaster returns "" (system-wide, not workstation-bound)
+//   - SourceSession returns "" (user-bound, not workstation-bound)
+//
+// The accessor is consumed by scope.Resolve ScopePrivate to enforce the
+// keycard identity invariant. Empty WorkstationID is treated as fail-closed
+// by the resolver (cannot match against any memory's source_workstation_id).
+func TestIdentity_WorkstationID_T003b(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		id   auth.Identity
+		want string
+	}{
+		{
+			name: "SourceClient returns KeycardID",
+			id:   auth.Client("read-write", "kc-uuid-abc-123"),
+			want: "kc-uuid-abc-123",
+		},
+		{
+			name: "SourceClient with admin role still returns KeycardID",
+			id:   auth.Client("admin", "kc-uuid-admin-456"),
+			want: "kc-uuid-admin-456",
+		},
+		{
+			name: "SourceMaster returns empty",
+			id:   auth.Admin(),
+			want: "",
+		},
+		{
+			name: "SourceSession admin returns empty",
+			id:   auth.Session("admin"),
+			want: "",
+		},
+		{
+			name: "SourceSession non-admin returns empty",
+			id:   auth.Session("user"),
+			want: "",
+		},
+		{
+			name: "Zero-value Identity returns empty",
+			id:   auth.Identity{},
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tc.id.WorkstationID()
+			assert.Equal(t, tc.want, got,
+				"Identity.WorkstationID() must derive from Source + KeycardID per spec FR-F1 AMEND 2026-05-25")
+		})
+	}
+}

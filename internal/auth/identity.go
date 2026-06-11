@@ -90,3 +90,28 @@ func (i Identity) IsAdmin() bool {
 func (i Identity) IsSessionAdmin() bool {
 	return i.Role == RoleAdmin && i.Source == SourceSession
 }
+
+// WorkstationID returns the stable workstation marker for this identity.
+//
+// For SourceClient keycard bearers, this is api_tokens.id — each workstation
+// is provisioned its own keycard in v6 (per CONTINUITY: per-workstation
+// API tokens replaced the shared admin token in v6 BREAKING), so the
+// keycard UUID functions as a stable per-workstation identifier.
+//
+// For SourceMaster (the operator key bearer) and SourceSession (browser
+// cookie sessions) returns the empty string — neither maps to a single
+// workstation: master is a system-wide bearer used by the server itself,
+// session cookies are user-bound rather than workstation-bound.
+//
+// Consumers (engram vNext Milestone F TG1 / T003b / spec FR-F1 AMEND
+// 2026-05-25): the empty return value is treated as fail-closed by
+// scope.Resolve ScopePrivate — a memory with privacy_scope='private'
+// cannot be made visible to a caller whose workstation identity is
+// unknown. Private-scope writes therefore require a SourceClient keycard
+// bearer.
+func (i Identity) WorkstationID() string {
+	if i.Source == SourceClient {
+		return i.KeycardID
+	}
+	return ""
+}
