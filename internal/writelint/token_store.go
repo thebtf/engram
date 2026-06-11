@@ -57,26 +57,36 @@ type TokenStore interface {
 
 // memTokenStore is the in-process, mutex-guarded implementation of TokenStore.
 type memTokenStore struct {
-	mu      sync.RWMutex
-	entries map[string]tokenEntry
-	done    chan struct{}
+	mu         sync.RWMutex
+	entries    map[string]tokenEntry
+	done       chan struct{}
+	closeOnce  sync.Once
+	defaultTTL time.Duration
 }
 
 // NewTokenStore creates a new in-memory TokenStore and starts its janitor.
 func NewTokenStore(cfg TokenStoreConfig) TokenStore {
+	if cfg.TTL <= 0 {
+		cfg.TTL = 600 * time.Second
+	}
 	if cfg.JanitorInterval <= 0 {
 		cfg.JanitorInterval = 60 * time.Second
 	}
 	s := &memTokenStore{
-		entries: make(map[string]tokenEntry),
-		done:    make(chan struct{}),
+		entries:    make(map[string]tokenEntry),
+		done:       make(chan struct{}),
+		defaultTTL: cfg.TTL,
 	}
 	go s.janitor(cfg.JanitorInterval)
 	return s
 }
 
 // Put stores a token. Thread-safe.
+// If ttl <= 0 the store's configured default TTL is used.
 func (s *memTokenStore) Put(key, payload string, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = s.defaultTTL
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[key] = tokenEntry{
@@ -125,15 +135,12 @@ func (s *memTokenStore) Delete(key string) {
 	delete(s.entries, key)
 }
 
-// Close stops the janitor goroutine. Safe to call multiple times.
+// Close stops the janitor goroutine. Safe to call multiple times — uses sync.Once
+// so concurrent calls cannot panic on a double-close of the done channel.
 func (s *memTokenStore) Close() {
-	// Non-blocking send — idempotent.
-	select {
-	case <-s.done:
-		// already closed
-	default:
+	s.closeOnce.Do(func() {
 		close(s.done)
-	}
+	})
 }
 
 // janitor runs on the configured interval and purges expired entries.

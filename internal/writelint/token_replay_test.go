@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/thebtf/engram/internal/writelint"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // buildReplayOrchestrator returns an orchestrator with a 10-second token TTL
@@ -38,7 +39,7 @@ func TestTokenReplay_DifferentProject(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	p1, err := orch.Phase1(ctx, dupContent, "project-alpha", "agent")
+	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "project-alpha"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestTokenReplay_DifferentContent(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	p1, err := orch.Phase1(ctx, dupContent, "project-alpha", "agent")
+	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "project-alpha"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestTokenReplay_SameProjectAndContent(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	p1, err := orch.Phase1(ctx, dupContent, "project-alpha", "agent")
+	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "project-alpha"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}

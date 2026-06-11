@@ -91,6 +91,19 @@ func (s *stubWriteLintMemStore) Update(_ context.Context, m *models.Memory) (*mo
 	return nil, fmt.Errorf("not found: %d", m.ID)
 }
 
+func (s *stubWriteLintMemStore) MarkSuperseded(_ context.Context, olderID, newID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.memories {
+		if m.ID == olderID {
+			m.Status = "superseded"
+			m.SupersededBy = &newID
+			return nil
+		}
+	}
+	return nil
+}
+
 // stubAuditLoggerWL records audit calls.
 type stubAuditLoggerWL struct {
 	mu      sync.Mutex

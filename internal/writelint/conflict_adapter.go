@@ -16,6 +16,7 @@ package writelint
 import (
 	"database/sql"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -40,6 +41,9 @@ import (
 // 12. SDKSessionID  — SourceSessions[0] if non-empty, else ""
 // 13. IsSuperseded  — Status == "superseded"
 func ProjectMemoryToObservation(m *models.Memory) *models.Observation {
+	if m == nil {
+		return nil
+	}
 	obs := &models.Observation{}
 
 	// Row 1: ID direct copy
@@ -70,14 +74,16 @@ func ProjectMemoryToObservation(m *models.Memory) *models.Observation {
 		obs.Type = models.ObsTypeChange
 	}
 
-	// Row 5: Title = first 100 chars of Content
-	// sql.NullString{Valid:false} when content shorter than 5 chars
-	if len(m.Content) >= 5 {
-		title := m.Content
-		if len(title) > 100 {
-			title = title[:100]
+	// Row 5: Title = first 100 Unicode characters of Content.
+	// Use rune-based length and slicing so multi-byte UTF-8 sequences are
+	// never split mid-character (fixes byte-based truncation vulnerability).
+	// sql.NullString{Valid:false} when content shorter than 5 rune characters.
+	if utf8.RuneCountInString(m.Content) >= 5 {
+		runes := []rune(m.Content)
+		if len(runes) > 100 {
+			runes = runes[:100]
 		}
-		obs.Title = sql.NullString{String: title, Valid: true}
+		obs.Title = sql.NullString{String: string(runes), Valid: true}
 	} else {
 		obs.Title = sql.NullString{Valid: false}
 	}

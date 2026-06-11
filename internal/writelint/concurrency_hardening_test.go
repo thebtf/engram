@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/thebtf/engram/internal/writelint"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // TestConcurrency_50Goroutines_IndependentWrites_StateAssertions is the
@@ -39,7 +40,7 @@ func TestConcurrency_50Goroutines_IndependentWrites_StateAssertions(t *testing.T
 		go func() {
 			defer wg.Done()
 			content := uniqueContent(i)
-			resp, err := orch.Phase1(ctx, content, "testproj", "agent")
+			resp, err := orch.Phase1(ctx, &models.Memory{Content: content, Project: "testproj"}, "agent")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -101,7 +102,7 @@ func TestConcurrency_50Goroutines_SameContent_DistinctTokens(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			resp, err := orch.Phase1(ctx, dupContent, "testproj", "agent")
+			resp, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -161,7 +162,7 @@ func TestToken_ExpiryContract(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	p1, err := orch.Phase1(ctx, dupContent, "testproj", "agent")
+	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}

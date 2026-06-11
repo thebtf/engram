@@ -42,7 +42,7 @@ func TestOrchestrator_Conflict_Deterministic(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	p1, err := orc.Phase1(ctx, correctionContent, "test-det", "system")
+	p1, err := orc.Phase1(ctx, &models.Memory{Content: correctionContent, Project: "test-det"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestOrchestrator_Supersede_Deterministic(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	p1, err := orc.Phase1(ctx, dupContent, "test", "system")
+	p1, err := orc.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}

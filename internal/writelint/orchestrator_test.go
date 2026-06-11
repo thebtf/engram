@@ -39,6 +39,15 @@ func (s *stubMemoryLister) Create(ctx context.Context, m *models.Memory) (*model
 func (s *stubMemoryLister) Update(ctx context.Context, m *models.Memory) (*models.Memory, error) {
 	return m, nil
 }
+func (s *stubMemoryLister) MarkSuperseded(ctx context.Context, olderID, newID int64) error {
+	for _, m := range s.memories {
+		if m.ID == olderID {
+			m.Status = "superseded"
+			m.SupersededBy = &newID
+		}
+	}
+	return nil
+}
 
 // stubAuditLogger captures audit log calls.
 type stubAuditLogger struct {
@@ -98,7 +107,7 @@ func TestOrchestrator_NoSignal_CommitsImmediately_T034(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	resp, err := orc.Phase1(ctx, "new unique memory about kubernetes networking", "test", "system")
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: "new unique memory about kubernetes networking", Project: "test"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1 no-signal: unexpected error: %v", err)
 	}
@@ -123,7 +132,7 @@ func TestOrchestrator_Duplicate_MergeWith_T034(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	resp, err := orc.Phase1(ctx, dupContent, "test", "system")
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1 dup: error: %v", err)
 	}
@@ -203,7 +212,7 @@ func TestOrchestrator_Conflict_LinkContradiction_T034(t *testing.T) {
 	ctx := context.Background()
 
 	// Content with explicit correction pattern
-	resp, err := orc.Phase1(ctx, "Actually that was wrong — max_connections should be 100 for our setup", "test", "system")
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: "Actually that was wrong — max_connections should be 100 for our setup", Project: "test"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1 conflict: error: %v", err)
 	}
@@ -255,7 +264,7 @@ func TestOrchestrator_Supersession_Supersede_T034(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	resp, err := orc.Phase1(ctx, "use go modules for dependency management in go projects — updated workflow", "test", "system")
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: "use go modules for dependency management in go projects — updated workflow", Project: "test"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1 supersede: error: %v", err)
 	}
@@ -296,7 +305,7 @@ func TestOrchestrator_Signal_IgnoreSignals_T034(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	resp, err := orc.Phase1(ctx, dupContent, "test", "system")
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1 ignore: error: %v", err)
 	}
@@ -338,7 +347,7 @@ func TestOrchestrator_Signal_Abort_T034(t *testing.T) {
 	defer closer()
 	ctx := context.Background()
 
-	resp, err := orc.Phase1(ctx, dupContent, "test", "system")
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1 abort: error: %v", err)
 	}
@@ -393,7 +402,7 @@ func TestOrchestrator_TokenExpiry_T034(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	resp, err := orc.Phase1(ctx, dupContent, "test", "system")
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "system")
 	if err != nil {
 		t.Fatalf("Phase1 expiry: error: %v", err)
 	}

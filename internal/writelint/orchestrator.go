@@ -16,8 +16,9 @@
 // synchronously in Phase1.
 //
 // Token payload contract (finding 2 — cross-project replay fix):
-// The payload stored in the TokenStore is a pipe-separated tuple:
-//   project|actor|content-hash
+// The payload stored in the TokenStore is a JSON object:
+//   {"content_hash":"<hex-sha256>","project":"<project>","actor":"<actor>"}
+// JSON encoding avoids pipe-delimiter collision when project or actor contain '|'.
 // Phase2 parses the stored payload and asserts:
 //   payload.Project == req.Project  → resolution_token_project_mismatch
 //   payload.ContentHash == hash(req.Content) → resolution_token_content_mismatch
@@ -36,8 +37,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,6 +52,9 @@ type MemoryStoreInterface interface {
 	Get(ctx context.Context, id int64) (*models.Memory, error)
 	Create(ctx context.Context, m *models.Memory) (*models.Memory, error)
 	Update(ctx context.Context, m *models.Memory) (*models.Memory, error)
+	// MarkSuperseded marks memory olderID as superseded by newID.
+	// Sets status="superseded" and superseded_by=newID atomically.
+	MarkSuperseded(ctx context.Context, olderID, newID int64) error
 }
 
 // AuditLoggerInterface defines the minimal audit surface.
@@ -90,32 +94,41 @@ type OrchestratorConfig struct {
 	DupThreshold float64
 	// TokenTTL overrides the token TTL used when minting. 0 → uses TokenStore default.
 	TokenTTL time.Duration
+	// MemoryListLimit caps how many existing memories Phase1 loads for
+	// duplicate/conflict detection. Default 200 when <= 0.
+	MemoryListLimit int
 }
 
 // tokenPayload is stored in the TokenStore per minted token.
-// Encoded as "project|actor|content-hash" (pipe-separated).
+// Encoded as a JSON object so that project/actor values containing '|'
+// do not corrupt the payload (fixes pipe-delimiter collision vulnerability).
 // finding 2 fix: structured payload enables cross-project replay prevention.
 type tokenPayload struct {
-	Content string
-	Project string
-	Actor   string
+	ContentHash string `json:"content_hash"`
+	Project     string `json:"project"`
+	Actor       string `json:"actor"`
 }
 
-// encodePayload encodes a tokenPayload to the wire format.
+// encodePayload encodes a tokenPayload to the wire format (JSON).
 func encodePayload(project, actor, content string) string {
 	h := sha256.Sum256([]byte(content))
-	// format: project|actor|hex(sha256(content))
-	return fmt.Sprintf("%s|%s|%x", project, actor, h)
+	p := tokenPayload{
+		ContentHash: fmt.Sprintf("%x", h),
+		Project:     project,
+		Actor:       actor,
+	}
+	data, _ := json.Marshal(p)
+	return string(data)
 }
 
-// decodePayload parses the wire-format payload into (project, actor, contentHash).
+// decodePayload parses the JSON wire-format payload into (project, actor, contentHash).
 // Returns an error if the format is invalid.
 func decodePayload(raw string) (project, actor, contentHash string, err error) {
-	parts := strings.SplitN(raw, "|", 3)
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("invalid token payload format")
+	var p tokenPayload
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return "", "", "", fmt.Errorf("invalid token payload format: %w", err)
 	}
-	return parts[0], parts[1], parts[2], nil
+	return p.Project, p.Actor, p.ContentHash, nil
 }
 
 // contentHash returns the hex SHA-256 of content, matching encodePayload.
@@ -129,6 +142,11 @@ func contentHash(content string) string {
 type Phase1Response = models.WriteResolutionPhase1Response
 
 // Phase2Request carries the caller-chosen resolution for Phase 2.
+// Mem carries the full normalized memory metadata (Content, Project, Tags,
+// PrivacyScope, SourceWorkstationID, SourceSessions, etc.) so that Phase2
+// can create new memory records with the complete field set.
+// Content, Project are convenience aliases kept for backward compatibility;
+// when Mem is non-nil its Content/Project fields take precedence.
 type Phase2Request struct {
 	Token          string
 	Option         string
@@ -136,6 +154,9 @@ type Phase2Request struct {
 	Content        string
 	Project        string
 	Actor          string
+	// Mem carries the full normalized memory for create paths in Phase2.
+	// When non-nil, new memories are created from Mem instead of Content+Project only.
+	Mem *models.Memory
 }
 
 // Phase2Response is the orchestrator's Phase 2 result.
@@ -151,14 +172,26 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 	if cfg.DupThreshold == 0 {
 		cfg.DupThreshold = 0.85
 	}
+	if cfg.MemoryListLimit <= 0 {
+		cfg.MemoryListLimit = 200
+	}
 	return &Orchestrator{cfg: cfg}
 }
 
 // Phase1 runs quality detection on incoming content and either commits the
 // memory immediately (no signals → stored=true, no token) or returns signals
 // + resolution options + a minted token (stored=false).
-func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor string) (*Phase1Response, error) {
-	existing, err := o.cfg.MemoryStore.List(ctx, project, 200)
+//
+// mem carries all metadata for the write (Content, Project, Tags, PrivacyScope,
+// SourceWorkstationID, SourceSessions, etc.) so that the no-signal path and
+// Phase2 paths can persist the full normalized record instead of just
+// Content+Project (fixes metadata loss for Tags, PrivacyScope, etc.).
+// actor is the calling agent identifier used for audit logging.
+func (o *Orchestrator) Phase1(ctx context.Context, mem *models.Memory, actor string) (*Phase1Response, error) {
+	content := mem.Content
+	project := mem.Project
+
+	existing, err := o.cfg.MemoryStore.List(ctx, project, o.cfg.MemoryListLimit)
 	if err != nil {
 		return nil, fmt.Errorf("writelint Phase1 list: %w", err)
 	}
@@ -167,13 +200,13 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 	var dupOptions []models.ResolutionOption
 
 	// --- detect_similar: Jaccard >= DupThreshold ---
-	for _, mem := range existing {
-		if mem.Status == "superseded" || mem.Status == "deleted" {
+	for _, ex := range existing {
+		if ex.Status == "superseded" || ex.Status == "deleted" {
 			continue
 		}
-		sim := writegate.Jaccard(content, mem.Content)
+		sim := writegate.Jaccard(content, ex.Content)
 		if sim >= o.cfg.DupThreshold {
-			id := mem.ID
+			id := ex.ID
 			signals = append(signals, models.LintSignal{
 				Type:             models.LintSignalPossibleDuplicate,
 				SimilarMemoryID:  &id,
@@ -183,9 +216,19 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 			dupOptions = append(dupOptions, models.ResolutionOption{
 				Option:   "merge_with",
 				MemoryID: &id,
-				Result:   fmt.Sprintf("update memory %d with merged content", mem.ID),
+				Result:   fmt.Sprintf("update memory %d with merged content", ex.ID),
 			})
 		}
+	}
+
+	// Derive concept tags from mem.Tags for conflict/supersession detection.
+	// Row 7 of the conflict adapter contract maps Tags → Concepts directly.
+	// Populating Concepts before detection ensures DetectConflictsWithExisting
+	// and DetectConceptTagMismatch operate on the actual tag set, not nil.
+	var incomingConcepts models.JSONStringArray
+	if len(mem.Tags) > 0 {
+		incomingConcepts = make(models.JSONStringArray, len(mem.Tags))
+		copy(incomingConcepts, mem.Tags)
 	}
 
 	// --- detect_conflict: via conflict_adapter + DetectConflictsWithExisting ---
@@ -193,14 +236,14 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 		Project:   project,
 		Scope:     models.ScopeProject,
 		Narrative: sql.NullString{String: content, Valid: content != ""},
-		Concepts:  nil,
+		Concepts:  incomingConcepts,
 	}
 	var existingObs []*models.Observation
-	for _, mem := range existing {
-		if mem.Status == "superseded" || mem.Status == "deleted" {
+	for _, ex := range existing {
+		if ex.Status == "superseded" || ex.Status == "deleted" {
 			continue
 		}
-		existingObs = append(existingObs, ProjectMemoryToObservation(mem))
+		existingObs = append(existingObs, ProjectMemoryToObservation(ex))
 	}
 	conflicts := models.DetectConflictsWithExisting(newObs, existingObs)
 	for _, cr := range conflicts {
@@ -223,15 +266,15 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 	// --- detect_supersession_candidate: concept overlap + file overlap ---
 	newObsForSupersede := &models.Observation{
 		Project:  project,
-		Concepts: nil,
+		Concepts: incomingConcepts,
 	}
-	for _, mem := range existing {
-		if mem.Status == "superseded" || mem.Status == "deleted" {
+	for _, ex := range existing {
+		if ex.Status == "superseded" || ex.Status == "deleted" {
 			continue
 		}
-		olderObs := ProjectMemoryToObservation(mem)
+		olderObs := ProjectMemoryToObservation(ex)
 		if isMismatch, evidence := models.DetectConceptTagMismatch(newObsForSupersede, olderObs); isMismatch {
-			id := mem.ID
+			id := ex.ID
 			signals = append(signals, models.LintSignal{
 				Type:          models.LintSignalSupersessionCandidate,
 				OlderMemoryID: &id,
@@ -245,12 +288,9 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 		}
 	}
 
-	// No signals → commit immediately
+	// No signals → commit immediately with full metadata.
 	if len(signals) == 0 {
-		created, err := o.cfg.MemoryStore.Create(ctx, &models.Memory{
-			Content: content,
-			Project: project,
-		})
+		created, err := o.cfg.MemoryStore.Create(ctx, mem)
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase1 create: %w", err)
 		}
@@ -319,6 +359,22 @@ func (o *Orchestrator) Phase1(ctx context.Context, content, project, actor strin
 	}, nil
 }
 
+// memForCreate returns the memory model to use when creating a new record in
+// Phase2. When req.Mem is set it is used directly (full metadata preserved);
+// otherwise a minimal memory is constructed from req.Content + req.Project.
+func (o *Orchestrator) memForCreate(req Phase2Request) *models.Memory {
+	if req.Mem != nil {
+		// Reset ID so the store assigns a new one.
+		m := *req.Mem
+		m.ID = 0
+		return &m
+	}
+	return &models.Memory{
+		Content: req.Content,
+		Project: req.Project,
+	}
+}
+
 // Phase2 validates the resolution token and applies the chosen option.
 // Returns an error for expired/invalid tokens.
 //
@@ -341,15 +397,17 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 	}
 
 	// finding 2 fix: parse the stored payload and assert project + content binding.
+	// Payload is always JSON (produced by encodePayload). A parse error means the
+	// token store contains a corrupted or tampered entry — reject it.
 	storedProject, _, storedHash, parseErr := decodePayload(rawPayload)
-	if parseErr == nil {
-		// Only enforce when we can parse (legacy tokens without the new format are tolerated).
-		if storedProject != "" && storedProject != req.Project {
-			return nil, fmt.Errorf("resolution_token_project_mismatch: token was minted for project %q, request is for %q", storedProject, req.Project)
-		}
-		if storedHash != "" && storedHash != contentHash(req.Content) {
-			return nil, fmt.Errorf("resolution_token_content_mismatch: content does not match the content hash bound to this token")
-		}
+	if parseErr != nil {
+		return nil, fmt.Errorf("resolution_token_invalid: malformed payload: %w", parseErr)
+	}
+	if storedProject != "" && storedProject != req.Project {
+		return nil, fmt.Errorf("resolution_token_project_mismatch: token was minted for project %q, request is for %q", storedProject, req.Project)
+	}
+	if storedHash != "" && storedHash != contentHash(req.Content) {
+		return nil, fmt.Errorf("resolution_token_content_mismatch: content does not match the content hash bound to this token")
 	}
 
 	switch req.Option {
@@ -363,10 +421,8 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		}, nil
 
 	case "ignore_signals":
-		created, err := o.cfg.MemoryStore.Create(ctx, &models.Memory{
-			Content: req.Content,
-			Project: req.Project,
-		})
+		// Create with full metadata so privacy_scope, tags, etc. are persisted.
+		created, err := o.cfg.MemoryStore.Create(ctx, o.memForCreate(req))
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 ignore_signals create: %w", err)
 		}
@@ -388,6 +444,9 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 merge_with get: %w", err)
 		}
+		if target == nil {
+			return nil, fmt.Errorf("merge_with: target memory %d not found", *req.TargetMemoryID)
+		}
 		// Merge: append new content to target (simple merge strategy)
 		target.Content = target.Content + "\n\n[merged] " + req.Content
 		updated, err := o.cfg.MemoryStore.Update(ctx, target)
@@ -407,27 +466,20 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		if req.TargetMemoryID == nil {
 			return nil, fmt.Errorf("supersede: target_memory_id required")
 		}
-		// finding 5 fix: Create new memory first; if that fails Phase2 fails (no partial write).
-		created, err := o.cfg.MemoryStore.Create(ctx, &models.Memory{
-			Content: req.Content,
-			Project: req.Project,
-		})
+		// finding 5 fix: Create new memory first with full metadata; if that fails
+		// Phase2 fails (no partial write).
+		created, err := o.cfg.MemoryStore.Create(ctx, o.memForCreate(req))
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 supersede create: %w", err)
 		}
 		// Mark old as superseded — propagate errors; caller may retry.
-		// finding 5 fix: Get/Update failures of the old memory return an error
-		// so the Phase2 call fails and the caller can retry. This prevents silent
-		// partial success where new memory is stored but the old one is not marked.
-		older, getErr := o.cfg.MemoryStore.Get(ctx, *req.TargetMemoryID)
-		if getErr != nil {
-			return nil, fmt.Errorf("writelint Phase2 supersede get-older %d: %w", *req.TargetMemoryID, getErr)
-		}
-		older.Status = "superseded"
-		supersededBy := created.ID
-		older.SupersededBy = &supersededBy
-		if _, uErr := o.cfg.MemoryStore.Update(ctx, older); uErr != nil {
-			return nil, fmt.Errorf("writelint Phase2 supersede update-older %d: %w", *req.TargetMemoryID, uErr)
+		// finding 5 fix: MarkSuperseded failure returns an error so the Phase2 call
+		// fails and the caller can retry. This prevents silent partial success where
+		// new memory is stored but the old one is not marked. MarkSuperseded
+		// atomically sets status="superseded" + superseded_by=created.ID, which
+		// Update(ctx, mem) cannot do (Update only writes content/tags/source_agent).
+		if msErr := o.cfg.MemoryStore.MarkSuperseded(ctx, *req.TargetMemoryID, created.ID); msErr != nil {
+			return nil, fmt.Errorf("writelint Phase2 supersede mark-older %d: %w", *req.TargetMemoryID, msErr)
 		}
 		if err := o.cfg.AuditLogger.LogAudit(ctx, created.ID, "supersede_with_candidate", req.Actor); err != nil {
 			_ = err
@@ -439,11 +491,8 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		}, nil
 
 	case "link_contradiction":
-		// Store new memory first.
-		created, err := o.cfg.MemoryStore.Create(ctx, &models.Memory{
-			Content: req.Content,
-			Project: req.Project,
-		})
+		// Store new memory first with full metadata.
+		created, err := o.cfg.MemoryStore.Create(ctx, o.memForCreate(req))
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 link_contradiction create: %w", err)
 		}
@@ -486,10 +535,9 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 			}, nil
 		}
 		// Fallback: store as plain memory (candidateStore not wired); honest description.
-		created, err := o.cfg.MemoryStore.Create(ctx, &models.Memory{
-			Content: req.Content + "\n[mark_candidate: candidateStore not wired — stored as plain memory]",
-			Project: req.Project,
-		})
+		fallbackMem := o.memForCreate(req)
+		fallbackMem.Content = fallbackMem.Content + "\n[mark_candidate: candidateStore not wired — stored as plain memory]"
+		created, err := o.cfg.MemoryStore.Create(ctx, fallbackMem)
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 mark_candidate create: %w", err)
 		}

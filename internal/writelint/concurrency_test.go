@@ -77,6 +77,19 @@ func (s *concurrentMemStore) Update(_ context.Context, m *models.Memory) (*model
 	return m, nil
 }
 
+func (s *concurrentMemStore) MarkSuperseded(_ context.Context, olderID, newID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.memories {
+		if m.ID == olderID {
+			m.Status = "superseded"
+			m.SupersededBy = &newID
+			return nil
+		}
+	}
+	return nil
+}
+
 // concurrentAuditLogger is a thread-safe stub for EC-F2 tests.
 type concurrentAuditLogger struct {
 	mu      sync.Mutex
@@ -133,7 +146,7 @@ func TestConcurrency_TwoGoroutines_SameToken(t *testing.T) {
 	ctx := context.Background()
 
 	// Phase1 to get a token
-	p1, err := orch.Phase1(ctx, dupContent, "testproj", "agent")
+	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
@@ -209,7 +222,7 @@ func TestConcurrency_50Goroutines_IndependentWrites(t *testing.T) {
 			defer wg.Done()
 			// Each goroutine uses a content string unique enough to avoid Jaccard >= 0.85
 			content := uniqueContent(i)
-			resp, err := orch.Phase1(ctx, content, "testproj", "agent")
+			resp, err := orch.Phase1(ctx, &models.Memory{Content: content, Project: "testproj"}, "agent")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -289,7 +302,7 @@ func TestConcurrency_50Goroutines_SameContent(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			resp, err := orch.Phase1(ctx, dupContent, "testproj", "agent")
+			resp, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {

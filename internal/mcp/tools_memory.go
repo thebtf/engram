@@ -252,9 +252,30 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		wlOption := coerceString(m["option"], "")
 		if !wlForce {
 			wlActor := actorFromContext(ctx)
-			wlProject := coerceString(m["project"], "")
-			if wlProject == "" {
-				wlProject = projectFromContext(ctx)
+			// Use the already-normalized params.Project (which respects
+			// EnforceSourceProject) instead of reading raw m["project"]. This
+			// prevents a client from bypassing source-project isolation by
+			// supplying a different project in the MCP args.
+			wlProject := params.Project
+
+			// Build a memory model carrying available metadata so Phase1/Phase2
+			// persist the full record (Tags, PrivacyScope, AgentSource, etc.) on
+			// the no-signal path and on Phase2 create paths. SourceWorkstationID
+			// and the fully-resolved privacy/scope values are not yet computed here
+			// (they require the legacy normalization below), so we populate what we
+			// have. The vnextF guard ensures PrivacyScope is relevant only when ON.
+			wlMem := &models.Memory{
+				Content:      params.Content,
+				Project:      wlProject,
+				Tags:         params.Tags,
+				PrivacyScope: params.PrivacyScope,
+				SourceAgent:  params.AgentSource,
+			}
+			if params.SessionID != "" {
+				wlMem.SourceSessions = []string{params.SessionID}
+			}
+			if id, ok := auth.IdentityFrom(ctx); ok {
+				wlMem.SourceWorkstationID = id.WorkstationID()
 			}
 
 			if wlResolutionToken != "" {
@@ -266,6 +287,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 					Project:        wlProject,
 					Actor:          wlActor,
 					TargetMemoryID: nil,
+					Mem:            wlMem,
 				}
 				if tv, ok := m["target_memory_id"]; ok && tv != nil {
 					tid := coerceInt(tv, 0)
@@ -286,7 +308,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			}
 
 			// Phase1: inspect for duplicates/conflicts/supersessions.
-			p1resp, p1err := s.writeLint.Phase1(ctx, params.Content, wlProject, wlActor)
+			p1resp, p1err := s.writeLint.Phase1(ctx, wlMem, wlActor)
 			if p1err != nil {
 				return "", fmt.Errorf("write_lint_phase1: %w", p1err)
 			}
