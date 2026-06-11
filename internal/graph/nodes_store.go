@@ -102,6 +102,12 @@ func (s *NodesStore) Create(ctx context.Context, node *models.KnowledgeNode) (*m
 	if node.PrivacyScope == "" {
 		node.PrivacyScope = scope.ScopeProject
 	}
+	switch node.PrivacyScope {
+	case scope.ScopePrivate, scope.ScopeProject, scope.ScopeShared, scope.ScopeGlobal:
+		// valid
+	default:
+		return nil, fmt.Errorf("invalid privacy_scope %q", node.PrivacyScope)
+	}
 
 	row := nodeToRow(node)
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
@@ -180,10 +186,20 @@ func (s *NodesStore) Update(ctx context.Context, node *models.KnowledgeNode) (*m
 		return nil, fmt.Errorf("node.ID is required for Update")
 	}
 	node.UpdatedAt = time.Now().UTC()
+	ps := node.PrivacyScope
+	if ps == "" {
+		ps = scope.ScopeProject
+	}
+	switch ps {
+	case scope.ScopePrivate, scope.ScopeProject, scope.ScopeShared, scope.ScopeGlobal:
+		// valid
+	default:
+		return nil, fmt.Errorf("invalid privacy_scope %q", ps)
+	}
 	updates := map[string]interface{}{
 		"external_ref":  node.ExternalRef,
 		"metadata":      node.Metadata,
-		"privacy_scope": node.PrivacyScope,
+		"privacy_scope": ps,
 		"updated_at":    node.UpdatedAt,
 	}
 	result := s.db.WithContext(ctx).Model(&nodeRow{}).

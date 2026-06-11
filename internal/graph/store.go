@@ -153,9 +153,13 @@ func (s *Store) resolveEndpoint(ctx context.Context, endpointType string, memory
 		}
 		node, err := s.nodes.Get(ctx, *nodeID, includePrivate)
 		if err != nil {
-			// Treat "not found" (including privacy-filtered not-found) as dangling;
-			// other errors propagate.
-			return nil, fmt.Errorf("%w: %s", ErrDangling, err.Error())
+			// Only record-not-found (including privacy-filtered visibility) is a
+			// dangling edge; unexpected DB errors propagate so callers can distinguish
+			// "edge references a deleted node" from "DB connection failure".
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, fmt.Errorf("%w: %s", ErrDangling, err.Error())
+			}
+			return nil, fmt.Errorf("resolve node endpoint %d: %w", *nodeID, err)
 		}
 		return node, nil
 	default: // "memory"
@@ -196,10 +200,18 @@ func (s *Store) Create(ctx context.Context, e *Edge) (*Edge, error) {
 		if e.SourceID == nil || *e.SourceID == 0 {
 			return nil, fmt.Errorf("source_id required when source_type='memory'")
 		}
+	} else if srcType == "node" {
+		if e.NodeSourceID == nil || *e.NodeSourceID == 0 {
+			return nil, fmt.Errorf("node_source_id required when source_type='node'")
+		}
 	}
 	if tgtType == "memory" {
 		if e.TargetID == nil || *e.TargetID == 0 {
 			return nil, fmt.Errorf("target_id required when target_type='memory'")
+		}
+	} else if tgtType == "node" {
+		if e.NodeTargetID == nil || *e.NodeTargetID == 0 {
+			return nil, fmt.Errorf("node_target_id required when target_type='node'")
 		}
 	}
 	if !ValidEdgeType(e.EdgeType) {
@@ -236,15 +248,23 @@ const (
 )
 
 // ListByMemory returns active edges for a memory in the given direction.
+// Only memory-typed endpoints are matched: after migration 127, node-backed
+// edges have NULL source_id / target_id for the node endpoint. Without the
+// source_type / target_type filter a mixed edge (memory→node) would be
+// returned with a nil target, which Traverse/FindPath would dereference as 0
+// and explore a phantom memory ID 0. The discriminator filter prevents that.
 func (s *Store) ListByMemory(ctx context.Context, memoryID int64, dir Direction, edgeType string) ([]Edge, error) {
 	q := s.db.WithContext(ctx).Where("superseded_at IS NULL")
 	switch dir {
 	case Outgoing:
-		q = q.Where("source_id = ?", memoryID)
+		q = q.Where("source_type = 'memory' AND source_id = ?", memoryID)
 	case Incoming:
-		q = q.Where("target_id = ?", memoryID)
+		q = q.Where("target_type = 'memory' AND target_id = ?", memoryID)
 	default:
-		q = q.Where("source_id = ? OR target_id = ?", memoryID, memoryID)
+		q = q.Where(
+			"(source_type = 'memory' AND source_id = ?) OR (target_type = 'memory' AND target_id = ?)",
+			memoryID, memoryID,
+		)
 	}
 	if edgeType != "" {
 		q = q.Where("edge_type = ?", edgeType)

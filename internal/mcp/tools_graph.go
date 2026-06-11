@@ -114,6 +114,13 @@ func (s *Server) graphAddEdge(ctx context.Context, a graphArgs) (string, error) 
 		return "", fmt.Errorf("invalid_node_type: target_type must be 'memory' or 'node', got %q", tgtType)
 	}
 
+	// T014: gate node-type endpoints behind vnextFEnabled — add_edge with
+	// source_type='node' or target_type='node' creates Path C edges (migration 127
+	// schema) and must be rejected on flag-OFF deployments just as add_node is.
+	if (srcType == "node" || tgtType == "node") && !vnextFEnabled() {
+		return "", fmt.Errorf("node-type edge endpoints require ENGRAM_VNEXT_F_ENABLED=true")
+	}
+
 	// Validate source endpoint.
 	if srcType == "memory" {
 		if a.SourceID == 0 {

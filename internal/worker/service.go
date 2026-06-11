@@ -1730,6 +1730,9 @@ func getPID() int {
 // Callers are responsible for storing the same *gorm.PromotionStore /
 // *graph.Store values on Service.promotionStore / Service.graphStore for the
 // sleep cycle goroutine, and *gorm.AuditStore on Service.auditStore for audit logging.
+// nodesStore does NOT need a separate Service field: it is accessed via
+// graphStore (graph.Store.nodes, used by Resolve) and mcpServer (Server.nodesStore,
+// used by add_node / get_edges). No other Service method references it directly.
 func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store, nodesStore *graph.NodesStore, auditStore *gorm.AuditStore) {
 	mcpServer.SetPromotionStore(promotionStore)
 	mcpServer.SetGraphStore(graphStore)
