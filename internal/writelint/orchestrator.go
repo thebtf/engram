@@ -466,6 +466,21 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		if req.TargetMemoryID == nil {
 			return nil, fmt.Errorf("supersede: target_memory_id required")
 		}
+		// round-3 finding 2 fix: verify the target memory belongs to the token's project
+		// before marking it superseded. Without this check a token minted for project A
+		// could mark memories from project B as superseded while creating the replacement
+		// in project A (cross-project clobber attack).
+		supersedeTgt, err := o.cfg.MemoryStore.Get(ctx, *req.TargetMemoryID)
+		if err != nil {
+			return nil, fmt.Errorf("writelint Phase2 supersede get target: %w", err)
+		}
+		if supersedeTgt == nil {
+			return nil, fmt.Errorf("supersede: target memory %d not found", *req.TargetMemoryID)
+		}
+		if supersedeTgt.Project != req.Project {
+			return nil, fmt.Errorf("supersede_project_mismatch: target memory %d belongs to project %q, token is for project %q",
+				*req.TargetMemoryID, supersedeTgt.Project, req.Project)
+		}
 		// finding 5 fix: Create new memory first with full metadata; if that fails
 		// Phase2 fails (no partial write).
 		created, err := o.cfg.MemoryStore.Create(ctx, o.memForCreate(req))

@@ -250,7 +250,14 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		wlForce := coerceBool(m["force"], false)
 		wlResolutionToken := coerceString(m["resolution_token"], "")
 		wlOption := coerceString(m["option"], "")
-		if !wlForce {
+		// round-3 finding 1 fix: always_inject=true routes to behavioralRulesStore
+		// (legacy path below). Write-lint must not intercept it — Phase1 would run
+		// against an empty-project memory list (global scope → Project=="") and fail,
+		// and even for project-scoped rules Phase1 would store a plain memory instead
+		// of a behavioral_rule. Treat always_inject the same as force: bypass write-lint
+		// and fall through to the legacy path which handles behavioralRulesStore routing.
+		wlAlwaysInject := params.AlwaysInject
+		if !wlForce && !wlAlwaysInject {
 			wlActor := actorFromContext(ctx)
 			// Use the already-normalized params.Project (which respects
 			// EnforceSourceProject) instead of reading raw m["project"]. This
