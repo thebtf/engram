@@ -128,6 +128,7 @@ type Service struct {
 	injectionTracker       *injection.Tracker
 	injectionLogStore      *gorm.InjectionLogStore
 	crystallizeFunc        func(context.Context, string, string, string, *gorm.MemoryStore) // test hook; nil uses runCrystallization
+	candidateStore         *gorm.CandidateStore                                             // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	agentStatsStore        *gorm.AgentStatsStore
 	versionStore           *gorm.VersionStore
 	retrievalHooks         *retrievalHooks
@@ -218,6 +219,14 @@ func (s *Service) GetLastPrompt(sessionID int64) string {
 		return v.(promptCacheEntry).Prompt
 	}
 	return ""
+}
+
+// SetCandidateStore injects the crystallization candidate store (Milestone-F TG4).
+// Called during initializeAsync when ENGRAM_VNEXT_F_ENABLED=true.
+func (s *Service) SetCandidateStore(cs *gorm.CandidateStore) {
+	s.initMu.Lock()
+	s.candidateStore = cs
+	s.initMu.Unlock()
 }
 
 // evictStalePrompts removes prompt cache entries older than 2 hours.
@@ -568,6 +577,14 @@ func (s *Service) initializeAsync() {
 	s.processor = processor
 	// Dedup config removed in v5 (US11) — SDK processor uses fixed defaults.
 	s.initMu.Unlock()
+
+	// Wire crystallization candidate store (Milestone-F TG4).
+	// Gated on ENGRAM_VNEXT_F_ENABLED so production deployments without the flag
+	// see no change in behaviour (candidateStore stays nil → legacy path in runCrystallization).
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		candidateStore := gorm.NewCandidateStore(store.GetDB(), auditStore)
+		s.SetCandidateStore(candidateStore)
+	}
 
 	// Wire token store into auth middleware for client token lookups.
 	// Also wire the shared *auth.Validator (constructed below alongside the
