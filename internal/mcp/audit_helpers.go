@@ -161,6 +161,30 @@ func logAuditDelete(ctx context.Context, s *Server, mem *models.Memory, actor st
 	})
 }
 
+// logAuditGeneric emits an audit event with a caller-supplied action string.
+// Used for write-lint-specific actions such as "legacy_force_write" (T035).
+func logAuditGeneric(ctx context.Context, s *Server, mem *models.Memory, actor, action string) {
+	if !isAuditEnabled() {
+		return
+	}
+	aw := s.effectiveAuditWriter()
+	if aw == nil {
+		return
+	}
+	memID := mem.ID
+	afterState := marshalState(mem)
+	sessionID := sessionFromContext(ctx)
+	runAuditAsync(action, memID, func(ctx context.Context) error {
+		return aw.Log(ctx, gorm.AuditLogEntry{
+			MemoryID:        &memID,
+			Action:          action,
+			Actor:           actor,
+			SourceSessionID: sessionID,
+			AfterState:      afterState,
+		})
+	})
+}
+
 // logAuditSupersede emits a supersede audit event when a memory is superseded.
 func logAuditSupersede(ctx context.Context, s *Server, superseded *models.Memory, actor string) {
 	if !isAuditEnabled() {

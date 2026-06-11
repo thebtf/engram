@@ -22,6 +22,7 @@ import (
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writegate"
+	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -129,7 +130,11 @@ func isValidStoreObservationType(obsType models.ObservationType) bool {
 
 // handleStoreMemory explicitly stores a memory in the v5 memories table.
 func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.memoryStore == nil {
+	// T035: write-lint orchestrator has its own MemoryStoreInterface; nil memoryStore
+	// is only fatal on the legacy create path, which is guarded below at the point of use.
+	// When writeLint is nil (the default), memoryStore is required for the legacy path.
+	writeLintEnabled := s.writeLint != nil && vnextFEnabled()
+	if s.memoryStore == nil && !writeLintEnabled {
 		return "", fmt.Errorf("memory store not available")
 	}
 
@@ -212,6 +217,87 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if privacy.ContainsSecrets(params.Content) {
 		log.Warn().Msg("store_memory: content contains secrets — redacting before storage")
 		params.Content = privacy.RedactSecrets(params.Content)
+	}
+
+	// T035 (engram vNext Milestone F TG5) — two-phase write-lint protocol.
+	//
+	// Gate conditions:
+	//   1. writeLint orchestrator is wired (non-nil).
+	//   2. ENGRAM_VNEXT_F_ENABLED=true.
+	//   3. force=true → bypass write-lint, proceed to legacy create path + audit.
+	//   4. resolution_token non-empty → Phase2 delegation; return result directly.
+	//   5. Otherwise → Phase1; if not stored, return Phase1 JSON; if stored, format as success.
+	//
+	// Redaction (ADR-F-004) ran above; write-lint sees the already-scrubbed content.
+	var (
+		wlForce           = coerceBool(m["force"], false)
+		wlResolutionToken = coerceString(m["resolution_token"], "")
+		wlOption          = coerceString(m["option"], "")
+	)
+	if s.writeLint != nil && vnextFEnabled() && !wlForce {
+		wlActor := actorFromContext(ctx)
+		wlProject := coerceString(m["project"], "")
+		if wlProject == "" {
+			wlProject = projectFromContext(ctx)
+		}
+
+		if wlResolutionToken != "" {
+			// Phase2: caller is committing with a previously minted token.
+			p2req := writelint.Phase2Request{
+				Token:          wlResolutionToken,
+				Option:         wlOption,
+				Content:        params.Content,
+				Project:        wlProject,
+				Actor:          wlActor,
+				TargetMemoryID: nil,
+			}
+			if tv, ok := m["target_memory_id"]; ok && tv != nil {
+				tid := coerceInt(tv, 0)
+				if tid > 0 {
+					tid64 := int64(tid)
+					p2req.TargetMemoryID = &tid64
+				}
+			}
+			p2resp, p2err := s.writeLint.Phase2(ctx, p2req)
+			if p2err != nil {
+				return "", fmt.Errorf("write_lint_phase2: %w", p2err)
+			}
+			out, marshalErr := json.MarshalIndent(p2resp, "", "  ")
+			if marshalErr != nil {
+				return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
+			}
+			return string(out), nil
+		}
+
+		// Phase1: inspect for duplicates/conflicts/supersessions.
+		p1resp, p1err := s.writeLint.Phase1(ctx, params.Content, wlProject, wlActor)
+		if p1err != nil {
+			return "", fmt.Errorf("write_lint_phase1: %w", p1err)
+		}
+		if !p1resp.Stored {
+			// Signals detected — return Phase1 response to caller for resolution.
+			out, marshalErr := json.MarshalIndent(p1resp, "", "  ")
+			if marshalErr != nil {
+				return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
+			}
+			return string(out), nil
+		}
+		// Stored=true means Phase1 created the memory (no conflicts detected).
+		// Return a success envelope consistent with the legacy create response.
+		out, marshalErr := json.MarshalIndent(map[string]any{
+			"stored":  true,
+			"storage": "memories",
+			"message": "Memory stored successfully via write-lint (no conflicts detected)",
+		}, "", "  ")
+		if marshalErr != nil {
+			return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
+		}
+		return string(out), nil
+	}
+	// force=true: fall through to legacy create path; audit "legacy_force_write" below.
+	// Require a live memoryStore for the legacy create path.
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("memory store not available")
 	}
 
 	resolvedScope := params.Scope
@@ -513,6 +599,12 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// session context when available, else "agent".
 	actor := actorFromContext(ctx)
 	logAuditCreate(ctx, s, created, actor)
+
+	// T035: when write-lint is wired AND force=true was set, emit an additional
+	// "legacy_force_write" audit entry to record that the lint gate was bypassed.
+	if s.writeLint != nil && vnextFEnabled() && wlForce {
+		logAuditGeneric(ctx, s, created, actor, "legacy_force_write")
+	}
 
 	// Async embedding: fire-and-forget goroutine so the MCP response is not blocked
 	// by the embedding HTTP call. Captures local copies of created fields and store

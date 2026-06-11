@@ -23,6 +23,7 @@ import (
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
+	"github.com/thebtf/engram/internal/writelint"
 )
 
 // Server is the MCP server that exposes engram tools.
@@ -55,6 +56,7 @@ type Server struct {
 	vaultInitErr           error
 	vaultOnce              sync.Once
 	backfillStatusFunc     func() (any, error)
+	writeLint              *writelint.Orchestrator // T035: two-phase write-lint protocol (nil → legacy path)
 	version                string
 }
 
@@ -154,6 +156,14 @@ func (s *Server) setTestAuditWriter(w auditWriter) {
 // Must only be called from _test.go files.
 func (s *Server) setTestMemoryEditor(me memoryEditor) {
 	s.testMemoryEditor = me
+}
+
+// SetWriteLintOrchestrator wires the write-lint orchestrator for the two-phase
+// write-lint protocol (T035, Milestone F TG5). When nil (the default), the
+// store_memory handler follows the pre-TG5 legacy path exactly.
+// Call this only when ENGRAM_VNEXT_F_ENABLED=true is expected at runtime.
+func (s *Server) SetWriteLintOrchestrator(o *writelint.Orchestrator) {
+	s.writeLint = o
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.
