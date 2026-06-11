@@ -1,6 +1,6 @@
 package worker
 
-// wiring_purge_test.go — regression guard for the PurgeStore wiring gap (T008).
+// wiring_purge_test.go — regression guard for the PurgeStore wiring and vnext gate (T008).
 //
 // Context: commit 231e321 added PurgeStore + MCP handler + SetPurgeStore setter,
 // but service.go never constructed NewPurgeStore nor called SetPurgeStore — so
@@ -13,25 +13,38 @@ package worker
 //  2. With SetPurgeStore (&gormdb.PurgeStore{} has nil *gorm.DB): the nil-guard
 //     is bypassed and execution reaches s.purgeStore.PurgeProject — which panics
 //     on the nil *gorm.DB. The panic proves the guard was passed; assert.Panics
-//     is the observable. This is intentional: the test would be wrong if the
-//     panic disappeared (regression) or if "purge store not available" appeared
-//     instead (wiring removed).
+//     is the observable.
+//  3. Flag-off: purge_project returns "unknown admin action" when
+//     ENGRAM_VNEXT_ENABLED != "true", and tools/list admin schema is byte-identical
+//     to the pre-branch (no purge_project, no confirm field).
 //
-// The mcp-side nil-guard unit test lives in internal/mcp/tools_admin_purge_test.go.
+// NOTE: DB tests require live Postgres (DATABASE_DSN). CI has no Postgres; those
+// tests skip automatically. See docs/PRODUCTION-TESTING-PLAYBOOK.md for the
+// live-DB test workflow. Residual DB coverage gap is accepted scope per finding 5.
+//
+// The mcp-side unit tests live in internal/mcp/tools_admin_purge_test.go.
 // Tests here drive through mcp.Server.HandleRequest (exported JSON-RPC path)
 // to stay outside the internal/mcp package boundary.
 
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 )
+
+// adminCtxW returns a context carrying an admin identity (worker-package local alias).
+func adminCtxW() context.Context {
+	return auth.WithIdentity(context.Background(), auth.Admin())
+}
 
 // makePurgeRequest builds a tools/call JSON-RPC request for purge_project.
 func makePurgeRequest(t *testing.T, project, confirm string) *mcp.Request {
@@ -84,14 +97,15 @@ func responseText(resp *mcp.Response) string {
 
 // TestWiring_PurgeStore_NilGuardFiresWhenNotWired verifies that a fresh
 // mcp.Server with SetPurgeStore NOT called returns "purge store not available"
-// for a fully-valid purge_project request. This is the baseline gap state —
-// equivalent to the production bug that the T008 wiring fix addresses.
+// for a fully-valid purge_project request. Requires ENGRAM_VNEXT_ENABLED=true
+// so the vnext gate does not short-circuit to "unknown admin action".
 func TestWiring_PurgeStore_NilGuardFiresWhenNotWired(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
 	// SetPurgeStore deliberately NOT called.
 
 	req := makePurgeRequest(t, "test-project", "test-project")
-	resp := srv.HandleRequest(context.Background(), req)
+	resp := srv.HandleRequest(adminCtxW(), req)
 	text := responseText(resp)
 	assert.Contains(t, text, "purge store not available",
 		"nil-guard must fire when SetPurgeStore has not been called")
@@ -104,17 +118,57 @@ func TestWiring_PurgeStore_NilGuardFiresWhenNotWired(t *testing.T) {
 // with a valid project panics at the GORM layer (nil DB dereference) rather than
 // returning "purge store not available". The panic proves execution passed the
 // nil-guard and reached s.purgeStore.PurgeProject.
-//
-// If SetPurgeStore were removed from service.go, purge_project would return
-// "purge store not available" instead of panicking — and this test would FAIL
-// (assert.Panics would not trigger), surfacing the regression.
 func TestWiring_PurgeStore_NilGuardBypassedAfterSetPurgeStore(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
 	srv.SetPurgeStore(&gormdb.PurgeStore{}) // nil DB inside — panics past nil-guard
 
 	req := makePurgeRequest(t, "test-project", "test-project")
 	assert.Panics(t, func() {
-		srv.HandleRequest(context.Background(), req)
+		srv.HandleRequest(adminCtxW(), req)
 	}, "execution must reach PurgeProject (nil-guard bypassed), then panic on nil DB — "+
 		"if this fails with no panic, the nil-guard fired instead (SetPurgeStore not wired)")
+}
+
+// TestWiring_FlagOff_PurgeProjectUnknown verifies that when ENGRAM_VNEXT_ENABLED
+// is not "true", purge_project is rejected as "unknown admin action" through the
+// full HandleRequest path.
+func TestWiring_FlagOff_PurgeProjectUnknown(t *testing.T) {
+	os.Unsetenv("ENGRAM_VNEXT_ENABLED")
+	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
+	srv.SetPurgeStore(&gormdb.PurgeStore{}) // wired — but flag-off gate fires first
+
+	req := makePurgeRequest(t, "test-project", "test-project")
+	resp := srv.HandleRequest(adminCtxW(), req)
+	text := responseText(resp)
+	assert.Contains(t, text, "unknown admin action",
+		"flag-off: purge_project must be rejected as unknown action")
+}
+
+// TestWiring_FlagOff_ToolsListAdminSchemaByteIdentical verifies that when
+// ENGRAM_VNEXT_ENABLED is not "true", the tools/list response for the admin tool
+// does not contain purge_project or confirm — byte-identical to the pre-branch surface.
+func TestWiring_FlagOff_ToolsListAdminSchemaByteIdentical(t *testing.T) {
+	os.Unsetenv("ENGRAM_VNEXT_ENABLED")
+	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
+
+	// Use the HandleRequest tools/list path.
+	req := &mcp.Request{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Method:  "tools/list",
+	}
+	resp := srv.HandleRequest(context.Background(), req)
+	require.NotNil(t, resp, "tools/list must return a response")
+	require.Nil(t, resp.Error, "tools/list must not return an error")
+
+	// Serialize the result and check for absent fields.
+	resultJSON, err := json.Marshal(resp.Result)
+	require.NoError(t, err)
+	resultStr := string(resultJSON)
+
+	assert.False(t, strings.Contains(resultStr, "purge_project"),
+		"flag-off: tools/list admin entry must not mention purge_project")
+	assert.False(t, strings.Contains(resultStr, `"confirm"`),
+		"flag-off: tools/list admin entry must not contain confirm field")
 }

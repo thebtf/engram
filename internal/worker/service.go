@@ -538,8 +538,11 @@ func (s *Service) initializeAsync() {
 	auditStore := gorm.NewAuditStore(store.GetDB())
 
 	// Create purge store for Milestone D project-level hard deletion (T008).
-	// Unconditional: purge_project is an always-on admin action; no feature flag.
-	purgeStore := gorm.NewPurgeStore(store)
+	// Gated behind ENGRAM_VNEXT_ENABLED: purge_project is a vnext action (Milestone D).
+	var purgeStore *gorm.PurgeStore
+	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+		purgeStore = gorm.NewPurgeStore(store)
+	}
 
 	// Set all the initialized components
 	s.initMu.Lock()
@@ -662,8 +665,10 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
 	// Wire purge store for the purge_project admin action (Milestone D T008).
-	// Unconditional: purge_project is always-on (no feature flag).
-	mcpServer.SetPurgeStore(purgeStore)
+	// Gated behind ENGRAM_VNEXT_ENABLED: mirrors wireVnextStores pattern.
+	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+		mcpServer.SetPurgeStore(purgeStore)
+	}
 
 	// Wire promotion, graph, and audit stores into the MCP server and record them on
 	// the Service for the sleep cycle goroutine and audit logging. Extracted into

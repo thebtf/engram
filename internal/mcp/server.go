@@ -620,21 +620,7 @@ func (s *Server) primaryTools() []Tool {
 				},
 			},
 		},
-		{
-			Name:        "admin",
-			Description: "Administrative operations: bulk ops, tagging, analytics. Actions: " + strings.Join(adminActions, ", ") + ". Action required.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"action"},
-				"properties": map[string]any{
-					"action":  map[string]any{"type": "string", "description": "Action to perform (required). See tool description for valid actions."},
-					"project": map[string]any{"type": "string", "description": "Project name (for stats, search_analytics, purge_project)"},
-					"days":    map[string]any{"type": "number", "description": "Days to analyze (for search_analytics)"},
-					"confirm": map[string]any{"type": "string", "description": "Double-entry confirmation: must equal project name (for purge_project)"},
-				},
-			},
-		},
+		buildAdminTool(),
 		{
 			Name: "issues",
 			Description: "Cross-project issue tracker between agents. Do NOT use store/docs for issues.\n\n" +

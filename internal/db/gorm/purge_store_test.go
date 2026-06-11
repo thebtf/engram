@@ -1,5 +1,17 @@
 package gorm
 
+// purge_store_test.go — unit and integration tests for PurgeStore.
+//
+// Tests that call openTestDB require a live PostgreSQL database via DATABASE_DSN.
+// They are skipped automatically when DATABASE_DSN is absent (CI environment).
+// To run them locally: set DATABASE_DSN to a valid Postgres DSN before running tests.
+// See docs/PRODUCTION-TESTING-PLAYBOOK.md for the full live-DB test workflow.
+//
+// RESIDUAL RISK (finding 5): the advisory-lock behaviour and RowsAffected-based
+// receipt counts are only exercisable against a live Postgres. The pure-unit tests
+// below cover validation logic and nil-DB guards; concurrent-writer correctness
+// is accepted as a known coverage gap pending CI Postgres infrastructure.
+
 import (
 	"context"
 	"encoding/json"
@@ -17,6 +29,24 @@ func TestPurgeStore_PurgeProject_EmptyProject(t *testing.T) {
 	// openTestDB skips when DATABASE_DSN is absent; use a nil-DB store for pure-validation test.
 	ps := &PurgeStore{db: nil}
 	_, err := ps.PurgeProject(context.Background(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "project must not be empty")
+}
+
+// TestPurgeStore_PurgeProject_WhitespaceOnlyProject verifies that a whitespace-only
+// project name is rejected (trimmed to empty). No DATABASE_DSN required.
+func TestPurgeStore_PurgeProject_WhitespaceOnlyProject(t *testing.T) {
+	ps := &PurgeStore{db: nil}
+	_, err := ps.PurgeProject(context.Background(), "   ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "project must not be empty",
+		"whitespace-only project must be rejected after trimming")
+}
+
+// TestPurgeStore_PurgeProject_TabWhitespace verifies tab+space project name is rejected.
+func TestPurgeStore_PurgeProject_TabWhitespace(t *testing.T) {
+	ps := &PurgeStore{db: nil}
+	_, err := ps.PurgeProject(context.Background(), "\t \n")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "project must not be empty")
 }
@@ -330,6 +360,165 @@ func TestPurgeStore_T009_Integration(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "audit_log must contain the purge receipt for %q", purgeProj)
+}
+
+// TestPurgeStore_PurgeProject_CitationLogDeletedAndCounted verifies that citation_log
+// rows referencing the project's memories are deleted and counted.
+// Requires DATABASE_DSN; skips otherwise.
+func TestPurgeStore_PurgeProject_CitationLogDeletedAndCounted(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	const purgeProj = "test-purge-citation"
+	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
+
+	store := &Store{DB: db}
+	ms := NewMemoryStore(store)
+	ps := NewPurgeStore(store)
+	ctx := context.Background()
+
+	m, err := ms.Create(ctx, &models.Memory{Project: purgeProj, Content: "citation test"})
+	require.NoError(t, err)
+
+	// Insert a citation_log row referencing the memory.
+	db.Exec(
+		`INSERT INTO citation_log (session_id, memory_id, cited, match_type) VALUES ('sess-1', ?, true, 'exact')`,
+		m.ID,
+	)
+
+	receipt, err := ps.PurgeProject(ctx, purgeProj)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(1), receipt.CitationCount, "receipt must count deleted citation_log rows")
+	assert.Equal(t, int64(1), receipt.MemoryCount)
+
+	// citation_log rows must be gone.
+	var count int64
+	db.Table("citation_log").Where("memory_id = ?", m.ID).Count(&count)
+	assert.Equal(t, int64(0), count, "citation_log rows must be deleted")
+}
+
+// TestPurgeStore_PurgeProject_ContentChunksDeletedAndCounted verifies that content_chunks
+// rows referencing the project's memories are deleted and counted.
+// Requires DATABASE_DSN; skips otherwise.
+func TestPurgeStore_PurgeProject_ContentChunksDeletedAndCounted(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	const purgeProj = "test-purge-chunks"
+	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
+
+	store := &Store{DB: db}
+	ms := NewMemoryStore(store)
+	ps := NewPurgeStore(store)
+	ctx := context.Background()
+
+	m, err := ms.Create(ctx, &models.Memory{Project: purgeProj, Content: "chunk test"})
+	require.NoError(t, err)
+
+	// Insert content_chunks rows (embedding is nullable when vectorscale absent).
+	db.Exec(
+		`INSERT INTO content_chunks (memory_id, seq, text, model) VALUES (?, 0, 'chunk text', 'test-model')`,
+		m.ID,
+	)
+	db.Exec(
+		`INSERT INTO content_chunks (memory_id, seq, text, model) VALUES (?, 1, 'chunk text 2', 'test-model')`,
+		m.ID,
+	)
+
+	receipt, err := ps.PurgeProject(ctx, purgeProj)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(2), receipt.ChunkCount, "receipt must count deleted content_chunks rows")
+
+	var count int64
+	db.Table("content_chunks").Where("memory_id = ?", m.ID).Count(&count)
+	assert.Equal(t, int64(0), count, "content_chunks rows must be deleted")
+}
+
+// TestPurgeStore_PurgeProject_PromotionLogDeletedAndCounted verifies that promotion_log
+// rows referencing the project's memories are deleted and counted.
+// Requires DATABASE_DSN; skips otherwise.
+func TestPurgeStore_PurgeProject_PromotionLogDeletedAndCounted(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	const purgeProj = "test-purge-promotion"
+	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
+
+	store := &Store{DB: db}
+	ms := NewMemoryStore(store)
+	ps := NewPurgeStore(store)
+	ctx := context.Background()
+
+	m, err := ms.Create(ctx, &models.Memory{Project: purgeProj, Content: "promotion test"})
+	require.NoError(t, err)
+
+	// Insert a promotion_log row.
+	db.Exec(
+		`INSERT INTO promotion_log (memory_id, from_tier, to_tier, reason) VALUES (?, 'semantic', 'core', 'test')`,
+		m.ID,
+	)
+
+	receipt, err := ps.PurgeProject(ctx, purgeProj)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(1), receipt.PromotionCount, "receipt must count deleted promotion_log rows")
+
+	var count int64
+	db.Table("promotion_log").Where("memory_id = ?", m.ID).Count(&count)
+	assert.Equal(t, int64(0), count, "promotion_log rows must be deleted")
+}
+
+// TestPurgeStore_PurgeProject_ZeroRowsSucceeds verifies that purging a project with
+// no data succeeds and returns all-zero counts. Idempotent re-purge is a legitimate
+// caller pattern — do NOT fail on zero rows.
+// Requires DATABASE_DSN; skips otherwise.
+func TestPurgeStore_PurgeProject_ZeroRowsSucceeds(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	const purgeProj = "test-purge-zero-rows-project-that-does-not-exist"
+	// Ensure truly empty.
+	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
+	db.Exec(`DELETE FROM behavioral_rules WHERE project = ?`, purgeProj)
+
+	ps := NewPurgeStore(&Store{DB: db})
+	receipt, err := ps.PurgeProject(context.Background(), purgeProj)
+	require.NoError(t, err, "zero-row purge must succeed (idempotent)")
+
+	assert.Equal(t, int64(0), receipt.MemoryCount)
+	assert.Equal(t, int64(0), receipt.RuleCount)
+	assert.Equal(t, int64(0), receipt.EdgeCount)
+	assert.Equal(t, int64(0), receipt.CitationCount)
+	assert.Equal(t, int64(0), receipt.ChunkCount)
+	assert.Equal(t, int64(0), receipt.PromotionCount)
+	assert.Equal(t, purgeProj, receipt.Project)
+	assert.False(t, receipt.PurgedAt.IsZero(), "PurgedAt must be set even for zero-row purge")
+}
+
+// TestPurgeStore_ReceiptFields_AllPresent verifies PurgeReceipt has all required fields
+// for the extended receipt (citation, chunk, promotion). No DATABASE_DSN required.
+func TestPurgeStore_ReceiptFields_AllPresent(t *testing.T) {
+	r := PurgeReceipt{
+		Project:        "p",
+		MemoryCount:    1,
+		RuleCount:      2,
+		EdgeCount:      3,
+		AuditCount:     4,
+		CitationCount:  5,
+		ChunkCount:     6,
+		PromotionCount: 7,
+	}
+	b, err := json.Marshal(r)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"citation_count":5`)
+	assert.Contains(t, s, `"chunk_count":6`)
+	assert.Contains(t, s, `"promotion_count":7`)
 }
 
 // jsonUnmarshal is a local alias to avoid importing encoding/json at package level
