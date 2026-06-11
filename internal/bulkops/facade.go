@@ -187,7 +187,28 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		Promoted:   []int64{},
 	}
 	for _, id := range ids {
-		promoted, promErr := f.candidateStore.TransitionToPromoted(ctx, id, 0)
+		// Load the candidate to build the memory.
+		candidate, cErr := f.candidateStore.Get(ctx, id)
+		if cErr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: get: %v", id, cErr))
+			log.Warn().Err(cErr).Int64("candidate_id", id).Msg("bulk_promote: get candidate failed")
+			continue
+		}
+		// Build memory from candidate — same logic as promote_candidate MCP tool.
+		project := ""
+		if len(candidate.AffectedProjects) > 0 {
+			project = candidate.AffectedProjects[0]
+		}
+		mem := &models.Memory{
+			Content:       candidate.ProposedContent,
+			Project:       project,
+			Tier:          candidate.ProposedTier,
+			EpistemicType: "decision",
+			Tags:          []string{fmt.Sprintf("candidate:%d", id), "crystallized"},
+			SourceAgent:   "crystallization",
+		}
+		// PromoteWithMemory atomically creates the memory and transitions the candidate.
+		promoted, created, promErr := f.candidateStore.PromoteWithMemory(ctx, id, mem)
 		if promErr != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: %v", id, promErr))
 			log.Warn().Err(promErr).Int64("candidate_id", id).Msg("bulk_promote: candidate promotion failed")
@@ -196,6 +217,8 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		result.AffectedCount++
 		if promoted != nil && promoted.PromotedMemoryID != nil {
 			result.Promoted = append(result.Promoted, *promoted.PromotedMemoryID)
+		} else if created != nil {
+			result.Promoted = append(result.Promoted, created.ID)
 		}
 	}
 

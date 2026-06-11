@@ -186,7 +186,7 @@ func (s *Server) handleRollbackSnapshot(ctx context.Context, args json.RawMessag
 		return "", fmt.Errorf("snapshot_id is required")
 	}
 
-	result, rollErr := bulkops.Rollback(ctx, id, snapshotID, s.snapshotStore, s.memoryStore, s.auditStore)
+	result, rollErr := bulkops.Rollback(ctx, id, snapshotID, s.snapshotStore, s.memoryStore, s.auditStore, s.candidateStore)
 	if rollErr != nil {
 		if errors.Is(rollErr, bulkops.ErrRollbackConflict) {
 			conflictOut := map[string]any{

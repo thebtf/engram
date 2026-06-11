@@ -795,6 +795,9 @@ func TestMigration133_BulkOpSnapshots(t *testing.T) {
 		require.Equal(t, 1, colCount, "column %q must exist in bulk_op_snapshots", col)
 	}
 
+	// Pre-cleanup: remove any leftover rows from prior runs before inserting test data.
+	_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-snap-%'`).Error
+
 	// Assert all 4 valid op_type values accepted.
 	for _, opType := range []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede"} {
 		err := db.Exec(`

@@ -199,7 +199,7 @@ type SnapshotPruner interface {
 // Returns the number of rows deleted.
 func PruneSnapshots(ctx context.Context, pruner SnapshotPruner) (int64, error) {
 	days := snapshotRetentionDays()
-	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
 	deleted, err := pruner.DeleteOlderThan(ctx, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune snapshots: %w", err)

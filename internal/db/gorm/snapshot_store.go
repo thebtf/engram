@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -61,8 +62,11 @@ func (a *Int64Array) Scan(src interface{}) error {
 		return a.parsePostgresArray(string(v))
 	case string:
 		return a.parsePostgresArray(v)
+	case []int64:
+		*a = append((*a)[:0], v...)
+		return nil
 	}
-	return nil
+	return fmt.Errorf("int64_array: unsupported Scan source type %T", src)
 }
 
 // parsePostgresArray parses the {1,2,3} PostgreSQL array format.
@@ -276,54 +280,51 @@ func (s *SnapshotStore) AmendPromoteEntries(ctx context.Context, snapshotID stri
 		return nil
 	}
 
-	// Read current row.
-	var row snapshotRow
-	if err := s.db.WithContext(ctx).Where("snapshot_id = ?", snapshotID).First(&row).Error; err != nil {
-		return fmt.Errorf("amend_promote_entries: get snapshot %q: %w", snapshotID, err)
-	}
-
-	// Decode existing before_state.
-	existing := make(map[string]json.RawMessage)
-	if len(row.BeforeState) > 0 && string(row.BeforeState) != "{}" {
-		if err := json.Unmarshal([]byte(row.BeforeState), &existing); err != nil {
-			return fmt.Errorf("amend_promote_entries: decode before_state: %w", err)
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Lock the row for update to prevent concurrent amend races.
+		var row snapshotRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("snapshot_id = ?", snapshotID).
+			First(&row).Error; err != nil {
+			return fmt.Errorf("amend_promote_entries: get snapshot %q: %w", snapshotID, err)
 		}
-	}
 
-	// Add delete entries for each promoted memory ID.
-	deleteEntry, _ := json.Marshal(map[string]string{"kind": "delete"})
-	for _, memID := range promotedMemoryIDs {
-		key := fmt.Sprintf("%d", memID)
-		existing[key] = json.RawMessage(deleteEntry)
-	}
+		// Decode existing before_state.
+		existing := make(map[string]json.RawMessage)
+		if len(row.BeforeState) > 0 && string(row.BeforeState) != "{}" {
+			if err := json.Unmarshal([]byte(row.BeforeState), &existing); err != nil {
+				return fmt.Errorf("amend_promote_entries: decode before_state: %w", err)
+			}
+		}
 
-	// Collect all affected memory IDs (promote candidates + promoted memories) for conflict detection.
-	// We also update AffectedMemoryIDs to include the promoted memory IDs.
-	var allMemoryIDs Int64Array
-	_ = s.db.WithContext(ctx).
-		Where("snapshot_id = ?", snapshotID).
-		Select("affected_memory_ids").
-		Find(&row).Error
-	allMemoryIDs = Int64Array(row.AffectedMemoryIDs)
-	allMemoryIDs = append(allMemoryIDs, promotedMemoryIDs...)
+		// Add delete entries for each promoted memory ID.
+		deleteEntry, _ := json.Marshal(map[string]string{"kind": "delete"})
+		for _, memID := range promotedMemoryIDs {
+			key := fmt.Sprintf("%d", memID)
+			existing[key] = json.RawMessage(deleteEntry)
+		}
 
-	// Serialize and write back.
-	amended, err := json.Marshal(existing)
-	if err != nil {
-		return fmt.Errorf("amend_promote_entries: serialize: %w", err)
-	}
+		// Merge promoted memory IDs into AffectedMemoryIDs for conflict detection.
+		allMemoryIDs := Int64Array(row.AffectedMemoryIDs)
+		allMemoryIDs = append(allMemoryIDs, promotedMemoryIDs...)
 
-	res := s.db.WithContext(ctx).
-		Model(&snapshotRow{}).
-		Where("snapshot_id = ?", snapshotID).
-		Updates(map[string]any{
-			"before_state":        JSONRaw(amended),
-			"affected_memory_ids": allMemoryIDs,
-		})
-	if res.Error != nil {
-		return fmt.Errorf("amend_promote_entries: update snapshot %q: %w", snapshotID, res.Error)
-	}
-	return nil
+		// Serialize and write back within the same transaction.
+		amended, err := json.Marshal(existing)
+		if err != nil {
+			return fmt.Errorf("amend_promote_entries: serialize: %w", err)
+		}
+
+		res := tx.Model(&snapshotRow{}).
+			Where("snapshot_id = ?", snapshotID).
+			Updates(map[string]any{
+				"before_state":        JSONRaw(amended),
+				"affected_memory_ids": allMemoryIDs,
+			})
+		if res.Error != nil {
+			return fmt.Errorf("amend_promote_entries: update snapshot %q: %w", snapshotID, res.Error)
+		}
+		return nil
+	})
 }
 
 // DeleteOlderThan deletes non-pinned snapshots older than the cutoff time.

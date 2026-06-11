@@ -59,7 +59,7 @@ func TestDecodeBeforeState_NilInput(t *testing.T) {
 func TestRollback_NonAdmin_ReturnsErrAdminRequired(t *testing.T) {
 	// No DB required — admin gate fires before any store access.
 	ctx := context.Background()
-	_, err := Rollback(ctx, readOnlyIdentity(), "snap-001", nil, nil, nil)
+	_, err := Rollback(ctx, readOnlyIdentity(), "snap-001", nil, nil, nil, nil)
 	require.ErrorIs(t, err, ErrAdminRequired)
 }
 
@@ -128,11 +128,11 @@ func TestRollback_HappyPath(t *testing.T) {
 	require.NoError(t, memStore.Delete(ctx, created.ID))
 
 	// Rollback.
-	result, err := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore)
+	result, err := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, createdSnap.SnapshotID, result.SnapshotID)
-	assert.GreaterOrEqual(t, result.RestoredCount, 0) // may be 0 if delete cleared the row
+	assert.Equal(t, 1, result.RestoredCount, "expected 1 memory to be restored")
 	assert.Empty(t, result.ConflictIDs)
 
 	// Snapshot must be marked rolled_back.
@@ -193,7 +193,7 @@ func TestRollback_Conflict_EC_F3(t *testing.T) {
 	).Error)
 
 	// Rollback must fail with ErrRollbackConflict (EC-F3).
-	result, err := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore)
+	result, err := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore, nil)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrRollbackConflict, "expected ErrRollbackConflict for modified memory")
 	require.NotNil(t, result)

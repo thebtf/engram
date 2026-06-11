@@ -103,7 +103,10 @@ func TestNewBulkOpSnapshot_Validation(t *testing.T) {
 // TestBulkOpSnapshot_JSONRoundtrip verifies the JSON shape is stable.
 func TestBulkOpSnapshot_JSONRoundtrip(t *testing.T) {
 	bs := json.RawMessage(`{"42":{"content":"test row"}}`)
-	snap, _ := NewBulkOpSnapshot("snap-json-01", SnapshotOpBulkSupersede, "test-actor", bs)
+	snap, err := NewBulkOpSnapshot("snap-json-01", SnapshotOpBulkSupersede, "test-actor", bs)
+	if err != nil {
+		t.Fatalf("NewBulkOpSnapshot: %v", err)
+	}
 	snap.AffectedMemoryIDs = []int64{42}
 	snap.SourceSessionID = "sess-001"
 

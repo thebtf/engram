@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // TestStoreMemory_DryRun_NilStore verifies that store_memory with dry_run=true
@@ -214,9 +216,20 @@ func TestDryRun_Integration_StoreMemory_ZeroSideEffects(t *testing.T) {
 }
 
 // dryRunTestServer builds a minimal Server connected to a live DB for integration tests.
+// When dsn is non-empty the server's memoryStore is wired so countMemories reflects real DB state.
 func dryRunTestServer(t *testing.T, dsn string) *dryRunServer {
 	t.Helper()
-	return &dryRunServer{s: NewServer(ServerOptions{Version: "test"}), dsn: dsn}
+	s := NewServer(ServerOptions{Version: "test"})
+	if dsn != "" {
+		store, err := gormdb.NewStore(gormdb.Config{
+			DSN:      dsn,
+			LogLevel: logger.Warn,
+		})
+		require.NoError(t, err, "dryRunTestServer: NewStore")
+		t.Cleanup(func() { store.Close() })
+		s.SetMemoryStore(gormdb.NewMemoryStore(store))
+	}
+	return &dryRunServer{s: s, dsn: dsn}
 }
 
 // dryRunServer wraps Server for integration test helpers.

@@ -4117,6 +4117,50 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`DROP TABLE IF EXISTS bulk_op_snapshots`).Error
 			},
 		},
+		{
+			// Migration 134: add CHECK(jsonb_typeof = 'object') constraints on
+			// bulk_op_snapshots.parameters and before_state to enforce the object
+			// structure expected by rollback/restore code. A pre-migration coerce step
+			// resets any non-object values (NULL, scalars, arrays) to '{}' so the
+			// ADD CONSTRAINT never fails on existing rows.
+			ID: "134_bulk_op_snapshots_jsonb_checks",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					// Coerce existing rows so the CHECK never fails on apply.
+					`UPDATE bulk_op_snapshots
+					 SET parameters = '{}'::jsonb
+					 WHERE jsonb_typeof(parameters) IS DISTINCT FROM 'object'`,
+					`UPDATE bulk_op_snapshots
+					 SET before_state = '{}'::jsonb
+					 WHERE jsonb_typeof(before_state) IS DISTINCT FROM 'object'`,
+					// Add the constraints.
+					`ALTER TABLE bulk_op_snapshots
+					 ADD CONSTRAINT chk_parameters_is_object
+					 CHECK (jsonb_typeof(parameters) = 'object')`,
+					`ALTER TABLE bulk_op_snapshots
+					 ADD CONSTRAINT chk_before_state_is_object
+					 CHECK (jsonb_typeof(before_state) = 'object')`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 134: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE bulk_op_snapshots DROP CONSTRAINT IF EXISTS chk_parameters_is_object`,
+					`ALTER TABLE bulk_op_snapshots DROP CONSTRAINT IF EXISTS chk_before_state_is_object`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

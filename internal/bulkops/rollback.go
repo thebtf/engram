@@ -57,9 +57,16 @@ func Rollback(
 	snapshotStore *gormdb.SnapshotStore,
 	memoryStore *gormdb.MemoryStore,
 	auditStore *gormdb.AuditStore,
+	candidateStore *gormdb.CandidateStore,
 ) (*RollbackResult, error) {
 	if identity.Role != auth.RoleAdmin {
 		return nil, ErrAdminRequired
+	}
+	if snapshotStore == nil {
+		return nil, fmt.Errorf("rollback: snapshotStore is required")
+	}
+	if memoryStore == nil {
+		return nil, fmt.Errorf("rollback: memoryStore is required")
 	}
 
 	snap, err := snapshotStore.Get(ctx, snapshotID)
@@ -136,13 +143,30 @@ func Rollback(
 					// Empty before-state: row didn't exist pre-op; skip (same as legacy skip).
 					continue
 				}
-				var mem models.Memory
-				if unmarshalErr := json.Unmarshal(entry.Before, &mem); unmarshalErr != nil {
-					return fmt.Errorf("rollback: unmarshal memory %d: %w", id, unmarshalErr)
-				}
-				mem.ID = id
-				if restoreErr := memoryStore.RestoreRawTx(ctx, tx, &mem); restoreErr != nil {
-					return fmt.Errorf("rollback: restore memory %d: %w", id, restoreErr)
+				if snap.OpType == models.SnapshotOpBulkPromote {
+					// bulk_promote stores candidate JSON in restore entries.
+					// Rollback must revert the candidate row to its pre-op state (e.g., pending),
+					// NOT write candidate data into the memories table.
+					if candidateStore == nil {
+						return fmt.Errorf("rollback: candidateStore required to roll back bulk_promote candidate %d", id)
+					}
+					var c models.CrystallizationCandidate
+					if unmarshalErr := json.Unmarshal(entry.Before, &c); unmarshalErr != nil {
+						return fmt.Errorf("rollback: unmarshal candidate %d: %w", id, unmarshalErr)
+					}
+					c.ID = id
+					if revertErr := candidateStore.RevertRawTx(ctx, tx, &c); revertErr != nil {
+						return fmt.Errorf("rollback: revert candidate %d: %w", id, revertErr)
+					}
+				} else {
+					var mem models.Memory
+					if unmarshalErr := json.Unmarshal(entry.Before, &mem); unmarshalErr != nil {
+						return fmt.Errorf("rollback: unmarshal memory %d: %w", id, unmarshalErr)
+					}
+					mem.ID = id
+					if restoreErr := memoryStore.RestoreRawTx(ctx, tx, &mem); restoreErr != nil {
+						return fmt.Errorf("rollback: restore memory %d: %w", id, restoreErr)
+					}
 				}
 				restored++
 

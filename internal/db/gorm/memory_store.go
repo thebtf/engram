@@ -944,6 +944,7 @@ func (s *MemoryStore) RestoreRaw(ctx context.Context, mem *models.Memory) error 
 		// version is deliberately not restored — keep current row version so conflicts are auditable.
 	}
 	result := s.db.WithContext(ctx).
+		Unscoped().
 		Model(&Memory{}).
 		Where("id = ?", mem.ID).
 		Updates(updates)
@@ -989,6 +990,7 @@ func (s *MemoryStore) RestoreRawTx(ctx context.Context, tx *gorm.DB, mem *models
 		"updated_at":       mem.UpdatedAt,
 	}
 	result := tx.WithContext(ctx).
+		Unscoped().
 		Model(&Memory{}).
 		Where("id = ?", mem.ID).
 		Updates(updates)

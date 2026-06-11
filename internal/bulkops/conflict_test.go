@@ -36,7 +36,7 @@ import (
 func TestEC_F3_AdminGate_NoConflictCheck(t *testing.T) {
 	ctx := context.Background()
 	// Non-admin — Rollback must return ErrAdminRequired without reaching detectConflicts.
-	_, err := Rollback(ctx, readOnlyIdentity(), "snap-ec-f3-unit", nil, nil, nil)
+	_, err := Rollback(ctx, readOnlyIdentity(), "snap-ec-f3-unit", nil, nil, nil, nil)
 	require.ErrorIs(t, err, ErrAdminRequired,
 		"non-admin must be rejected before conflict detection")
 }
@@ -152,7 +152,7 @@ func TestEC_F3_ConflictDetected_Integration(t *testing.T) {
 	).Error)
 
 	// Step 4: Rollback → must return ErrRollbackConflict.
-	result, rollbackErr := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore)
+	result, rollbackErr := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore, nil)
 	require.Error(t, rollbackErr)
 	require.ErrorIs(t, rollbackErr, ErrRollbackConflict,
 		"EC-F3: rollback of a post-snapshot-modified memory must return ErrRollbackConflict")
@@ -204,7 +204,7 @@ func TestEC_F3_ConflictDetected_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 9: Rollback S2 → must succeed (no conflict).
-	result2, err := Rollback(ctx, admin, createdSnap2.SnapshotID, snapStore, memStore, auditStore)
+	result2, err := Rollback(ctx, admin, createdSnap2.SnapshotID, snapStore, memStore, auditStore, nil)
 	require.NoError(t, err, "EC-F3: rollback must succeed after conflict is cleared")
 	require.NotNil(t, result2)
 	assert.Empty(t, result2.ConflictIDs,

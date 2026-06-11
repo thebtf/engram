@@ -21,7 +21,6 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/pkg/models"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -135,18 +134,16 @@ func openTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping integration test")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+	// NewStore opens the connection AND runs all migrations — ensures schema is current
+	// on a fresh test database. runMigrations is package-private to internal/db/gorm
+	// so we use the exported NewStore path (consistent with other external test helpers).
+	store, err := gormdb.NewStore(gormdb.Config{
+		DSN:      dsn,
+		LogLevel: logger.Warn,
 	})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	require.NoError(t, sqlDB.Ping())
-
-	// Build a minimal *gormdb.Store wrapper (only DB field needed by MemoryStore etc.)
-	store := &gormdb.Store{DB: db}
-	return db, store
+	require.NoError(t, err, "openTestDB: NewStore (applies migrations)")
+	t.Cleanup(func() { store.Close() })
+	return store.DB, store
 }
 
 // TestFacade_BulkDelete_Committed_AuditLogWritten verifies:
@@ -183,6 +180,13 @@ func TestFacade_BulkDelete_Committed_AuditLogWritten(t *testing.T) {
 		DryRun:      false,
 		Parameters:  json.RawMessage(`{"test":"bulk_delete_committed"}`),
 	}
+
+	// Capture audit count BEFORE Execute to avoid false pass from historical records (§FR-F5).
+	var auditCountBefore int64
+	db.Model(&gormdb.AuditLogEntry{}).
+		Where("action = ? AND actor = ?", "bulk_delete", "master").
+		Count(&auditCountBefore)
+
 	result, err := f.Execute(ctx, admin, op)
 	require.NoError(t, err)
 	assert.False(t, result.DryRun)
@@ -197,17 +201,13 @@ func TestFacade_BulkDelete_Committed_AuditLogWritten(t *testing.T) {
 	assert.Equal(t, models.SnapshotStatusCommitted, snap.Status)
 	assert.Contains(t, snap.AffectedMemoryIDs, created.ID)
 
-	// Verify audit log entry written (§FR-F5).
-	entries, err := auditStore.GetByMemory(ctx, created.ID, 10)
-	// audit log may not have a memory_id foreign key for bulk ops — check by recent entries.
-	_ = entries
-	_ = err
-	// Alternative: query directly.
-	var count int64
+	// Verify audit log entry written (§FR-F5): delta >= 1 ties the entry to this run.
+	var auditCountAfter int64
 	db.Model(&gormdb.AuditLogEntry{}).
 		Where("action = ? AND actor = ?", "bulk_delete", "master").
-		Count(&count)
-	assert.GreaterOrEqual(t, count, int64(1), "audit log must have at least 1 bulk_delete entry")
+		Count(&auditCountAfter)
+	assert.GreaterOrEqual(t, auditCountAfter-auditCountBefore, int64(1),
+		"audit log must have at least 1 new bulk_delete entry from this Execute call")
 }
 
 // TestFacade_BulkSupersede_Committed_AuditLogWritten verifies the supersede path.
@@ -240,16 +240,24 @@ func TestFacade_BulkSupersede_Committed_AuditLogWritten(t *testing.T) {
 		MemoryIDs: []int64{created.ID},
 		DryRun:    false,
 	}
+
+	// Capture audit count BEFORE Execute to avoid false pass from historical records.
+	var auditCountBefore int64
+	db.Model(&gormdb.AuditLogEntry{}).
+		Where("action = ? AND actor = ?", "bulk_supersede", "master").
+		Count(&auditCountBefore)
+
 	result, err := f.Execute(ctx, admin, op)
 	require.NoError(t, err)
 	assert.False(t, result.DryRun)
 	assert.NotEmpty(t, result.SnapshotID)
 	assert.Equal(t, 1, result.AffectedCount)
 
-	// Verify audit log.
-	var count int64
+	// Verify audit log: delta >= 1 ties the entry to this run.
+	var auditCountAfter int64
 	db.Model(&gormdb.AuditLogEntry{}).
 		Where("action = ? AND actor = ?", "bulk_supersede", "master").
-		Count(&count)
-	assert.GreaterOrEqual(t, count, int64(1))
+		Count(&auditCountAfter)
+	assert.GreaterOrEqual(t, auditCountAfter-auditCountBefore, int64(1),
+		"audit log must have at least 1 new bulk_supersede entry from this Execute call")
 }

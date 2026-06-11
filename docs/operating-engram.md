@@ -27,7 +27,7 @@ redaction.
 
 ### Rule File Format
 
-Rules are JSON objects with `pattern` (regex) and `replacement` fields:
+Rules are JSON objects with `id` (unique rule identifier), `pattern` (regex), and `replacement` fields:
 
 ```json
 [
@@ -118,10 +118,9 @@ The memory row is **not written** to the database.
 All redaction events (successful scrub or full-content rejection) are written to
 `audit_log`:
 
-| `action`                  | Meaning                                      |
-|---------------------------|----------------------------------------------|
-| `redacted`                | Content was partially or fully scrubbed      |
-| `content_fully_redacted`  | Write rejected — no content after scrubbing  |
+| `action`    | Meaning                                                                                      |
+|-------------|----------------------------------------------------------------------------------------------|
+| `redacted`  | Content matched a rule. Write succeeds with scrubbed content (partial match), or is rejected with MCP error code `content_fully_redacted` when the entire content was stripped. |
 
 ---
 

@@ -71,7 +71,8 @@ func TestSnapshotStore_CRUD(t *testing.T) {
 	require.Equal(t, "test-store-001", got2.SnapshotID)
 
 	// --- Create a second snapshot for list test ---
-	snap2, _ := models.NewBulkOpSnapshot("test-store-002", models.SnapshotOpBulkDelete, "test-actor", json.RawMessage(`{}`))
+	snap2, err := models.NewBulkOpSnapshot("test-store-002", models.SnapshotOpBulkDelete, "test-actor", json.RawMessage(`{}`))
+	require.NoError(t, err)
 	_, err = store.Create(ctx, snap2)
 	require.NoError(t, err)
 
@@ -109,8 +110,10 @@ func TestSnapshotStore_CRUD(t *testing.T) {
 
 	// --- DeleteOlderThan: pinned snapshot must survive ---
 	// Use a far-future cutoff to delete all non-pinned test rows.
-	snap3, _ := models.NewBulkOpSnapshot("test-store-003", models.SnapshotOpIngestDoc, "actor2", nil)
-	_, _ = store.Create(ctx, snap3)
+	snap3, err := models.NewBulkOpSnapshot("test-store-003", models.SnapshotOpIngestDoc, "actor2", nil)
+	require.NoError(t, err)
+	_, err = store.Create(ctx, snap3)
+	require.NoError(t, err)
 
 	// Force created_at to be very old for test-store-003 by updating directly.
 	_ = db.Exec(`UPDATE bulk_op_snapshots SET created_at = '2000-01-01T00:00:00Z' WHERE snapshot_id = 'test-store-003'`).Error

@@ -71,8 +71,8 @@ func TestEC_F9_OperatingDocsExist(t *testing.T) {
 // is correct so that TG5 integration picks up the right value.
 func TestEC_F5_ErrorSentinel_Shape(t *testing.T) {
 	// Per spec EC-F5: error='content_fully_redacted'
-	const expectedErrorCode = "content_fully_redacted"
-	assert.Equal(t, "content_fully_redacted", expectedErrorCode,
+	// Compare against the actual package sentinel to catch renames.
+	assert.EqualError(t, ErrContentFullyRedacted, "content_fully_redacted",
 		"EC-F5 error code must be 'content_fully_redacted' — verified against spec §EC-F5")
 }
 
@@ -88,16 +88,14 @@ func TestEC_F9_EnvVar_NoOpWhenAbsent(t *testing.T) {
 }
 
 // TestEC_F9_EnvVar_PathSet verifies that when ENGRAM_REDACTION_RULES_PATH is set
-// to a non-existent path, the expected behavior is logged warning + no-op fallback
-// (not a fatal startup error). This documents the contract for TG5 implementation.
+// to a non-existent path, LoadRulesFromPath returns an error (caller logs warning
+// and falls back to no-op per ADR-F-004).
 func TestEC_F9_EnvVar_PathSet_MissingFile(t *testing.T) {
-	t.Setenv("ENGRAM_REDACTION_RULES_PATH", "/nonexistent/rules.json")
-	path := os.Getenv("ENGRAM_REDACTION_RULES_PATH")
-	assert.NotEmpty(t, path)
-	_, statErr := os.Stat(path)
-	assert.True(t, os.IsNotExist(statErr),
-		"missing rule file with ENGRAM_REDACTION_RULES_PATH set must not exist — "+
-			"server must log warning + run no-op per ADR-F-004; this test documents the expected env contract")
+	path := "/nonexistent/engram-rules-test-ec-f9.json"
+	t.Setenv("ENGRAM_REDACTION_RULES_PATH", path)
+	rules, err := LoadRulesFromPath(path)
+	require.Error(t, err, "LoadRulesFromPath must return error for missing file")
+	assert.Nil(t, rules, "no rules must be returned for missing file")
 }
 
 // --- TG5-gated tests (skipped until TG5 merges) ---
