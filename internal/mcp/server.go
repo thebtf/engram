@@ -49,6 +49,7 @@ type Server struct {
 	nodesStore             nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
 	auditStore             *gorm.AuditStore
 	purgeStore             *gorm.PurgeStore
+	candidateStore         *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
 	testMemoryEditor       memoryEditor // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
@@ -142,6 +143,12 @@ func (s *Server) SetAuditStore(as *gorm.AuditStore) {
 // SetPurgeStore sets the purge store for the purge_project admin action (Milestone D T008).
 func (s *Server) SetPurgeStore(ps *gorm.PurgeStore) {
 	s.purgeStore = ps
+}
+
+// SetCandidateStore wires the crystallization candidate store (Milestone-F TG4 T026).
+// Must be called when ENGRAM_VNEXT_F_ENABLED=true to enable the 4 candidate MCP tools.
+func (s *Server) SetCandidateStore(cs *gorm.CandidateStore) {
+	s.candidateStore = cs
 }
 
 // setTestAuditWriter injects a mock auditWriter for unit tests.
@@ -1000,6 +1007,12 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
+	// Crystallization candidate tools — advertised only when ENGRAM_VNEXT_F_ENABLED=true
+	// and the candidate store is wired (Milestone-F TG4 T026).
+	if vnextFEnabled() && s.candidateStore != nil {
+		tools = append(tools, candidateTools()...)
+	}
+
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
 	if config.GetDatabaseDSN() != "" && crypto.VaultExists(config.Get()) {
 		tools = append(tools,
@@ -1531,6 +1544,15 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleSetSessionOutcome(ctx, args)
 	case "get_memory_brief":
 		return s.handleGetMemoryBrief(ctx, args)
+	// Crystallization candidate tools (Milestone-F TG4 T026).
+	case "list_candidates":
+		return s.handleListCandidates(ctx, args)
+	case "promote_candidate":
+		return s.handlePromoteCandidate(ctx, args)
+	case "reject_candidate":
+		return s.handleRejectCandidate(ctx, args)
+	case "supersede_candidate":
+		return s.handleSupersedeCandidate(ctx, args)
 	}
 
 	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/

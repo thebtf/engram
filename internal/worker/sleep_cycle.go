@@ -163,6 +163,21 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		Dur("duration", result.Duration).
 		Msg("sleep cycle: finished")
 
+	// Milestone-F TG4 T028: run candidate decay batch when flag is on.
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		s.initMu.RLock()
+		cs := s.candidateStore
+		s.initMu.RUnlock()
+		if cs != nil {
+			decayResult := lifecycle.RunCandidateDecayCycle(ctx, cs)
+			log.Info().
+				Int("candidates_decayed", decayResult.Decayed).
+				Int("decay_errors", decayResult.Errors).
+				Dur("decay_duration", decayResult.Duration).
+				Msg("sleep cycle: candidate decay finished")
+		}
+	}
+
 	// Advance watermark only when the run completed without errors and the
 	// context was not cancelled. Skipping on failure ensures no memories are
 	// silently orphaned from future counts.
