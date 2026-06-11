@@ -2,10 +2,13 @@ package worker
 
 import (
 	"context"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -46,6 +49,20 @@ type retrievalMetadata struct {
 type retrievalScope struct {
 	Project string
 	AgentID string
+}
+
+// memListStore returns the memoryListStore to use for List-only paths.
+// When memoryStoreSeam is non-nil (test-only override), it is used in place of
+// the concrete memoryStore. Production code always has memoryStoreSeam == nil.
+// Returns nil (not a nil-interface-holding-nil-pointer) when neither is set.
+func (s *Service) memListStore() memoryListStore {
+	if s.memoryStoreSeam != nil {
+		return s.memoryStoreSeam
+	}
+	if s.memoryStore == nil {
+		return nil
+	}
+	return s.memoryStore
 }
 
 type retrievalHooks struct {
@@ -200,10 +217,21 @@ func (s *Service) searchFallbackObservations(ctx context.Context, query string, 
 	}
 
 	observations := make([]*models.Observation, 0, fetchLimit)
-	if s.memoryStore != nil && scopeFilter.Project != "" {
-		memories, err := s.memoryStore.List(ctx, scopeFilter.Project, fetchLimit)
+	if lister := s.memListStore(); lister != nil && scopeFilter.Project != "" {
+		memories, err := lister.List(ctx, scopeFilter.Project, fetchLimit)
 		if err != nil {
 			return nil, err
+		}
+		// W4 P3: apply privacy-scope filter when ENGRAM_VNEXT_F_ENABLED=true so
+		// the dashboard /api/observations endpoint does not expose private-scope
+		// rows from other workstations. Flag-OFF: path is byte-identical to the
+		// pre-fix behavior (scope.FilterMemories is not called).
+		if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+			var callerCtx scope.KeycardContext
+			if id, ok := auth.IdentityFrom(ctx); ok {
+				callerCtx.WorkstationID = id.WorkstationID()
+			}
+			memories = scope.FilterMemories(callerCtx, memories)
 		}
 		observations = append(observations, memoriesToObservations(memories)...)
 	}
