@@ -128,11 +128,10 @@ func isValidStoreObservationType(obsType models.ObservationType) bool {
 }
 
 // handleStoreMemory explicitly stores a memory in the v5 memories table.
+// T044 (FR-F6.b): dry_run=true returns a legacy-path preview JSON without any DB writes.
+// The nil-store guard is deferred until after dry_run is parsed so that dry_run=true
+// always succeeds (TG5-absent nil-safe seam).
 func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.memoryStore == nil {
-		return "", fmt.Errorf("memory store not available")
-	}
-
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -153,6 +152,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		Importance   *float64
 		TtlDays      *int
 		AlwaysInject bool
+		DryRun       bool // T044 — FR-F6.b dry-run preview
 	}
 	params.Tags = coerceStringSlice(m["tags"])
 	params.Rejected = coerceStringSlice(m["rejected"])
@@ -173,6 +173,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		params.Project = coerceString(m["project"], "")
 	}
 	params.AlwaysInject = coerceBool(m["always_inject"], false)
+	params.DryRun = coerceBool(m["dry_run"], false)
 	if v, ok := m["importance"]; ok && v != nil {
 		f := coerceFloat64(v, 0)
 		params.Importance = &f
@@ -188,6 +189,31 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	if params.Importance != nil && (*params.Importance < 0 || *params.Importance > 1) {
 		return "", fmt.Errorf("importance must be between 0 and 1")
+	}
+
+	// T044 dry-run early return (FR-F6.b): after content validation, before any DB access.
+	// TG5 write-lint orchestrator absent → uses legacy path preview (no lint signals).
+	// No snapshot row created for dry-run — would_store reflects what would be committed.
+	if params.DryRun {
+		preview := map[string]any{
+			"dry_run":     true,
+			"would_store": params.Content,
+			"project":     params.Project,
+			"type":        params.Type,
+			"scope":       params.Scope,
+			"tags":        params.Tags,
+			"note":        "dry_run preview — no memory row written (write-lint seam: TG5 not present, lint signals unavailable)",
+		}
+		out, jsonErr := json.MarshalIndent(preview, "", "  ")
+		if jsonErr != nil {
+			return "", fmt.Errorf("store_memory dry_run marshal: %w", jsonErr)
+		}
+		return string(out), nil
+	}
+
+	// Deferred nil-store guard (after dry_run check so dry_run=true never hits this).
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("memory store not available")
 	}
 
 	cfg := config.Get()

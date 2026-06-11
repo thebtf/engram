@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/internal/chunking"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
@@ -51,6 +52,7 @@ type Server struct {
 	purgeStore             *gorm.PurgeStore
 	candidateStore         *gorm.CandidateStore  // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	snapshotStore          *gorm.SnapshotStore   // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	bulkFacade             *bulkops.Facade       // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
 	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
 	testMemoryEditor       memoryEditor // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
@@ -156,6 +158,12 @@ func (s *Server) SetCandidateStore(cs *gorm.CandidateStore) {
 // Must be called when ENGRAM_VNEXT_F_ENABLED=true to enable the 4 governance MCP tools.
 func (s *Server) SetSnapshotStore(ss *gorm.SnapshotStore) {
 	s.snapshotStore = ss
+}
+
+// SetBulkFacade wires the bulk-op facade (Milestone-F TG6 T044).
+// Enables bulk_promote, bulk_delete, bulk_supersede MCP tools with dry-run support.
+func (s *Server) SetBulkFacade(f *bulkops.Facade) {
+	s.bulkFacade = f
 }
 
 // setTestAuditWriter injects a mock auditWriter for unit tests.
@@ -1026,6 +1034,13 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, governanceTools()...)
 	}
 
+	// Bulk-op tools (Milestone-F TG6 T044): bulk_promote/delete/supersede with dry-run.
+	// Admin-gated at handler level. Advertised whenever ENGRAM_VNEXT_F_ENABLED=true
+	// (facade may be nil — dry_run still works with nil facade via seam).
+	if vnextFEnabled() {
+		tools = append(tools, bulkOpsTools()...)
+	}
+
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
 	if config.GetDatabaseDSN() != "" && crypto.VaultExists(config.Get()) {
 		tools = append(tools,
@@ -1575,6 +1590,13 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handlePinSnapshot(ctx, args)
 	case "redaction_rules_status":
 		return s.handleRedactionRulesStatus(ctx, args)
+	// Bulk-op tools (Milestone-F TG6 T044).
+	case "bulk_promote":
+		return s.handleBulkPromote(ctx, args)
+	case "bulk_delete":
+		return s.handleBulkDelete(ctx, args)
+	case "bulk_supersede":
+		return s.handleBulkSupersede(ctx, args)
 	}
 
 	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/
