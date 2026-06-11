@@ -121,14 +121,28 @@ func (m *mockImportStore) WriteCandidate(cand *ExportableCandidate) error {
 // --- Auto-detect ---
 
 // detectFormat implements the priority-order format detection.
-// Priority: explicit param > file extension > content signature > error.
+//
+// Priority order (per plan.md §Format auto-detect priority order + T047/T048 ACs):
+//   1. Explicit Format param (always wins)
+//   2. ZIP magic bytes PK\x03\x04 — unambiguous binary signature; wins over extension
+//      (handles format collision: ZIP renamed to .jsonl → content sig wins; T048 AC)
+//   3. File extension (.zip → FormatZIP, .jsonl → FormatJSONL)
+//      (handles: JSONL renamed to .zip → extension wins; T048 AC)
+//   4. JSONL content signature: leading '{' after no magic bytes matched
+//   5. Error — cannot detect
 func detectFormat(data []byte, opts ImportOptions) (ExportFormat, error) {
 	// 1. Explicit param wins.
 	if opts.Format != "" {
 		return opts.Format, nil
 	}
 
-	// 2. File extension.
+	// 2. ZIP magic bytes (PK\x03\x04) win over file extension.
+	// This handles format collision: ZIP content renamed to .jsonl still routes to ZIP parser.
+	if len(data) >= 4 && data[0] == 'P' && data[1] == 'K' && data[2] == 0x03 && data[3] == 0x04 {
+		return FormatZIP, nil
+	}
+
+	// 3. File extension (after ZIP magic bytes to preserve collision semantics).
 	if opts.Filename != "" {
 		lower := strings.ToLower(opts.Filename)
 		if strings.HasSuffix(lower, ".zip") {
@@ -139,15 +153,12 @@ func detectFormat(data []byte, opts ImportOptions) (ExportFormat, error) {
 		}
 	}
 
-	// 3. Content signature.
-	if len(data) >= 4 && data[0] == 'P' && data[1] == 'K' && data[2] == 0x03 && data[3] == 0x04 {
-		return FormatZIP, nil
-	}
+	// 4. JSONL content signature: leading '{'.
 	if len(data) > 0 && data[0] == '{' {
 		return FormatJSONL, nil
 	}
 
-	return "", fmt.Errorf("import: cannot detect format from data (no explicit format, no matching extension, no PK/{ signature)")
+	return "", fmt.Errorf("import: cannot detect format from data (no explicit format, no ZIP magic bytes, no matching extension, no '{' signature)")
 }
 
 // --- Entry points ---
