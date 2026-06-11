@@ -125,7 +125,10 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 			memory.Status = "flagged"
 		}
 
-		created, err := s.memoryStore.Create(ctx, memory)
+		// Ingest always supplies lifecycle fields (Tier/EpistemicType/Defeasibility);
+		// use CreateWithLifecycle so they are persisted without touching the plain
+		// Create path (preserves default-off byte-identity contract).
+		created, err := s.memoryStore.CreateWithLifecycle(ctx, memory)
 		if err != nil {
 			log.Error().Err(err).Int("chunk_index", chunk.Index).Msg("ingest: store chunk failed")
 			continue
@@ -137,11 +140,11 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 	}
 
 	return marshalJSON(map[string]any{
-		"source_title":  a.SourceTitle,
-		"strategy":      string(strategy),
-		"total_chunks":  len(chunks),
-		"stored":        stored,
-		"flagged":       flagged,
-		"message":       fmt.Sprintf("ingested %d chunks from '%s'", stored, a.SourceTitle),
+		"source_title": a.SourceTitle,
+		"strategy":     string(strategy),
+		"total_chunks": len(chunks),
+		"stored":       stored,
+		"flagged":      flagged,
+		"message":      fmt.Sprintf("ingested %d chunks from '%s'", stored, a.SourceTitle),
 	})
 }

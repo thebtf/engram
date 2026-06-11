@@ -29,6 +29,11 @@ func NewMemoryStore(store *Store) *MemoryStore {
 
 // Create inserts a new memory row. Returns a new *models.Memory populated with the
 // database-assigned ID and timestamps. The caller's input is never mutated.
+//
+// Lifecycle contract: Create intentionally does NOT persist Tier, EpistemicType, or
+// Defeasibility fields — the DB schema defaults remain authoritative for all ordinary
+// callers (store_memory MCP tool, extraction, correction, ingest). Flag-gated paths
+// that need lifecycle metadata must use CreateWithLifecycle instead.
 func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.Memory, error) {
 	if mem == nil {
 		return nil, fmt.Errorf("memory must not be nil")
@@ -67,10 +72,63 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	if mem.SupersedesID != nil {
 		row.SupersedesID = mem.SupersedesID
 	}
-	// Preserve caller-specified lifecycle and epistemic fields.
-	// These default to "semantic" / "observation" in the DB schema; we only
-	// override when the caller supplies a non-empty value so that the GORM
-	// column defaults remain authoritative for ordinary store_memory calls.
+	// Lifecycle fields (Tier, EpistemicType, Defeasibility) are intentionally
+	// NOT copied here. Use CreateWithLifecycle for flag-gated paths.
+
+	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
+		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
+	}
+	return memoryRowToModel(row), nil
+}
+
+// CreateWithLifecycle inserts a new memory row including Tier, EpistemicType, and
+// Defeasibility fields. It MUST only be called from flag-gated paths:
+//   - crystallization bridge (ENGRAM_CRYSTALLIZATION_ENABLED)
+//   - MCP store_memory tool (ENGRAM_LIFECYCLE_ENABLED)
+//   - ingest tool (ENGRAM_VNEXT_ENABLED or ENGRAM_LIFECYCLE_ENABLED)
+//
+// Callers that are NOT behind one of these flags must call Create instead to
+// preserve the default-off byte-identity contract (milestone-B cycle-3).
+func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memory) (*models.Memory, error) {
+	if mem == nil {
+		return nil, fmt.Errorf("memory must not be nil")
+	}
+	if mem.Project == "" {
+		return nil, fmt.Errorf("memory.Project must not be empty")
+	}
+	if mem.Content == "" {
+		return nil, fmt.Errorf("memory.Content must not be empty")
+	}
+
+	now := time.Now().UTC()
+	row := &Memory{
+		Project:        mem.Project,
+		Content:        mem.Content,
+		Tags:           models.JSONStringArray(mem.Tags),
+		SourceAgent:    mem.SourceAgent,
+		EditedBy:       mem.EditedBy,
+		Status:         "active",
+		ImportanceBase: 0.5,
+		TsAlpha:        1.0,
+		TsBeta:         1.0,
+		Version:        1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if mem.Version > 0 {
+		row.Version = mem.Version
+	}
+	if mem.Status != "" {
+		row.Status = mem.Status
+	}
+	if mem.ImportanceBase > 0 {
+		row.ImportanceBase = mem.ImportanceBase
+	}
+	if mem.SupersedesID != nil {
+		row.SupersedesID = mem.SupersedesID
+	}
+	// Lifecycle fields: only override when caller supplies non-empty value so
+	// that DB schema defaults remain authoritative for unspecified fields.
 	if mem.Tier != "" {
 		row.Tier = mem.Tier
 	}
@@ -82,7 +140,7 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	}
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
-		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
+		return nil, fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 	}
 	return memoryRowToModel(row), nil
 }
@@ -413,6 +471,38 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		RecurrenceCount:          row.RecurrenceCount,
 		ConsecutiveCitationCount: row.ConsecutiveCitationCount,
 	}
+}
+
+// ListBySourceAgentAndTag returns active memories for a project where source_agent
+// matches sourceAgent AND the tags JSONB column contains the given tag string.
+// Used by the crystallization pipeline for idempotency checks (P2-5).
+// Returns at most 500 rows (sufficient for any single session's decisions).
+func (s *MemoryStore) ListBySourceAgentAndTag(ctx context.Context, project, sourceAgent, tag string) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("project must not be empty")
+	}
+	if sourceAgent == "" {
+		return nil, fmt.Errorf("sourceAgent must not be empty")
+	}
+	if tag == "" {
+		return nil, fmt.Errorf("tag must not be empty")
+	}
+	// Use PostgreSQL JSONB containment: tags @> '["<tag>"]'::jsonb
+	tagJSON := fmt.Sprintf(`[%q]`, tag)
+	var rows []Memory
+	err := s.db.WithContext(ctx).
+		Where("project = ? AND source_agent = ? AND status = 'active' AND deleted_at IS NULL AND tags @> ?::jsonb", project, sourceAgent, tagJSON).
+		Order("id ASC").
+		Limit(500).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list memories by source_agent+tag project=%q agent=%q tag=%q: %w", project, sourceAgent, tag, err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
 }
 
 // CountActiveSince returns the count of active memories with id > afterID.
