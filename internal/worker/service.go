@@ -23,6 +23,7 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/internal/chunking"
 
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
@@ -759,6 +760,19 @@ func (s *Service) initializeAsync() {
 	wlCandidateStore := s.candidateStore
 	s.initMu.RUnlock()
 	wireVnextF(mcpServer, memoryStore, auditStore, wlTS, graphStore, wlCandidateStore, wlRedRules)
+
+	// TG6 — wire snapshot governance tools into the MCP server (T043/T044).
+	// snapshotStore was created in initializeAsync when ENGRAM_VNEXT_F_ENABLED=true.
+	// Both SetSnapshotStore and SetBulkFacade are required: ListTools gates on
+	// snapshotStore != nil, and non-dry-run bulk_* calls route through the facade.
+	s.initMu.RLock()
+	existingSnapshotStore := s.snapshotStore
+	s.initMu.RUnlock()
+	if existingSnapshotStore != nil {
+		mcpServer.SetSnapshotStore(existingSnapshotStore)
+		bulkFacade := bulkops.NewFacade(existingSnapshotStore, existingCandidateStore, memoryStore, auditStore)
+		mcpServer.SetBulkFacade(bulkFacade)
+	}
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	embClient, embErr := embedding.NewClient()

@@ -94,8 +94,19 @@ func Rollback(
 	}
 
 	// Conflict check (EC-F3): for every affected memory ID, verify updated_at <= snapshot.created_at.
-	// AffectedMemoryIDs contains actual memory IDs (post-amend for bulk_promote).
-	conflictIDs, err := detectConflicts(ctx, memoryStore, snap.AffectedMemoryIDs, snap.CreatedAt)
+	// AffectedMemoryIDs contains actual memory IDs (post-amend for bulk_promote), but IDs with
+	// EntryKindDelete were CREATED by the op (not pre-existing) and are expected to have
+	// updated_at > snapshot.created_at — exclude them from the conflict check. Only pre-existing
+	// rows (EntryKindRestore / legacy flat) need the timestamp guard.
+	var idsToCheck []int64
+	for _, id := range snap.AffectedMemoryIDs {
+		key := fmt.Sprintf("%d", id)
+		if entry, ok := typedEntries[key]; ok && entry.Kind == models.EntryKindDelete {
+			continue // op-created row; rollback will hard-delete it — no conflict possible
+		}
+		idsToCheck = append(idsToCheck, id)
+	}
+	conflictIDs, err := detectConflicts(ctx, memoryStore, idsToCheck, snap.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("rollback: conflict detection: %w", err)
 	}
