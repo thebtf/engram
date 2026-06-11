@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/thebtf/engram/internal/auth"
+	engramgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -171,6 +173,14 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		}
 	}
 
+	// T018 TG3 — confidence_min, include_superseded, include_rationale.
+	// Schema-unconditional (same as session_id/include_scopes); runtime behavior
+	// gated by vnextFEnabled() AND at least one non-default value.
+	tg3ConfidenceMin := coerceFloat64(m["confidence_min"], 0.0)
+	tg3IncludeSuperseded := coerceBool(m["include_superseded"], false)
+	tg3IncludeRationale := coerceBool(m["include_rationale"], false)
+	tg3Active := vnextFEnabled() && (tg3ConfidenceMin > 0 || tg3IncludeSuperseded || tg3IncludeRationale)
+
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("recall: memory store not configured")
 	}
@@ -200,15 +210,16 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	}
 
 	type memoryResult struct {
-		Tags                []string `json:"tags,omitempty"`
-		Content             string   `json:"content"`
-		SourceAgent         string   `json:"source_agent,omitempty"`
-		PrivacyScope        string   `json:"privacy_scope,omitempty"`
-		SourceWorkstationID string   `json:"source_workstation_id,omitempty"`
-		SourceSessions      []string `json:"source_sessions,omitempty"`
-		Project             string   `json:"project"`
-		ID                  int64    `json:"id"`
-		Version             int      `json:"version"`
+		RankingRationale    *retrieval.RankingRationale `json:"ranking_rationale,omitempty"`
+		Tags                []string                    `json:"tags,omitempty"`
+		Content             string                      `json:"content"`
+		SourceAgent         string                      `json:"source_agent,omitempty"`
+		PrivacyScope        string                      `json:"privacy_scope,omitempty"`
+		SourceWorkstationID string                      `json:"source_workstation_id,omitempty"`
+		SourceSessions      []string                    `json:"source_sessions,omitempty"`
+		Project             string                      `json:"project"`
+		ID                  int64                       `json:"id"`
+		Version             int                         `json:"version"`
 	}
 
 	// filterMemory applies the optional substring query filter AND the
@@ -258,8 +269,108 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		return mr, true
 	}
 
+	// Build filter descriptors for TG3 rationale (used only when tg3IncludeRationale).
+	var tg3FilterDescs []string
+	if tg3Active {
+		tg3FilterDescs = append(tg3FilterDescs, "project="+project)
+		if tg3ConfidenceMin > 0 {
+			tg3FilterDescs = append(tg3FilterDescs, fmt.Sprintf("confidence_min=%.4g", tg3ConfidenceMin))
+		}
+		if tg3IncludeSuperseded {
+			tg3FilterDescs = append(tg3FilterDescs, "include_superseded=true")
+		}
+	}
+
 	results := make([]memoryResult, 0, limit)
-	if scopeEnabled {
+	if tg3Active {
+		if scopeEnabled {
+			// T018 MAJOR fix (review hardening): when both tg3Active and
+			// scopeEnabled are true, ListWithFilters cannot be used safely
+			// because scope-invisible rows at the head of the result set
+			// truncate visible recall before older eligible rows are reached
+			// (same truncation problem as the non-TG3 scope path — fixed by
+			// batch-looping via ListWithOffset).
+			//
+			// include_superseded cannot be honoured by ListWithOffset (hardcoded
+			// status='active'). Return a structured error so the caller knows to
+			// use the non-scope path or omit the flag — option B from coderabbit
+			// MAJOR review, matching hybrid-path and recall_memory treatment.
+			if tg3IncludeSuperseded {
+				return "", fmt.Errorf("include_superseded is not supported with scope-enabled recall search; omit include_superseded or disable ENGRAM_VNEXT_F_ENABLED scope")
+			}
+			// Batch-loop via ListWithOffset: scope-invisible rows must not
+			// truncate recall. confidence_min is applied in-memory below (SQL
+			// push is not available without ListWithFilters).
+			const batchSize = 500
+			offset := 0
+			for len(results) < limit {
+				batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+				if err != nil {
+					return "", fmt.Errorf("recall search tg3 scoped: %w", err)
+				}
+				if len(batch) == 0 {
+					break
+				}
+				for _, mem := range batch {
+					if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
+						continue
+					}
+					mr, ok := filterMemory(mem)
+					if !ok {
+						continue
+					}
+					if tg3IncludeRationale {
+						contentMatched := queryLower != "" && strings.Contains(strings.ToLower(mem.Content), queryLower)
+						rat := retrieval.AssembleRationale(mem, query, contentMatched, tg3FilterDescs)
+						mr.RankingRationale = &rat
+					}
+					results = append(results, mr)
+					if len(results) >= limit {
+						break
+					}
+				}
+				offset += len(batch)
+				if len(batch) < batchSize {
+					break
+				}
+			}
+		} else {
+			// T018 TG3 fetch path (non-scoped): use ListWithFilters to apply
+			// confidence_min / include_superseded at the SQL layer. A generous
+			// candidate multiplier ensures the substring-query filter still
+			// sees enough rows. No scope-invisible rows exist here.
+			const tg3CandidateMultiplier = 10
+			const tg3MinPool = 1000
+			fetchLimit := limit * tg3CandidateMultiplier
+			if fetchLimit < tg3MinPool {
+				fetchLimit = tg3MinPool
+			}
+			tg3Opts := engramgorm.ListOptions{
+				ConfidenceMin:     tg3ConfidenceMin,
+				IncludeSuperseded: tg3IncludeSuperseded,
+				Limit:             fetchLimit,
+			}
+			candidates, err := s.memoryStore.ListWithFilters(ctx, project, tg3Opts)
+			if err != nil {
+				return "", fmt.Errorf("recall search tg3: %w", err)
+			}
+			for _, mem := range candidates {
+				mr, ok := filterMemory(mem)
+				if !ok {
+					continue
+				}
+				if tg3IncludeRationale {
+					contentMatched := queryLower != "" && strings.Contains(strings.ToLower(mem.Content), queryLower)
+					rat := retrieval.AssembleRationale(mem, query, contentMatched, tg3FilterDescs)
+					mr.RankingRationale = &rat
+				}
+				results = append(results, mr)
+				if len(results) >= limit {
+					break
+				}
+			}
+		}
+	} else if scopeEnabled {
 		// Codex P1 cycle-3 fix on 4cb71be: batch-loop with offset paging so
 		// that scope-invisible newest rows do not truncate recall before
 		// older visible rows reach the requested limit. The previous

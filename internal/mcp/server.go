@@ -560,6 +560,24 @@ func recallMemoryTool() Tool {
 			"items":       map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}},
 			"description": "Restrict returned memories to the named privacy_scope tiers. Empty/omitted means all 4 tiers are returned (subject to scope.Resolve visibility). Honored only when ENGRAM_VNEXT_F_ENABLED=true. Unknown enum values return 'invalid_include_scopes:' structured error.",
 		},
+		// T019 TG3: explainable rerank + missing filters (Milestone F TG3).
+		// Schema-unconditional (same pattern as session_id/include_scopes above):
+		// schema discovery is deterministic regardless of env; ENGRAM_VNEXT_F_ENABLED
+		// gates runtime behavior (tg3Active = vnextFEnabled && any non-default flag).
+		"confidence_min": map[string]any{
+			"type":        "number",
+			"minimum":     0,
+			"maximum":     1,
+			"description": "Only return memories whose confidence score is ≥ this value [0,1]. Applied at SQL layer via ListWithFilters. Honored only when ENGRAM_VNEXT_F_ENABLED=true.",
+		},
+		"include_superseded": map[string]any{
+			"type":        "boolean",
+			"description": "When true, include memories with status='superseded' in addition to status='active'. Honored only when ENGRAM_VNEXT_F_ENABLED=true.",
+		},
+		"include_rationale": map[string]any{
+			"type":        "boolean",
+			"description": "When true, attach a per-result ranking_rationale object with v5-surface fields: recency_days, confidence, citation_count, tier, substring_match, filters_applied. Honored only when ENGRAM_VNEXT_F_ENABLED=true.",
+		},
 	}
 	desc := "Recall memories/observations by semantic search. Use to retrieve previously stored knowledge."
 	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
