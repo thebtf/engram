@@ -19,9 +19,11 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writegate"
+	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -132,6 +134,12 @@ func isValidStoreObservationType(obsType models.ObservationType) bool {
 // The nil-store guard is deferred until after dry_run is parsed so that dry_run=true
 // always succeeds (TG5-absent nil-safe seam).
 func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (string, error) {
+	// T035: write-lint orchestrator has its own MemoryStoreInterface; nil memoryStore
+	// is only fatal on the legacy create path. writeLintEnabled and dry_run are both
+	// exemptions; the nil-store guard is deferred until after params are parsed so both
+	// exemptions can be evaluated together.
+	writeLintEnabled := s.writeLint != nil && vnextFEnabled()
+
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -191,28 +199,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("importance must be between 0 and 1")
 	}
 
-	// T044 dry-run early return (FR-F6.b): after content validation, before any DB access.
-	// TG5 write-lint orchestrator absent → uses legacy path preview (no lint signals).
-	// No snapshot row created for dry-run — would_store reflects what would be committed.
-	if params.DryRun {
-		preview := map[string]any{
-			"dry_run":     true,
-			"would_store": params.Content,
-			"project":     params.Project,
-			"type":        params.Type,
-			"scope":       params.Scope,
-			"tags":        params.Tags,
-			"note":        "dry_run preview — no memory row written (write-lint seam: TG5 not present, lint signals unavailable)",
-		}
-		out, jsonErr := json.MarshalIndent(preview, "", "  ")
-		if jsonErr != nil {
-			return "", fmt.Errorf("store_memory dry_run marshal: %w", jsonErr)
-		}
-		return string(out), nil
-	}
-
-	// Deferred nil-store guard (after dry_run check so dry_run=true never hits this).
-	if s.memoryStore == nil {
+	// Deferred nil-store guard: runs after params are parsed so all exemptions are known.
+	// Exemptions: writeLintEnabled (T035 — orchestrator manages its own store) and
+	// dry_run=true (T044 — preview exits before any DB access; no store required).
+	if s.memoryStore == nil && !writeLintEnabled && !params.DryRun {
 		return "", fmt.Errorf("memory store not available")
 	}
 
@@ -238,6 +228,188 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if privacy.ContainsSecrets(params.Content) {
 		log.Warn().Msg("store_memory: content contains secrets — redacting before storage")
 		params.Content = privacy.RedactSecrets(params.Content)
+	}
+
+	// ADR-F-004: operator redaction layer — runs AFTER privacy.RedactSecrets,
+	// BEFORE write-lint gate. Rules are pre-compiled at startup from
+	// ENGRAM_REDACTION_RULES_PATH (EC-F9: no hot-reload; restart required).
+	// ScrubCompiled is the hot path: no per-call regexp.Compile (finding 7 fix).
+	if len(s.redactionRules) > 0 {
+		scrubbed, _, scrubErr := redaction.ScrubCompiled(params.Content, s.redactionRules)
+		if scrubErr != nil {
+			if errors.Is(scrubErr, redaction.ErrContentFullyRedacted) {
+				// EC-F5: all content was removed by operator redaction rules.
+				return "", fmt.Errorf("content_fully_redacted: all content was removed by operator redaction rules")
+			}
+			return "", fmt.Errorf("redaction: %w", scrubErr)
+		}
+		params.Content = scrubbed
+	}
+
+	// T044 dry-run return (FR-F6.b): after content size limits AND redaction so
+	// would_store reflects the post-redacted content (honest preview per ADR-F-004).
+	//
+	// Composition with TG5 write-lint (ADR: dry_run×write-lint design):
+	//   - write-lint active (writeLintEnabled=true): Phase1 would run signal detection
+	//     (duplicate / conflict / supersession) before committing. dry_run does NOT
+	//     invoke Phase1 because that would either commit on the no-signal path or mint
+	//     a resolution token that expires unused — both are write side-effects
+	//     incompatible with preview semantics. Instead, the preview declares that
+	//     lint signals are "deferred" — the caller knows lint would intercept but
+	//     must use a live (non-dry-run) call to see actual signals.
+	//   - write-lint absent (writeLintEnabled=false / flag OFF): legacy-path preview
+	//     with no lint signals (original TG6 T044 behavior).
+	//
+	// No DB write, no token mint, no snapshot row for dry_run in either case.
+	if params.DryRun {
+		dryRunNote := "dry_run preview — no memory row written; redaction applied above"
+		if writeLintEnabled {
+			dryRunNote = "dry_run preview — no memory row written; redaction applied; write-lint Phase1 (duplicate/conflict detection) would run on live call — signals deferred"
+		}
+		preview := map[string]any{
+			"dry_run":     true,
+			"would_store": params.Content,
+			"project":     params.Project,
+			"type":        params.Type,
+			"scope":       params.Scope,
+			"tags":        params.Tags,
+			"write_lint":  writeLintEnabled,
+			"note":        dryRunNote,
+		}
+		out, jsonErr := json.MarshalIndent(preview, "", "  ")
+		if jsonErr != nil {
+			return "", fmt.Errorf("store_memory dry_run marshal: %w", jsonErr)
+		}
+		return string(out), nil
+	}
+
+	// T035 (engram vNext Milestone F TG5) — two-phase write-lint protocol.
+	//
+	// Gate conditions:
+	//   1. writeLint orchestrator is wired (non-nil).
+	//   2. ENGRAM_VNEXT_F_ENABLED=true.
+	//   3. force=true → bypass write-lint, proceed to legacy create path + audit.
+	//   4. resolution_token non-empty → Phase2 delegation; return result directly.
+	//   5. Otherwise → Phase1; if not stored, return Phase1 JSON; if stored, format as success.
+	if s.writeLint != nil && vnextFEnabled() {
+		// finding 12 fix: declare write-lint locals inside the gate block so they
+		// are not allocated on the common non-writelint path.
+		wlForce := coerceBool(m["force"], false)
+		wlResolutionToken := coerceString(m["resolution_token"], "")
+		wlOption := coerceString(m["option"], "")
+		// round-3 finding 1 fix: always_inject=true routes to behavioralRulesStore
+		// (legacy path below). Write-lint must not intercept it — Phase1 would run
+		// against an empty-project memory list (global scope → Project=="") and fail,
+		// and even for project-scoped rules Phase1 would store a plain memory instead
+		// of a behavioral_rule. Treat always_inject the same as force: bypass write-lint
+		// and fall through to the legacy path which handles behavioralRulesStore routing.
+		wlAlwaysInject := params.AlwaysInject
+		if !wlForce && !wlAlwaysInject {
+			wlActor := actorFromContext(ctx)
+			// Use the already-normalized params.Project (which respects
+			// EnforceSourceProject) instead of reading raw m["project"]. This
+			// prevents a client from bypassing source-project isolation by
+			// supplying a different project in the MCP args.
+			wlProject := params.Project
+
+			// Build a memory model carrying available metadata so Phase1/Phase2
+			// persist the full record (Tags, PrivacyScope, AgentSource, etc.) on
+			// the no-signal path and on Phase2 create paths. SourceWorkstationID
+			// and the fully-resolved privacy/scope values are not yet computed here
+			// (they require the legacy normalization below), so we populate what we
+			// have. The vnextF guard ensures PrivacyScope is relevant only when ON.
+			wlMem := &models.Memory{
+				Content:      params.Content,
+				Project:      wlProject,
+				Tags:         params.Tags,
+				PrivacyScope: params.PrivacyScope,
+				SourceAgent:  params.AgentSource,
+			}
+			if params.SessionID != "" {
+				wlMem.SourceSessions = []string{params.SessionID}
+			}
+			if id, ok := auth.IdentityFrom(ctx); ok {
+				wlMem.SourceWorkstationID = id.WorkstationID()
+			}
+
+			// round-4 finding 2 fix: reject private-scope writes that lack a
+			// workstation identity before reaching Phase1/Phase2. The legacy
+			// path performs this check at line 597 (Codex P1 cycle-4 fix).
+			// Without mirroring it here, a no-signal write-lint path (Phase1
+			// returns stored=true) or a Phase2 create path (ignore_signals /
+			// supersede) persists a private memory with empty
+			// source_workstation_id. scope.Resolve fail-closes such rows
+			// (internal/scope/filter.go:85-87), making them permanently
+			// unreadable — including to the writer itself.
+			if wlMem.PrivacyScope == "private" && wlMem.SourceWorkstationID == "" {
+				return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
+			}
+
+			if wlResolutionToken != "" {
+				// Phase2: caller is committing with a previously minted token.
+				p2req := writelint.Phase2Request{
+					Token:          wlResolutionToken,
+					Option:         wlOption,
+					Content:        params.Content,
+					Project:        wlProject,
+					Actor:          wlActor,
+					TargetMemoryID: nil,
+					Mem:            wlMem,
+				}
+				if tv, ok := m["target_memory_id"]; ok && tv != nil {
+					tid := coerceInt(tv, 0)
+					if tid > 0 {
+						tid64 := int64(tid)
+						p2req.TargetMemoryID = &tid64
+					}
+				}
+				p2resp, p2err := s.writeLint.Phase2(ctx, p2req)
+				if p2err != nil {
+					return "", fmt.Errorf("write_lint_phase2: %w", p2err)
+				}
+				out, marshalErr := json.MarshalIndent(p2resp, "", "  ")
+				if marshalErr != nil {
+					return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
+				}
+				return string(out), nil
+			}
+
+			// Phase1: inspect for duplicates/conflicts/supersessions.
+			p1resp, p1err := s.writeLint.Phase1(ctx, wlMem, wlActor)
+			if p1err != nil {
+				return "", fmt.Errorf("write_lint_phase1: %w", p1err)
+			}
+			if !p1resp.Stored {
+				// Signals detected — return Phase1 response to caller for resolution.
+				out, marshalErr := json.MarshalIndent(p1resp, "", "  ")
+				if marshalErr != nil {
+					return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
+				}
+				return string(out), nil
+			}
+			// finding 6 fix: no-signal stored=true carries the same fields as the
+			// legacy store_memory response (NFR-F1): id, storage, scope, privacy_scope,
+			// quality_signals. Phase1 returns MemoryID when Stored=true.
+			out, marshalErr := json.MarshalIndent(map[string]any{
+				"stored":         true,
+				"id":             p1resp.MemoryID,
+				"storage":        "memories",
+				"scope":          params.Scope,
+				"privacy_scope":  params.PrivacyScope,
+				"quality_signals": []any{},
+				"message":        "Memory stored successfully via write-lint (no conflicts detected)",
+			}, "", "  ")
+			if marshalErr != nil {
+				return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
+			}
+			return string(out), nil
+		}
+		// wlForce=true: fall through to legacy create path; audit "legacy_force_write" below.
+	}
+	// force=true OR writeLint not wired: fall through to legacy create path.
+	// Require a live memoryStore for the legacy create path.
+	if s.memoryStore == nil {
+		return "", fmt.Errorf("memory store not available")
 	}
 
 	resolvedScope := params.Scope
@@ -539,6 +711,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// session context when available, else "agent".
 	actor := actorFromContext(ctx)
 	logAuditCreate(ctx, s, created, actor)
+
+	// T035: when write-lint is wired AND force=true was set, emit an additional
+	// "legacy_force_write" audit entry to record that the lint gate was bypassed.
+	// finding 12 fix: wlForce is now scoped inside the gate block; re-derive here.
+	if s.writeLint != nil && vnextFEnabled() && coerceBool(m["force"], false) {
+		logAuditGeneric(ctx, s, created, actor, "legacy_force_write")
+	}
 
 	// Async embedding: fire-and-forget goroutine so the MCP response is not blocked
 	// by the embedding HTTP call. Captures local copies of created fields and store

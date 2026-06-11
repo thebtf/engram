@@ -7,10 +7,14 @@
 //   3. Content signature (PK\x03\x04 → FormatZIP; '{' → FormatJSONL)
 //   4. Error (unknown format)
 //
-// Write-lint seam (TG5-absent nil-safe):
-//   When ImportStore.WriteMemory returns ErrConflict, the import emits a
-//   conflict report entry and issues a resolution token for manual review.
-//   No silent overwrite EVER (EC-F8).
+// Write-lint integration note (TG5 present on main since f0ae3f3):
+//   Import conflict tokens (res_<UUID>) are governance-level conflict handles
+//   for audit tracking, distinct from write-lint Phase1/Phase2 tokens (MCP
+//   store_memory resolution via TokenStore). When ImportStore.WriteMemory
+//   returns ErrImportConflict, the import emits a conflict report entry and
+//   issues a governance token — no silent overwrite EVER (EC-F8). Live-DB
+//   ImportStore implementations may call the write-lint orchestrator's Phase1
+//   for deeper duplicate detection; the import package is orchestrator-agnostic.
 //
 // When ImportStore is nil (unit tests without DB), Import uses an in-memory
 // mock that detects duplicates by ID within the current import session.
@@ -59,9 +63,10 @@ type ImportReport struct {
 // ImportStore is the write surface for import. Implementing types may be
 // backed by live DB stores or in-memory mocks.
 //
-// Write-lint seam: when TG5 write-lint orchestrator is absent, implementors
-// return ErrImportConflict for duplicate IDs. Import records the conflict and
-// issues a resolution token; it never silently overwrites. (EC-F8)
+// Contract: return ErrImportConflict for duplicate IDs. Import records the
+// conflict and issues a governance resolution token; it never silently
+// overwrites (EC-F8). Live-DB implementors may additionally call the write-lint
+// orchestrator's Phase1 for deeper duplicate/conflict detection.
 type ImportStore interface {
 	WriteMemory(mem *ExportableMemory) error
 	WriteEdge(edge *ExportableEdge) error

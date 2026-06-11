@@ -23,7 +23,9 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/sessions"
+	"github.com/thebtf/engram/internal/writelint"
 )
 
 // Server is the MCP server that exposes engram tools.
@@ -59,6 +61,8 @@ type Server struct {
 	vaultInitErr           error
 	vaultOnce              sync.Once
 	backfillStatusFunc     func() (any, error)
+	writeLint              *writelint.Orchestrator  // T035: two-phase write-lint protocol (nil → legacy path)
+	redactionRules         []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
 	version                string
 }
 
@@ -176,6 +180,23 @@ func (s *Server) setTestAuditWriter(w auditWriter) {
 // Must only be called from _test.go files.
 func (s *Server) setTestMemoryEditor(me memoryEditor) {
 	s.testMemoryEditor = me
+}
+
+// SetWriteLintOrchestrator wires the write-lint orchestrator for the two-phase
+// write-lint protocol (T035, Milestone F TG5). When nil (the default), the
+// store_memory handler follows the pre-TG5 legacy path exactly.
+// Call this only when ENGRAM_VNEXT_F_ENABLED=true is expected at runtime.
+func (s *Server) SetWriteLintOrchestrator(o *writelint.Orchestrator) {
+	s.writeLint = o
+}
+
+// SetRedactionRules wires pre-compiled operator redaction rules (T036, ADR-F-004).
+// Rules are compiled once at startup from ENGRAM_REDACTION_RULES_PATH; this setter
+// transfers the compiled slice from the service to the MCP server so handleStoreMemory
+// can run ScrubCompiled on the hot path without per-call regexp.Compile.
+// An empty/nil slice is a valid no-op (redaction layer disabled).
+func (s *Server) SetRedactionRules(rules []redaction.CompiledRule) {
+	s.redactionRules = rules
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.
@@ -949,7 +970,12 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"ttl_days":      map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
 						"always_inject": map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
 						"agent_source":  map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
-						"supersedes":    map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
+						"supersedes":         map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
+						"dry_run":            map[string]any{"type": "boolean", "description": "T044 FR-F6.b: when true, returns a preview of what would be stored (after redaction) without writing to DB. write_lint field in response indicates whether Phase1 would run on a live call."},
+						"force":              map[string]any{"type": "boolean", "description": "T035: when true, bypasses write-lint Phase1/Phase2 and writes directly (legacy path). Logged as legacy_force_write in audit. Honored only when ENGRAM_VNEXT_F_ENABLED=true."},
+						"resolution_token":   map[string]any{"type": "string", "description": "T035 Phase2: resolution token minted by a prior Phase1 response. When set, commits the write using the chosen option. Cannot combine with force=true."},
+						"option":             map[string]any{"type": "string", "description": "T035 Phase2: resolution option chosen by the caller (e.g. merge_with, supersede, link_contradiction, ignore_signals). Required when resolution_token is set."},
+						"target_memory_id":   map[string]any{"type": "integer", "description": "T035 Phase2: target memory ID for merge_with / supersede options. Required for those options."},
 					},
 				},
 			},

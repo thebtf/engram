@@ -261,13 +261,21 @@ func (s *Server) handleRedactionRulesStatus(ctx context.Context, args json.RawMe
 		return "", fmt.Errorf("admin_required: redaction_rules_status requires admin identity")
 	}
 
-	// Redaction rules are loaded at startup (TG5 write-lint seam).
-	// Nil-safe TG5 seam: when TG5 write-lint orchestrator is absent,
-	// report as unavailable — no silent overwrite, no crash.
+	// Redaction rules are loaded at startup from ENGRAM_REDACTION_RULES_PATH (T036 / ADR-F-004).
+	// EC-F9: rule file changes require a server restart (no hot-reload).
+	// TG5 is now present; report the actual loaded state from s.redactionRules.
+	ruleCount := len(s.redactionRules)
 	out := map[string]any{
-		"status":           "unavailable",
-		"description":      "Redaction rules subsystem not active in this build (TG5 write-lint not present). Deploy TG5 to enable.",
-		"restart_required": false,
+		"restart_required": true, // EC-F9: rule changes always require restart
+	}
+	if ruleCount == 0 {
+		out["status"] = "inactive"
+		out["rule_count"] = 0
+		out["description"] = "No redaction rules loaded. Set ENGRAM_REDACTION_RULES_PATH to a rules file and restart to activate."
+	} else {
+		out["status"] = "active"
+		out["rule_count"] = ruleCount
+		out["description"] = "Redaction rules active. Rules were loaded at startup from ENGRAM_REDACTION_RULES_PATH."
 	}
 	return marshalJSON(out)
 }

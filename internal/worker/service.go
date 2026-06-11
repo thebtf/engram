@@ -39,7 +39,9 @@ import (
 	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/sessions"
+	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
@@ -48,6 +50,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/internal/worker/sse"
+	"github.com/thebtf/engram/internal/writelint"
 	googlegrpc "google.golang.org/grpc"
 )
 
@@ -128,7 +131,9 @@ type Service struct {
 	injectionTracker       *injection.Tracker
 	injectionLogStore      *gorm.InjectionLogStore
 	crystallizeFunc        func(context.Context, string, string, string, *gorm.MemoryStore) // test hook; nil uses runCrystallization
-	candidateStore         *gorm.CandidateStore                                             // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	candidateStore         *gorm.CandidateStore     // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	writelintTokenStore    writelint.TokenStore     // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	redactionRules         []redaction.CompiledRule // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
 	agentStatsStore        *gorm.AgentStatsStore
 	versionStore           *gorm.VersionStore
 	retrievalHooks         *retrievalHooks
@@ -584,6 +589,34 @@ func (s *Service) initializeAsync() {
 	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
 		candidateStore := gorm.NewCandidateStore(store.GetDB(), auditStore)
 		s.SetCandidateStore(candidateStore)
+
+		// TG5 — redaction layer (ADR-F-004, EC-F9: startup-only, no hot-reload).
+		// Rules are compiled once here; any rule-change requires a process restart.
+		rulesPath := os.Getenv("ENGRAM_REDACTION_RULES_PATH")
+		compiledRules, rErr := redaction.LoadRulesFromPath(rulesPath)
+		if rErr != nil {
+			log.Warn().Err(rErr).Str("path", rulesPath).Msg("redaction: failed to load rules, layer disabled")
+		} else if len(compiledRules) > 0 {
+			log.Info().Int("rules", len(compiledRules)).Str("path", rulesPath).Msg("redaction: rules loaded")
+		}
+		s.initMu.Lock()
+		s.redactionRules = compiledRules
+		s.initMu.Unlock()
+
+		// TG5 — write-lint TokenStore.
+		// Parse ENGRAM_WRITE_LINT_TOKEN_TTL_SEC; fall back to default 600s.
+		tsCfg := writelint.DefaultTokenStoreConfig()
+		if ttlStr := os.Getenv("ENGRAM_WRITE_LINT_TOKEN_TTL_SEC"); ttlStr != "" {
+			if ttlSec := parseInt64Env(ttlStr, 600); ttlSec > 0 {
+				tsCfg.TTL = time.Duration(ttlSec) * time.Second
+			}
+		}
+		ts := writelint.NewTokenStore(tsCfg)
+		s.initMu.Lock()
+		s.writelintTokenStore = ts
+		s.initMu.Unlock()
+		// Orchestrator is wired further below after graphStore is constructed
+		// (wireVnextF is called after wireVnextStores sets s.graphStore).
 	}
 
 	// Wire token store into auth middleware for client token lookups.
@@ -710,6 +743,15 @@ func (s *Service) initializeAsync() {
 	s.promotionStore = promotionStore
 	s.graphStore = graphStore
 	s.initMu.Unlock()
+
+	// TG5: Wire write-lint orchestrator + redaction rules into MCP server.
+	// Must happen after wireVnextStores so graphStore is fully constructed.
+	s.initMu.RLock()
+	wlTS := s.writelintTokenStore
+	wlRedRules := s.redactionRules
+	wlCandidateStore := s.candidateStore
+	s.initMu.RUnlock()
+	wireVnextF(mcpServer, memoryStore, auditStore, wlTS, graphStore, wlCandidateStore, wlRedRules)
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	embClient, embErr := embedding.NewClient()
@@ -1689,6 +1731,10 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.cognitiveQueueLifecycle != nil {
 		collectError("cognitive_hint_queue", s.cognitiveQueueLifecycle.Stop())
 	}
+	// TG5: Stop write-lint token store janitor goroutine.
+	if s.writelintTokenStore != nil {
+		s.writelintTokenStore.Close()
+	}
 
 	// Phase 4: Shutdown sessions (flush pending work)
 	log.Debug().Msg("Phase 4: Shutting down sessions...")
@@ -1766,4 +1812,97 @@ func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore,
 	mcpServer.SetGraphStore(graphStore)
 	mcpServer.SetNodesStore(nodesStore)
 	mcpServer.SetAuditStore(auditStore)
+}
+
+// wireVnextF wires the TG5 write-lint orchestrator into the MCP server.
+// Called after wireVnextStores (which sets graphStore on the service) so the
+// orchestrator receives a live graphStore for link_contradiction edge creation.
+// Also wires redactionRules from service state into the MCP server.
+// Extracted for testability — a test that calls wireVnextF and checks
+// mcpServer.writeLint will break if wiring is omitted.
+func wireVnextF(
+	mcpServer *mcp.Server,
+	memStore writelint.MemoryStoreInterface,
+	auditLogger writelint.AuditLoggerInterface,
+	ts writelint.TokenStore,
+	gs *graph.Store,
+	cs *gorm.CandidateStore,
+	redactionRules []redaction.CompiledRule,
+) {
+	if ts == nil {
+		return // ENGRAM_VNEXT_F_ENABLED was false; nothing to wire
+	}
+	orchCfg := writelint.OrchestratorConfig{
+		MemoryStore:    memStore,
+		AuditLogger:    auditLogger,
+		TokenStore:     ts,
+		GraphStore:     newGraphStoreAdapter(gs),
+		CandidateStore: newCandidateStoreAdapter(cs),
+	}
+	orch := writelint.NewOrchestrator(orchCfg)
+	mcpServer.SetWriteLintOrchestrator(orch)
+	mcpServer.SetRedactionRules(redactionRules)
+}
+
+// parseInt64Env parses a decimal integer string; returns defaultVal on failure.
+func parseInt64Env(s string, defaultVal int64) int64 {
+	if s == "" {
+		return defaultVal
+	}
+	var n int64
+	_, err := fmt.Sscanf(s, "%d", &n)
+	if err != nil || n <= 0 {
+		return defaultVal
+	}
+	return n
+}
+
+// newGraphStoreAdapter wraps *graph.Store to satisfy writelint.GraphStoreInterface.
+// Returns nil when gs is nil (nil-safe path: orchestrator falls back to
+// description-only for link_contradiction per finding 4).
+func newGraphStoreAdapter(gs *graph.Store) writelint.GraphStoreInterface {
+	if gs == nil {
+		return nil
+	}
+	return &graphStoreAdapter{gs: gs}
+}
+
+type graphStoreAdapter struct {
+	gs *graph.Store
+}
+
+func (a *graphStoreAdapter) CreateEdge(ctx context.Context, sourceID, targetID int64, edgeType, reasoning string) error {
+	e := &graph.Edge{
+		SourceID:  &sourceID,
+		TargetID:  &targetID,
+		EdgeType:  edgeType,
+		Reasoning: reasoning,
+	}
+	_, err := a.gs.Create(ctx, e)
+	return err
+}
+
+// newCandidateStoreAdapter wraps *gorm.CandidateStore to satisfy writelint.CandidateStoreInterface.
+// Returns nil when cs is nil (nil-safe: orchestrator stores plain memory fallback).
+func newCandidateStoreAdapter(cs *gorm.CandidateStore) writelint.CandidateStoreInterface {
+	if cs == nil {
+		return nil
+	}
+	return &candidateStoreAdapter{cs: cs}
+}
+
+type candidateStoreAdapter struct {
+	cs *gorm.CandidateStore
+}
+
+func (a *candidateStoreAdapter) CreatePending(ctx context.Context, content, project, actor string) error {
+	// NewCrystallizationCandidate(sourceSessionID, proposedContent, promotionTarget, opts)
+	// Use actor as sourceSessionID (closest available analog) and project as the
+	// proposed_promotion_target for context; defaults apply for tier/epistemic type.
+	c, err := models.NewCrystallizationCandidate(actor, content, project, models.CandidateOptions{})
+	if err != nil {
+		return fmt.Errorf("mark_candidate: construct: %w", err)
+	}
+	_, err = a.cs.Create(ctx, c)
+	return err
 }

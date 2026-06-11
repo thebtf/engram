@@ -95,8 +95,9 @@ func TestGovernanceTools_AdminGate_ReadOnlyCaller(t *testing.T) {
 }
 
 // TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin verifies that
-// redaction_rules_status returns the unavailable status report (TG5 seam) without error
-// when an admin calls it — no DB required.
+// redaction_rules_status returns a valid status report without error when an admin
+// calls it with no DB required. TG5 is now present (f0ae3f3); status is "inactive"
+// when no rules are loaded (ENGRAM_REDACTION_RULES_PATH not set in test).
 func TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin(t *testing.T) {
 	adminID := auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster}
 	ctx := auth.WithIdentity(context.Background(), adminID)
@@ -107,5 +108,10 @@ func TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin(t *testi
 
 	var out map[string]any
 	require.NoError(t, json.Unmarshal([]byte(result), &out))
-	assert.Equal(t, "unavailable", out["status"], "TG5-absent seam must report 'unavailable'")
+	// TG5 present: "inactive" (no rules loaded) or "active" (rules loaded).
+	// Test environment has no ENGRAM_REDACTION_RULES_PATH so expect "inactive".
+	status, _ := out["status"].(string)
+	assert.Contains(t, []string{"inactive", "active"}, status, "status must be inactive or active (TG5 present)")
+	assert.NotNil(t, out["rule_count"], "rule_count must be present")
+	assert.Equal(t, true, out["restart_required"], "restart_required must be true (EC-F9)")
 }
