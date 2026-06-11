@@ -67,6 +67,19 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	if mem.SupersedesID != nil {
 		row.SupersedesID = mem.SupersedesID
 	}
+	// Preserve caller-specified lifecycle and epistemic fields.
+	// These default to "semantic" / "observation" in the DB schema; we only
+	// override when the caller supplies a non-empty value so that the GORM
+	// column defaults remain authoritative for ordinary store_memory calls.
+	if mem.Tier != "" {
+		row.Tier = mem.Tier
+	}
+	if mem.EpistemicType != "" {
+		row.EpistemicType = mem.EpistemicType
+	}
+	if mem.Defeasibility != "" {
+		row.Defeasibility = mem.Defeasibility
+	}
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)

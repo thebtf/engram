@@ -806,6 +806,13 @@ func (s *Service) reloadConfig() {
 	})
 }
 
+// isCrystallizationEnabled reports whether the crystallization pipeline is
+// active for this process. Reads ENGRAM_CRYSTALLIZATION_ENABLED at call time
+// so that test code can override it via t.Setenv without restart.
+func isCrystallizationEnabled() bool {
+	return os.Getenv("ENGRAM_CRYSTALLIZATION_ENABLED") == "true"
+}
+
 // setInitError records an initialization error.
 func (s *Service) setInitError(err error) {
 	s.initMu.Lock()
