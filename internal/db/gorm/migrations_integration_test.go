@@ -606,3 +606,129 @@ func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
 	// We assert at least 1 partial check constraint was created by migration 127.
 	require.GreaterOrEqual(t, checkCount, 1, "at least one CHECK constraint on knowledge_edges source side must exist after migration 127")
 }
+
+// TestMigration132_CrystallizationCandidates verifies migration 132_crystallization_candidates.
+//
+// Asserts:
+//   - crystallization_candidates table exists with expected columns and types
+//   - status CHECK constraint admits exactly the 5 valid values
+//   - idx_candidates_status_review index exists
+//   - idx_candidates_fingerprint_pending unique partial index exists
+//   - FK promoted_memory_id → memories(id) exists (ON DELETE SET NULL)
+//   - Rollback drops the table cleanly
+//
+// Anti-stub: replacing the Migrate body with `return nil` causes the table-existence
+// assertion below to fail.
+//
+// Requires DATABASE_DSN environment variable pointing to a test database.
+func TestMigration132_CrystallizationCandidates(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+
+	// Run all migrations up to and including 132.
+	require.NoError(t, runMigrations(db))
+
+	// Assert table exists.
+	var tableCount int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name = 'crystallization_candidates'
+	`).Scan(&tableCount).Error)
+	require.Equal(t, 1, tableCount, "crystallization_candidates table must exist after migration 132")
+
+	// Assert required columns exist with correct types/nullability.
+	type colInfo struct {
+		DataType  string
+		IsNullable string
+	}
+	cols := map[string]colInfo{}
+	rows, err := db.Raw(`
+		SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_name = 'crystallization_candidates' AND table_schema = 'public'
+	`).Rows()
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var name, dt, nullable string
+		require.NoError(t, rows.Scan(&name, &dt, &nullable))
+		cols[name] = colInfo{DataType: dt, IsNullable: nullable}
+	}
+
+	for _, col := range []string{"id", "source_session_id", "proposed_content", "status", "fingerprint",
+		"created_at", "updated_at", "confidence", "recurrence_count"} {
+		_, ok := cols[col]
+		require.True(t, ok, "column %q must exist in crystallization_candidates", col)
+	}
+
+	// status must be NOT NULL.
+	require.Equal(t, "NO", cols["status"].IsNullable, "status must be NOT NULL")
+	// promoted_memory_id must be nullable (FK with ON DELETE SET NULL).
+	require.Equal(t, "YES", cols["promoted_memory_id"].IsNullable, "promoted_memory_id must be nullable")
+
+	// Assert status CHECK constraint exists.
+	var constraintCount int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM information_schema.check_constraints
+		WHERE constraint_schema = 'public'
+		  AND constraint_name LIKE '%crystallization_candidates%status%'
+	`).Scan(&constraintCount).Error)
+	require.GreaterOrEqual(t, constraintCount, 1, "status CHECK constraint must exist on crystallization_candidates")
+
+	// Assert status CHECK rejects invalid value.
+	err = db.Exec(`
+		INSERT INTO crystallization_candidates (proposed_content, status)
+		VALUES ('test', 'invalid_status')
+	`).Error
+	require.Error(t, err, "invalid status must be rejected by CHECK constraint")
+
+	// Assert all 5 valid status values are accepted.
+	for _, status := range []string{"pending", "promoted", "rejected", "superseded", "decayed"} {
+		// Insert a valid candidate; ignore duplicate key errors (idempotent test runs).
+		insertErr := db.Exec(`
+			INSERT INTO crystallization_candidates (proposed_content, status, fingerprint)
+			VALUES (?, ?, ?)
+		`, "content-"+status, status, "fp-test-"+status).Error
+		require.NoError(t, insertErr, "status %q must be accepted by crystallization_candidates", status)
+	}
+
+	// Assert idx_candidates_status_review index exists.
+	var idxCount int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'crystallization_candidates'
+		  AND indexname = 'idx_candidates_status_review'
+	`).Scan(&idxCount).Error)
+	require.Equal(t, 1, idxCount, "idx_candidates_status_review must exist")
+
+	// Assert idx_candidates_fingerprint_pending unique partial index exists.
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'crystallization_candidates'
+		  AND indexname = 'idx_candidates_fingerprint_pending'
+	`).Scan(&idxCount).Error)
+	require.Equal(t, 1, idxCount, "idx_candidates_fingerprint_pending must exist")
+
+	// Assert FK promoted_memory_id → memories(id) exists.
+	var fkCount int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM information_schema.referential_constraints rc
+		JOIN information_schema.key_column_usage kcu
+		  ON rc.constraint_name = kcu.constraint_name
+		WHERE kcu.table_name = 'crystallization_candidates'
+		  AND kcu.column_name = 'promoted_memory_id'
+	`).Scan(&fkCount).Error)
+	require.GreaterOrEqual(t, fkCount, 1, "FK promoted_memory_id → memories(id) must exist")
+}

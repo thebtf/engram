@@ -4016,6 +4016,65 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 
 			},
 		},
+		// 132_crystallization_candidates — Milestone F TG4 (T022).
+		// Creates the crystallization_candidates table that separates candidate decisions
+		// from promoted memories per spec §FR-F4.
+		//
+		// Migration number: main contained migrations up to 131 at branch-point; 132 is
+		// the next free slot. Tasks.md initially drafted this as 128 but main now has 129,
+		// 130, 131 merged — renumbered to 132 here; documented for audit trail.
+		//
+		// Idempotency: fingerprint column (sha256 of source_session_id+proposed_content)
+		// carries a unique index so duplicate pending candidates for the same session+content
+		// cannot be created — same fp-tag concept used by CreateWithLifecycleIfTagAbsent.
+		//
+		// FK: promoted_memory_id → memories(id) ON DELETE SET NULL so that deleting a
+		// promoted memory nulls the back-reference without orphaning the candidate row
+		// (status stays 'promoted'; EC-F4 orphan behavior = null reference, see T030).
+		{
+			ID: "132_crystallization_candidates",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS crystallization_candidates (
+						id                        BIGSERIAL PRIMARY KEY,
+						source_session_id         TEXT NOT NULL DEFAULT '',
+						proposed_content          TEXT NOT NULL,
+						proposed_tier             TEXT NOT NULL DEFAULT 'episodic',
+						proposed_epistemic_type   TEXT NOT NULL DEFAULT 'observation',
+						proposed_promotion_target TEXT NOT NULL DEFAULT 'none',
+						evidence_handles          JSONB NOT NULL DEFAULT '[]',
+						confidence                REAL NOT NULL DEFAULT 0.5,
+						recurrence_count          INT NOT NULL DEFAULT 1,
+						affected_projects         TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+						privacy_scope             TEXT NOT NULL DEFAULT 'project',
+						review_after              TIMESTAMPTZ,
+						status                    TEXT NOT NULL DEFAULT 'pending'
+							CHECK (status IN ('pending','promoted','rejected','superseded','decayed')),
+						promoted_memory_id        BIGINT REFERENCES memories(id) ON DELETE SET NULL,
+						fingerprint               TEXT NOT NULL DEFAULT '',
+						created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+					)`,
+					// Primary query index: list candidates by status + review_after (decay batch).
+					`CREATE INDEX IF NOT EXISTS idx_candidates_status_review
+						ON crystallization_candidates(status, review_after)`,
+					// Idempotency: one pending candidate per unique session+content fingerprint.
+					// UNIQUE partial on status='pending' so promoted/rejected rows don't block resubmission.
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_fingerprint_pending
+						ON crystallization_candidates(fingerprint)
+						WHERE status = 'pending' AND fingerprint <> ''`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 132: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS crystallization_candidates`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
