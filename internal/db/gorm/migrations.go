@@ -3807,6 +3807,177 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				).Error
 			},
 		},
+		// 126_knowledge_nodes_table — engram vNext Milestone F TG2/CR-F2/T009.
+		// Creates the knowledge_nodes table implementing Path C (ADR-F-001) of
+		// the typed-node taxonomy: non-memory graph entities (skill, agent, rule,
+		// hook, session, file, consumer, decision, claim, bug, feature, project,
+		// repo) reside here rather than in the memories table, keeping the two
+		// domain concepts cleanly separated (SSoT decision criterion per ADR-F-001).
+		//
+		// knowledge_edges links to these nodes via nullable node_source_id /
+		// node_target_id FKs added by migration 127.
+		//
+		// Indexes:
+		//   - UNIQUE (node_type, external_ref) WHERE deleted_at IS NULL — prevents
+		//     duplicate live nodes for the same typed entity.
+		//   - (project, node_type) — accelerates ListByType with project filter.
+		//
+		// Privacy / visibility: privacy_scope column mirrors the memories table
+		// pattern (migration 125) so ListByType can apply the same scope.Resolve
+		// filter. Default 'project' for all new nodes.
+		//
+		// Soft-delete: deleted_at column (nullable timestamptz) — soft-delete via
+		// NodesStore.SoftDelete which sets deleted_at = now(). Active rows have
+		// deleted_at IS NULL.
+		{
+			ID: "126_knowledge_nodes_table",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS knowledge_nodes (
+						id          BIGSERIAL PRIMARY KEY,
+						node_type   TEXT NOT NULL,
+						external_ref TEXT NOT NULL,
+						metadata    JSONB NOT NULL DEFAULT '{}',
+						project     TEXT,
+						privacy_scope TEXT NOT NULL DEFAULT 'project',
+						created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+						deleted_at  TIMESTAMPTZ
+					)`,
+					// CHECK constraint for the 13 node types per spec §FR-F2.
+					// Drop-before-add keeps the migration idempotent on retry.
+					`ALTER TABLE knowledge_nodes DROP CONSTRAINT IF EXISTS knowledge_nodes_type_chk`,
+					`ALTER TABLE knowledge_nodes ADD CONSTRAINT knowledge_nodes_type_chk
+						CHECK (node_type IN (
+							'project','repo','skill','agent','rule','hook','session',
+							'file','consumer','decision','claim','bug','feature'
+						))`,
+					// UNIQUE active-only index — (node_type, external_ref) pair must be
+					// unique among non-deleted rows.
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_nodes_type_ref_active
+						ON knowledge_nodes (node_type, external_ref)
+						WHERE deleted_at IS NULL`,
+					// Composite index for ListByType project-scoped queries.
+					`CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_project_type
+						ON knowledge_nodes (project, node_type)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS knowledge_nodes`).Error
+			},
+		},
+
+		// 127_edge_discriminators — engram vNext Milestone F TG2/CR-F2/T010.
+		// Extends knowledge_edges with discriminator columns source_type/target_type
+		// (CHECK IN ('memory','node'), DEFAULT 'memory') and nullable FK columns
+		// node_source_id/node_target_id referencing knowledge_nodes(id).
+		//
+		// Path C (ADR-F-001) allows edges to span memory↔memory (legacy), memory↔node,
+		// and node↔node. The discriminator columns replace the implicit "source_id is
+		// always a memory" assumption. Existing rows default to source_type='memory' and
+		// target_type='memory' via the column default — no data migration required.
+		//
+		// Partial CHECK constraints enforce that each side has exactly one populated
+		// ID column consistent with its discriminator:
+		//   source side: (source_type='memory' → source_id NOT NULL, node_source_id IS NULL)
+		//                (source_type='node'   → node_source_id NOT NULL, source_id IS NULL)
+		//   target side: symmetric.
+		//
+		// Anti-stub: removing these columns causes TestMigration127_EdgeDiscriminatorsAndNodeFKs
+		// column-existence assertions to fail.
+		//
+		// Flag gate: column additions are unconditional in migration; MCP surface is gated
+		// by vnextFEnabled() + ENGRAM_GRAPH_ENABLED at runtime.
+		{
+			ID: "127_edge_discriminators",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					// Add discriminator columns with CHECK and DEFAULT.
+					// Drop-before-add keeps idempotent on retry.
+					`ALTER TABLE knowledge_edges DROP COLUMN IF EXISTS source_type`,
+					`ALTER TABLE knowledge_edges ADD COLUMN source_type TEXT NOT NULL DEFAULT 'memory'`,
+					`ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS knowledge_edges_source_type_chk`,
+					`ALTER TABLE knowledge_edges ADD CONSTRAINT knowledge_edges_source_type_chk
+						CHECK (source_type IN ('memory','node'))`,
+
+					`ALTER TABLE knowledge_edges DROP COLUMN IF EXISTS target_type`,
+					`ALTER TABLE knowledge_edges ADD COLUMN target_type TEXT NOT NULL DEFAULT 'memory'`,
+					`ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS knowledge_edges_target_type_chk`,
+					`ALTER TABLE knowledge_edges ADD CONSTRAINT knowledge_edges_target_type_chk
+						CHECK (target_type IN ('memory','node'))`,
+
+					// Nullable FK columns for node-type endpoints.
+					`ALTER TABLE knowledge_edges DROP COLUMN IF EXISTS node_source_id`,
+					`ALTER TABLE knowledge_edges ADD COLUMN node_source_id BIGINT REFERENCES knowledge_nodes(id)`,
+
+					`ALTER TABLE knowledge_edges DROP COLUMN IF EXISTS node_target_id`,
+					`ALTER TABLE knowledge_edges ADD COLUMN node_target_id BIGINT REFERENCES knowledge_nodes(id)`,
+
+					// Relax NOT NULL on source_id and target_id to allow pure-node edges.
+					// Existing rows already have source_id/target_id populated so no data loss.
+					`ALTER TABLE knowledge_edges ALTER COLUMN source_id DROP NOT NULL`,
+					`ALTER TABLE knowledge_edges ALTER COLUMN target_id DROP NOT NULL`,
+
+					// Partial CHECK: exactly one source ID column must be populated per row.
+					`ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS knowledge_edges_source_consistency_chk`,
+					`ALTER TABLE knowledge_edges ADD CONSTRAINT knowledge_edges_source_consistency_chk CHECK (
+						(source_type = 'memory' AND source_id IS NOT NULL AND node_source_id IS NULL)
+						OR
+						(source_type = 'node' AND node_source_id IS NOT NULL AND source_id IS NULL)
+					)`,
+
+					// Partial CHECK: exactly one target ID column must be populated per row.
+					`ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS knowledge_edges_target_consistency_chk`,
+					`ALTER TABLE knowledge_edges ADD CONSTRAINT knowledge_edges_target_consistency_chk CHECK (
+						(target_type = 'memory' AND target_id IS NOT NULL AND node_target_id IS NULL)
+						OR
+						(target_type = 'node' AND node_target_id IS NOT NULL AND target_id IS NULL)
+					)`,
+
+					// Partial indexes for each endpoint lookup pattern.
+					`CREATE INDEX IF NOT EXISTS idx_ke_source_memory ON knowledge_edges (source_type, source_id) WHERE superseded_at IS NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ke_source_node   ON knowledge_edges (source_type, node_source_id) WHERE node_source_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ke_target_memory ON knowledge_edges (target_type, target_id) WHERE superseded_at IS NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ke_target_node   ON knowledge_edges (target_type, node_target_id) WHERE node_target_id IS NOT NULL`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 127: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				stmts := []string{
+					`DROP INDEX IF EXISTS idx_ke_target_node`,
+					`DROP INDEX IF EXISTS idx_ke_target_memory`,
+					`DROP INDEX IF EXISTS idx_ke_source_node`,
+					`DROP INDEX IF EXISTS idx_ke_source_memory`,
+					`ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS knowledge_edges_target_consistency_chk`,
+					`ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS knowledge_edges_source_consistency_chk`,
+					`ALTER TABLE knowledge_edges ALTER COLUMN target_id SET NOT NULL`,
+					`ALTER TABLE knowledge_edges ALTER COLUMN source_id SET NOT NULL`,
+					`ALTER TABLE knowledge_edges DROP COLUMN IF EXISTS node_target_id`,
+					`ALTER TABLE knowledge_edges DROP COLUMN IF EXISTS node_source_id`,
+					`ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS knowledge_edges_target_type_chk`,
+					`ALTER TABLE knowledge_edges DROP COLUMN IF EXISTS target_type`,
+					`ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS knowledge_edges_source_type_chk`,
+					`ALTER TABLE knowledge_edges DROP COLUMN IF EXISTS source_type`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 127 rollback: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

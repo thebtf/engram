@@ -46,6 +46,7 @@ type Server struct {
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
+	nodesStore             *graph.NodesStore // T014: Milestone F TG2 add_node action
 	auditStore             *gorm.AuditStore
 	purgeStore             *gorm.PurgeStore
 	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
@@ -124,6 +125,11 @@ func (s *Server) SetPromotionStore(ps *gorm.PromotionStore) {
 
 func (s *Server) SetGraphStore(gs *graph.Store) {
 	s.graphStore = gs
+}
+
+// SetNodesStore wires the NodesStore for the add_node graph action (T014, TG2).
+func (s *Server) SetNodesStore(ns *graph.NodesStore) {
+	s.nodesStore = ns
 }
 
 // SetAuditStore sets the audit store for mutation audit logging (Milestone D FR-D2).
@@ -1072,17 +1078,27 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				"type":     "object",
 				"required": []string{"action"},
 				"properties": map[string]any{
-					"action":    map[string]any{"type": "string", "description": "Action: add_edge, remove_edge, get_edges, traverse, find_path, synonyms", "enum": []string{"add_edge", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}},
-					"source_id": map[string]any{"type": "integer", "description": "Source memory ID (for add_edge, find_path)"},
-					"target_id": map[string]any{"type": "integer", "description": "Target memory ID (for add_edge, find_path)"},
-					"memory_id": map[string]any{"type": "integer", "description": "Memory ID (for get_edges, traverse, synonyms)"},
-					"edge_id":   map[string]any{"type": "integer", "description": "Edge ID (for remove_edge)"},
-					"edge_type": map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, contradicts, synonym_of)"},
-					"weight":    map[string]any{"type": "number", "description": "Edge confidence 0.0-1.0 (default 1.0)"},
-					"reasoning": map[string]any{"type": "string", "description": "Why this edge exists"},
-					"direction": map[string]any{"type": "string", "description": "Edge direction for get_edges: outgoing, incoming, both"},
-					"depth":     map[string]any{"type": "integer", "description": "Traversal depth (1-3, default 1)"},
-					"max_depth": map[string]any{"type": "integer", "description": "Max path depth for find_path (1-3)"},
+					"action":         map[string]any{"type": "string", "description": "Action: add_edge, add_node, remove_edge, get_edges, traverse, find_path, synonyms", "enum": []string{"add_edge", "add_node", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}},
+					"source_id":      map[string]any{"type": "integer", "description": "Source memory ID (for add_edge memory→memory, find_path)"},
+					"target_id":      map[string]any{"type": "integer", "description": "Target memory ID (for add_edge memory→memory, find_path)"},
+					"memory_id":      map[string]any{"type": "integer", "description": "Memory ID (for get_edges, traverse, synonyms)"},
+					"edge_id":        map[string]any{"type": "integer", "description": "Edge ID (for remove_edge)"},
+					"edge_type":      map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, contradicts, synonym_of)"},
+					"weight":         map[string]any{"type": "number", "description": "Edge confidence 0.0-1.0 (default 1.0)"},
+					"reasoning":      map[string]any{"type": "string", "description": "Why this edge exists"},
+					"direction":      map[string]any{"type": "string", "description": "Edge direction for get_edges: outgoing, incoming, both"},
+					"depth":          map[string]any{"type": "integer", "description": "Traversal depth (1-3, default 1)"},
+					"max_depth":      map[string]any{"type": "integer", "description": "Max path depth for find_path (1-3)"},
+					// T014: Milestone F TG2 params (default to 'memory' for v6.2.x backward compat).
+					"source_type":    map[string]any{"type": "string", "description": "Source endpoint type: 'memory' (default) or 'node'. Requires ENGRAM_VNEXT_F_ENABLED=true for 'node' value.", "enum": []string{"memory", "node"}},
+					"target_type":    map[string]any{"type": "string", "description": "Target endpoint type: 'memory' (default) or 'node'. Requires ENGRAM_VNEXT_F_ENABLED=true for 'node' value.", "enum": []string{"memory", "node"}},
+					"node_source_id": map[string]any{"type": "integer", "description": "Source node ID when source_type='node' (for add_edge)"},
+					"node_target_id": map[string]any{"type": "integer", "description": "Target node ID when target_type='node' (for add_edge)"},
+					"node_id":        map[string]any{"type": "integer", "description": "Node ID (for get_edges by node)"},
+					"node_type":      map[string]any{"type": "string", "description": "Node type filter for get_edges; or the type to create for add_node (e.g. skill, file, agent)"},
+					"external_ref":   map[string]any{"type": "string", "description": "External reference string for the node (for add_node)"},
+					"project":        map[string]any{"type": "string", "description": "Project slug (for add_node)"},
+					"privacy_scope":  map[string]any{"type": "string", "description": "Privacy scope for add_node: project (default), private, shared, global"},
 				},
 			},
 		})
