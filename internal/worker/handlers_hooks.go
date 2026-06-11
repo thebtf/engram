@@ -3,12 +3,15 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/crystallization"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/feedback"
 	"github.com/thebtf/engram/pkg/models"
@@ -44,11 +47,11 @@ func (s *Service) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Respond 202 immediately — citation detection runs asynchronously.
+	// Respond 202 immediately — all processing runs asynchronously.
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]string{"status": "accepted"})
 
-	// Capture stores under initMu so the goroutine holds stable references.
+	// Capture stores under initMu so the goroutines hold stable references.
 	s.initMu.RLock()
 	injectionStore := s.injectionStore
 	memStore := s.memoryStore
@@ -59,6 +62,24 @@ func (s *Service) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	capturedSessionID := req.SessionID
 	capturedProject := req.Project
 	capturedOutput := req.AgentOutputText
+
+	// Crystallization runs as an independent goroutine — it only needs memStore,
+	// sessionID, project, and non-empty agent output. It must NOT be gated by the
+	// citation pipeline's prerequisite checks (nil injectionStore/citationStore,
+	// zero injection records, or citation insert failure).
+	if isCrystallizationEnabled() && memStore != nil && capturedOutput != "" {
+		crystallize := s.runCrystallization
+		if s.crystallizeFunc != nil {
+			crystallize = s.crystallizeFunc
+		}
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+			defer cancel()
+			crystallize(ctx, capturedSessionID, capturedProject, capturedOutput, memStore)
+		}()
+	}
 
 	s.wg.Add(1)
 	go s.processCitationsAsync(capturedSessionID, capturedProject, capturedOutput, injectionStore, memStore, citationStore, feedbackUpdater)
@@ -200,4 +221,152 @@ func (s *Service) processCitationsAsync(
 		Int("violated_count", violatedCount).
 		Int("total_count", len(results)).
 		Msg("session-end citation detection complete")
+}
+
+// crystallizationFingerprint returns a stable hex fingerprint for a decision memory
+// used to detect duplicates across double-fire or replay scenarios.
+// The fingerprint is sha256(sessionID + ":" + content), truncated to 16 hex chars.
+func crystallizationFingerprint(sessionID, content string) string {
+	h := sha256.Sum256([]byte(sessionID + ":" + content))
+	return hex.EncodeToString(h[:])[:16]
+}
+
+// runCrystallizationAuditAsync emits a single audit event in a fire-and-forget
+// goroutine with a 10-second detached context, panic recovery, and structured
+// error logging. This mirrors the runAuditAsync pattern from internal/mcp/audit_helpers.go.
+//
+// Only called when ENGRAM_VNEXT_ENABLED=true (auditStore is non-nil in that case).
+func runCrystallizationAuditAsync(auditStore *gormdb.AuditStore, sessionID string, created *models.Memory) {
+	memID := created.ID
+	afterJSON, jsonErr := json.Marshal(created)
+	if jsonErr != nil {
+		log.Error().Err(jsonErr).Int64("memory_id", memID).Msg("crystallization: failed to marshal audit state")
+		return
+	}
+	raw := json.RawMessage(afterJSON)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Str("audit_label", "crystallization").
+					Int64("memory_id", memID).
+					Interface("panic", r).
+					Msg("audit: goroutine panic recovered")
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := auditStore.Log(ctx, gormdb.AuditLogEntry{
+			MemoryID:        &memID,
+			Action:          "create",
+			Actor:           "crystallization",
+			SourceSessionID: sessionID,
+			AfterState:      &raw,
+			Reason:          "session-end crystallization",
+		}); err != nil {
+			log.Error().
+				Err(err).
+				Str("audit_label", "crystallization").
+				Int64("memory_id", memID).
+				Msg("audit: async write failed")
+		}
+	}()
+}
+
+// runCrystallization extracts decision patterns from agent output and persists them
+// as episodic memories. It is spawned as an independent goroutine from handleSessionEnd
+// and must not panic or propagate errors upward — all failures are logged and swallowed.
+//
+// Independence contract: this function requires only memStore, sessionID, project, and
+// agentOutput. It is NOT gated by citation pipeline prerequisites.
+//
+// Idempotency: each decision memory is fingerprinted by sha256(sessionID+":"+content)
+// stored as a tag "fp:<hex>". Before inserting, the store checks the exact
+// fingerprint tag under a transaction-level lock so concurrent session-end
+// replays cannot both pass the pre-read before either insert commits.
+func (s *Service) runCrystallization(
+	ctx context.Context,
+	sessionID, project, agentOutput string,
+	memStore *gormdb.MemoryStore,
+) {
+	if memStore == nil {
+		log.Warn().
+			Str("session_id", sessionID).
+			Msg("crystallization: memoryStore not ready, skipping")
+		return
+	}
+
+	decisions := crystallization.ExtractDecisions(agentOutput)
+	if len(decisions) == 0 {
+		log.Debug().
+			Str("session_id", sessionID).
+			Msg("crystallization: no decision patterns found")
+		return
+	}
+
+	mems := crystallization.BuildMemories(decisions, sessionID, project)
+
+	s.initMu.RLock()
+	auditStore := s.auditStore
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	s.initMu.RUnlock()
+
+	existingFPs := make(map[string]struct{})
+
+	storedCount := 0
+	skippedCount := 0
+	for i, mem := range mems {
+		fp := crystallizationFingerprint(sessionID, decisions[i].Text)
+		if _, dup := existingFPs[fp]; dup {
+			skippedCount++
+			log.Debug().
+				Str("session_id", sessionID).
+				Str("fingerprint", fp).
+				Msg("crystallization: skipping duplicate decision memory")
+			continue
+		}
+
+		// Embed the fingerprint tag so future runs can detect this decision.
+		fpTag := "fp:" + fp
+		mem.Tags = append(mem.Tags, fpTag)
+
+		// Crystallization memories carry lifecycle fields (Tier="episodic",
+		// EpistemicType="decision"); use CreateWithLifecycle so they are persisted
+		// without touching the plain Create path (flag-gated: ENGRAM_CRYSTALLIZATION_ENABLED).
+		created, duplicate, err := memStore.CreateWithLifecycleIfTagAbsent(ctx, mem, fpTag)
+		if err != nil {
+			log.Error().Err(err).
+				Str("session_id", sessionID).
+				Msg("crystallization: failed to store decision memory")
+			continue
+		}
+		if duplicate {
+			existingFPs[fp] = struct{}{}
+			skippedCount++
+			log.Debug().
+				Str("session_id", sessionID).
+				Str("fingerprint", fp).
+				Msg("crystallization: skipping duplicate decision memory")
+			continue
+		}
+		existingFPs[fp] = struct{}{}
+		storedCount++
+
+		// Emit audit event asynchronously — matches the runAuditAsync pattern from
+		// internal/mcp/audit_helpers.go. Gated on ENGRAM_VNEXT_ENABLED (audit store
+		// is nil when the flag is off).
+		if vnextEnabled && auditStore != nil {
+			runCrystallizationAuditAsync(auditStore, sessionID, created)
+		}
+	}
+
+	log.Info().
+		Str("event", "crystallization_complete").
+		Str("session_id", sessionID).
+		Str("project", project).
+		Int("decisions_found", len(decisions)).
+		Int("memories_stored", storedCount).
+		Int("memories_skipped_dup", skippedCount).
+		Msg("crystallization: stored decisions as episodic memories")
 }

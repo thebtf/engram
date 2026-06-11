@@ -80,6 +80,20 @@ are silently ignored (compiled defaults used).
 | `ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES` | (compiled) | Interval for periodic session outcome recording. |
 | `COLLECTION_CONFIG` | (none) | Path to collections YAML config file. |
 
+### vNext Feature Flags
+
+These flags gate optional vNext subsystems. All default to `false` (disabled).
+Enable them once the corresponding subsystem is wired and the schema migrations
+have been applied.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENGRAM_VNEXT_ENABLED` | `false` | Master vNext gate. Enables retention cron for injection_log and citation_log cleanup (Milestone A). |
+| `ENGRAM_LIFECYCLE_ENABLED` | `false` | Enables the sleep cycle (tier promotion/demotion) for memory lifecycle management (Milestone B). |
+| `ENGRAM_GRAPH_ENABLED` | `false` | Enables the knowledge graph subsystem and `graph` MCP tool (Milestone C). |
+| `ENGRAM_ADAPTIVE_ENABLED` | `false` | Enables adaptive memory segmentation and adaptive brief retrieval (`get_memory_brief`). |
+| `ENGRAM_CRYSTALLIZATION_ENABLED` | `false` | Enables session-end crystallization pipeline: deterministic extraction of decisions from agent output, stored as `epistemic_type=decision, tier=episodic` memories (Milestone D). Requires `ENGRAM_VNEXT_ENABLED=true` for the audit trail to fire. |
+
 ### Removed in v5/v6
 
 v5 removals fall into two categories. **Permanent architectural shifts** (auth model, transport model) are gone for good. **Transitional strip-down items** (embedding, LLM, graph, retrieval) were removed because the pre-v5 implementations were non-functional; they are being rebuilt from scratch across the vnext milestones (lifecycle, graph, retrieval, crystallization — see `internal/lifecycle`, `internal/graph`, `internal/retrieval`, `internal/crystallization` packages already landing on main). Do not set transitional vars until the rebuilt subsystem ships.

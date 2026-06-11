@@ -3,6 +3,10 @@ package gorm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -27,20 +31,20 @@ func NewMemoryStore(store *Store) *MemoryStore {
 	return &MemoryStore{db: store.DB}
 }
 
-// Create inserts a new memory row. Returns a new *models.Memory populated with the
-// database-assigned ID and timestamps. The caller's input is never mutated.
-func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.Memory, error) {
+func validateMemoryForCreate(mem *models.Memory) error {
 	if mem == nil {
-		return nil, fmt.Errorf("memory must not be nil")
+		return fmt.Errorf("memory must not be nil")
 	}
 	if mem.Project == "" {
-		return nil, fmt.Errorf("memory.Project must not be empty")
+		return fmt.Errorf("memory.Project must not be empty")
 	}
 	if mem.Content == "" {
-		return nil, fmt.Errorf("memory.Content must not be empty")
+		return fmt.Errorf("memory.Content must not be empty")
 	}
+	return nil
+}
 
-	now := time.Now().UTC()
+func memoryRowForCreate(mem *models.Memory, now time.Time, includeLifecycle bool) *Memory {
 	row := &Memory{
 		Project:        mem.Project,
 		Content:        mem.Content,
@@ -67,11 +71,142 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	if mem.SupersedesID != nil {
 		row.SupersedesID = mem.SupersedesID
 	}
+	if includeLifecycle {
+		// Lifecycle fields only override DB defaults when caller supplies them.
+		if mem.Tier != "" {
+			row.Tier = mem.Tier
+		}
+		if mem.EpistemicType != "" {
+			row.EpistemicType = mem.EpistemicType
+		}
+		if mem.Defeasibility != "" {
+			row.Defeasibility = mem.Defeasibility
+		}
+	}
+	return row
+}
+
+func advisoryLockKey(parts ...string) int64 {
+	h := sha256.New()
+	for _, part := range parts {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	return int64(binary.BigEndian.Uint64(sum[:8]))
+}
+
+func tagContainmentJSON(tag string) (string, error) {
+	tagBytes, err := json.Marshal([]string{tag})
+	if err != nil {
+		return "", fmt.Errorf("marshal tag containment JSON: %w", err)
+	}
+	return string(tagBytes), nil
+}
+
+// Create inserts a new memory row. Returns a new *models.Memory populated with the
+// database-assigned ID and timestamps. The caller's input is never mutated.
+//
+// Lifecycle contract: Create intentionally does NOT persist Tier, EpistemicType, or
+// Defeasibility fields — the DB schema defaults remain authoritative for all ordinary
+// callers (store_memory MCP tool, extraction, correction, ingest). Flag-gated paths
+// that need lifecycle metadata must use CreateWithLifecycle instead.
+func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.Memory, error) {
+	if err := validateMemoryForCreate(mem); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	row := memoryRowForCreate(mem, now, false)
+	// Lifecycle fields (Tier, EpistemicType, Defeasibility) are intentionally
+	// NOT copied here. Use CreateWithLifecycle for flag-gated paths.
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
 	}
 	return memoryRowToModel(row), nil
+}
+
+// CreateWithLifecycle inserts a new memory row including Tier, EpistemicType, and
+// Defeasibility fields. It MUST only be called from flag-gated paths:
+//   - crystallization bridge (ENGRAM_CRYSTALLIZATION_ENABLED)
+//   - MCP store_memory tool (ENGRAM_LIFECYCLE_ENABLED)
+//   - ingest tool (ENGRAM_VNEXT_ENABLED or ENGRAM_LIFECYCLE_ENABLED)
+//
+// Callers that are NOT behind one of these flags must call Create instead to
+// preserve the default-off byte-identity contract (milestone-B cycle-3).
+func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memory) (*models.Memory, error) {
+	if err := validateMemoryForCreate(mem); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	row := memoryRowForCreate(mem, now, true)
+	// Lifecycle fields: only override when caller supplies non-empty value so
+	// that DB schema defaults remain authoritative for unspecified fields.
+
+	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
+		return nil, fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
+	}
+	return memoryRowToModel(row), nil
+}
+
+// CreateWithLifecycleIfTagAbsent inserts a lifecycle memory only when no active
+// memory from the same project/source_agent already carries uniqueTag. The
+// check and insert are protected by a PostgreSQL transaction-level advisory
+// lock keyed by project, source_agent, and tag so concurrent callers cannot
+// double-insert the same fingerprint.
+func (s *MemoryStore) CreateWithLifecycleIfTagAbsent(
+	ctx context.Context,
+	mem *models.Memory,
+	uniqueTag string,
+) (*models.Memory, bool, error) {
+	if err := validateMemoryForCreate(mem); err != nil {
+		return nil, false, err
+	}
+	if mem.SourceAgent == "" {
+		return nil, false, fmt.Errorf("memory.SourceAgent must not be empty")
+	}
+	if uniqueTag == "" {
+		return nil, false, fmt.Errorf("uniqueTag must not be empty")
+	}
+
+	var created *models.Memory
+	duplicate := false
+	lockKey := advisoryLockKey("mem-tag", mem.Project, mem.SourceAgent, uniqueTag)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", lockKey).Error; err != nil {
+			return fmt.Errorf("lock memory tag project=%q agent=%q tag=%q: %w", mem.Project, mem.SourceAgent, uniqueTag, err)
+		}
+
+		tagJSON, err := tagContainmentJSON(uniqueTag)
+		if err != nil {
+			return err
+		}
+		var existing Memory
+		err = tx.Select("id").
+			Where("project = ? AND source_agent = ? AND status = 'active' AND deleted_at IS NULL AND tags @> ?::jsonb", mem.Project, mem.SourceAgent, tagJSON).
+			Limit(1).
+			Take(&existing).Error
+		if err == nil {
+			duplicate = true
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("check memory tag project=%q agent=%q tag=%q: %w", mem.Project, mem.SourceAgent, uniqueTag, err)
+		}
+
+		row := memoryRowForCreate(mem, time.Now().UTC(), true)
+		if err := tx.Create(row).Error; err != nil {
+			return fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
+		}
+		created = memoryRowToModel(row)
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return created, duplicate, nil
 }
 
 // Get returns the active (non-soft-deleted) memory with the given ID.
@@ -400,6 +535,42 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		RecurrenceCount:          row.RecurrenceCount,
 		ConsecutiveCitationCount: row.ConsecutiveCitationCount,
 	}
+}
+
+// ListBySourceAgentAndTag returns active memories for a project where source_agent
+// matches sourceAgent AND the tags JSONB column contains the given tag string.
+// Used by the crystallization pipeline for idempotency checks (P2-5).
+// Returns at most 500 rows; callers that need exhaustive scans should query a
+// narrower tag or use a paged query.
+func (s *MemoryStore) ListBySourceAgentAndTag(ctx context.Context, project, sourceAgent, tag string) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("project must not be empty")
+	}
+	if sourceAgent == "" {
+		return nil, fmt.Errorf("sourceAgent must not be empty")
+	}
+	if tag == "" {
+		return nil, fmt.Errorf("tag must not be empty")
+	}
+	// Use PostgreSQL JSONB containment: tags @> '["<tag>"]'::jsonb
+	tagJSON, err := tagContainmentJSON(tag)
+	if err != nil {
+		return nil, err
+	}
+	var rows []Memory
+	err = s.db.WithContext(ctx).
+		Where("project = ? AND source_agent = ? AND status = 'active' AND deleted_at IS NULL AND tags @> ?::jsonb", project, sourceAgent, tagJSON).
+		Order("id ASC").
+		Limit(500).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("list memories by source_agent+tag project=%q agent=%q tag=%q: %w", project, sourceAgent, tag, err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
 }
 
 // CountActiveSince returns the count of active memories with id > afterID.

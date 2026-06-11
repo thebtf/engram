@@ -84,7 +84,9 @@ func (s *Service) processCorrectionAsync(req correctionRequest) {
 			Tags:          []string{"user_correction"},
 			EpistemicType: "guidance",
 		}
-		if _, createErr := memStore.Create(ctx, newMem); createErr != nil {
+		// Correction always sets EpistemicType; use CreateWithLifecycle so the
+		// field is persisted without touching the plain Create path.
+		if _, createErr := memStore.CreateWithLifecycle(ctx, newMem); createErr != nil {
 			log.Error().Err(createErr).Msg("correction: create new memory failed")
 		} else {
 			log.Info().Str("project", req.Project).Msg("correction: stored as new memory (no similar found)")
@@ -101,7 +103,7 @@ func (s *Service) processCorrectionAsync(req correctionRequest) {
 		SupersedesID:  &similarID,
 		EpistemicType: "guidance",
 	}
-	created, createErr := memStore.Create(ctx, newMem)
+	created, createErr := memStore.CreateWithLifecycle(ctx, newMem)
 	if createErr != nil {
 		log.Error().Err(createErr).Int64("supersedes", similarID).Msg("correction: create superseding memory failed")
 		return

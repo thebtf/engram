@@ -344,9 +344,17 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		memory.Status = "flagged"
 	}
 
-	created, err := s.memoryStore.Create(ctx, memory)
-	if err != nil {
-		return "", fmt.Errorf("store memory: %w", err)
+	// Use CreateWithLifecycle when lifecycle fields are present (ENGRAM_LIFECYCLE_ENABLED
+	// path sets Tier/EpistemicType/Defeasibility on the memory struct above).
+	var created *models.Memory
+	var createErr error
+	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+		created, createErr = s.memoryStore.CreateWithLifecycle(ctx, memory)
+	} else {
+		created, createErr = s.memoryStore.Create(ctx, memory)
+	}
+	if createErr != nil {
+		return "", fmt.Errorf("store memory: %w", createErr)
 	}
 
 	// Audit: fire-and-forget create event (FR-D2 / NFR-D4). Actor derived from

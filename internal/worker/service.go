@@ -127,6 +127,7 @@ type Service struct {
 	citationLogStore       *gorm.CitationLogStore
 	injectionTracker       *injection.Tracker
 	injectionLogStore      *gorm.InjectionLogStore
+	crystallizeFunc        func(context.Context, string, string, string, *gorm.MemoryStore) // test hook; nil uses runCrystallization
 	agentStatsStore        *gorm.AgentStatsStore
 	versionStore           *gorm.VersionStore
 	retrievalHooks         *retrievalHooks
@@ -804,6 +805,13 @@ func (s *Service) reloadConfig() {
 		"message": "Configuration reloaded",
 		"changed": changed,
 	})
+}
+
+// isCrystallizationEnabled reports whether the crystallization pipeline is
+// active for this process. Reads ENGRAM_CRYSTALLIZATION_ENABLED at call time
+// so that test code can override it via t.Setenv without restart.
+func isCrystallizationEnabled() bool {
+	return os.Getenv("ENGRAM_CRYSTALLIZATION_ENABLED") == "true"
 }
 
 // setInitError records an initialization error.

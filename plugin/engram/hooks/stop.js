@@ -63,18 +63,38 @@ function extractAgentOutput(filePath) {
     }
 
     // Accept both role-based and type-based assistant message shapes.
-    if (record.role !== 'assistant' && record.type !== 'assistant') continue;
+    // Real Claude Code transcripts use the NESTED shape:
+    //   {"type":"assistant","message":{"role":"assistant","content":[...]}}
+    // Older/flat shapes use top-level role or content fields.
+    const isAssistantType = record.type === 'assistant';
+    const isAssistantRole = record.role === 'assistant';
+    const isAssistantMsgRole =
+      record.message &&
+      typeof record.message === 'object' &&
+      record.message.role === 'assistant';
+
+    if (!isAssistantType && !isAssistantRole && !isAssistantMsgRole) continue;
+
+    // Resolve the content array: nested shape puts it in record.message.content;
+    // flat shapes put it at record.content or record.text.
+    const contentSource =
+      (record.message && Array.isArray(record.message.content))
+        ? record.message.content
+        : (Array.isArray(record.content) ? record.content : null);
 
     // Extract text from the content field (string or array-of-blocks).
     let text = '';
-    if (typeof record.content === 'string') {
-      text = record.content;
-    } else if (Array.isArray(record.content)) {
-      for (const block of record.content) {
+    if (contentSource !== null) {
+      for (const block of contentSource) {
         if (block && block.type === 'text' && typeof block.text === 'string') {
           text += block.text;
         }
       }
+    } else if (typeof record.content === 'string') {
+      text = record.content;
+    } else if (record.message && typeof record.message.content === 'string') {
+      // Nested shape with string content (rare but possible).
+      text = record.message.content;
     } else if (typeof record.text === 'string') {
       // Flat-text variant some CC versions emit.
       text = record.text;
