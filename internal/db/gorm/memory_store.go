@@ -548,6 +548,41 @@ func (s *MemoryStore) Supersede(ctx context.Context, id int64) (oldImportance fl
 	return oldImportance, nil
 }
 
+// MarkSuperseded atomically sets status='superseded' and superseded_by=newID on
+// the memory identified by olderID. It does NOT scale importance_base (that
+// remains the caller's decision). Returns an error when olderID is not found,
+// already deleted, or when the UPDATE affects 0 rows (already superseded is
+// treated as success to keep the operation idempotent).
+//
+// This is distinct from Supersede: Supersede also scales importance and does
+// not record the successor ID. MarkSuperseded is the precise link-recording
+// counterpart used by the writelint Phase2 supersede path.
+func (s *MemoryStore) MarkSuperseded(ctx context.Context, olderID, newID int64) error {
+	if olderID == 0 {
+		return fmt.Errorf("MarkSuperseded: olderID must be non-zero")
+	}
+	if newID == 0 {
+		return fmt.Errorf("MarkSuperseded: newID must be non-zero")
+	}
+	now := time.Now().UTC()
+	result := s.db.WithContext(ctx).Model(&Memory{}).
+		Where("id = ? AND deleted_at IS NULL", olderID).
+		Updates(map[string]any{
+			"status":        "superseded",
+			"superseded_by": newID,
+			"updated_at":    now,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("MarkSuperseded memory id=%d: %w", olderID, result.Error)
+	}
+	// 0 rows affected means the memory was not found or already deleted.
+	// An already-superseded row still exists and should be updated if found.
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("MarkSuperseded memory id=%d: %w", olderID, gorm.ErrRecordNotFound)
+	}
+	return nil
+}
+
 // UpdateLifecycleFields updates specific lifecycle fields on a memory without
 // touching content, tags, or version. Used by feedback and injection pipelines.
 func (s *MemoryStore) UpdateLifecycleFields(ctx context.Context, id int64, fields map[string]any) error {
