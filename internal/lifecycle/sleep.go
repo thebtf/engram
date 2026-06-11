@@ -261,6 +261,9 @@ func RunCandidateDecayCycle(ctx context.Context, decayer CandidateDecayer) Candi
 	}
 
 	for _, c := range candidates {
+		if c == nil {
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			result.Duration = time.Since(start)

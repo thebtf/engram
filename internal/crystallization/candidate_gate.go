@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -118,7 +119,10 @@ func RouteDecision(
 			mems, err := memChecker.ListBySourceAgentAndTag(ctx, project, "crystallization", fpTag)
 			if err != nil {
 				// Non-fatal: log and continue (a failed check should not block new candidates).
-				_ = err
+				log.Warn().Err(err).
+					Str("project", project).
+					Str("fingerprint", c.Fingerprint).
+					Msg("candidate_gate: memory fingerprint check failed, skipping flag-flip guard")
 			} else if len(mems) > 0 {
 				return &RouteDecisionResult{
 					Duplicate:         true,
@@ -131,6 +135,9 @@ func RouteDecision(
 	created, err := candidateWriter.Create(ctx, c)
 	if err != nil {
 		return nil, fmt.Errorf("route_decision create candidate: %w", err)
+	}
+	if created == nil {
+		return nil, fmt.Errorf("route_decision: created candidate is nil")
 	}
 	return &RouteDecisionResult{
 		CandidateID:       created.ID,

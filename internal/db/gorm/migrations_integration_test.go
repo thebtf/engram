@@ -694,9 +694,14 @@ func TestMigration132_CrystallizationCandidates(t *testing.T) {
 	`).Error
 	require.Error(t, err, "invalid status must be rejected by CHECK constraint")
 
+	// Clean up any rows left by a previous run before inserting, ensuring idempotency
+	// across repeated test runs against the same database instance.
+	require.NoError(t, db.Exec(`
+		DELETE FROM crystallization_candidates WHERE fingerprint LIKE 'fp-test-%'
+	`).Error)
+
 	// Assert all 5 valid status values are accepted.
 	for _, status := range []string{"pending", "promoted", "rejected", "superseded", "decayed"} {
-		// Insert a valid candidate; ignore duplicate key errors (idempotent test runs).
 		insertErr := db.Exec(`
 			INSERT INTO crystallization_candidates (proposed_content, status, fingerprint)
 			VALUES (?, ?, ?)

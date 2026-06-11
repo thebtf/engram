@@ -89,6 +89,9 @@ func runBackfillCandidates(args []string) {
 		}
 
 		for _, mem := range mems {
+			if mem == nil {
+				continue
+			}
 			// Filter to episodic decision memories only.
 			if mem.Tier != "episodic" || mem.EpistemicType != "decision" {
 				continue
@@ -128,9 +131,12 @@ func runBackfillCandidates(args []string) {
 				continue
 			}
 
-			// Idempotency: skip if pending candidate with same fingerprint already exists.
+			// Idempotency: skip if any candidate (any status) with same fingerprint already
+			// exists. GetByFingerprintAnyStatus covers terminal states (promoted, rejected,
+			// superseded, decayed) so that a re-run after review does not re-queue the same
+			// legacy memory as a fresh pending candidate.
 			if c.Fingerprint != "" {
-				existing, fpErr := candidateStore.GetByFingerprint(ctx, c.Fingerprint)
+				existing, fpErr := candidateStore.GetByFingerprintAnyStatus(ctx, c.Fingerprint)
 				if fpErr != nil {
 					log.Warn().Err(fpErr).Int64("memory_id", mem.ID).Msg("backfill-candidates: fingerprint check failed, skipping")
 					errCount++
@@ -140,7 +146,8 @@ func runBackfillCandidates(args []string) {
 					log.Debug().
 						Int64("memory_id", mem.ID).
 						Int64("candidate_id", existing.ID).
-						Msg("backfill-candidates: pending candidate exists, skipping")
+						Str("candidate_status", string(existing.Status)).
+						Msg("backfill-candidates: candidate exists, skipping")
 					skipped++
 					continue
 				}

@@ -3,6 +3,7 @@ package gorm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -42,9 +43,9 @@ func TestCandidateStore_CRUDRoundtrip(t *testing.T) {
 	cs := NewCandidateStore(db, auditStore)
 	ctx := context.Background()
 
-	// Build a valid candidate.
+	// Build a valid candidate. Unique session ID prevents fingerprint collisions on re-run.
 	candidate, err := models.NewCrystallizationCandidate(
-		"session-roundtrip",
+		fmt.Sprintf("session-roundtrip-%d", time.Now().UnixNano()),
 		"we decided to use Redis because of cluster mode",
 		"rule",
 		models.CandidateOptions{
@@ -134,9 +135,10 @@ func TestCandidateStore_StateMachine_AllTransitionsFromPending(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create a fresh pending candidate for each sub-test.
+			// Create a fresh pending candidate for each sub-test. Unique session ID prevents
+			// fingerprint collisions on repeated test runs against the same database.
 			candidate, err := models.NewCrystallizationCandidate(
-				"session-sm-"+tc.name,
+				fmt.Sprintf("session-sm-%s-%d", tc.name, time.Now().UnixNano()),
 				"content for "+tc.name,
 				"rule",
 				models.CandidateOptions{AffectedProjects: []string{"test-project"}},
@@ -163,7 +165,7 @@ func TestCandidateStore_StateMachine_IllegalTransition(t *testing.T) {
 	cs := NewCandidateStore(db, auditStore)
 	ctx := context.Background()
 
-	candidate, err := models.NewCrystallizationCandidate("session-illegal", "content", "rule", models.CandidateOptions{})
+	candidate, err := models.NewCrystallizationCandidate(fmt.Sprintf("session-illegal-%d", time.Now().UnixNano()), "content", "rule", models.CandidateOptions{})
 	require.NoError(t, err)
 	created, err := cs.Create(ctx, candidate)
 	require.NoError(t, err)
@@ -192,7 +194,7 @@ func TestCandidateStore_StateMachine_ConcurrentRace(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a shared pending candidate.
-	candidate, err := models.NewCrystallizationCandidate("session-race", "race content", "rule", models.CandidateOptions{})
+	candidate, err := models.NewCrystallizationCandidate(fmt.Sprintf("session-race-%d", time.Now().UnixNano()), "race content", "rule", models.CandidateOptions{})
 	require.NoError(t, err)
 	created, err := cs.Create(ctx, candidate)
 	require.NoError(t, err)
@@ -233,7 +235,12 @@ func TestCandidateStore_FingerprintIdempotency(t *testing.T) {
 	cs := NewCandidateStore(db, nil)
 	ctx := context.Background()
 
-	c, err := models.NewCrystallizationCandidate("session-fp", "idempotent content", "rule", models.CandidateOptions{})
+	// Use a fixed session ID here intentionally: the test exercises fingerprint collision
+	// between two candidates with the SAME session+content, so both must share one session ID.
+	// The cleanup before the test (t.Cleanup) is not available without a DB truncate, so we
+	// use a run-unique prefix to isolate this test's fingerprint from prior runs.
+	sessionFP := fmt.Sprintf("session-fp-%d", time.Now().UnixNano())
+	c, err := models.NewCrystallizationCandidate(sessionFP, "idempotent content", "rule", models.CandidateOptions{})
 	require.NoError(t, err)
 	require.NotEmpty(t, c.Fingerprint, "fingerprint must be non-empty for session+content pair")
 
@@ -242,7 +249,7 @@ func TestCandidateStore_FingerprintIdempotency(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second insert with same fingerprint must fail (unique constraint on pending+fingerprint).
-	c2, _ := models.NewCrystallizationCandidate("session-fp", "idempotent content", "rule", models.CandidateOptions{})
+	c2, _ := models.NewCrystallizationCandidate(sessionFP, "idempotent content", "rule", models.CandidateOptions{})
 	_, err = cs.Create(ctx, c2)
 	require.Error(t, err, "duplicate pending fingerprint must be rejected by unique partial index")
 }
@@ -255,7 +262,7 @@ func TestCandidateStore_AuditLogWrittenOnTransition(t *testing.T) {
 	cs := NewCandidateStore(db, auditStore)
 	ctx := context.Background()
 
-	candidate, err := models.NewCrystallizationCandidate("session-audit", "content for audit", "rule", models.CandidateOptions{})
+	candidate, err := models.NewCrystallizationCandidate(fmt.Sprintf("session-audit-%d", time.Now().UnixNano()), "content for audit", "rule", models.CandidateOptions{})
 	require.NoError(t, err)
 	created, err := cs.Create(ctx, candidate)
 	require.NoError(t, err)
@@ -283,7 +290,7 @@ func TestCandidateStore_ListExpiredPending(t *testing.T) {
 
 	// Insert a candidate whose review_after is in the past.
 	past := time.Now().UTC().Add(-48 * time.Hour)
-	expired, err := models.NewCrystallizationCandidate("session-decay", "expired content", "rule", models.CandidateOptions{})
+	expired, err := models.NewCrystallizationCandidate(fmt.Sprintf("session-decay-%d", time.Now().UnixNano()), "expired content", "rule", models.CandidateOptions{})
 	require.NoError(t, err)
 	expired.ReviewAfter = &past
 
@@ -291,7 +298,7 @@ func TestCandidateStore_ListExpiredPending(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert a candidate whose review_after is in the future.
-	future, err := models.NewCrystallizationCandidate("session-future", "future content", "rule", models.CandidateOptions{})
+	future, err := models.NewCrystallizationCandidate(fmt.Sprintf("session-future-%d", time.Now().UnixNano()), "future content", "rule", models.CandidateOptions{})
 	require.NoError(t, err)
 	_, err = cs.Create(ctx, future)
 	require.NoError(t, err)
@@ -319,7 +326,7 @@ func TestCandidateStore_TransitionToRejected_PreservesProposedContent(t *testing
 
 	originalContent := "decided to use PostgreSQL for transactional workloads"
 	candidate, err := models.NewCrystallizationCandidate(
-		"session-reject-preserve",
+		fmt.Sprintf("session-reject-preserve-%d", time.Now().UnixNano()),
 		originalContent,
 		"rule",
 		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
@@ -361,7 +368,7 @@ func TestCandidateStore_PromoteWithMemory_AtomicRollback(t *testing.T) {
 
 	// Create a candidate and immediately reject it (terminal state).
 	candidate, err := models.NewCrystallizationCandidate(
-		"session-promote-rollback",
+		fmt.Sprintf("session-promote-rollback-%d", time.Now().UnixNano()),
 		"content for atomic promote test",
 		"rule",
 		models.CandidateOptions{AffectedProjects: []string{"test-project"}},

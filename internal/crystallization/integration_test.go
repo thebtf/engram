@@ -116,6 +116,9 @@ func TestCrystallizationLifecycle_FullPath(t *testing.T) {
 	// This is the correct idempotency behavior: partial-unique index is on (fingerprint, status=pending),
 	// so a promoted candidate does not block a new pending candidate for the same content.
 	assert.True(t, result2.UsedCandidatePath, "second route must still use candidate path")
+	assert.False(t, result2.Duplicate, "second route with promoted fingerprint should create a new pending candidate, not duplicate")
+	assert.Greater(t, result2.CandidateID, int64(0), "second route should return a new candidate ID")
+	assert.NotEqual(t, candidateID, result2.CandidateID, "second route should create a different candidate (first is promoted)")
 }
 
 // TestCrystallizationLifecycle_FlagOff verifies that RouteDecision returns nil

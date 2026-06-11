@@ -22,11 +22,11 @@ func candidateTools() []Tool {
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
-				"required": []string{},
+				"required": []string{"project"},
 				"properties": map[string]any{
 					"project": map[string]any{
 						"type":        "string",
-						"description": "Filter by project slug. Empty returns all projects.",
+						"description": "REQUIRED. Filter by project slug.",
 					},
 					"status": map[string]any{
 						"type":        "string",
@@ -132,9 +132,12 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 		CreatedAt               string  `json:"created_at"`
 	}
 
-	items := make([]candidateItem, len(candidates))
-	for i, c := range candidates {
-		items[i] = candidateItem{
+	items := make([]candidateItem, 0, len(candidates))
+	for _, c := range candidates {
+		if c == nil {
+			continue
+		}
+		items = append(items, candidateItem{
 			ID:                      c.ID,
 			Status:                  string(c.Status),
 			ProposedContent:         c.ProposedContent,
@@ -146,7 +149,7 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 			RecurrenceCount:         c.RecurrenceCount,
 			Fingerprint:             c.Fingerprint,
 			CreatedAt:               c.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		}
+		})
 	}
 
 	out := map[string]any{
@@ -181,6 +184,9 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 	if err != nil {
 		return "", fmt.Errorf("promote_candidate get %d: %w", id, err)
 	}
+	if candidate == nil {
+		return "", fmt.Errorf("promote_candidate: candidate %d not found", id)
+	}
 	if candidate.Status != models.CandidateStatusPending {
 		return "", fmt.Errorf("promote_candidate: candidate %d is not pending (status=%s)", id, candidate.Status)
 	}
@@ -212,6 +218,9 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 			return "", fmt.Errorf("promote_candidate: %w", err)
 		}
 		return "", fmt.Errorf("promote_candidate %d: %w", id, err)
+	}
+	if updated == nil || created == nil {
+		return "", fmt.Errorf("promote_candidate %d: promotion returned nil candidate or memory", id)
 	}
 
 	out := map[string]any{
@@ -249,6 +258,9 @@ func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage
 		}
 		return "", fmt.Errorf("reject_candidate %d: %w", id, err)
 	}
+	if updated == nil {
+		return "", fmt.Errorf("reject_candidate %d: transition returned nil candidate", id)
+	}
 
 	out := map[string]any{
 		"candidate_id":     updated.ID,
@@ -281,6 +293,9 @@ func (s *Server) handleSupersedeCandidate(ctx context.Context, args json.RawMess
 			return "", fmt.Errorf("supersede_candidate: %w", err)
 		}
 		return "", fmt.Errorf("supersede_candidate %d: %w", id, err)
+	}
+	if updated == nil {
+		return "", fmt.Errorf("supersede_candidate %d: transition returned nil candidate", id)
 	}
 
 	out := map[string]any{

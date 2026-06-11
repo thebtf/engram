@@ -3,6 +3,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -67,6 +68,10 @@ func (j *JSONRaw) Scan(src interface{}) error {
 
 // toDomainCandidate converts a candidateRow to a models.CrystallizationCandidate.
 func toDomainCandidate(r *candidateRow) *models.CrystallizationCandidate {
+	var evidence []string
+	if len(r.EvidenceHandles) > 0 {
+		_ = json.Unmarshal(r.EvidenceHandles, &evidence)
+	}
 	c := &models.CrystallizationCandidate{
 		ID:                      r.ID,
 		SourceSessionID:         r.SourceSessionID,
@@ -74,6 +79,7 @@ func toDomainCandidate(r *candidateRow) *models.CrystallizationCandidate {
 		ProposedTier:            r.ProposedTier,
 		ProposedEpistemicType:   r.ProposedEpistemicType,
 		ProposedPromotionTarget: r.ProposedPromotionTarget,
+		EvidenceHandles:         evidence,
 		PrivacyScope:            r.PrivacyScope,
 		Status:                  models.CandidateStatus(r.Status),
 		Fingerprint:             r.Fingerprint,
@@ -90,12 +96,14 @@ func toDomainCandidate(r *candidateRow) *models.CrystallizationCandidate {
 
 // fromDomainCandidate converts a models.CrystallizationCandidate to a candidateRow.
 func fromDomainCandidate(c *models.CrystallizationCandidate) *candidateRow {
+	evidenceJSON, _ := json.Marshal(c.EvidenceHandles)
 	r := &candidateRow{
 		SourceSessionID:         c.SourceSessionID,
 		ProposedContent:         c.ProposedContent,
 		ProposedTier:            c.ProposedTier,
 		ProposedEpistemicType:   c.ProposedEpistemicType,
 		ProposedPromotionTarget: c.ProposedPromotionTarget,
+		EvidenceHandles:         JSONRaw(evidenceJSON),
 		PrivacyScope:            c.PrivacyScope,
 		Status:                  string(c.Status),
 		Fingerprint:             c.Fingerprint,
@@ -126,6 +134,9 @@ func NewCandidateStore(db *gorm.DB, auditStore *AuditStore) *CandidateStore {
 // Returns ErrDuplicateFingerprint if a pending candidate with the same fingerprint exists
 // (enforced by the partial unique index idx_candidates_fingerprint_pending).
 func (s *CandidateStore) Create(ctx context.Context, c *models.CrystallizationCandidate) (*models.CrystallizationCandidate, error) {
+	if c == nil {
+		return nil, fmt.Errorf("candidate_store create: candidate must not be nil")
+	}
 	row := fromDomainCandidate(c)
 	result := s.db.WithContext(ctx).Create(row)
 	if result.Error != nil {
@@ -316,6 +327,9 @@ func (s *CandidateStore) PromoteWithMemory(
 	candidateID int64,
 	mem *models.Memory,
 ) (*models.CrystallizationCandidate, *models.Memory, error) {
+	if mem == nil {
+		return nil, nil, fmt.Errorf("promote_with_memory: memory must not be nil")
+	}
 	if err := validateMemoryForCreate(mem); err != nil {
 		return nil, nil, fmt.Errorf("promote_with_memory: invalid memory: %w", err)
 	}
@@ -339,6 +353,9 @@ func (s *CandidateStore) PromoteWithMemory(
 		created, err := createMemoryWithLifecycleTx(ctx, tx, mem)
 		if err != nil {
 			return err
+		}
+		if created == nil {
+			return fmt.Errorf("promote_with_memory: createMemoryWithLifecycleTx returned nil")
 		}
 		createdMemory = created
 
@@ -398,6 +415,28 @@ func (s *CandidateStore) TransitionToSuperseded(ctx context.Context, id int64) (
 // Returns ErrInvalidTransition if the candidate is not pending.
 func (s *CandidateStore) TransitionToDecayed(ctx context.Context, id int64) (*models.CrystallizationCandidate, error) {
 	return s.transitionStatus(ctx, id, models.CandidateStatusDecayed, "decay_candidate", nil, "")
+}
+
+// GetByFingerprintAnyStatus looks up any candidate (regardless of status) by fingerprint.
+// Used by the backfill path to prevent re-queuing a memory whose candidate has already
+// been processed (promoted, rejected, superseded, or decayed).
+// Returns nil, nil when no candidate with that fingerprint exists.
+func (s *CandidateStore) GetByFingerprintAnyStatus(ctx context.Context, fingerprint string) (*models.CrystallizationCandidate, error) {
+	if fingerprint == "" {
+		return nil, nil
+	}
+	var row candidateRow
+	err := s.db.WithContext(ctx).
+		Where("fingerprint = ?", fingerprint).
+		Order("created_at DESC").
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("candidate_store get_by_fingerprint_any_status: %w", err)
+	}
+	return toDomainCandidate(&row), nil
 }
 
 // GetByFingerprint looks up a pending candidate by fingerprint.
