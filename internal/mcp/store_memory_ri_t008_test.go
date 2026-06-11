@@ -63,14 +63,16 @@ func TestRI_F2_DualFieldResponse_FlagOn_T008(t *testing.T) {
 			wantPrivacyScope:   "global",
 			wantDualFieldsBoth: true,
 		},
-		{
-			name:               "explicit privacy_scope=private overrides legacy",
-			legacyScope:        "project",
-			privacyScope:       "private",
-			wantLegacyScope:    "project",
-			wantPrivacyScope:   "private",
-			wantDualFieldsBoth: true,
-		},
+		// NOTE: privacy_scope=private is intentionally not tested here.
+		// Per spec FR-F1 AMEND (fix b5ac7ec, 2026-05-25), store_memory rejects
+		// private-scope writes when the caller has no non-empty workstation
+		// identity — scope.Resolve fail-closes private memories whose
+		// source_workstation_id is empty, making such rows permanently
+		// unreadable. Integration tests at this MCP layer run without a
+		// SourceClient keycard, so they carry no WorkstationID. The private
+		// scope write-rejection is covered by
+		// TestRI_F2_InvalidPrivacyScope_StillStructuredErrorUnderFlagOn_T008
+		// and the scope.Resolve unit tests.
 		{
 			name:               "explicit privacy_scope=shared overrides legacy",
 			legacyScope:        "global",

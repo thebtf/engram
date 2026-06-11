@@ -268,11 +268,10 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 	}
 
 	var rows []Memory
-	now := time.Now().UTC()
 	err := s.db.WithContext(ctx).
 		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
-		Where("valid_from IS NULL OR valid_from <= ?", now).
-		Where("valid_until IS NULL OR valid_until >= ?", now).
+		Where("valid_from IS NULL OR valid_from <= NOW()").
+		Where("valid_until IS NULL OR valid_until >= NOW()").
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&rows).Error
@@ -309,17 +308,22 @@ func (s *MemoryStore) ListWithOffset(ctx context.Context, project string, limit 
 	}
 
 	var rows []Memory
-	now := time.Now().UTC()
 	// Codex P2 cycle-4 fix on 783c0be: add `id DESC` as a deterministic
 	// secondary order key so offset-paged scans cannot skip or repeat rows
 	// when multiple memories share the same created_at value. handleRecallSearch
 	// invokes ListWithOffset in a loop with changing OFFSET, and ties on
 	// created_at would otherwise destabilise page boundaries — eligible rows
 	// could be missed before the visible-result limit is reached.
+	//
+	// Use NOW() (DB server clock) instead of a Go-side timestamp for valid_from /
+	// valid_until comparisons. The DB DEFAULT for valid_from is now(), evaluated
+	// at INSERT time. If we compare against a Go-side time.Now() captured before
+	// the SELECT, a just-inserted row's valid_from can be fractionally newer than
+	// the Go clock value, causing the row to be excluded from the first List call.
 	err := s.db.WithContext(ctx).
 		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
-		Where("valid_from IS NULL OR valid_from <= ?", now).
-		Where("valid_until IS NULL OR valid_until >= ?", now).
+		Where("valid_from IS NULL OR valid_from <= NOW()").
+		Where("valid_until IS NULL OR valid_until >= NOW()").
 		Order("created_at DESC, id DESC").
 		Limit(limit).
 		Offset(offset).
@@ -346,11 +350,10 @@ func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limi
 	}
 	lifecycleEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
 	var rows []Memory
-	now := time.Now().UTC()
 	q := s.db.WithContext(ctx).
 		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
-		Where("valid_from IS NULL OR valid_from <= ?", now).
-		Where("valid_until IS NULL OR valid_until >= ?", now)
+		Where("valid_from IS NULL OR valid_from <= NOW()").
+		Where("valid_until IS NULL OR valid_until >= NOW()")
 
 	if lifecycleEnabled {
 		q = q.Where("tier != 'working'").
