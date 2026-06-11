@@ -24,9 +24,11 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -199,6 +201,40 @@ func ImportWithStore(data []byte, opts ImportOptions, store ImportStore) (*Impor
 	}
 }
 
+// importManifest is the JSON structure for manifest.json inside a ZIP export bundle.
+// It mirrors the internal manifest type in export.go (kept separate to avoid coupling).
+type importManifest struct {
+	Checksums map[string]string `json:"checksums"`
+}
+
+// importZIPChecksums reads the bytes from a manifest.json zip.File and returns its
+// checksums map. Returns nil (no error) when the file is missing or unreadable —
+// checksum verification is best-effort: mismatches are reported but don't abort.
+func importZIPChecksums(zr *zip.Reader) map[string]string {
+	for _, f := range zr.File {
+		if f.Name != "manifest.json" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return nil
+		}
+		defer rc.Close() //nolint:staticcheck
+		var mf importManifest
+		if err := json.NewDecoder(io.LimitReader(rc, 1024*1024)).Decode(&mf); err != nil {
+			return nil
+		}
+		return mf.Checksums
+	}
+	return nil
+}
+
+// sha256hexImport returns the hex SHA-256 of data (mirrors export.go sha256hex).
+func sha256hexImport(data []byte) string {
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h)
+}
+
 // --- ZIP import (I1) ---
 
 func importFromZIP(data []byte, _ ImportOptions, store ImportStore, report *ImportReport) (*ImportReport, error) {
@@ -207,9 +243,13 @@ func importFromZIP(data []byte, _ ImportOptions, store ImportStore, report *Impo
 		return nil, fmt.Errorf("import ZIP: open: %w", err)
 	}
 
+	// Parse manifest.json to get checksums for verification (MINOR #5).
+	// Missing manifest is not an error — checksum verification is skipped silently.
+	checksums := importZIPChecksums(zr)
+
 	for _, f := range zr.File {
 		if f.Name == "manifest.json" {
-			continue // manifest is informational; we drive from content files
+			continue // already parsed above
 		}
 
 		rc, openErr := f.Open()
@@ -217,11 +257,34 @@ func importFromZIP(data []byte, _ ImportOptions, store ImportStore, report *Impo
 			report.Errors = append(report.Errors, fmt.Sprintf("open %s: %v", f.Name, openErr))
 			continue
 		}
+		// Decompression bomb guard: limit each ZIP entry to 64 MiB.
+		// Entries exceeding the limit are recorded as errors and skipped.
+		const maxZIPEntryBytes = 64 * 1024 * 1024 // 64 MiB
+		limited := io.LimitReader(rc, maxZIPEntryBytes+1)
 		var raw []byte
 		buf := new(bytes.Buffer)
-		_, _ = buf.ReadFrom(rc)
+		n, readErr := buf.ReadFrom(limited)
 		_ = rc.Close()
+		if readErr != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("read %s: %v", f.Name, readErr))
+			continue
+		}
+		if n > maxZIPEntryBytes {
+			report.Errors = append(report.Errors, fmt.Sprintf("entry %s exceeds 64 MiB limit, skipped", f.Name))
+			continue
+		}
 		raw = buf.Bytes()
+
+		// Verify SHA-256 checksum when manifest provided one (MINOR #5).
+		// Mismatch → report.Errors entry (not hard fail — import continues with other entries).
+		if checksums != nil {
+			if expected, ok := checksums[f.Name]; ok {
+				if actual := sha256hexImport(raw); actual != expected {
+					report.Errors = append(report.Errors, fmt.Sprintf("checksum mismatch for %s: expected %s got %s", f.Name, expected, actual))
+					continue
+				}
+			}
+		}
 
 		if strings.HasPrefix(f.Name, "content/") && strings.HasSuffix(f.Name, ".json") {
 			var mem ExportableMemory
@@ -284,6 +347,9 @@ func importFromZIP(data []byte, _ ImportOptions, store ImportStore, report *Impo
 
 func importFromJSONL(data []byte, _ ImportOptions, store ImportStore, report *ImportReport) (*ImportReport, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
+	// MINOR #6: increase scanner buffer beyond the default 64 KiB to handle large memory
+	// rows (embeddings, long content). Max token size = 4 MiB; initial buffer = 1 MiB.
+	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -324,6 +390,7 @@ func newResolutionToken() string {
 // Called by the JSONL importer when a sidecar is provided alongside the primary .jsonl.
 func importEdgesSidecarJSONL(data []byte, store ImportStore, report *ImportReport) error {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -351,6 +418,7 @@ func importEdgesSidecarJSONL(data []byte, store ImportStore, report *ImportRepor
 // importCandidatesSidecarJSONL parses a .candidates.jsonl sidecar into the store.
 func importCandidatesSidecarJSONL(data []byte, store ImportStore, report *ImportReport) error {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {

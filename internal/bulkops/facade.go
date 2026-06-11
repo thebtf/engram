@@ -145,9 +145,16 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		return &ExecuteResult{DryRun: false, AffectedCount: 0, Promoted: []int64{}}, nil
 	}
 
-	// Capture before-state.
+	// Capture before-state using typed entries (MAJOR fix: distinguish restore vs delete).
+	//
+	// The before_state JSONB uses SnapshotEntry{Kind, Before} per row:
+	//   - Candidates (by candidate ID): EntryKindRestore — rollback restores them to pending.
+	//   - Promoted memory rows (by memory ID): EntryKindDelete — rollback hard-deletes them.
+	//
+	// This fixes the rollback bug where AffectedMemoryIDs contained candidate IDs,
+	// memoryStore.Get() returned not-found for them, and promoted memory rows survived.
 	actor := resolveActor(identity)
-	snapshotID, beforeState, err := f.captureCandidateBeforeState(ctx, ids)
+	snapshotID, beforeState, err := f.capturePromoteBeforeState(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("bulk_promote snapshot capture: %w", err)
 	}
@@ -160,7 +167,11 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	if err != nil {
 		return nil, fmt.Errorf("bulk_promote new_snapshot: %w", err)
 	}
-	snap.AffectedMemoryIDs = candidateIDsToInt64(ids)
+	// AffectedMemoryIDs for bulk_promote tracks the CANDIDATE ids at this point
+	// (before promotions run). After promotions, we amend it with the promoted memory IDs
+	// so conflict detection can check the actual memory rows. The before_state typed entries
+	// are the rollback source of truth — AffectedMemoryIDs is only used for conflict detection.
+	snap.AffectedMemoryIDs = ids // candidate IDs pre-op; amended below with memory IDs
 	snap.SourceSessionID = op.SourceSessionID
 	snap.Parameters = params
 
@@ -185,6 +196,15 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		result.AffectedCount++
 		if promoted != nil && promoted.PromotedMemoryID != nil {
 			result.Promoted = append(result.Promoted, *promoted.PromotedMemoryID)
+		}
+	}
+
+	// Amend the snapshot before_state with delete-kind entries for promoted memory IDs,
+	// and update AffectedMemoryIDs to contain the memory IDs for conflict detection.
+	if len(result.Promoted) > 0 {
+		if amendErr := f.snapshotStore.AmendPromoteEntries(ctx, created.SnapshotID, result.Promoted); amendErr != nil {
+			// Non-fatal: log and continue — the snapshot is still usable for candidate restore.
+			log.Warn().Err(amendErr).Str("snapshot_id", created.SnapshotID).Msg("bulk_promote: amend snapshot entries failed")
 		}
 	}
 
@@ -357,6 +377,7 @@ func resolveActor(identity auth.Identity) string {
 
 // captureCandidateBeforeState fetches candidate rows and serializes them as JSONB.
 // The before_state JSONB is keyed by candidate ID (string for JSON compat).
+// Deprecated: use capturePromoteBeforeState for bulk_promote (typed entries).
 func (f *Facade) captureCandidateBeforeState(ctx context.Context, ids []int64) (string, json.RawMessage, error) {
 	snapshotID := uuid.New().String()
 	state := make(map[string]any, len(ids))
@@ -372,6 +393,33 @@ func (f *Facade) captureCandidateBeforeState(ctx context.Context, ids []int64) (
 	bs, err := json.Marshal(state)
 	if err != nil {
 		return "", nil, fmt.Errorf("serialize before_state: %w", err)
+	}
+	return snapshotID, json.RawMessage(bs), nil
+}
+
+// capturePromoteBeforeState captures candidate before-state as typed SnapshotEntry rows.
+// Each candidate ID is stored as EntryKindRestore with the candidate body as Before data.
+// Promoted memory IDs (created by the op) are added later via AmendPromoteEntries as
+// EntryKindDelete (no before needed — they did not exist pre-op).
+func (f *Facade) capturePromoteBeforeState(ctx context.Context, candidateIDs []int64) (string, json.RawMessage, error) {
+	snapshotID := uuid.New().String()
+	state := make(map[string]models.SnapshotEntry, len(candidateIDs))
+	for _, id := range candidateIDs {
+		c, err := f.candidateStore.Get(ctx, id)
+		if err != nil {
+			// Missing candidate: still record a restore entry with empty Before.
+			state[fmt.Sprintf("%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore}
+			continue
+		}
+		before, marshalErr := json.Marshal(c)
+		if marshalErr != nil {
+			return "", nil, fmt.Errorf("capturePromoteBeforeState: marshal candidate %d: %w", id, marshalErr)
+		}
+		state[fmt.Sprintf("%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore, Before: json.RawMessage(before)}
+	}
+	bs, err := json.Marshal(state)
+	if err != nil {
+		return "", nil, fmt.Errorf("capturePromoteBeforeState: serialize: %w", err)
 	}
 	return snapshotID, json.RawMessage(bs), nil
 }

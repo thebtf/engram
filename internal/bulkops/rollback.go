@@ -20,7 +20,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/pkg/models"
-	"gorm.io/gorm"
+	gormpkg "gorm.io/gorm"
 )
 
 // ErrRollbackConflict is returned when at least one affected memory has been modified
@@ -64,7 +64,7 @@ func Rollback(
 
 	snap, err := snapshotStore.Get(ctx, snapshotID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, gormpkg.ErrRecordNotFound) {
 			return nil, fmt.Errorf("rollback: snapshot %q not found: %w", snapshotID, err)
 		}
 		return nil, fmt.Errorf("rollback: get snapshot: %w", err)
@@ -77,13 +77,17 @@ func Rollback(
 
 	actor := resolveActor(identity)
 
-	// Decode before_state: map[string(memoryID)]json.RawMessage.
-	beforeState, err := decodeBeforeState(snap.BeforeState)
+	// Decode before_state. Supports two formats:
+	//  - Typed entries: map[id]{"kind":"restore"|"delete","before":<raw>} (bulk_promote fix)
+	//  - Legacy flat format: map[id]<memory JSON> (bulk_delete, bulk_supersede)
+	// decodeTypedBeforeState transparently handles both.
+	typedEntries, err := decodeTypedBeforeState(snap.BeforeState)
 	if err != nil {
 		return nil, fmt.Errorf("rollback: decode before_state: %w", err)
 	}
 
-	// Conflict check (EC-F3): for every affected memory, verify updated_at <= snapshot.created_at.
+	// Conflict check (EC-F3): for every affected memory ID, verify updated_at <= snapshot.created_at.
+	// AffectedMemoryIDs contains actual memory IDs (post-amend for bulk_promote).
 	conflictIDs, err := detectConflicts(ctx, memoryStore, snap.AffectedMemoryIDs, snap.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("rollback: conflict detection: %w", err)
@@ -103,36 +107,76 @@ func Rollback(
 		}, ErrRollbackConflict
 	}
 
-	// Restore each memory from before_state.
+	// MAJOR fix: all restore mutations + MarkRolledBack run inside ONE transaction.
+	// A mid-loop failure previously left partially-restored state with the snapshot
+	// still committed — re-rollback would double-write already-restored rows.
+	// With a single transaction: either everything is applied or nothing is.
+	db := memoryStore.GetDB()
 	result := &RollbackResult{SnapshotID: snapshotID}
-	for _, id := range snap.AffectedMemoryIDs {
-		key := strconv.FormatInt(id, 10)
-		rawMem, ok := beforeState[key]
-		if !ok || rawMem == nil {
-			// Memory was not in before_state (e.g., was created by the op); skip.
-			continue
+
+	txErr := db.WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
+		var restored int
+
+		for key, entry := range typedEntries {
+			id, parseErr := strconv.ParseInt(key, 10, 64)
+			if parseErr != nil {
+				return fmt.Errorf("rollback: parse entry key %q: %w", key, parseErr)
+			}
+
+			switch entry.Kind {
+			case models.EntryKindDelete:
+				// Row was CREATED by the op; hard-delete it within the transaction.
+				// candidate.promoted_memory_id is SET NULL by FK (ON DELETE SET NULL, EC-F4).
+				if delErr := memoryStore.HardDeleteTx(ctx, tx, id); delErr != nil {
+					return fmt.Errorf("rollback: hard-delete created memory %d: %w", id, delErr)
+				}
+
+			case models.EntryKindRestore, "": // empty kind = legacy flat format (treated as restore)
+				if len(entry.Before) == 0 || string(entry.Before) == "null" {
+					// Empty before-state: row didn't exist pre-op; skip (same as legacy skip).
+					continue
+				}
+				var mem models.Memory
+				if unmarshalErr := json.Unmarshal(entry.Before, &mem); unmarshalErr != nil {
+					return fmt.Errorf("rollback: unmarshal memory %d: %w", id, unmarshalErr)
+				}
+				mem.ID = id
+				if restoreErr := memoryStore.RestoreRawTx(ctx, tx, &mem); restoreErr != nil {
+					return fmt.Errorf("rollback: restore memory %d: %w", id, restoreErr)
+				}
+				restored++
+
+			default:
+				return fmt.Errorf("rollback: unknown entry kind %q for id %d", entry.Kind, id)
+			}
 		}
 
-		var mem models.Memory
-		if err := json.Unmarshal(rawMem, &mem); err != nil {
-			return nil, fmt.Errorf("rollback: unmarshal memory %d: %w", id, err)
+		// Mark snapshot rolled_back inside the same transaction.
+		now := time.Now().UTC()
+		res := tx.WithContext(ctx).
+			Model(&struct{ TableName string }{}).
+			Table("bulk_op_snapshots").
+			Where("snapshot_id = ? AND status = 'committed'", snapshotID).
+			Updates(map[string]any{
+				"status":         string(models.SnapshotStatusRolledBack),
+				"rolled_back_at": now,
+			})
+		if res.Error != nil {
+			return fmt.Errorf("rollback: mark_rolled_back in tx: %w", res.Error)
 		}
-		mem.ID = id
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("rollback: snapshot %q not found or already rolled back", snapshotID)
+		}
 
-		// Restore via Update. Update only touches content/tags/source_agent/edited_by/updated_at.
-		// For deletions (deleted_at was nil before), we also need to clear deleted_at.
-		if err := restoreMemory(ctx, memoryStore, &mem); err != nil {
-			return nil, fmt.Errorf("rollback: restore memory %d: %w", id, err)
-		}
-		result.RestoredCount++
+		result.RestoredCount = restored
+		return nil
+	})
+
+	if txErr != nil {
+		return nil, txErr
 	}
 
-	// Mark snapshot as rolled back.
-	if err := snapshotStore.MarkRolledBack(ctx, snapshotID); err != nil {
-		return nil, fmt.Errorf("rollback: mark_rolled_back: %w", err)
-	}
-
-	// Audit success.
+	// Audit success (outside tx — non-fatal if it fails).
 	if auditStore != nil {
 		_ = auditStore.Log(ctx, gormdb.AuditLogEntry{
 			Action: "rollback",
@@ -154,7 +198,7 @@ func detectConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids [
 	for _, id := range ids {
 		mem, err := memoryStore.Get(ctx, id)
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
+			if errors.Is(err, gormpkg.ErrRecordNotFound) {
 				// Deleted memories don't conflict — skip.
 				continue
 			}
@@ -167,8 +211,49 @@ func detectConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids [
 	return conflicts, nil
 }
 
+// decodeTypedBeforeState parses the JSONB before_state into typed SnapshotEntry values.
+//
+// Supports two wire formats transparently:
+//  1. Typed: map[id]{"kind":"restore"|"delete","before":<raw>} — written by bulk_promote fix.
+//  2. Legacy flat: map[id]<memory JSON object> — written by bulk_delete/bulk_supersede.
+//
+// The distinguishing heuristic: if the top-level value has a "kind" field that equals
+// "restore" or "delete", it is a typed entry. Otherwise it is treated as a legacy
+// flat memory row and wrapped as EntryKindRestore with the full value as Before.
+func decodeTypedBeforeState(raw json.RawMessage) (map[string]models.SnapshotEntry, error) {
+	if len(raw) == 0 || string(raw) == "{}" {
+		return map[string]models.SnapshotEntry{}, nil
+	}
+
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return nil, fmt.Errorf("parse before_state JSON: %w", err)
+	}
+
+	out := make(map[string]models.SnapshotEntry, len(rawMap))
+	for k, v := range rawMap {
+		if v == nil || string(v) == "null" {
+			// nil entry = legacy missing row; treat as restore with empty before.
+			out[k] = models.SnapshotEntry{Kind: models.EntryKindRestore}
+			continue
+		}
+
+		// Try typed format first.
+		var typed models.SnapshotEntry
+		if err := json.Unmarshal(v, &typed); err == nil &&
+			(typed.Kind == models.EntryKindRestore || typed.Kind == models.EntryKindDelete) {
+			out[k] = typed
+			continue
+		}
+
+		// Legacy flat format: the value is a raw memory object. Wrap as restore entry.
+		out[k] = models.SnapshotEntry{Kind: models.EntryKindRestore, Before: v}
+	}
+	return out, nil
+}
+
 // decodeBeforeState parses the JSONB before_state into a map[memoryID]raw.
-// The before_state was written by captureMemoryBeforeState as map[string]*models.Memory.
+// Kept for backward compatibility with existing tests.
 func decodeBeforeState(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	if len(raw) == 0 || string(raw) == "{}" {
 		return map[string]json.RawMessage{}, nil
@@ -178,16 +263,4 @@ func decodeBeforeState(raw json.RawMessage) (map[string]json.RawMessage, error) 
 		return nil, fmt.Errorf("parse before_state JSON: %w", err)
 	}
 	return m, nil
-}
-
-// restoreMemory writes back a memory row captured in before_state.
-// Uses GORM raw update to restore content, tags, status, deleted_at, and updated_at
-// to their pre-op values without triggering version bumps.
-func restoreMemory(ctx context.Context, memoryStore *gormdb.MemoryStore, mem *models.Memory) error {
-	if mem.ID == 0 {
-		return fmt.Errorf("restoreMemory: memory ID is zero")
-	}
-	// RestoreRaw performs a direct UPDATE bypassing the normal Update() validations
-	// (which require non-empty Content and reject deleted rows).
-	return memoryStore.RestoreRaw(ctx, mem)
 }

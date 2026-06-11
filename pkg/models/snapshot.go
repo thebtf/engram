@@ -85,6 +85,31 @@ type BulkOpSnapshot struct {
 	ID int64 `json:"id"`
 }
 
+// SnapshotEntryKind distinguishes how a rollback should handle each row captured in
+// before_state.
+//
+//   - EntryKindRestore: the row existed before the op; rollback must restore it from BeforeData.
+//   - EntryKindDelete: the row was CREATED by the op (e.g., memory promoted from a candidate);
+//     rollback must hard-delete it.
+//
+// The kind is stored inline inside before_state JSONB so no schema migration is needed:
+//
+//	"<id>": {"kind": "restore", "before": <row JSON>}
+//	"<id>": {"kind": "delete"}
+type SnapshotEntryKind string
+
+const (
+	EntryKindRestore SnapshotEntryKind = "restore"
+	EntryKindDelete  SnapshotEntryKind = "delete"
+)
+
+// SnapshotEntry is the typed unit stored inside before_state for each affected row.
+// Stored as JSONB — no new column required.
+type SnapshotEntry struct {
+	Kind   SnapshotEntryKind `json:"kind"`
+	Before json.RawMessage   `json:"before,omitempty"` // populated only for EntryKindRestore
+}
+
 // NewBulkOpSnapshot constructs a BulkOpSnapshot with validation.
 // Returns an error if required fields are absent or if OpType/Status are invalid.
 // SnapshotID must be provided by the caller (ULID or UUID).

@@ -93,6 +93,9 @@ func bulkOpsTools() []Tool {
 // Dry-run nil-safe seam: when bulkFacade is nil and dry_run=true, returns
 // would_affect from len(candidate_ids) — zero DB reads or writes.
 func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (string, error) {
+	if !vnextFEnabled() {
+		return "", fmt.Errorf("bulk_promote: requires ENGRAM_VNEXT_F_ENABLED=true")
+	}
 	identity, ok := auth.IdentityFrom(ctx)
 	if !ok || !identity.IsAdmin() {
 		return "", fmt.Errorf("admin_required: bulk_promote requires admin identity")
@@ -149,6 +152,9 @@ func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (s
 // Dry-run nil-safe seam: when bulkFacade is nil and dry_run=true, returns
 // would_affect from len(memory_ids) — zero DB reads or writes.
 func (s *Server) handleBulkDelete(ctx context.Context, args json.RawMessage) (string, error) {
+	if !vnextFEnabled() {
+		return "", fmt.Errorf("bulk_delete: requires ENGRAM_VNEXT_F_ENABLED=true")
+	}
 	identity, ok := auth.IdentityFrom(ctx)
 	if !ok || !identity.IsAdmin() {
 		return "", fmt.Errorf("admin_required: bulk_delete requires admin identity")
@@ -203,6 +209,9 @@ func (s *Server) handleBulkDelete(ctx context.Context, args json.RawMessage) (st
 // Dry-run nil-safe seam: when bulkFacade is nil and dry_run=true, returns
 // would_affect from len(memory_ids) — zero DB reads or writes.
 func (s *Server) handleBulkSupersede(ctx context.Context, args json.RawMessage) (string, error) {
+	if !vnextFEnabled() {
+		return "", fmt.Errorf("bulk_supersede: requires ENGRAM_VNEXT_F_ENABLED=true")
+	}
 	identity, ok := auth.IdentityFrom(ctx)
 	if !ok || !identity.IsAdmin() {
 		return "", fmt.Errorf("admin_required: bulk_supersede requires admin identity")

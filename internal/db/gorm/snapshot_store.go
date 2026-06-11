@@ -264,6 +264,68 @@ func (s *SnapshotStore) Pin(ctx context.Context, snapshotID string) error {
 	return nil
 }
 
+// AmendPromoteEntries adds EntryKindDelete typed entries for memory IDs that were
+// CREATED by a bulk_promote op. These entries tell rollback to hard-delete those rows
+// (they have no pre-op state to restore). The method reads the existing before_state,
+// merges the new delete entries, and writes back atomically.
+//
+// This must be called after TransitionToPromoted returns the promoted memory IDs so
+// the snapshot records the full picture needed for correct rollback.
+func (s *SnapshotStore) AmendPromoteEntries(ctx context.Context, snapshotID string, promotedMemoryIDs []int64) error {
+	if len(promotedMemoryIDs) == 0 {
+		return nil
+	}
+
+	// Read current row.
+	var row snapshotRow
+	if err := s.db.WithContext(ctx).Where("snapshot_id = ?", snapshotID).First(&row).Error; err != nil {
+		return fmt.Errorf("amend_promote_entries: get snapshot %q: %w", snapshotID, err)
+	}
+
+	// Decode existing before_state.
+	existing := make(map[string]json.RawMessage)
+	if len(row.BeforeState) > 0 && string(row.BeforeState) != "{}" {
+		if err := json.Unmarshal([]byte(row.BeforeState), &existing); err != nil {
+			return fmt.Errorf("amend_promote_entries: decode before_state: %w", err)
+		}
+	}
+
+	// Add delete entries for each promoted memory ID.
+	deleteEntry, _ := json.Marshal(map[string]string{"kind": "delete"})
+	for _, memID := range promotedMemoryIDs {
+		key := fmt.Sprintf("%d", memID)
+		existing[key] = json.RawMessage(deleteEntry)
+	}
+
+	// Collect all affected memory IDs (promote candidates + promoted memories) for conflict detection.
+	// We also update AffectedMemoryIDs to include the promoted memory IDs.
+	var allMemoryIDs Int64Array
+	_ = s.db.WithContext(ctx).
+		Where("snapshot_id = ?", snapshotID).
+		Select("affected_memory_ids").
+		Find(&row).Error
+	allMemoryIDs = Int64Array(row.AffectedMemoryIDs)
+	allMemoryIDs = append(allMemoryIDs, promotedMemoryIDs...)
+
+	// Serialize and write back.
+	amended, err := json.Marshal(existing)
+	if err != nil {
+		return fmt.Errorf("amend_promote_entries: serialize: %w", err)
+	}
+
+	res := s.db.WithContext(ctx).
+		Model(&snapshotRow{}).
+		Where("snapshot_id = ?", snapshotID).
+		Updates(map[string]any{
+			"before_state":        JSONRaw(amended),
+			"affected_memory_ids": allMemoryIDs,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("amend_promote_entries: update snapshot %q: %w", snapshotID, res.Error)
+	}
+	return nil
+}
+
 // DeleteOlderThan deletes non-pinned snapshots older than the cutoff time.
 // Returns the number of rows deleted. Used by the T049 snapshot auto-prune.
 func (s *SnapshotStore) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {

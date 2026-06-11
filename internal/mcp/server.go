@@ -572,6 +572,53 @@ If you need the full expanded tool list (50+ individual tools), call ` + "`tools
 
 `
 
+// storeMemoryTool returns the store_memory tool definition.
+//
+// Schema contract (per TestStoreMemoryToolSchema_FlagOff_HasNewProperties_ButRuntimeIgnores):
+//   - privacy_scope and session_id are advertised unconditionally so clients always
+//     discover them; the runtime handler honors them only when ENGRAM_VNEXT_F_ENABLED=true.
+//   - dry_run, force, resolution_token, option, target_memory_id are advertised only
+//     when ENGRAM_VNEXT_F_ENABLED=true (T044 FR-F6.b — write-lint phase fields).
+func storeMemoryTool() Tool {
+	props := map[string]any{
+		"content":       map[string]any{"type": "string", "description": "The content/knowledge to remember"},
+		"title":         map[string]any{"type": "string", "description": "Short title for the memory"},
+		"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
+		"rejected":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
+		"type":          map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
+		"importance":    map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
+		"scope":         map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
+		// privacy_scope and session_id are unconditional in schema (clients discover them at all
+		// times); the runtime handler ignores them when ENGRAM_VNEXT_F_ENABLED=false (RI-F1).
+		"privacy_scope": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
+		"session_id":    map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
+		"project":       map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
+		"ttl_days":      map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
+		"always_inject": map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
+		"agent_source":  map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
+		"supersedes":    map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
+	}
+	// dry_run and write-lint phase fields are only advertised when the flag is on.
+	// Advertising them unconditionally would imply they work on flag-off servers.
+	if vnextFEnabled() {
+		props["dry_run"]          = map[string]any{"type": "boolean", "description": "T044 FR-F6.b: when true, returns a preview of what would be stored (after redaction) without writing to DB. write_lint field in response indicates whether Phase1 would run on a live call."}
+		props["force"]            = map[string]any{"type": "boolean", "description": "T035: when true, bypasses write-lint Phase1/Phase2 and writes directly (legacy path). Logged as legacy_force_write in audit. Honored only when ENGRAM_VNEXT_F_ENABLED=true."}
+		props["resolution_token"] = map[string]any{"type": "string", "description": "T035 Phase2: resolution token minted by a prior Phase1 response. When set, commits the write using the chosen option. Cannot combine with force=true."}
+		props["option"]           = map[string]any{"type": "string", "description": "T035 Phase2: resolution option chosen by the caller (e.g. merge_with, supersede, link_contradiction, ignore_signals). Required when resolution_token is set."}
+		props["target_memory_id"] = map[string]any{"type": "integer", "description": "T035 Phase2: target memory ID for merge_with / supersede options. Required for those options."}
+	}
+	return Tool{
+		Name:        "store_memory",
+		Description: "Explicitly store a memory/observation. Use when you want to remember something specific across sessions.",
+		tier:        tierCore,
+		InputSchema: map[string]any{
+			"type":       "object",
+			"required":   []string{"content"},
+			"properties": props,
+		},
+	}
+}
+
 // recallMemoryTool returns the recall_memory tool definition.
 // Schema composition (two independent flags):
 //
@@ -949,36 +996,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	// Memory management tools — advertise when memory storage is available
 	if s.memoryStore != nil {
 		tools = append(tools,
-			Tool{
-				Name:        "store_memory",
-				Description: "Explicitly store a memory/observation. Use when you want to remember something specific across sessions.",
-				tier:        tierCore,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"content"},
-					"properties": map[string]any{
-						"content":       map[string]any{"type": "string", "description": "The content/knowledge to remember"},
-						"title":         map[string]any{"type": "string", "description": "Short title for the memory"},
-						"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
-						"rejected":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
-						"type":          map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
-						"importance":    map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
-						"scope":         map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
-						"privacy_scope": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
-						"session_id":    map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
-						"project":       map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
-						"ttl_days":      map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
-						"always_inject": map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
-						"agent_source":  map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
-						"supersedes":         map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
-						"dry_run":            map[string]any{"type": "boolean", "description": "T044 FR-F6.b: when true, returns a preview of what would be stored (after redaction) without writing to DB. write_lint field in response indicates whether Phase1 would run on a live call."},
-						"force":              map[string]any{"type": "boolean", "description": "T035: when true, bypasses write-lint Phase1/Phase2 and writes directly (legacy path). Logged as legacy_force_write in audit. Honored only when ENGRAM_VNEXT_F_ENABLED=true."},
-						"resolution_token":   map[string]any{"type": "string", "description": "T035 Phase2: resolution token minted by a prior Phase1 response. When set, commits the write using the chosen option. Cannot combine with force=true."},
-						"option":             map[string]any{"type": "string", "description": "T035 Phase2: resolution option chosen by the caller (e.g. merge_with, supersede, link_contradiction, ignore_signals). Required when resolution_token is set."},
-						"target_memory_id":   map[string]any{"type": "integer", "description": "T035 Phase2: target memory ID for merge_with / supersede options. Required for those options."},
-					},
-				},
-			},
+			storeMemoryTool(),
 			recallMemoryTool(),
 			Tool{
 				Name:        "rate_memory",
