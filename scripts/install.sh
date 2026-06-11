@@ -213,6 +213,12 @@ download_release() {
         cp "$tmp_dir/.mcp.json" "$INSTALL_DIR/.mcp.json"
     fi
 
+    # Copy the Claude-specific MCP config referenced by .claude-plugin/plugin.json
+    if [[ -f "$tmp_dir/claude/.mcp.json" ]]; then
+        mkdir -p "$INSTALL_DIR/claude"
+        cp "$tmp_dir/claude/.mcp.json" "$INSTALL_DIR/claude/.mcp.json"
+    fi
+
     # Make binaries executable
     if [[ "$INSTALL_MODE" == "full" ]]; then
         chmod +x "$INSTALL_DIR/engram-server" 2>/dev/null || true

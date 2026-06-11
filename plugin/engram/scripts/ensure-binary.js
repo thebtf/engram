@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const http = require("http");
-const { execFileSync } = require("child_process");
+const { spawnSync } = require("child_process");
 
 const REPO = "thebtf/engram";
 
@@ -254,46 +254,80 @@ function download(url, destPath) {
   });
 }
 
-function installedBinaryMatches(binaryPath, versionFile, desiredVersion, readVersion = readBinaryVersion) {
+function installedBinaryMatches(
+  binaryPath,
+  versionFile,
+  desiredVersion,
+  readVersion = readBinaryVersion,
+  probeRuns = binaryVersionProbeRuns
+) {
   if (!fs.existsSync(binaryPath)) {
     return false;
   }
 
+  let markerMatches = false;
   if (fs.existsSync(versionFile)) {
     try {
       const installed = fs.readFileSync(versionFile, "utf8").trim();
       if (installed !== desiredVersion) {
         return false;
       }
+      markerMatches = true;
     } catch {
       return false;
     }
   }
 
   const actualVersion = readVersion(binaryPath);
-  return actualVersion === daemonVersionForPluginVersion(desiredVersion);
+  if (actualVersion) {
+    return actualVersion === daemonVersionForPluginVersion(desiredVersion);
+  }
+
+  // Some Windows Codex/Desktop contexts deny Node child_process launches when
+  // stdout/stderr are piped (EPERM), while the same binary launches normally
+  // with inherited or ignored stdio. In that case, keep the previous stale-marker
+  // protection: only trust the marker if it already matched the desired plugin
+  // version and the executable at least starts for --version.
+  return markerMatches && probeRuns(binaryPath);
 }
 
 function readBinaryVersion(binaryPath) {
-  try {
-    const output = execFileSync(binaryPath, ["--version"], {
-      encoding: "utf8",
-      timeout: 5000,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        ENGRAM_URL: "",
-        ENGRAM_TOKEN: "",
-      },
-    });
-    const match = output.match(/\b(v?\d+\.\d+\.\d+(?:[-+][^\s]+)?)/);
-    if (!match) {
-      return "";
-    }
-    return daemonVersionForPluginVersion(match[1]);
-  } catch {
+  const result = spawnSync(binaryPath, ["--version"], {
+    encoding: "utf8",
+    timeout: 5000,
+    windowsHide: true,
+    env: versionProbeEnv(),
+  });
+
+  if (result.error || result.status !== 0) {
     return "";
   }
+
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  const match = output.match(/\b(v?\d+\.\d+\.\d+(?:[-+][^\s]+)?)/);
+  if (!match) {
+    return "";
+  }
+  return daemonVersionForPluginVersion(match[1]);
+}
+
+function binaryVersionProbeRuns(binaryPath) {
+  const result = spawnSync(binaryPath, ["--version"], {
+    stdio: "ignore",
+    timeout: 5000,
+    windowsHide: true,
+    env: versionProbeEnv(),
+  });
+
+  return !result.error && result.status === 0;
+}
+
+function versionProbeEnv() {
+  return {
+    ...process.env,
+    ENGRAM_URL: "",
+    ENGRAM_TOKEN: "",
+  };
 }
 
 function daemonVersionForPluginVersion(version) {
@@ -312,6 +346,7 @@ if (require.main === module) {
 
 module.exports = {
   daemonVersionForPluginVersion,
+  binaryVersionProbeRuns,
   installedBinaryMatches,
   readBinaryVersion,
 };

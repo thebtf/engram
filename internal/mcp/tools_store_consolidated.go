@@ -19,7 +19,7 @@ func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessa
 	case "create":
 		return s.handleStoreMemory(ctx, args)
 	case "edit":
-		return "", fmt.Errorf("store action 'edit' (observation editing) removed in v5")
+		return s.handleEditMemory(ctx, args)
 	case "merge":
 		return "", fmt.Errorf("store action 'merge' (observation merging) removed in v5")
 	case "import":

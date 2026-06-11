@@ -67,7 +67,7 @@ Tests require CGO (`CGO_ENABLED=1`). Some integration tests need a running Postg
 - **Database**: GORM with PostgreSQL driver
 - **Logging**: zerolog
 - **Error handling**: wrap errors with context (`fmt.Errorf("doing X: %w", err)`)
-- **File organization**: by domain -- `internal/search/`, `internal/scoring/`, `internal/embedding/`, etc.
+- **File organization**: by domain -- `internal/mcp/`, `internal/worker/`, `internal/retrieval/`, etc.
 - **File size**: keep files focused, ideally under 800 lines
 - **Immutability**: prefer creating new objects over mutating existing ones
 
@@ -104,22 +104,31 @@ Keep descriptions concise. Add a body for non-obvious changes.
 
 ```
 cmd/
-  worker/          -- HTTP API server (main entry point)
-  mcp/             -- MCP server (stdio transport)
-  mcp-stdio-proxy/ -- stdio-to-SSE proxy
-  hooks/           -- Claude Code lifecycle hooks
+  engram-server/   -- HTTP API + gRPC server (main entry point, cmux on :37777)
+  engram/          -- stdio MCP proxy (client, git-derived project identity)
+  engram-import/   -- bulk import CLI
 internal/
-  search/          -- search and retrieval logic
-  scoring/         -- observation scoring and ranking
-  embedding/       -- vector embedding (OpenAI-compatible REST API)
-  reranking/       -- result reranking (API-based cross-encoder)
-  mcp/             -- MCP protocol implementation and tool handlers
+  mcp/             -- MCP protocol implementation and tool handlers (tools_*.go)
   worker/          -- HTTP handlers, middleware, server setup
-  consolidation/   -- observation merging and maintenance
-  selflearn/       -- self-learning signal detection
+  grpcserver/      -- gRPC service implementations
+  db/gorm/         -- GORM models + stores (memories, behavioral_rules, etc.)
+  auth/            -- authentication and token management
+  crypto/          -- AES-256-GCM vault for credential encryption
+  config/          -- server configuration and env parsing
+  retrieval/       -- search and retrieval logic (vnext rebuild in progress)
+  graph/           -- graph capabilities (vnext rebuild in progress)
+  crystallization/ -- observation crystallization (vnext rebuild in progress)
+  lifecycle/       -- agent lifecycle management (vnext rebuild in progress)
+  embedding/       -- embedding subsystem (vnext rebuild in progress)
+  injection/       -- session-start context injection
+  sessions/        -- session management and tracking
+  collections/     -- document collections
+  handlers/loom/   -- background task engine (Loom)
+  telemetry/       -- telemetry snapshots
+  cognitive/       -- cognitive processing utilities (v7 platform substrate)
 pkg/
-  models/          -- shared data models
-  hooks/           -- hook definitions and utilities
+  models/          -- shared data models and domain types
+  similarity/      -- clustering helpers for similarity workflows
   strutil/         -- string utility functions
 plugin/            -- Claude Code plugin definition and metadata
 ```

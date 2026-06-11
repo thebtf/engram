@@ -12,11 +12,41 @@ Configure the connection to your Engram server.
 
 ## Codex setup
 
-Codex does not use Claude Code `userConfig`. Configure the two required values
-in `~/.codex/config.toml` so the plugin MCP server can forward them via
-`env_vars`.
+> **Note (Codex ≥ 0.139):** Codex stopped forwarding
+> `[shell_environment_policy.set]` values to plugin MCP server children in
+> 0.139 (see openai/codex#24401 — no documented replacement for plugin MCP
+> servers). `ENGRAM_URL` / `ENGRAM_TOKEN` set in `config.toml` are no longer
+> seen by the engram wrapper. The **engram config file** is the supported path
+> from v6.4.15 onward.
 
-Add or update:
+### Supported path: engram config file
+
+Create `~/.engram/config.json` (or a path of your choice pointed to by
+`ENGRAM_CONFIG_FILE`):
+
+```json
+{
+  "server_url": "http://your-server:37777",
+  "api_token": "engram_<32hex-keycard-from-dashboard>"
+}
+```
+
+On POSIX systems the file should be readable only by your user account:
+
+```sh
+chmod 600 ~/.engram/config.json
+```
+
+On Windows the file lives in your user profile; NTFS ACLs inherited from the
+parent directory already restrict access to your account.
+
+The engram plugin reads this file as the final fallback in its credential
+chain, so it works in Codex, Claude Code, and any other harness that does
+not forward env vars to plugin children.
+
+### Legacy path (Codex < 0.139 only)
+
+For Codex versions that still forward `shell_environment_policy.set`:
 
 ```toml
 [shell_environment_policy.set]
@@ -24,10 +54,12 @@ ENGRAM_URL = "http://your-server:37777"
 ENGRAM_TOKEN = "engram_<32hex-keycard-from-dashboard>"
 ```
 
+This path was never a documented contract for plugin MCP servers and stopped
+working with Codex 0.139. Prefer the config file for new setups.
+
 Then restart Codex or open a new Codex thread so MCP startup sees the new
 environment. If Codex offers plugin authentication during install, provide the
-same server URL and worker keycard there; the config values above remain the
-portable fallback for CLI, IDE, and Desktop.
+same server URL and worker keycard there.
 
 ## Claude Code setup
 
@@ -98,7 +130,9 @@ it there triggers a v6 warning at daemon startup.
 If the user has a stale `ENGRAM_API_TOKEN` entry, remove it too (v5-era
 name, no longer read).
 
-For Codex, update `~/.codex/config.toml` as shown in "Codex setup" above.
+For Codex, create `~/.engram/config.json` as shown in "Codex setup" above.
+The config file also works as a universal fallback for any harness that does not
+forward env vars to plugin children.
 
 ### 4. Restart the agent host
 

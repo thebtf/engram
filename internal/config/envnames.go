@@ -6,9 +6,9 @@ package config
 // admin-vs-client tier separation (FR-1 + FR-3 + ADR-006):
 //
 //   - EnvAdminToken       — server-host-only operator key. NEVER read by
-//                           daemon, plugin, or hook code.
+//     daemon, plugin, or hook code.
 //   - EnvWorkstationToken — client-side keycard issued via the dashboard
-//                           /tokens UI. Read ONLY by the daemon and bridge.
+//     /tokens UI. Read ONLY by the daemon and bridge.
 //
 // EnvServerURL / EnvServerURLAlt resolve the historical split between
 // ENGRAM_URL (plugin docs / hooks) and ENGRAM_SERVER_URL (server-events
@@ -36,4 +36,11 @@ const (
 	// serverevents bridge read it; nothing else does. Empty value at
 	// daemon startup with a configured server URL is fatal (FR-4).
 	EnvWorkstationToken = "ENGRAM_TOKEN"
+
+	// EnvClaudeSessionID is the Claude Code session identifier injected by the
+	// Claude Code harness into the daemon process environment on every session.
+	// The daemon reads it from p.Env (per-session override) or os.Getenv
+	// (process-level) and propagates it as SessionId in pb.CallToolRequest so
+	// the server-side audit helpers can record the correct SourceSessionID.
+	EnvClaudeSessionID = "CLAUDE_SESSION_ID"
 )

@@ -29,8 +29,17 @@ type PromotionLogger interface {
 	LogPromotion(ctx context.Context, memoryID int64, fromTier, toTier, reason string) error
 }
 
+// AuditLogger abstracts audit_log writes for the sleep cycle (T004).
+// Accepts just the fields needed for promote/demote events. When nil,
+// no audit write occurs — nil-guard is applied at call sites.
+type AuditLogger interface {
+	LogAudit(ctx context.Context, memoryID int64, action, actor string) error
+}
+
 // RunSleepCycle executes a full decay + promotion + demotion + expiration cycle.
-func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog PromotionLogger) SleepResult {
+// auditLog may be nil (e.g. when ENGRAM_VNEXT_ENABLED is off); all call sites
+// nil-guard before invoking.
+func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog PromotionLogger, auditLog AuditLogger) SleepResult {
 	start := time.Now()
 	result := SleepResult{}
 
@@ -87,18 +96,30 @@ func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog Promot
 			m.Confidence = confidence
 			m.Stability = stability
 
+			// Finding 5: capture promotion/demotion intent but defer audit until
+			// Findings 4-5 (second review): both promotionLog and auditLog must fire
+			// only after UpdateLifecycleFields succeeds.  Capture pending callbacks
+			// here; execute them in the success branch below.
+			var pendingAuditAction string
+			var pendingPromoLog func()
 			if promo := EvaluatePromotion(m); promo.Changed {
 				fields["tier"] = promo.NewTier
 				result.Promotions++
-				if promotionLog != nil {
-					_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, promo.NewTier, promo.Reason)
+				pendingPromoLog = func() {
+					if promotionLog != nil {
+						_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, promo.NewTier, promo.Reason)
+					}
 				}
+				pendingAuditAction = "promote"
 			} else if demo := EvaluateDemotion(m); demo.Changed {
 				fields["tier"] = demo.NewTier
 				result.Demotions++
-				if promotionLog != nil {
-					_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, demo.NewTier, demo.Reason)
+				pendingPromoLog = func() {
+					if promotionLog != nil {
+						_ = promotionLog.LogPromotion(ctx, m.ID, m.Tier, demo.NewTier, demo.Reason)
+					}
 				}
+				pendingAuditAction = "demote"
 			}
 
 			if m.Defeasibility == DefeasibilityRapid && m.ValidUntil != nil && now.After(*m.ValidUntil) {
@@ -115,8 +136,20 @@ func RunSleepCycle(ctx context.Context, store MemoryUpdater, promotionLog Promot
 			if len(fields) > 0 {
 				if err := store.UpdateLifecycleFields(ctx, m.ID, fields); err != nil {
 					log.Error().Err(err).Int64("memory_id", m.ID).Msg("sleep cycle: update failed")
+				} else {
+					result.MemoriesProcessed++
+					// Findings 4-5: execute promotion/demotion log ONLY after
+					// the DB update succeeds, preventing phantom entries on rollback.
+					if pendingPromoLog != nil {
+						pendingPromoLog()
+					}
+					// Audit tier changes only after successful persist.
+					if pendingAuditAction != "" && auditLog != nil {
+						if auditErr := auditLog.LogAudit(ctx, m.ID, pendingAuditAction, "system"); auditErr != nil {
+							log.Error().Err(auditErr).Int64("memory_id", m.ID).Str("action", pendingAuditAction).Msg("sleep cycle: audit log failed")
+						}
+					}
 				}
-				result.MemoriesProcessed++
 			}
 		}
 

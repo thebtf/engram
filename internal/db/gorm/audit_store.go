@@ -59,6 +59,17 @@ func (s *AuditStore) GetByMemory(ctx context.Context, memoryID int64, limit int)
 	return entries, nil
 }
 
+// LogAudit is a convenience method that satisfies the lifecycle.AuditLogger interface.
+// It records a minimal audit entry with only action, actor, and optional memory_id.
+func (s *AuditStore) LogAudit(ctx context.Context, memoryID int64, action, actor string) error {
+	entry := AuditLogEntry{
+		MemoryID: &memoryID,
+		Action:   action,
+		Actor:    actor,
+	}
+	return s.Log(ctx, entry)
+}
+
 // DeleteOlderThan removes audit entries older than the cutoff.
 func (s *AuditStore) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	result := s.db.WithContext(ctx).

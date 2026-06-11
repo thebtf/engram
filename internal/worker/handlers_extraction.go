@@ -96,7 +96,9 @@ func (s *Service) processCodeExtractionAsync(req codeExtractionRequest) {
 			Tier:          "episodic",
 		}
 
-		if _, err := memStore.Create(ctx, mem); err != nil {
+		// Extraction always sets EpistemicType/Tier; use CreateWithLifecycle so
+		// these fields are persisted without touching the plain Create path.
+		if _, err := memStore.CreateWithLifecycle(ctx, mem); err != nil {
 			log.Error().Err(err).Str("file", change.FilePath).Msg("code-extraction: store failed")
 			continue
 		}

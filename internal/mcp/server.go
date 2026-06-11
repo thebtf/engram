@@ -46,6 +46,9 @@ type Server struct {
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
+	auditStore             *gorm.AuditStore
+	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
+	testMemoryEditor       memoryEditor // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -120,6 +123,25 @@ func (s *Server) SetPromotionStore(ps *gorm.PromotionStore) {
 
 func (s *Server) SetGraphStore(gs *graph.Store) {
 	s.graphStore = gs
+}
+
+// SetAuditStore sets the audit store for mutation audit logging (Milestone D FR-D2).
+// When ENGRAM_VNEXT_ENABLED != "true", this setter may still be called but audit
+// writes are gated at the handler level.
+func (s *Server) SetAuditStore(as *gorm.AuditStore) {
+	s.auditStore = as
+}
+
+// setTestAuditWriter injects a mock auditWriter for unit tests.
+// Must only be called from _test.go files.
+func (s *Server) setTestAuditWriter(w auditWriter) {
+	s.testAuditWriter = w
+}
+
+// setTestMemoryEditor injects a mock memoryEditor for unit tests.
+// Must only be called from _test.go files.
+func (s *Server) setTestMemoryEditor(me memoryEditor) {
+	s.testMemoryEditor = me
 }
 
 // SetEmbeddingStores wires the embedding client and store for async memory embedding.

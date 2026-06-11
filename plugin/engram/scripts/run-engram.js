@@ -6,6 +6,8 @@ const { spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
+const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
+
 function main() {
   const pluginRoot = resolvePluginRoot();
   const pluginData = resolvePluginData(pluginRoot);
@@ -13,6 +15,11 @@ function main() {
   const ext = process.platform === "win32" ? ".exe" : "";
   const binaryPath = path.join(pluginData, "bin", `engram${ext}`);
   const ensureBinary = path.join(pluginRoot, "scripts", "ensure-binary.js");
+
+  const configFilePath = resolveConfigFilePath(pluginData);
+  const configFile = readEngramConfigFile(configFilePath);
+
+  emitStartupDiagnostic(pluginData, configFilePath, configFile);
 
   if (fs.existsSync(ensureBinary)) {
     // ensure-binary owns freshness: it compares plugin.json with both the
@@ -42,16 +49,35 @@ function main() {
 
   // Visible diagnostic: fail early if the workstation is not configured. A new
   // install should not expose half-working tools with no remote memory backend.
-  const serverURL = configuredEnvValue(
-    "ENGRAM_URL",
-    "ENGRAM_SERVER_URL",
-    "ENGRAM_CLAUDE_USERCONFIG_URL"
-  );
+  //
+  // Resolution order for each credential:
+  //   1. Explicit env vars (ENGRAM_URL / ENGRAM_TOKEN)
+  //   2. Claude Code plugin option env (CLAUDE_PLUGIN_OPTION_*)
+  //   3. Legacy userConfig env aliases (ENGRAM_CLAUDE_USERCONFIG_*)
+  //   4. Config file fallback (ENGRAM_CONFIG_FILE, <pluginData>/config.json,
+  //      or ~/.engram/config.json) — added in v6.4.15 to handle Codex ≥0.139
+  //      which stopped forwarding shell_environment_policy.set values to plugin
+  //      MCP server children (openai/codex#24401).
+  const serverURL =
+    configuredEnvValue(
+      "ENGRAM_URL",
+      "ENGRAM_SERVER_URL",
+      // Claude Code exports plugin userConfig values to plugin subprocesses as
+      // CLAUDE_PLUGIN_OPTION_<KEY>. Interpolating ${user_config.*} inside the
+      // .mcp.json env block is NOT used: it silently prevents the MCP server
+      // from spawning (anthropics/claude-code#51573).
+      "CLAUDE_PLUGIN_OPTION_server_url",
+      "CLAUDE_PLUGIN_OPTION_SERVER_URL",
+      "ENGRAM_CLAUDE_USERCONFIG_URL"
+    ) ||
+    (configFile && isConfiguredValue(configFile.server_url) ? configFile.server_url : "");
   if (!serverURL) {
     process.stderr.write(
       "[engram] FATAL: ENGRAM_URL is empty. Configure Engram before first use.\n" +
+      "Universal (all harnesses): create ~/.engram/config.json with {\"server_url\":\"http://...\",\"api_token\":\"engram_...\"}\n" +
+      "  or set ENGRAM_CONFIG_FILE to a custom path.\n" +
       "Claude Code: run /engram:setup or set ENGRAM_URL in ~/.claude/settings.json env.\n" +
-      "Codex: set ENGRAM_URL in ~/.codex/config.toml under [shell_environment_policy.set].\n"
+      `Config file checked: ${configFilePath}\n`
     );
     process.exit(1);
   }
@@ -60,13 +86,20 @@ function main() {
   // v6 model: ENGRAM_TOKEN is the per-workstation keycard issued via the
   // dashboard /tokens page. The operator key (ENGRAM_AUTH_ADMIN_TOKEN) lives
   // ONLY on the server host and MUST NOT be set on a workstation.
-  const token = configuredEnvValue("ENGRAM_TOKEN", "ENGRAM_CLAUDE_USERCONFIG_TOKEN");
+  const token =
+    configuredEnvValue(
+      "ENGRAM_TOKEN",
+      "CLAUDE_PLUGIN_OPTION_api_token",
+      "CLAUDE_PLUGIN_OPTION_API_TOKEN",
+      "ENGRAM_CLAUDE_USERCONFIG_TOKEN"
+    ) ||
+    (configFile && isConfiguredValue(configFile.api_token) ? configFile.api_token : "");
   if (!token) {
     process.stderr.write(
       `[engram] FATAL: ENGRAM_TOKEN is empty. Open ${serverURL.replace(/\/+$/, "")}/tokens, ` +
       "generate a workstation keycard, then configure ENGRAM_TOKEN.\n" +
-      "Claude Code: store it in ~/.claude/settings.json env.\n" +
-      "Codex: store it in ~/.codex/config.toml under [shell_environment_policy.set].\n"
+      "Universal (all harnesses): add \"api_token\":\"engram_...\" to the config file.\n" +
+      `Config file checked: ${configFilePath}\n`
     );
     process.exit(1);
   }
@@ -141,6 +174,57 @@ function configuredEnvValue(...keys) {
   return "";
 }
 
+/**
+ * Resolve the engram config file path, in priority order:
+ *   1. $ENGRAM_CONFIG_FILE if set and non-empty
+ *   2. <pluginData>/config.json if that file exists
+ *   3. ~/.engram/config.json (home-directory universal fallback)
+ * Returns the resolved path string (file may or may not exist).
+ *
+ * When pluginData is set but <pluginData>/config.json does not exist,
+ * we fall through to the home-directory path so users who create only
+ * ~/.engram/config.json (the documented Codex setup path) are found.
+ */
+function resolveConfigFilePath(pluginData) {
+  const explicit = process.env.ENGRAM_CONFIG_FILE;
+  if (isConfiguredValue(explicit)) {
+    return explicit.trim();
+  }
+  if (pluginData && typeof pluginData === "string" && pluginData.trim()) {
+    const candidate = path.join(pluginData.trim(), "config.json");
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return path.join(require("os").homedir(), ".engram", "config.json");
+}
+
+/**
+ * Read and parse the engram config file.
+ * Returns { server_url, api_token } on success (values trimmed, may be empty strings).
+ * Returns null on missing or malformed file — callers must treat null as "not configured here".
+ * Never throws.
+ */
+function readEngramConfigFile(configFilePath) {
+  try {
+    if (!configFilePath || !fs.existsSync(configFilePath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(configFilePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return {
+      server_url: typeof parsed.server_url === "string" ? parsed.server_url.trim() : "",
+      api_token: typeof parsed.api_token === "string" ? parsed.api_token.trim() : "",
+    };
+  } catch {
+    // Missing file, permission error, or malformed JSON — skip silently.
+    return null;
+  }
+}
+
 function isConfiguredValue(value) {
   if (typeof value !== "string") {
     return false;
@@ -150,6 +234,96 @@ function isConfiguredValue(value) {
     return false;
   }
   return !/^\$\{[^}]+\}$/.test(trimmed);
+}
+
+function emitStartupDiagnostic(pluginData, configFilePath, configFile) {
+  const line = formatStartupDiagnostic(process.env, configFilePath, configFile);
+  process.stderr.write(`${line}\n`);
+  appendStartupDiagnosticLog(pluginData, line);
+}
+
+function formatStartupDiagnostic(env = process.env, configFilePath, configFile) {
+  const keys = [
+    ["ENGRAM_URL", false],
+    ["ENGRAM_TOKEN", true],
+    ["ENGRAM_SERVER_URL", false],
+    ["CLAUDE_PLUGIN_OPTION_server_url", false],
+    ["CLAUDE_PLUGIN_OPTION_api_token", true],
+    ["ENGRAM_CLAUDE_USERCONFIG_URL", false],
+    ["ENGRAM_CLAUDE_USERCONFIG_TOKEN", true],
+    ["PLUGIN_ROOT", false],
+    ["CLAUDE_PLUGIN_ROOT", false],
+    ["PLUGIN_DATA", false],
+    ["CLAUDE_PLUGIN_DATA", false],
+  ];
+  const envParts = keys.map(([key, sensitive]) => describeEnvValue(key, env, sensitive)).join("; ");
+  const cfPart = describeConfigFile(configFilePath, configFile);
+  return `[engram] startup env: ${envParts}; ${cfPart}`;
+}
+
+function describeConfigFile(configFilePath, configFile) {
+  if (!configFilePath) {
+    return "config_file=unresolved";
+  }
+  if (!fs.existsSync(configFilePath)) {
+    return `config_file=missing(${configFilePath})`;
+  }
+  if (configFile === null || configFile === undefined) {
+    return `config_file=malformed(${configFilePath})`;
+  }
+  return `config_file=present(${configFilePath})`;
+}
+
+function describeEnvValue(key, env = process.env, sensitive = false) {
+  const raw = env[key];
+  if (typeof raw !== "string") {
+    return `${key}=missing`;
+  }
+
+  const value = raw.trim();
+  if (!value) {
+    return `${key}=empty`;
+  }
+  if (/^\$\{[^}]+\}$/.test(value)) {
+    return `${key}=placeholder`;
+  }
+
+  const kind = sensitive ? "redacted" : "present";
+  return `${key}=${kind}(len=${value.length})`;
+}
+
+function appendStartupDiagnosticLog(pluginData, line, now = new Date()) {
+  try {
+    const logsDir = path.join(pluginData, "logs");
+    fs.mkdirSync(logsDir, { recursive: true });
+    const logPath = path.join(logsDir, "startup-env.log");
+    fs.appendFileSync(logPath, `${now.toISOString()} pid=${process.pid} ${line}\n`, "utf8");
+    const stat = fs.statSync(logPath);
+    if (stat.size > 2 * STARTUP_DIAGNOSTIC_LOG_MAX_BYTES) {
+      trimStartupDiagnosticLog(logPath);
+    }
+  } catch {
+    // Diagnostics must never prevent MCP startup.
+  }
+}
+
+function trimStartupDiagnosticLog(logPath, maxBytes = STARTUP_DIAGNOSTIC_LOG_MAX_BYTES) {
+  try {
+    const stat = fs.statSync(logPath);
+    if (stat.size <= maxBytes) {
+      return;
+    }
+
+    const content = fs.readFileSync(logPath, "utf8");
+    let trimmed = content.slice(-Math.floor(maxBytes / 2));
+    const firstNewline = trimmed.indexOf("\n");
+    if (firstNewline !== -1) {
+      trimmed = trimmed.slice(firstNewline + 1);
+    }
+    fs.writeFileSync(logPath, trimmed, "utf8");
+  } catch {
+    // Best-effort only.
+  }
 }
 
 function checkedSpawnSync(command, args, options, label) {
@@ -180,9 +354,17 @@ if (require.main === module) {
 module.exports = {
   main,
   configuredEnvValue,
+  appendStartupDiagnosticLog,
+  describeConfigFile,
+  describeEnvValue,
+  emitStartupDiagnostic,
+  formatStartupDiagnostic,
   inferCodexPluginDataDir,
   isConfiguredValue,
+  readEngramConfigFile,
+  resolveConfigFilePath,
   resolvePluginData,
   resolvePluginRoot,
   spawnFailureMessage,
+  trimStartupDiagnosticLog,
 };

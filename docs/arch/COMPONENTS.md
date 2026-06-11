@@ -105,13 +105,22 @@ Shared utilities in `lib.js`. Tests: `*.test.js`.
 | `pkg/similarity` | Clustering helpers for similarity workflows. |
 | `pkg/strutil` | Shared string utilities: Truncate, TruncateTrimmed, ContainsAny. |
 
-## Removed in v5 (do not reference)
+## Removed in v5 strip-down
 
-These packages were deleted in v5 (~12,800 lines removed):
-`internal/search`, `internal/embedding`, `internal/vector/`,
-`internal/consolidation`, `internal/scoring`, `internal/pattern`,
-`internal/reranking`, `internal/graph`, `internal/maintenance`,
-`pkg/llmclient`, `internal/synthesis`, `internal/backfill`,
-`internal/dedup`, `internal/pipeline`, `internal/palace`.
+These paths were deleted in the v5 demolition phase (~12,800 lines removed) and must not be
+referenced. Some package names have been reused for ground-up vnext rebuilds; those new
+implementations share a name but not semantics — do not assume old API or behaviour applies.
+
+**Still absent — do not reference:**
+`internal/search`, `internal/vector/`, `internal/consolidation`, `internal/scoring`,
+`internal/pattern`, `internal/reranking`, `internal/maintenance`, `pkg/llmclient`,
+`internal/synthesis`, `internal/backfill`, `internal/dedup`, `internal/pipeline`,
+`internal/palace`.
+
+**Rebuilt in vnext (new implementation, do not assume old semantics):**
+`internal/graph`, `internal/embedding` — old implementations were deleted in v5; the packages
+now present on main are ground-up vnext rebuilds. The same applies to `internal/lifecycle`,
+`internal/retrieval`, and `internal/crystallization`, which are new additions with no v4
+equivalent.
 
 The `observations` table was also dropped (replaced by `memories`).

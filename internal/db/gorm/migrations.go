@@ -3666,6 +3666,50 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`DROP TABLE IF EXISTS session_segments`).Error
 			},
 		},
+		// T006: Add ON DELETE CASCADE to knowledge_edges FKs (FR-D2, EC-D3).
+		// Migration 113 defined source_id and target_id as bare REFERENCES (RESTRICT by default).
+		// Purge operations require CASCADE so deleting memories does not violate FK constraints.
+		// Idempotent: DROP CONSTRAINT IF EXISTS before re-adding with CASCADE.
+		{
+			ID: "121_knowledge_edges_cascade",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE knowledge_edges
+						DROP CONSTRAINT IF EXISTS knowledge_edges_source_id_fkey,
+						DROP CONSTRAINT IF EXISTS knowledge_edges_target_id_fkey`,
+					`ALTER TABLE knowledge_edges
+						ADD CONSTRAINT knowledge_edges_source_id_fkey
+							FOREIGN KEY (source_id) REFERENCES memories(id) ON DELETE CASCADE,
+						ADD CONSTRAINT knowledge_edges_target_id_fkey
+							FOREIGN KEY (target_id) REFERENCES memories(id) ON DELETE CASCADE`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				// Revert to RESTRICT (PostgreSQL default when no ON DELETE clause is given).
+				stmts := []string{
+					`ALTER TABLE knowledge_edges
+						DROP CONSTRAINT IF EXISTS knowledge_edges_source_id_fkey,
+						DROP CONSTRAINT IF EXISTS knowledge_edges_target_id_fkey`,
+					`ALTER TABLE knowledge_edges
+						ADD CONSTRAINT knowledge_edges_source_id_fkey
+							FOREIGN KEY (source_id) REFERENCES memories(id),
+						ADD CONSTRAINT knowledge_edges_target_id_fkey
+							FOREIGN KEY (target_id) REFERENCES memories(id)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 		// 125_privacy_scope_addition — engram vNext Milestone F TG1/CR-F1/T001.
 		// Adds the 4-tier privacy_scope column and source_sessions[] array column
 		// to the memories table.

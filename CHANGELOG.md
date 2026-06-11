@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.15] - 2026-06-10
+
+### Added
+
+- **Config file credential fallback for Codex ≥ 0.139 and other env-hostile
+  harnesses.** Codex 0.139 stopped forwarding `[shell_environment_policy.set]`
+  values to plugin MCP server children (openai/codex#24401 — no supported
+  replacement for plugin MCP servers). The plugin wrapper (`run-engram.js`)
+  and hooks (`lib.js`) now resolve `ENGRAM_URL` and `ENGRAM_TOKEN` from a
+  JSON config file as the final fallback in the credential chain:
+  `$ENGRAM_CONFIG_FILE` → `<pluginData>/config.json` →
+  `~/.engram/config.json`. File format: `{"server_url":"...","api_token":"..."}`.
+  On POSIX the file is created/chmod'd 0600; on Windows NTFS user-profile ACLs
+  suffice. Token values are never logged. The startup diagnostic line now
+  reports `config_file=present(<path>)` or `config_file=missing(<path>)`.
+
+### Changed
+
+- `session-start.js` now calls `lib.getEngramConfig()` (the shared resolver
+  with config file fallback) instead of its own `configureRuntimeEnv()`.
+- Codex setup docs rewritten: `~/.engram/config.json` is the documented path;
+  `shell_environment_policy.set` is noted as legacy/broken for plugin MCP
+  servers and retained only for Codex < 0.139.
+- FATAL error messages for missing URL/token now include the config file path
+  that was checked, so users know the new option without consulting docs.
+
+## [6.4.14] - 2026-06-10
+
+### Fixed
+
+- **Codex plugin MCP server failing with MODULE_NOT_FOUND.** Codex does not
+  interpolate `${CLAUDE_PLUGIN_ROOT}` in plugin `.mcp.json` args — the literal
+  string reached node and the wrapper never started
+  (`Cannot find module '...\${CLAUDE_PLUGIN_ROOT}\scripts\run-engram.js'`).
+  The plugin now ships per-consumer MCP configs: the root `.mcp.json` (used by
+  Codex) launches the wrapper via a plugin-root-relative path resolved against
+  `cwd: "."`, while `.claude-plugin/plugin.json` points Claude Code at
+  `claude/.mcp.json`, which keeps the `${CLAUDE_PLUGIN_ROOT}` interpolated
+  entrypoint that Claude Code requires (Claude Code does not resolve relative
+  args against the plugin root).
+
+## [6.4.13] - 2026-06-10
+
+### Fixed
+
+- **Claude Code plugin MCP server silently not spawning.** The plugin
+  `.mcp.json` interpolated `${user_config.*}` inside the `env` block, which
+  makes Claude Code skip spawning the MCP server with no error
+  (anthropics/claude-code#51573). The env block is removed; the wrapper and
+  hooks now read userConfig values through the documented
+  `CLAUDE_PLUGIN_OPTION_<KEY>` plugin-subprocess environment variables, with
+  explicit `ENGRAM_URL`/`ENGRAM_TOKEN` env still taking precedence.
+
+## [6.4.12] - 2026-06-04
+
+### Fixed
+
+- **Codex remote tool surface behind blocked proxy environments.** The local
+  MCP daemon now disables gRPC proxy use for Engram backend connections, so
+  Desktop Codex sessions connect directly to `ENGRAM_URL` instead of falling
+  through a host/Codex proxy route such as `127.0.0.1:9`. This restores the
+  full remote `tools/list` surface after plugin startup.
+
+## [6.4.11] - 2026-06-04
+
+### Fixed
+
+- **Muxcore stale daemon owner detection.** The local MCP daemon marker now
+  records the executable path in addition to version and PID, and startup treats
+  same-version markers from a different `engram.exe` path as stale. This
+  prevents release-smoke or old plugin-data daemons from keeping the global
+  muxcore owner slot after a plugin reinstall.
+
+## [6.4.10] - 2026-06-03
+
+### Fixed
+
+- **Codex plugin startup diagnostics.** The MCP wrapper now writes a redacted
+  startup environment line to stderr and `pluginData/logs/startup-env.log`, so
+  operators can prove whether `ENGRAM_URL` and `ENGRAM_TOKEN` reached the
+  plugin-provided MCP child without exposing the token.
+- **Codex binary freshness on Windows.** `ensure-binary.js` no longer treats a
+  current installed binary as stale when Windows denies Node's piped
+  `--version` probe with `EPERM`. It still rejects marker mismatches before the
+  fallback, preserving the stale-binary guard added in v6.4.7.
+
 ## [6.4.9] - 2026-06-03
 
 ### Fixed
@@ -826,7 +912,14 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.8...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.15...HEAD
+[6.4.15]: https://github.com/thebtf/engram/compare/v6.4.14...v6.4.15
+[6.4.14]: https://github.com/thebtf/engram/compare/v6.4.13...v6.4.14
+[6.4.13]: https://github.com/thebtf/engram/compare/v6.4.12...v6.4.13
+[6.4.12]: https://github.com/thebtf/engram/compare/v6.4.11...v6.4.12
+[6.4.11]: https://github.com/thebtf/engram/compare/v6.4.10...v6.4.11
+[6.4.10]: https://github.com/thebtf/engram/compare/v6.4.9...v6.4.10
+[6.4.9]: https://github.com/thebtf/engram/compare/v6.4.8...v6.4.9
 [6.4.8]: https://github.com/thebtf/engram/compare/v6.4.7...v6.4.8
 [6.4.7]: https://github.com/thebtf/engram/compare/v6.4.6...v6.4.7
 [6.4.6]: https://github.com/thebtf/engram/compare/v6.4.5...v6.4.6
