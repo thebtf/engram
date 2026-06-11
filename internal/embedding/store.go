@@ -83,6 +83,9 @@ func (s *Store) FindSimilar(ctx context.Context, queryVec []float32, limit int, 
 // scoped to a specific project via a JOIN to the memories table.
 // This prevents cross-project leakage through the vector leg of hybrid retrieval.
 func (s *Store) FindSimilarForProject(ctx context.Context, project string, queryVec []float32, limit int, threshold float64) ([]SimilarResult, error) {
+	if project == "" {
+		return nil, fmt.Errorf("find similar for project: project must not be empty")
+	}
 	if len(queryVec) == 0 {
 		return nil, fmt.Errorf("find similar: query vector must not be empty")
 	}

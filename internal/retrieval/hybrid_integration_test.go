@@ -172,8 +172,17 @@ func TestIntegration_HybridWithVector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HybridSearch with vector: %v", err)
 	}
-	// If vector path succeeds, we should get at least the FTS result.
-	if len(scored) == 0 {
-		t.Error("expected at least one result from hybrid search")
+	// Verify that the seeded memory is present in results and carries a positive score.
+	found := false
+	for _, sm := range scored {
+		if sm.Memory.ID == created.ID {
+			found = true
+			if sm.Score <= 0 {
+				t.Errorf("expected positive score for seeded memory, got %v", sm.Score)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("HybridSearch did not return seeded memory (id=%d); got %d results", created.ID, len(scored))
 	}
 }

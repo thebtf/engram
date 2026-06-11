@@ -147,7 +147,9 @@ func HybridSearch(
 	if limit <= 0 {
 		limit = 10
 	}
-	now := time.Now()
+	// Use UTC to match DB timestamps stored in UTC; avoids ranking skew when
+	// the server's local timezone is not UTC.
+	now := time.Now().UTC()
 	tierAllowed := buildTierSet(opts.TierFilter)
 
 	// Tier 0 — exact content-hash match.
@@ -245,7 +247,12 @@ func HybridSearch(
 		return nil, nil, nil
 	}
 	// Cap candidate fetch.
-	fetchN := limit * 3
+	// Multiplier 5× (was 3×) to ensure enough candidates survive the MCP-layer
+	// scope.Resolve privacy filter (F-TG1). If the top-ranked fused candidates
+	// are private/shared rows invisible to the caller, a 3× cap could exhaust
+	// before reaching visible matches; 5× keeps the cap tight while reducing
+	// false-empty results under realistic private-heavy corpora.
+	fetchN := limit * 5
 	if fetchN > len(fusedIDs) {
 		fetchN = len(fusedIDs)
 	}
@@ -364,12 +371,15 @@ func HybridSearch(
 		}
 		if len(neighbourSet) > 0 {
 			// Cap neighbour expansion to 20 (EC-C3).
+			// Collect all IDs then sort ascending before truncation so the set is
+			// deterministic — Go map iteration order is randomised.
 			nIDs := make([]int64, 0, len(neighbourSet))
 			for id := range neighbourSet {
 				nIDs = append(nIDs, id)
-				if len(nIDs) == 20 {
-					break
-				}
+			}
+			sort.Slice(nIDs, func(i, j int) bool { return nIDs[i] < nIDs[j] })
+			if len(nIDs) > 20 {
+				nIDs = nIDs[:20]
 			}
 			// Use project-scoped GetByIDs to prevent cross-project leakage through
 			// graph edges that may reference memories in other projects.

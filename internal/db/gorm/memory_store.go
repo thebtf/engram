@@ -700,8 +700,12 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 
 	// Try websearch_to_tsquery first; fall back to plainto_tsquery for
 	// stop-word-only inputs that yield an empty tsquery.
+	// Use SQL NOW() instead of a Go-side timestamp to avoid clock-skew where a
+	// Go-captured time pre-dates valid_from set by DB DEFAULT now() on freshly
+	// inserted rows (see ListWithOffset comment for full rationale).
+	// NULLIF comparison uses ''::tsquery cast — PostgreSQL has no implicit
+	// tsquery ↔ unknown conversion and raises "operator does not exist" otherwise.
 	var rows []Memory
-	now := time.Now().UTC()
 	err := s.db.WithContext(ctx).Raw(`
 		WITH parsed AS (
 			SELECT websearch_to_tsquery('english', ?) AS wsq,
@@ -712,13 +716,13 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 		WHERE  m.project    = ?
 		AND    m.status     = 'active'
 		AND    m.deleted_at IS NULL
-		AND   (m.valid_from IS NULL OR m.valid_from <= ?)
-		AND   (m.valid_until IS NULL OR m.valid_until >= ?)
-		AND    m.search_vector @@ COALESCE(NULLIF(parsed.wsq, ''), parsed.ptq)
+		AND   (m.valid_from IS NULL OR m.valid_from <= NOW())
+		AND   (m.valid_until IS NULL OR m.valid_until >= NOW())
+		AND    m.search_vector @@ COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)
 		ORDER BY ts_rank_cd(m.search_vector,
-		             COALESCE(NULLIF(parsed.wsq, ''), parsed.ptq)) DESC
+		             COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)) DESC
 		LIMIT ?
-	`, query, query, project, now, now, limit).Scan(&rows).Error
+	`, query, query, project, limit).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("SearchFTS project=%q: %w", project, err)
 	}
@@ -740,12 +744,13 @@ func (s *MemoryStore) GetByIDs(ctx context.Context, project string, ids []int64)
 	if project == "" {
 		return nil, fmt.Errorf("GetByIDs: project must be non-empty")
 	}
-	now := time.Now().UTC()
+	// Use SQL NOW() to avoid clock-skew with freshly-inserted rows whose
+	// valid_from is set by DB DEFAULT now() (same rationale as ListWithOffset).
 	var rows []Memory
 	err := s.db.WithContext(ctx).
 		Where("id = ANY(?) AND project = ? AND status = 'active' AND deleted_at IS NULL", pq.Array(ids), project).
-		Where("valid_from IS NULL OR valid_from <= ?", now).
-		Where("valid_until IS NULL OR valid_until >= ?", now).
+		Where("valid_from IS NULL OR valid_from <= NOW()").
+		Where("valid_until IS NULL OR valid_until >= NOW()").
 		Find(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("GetByIDs: %w", err)
