@@ -51,6 +51,31 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	case "similar":
 		// Dropped in v5 (US9): vector similarity search removed (content_chunks dropped).
+		// Reinstated under flag via recall_memory when ENGRAM_VNEXT_ENABLED=true (W3).
+		if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+			// Under flag-ON: translate min_similarity into the hybrid vector threshold
+			// (VecThreshold on HybridOptions) and forward to recall_memory.
+			// This preserves legacy min_similarity semantics: callers that relied on
+			// a cosine floor will see the same filtering under the hybrid path.
+			var mArgs map[string]any
+			if jsonErr := json.Unmarshal(args, &mArgs); jsonErr != nil {
+				return "", fmt.Errorf("recall similar: %w", jsonErr)
+			}
+			// Map min_similarity → vec_threshold so handleRecallMemoryHybrid picks it up.
+			if ms, ok := mArgs["min_similarity"]; ok {
+				mArgs["vec_threshold"] = ms
+			}
+			// Restrict to vector tier only so callers get the promised cosine floor.
+			// Without this, FTS matches that pass text criteria but are below the
+			// cosine threshold would still appear in results (codex finding W3-#7).
+			mArgs["tier_filter"] = []string{"tier1_vector"}
+			patched, marshalErr := json.Marshal(mArgs)
+			if marshalErr != nil {
+				return "", fmt.Errorf("recall similar: patch args: %w", marshalErr)
+			}
+			return s.handleRecallMemory(ctx, patched)
+		}
+		// Flag-OFF: exact tombstone string from origin/main (byte-identical).
 		return "", fmt.Errorf("recall: action %q not supported in v5 (vector similarity removed)", action)
 
 	case "timeline":
@@ -69,6 +94,21 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	case "explain":
 		// Dropped in v5 (US9): explain ranked search results using search.Manager.
+		// Reinstated under flag via recall_memory(explain=true) when ENGRAM_VNEXT_ENABLED=true (W3).
+		if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+			// Forward to recall_memory with explain=true injected.
+			var m map[string]any
+			if jsonErr := json.Unmarshal(args, &m); jsonErr != nil {
+				return "", fmt.Errorf("recall explain: %w", jsonErr)
+			}
+			m["explain"] = true
+			patched, marshalErr := json.Marshal(m)
+			if marshalErr != nil {
+				return "", fmt.Errorf("recall explain: patch args: %w", marshalErr)
+			}
+			return s.handleRecallMemory(ctx, patched)
+		}
+		// Flag-OFF: exact tombstone string from origin/main (byte-identical).
 		return "", fmt.Errorf("recall: action %q not supported in v5 (search ranking removed)", action)
 
 	case "reasoning":

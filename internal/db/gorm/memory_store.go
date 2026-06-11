@@ -677,6 +677,99 @@ func (s *MemoryStore) ListBySourceAgentAndTag(ctx context.Context, project, sour
 	return result, nil
 }
 
+// SearchFTS performs a full-text search against the memories table using the
+// search_vector GENERATED ALWAYS column (migration 088). The query string is
+// parsed with websearch_to_tsquery (supports quoted phrases, + for AND, - for NOT).
+// Falls back to plainto_tsquery when websearch_to_tsquery produces an empty result
+// (e.g. stop-word-only queries). Returns memories ordered by ts_rank_cd DESC,
+// limited to limit rows (capped at 200 internally to prevent unbounded scans).
+// Returns an empty slice — not an error — when no rows match.
+func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limit int) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("SearchFTS: project must not be empty")
+	}
+	if query == "" {
+		return nil, fmt.Errorf("SearchFTS: query must not be empty")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	// Try websearch_to_tsquery first; fall back to plainto_tsquery for
+	// stop-word-only inputs that yield an empty tsquery.
+	// Use SQL NOW() instead of a Go-side timestamp to avoid clock-skew where a
+	// Go-captured time pre-dates valid_from set by DB DEFAULT now() on freshly
+	// inserted rows (see ListWithOffset comment for full rationale).
+	// NULLIF comparison uses ''::tsquery cast — PostgreSQL has no implicit
+	// tsquery ↔ unknown conversion and raises "operator does not exist" otherwise.
+	var rows []Memory
+	err := s.db.WithContext(ctx).Raw(`
+		WITH parsed AS (
+			SELECT websearch_to_tsquery('english', ?) AS wsq,
+			       plainto_tsquery('english', ?)      AS ptq
+		)
+		SELECT m.*
+		FROM   memories m, parsed
+		WHERE  m.project    = ?
+		AND    m.status     = 'active'
+		AND    m.deleted_at IS NULL
+		AND   (m.valid_from IS NULL OR m.valid_from <= NOW())
+		AND   (m.valid_until IS NULL OR m.valid_until >= NOW())
+		AND    m.search_vector @@ COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)
+		ORDER BY ts_rank_cd(m.search_vector,
+		             COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)) DESC
+		LIMIT ?
+	`, query, query, project, limit).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("SearchFTS project=%q: %w", project, err)
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
+}
+
+// GetByIDs fetches active memories by a list of IDs scoped to project, preserving the ID order.
+// The project filter prevents cross-project leakage when IDs originate from the vector leg
+// (content_chunks has no project column; project scoping must be enforced here as second defence).
+// project must be non-empty; an empty project returns an error.
+func (s *MemoryStore) GetByIDs(ctx context.Context, project string, ids []int64) ([]*models.Memory, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if project == "" {
+		return nil, fmt.Errorf("GetByIDs: project must be non-empty")
+	}
+	// Use SQL NOW() to avoid clock-skew with freshly-inserted rows whose
+	// valid_from is set by DB DEFAULT now() (same rationale as ListWithOffset).
+	var rows []Memory
+	err := s.db.WithContext(ctx).
+		Where("id = ANY(?) AND project = ? AND status = 'active' AND deleted_at IS NULL", pq.Array(ids), project).
+		Where("valid_from IS NULL OR valid_from <= NOW()").
+		Where("valid_until IS NULL OR valid_until >= NOW()").
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("GetByIDs: %w", err)
+	}
+	// Rebuild in original id order.
+	byID := make(map[int64]*models.Memory, len(rows))
+	for i := range rows {
+		m := memoryRowToModel(&rows[i])
+		byID[m.ID] = m
+	}
+	result := make([]*models.Memory, 0, len(ids))
+	for _, id := range ids {
+		if m, ok := byID[id]; ok {
+			result = append(result, m)
+		}
+	}
+	return result, nil
+}
+
 // CountActiveSince returns the count of active memories with id > afterID.
 // Used by the sleep cycle to count new memories since the last cycle run
 // without fetching all rows. Pass afterID=0 to count all active memories.
