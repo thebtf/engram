@@ -311,7 +311,7 @@ type Memory struct {
 	SourceAgent     string                 `gorm:"type:text" json:"source_agent,omitempty"`
 	EditedBy        string                 `gorm:"type:text" json:"edited_by,omitempty"`
 	Status          string                 `gorm:"type:text;default:'active'" json:"status"`
-	Tier            string                 `gorm:"type:text;default:'semantic'" json:"tier"`
+	Tier            string                 `gorm:"type:text;default:'episodic'" json:"tier"`
 	EpistemicType   string                 `gorm:"type:text;default:'observation'" json:"epistemic_type"`
 	Defeasibility   string                 `gorm:"type:text;default:'slow'" json:"defeasibility"`
 	PromotionTarget string                 `gorm:"type:text;default:'none'" json:"promotion_target"`

@@ -19,6 +19,8 @@
 // MemoryStore.List); Resolve trusts that filter and does not re-check project.
 package scope
 
+import "github.com/thebtf/engram/pkg/models"
+
 // PrivacyScope values recognised by Resolve. Mirror the CHECK constraint on
 // memories.privacy_scope added by migration 125 (T001).
 const (
@@ -49,6 +51,40 @@ type KeycardContext struct {
 type SourceMeta struct {
 	WorkstationID string
 	Sessions      []string
+}
+
+// FilterMemories returns the subset of mems that the caller may see per
+// scope.Resolve. It is a pure helper for read-path callers that have already
+// fetched a raw slice from the store and need to remove private-scope rows
+// the caller cannot access.
+//
+// Callers build the KeycardContext from auth.IdentityFrom(ctx) and pass it
+// here so this package stays free of auth and context dependencies.
+//
+// When memoryScope is empty, the defaulted value "project" is used (matching
+// the DB column DEFAULT 'project').
+//
+// Anti-stub: returning mems unchanged fails private-scope cross-workstation
+// cases that expect the private row to be absent.
+func FilterMemories(caller KeycardContext, mems []*models.Memory) []*models.Memory {
+	out := make([]*models.Memory, 0, len(mems))
+	for _, mem := range mems {
+		if mem == nil {
+			continue
+		}
+		memScope := mem.PrivacyScope
+		if memScope == "" {
+			memScope = ScopeProject
+		}
+		meta := SourceMeta{
+			WorkstationID: mem.SourceWorkstationID,
+			Sessions:      mem.SourceSessions,
+		}
+		if Resolve(caller, memScope, meta) {
+			out = append(out, mem)
+		}
+	}
+	return out
 }
 
 // Resolve returns true iff the caller may see a memory with the given

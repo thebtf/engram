@@ -148,6 +148,7 @@ type Service struct {
 	issueStore             *gorm.IssueStore
 	credentialStore        *gorm.CredentialStore
 	memoryStore            *gorm.MemoryStore
+	memoryStoreSeam        memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	auditStore             *gorm.AuditStore
 	purgeStore             *gorm.PurgeStore
