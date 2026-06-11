@@ -148,6 +148,8 @@ type Service struct {
 	credentialStore        *gorm.CredentialStore
 	memoryStore            *gorm.MemoryStore
 	behavioralRulesStore   *gorm.BehavioralRulesStore
+	auditStore             *gorm.AuditStore
+	testAuditRetainer      auditRetainer // test-only override for retention unit tests
 	feedbackUpdater        *feedback.Updater
 	segmentStore           *gorm.SegmentStore
 	embeddingClient        *embedding.Client
@@ -530,6 +532,9 @@ func (s *Service) initializeAsync() {
 	// Create feedback updater for vNext Phase A closed-loop learning.
 	feedbackUpdater := feedback.NewUpdater(memoryStore)
 
+	// Create audit store for Milestone D audit trail (FR-D2 / NFR-D4).
+	auditStore := gorm.NewAuditStore(store.GetDB())
+
 	// Set all the initialized components
 	s.initMu.Lock()
 	s.store = store
@@ -545,6 +550,7 @@ func (s *Service) initializeAsync() {
 	s.feedbackUpdater = feedbackUpdater
 	s.agentStatsStore = agentStatsStore
 	s.versionStore = versionStore
+	s.auditStore = auditStore
 	s.tokenStore = tokenStore
 	s.relationStore = relationStore
 	s.sessionManager = sessionManager
@@ -648,12 +654,12 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
-	// Wire promotion and graph stores into the MCP server and record them on
-	// the Service for the sleep cycle goroutine. Extracted into wireVnextStores
-	// so the wiring is testable without a full service initialisation.
+	// Wire promotion, graph, and audit stores into the MCP server and record them on
+	// the Service for the sleep cycle goroutine and audit logging. Extracted into
+	// wireVnextStores so the wiring is testable without a full service initialisation.
 	promotionStore := gorm.NewPromotionStore(store.GetDB())
 	graphStore := graph.NewStore(store.GetDB())
-	wireVnextStores(mcpServer, promotionStore, graphStore)
+	wireVnextStores(mcpServer, promotionStore, graphStore, auditStore)
 	s.initMu.Lock()
 	s.promotionStore = promotionStore
 	s.graphStore = graphStore
@@ -1691,15 +1697,16 @@ func getPID() int {
 	return os.Getpid()
 }
 
-// wireVnextStores injects the promotion and graph stores into the MCP server.
+// wireVnextStores injects the promotion, graph, and audit stores into the MCP server.
 // Extracted from initializeAsync so the wiring path is unit-testable: a test
 // that calls wireVnextStores and then checks mcpServer tool advertise surface
-// will break if either SetPromotionStore or SetGraphStore is removed.
+// will break if any Set* call is removed.
 //
 // Callers are responsible for storing the same *gorm.PromotionStore /
 // *graph.Store values on Service.promotionStore / Service.graphStore for the
-// sleep cycle goroutine.
-func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store) {
+// sleep cycle goroutine, and *gorm.AuditStore on Service.auditStore for audit logging.
+func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store, auditStore *gorm.AuditStore) {
 	mcpServer.SetPromotionStore(promotionStore)
 	mcpServer.SetGraphStore(graphStore)
+	mcpServer.SetAuditStore(auditStore)
 }

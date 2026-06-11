@@ -50,7 +50,7 @@ func TestWireVnextStores_LifecycleAdvertisedAfterWiring(t *testing.T) {
 		"lifecycle must be absent before wireVnextStores is called (promotionStore nil)")
 
 	// Call the helper under test.
-	wireVnextStores(srv, &gormdb.PromotionStore{}, &graph.Store{})
+	wireVnextStores(srv, &gormdb.PromotionStore{}, &graph.Store{}, nil)
 
 	// Now the tool must be present.
 	namesAfter := buildMCPToolNames(srv)
@@ -70,7 +70,7 @@ func TestWireVnextStores_GraphAdvertisedAfterWiring(t *testing.T) {
 	assert.NotContains(t, namesBefore, "graph",
 		"graph must be absent before wireVnextStores is called (graphStore nil)")
 
-	wireVnextStores(srv, &gormdb.PromotionStore{}, &graph.Store{})
+	wireVnextStores(srv, &gormdb.PromotionStore{}, &graph.Store{}, nil)
 
 	namesAfter := buildMCPToolNames(srv)
 	assert.Contains(t, namesAfter, "graph",
@@ -86,7 +86,7 @@ func TestWireVnextStores_NoLeakWhenFlagsOff(t *testing.T) {
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
 	srv.SetMemoryStore(&gormdb.MemoryStore{})
 
-	wireVnextStores(srv, &gormdb.PromotionStore{}, &graph.Store{})
+	wireVnextStores(srv, &gormdb.PromotionStore{}, &graph.Store{}, nil)
 
 	names := buildMCPToolNames(srv)
 	assert.NotContains(t, names, "lifecycle",

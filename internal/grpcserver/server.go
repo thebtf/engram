@@ -151,6 +151,11 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 	if req.Project != "" {
 		ctx = mcp.ContextWithProject(ctx, req.Project)
 	}
+	// Finding 3: inject session identity so audit helpers can record the correct
+	// SourceSessionID. Only set when the proto field is non-empty.
+	if req.SessionId != "" {
+		ctx = mcp.ContextWithSession(ctx, req.SessionId)
+	}
 
 	resultJSON, isError, err := s.handler.HandleToolCall(ctx, req.ToolName, req.ArgumentsJson)
 	if err != nil {
