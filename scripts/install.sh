@@ -452,7 +452,7 @@ if [[ "$FLAG_UNINSTALL" == "true" ]]; then
         warn "jq not found — configuration files not cleaned up"
     fi
 
-    local data_dir="$HOME/.engram"
+    data_dir="$HOME/.engram"
     if [[ -d "$data_dir" ]]; then
         if [[ "$local_keep" == "true" ]]; then
             warn "Keeping data directory: $data_dir"
