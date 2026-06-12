@@ -6,485 +6,381 @@ import (
 	"testing"
 )
 
-func TestSecurityHeaders(t *testing.T) {
-	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// ---------------------------------------------------------------------------
+// SecurityHeaders — basic header set
+// ---------------------------------------------------------------------------
+
+func TestSecurityHeaders_StandardHeaders(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	})
+	h := SecurityHeaders(inner)
 
-	req := httptest.NewRequest("GET", "/test", nil)
-	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 
-	handler.ServeHTTP(rr, req)
-
-	// Check all security headers are set
-	tests := []struct {
-		header   string
-		expected string
-	}{
-		{"X-Frame-Options", "DENY"},
-		{"X-Content-Type-Options", "nosniff"},
-		{"X-XSS-Protection", "1; mode=block"},
-		{"Referrer-Policy", "strict-origin-when-cross-origin"},
+	want := map[string]string{
+		"X-Frame-Options":        "DENY",
+		"X-Content-Type-Options": "nosniff",
+		"X-XSS-Protection":       "1; mode=block",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
 	}
-
-	for _, tt := range tests {
-		if got := rr.Header().Get(tt.header); got != tt.expected {
-			t.Errorf("SecurityHeaders() %s = %q, want %q", tt.header, got, tt.expected)
+	for header, expected := range want {
+		if got := rec.Header().Get(header); got != expected {
+			t.Errorf("header %s = %q, want %q", header, got, expected)
 		}
 	}
 }
 
-func TestSecurityHeaders_CORS(t *testing.T) {
-	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestSecurityHeaders_CSPValue(t *testing.T) {
+	h := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	tests := []struct {
-		name           string
-		origin         string
-		expectedOrigin string
-		expectCORS     bool
-	}{
-		{
-			name:           "localhost:37777 origin allowed",
-			origin:         "http://localhost:37777",
-			expectCORS:     true,
-			expectedOrigin: "http://localhost:37777",
-		},
-		{
-			name:           "127.0.0.1:5173 origin allowed",
-			origin:         "http://127.0.0.1:5173",
-			expectCORS:     true,
-			expectedOrigin: "http://127.0.0.1:5173",
-		},
-		{
-			name:           "localhost without port allowed",
-			origin:         "http://localhost",
-			expectCORS:     true,
-			expectedOrigin: "http://localhost",
-		},
-		{
-			name:       "external origin blocked",
-			origin:     "http://evil.com",
-			expectCORS: false,
-		},
-		{
-			name:       "evil-localhost.com bypass attempt blocked",
-			origin:     "http://evil-localhost.com",
-			expectCORS: false,
-		},
-		{
-			name:       "localhost subdomain bypass attempt blocked",
-			origin:     "http://localhost.evil.com",
-			expectCORS: false,
-		},
-		{
-			name:       "unknown localhost port blocked",
-			origin:     "http://localhost:9999",
-			expectCORS: false,
-		},
-		{
-			name:       "no origin header",
-			origin:     "",
-			expectCORS: false,
-		},
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("Content-Security-Policy header must be present")
+	}
+	wantCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
+	if csp != wantCSP {
+		t.Errorf("CSP = %q\nwant %q", csp, wantCSP)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/test", nil)
-			if tt.origin != "" {
-				req.Header.Set("Origin", tt.origin)
+	if pp := rec.Header().Get("Permissions-Policy"); pp == "" {
+		t.Error("Permissions-Policy must be set")
+	}
+}
+
+func TestSecurityHeaders_OptionsReturns204(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Should not reach here for OPTIONS
+		w.WriteHeader(http.StatusOK)
+	})
+	h := SecurityHeaders(inner)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/memory", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("OPTIONS status = %d, want 204", rec.Code)
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
+		t.Errorf("CORS origin not set for allowed OPTIONS origin")
+	}
+	if rec.Header().Get("Access-Control-Allow-Methods") == "" {
+		t.Error("Access-Control-Allow-Methods must be set for preflight")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SecurityHeaders — CORS whitelist
+// ---------------------------------------------------------------------------
+
+func TestSecurityHeaders_CORSWhitelist(t *testing.T) {
+	h := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	cases := []struct {
+		name        string
+		origin      string
+		wantAllowed bool
+	}{
+		{"dashboard port", "http://localhost:37777", true},
+		{"vite dev", "http://127.0.0.1:5173", true},
+		{"plain localhost", "http://localhost", true},
+		{"loopback ip", "http://127.0.0.1", true},
+		{"port 3000", "http://localhost:3000", true},
+		// blocked
+		{"external", "http://evil.com", false},
+		{"lookalike", "http://evil-localhost.com", false},
+		{"subdomain", "http://localhost.evil.com", false},
+		{"unknown port", "http://localhost:8888", false},
+		{"no origin", "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
 			}
-			rr := httptest.NewRecorder()
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
 
-			handler.ServeHTTP(rr, req)
-
-			cors := rr.Header().Get("Access-Control-Allow-Origin")
-			if tt.expectCORS {
-				if cors != tt.expectedOrigin {
-					t.Errorf("Expected CORS origin %q, got %q", tt.expectedOrigin, cors)
+			got := rec.Header().Get("Access-Control-Allow-Origin")
+			if tc.wantAllowed {
+				if got != tc.origin {
+					t.Errorf("origin %q: CORS = %q, want %q", tc.origin, got, tc.origin)
 				}
 			} else {
-				if cors != "" {
-					t.Errorf("Expected no CORS header, got %q", cors)
+				if got != "" {
+					t.Errorf("origin %q: expected no CORS header, got %q", tc.origin, got)
 				}
 			}
 		})
 	}
 }
 
-func TestMaxBodySize(t *testing.T) {
-	maxSize := int64(100)
-	handler := MaxBodySize(maxSize)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// ---------------------------------------------------------------------------
+// MaxBodySize
+// ---------------------------------------------------------------------------
+
+func TestMaxBodySize_Table(t *testing.T) {
+	const limit = int64(512)
+
+	h := MaxBodySize(limit)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	tests := []struct {
-		name           string
-		contentLength  int64
-		expectedStatus int
+	cases := []struct {
+		name       string
+		length     int64
+		wantStatus int
 	}{
-		{
-			name:           "within limit",
-			contentLength:  50,
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "at limit",
-			contentLength:  100,
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "exceeds limit",
-			contentLength:  150,
-			expectedStatus: http.StatusRequestEntityTooLarge,
-		},
+		{"under limit", 100, http.StatusOK},
+		{"at limit", 512, http.StatusOK},
+		{"over limit", 513, http.StatusRequestEntityTooLarge},
+		{"well over limit", 10000, http.StatusRequestEntityTooLarge},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/test", nil)
-			req.ContentLength = tt.contentLength
-			rr := httptest.NewRecorder()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/memory", nil)
+			req.ContentLength = tc.length
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
 
-			handler.ServeHTTP(rr, req)
-
-			if rr.Code != tt.expectedStatus {
-				t.Errorf("MaxBodySize() status = %d, want %d", rr.Code, tt.expectedStatus)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("ContentLength=%d: status=%d, want %d", tc.length, rec.Code, tc.wantStatus)
 			}
 		})
 	}
 }
 
-func TestTokenAuth(t *testing.T) {
-	t.Run("disabled auth allows all requests", func(t *testing.T) {
-		ta, err := NewTokenAuth("")
-		if err != nil {
-			t.Fatalf("NewTokenAuth() error = %v", err)
-		}
+// ---------------------------------------------------------------------------
+// TokenAuth
+// ---------------------------------------------------------------------------
 
-		handler := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
+func TestTokenAuth_DisabledAllowsAll(t *testing.T) {
+	ta, err := NewTokenAuth("")
+	if err != nil {
+		t.Fatalf("NewTokenAuth: %v", err)
+	}
 
-		req := httptest.NewRequest("GET", "/test", nil)
-		rr := httptest.NewRecorder()
+	h := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 
-		handler.ServeHTTP(rr, req)
+	req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 
-		if rr.Code != http.StatusOK {
-			t.Errorf("Expected OK with disabled auth, got %d", rr.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("disabled auth: status=%d, want 200", rec.Code)
+	}
+}
+
+func TestTokenAuth_EnabledRequiresToken(t *testing.T) {
+	ta, err := NewTokenAuth("secret-token-xyz")
+	if err != nil {
+		t.Fatalf("NewTokenAuth: %v", err)
+	}
+	h := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	t.Run("no token rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("no token: status=%d, want 401", rec.Code)
 		}
 	})
 
-	t.Run("enabled auth requires token", func(t *testing.T) {
-		ta, err := NewTokenAuth("worker-token")
-		if err != nil {
-			t.Fatalf("NewTokenAuth() error = %v", err)
-		}
-
-		handler := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-
-		// Without token
-		req := httptest.NewRequest("GET", "/test", nil)
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-
-		if rr.Code != http.StatusUnauthorized {
-			t.Errorf("Expected Unauthorized without token, got %d", rr.Code)
-		}
-
-		// With correct token in X-Auth-Token header
-		req = httptest.NewRequest("GET", "/test", nil)
+	t.Run("correct X-Auth-Token accepted", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
 		req.Header.Set("X-Auth-Token", ta.Token())
-		rr = httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-
-		if rr.Code != http.StatusOK {
-			t.Errorf("Expected OK with correct token, got %d", rr.Code)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("X-Auth-Token: status=%d, want 200", rec.Code)
 		}
+	})
 
-		// With correct token in Authorization header
-		req = httptest.NewRequest("GET", "/test", nil)
+	t.Run("correct Bearer token accepted", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
 		req.Header.Set("Authorization", "Bearer "+ta.Token())
-		rr = httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-
-		if rr.Code != http.StatusOK {
-			t.Errorf("Expected OK with Bearer token, got %d", rr.Code)
-		}
-	})
-
-	t.Run("exempt paths skip auth", func(t *testing.T) {
-		ta, err := NewTokenAuth("worker-token")
-		if err != nil {
-			t.Fatalf("NewTokenAuth() error = %v", err)
-		}
-
-		handler := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-
-		exemptPaths := []string{"/health", "/api/health", "/api/ready"}
-		for _, path := range exemptPaths {
-			req := httptest.NewRequest("GET", path, nil)
-			rr := httptest.NewRecorder()
-			handler.ServeHTTP(rr, req)
-
-			if rr.Code != http.StatusOK {
-				t.Errorf("Expected OK for exempt path %s, got %d", path, rr.Code)
-			}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Bearer: status=%d, want 200", rec.Code)
 		}
 	})
 }
 
-func TestExpensiveOperationLimiter(t *testing.T) {
-	limiter := NewExpensiveOperationLimiter()
-
-	// First rebuild should be allowed
-	if !limiter.CanRebuild() {
-		t.Error("First rebuild should be allowed")
+func TestTokenAuth_ExemptPaths(t *testing.T) {
+	ta, err := NewTokenAuth("secret-token-xyz")
+	if err != nil {
+		t.Fatalf("NewTokenAuth: %v", err)
 	}
-
-	// Immediate second rebuild should be blocked
-	if limiter.CanRebuild() {
-		t.Error("Immediate second rebuild should be blocked")
-	}
-}
-
-func TestRequestID(t *testing.T) {
-	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request ID is in context
-		id := GetRequestID(r.Context())
-		if id == "" {
-			t.Error("Request ID should be set in context")
-		}
+	h := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	t.Run("generates new request ID", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/test", nil)
-		rr := httptest.NewRecorder()
-
-		handler.ServeHTTP(rr, req)
-
-		if rr.Header().Get("X-Request-ID") == "" {
-			t.Error("X-Request-ID header should be set")
-		}
-	})
-
-	t.Run("uses existing request ID", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.Header.Set("X-Request-ID", "test-id-12345")
-		rr := httptest.NewRecorder()
-
-		handler.ServeHTTP(rr, req)
-
-		if rr.Header().Get("X-Request-ID") != "test-id-12345" {
-			t.Errorf("Expected X-Request-ID to be test-id-12345, got %s", rr.Header().Get("X-Request-ID"))
-		}
-	})
-}
-
-func TestRequireJSONContentType(t *testing.T) {
-	handler := RequireJSONContentType(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	tests := []struct {
-		name           string
-		method         string
-		contentType    string
-		expectedStatus int
-	}{
-		{
-			name:           "GET request without content-type",
-			method:         "GET",
-			contentType:    "",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "POST with application/json",
-			method:         "POST",
-			contentType:    "application/json",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "POST with application/json; charset=utf-8",
-			method:         "POST",
-			contentType:    "application/json; charset=utf-8",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "POST without content-type (empty body)",
-			method:         "POST",
-			contentType:    "",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "POST with text/plain rejected",
-			method:         "POST",
-			contentType:    "text/plain",
-			expectedStatus: http.StatusUnsupportedMediaType,
-		},
-		{
-			name:           "PUT with application/xml rejected",
-			method:         "PUT",
-			contentType:    "application/xml",
-			expectedStatus: http.StatusUnsupportedMediaType,
-		},
-		{
-			name:           "PATCH with form-urlencoded rejected",
-			method:         "PATCH",
-			contentType:    "application/x-www-form-urlencoded",
-			expectedStatus: http.StatusUnsupportedMediaType,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, "/test", nil)
-			if tt.contentType != "" {
-				req.Header.Set("Content-Type", tt.contentType)
-			}
-			rr := httptest.NewRecorder()
-
-			handler.ServeHTTP(rr, req)
-
-			if rr.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d", tt.expectedStatus, rr.Code)
+	exemptPaths := []string{"/health", "/api/health", "/api/ready"}
+	for _, path := range exemptPaths {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			// No token provided
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("exempt path %s: status=%d, want 200", path, rec.Code)
 			}
 		})
 	}
 }
 
-func TestValidateProjectName(t *testing.T) {
-	tests := []struct {
+// ---------------------------------------------------------------------------
+// ExpensiveOperationLimiter
+// ---------------------------------------------------------------------------
+
+func TestExpensiveOperationLimiter_FirstAllowed(t *testing.T) {
+	lim := NewExpensiveOperationLimiter()
+	if !lim.CanRebuild() {
+		t.Error("first CanRebuild should return true")
+	}
+}
+
+func TestExpensiveOperationLimiter_SecondBlocked(t *testing.T) {
+	lim := NewExpensiveOperationLimiter()
+	lim.CanRebuild() // consume first slot
+	if lim.CanRebuild() {
+		t.Error("immediate second CanRebuild should return false (within cooldown)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RequestID
+// ---------------------------------------------------------------------------
+
+func TestRequestID_GeneratesID(t *testing.T) {
+	var capturedID string
+	h := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedID = GetRequestID(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Header().Get("X-Request-ID") == "" {
+		t.Error("X-Request-ID response header must be set")
+	}
+	if capturedID == "" {
+		t.Error("request ID must be set in context")
+	}
+}
+
+func TestRequestID_PropagatesExistingID(t *testing.T) {
+	const clientID = "client-provided-req-id-abc"
+
+	h := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
+	req.Header.Set("X-Request-ID", clientID)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Request-ID"); got != clientID {
+		t.Errorf("X-Request-ID = %q, want %q", got, clientID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RequireJSONContentType
+// ---------------------------------------------------------------------------
+
+func TestRequireJSONContentType_Table(t *testing.T) {
+	h := RequireJSONContentType(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	cases := []struct {
+		name        string
+		method      string
+		contentType string
+		wantStatus  int
+	}{
+		{"GET no content-type", http.MethodGet, "", http.StatusOK},
+		{"POST application/json", http.MethodPost, "application/json", http.StatusOK},
+		{"POST with charset", http.MethodPost, "application/json; charset=utf-8", http.StatusOK},
+		{"POST empty body no ct", http.MethodPost, "", http.StatusOK},
+		{"POST text/plain", http.MethodPost, "text/plain", http.StatusUnsupportedMediaType},
+		{"PUT application/xml", http.MethodPut, "application/xml", http.StatusUnsupportedMediaType},
+		{"PATCH form-urlencoded", http.MethodPatch, "application/x-www-form-urlencoded", http.StatusUnsupportedMediaType},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/api/memory", nil)
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("%s %s: status=%d, want %d", tc.method, tc.contentType, rec.Code, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ValidateProjectName
+// ---------------------------------------------------------------------------
+
+func TestValidateProjectName_Table(t *testing.T) {
+	cases := []struct {
 		name      string
 		project   string
 		wantError bool
 	}{
-		{
-			name:      "empty project allowed",
-			project:   "",
-			wantError: false,
-		},
-		{
-			name:      "simple project name",
-			project:   "my-project",
-			wantError: false,
-		},
-		{
-			name:      "project with path",
-			project:   "org/my-project",
-			wantError: false,
-		},
-		{
-			name:      "project with underscore",
-			project:   "my_project_v2",
-			wantError: false,
-		},
-		{
-			name:      "project with dot",
-			project:   "my.project.name",
-			wantError: false,
-		},
-		{
-			name:      "path traversal attack",
-			project:   "../../../etc/passwd",
-			wantError: true,
-		},
-		{
-			name:      "hidden path traversal",
-			project:   "project/../../secret",
-			wantError: true,
-		},
-		{
-			name:      "shell injection attempt",
-			project:   "project; rm -rf /",
-			wantError: true,
-		},
-		{
-			name:      "backtick injection",
-			project:   "project`whoami`",
-			wantError: true,
-		},
-		{
-			name:      "special characters",
-			project:   "project$HOME",
-			wantError: true,
-		},
-		{
-			name:      "too long project name",
-			project:   string(make([]byte, 501)),
-			wantError: true,
-		},
+		{"empty allowed", "", false},
+		{"simple name", "engram-project", false},
+		{"with slash", "org/repo-name", false},
+		{"underscore", "my_project_v3", false},
+		{"dots", "a.b.c", false},
+		// attacks
+		{"path traversal relative", "../../../etc/shadow", true},
+		{"hidden traversal", "repo/../../secret", true},
+		{"semicolon injection", "proj; rm -rf /", true},
+		{"backtick injection", "proj`id`", true},
+		{"dollar sign", "proj$PATH", true},
+		{"too long", string(make([]byte, 501)), true},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateProjectName(tt.project)
-			if tt.wantError && err == nil {
-				t.Errorf("Expected error for project %q, got nil", tt.project)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateProjectName(tc.project)
+			if tc.wantError && err == nil {
+				t.Errorf("expected error for %q, got nil", tc.project)
 			}
-			if !tt.wantError && err != nil {
-				t.Errorf("Unexpected error for project %q: %v", tt.project, err)
+			if !tc.wantError && err != nil {
+				t.Errorf("unexpected error for %q: %v", tc.project, err)
 			}
 		})
-	}
-}
-
-func TestSecurityHeaders_CSP(t *testing.T) {
-	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	rr := httptest.NewRecorder()
-
-	handler.ServeHTTP(rr, req)
-
-	// Check CSP header is set
-	csp := rr.Header().Get("Content-Security-Policy")
-	if csp == "" {
-		t.Error("Content-Security-Policy header should be set")
-	}
-	expectedCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
-	if csp != expectedCSP {
-		t.Errorf("Expected CSP to be %q, got %q", expectedCSP, csp)
-	}
-
-	// Check Permissions-Policy header
-	pp := rr.Header().Get("Permissions-Policy")
-	if pp == "" {
-		t.Error("Permissions-Policy header should be set")
-	}
-}
-
-func TestSecurityHeaders_Preflight(t *testing.T) {
-	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("OPTIONS", "/test", nil)
-	req.Header.Set("Origin", "http://localhost:3000")
-	rr := httptest.NewRecorder()
-
-	handler.ServeHTTP(rr, req)
-
-	// OPTIONS should return 204 No Content
-	if rr.Code != http.StatusNoContent {
-		t.Errorf("Expected status 204 for OPTIONS, got %d", rr.Code)
-	}
-
-	// CORS headers should be set for allowed origin
-	if rr.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
-		t.Errorf("CORS origin should be set for allowed origin")
-	}
-	if rr.Header().Get("Access-Control-Allow-Methods") == "" {
-		t.Error("Access-Control-Allow-Methods should be set")
 	}
 }
