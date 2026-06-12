@@ -1,11 +1,12 @@
 <template>
   <section class="min-h-screen flex items-center relative pt-24 sm:pt-28 pb-16 sm:pb-20">
-    <!-- Background Effects -->
+    <!-- Radial gradient backdrop behind the headline -->
     <div class="absolute inset-0 overflow-hidden">
       <div class="absolute top-[-50%] left-1/2 -translate-x-1/2 w-[150%] h-full bg-[radial-gradient(ellipse_at_center,rgba(245,158,11,0.12)_0%,transparent_60%)] opacity-60"></div>
     </div>
 
     <div class="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 text-center">
+      <!-- Badge pill -->
       <div class="inline-flex items-center gap-2 glass px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm text-slate-400 mb-6 sm:mb-8 opacity-0 animate-fade-in-up">
         <span class="w-2 h-2 bg-amber-500 rounded-full animate-pulse-slow"></span>
         {{ badge }}
@@ -22,21 +23,32 @@
       </p>
 
       <div class="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center mb-12 sm:mb-16 opacity-0 animate-fade-in-up animation-delay-300 px-4 sm:px-0">
-        <a :href="primaryCta.href" class="inline-flex items-center justify-center gap-2 bg-gradient-to-br from-amber-500 to-amber-400 text-slate-950 px-6 sm:px-8 py-3 sm:py-3.5 rounded-lg font-semibold hover:scale-105 hover:shadow-lg hover:shadow-amber-500/30 transition-all">
+        <a
+          :href="primaryCta.href"
+          class="inline-flex items-center justify-center gap-2 bg-gradient-to-br from-amber-500 to-amber-400 text-slate-950 px-6 sm:px-8 py-3 sm:py-3.5 rounded-lg font-semibold hover:scale-105 hover:shadow-lg hover:shadow-amber-500/30 transition-all"
+        >
           <i :class="primaryCta.icon"></i>
           {{ primaryCta.label }}
         </a>
-        <a :href="secondaryCta.href" target="_blank" class="inline-flex items-center justify-center gap-2 glass text-white px-6 sm:px-8 py-3 sm:py-3.5 rounded-lg font-medium hover:border-amber-500/30 hover:bg-amber-500/10 transition-all">
+        <a
+          :href="secondaryCta.href"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center justify-center gap-2 glass text-white px-6 sm:px-8 py-3 sm:py-3.5 rounded-lg font-medium hover:border-amber-500/30 hover:bg-amber-500/10 transition-all"
+        >
           <i :class="secondaryCta.icon"></i>
           {{ secondaryCta.label }}
         </a>
       </div>
 
-      <!-- Install Command -->
+      <!-- Quick-install command with copy button -->
       <div class="opacity-0 animate-fade-in-up animation-delay-400 px-2 sm:px-0">
         <div class="glass rounded-xl px-4 sm:px-6 py-4 sm:py-5 flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4 max-w-4xl mx-auto glow-amber">
           <code class="text-amber-400 text-xs sm:text-sm md:text-base flex-1 text-center sm:text-left break-all font-mono">{{ installCommand }}</code>
-          <button @click="copyCommand" class="text-slate-500 hover:text-white transition-colors p-2 flex-shrink-0 rounded-lg hover:bg-slate-800/50">
+          <button
+            @click="handleCopy"
+            class="text-slate-500 hover:text-white transition-colors p-2 flex-shrink-0 rounded-lg hover:bg-slate-800/50"
+          >
             <i :class="copied ? 'fas fa-check text-amber-500' : 'fas fa-copy'"></i>
             <span class="ml-2 text-sm sm:hidden">{{ copied ? 'Copied!' : 'Copy' }}</span>
           </button>
@@ -49,7 +61,7 @@
 <script setup>
 import { ref } from 'vue'
 
-defineProps({
+const props = defineProps({
   badge: {
     type: String,
     default: 'Persistent Memory for Claude Code'
@@ -81,10 +93,16 @@ defineProps({
 })
 
 const copied = ref(false)
+let copyTimeoutId = null
 
-function copyCommand() {
-  navigator.clipboard.writeText('curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash')
-  copied.value = true
-  setTimeout(() => copied.value = false, 2000)
+async function handleCopy() {
+  try {
+    await navigator.clipboard.writeText(props.installCommand)
+    copied.value = true
+    if (copyTimeoutId !== null) clearTimeout(copyTimeoutId)
+    copyTimeoutId = setTimeout(() => { copied.value = false }, 2000)
+  } catch {
+    // Clipboard write failed; silently ignore.
+  }
 }
 </script>

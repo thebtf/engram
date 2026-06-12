@@ -3,26 +3,26 @@ import type { Stats } from '@/types'
 import { fetchStats } from '@/utils/api'
 import { useSSE } from './useSSE'
 
-// Fallback poll interval when SSE is disconnected
-const FALLBACK_POLL_INTERVAL = 10000 // 10 seconds
+// When SSE is disconnected we fall back to polling so the stats panel stays
+// fresh even without a live event stream.
+const FALLBACK_POLL_MS = 10_000
 
 export function useStats(projectRef?: Ref<string | null>) {
   const stats = ref<Stats | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  // SSE for real-time session updates
+  // SSE-driven updates are the primary path. The fallback poll only runs
+  // while the SSE connection is down.
   const { lastEvent, isConnected } = useSSE()
 
-  let fallbackIntervalId: number | null = null
+  let fallbackPollId: number | null = null
 
-  const refresh = async () => {
+  const refresh = async (): Promise<void> => {
     loading.value = true
     error.value = null
-
     try {
-      const project = projectRef?.value ?? null
-      stats.value = await fetchStats(project)
+      stats.value = await fetchStats(projectRef?.value ?? null)
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Failed to fetch stats'
       console.error('[Stats] Error:', err)
@@ -31,43 +31,47 @@ export function useStats(projectRef?: Ref<string | null>) {
     }
   }
 
-  const startFallbackPolling = () => {
-    if (fallbackIntervalId) return
-    console.log('[Stats] SSE disconnected, starting fallback polling')
-    fallbackIntervalId = window.setInterval(refresh, FALLBACK_POLL_INTERVAL)
+  function startFallbackPolling(): void {
+    if (fallbackPollId !== null) return
+    console.log('[Stats] SSE down — starting fallback poll')
+    fallbackPollId = window.setInterval(refresh, FALLBACK_POLL_MS)
   }
 
-  const stopFallbackPolling = () => {
-    if (fallbackIntervalId) {
-      console.log('[Stats] SSE connected, stopping fallback polling')
-      clearInterval(fallbackIntervalId)
-      fallbackIntervalId = null
+  function stopFallbackPolling(): void {
+    if (fallbackPollId !== null) {
+      console.log('[Stats] SSE up — stopping fallback poll')
+      clearInterval(fallbackPollId)
+      fallbackPollId = null
     }
   }
 
-  // Watch for SSE events that affect stats
+  // SSE events that carry session or processing data are the signal to pull
+  // fresh stats. We react to the event here rather than having the SSE layer
+  // push stats directly, keeping concerns separated.
   watch(lastEvent, (event) => {
     if (event && (event.type === 'session' || event.type === 'processing_status')) {
       if (event.type === 'session') {
-        console.log('[Stats] SSE session event triggered refresh:', event.action)
+        console.log('[Stats] Session event — refreshing:', event.action)
       }
       refresh()
     }
   })
 
-  // Watch for project filter changes
+  // A project filter change means the previous stats are for the wrong scope;
+  // refresh immediately rather than waiting for the next SSE event.
   if (projectRef) {
     watch(projectRef, () => {
-      console.log('[Stats] Project filter changed, refreshing stats')
+      console.log('[Stats] Project filter changed — refreshing')
       refresh()
     })
   }
 
-  // Switch between SSE-driven and fallback polling based on connection status
+  // Switch between SSE-driven and polled modes as the connection comes and goes.
   watch(isConnected, (connected) => {
     if (connected) {
       stopFallbackPolling()
-      refresh() // Refresh immediately on reconnect
+      // Refresh on reconnect to catch any events we missed while disconnected.
+      refresh()
     } else {
       startFallbackPolling()
     }
@@ -75,10 +79,9 @@ export function useStats(projectRef?: Ref<string | null>) {
 
   onMounted(() => {
     refresh()
-    // Start fallback polling only if SSE is not connected
-    if (!isConnected.value) {
-      startFallbackPolling()
-    }
+    // Only start polling if SSE is already down at mount time; the watcher
+    // above handles the transition if SSE drops later.
+    if (!isConnected.value) startFallbackPolling()
   })
 
   onUnmounted(() => {
@@ -89,6 +92,6 @@ export function useStats(projectRef?: Ref<string | null>) {
     stats,
     loading,
     error,
-    refresh
+    refresh,
   }
 }
