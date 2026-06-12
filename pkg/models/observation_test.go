@@ -8,501 +8,495 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
 )
 
-// ObservationSuite is a test suite for Observation operations.
-type ObservationSuite struct {
-	suite.Suite
+// ---------------------------------------------------------------------------
+// ObservationType constants
+// ---------------------------------------------------------------------------
+
+func TestObsTypeConstants(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		got  ObservationType
+		want string
+	}{
+		{ObsTypeDiscovery, "discovery"},
+		{ObsTypeDecision, "decision"},
+		{ObsTypeBugfix, "bugfix"},
+		{ObsTypeFeature, "feature"},
+		{ObsTypeRefactor, "refactor"},
+		{ObsTypeChange, "change"},
+		{ObsTypeGuidance, "guidance"},
+		{ObsTypePitfall, "pitfall"},
+		{ObsTypeOperational, "operational"},
+		{ObsTypeTimeline, "timeline"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(string(c.got), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, ObservationType(c.want), c.got)
+		})
+	}
 }
 
-func TestObservationSuite(t *testing.T) {
-	suite.Run(t, new(ObservationSuite))
+// ---------------------------------------------------------------------------
+// AgentSource constants and validation
+// ---------------------------------------------------------------------------
+
+func TestAgentSourceConstants(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		got  AgentSource
+		want string
+	}{
+		{AgentClaude, "claude-code"},
+		{AgentCodex, "codex"},
+		{AgentGemini, "gemini"},
+		{AgentOther, "other"},
+		{AgentUnknown, "unknown"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(string(c.got), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, AgentSource(c.want), c.got)
+		})
+	}
 }
 
-func TestJSONStringArray_Value_NilReturnsEmptyJSONArray(t *testing.T) {
+func TestIsValidAgentSource(t *testing.T) {
+	t.Parallel()
+	valid := []string{"claude-code", "codex", "gemini", "other", "unknown"}
+	for _, s := range valid {
+		s := s
+		t.Run("valid/"+s, func(t *testing.T) {
+			t.Parallel()
+			assert.True(t, IsValidAgentSource(s))
+		})
+	}
+	invalid := []string{"gpt-4", "llama", ""}
+	for _, s := range invalid {
+		s := s
+		t.Run("invalid/"+s, func(t *testing.T) {
+			t.Parallel()
+			assert.False(t, IsValidAgentSource(s))
+		})
+	}
+}
+
+func TestSourceCrossModelConstant(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, SourceType("cross_model"), SourceCrossModel)
+}
+
+// ---------------------------------------------------------------------------
+// ObservationScope constants
+// ---------------------------------------------------------------------------
+
+func TestObservationScopeConstants(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, ObservationScope("project"), ScopeProject)
+	assert.Equal(t, ObservationScope("global"), ScopeGlobal)
+}
+
+// ---------------------------------------------------------------------------
+// GlobalizableConcepts
+// ---------------------------------------------------------------------------
+
+func TestGlobalizableConcepts_Contents(t *testing.T) {
+	t.Parallel()
+	required := []string{
+		"best-practice", "pattern", "anti-pattern", "architecture",
+		"security", "performance", "testing", "debugging", "workflow", "tooling",
+	}
+	assert.Equal(t, required, GlobalizableConcepts)
+}
+
+// ---------------------------------------------------------------------------
+// classifyFileScopes
+// ---------------------------------------------------------------------------
+
+func TestClassifyFileScopes_Frontend(t *testing.T) {
+	t.Parallel()
+	scopes := classifyFileScopes([]string{"src/App.tsx", "styles.css"})
+	assert.Contains(t, scopes, "scope:frontend")
+}
+
+func TestClassifyFileScopes_Backend(t *testing.T) {
+	t.Parallel()
+	scopes := classifyFileScopes([]string{"internal/mcp/server.go", "cmd/worker/main.go"})
+	assert.Contains(t, scopes, "scope:backend")
+}
+
+func TestClassifyFileScopes_TestFiles(t *testing.T) {
+	t.Parallel()
+	scopes := classifyFileScopes([]string{"internal/scoring/calculator_test.go"})
+	assert.Contains(t, scopes, "scope:tests")
+	assert.Contains(t, scopes, "scope:backend")
+}
+
+func TestClassifyFileScopes_MultiSegmentPath(t *testing.T) {
+	t.Parallel()
+	scopes := classifyFileScopes([]string{"internal/api/auth_handler_test.go"})
+	assert.Contains(t, scopes, "scope:backend")
+	assert.Contains(t, scopes, "scope:api")
+	assert.Contains(t, scopes, "scope:auth")
+	assert.Contains(t, scopes, "scope:tests")
+}
+
+func TestClassifyFileScopes_NoPseudoMatch(t *testing.T) {
+	t.Parallel()
+	scopes := classifyFileScopes([]string{"internal/mcp/tools_memory.go"})
+	assert.NotContains(t, scopes, "scope:api")
+	assert.NotContains(t, scopes, "scope:auth")
+}
+
+func TestClassifyFileScopes_EmptyInputs(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, classifyFileScopes(nil))
+	assert.Empty(t, classifyFileScopes([]string{}))
+	assert.Empty(t, classifyFileScopes([]string{""}))
+}
+
+// ---------------------------------------------------------------------------
+// DetermineScope
+// ---------------------------------------------------------------------------
+
+func TestDetermineScope_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		concepts []string
+		want     ObservationScope
+	}{
+		{"empty → project", []string{}, ScopeProject},
+		{"no globalizable → project", []string{"custom", "project-specific"}, ScopeProject},
+		{"security → global", []string{"security"}, ScopeGlobal},
+		{"best-practice → global", []string{"best-practice"}, ScopeGlobal},
+		{"performance → global", []string{"performance"}, ScopeGlobal},
+		{"testing → global", []string{"testing"}, ScopeGlobal},
+		{"pattern → global", []string{"pattern"}, ScopeGlobal},
+		{"mixed with globalizable → global", []string{"custom", "security"}, ScopeGlobal},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, DetermineScope(tc.concepts))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ClassifyMemoryType
+// ---------------------------------------------------------------------------
+
+func TestClassifyMemoryType_GuidanceShortcut(t *testing.T) {
+	t.Parallel()
+	obs := &ParsedObservation{
+		Type:     ObsTypeGuidance,
+		Concepts: []string{"architecture", "pattern"}, // would trigger decision otherwise
+	}
+	assert.Equal(t, MemTypeGuidance, ClassifyMemoryType(obs))
+}
+
+func TestClassifyMemoryType_NonGuidanceUsesConceptMatch(t *testing.T) {
+	t.Parallel()
+	obs := &ParsedObservation{
+		Type:     ObsTypeDiscovery,
+		Concepts: []string{"architecture"},
+	}
+	assert.Equal(t, MemTypeDecision, ClassifyMemoryType(obs))
+}
+
+// ---------------------------------------------------------------------------
+// ParsedObservation field access
+// ---------------------------------------------------------------------------
+
+func TestParsedObservation_Fields(t *testing.T) {
+	t.Parallel()
+	obs := &ParsedObservation{
+		Type:          ObsTypeBugfix,
+		Title:         "Fix connection leak",
+		Subtitle:      "In database pool",
+		Narrative:     "Connections were not returned after timeout",
+		Facts:         []string{"Added defer close", "Added test coverage"},
+		Concepts:      []string{"database", "reliability"},
+		FilesRead:     []string{"pool.go"},
+		FilesModified: []string{"pool.go", "pool_test.go"},
+		FileMtimes:    map[string]int64{"pool.go": 1700000000},
+	}
+
+	assert.Equal(t, ObsTypeBugfix, obs.Type)
+	assert.Equal(t, "Fix connection leak", obs.Title)
+	assert.Equal(t, "In database pool", obs.Subtitle)
+	assert.Len(t, obs.Facts, 2)
+	assert.Len(t, obs.Concepts, 2)
+	assert.Len(t, obs.FilesRead, 1)
+	assert.Len(t, obs.FilesModified, 2)
+	assert.Equal(t, int64(1700000000), obs.FileMtimes["pool.go"])
+}
+
+func TestParsedObservation_FileMtimesSerializable(t *testing.T) {
+	t.Parallel()
+	obs := &ParsedObservation{
+		Type:       ObsTypeDiscovery,
+		Title:      "Mtime check",
+		FileMtimes: map[string]int64{"handler.go": 9876543210},
+	}
+	data, err := json.Marshal(obs.FileMtimes)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "handler.go")
+	assert.Contains(t, string(data), "9876543210")
+}
+
+// ---------------------------------------------------------------------------
+// Observation.CheckStaleness
+// ---------------------------------------------------------------------------
+
+func TestCheckStaleness_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		stored  map[string]int64
+		current map[string]int64
+		want    bool
+	}{
+		{"empty stored — not stale", map[string]int64{}, map[string]int64{"f.go": 1}, false},
+		{"matching mtimes — not stale", map[string]int64{"f.go": 1000}, map[string]int64{"f.go": 1000}, false},
+		{"file changed — stale", map[string]int64{"f.go": 1000}, map[string]int64{"f.go": 2000}, true},
+		{"file absent from current — not stale", map[string]int64{"f.go": 1000}, map[string]int64{}, false},
+		{"nil current — not stale", map[string]int64{"f.go": 1000}, nil, false},
+		{
+			"multi-file partial change — stale",
+			map[string]int64{"a.go": 100, "b.go": 200},
+			map[string]int64{"a.go": 100, "b.go": 999},
+			true,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			obs := &Observation{FileMtimes: tc.stored}
+			assert.Equal(t, tc.want, obs.CheckStaleness(tc.current))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Observation nullable fields
+// ---------------------------------------------------------------------------
+
+func TestObservation_NullFields(t *testing.T) {
+	t.Parallel()
+	obs := &Observation{
+		ID:        1,
+		Project:   "proj",
+		Type:      ObsTypeChange,
+		Title:     sql.NullString{Valid: false},
+		Subtitle:  sql.NullString{Valid: false},
+		Narrative: sql.NullString{Valid: false},
+	}
+	assert.False(t, obs.Title.Valid)
+	assert.False(t, obs.Subtitle.Valid)
+	assert.False(t, obs.Narrative.Valid)
+}
+
+func TestObservation_ValidFields(t *testing.T) {
+	t.Parallel()
+	obs := &Observation{
+		ID:        2,
+		Project:   "proj",
+		Type:      ObsTypeRefactor,
+		Title:     sql.NullString{String: "Rename package", Valid: true},
+		Subtitle:  sql.NullString{String: "From old to new", Valid: true},
+		Narrative: sql.NullString{String: "Renamed the package to align with conventions", Valid: true},
+	}
+	assert.True(t, obs.Title.Valid)
+	assert.Equal(t, "Rename package", obs.Title.String)
+	assert.True(t, obs.Subtitle.Valid)
+}
+
+// ---------------------------------------------------------------------------
+// NewObservation
+// ---------------------------------------------------------------------------
+
+func TestNewObservation_ScopeFromConcepts(t *testing.T) {
+	t.Parallel()
+	parsed := &ParsedObservation{
+		Type:          ObsTypeFeature,
+		Title:         "Add TLS termination",
+		Narrative:     "Enabled mutual TLS at the reverse proxy",
+		Concepts:      []string{"security"},
+		FilesModified: []string{"proxy.go"},
+		FileMtimes:    map[string]int64{"proxy.go": 1700000000},
+	}
+	obs := NewObservation("sdk-001", "infra-proj", parsed, 3, 512)
+
+	assert.Equal(t, "sdk-001", obs.SDKSessionID)
+	assert.Equal(t, "infra-proj", obs.Project)
+	assert.Equal(t, ScopeGlobal, obs.Scope) // security → global
+	assert.Equal(t, ObsTypeFeature, obs.Type)
+	assert.Equal(t, "Add TLS termination", obs.Title.String)
+	assert.True(t, obs.Title.Valid)
+	assert.Equal(t, int64(3), obs.PromptNumber.Int64)
+	assert.Equal(t, int64(512), obs.DiscoveryTokens)
+	assert.NotEmpty(t, obs.CreatedAt)
+	assert.Greater(t, obs.CreatedAtEpoch, int64(0))
+}
+
+func TestNewObservation_ProjectScopeWhenNoGlobalizableConcepts(t *testing.T) {
+	t.Parallel()
+	parsed := &ParsedObservation{
+		Type:     ObsTypeDecision,
+		Title:    "Use short variable names",
+		Concepts: []string{"style", "convention"},
+	}
+	obs := NewObservation("sdk-002", "my-proj", parsed, 1, 100)
+
+	assert.Equal(t, ScopeProject, obs.Scope)
+}
+
+// ---------------------------------------------------------------------------
+// ParsedObservation.ToStoredObservation
+// ---------------------------------------------------------------------------
+
+func TestToStoredObservation_FieldMapping(t *testing.T) {
+	t.Parallel()
+	parsed := &ParsedObservation{
+		Type:      ObsTypeOperational,
+		Title:     "Rotate certs quarterly",
+		Subtitle:  "TLS cert rotation",
+		Narrative: "Certificates must be rotated every 90 days",
+		Facts:     []string{"Automate via cron"},
+		Concepts:  []string{"security"},
+	}
+	obs := parsed.ToStoredObservation()
+
+	assert.Equal(t, ObsTypeOperational, obs.Type)
+	assert.Equal(t, "Rotate certs quarterly", obs.Title.String)
+	assert.True(t, obs.Title.Valid)
+	assert.Equal(t, "TLS cert rotation", obs.Subtitle.String)
+	assert.True(t, obs.Subtitle.Valid)
+}
+
+// ---------------------------------------------------------------------------
+// JSONStringArray scanning
+// ---------------------------------------------------------------------------
+
+func TestJSONStringArray_Scan(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		input   interface{}
+		want    JSONStringArray
+		wantErr bool
+	}{
+		{"nil input", nil, nil, false},
+		{"empty string", "", nil, false},
+		{"json string", `["x","y"]`, JSONStringArray{"x", "y"}, false},
+		{"json bytes", []byte(`["p","q","r"]`), JSONStringArray{"p", "q", "r"}, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var arr JSONStringArray
+			err := arr.Scan(tc.input)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, arr)
+			}
+		})
+	}
+}
+
+func TestJSONStringArray_Value_NilReturnsEmptyArray(t *testing.T) {
+	t.Parallel()
 	var arr JSONStringArray
 	val, err := arr.Value()
 	require.NoError(t, err)
 	require.Equal(t, "[]", string(val.([]byte)))
 }
 
-// TestObservationTypeConstants tests observation type constants.
-func (s *ObservationSuite) TestObservationTypeConstants() {
-	s.Equal(ObservationType("discovery"), ObsTypeDiscovery)
-	s.Equal(ObservationType("decision"), ObsTypeDecision)
-	s.Equal(ObservationType("bugfix"), ObsTypeBugfix)
-	s.Equal(ObservationType("feature"), ObsTypeFeature)
-	s.Equal(ObservationType("refactor"), ObsTypeRefactor)
-	s.Equal(ObservationType("change"), ObsTypeChange)
-	s.Equal(ObservationType("guidance"), ObsTypeGuidance)
-	s.Equal(ObservationType("pitfall"), ObsTypePitfall)
-	s.Equal(ObservationType("operational"), ObsTypeOperational)
-	s.Equal(ObservationType("timeline"), ObsTypeTimeline)
-}
+// ---------------------------------------------------------------------------
+// JSONInt64Map scanning
+// ---------------------------------------------------------------------------
 
-// TestAgentSourceConstants tests agent source type constants and validation.
-func (s *ObservationSuite) TestAgentSourceConstants() {
-	s.Equal(AgentSource("claude-code"), AgentClaude)
-	s.Equal(AgentSource("codex"), AgentCodex)
-	s.Equal(AgentSource("gemini"), AgentGemini)
-	s.Equal(AgentSource("other"), AgentOther)
-	s.Equal(AgentSource("unknown"), AgentUnknown)
-
-	// Validation
-	s.True(IsValidAgentSource("claude-code"))
-	s.True(IsValidAgentSource("codex"))
-	s.True(IsValidAgentSource("gemini"))
-	s.True(IsValidAgentSource("other"))
-	s.True(IsValidAgentSource("unknown"))
-	s.False(IsValidAgentSource("gpt-4"))
-	s.False(IsValidAgentSource(""))
-}
-
-// TestSourceCrossModel tests the cross_model source type constant.
-func (s *ObservationSuite) TestSourceCrossModel() {
-	s.Equal(SourceType("cross_model"), SourceCrossModel)
-}
-
-// TestClassifyFileScopes tests diff-scope auto-tagging from file paths.
-func (s *ObservationSuite) TestClassifyFileScopes() {
-	// Frontend files
-	scopes := classifyFileScopes([]string{"src/App.tsx", "styles.css"})
-	s.Contains(scopes, "scope:frontend")
-
-	// Backend files
-	scopes = classifyFileScopes([]string{"internal/mcp/server.go", "cmd/worker/main.go"})
-	s.Contains(scopes, "scope:backend")
-
-	// Test files
-	scopes = classifyFileScopes([]string{"internal/scoring/calculator_test.go"})
-	s.Contains(scopes, "scope:tests")
-	s.Contains(scopes, "scope:backend")
-
-	// Multiple scopes from single file
-	scopes = classifyFileScopes([]string{"internal/api/auth_handler_test.go"})
-	s.Contains(scopes, "scope:backend")
-	s.Contains(scopes, "scope:api")  // /api/ path segment
-	s.Contains(scopes, "scope:auth") // /auth/ in path
-	s.Contains(scopes, "scope:tests")
-
-	// Avoid false positives on partial matches
-	scopes = classifyFileScopes([]string{"internal/mcp/tools_memory.go"})
-	s.NotContains(scopes, "scope:api")  // "mcp" doesn't match /api/
-	s.NotContains(scopes, "scope:auth") // "memory" doesn't match /auth/
-
-	// Empty/nil input
-	s.Empty(classifyFileScopes(nil))
-	s.Empty(classifyFileScopes([]string{}))
-	s.Empty(classifyFileScopes([]string{""}))
-}
-
-// TestScopeConstants tests scope constants.
-func (s *ObservationSuite) TestScopeConstants() {
-	s.Equal(ObservationScope("project"), ScopeProject)
-	s.Equal(ObservationScope("global"), ScopeGlobal)
-}
-
-// TestGlobalizableConcepts tests that globalizable concepts are defined.
-func (s *ObservationSuite) TestGlobalizableConcepts() {
-	expected := []string{
-		"best-practice", "pattern", "anti-pattern", "architecture",
-		"security", "performance", "testing",
-		"debugging", "workflow", "tooling",
-	}
-	s.Equal(expected, GlobalizableConcepts)
-}
-
-// TestDetermineScope_TableDriven tests scope determination with various concepts.
-func (s *ObservationSuite) TestDetermineScope_TableDriven() {
-	tests := []struct {
-		name     string
-		expected ObservationScope
-		concepts []string
+func TestJSONInt64Map_Scan(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		input   interface{}
+		want    JSONInt64Map
+		wantErr bool
 	}{
-		{
-			name:     "empty concepts - project scope",
-			concepts: []string{},
-			expected: ScopeProject,
-		},
-		{
-			name:     "no globalizable concepts - project scope",
-			concepts: []string{"how-it-works", "custom-tag"},
-			expected: ScopeProject,
-		},
-		{
-			name:     "security concept - global scope",
-			concepts: []string{"security"},
-			expected: ScopeGlobal,
-		},
-		{
-			name:     "best-practice concept - global scope",
-			concepts: []string{"best-practice"},
-			expected: ScopeGlobal,
-		},
-		{
-			name:     "mixed concepts with globalizable - global scope",
-			concepts: []string{"how-it-works", "security"},
-			expected: ScopeGlobal,
-		},
-		{
-			name:     "performance concept - global scope",
-			concepts: []string{"performance"},
-			expected: ScopeGlobal,
-		},
-		{
-			name:     "testing concept - global scope",
-			concepts: []string{"testing"},
-			expected: ScopeGlobal,
-		},
-		{
-			name:     "pattern concept - global scope",
-			concepts: []string{"pattern"},
-			expected: ScopeGlobal,
-		},
+		{"nil", nil, nil, false},
+		{"empty str", "", nil, false},
+		{"json str", `{"f.go":777}`, JSONInt64Map{"f.go": 777}, false},
+		{"json bytes", []byte(`{"a.go":1,"b.go":2}`), JSONInt64Map{"a.go": 1, "b.go": 2}, false},
 	}
-
-	for _, tt := range tests {
-		s.Run(tt.name, func() {
-			result := DetermineScope(tt.concepts)
-			s.Equal(tt.expected, result)
-		})
-	}
-}
-
-// TestClassifyMemoryType_GuidanceShortcut tests that guidance type bypasses concept matching.
-func (s *ObservationSuite) TestClassifyMemoryType_GuidanceShortcut() {
-	// Guidance type should always return MemTypeGuidance regardless of concepts
-	obs := &ParsedObservation{
-		Type:     ObsTypeGuidance,
-		Concepts: []string{"architecture", "pattern"}, // Would match MemTypeDecision/MemTypePattern
-	}
-	s.Equal(MemTypeGuidance, ClassifyMemoryType(obs))
-
-	// Non-guidance type should still use concept matching
-	obs2 := &ParsedObservation{
-		Type:     ObsTypeDiscovery,
-		Concepts: []string{"architecture"},
-	}
-	s.Equal(MemTypeDecision, ClassifyMemoryType(obs2))
-}
-
-// TestParsedObservation_FileMtimesJSON tests FileMtimes JSON serialization.
-func (s *ObservationSuite) TestParsedObservation_FileMtimesJSON() {
-	obs := &ParsedObservation{
-		Type:       ObsTypeDiscovery,
-		Title:      "Test",
-		FileMtimes: map[string]int64{"file1.go": 1234567890, "file2.go": 1234567891},
-	}
-
-	// Verify mtimes can be marshaled
-	data, err := json.Marshal(obs.FileMtimes)
-	s.NoError(err)
-	s.Contains(string(data), "file1.go")
-	s.Contains(string(data), "1234567890")
-}
-
-// TestObservation_CheckStaleness_TableDriven tests staleness checking.
-func (s *ObservationSuite) TestObservation_CheckStaleness_TableDriven() {
-	tests := []struct {
-		storedMtimes  map[string]int64
-		currentMtimes map[string]int64
-		name          string
-		expectedStale bool
-	}{
-		{
-			name:          "empty stored mtimes - not stale",
-			storedMtimes:  map[string]int64{},
-			currentMtimes: map[string]int64{"file.go": 1000},
-			expectedStale: false,
-		},
-		{
-			name:          "matching mtimes - not stale",
-			storedMtimes:  map[string]int64{"file.go": 1000},
-			currentMtimes: map[string]int64{"file.go": 1000},
-			expectedStale: false,
-		},
-		{
-			name:          "file modified - stale",
-			storedMtimes:  map[string]int64{"file.go": 1000},
-			currentMtimes: map[string]int64{"file.go": 2000},
-			expectedStale: true,
-		},
-		{
-			name:          "file missing from current - not stale (files might not be checked)",
-			storedMtimes:  map[string]int64{"file.go": 1000},
-			currentMtimes: map[string]int64{},
-			expectedStale: false, // Missing files don't mark as stale per the implementation
-		},
-		{
-			name:          "multiple files, one modified - stale",
-			storedMtimes:  map[string]int64{"file1.go": 1000, "file2.go": 2000},
-			currentMtimes: map[string]int64{"file1.go": 1000, "file2.go": 3000},
-			expectedStale: true,
-		},
-		{
-			name:          "nil current mtimes - not stale",
-			storedMtimes:  map[string]int64{"file.go": 1000},
-			currentMtimes: nil,
-			expectedStale: false,
-		},
-	}
-
-	for _, tt := range tests {
-		s.Run(tt.name, func() {
-			obs := &Observation{
-				FileMtimes: tt.storedMtimes,
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var m JSONInt64Map
+			err := m.Scan(tc.input)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, m)
 			}
-			result := obs.CheckStaleness(tt.currentMtimes)
-			s.Equal(tt.expectedStale, result)
 		})
 	}
 }
 
-// TestObservation_MarshalJSON tests JSON marshaling of Observation.
-func (s *ObservationSuite) TestObservation_MarshalJSON() {
+// ---------------------------------------------------------------------------
+// Observation JSON serialization
+// ---------------------------------------------------------------------------
+
+func TestObservation_JSONMarshal(t *testing.T) {
+	t.Parallel()
 	obs := &Observation{
-		ID:      1,
-		Project: "test-project",
-		Type:    ObsTypeDiscovery,
-		Title:   sql.NullString{String: "Test Title", Valid: true},
+		ID:      7,
+		Project: "payroll-service",
+		Type:    ObsTypePitfall,
+		Title:   sql.NullString{String: "Race on shutdown", Valid: true},
 		Scope:   ScopeProject,
 	}
-
 	data, err := json.Marshal(obs)
-	s.NoError(err)
-	s.Contains(string(data), `"id":1`)
-	s.Contains(string(data), `"project":"test-project"`)
-	s.Contains(string(data), `"type":"discovery"`)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"id":7`)
+	assert.Contains(t, string(data), `"project":"payroll-service"`)
+	assert.Contains(t, string(data), `"type":"pitfall"`)
 }
 
-// TestParsedObservation_Fields tests ParsedObservation field access.
-func (s *ObservationSuite) TestParsedObservation_Fields() {
-	obs := &ParsedObservation{
-		Type:          ObsTypeFeature,
-		Title:         "Add authentication",
-		Subtitle:      "JWT-based auth",
-		Narrative:     "Implemented JWT authentication for API endpoints",
-		Facts:         []string{"Uses RS256 algorithm", "Tokens expire in 24h"},
-		Concepts:      []string{"security", "auth"},
-		FilesRead:     []string{"config.go"},
-		FilesModified: []string{"handler.go", "middleware.go"},
-		FileMtimes:    map[string]int64{"handler.go": 1234567890},
-	}
-
-	s.Equal(ObsTypeFeature, obs.Type)
-	s.Equal("Add authentication", obs.Title)
-	s.Equal("JWT-based auth", obs.Subtitle)
-	s.Contains(obs.Narrative, "JWT")
-	s.Len(obs.Facts, 2)
-	s.Len(obs.Concepts, 2)
-	s.Len(obs.FilesRead, 1)
-	s.Len(obs.FilesModified, 2)
-	s.Len(obs.FileMtimes, 1)
-}
-
-// TestObservation_NullFields tests handling of nullable fields.
-func (s *ObservationSuite) TestObservation_NullFields() {
-	// Test with null fields
-	obs := &Observation{
-		ID:        1,
-		Project:   "test",
-		Type:      ObsTypeDiscovery,
-		Title:     sql.NullString{Valid: false},
-		Subtitle:  sql.NullString{Valid: false},
-		Narrative: sql.NullString{Valid: false},
-	}
-
-	s.False(obs.Title.Valid)
-	s.False(obs.Subtitle.Valid)
-	s.False(obs.Narrative.Valid)
-
-	// Test with valid fields
-	obs2 := &Observation{
-		ID:        2,
-		Project:   "test",
-		Type:      ObsTypeBugfix,
-		Title:     sql.NullString{String: "Fix bug", Valid: true},
-		Subtitle:  sql.NullString{String: "Memory leak", Valid: true},
-		Narrative: sql.NullString{String: "Fixed memory leak in handler", Valid: true},
-	}
-
-	s.True(obs2.Title.Valid)
-	s.Equal("Fix bug", obs2.Title.String)
-	s.True(obs2.Subtitle.Valid)
-	s.Equal("Memory leak", obs2.Subtitle.String)
-}
-
-// TestNewObservation tests observation creation from parsed data.
-func TestNewObservation(t *testing.T) {
-	parsed := &ParsedObservation{
-		Type:          ObsTypeFeature,
-		Title:         "Add authentication",
-		Subtitle:      "JWT-based",
-		Narrative:     "Implemented JWT auth",
-		Facts:         []string{"Uses RS256"},
-		Concepts:      []string{"security"},
-		FilesRead:     []string{"config.go"},
-		FilesModified: []string{"handler.go"},
-		FileMtimes:    map[string]int64{"handler.go": 1234567890},
-	}
-
-	obs := NewObservation("sdk-123", "test-project", parsed, 5, 1000)
-
-	assert.Equal(t, "sdk-123", obs.SDKSessionID)
-	assert.Equal(t, "test-project", obs.Project)
-	assert.Equal(t, ScopeGlobal, obs.Scope) // security triggers global
-	assert.Equal(t, ObsTypeFeature, obs.Type)
-	assert.Equal(t, "Add authentication", obs.Title.String)
-	assert.True(t, obs.Title.Valid)
-	assert.Equal(t, int64(5), obs.PromptNumber.Int64)
-	assert.Equal(t, int64(1000), obs.DiscoveryTokens)
-	assert.NotEmpty(t, obs.CreatedAt)
-	assert.Greater(t, obs.CreatedAtEpoch, int64(0))
-}
-
-// TestParsedObservation_ToStoredObservation tests conversion.
-func TestParsedObservation_ToStoredObservation(t *testing.T) {
-	parsed := &ParsedObservation{
-		Type:      ObsTypeDiscovery,
-		Title:     "Test Title",
-		Subtitle:  "Test Subtitle",
-		Narrative: "Test narrative",
-		Facts:     []string{"Fact 1"},
-		Concepts:  []string{"testing"},
-	}
-
-	obs := parsed.ToStoredObservation()
-
-	assert.Equal(t, ObsTypeDiscovery, obs.Type)
-	assert.Equal(t, "Test Title", obs.Title.String)
-	assert.True(t, obs.Title.Valid)
-	assert.Equal(t, "Test Subtitle", obs.Subtitle.String)
-	assert.True(t, obs.Subtitle.Valid)
-}
-
-// TestJSONStringArray tests JSONStringArray scanning.
-func TestJSONStringArray(t *testing.T) {
-	tests := []struct {
-		input    interface{}
-		name     string
-		expected JSONStringArray
-		wantErr  bool
-	}{
-		{
-			name:     "nil input",
-			input:    nil,
-			wantErr:  false,
-			expected: nil,
-		},
-		{
-			name:     "empty string",
-			input:    "",
-			wantErr:  false,
-			expected: nil,
-		},
-		{
-			name:     "json array string",
-			input:    `["item1", "item2"]`,
-			wantErr:  false,
-			expected: JSONStringArray{"item1", "item2"},
-		},
-		{
-			name:     "json array bytes",
-			input:    []byte(`["a", "b", "c"]`),
-			wantErr:  false,
-			expected: JSONStringArray{"a", "b", "c"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var arr JSONStringArray
-			err := arr.Scan(tt.input)
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, arr)
-			}
-		})
-	}
-}
-
-// TestJSONInt64Map tests JSONInt64Map scanning.
-func TestJSONInt64Map(t *testing.T) {
-	tests := []struct {
-		input    interface{}
-		expected JSONInt64Map
-		name     string
-		wantErr  bool
-	}{
-		{
-			name:     "nil input",
-			input:    nil,
-			wantErr:  false,
-			expected: nil,
-		},
-		{
-			name:     "empty string",
-			input:    "",
-			wantErr:  false,
-			expected: nil,
-		},
-		{
-			name:     "json map string",
-			input:    `{"file.go": 1234567890}`,
-			wantErr:  false,
-			expected: JSONInt64Map{"file.go": 1234567890},
-		},
-		{
-			name:     "json map bytes",
-			input:    []byte(`{"a.go": 100, "b.go": 200}`),
-			wantErr:  false,
-			expected: JSONInt64Map{"a.go": 100, "b.go": 200},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var m JSONInt64Map
-			err := m.Scan(tt.input)
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, m)
-			}
-		})
-	}
-}
-
-// TestObservation_JSONRoundTrip tests that observations can be marshaled and unmarshaled.
 func TestObservation_JSONRoundTrip(t *testing.T) {
-	original := &Observation{
-		ID:             1,
-		SDKSessionID:   "session-123",
-		Project:        "test-project",
-		Type:           ObsTypeDiscovery,
-		Title:          sql.NullString{String: "Test Title", Valid: true},
-		Subtitle:       sql.NullString{String: "Test Subtitle", Valid: true},
-		Narrative:      sql.NullString{String: "Test narrative content", Valid: true},
-		Scope:          ScopeProject,
-		CreatedAt:      "2024-01-01T00:00:00Z",
-		CreatedAtEpoch: 1704067200000,
+	t.Parallel()
+	orig := &Observation{
+		ID:             99,
+		SDKSessionID:   "sess-99",
+		Project:        "rt-proj",
+		Type:           ObsTypeTimeline,
+		Title:          sql.NullString{String: "Milestone reached", Valid: true},
+		Subtitle:       sql.NullString{String: "v2.0 released", Valid: true},
+		Narrative:      sql.NullString{String: "v2.0 shipped with new UI", Valid: true},
+		Scope:          ScopeGlobal,
+		CreatedAt:      "2026-01-01T00:00:00Z",
+		CreatedAtEpoch: 1767225600000,
 	}
-
-	// Marshal
-	data, err := json.Marshal(original)
+	data, err := json.Marshal(orig)
 	require.NoError(t, err)
 
-	// Unmarshal into map to check fields
-	var result map[string]interface{}
-	err = json.Unmarshal(data, &result)
-	require.NoError(t, err)
-
-	assert.Equal(t, float64(1), result["id"])
-	assert.Equal(t, "test-project", result["project"])
-	assert.Equal(t, "discovery", result["type"])
-	assert.Equal(t, "Test Title", result["title"])
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &m))
+	assert.Equal(t, float64(99), m["id"])
+	assert.Equal(t, "rt-proj", m["project"])
+	assert.Equal(t, "timeline", m["type"])
+	assert.Equal(t, "Milestone reached", m["title"])
 }
