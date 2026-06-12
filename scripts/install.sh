@@ -1,31 +1,45 @@
 #!/bin/bash
-# Engram - Remote Installation Script
-# Usage: curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
+# engram installer — macOS / Linux / Git-Bash
 #
-# Or with a specific version:
-# curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash -s -- v1.0.0
+# One-shot install from GitHub releases:
+#   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
+#
+# Pin a specific release tag:
+#   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash -s -- v1.0.0
+#
+# Flags (order-independent):
+#   --full           install server binary in addition to plugin files
+#   --client-only    install plugin files only (default)
+#   --register-only  re-run plugin registration for an already-downloaded release
+#   --uninstall      remove plugin and (unless --keep-data) data directory
+#   --keep-data      paired with --uninstall: preserve ~/.engram
 
 set -e
 
-# Install mode: --client-only (default) skips server binary, --full installs everything
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
 INSTALL_MODE="client-only"
 VERSION_ARG=""
 FLAG_REGISTER_ONLY=false
 FLAG_UNINSTALL=false
 FLAG_KEEP_DATA=false
+
 for arg in "$@"; do
     case "$arg" in
-        --full) INSTALL_MODE="full" ;;
-        --client-only) INSTALL_MODE="client-only" ;;
+        --full)          INSTALL_MODE="full" ;;
+        --client-only)   INSTALL_MODE="client-only" ;;
         --register-only) FLAG_REGISTER_ONLY=true ;;
-        --uninstall) FLAG_UNINSTALL=true ;;
-        --keep-data) FLAG_KEEP_DATA=true ;;
-        --*) ;;
-        *) VERSION_ARG="${VERSION_ARG:-$arg}" ;;
+        --uninstall)     FLAG_UNINSTALL=true ;;
+        --keep-data)     FLAG_KEEP_DATA=true ;;
+        --*)             ;;
+        *)               VERSION_ARG="${VERSION_ARG:-$arg}" ;;
     esac
 done
 
-# Configuration
+# ---------------------------------------------------------------------------
+# Paths — all derived from $HOME so they survive sudo-less installs
+# ---------------------------------------------------------------------------
 GITHUB_REPO="thebtf/engram"
 INSTALL_DIR="$HOME/.claude/plugins/marketplaces/engram"
 CACHE_DIR="$HOME/.claude/plugins/cache/engram/engram"
@@ -34,62 +48,40 @@ SETTINGS_FILE="$HOME/.claude/settings.json"
 MARKETPLACES_FILE="$HOME/.claude/plugins/known_marketplaces.json"
 PLUGIN_KEY="engram@engram"
 
-# Colors for output
+# ---------------------------------------------------------------------------
+# Terminal output helpers
+# ---------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[OK]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
-success() {
-    echo -e "${GREEN}[OK]${NC} $1"
-}
-
-warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-    exit 1
-}
-
-# Detect OS and architecture
+# ---------------------------------------------------------------------------
+# Platform detection
+# ---------------------------------------------------------------------------
 detect_platform() {
     local os arch
 
     case "$(uname -s)" in
-        Darwin)
-            os="darwin"
-            ;;
-        Linux)
-            os="linux"
-            ;;
-        MINGW*|MSYS*|CYGWIN*)
-            os="windows"
-            ;;
-        *)
-            error "Unsupported operating system: $(uname -s)"
-            ;;
+        Darwin)             os="darwin" ;;
+        Linux)              os="linux" ;;
+        MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+        *)                  error "Unsupported operating system: $(uname -s)" ;;
     esac
 
     case "$(uname -m)" in
-        x86_64|amd64)
-            arch="amd64"
-            ;;
-        arm64|aarch64)
-            arch="arm64"
-            ;;
-        *)
-            error "Unsupported architecture: $(uname -m)"
-            ;;
+        x86_64|amd64)  arch="amd64" ;;
+        arm64|aarch64) arch="arm64" ;;
+        *)             error "Unsupported architecture: $(uname -m)" ;;
     esac
 
-    # Check for unsupported combinations
+    # CGO cross-compilation is not available for linux/arm64
     if [[ "$os" == "linux" && "$arch" == "arm64" ]]; then
         error "Linux ARM64 is not currently supported due to CGO cross-compilation limitations"
     fi
@@ -97,177 +89,159 @@ detect_platform() {
     echo "${os}_${arch}"
 }
 
-# Get the latest release version from GitHub
+# ---------------------------------------------------------------------------
+# Fetch latest release tag from GitHub API
+# ---------------------------------------------------------------------------
 get_latest_version() {
-    local response version curl_opts
+    local curl_opts response version
 
-    # Use GitHub token if available (higher rate limit)
     curl_opts=(-sS)
+    # Higher rate limit when a token is present
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         curl_opts+=(-H "Authorization: token ${GITHUB_TOKEN}")
     fi
 
-    # Fetch with error handling
     response=$(curl "${curl_opts[@]}" "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>&1)
 
-    # Check for rate limiting
     if echo "$response" | grep -q "API rate limit exceeded"; then
-        echo ""
         error "GitHub API rate limit exceeded.
 
-You have a few options:
-  1. Wait ~1 hour for the rate limit to reset
-  2. Specify a version manually:
-     curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/install.sh | bash -s -- v0.6.1
-  3. Use a GitHub token (set GITHUB_TOKEN environment variable)
+Options:
+  1. Wait ~1 hour for the limit to reset
+  2. Specify a version explicitly:
+       curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/install.sh | bash -s -- v0.6.1
+  3. Export GITHUB_TOKEN to raise the limit
   4. Clone and build from source:
-     git clone https://github.com/${GITHUB_REPO}.git
-     cd engram && make build && make install"
+       git clone https://github.com/${GITHUB_REPO}.git && cd engram && make build && make install"
     fi
 
-    # Check for other API errors
     if echo "$response" | grep -q '"message":'; then
         local msg
         msg=$(echo "$response" | grep '"message":' | sed -E 's/.*"message": *"([^"]+)".*/\1/')
         error "GitHub API error: $msg"
     fi
 
-    # Extract version
     version=$(echo "$response" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
     if [[ -z "$version" ]]; then
-        error "Failed to fetch latest version from GitHub. Response: $response"
+        error "Could not parse release tag from GitHub API. Response: $response"
     fi
 
     echo "$version"
 }
 
-# Download and extract the release
+# ---------------------------------------------------------------------------
+# Download release archive and lay out files into INSTALL_DIR
+# ---------------------------------------------------------------------------
 download_release() {
     local version="$1"
     local platform="$2"
-    local tmp_dir
+    local tmp_dir archive_ext archive_name download_url
 
     tmp_dir=$(mktemp -d)
     trap "rm -rf $tmp_dir" EXIT
 
-    # Construct download URL (use .zip for Windows, .tar.gz for others)
-    local archive_ext="tar.gz"
+    # Windows releases use zip; everything else uses tar.gz
+    archive_ext="tar.gz"
     if [[ "$platform" == windows_* ]]; then
         archive_ext="zip"
     fi
-    local archive_name="engram_${version#v}_${platform}.${archive_ext}"
-    local download_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${archive_name}"
+
+    archive_name="engram_${version#v}_${platform}.${archive_ext}"
+    download_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${archive_name}"
 
     info "Downloading ${archive_name}..."
-
     if ! curl -sSL -o "$tmp_dir/release.${archive_ext}" "$download_url"; then
-        error "Failed to download release from: $download_url"
+        error "Download failed: $download_url"
     fi
 
     info "Extracting archive..."
     if [[ "$archive_ext" == "zip" ]]; then
-        if ! unzip -q "$tmp_dir/release.zip" -d "$tmp_dir"; then
-            error "Failed to extract archive"
-        fi
+        unzip -q "$tmp_dir/release.zip" -d "$tmp_dir" || error "Failed to extract zip"
     else
-        if ! tar -xzf "$tmp_dir/release.tar.gz" -C "$tmp_dir"; then
-            error "Failed to extract archive"
-        fi
+        tar -xzf "$tmp_dir/release.tar.gz" -C "$tmp_dir" || error "Failed to extract tar.gz"
     fi
 
-    # Create installation directories
     info "Installing to ${INSTALL_DIR}..."
-    mkdir -p "$INSTALL_DIR/hooks"
-    mkdir -p "$INSTALL_DIR/.claude-plugin"
-    mkdir -p "$INSTALL_DIR/commands"
+    mkdir -p "$INSTALL_DIR/hooks" "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/commands"
 
-    # Copy binaries (--client-only skips server binary)
+    # Server binary is only included in --full installs
     if [[ "$INSTALL_MODE" == "full" ]]; then
         cp "$tmp_dir/engram-server" "$INSTALL_DIR/" 2>/dev/null || true
     fi
-    # Copy JS hooks (required for plugin — fail loudly if missing)
-    if ! cp "$tmp_dir/hooks/"*.js "$INSTALL_DIR/hooks/" 2>/dev/null; then
-        error "Failed to copy JS hooks from $tmp_dir/hooks/ to $INSTALL_DIR/hooks/"
-    fi
-    if ! cp "$tmp_dir/hooks/hooks.json" "$INSTALL_DIR/hooks/" 2>/dev/null; then
-        error "Failed to copy hooks.json from $tmp_dir/hooks/ to $INSTALL_DIR/hooks/"
-    fi
 
-    # Copy plugin configuration
+    # JS hooks are mandatory — the plugin cannot function without them
+    cp "$tmp_dir/hooks/"*.js "$INSTALL_DIR/hooks/" \
+        || error "Failed to copy JS hooks from $tmp_dir/hooks/"
+    cp "$tmp_dir/hooks/hooks.json" "$INSTALL_DIR/hooks/" \
+        || error "Failed to copy hooks.json from $tmp_dir/hooks/"
+
     cp "$tmp_dir/.claude-plugin/"* "$INSTALL_DIR/.claude-plugin/"
 
-    # Copy slash commands if they exist in the release
     if [[ -d "$tmp_dir/commands" ]]; then
         cp -r "$tmp_dir/commands/"* "$INSTALL_DIR/commands/" 2>/dev/null || true
     fi
 
-    # Copy skills if they exist in the release
     if [[ -d "$tmp_dir/skills" ]]; then
         mkdir -p "$INSTALL_DIR/skills"
         cp -r "$tmp_dir/skills/"* "$INSTALL_DIR/skills/" 2>/dev/null || true
     fi
 
-    # Copy MCP config if it exists in the release
     if [[ -f "$tmp_dir/.mcp.json" ]]; then
         cp "$tmp_dir/.mcp.json" "$INSTALL_DIR/.mcp.json"
     fi
 
-    # Copy the Claude-specific MCP config referenced by .claude-plugin/plugin.json
+    # Claude-specific transport config (referenced by .claude-plugin/plugin.json)
     if [[ -f "$tmp_dir/claude/.mcp.json" ]]; then
         mkdir -p "$INSTALL_DIR/claude"
         cp "$tmp_dir/claude/.mcp.json" "$INSTALL_DIR/claude/.mcp.json"
     fi
 
-    # Make binaries executable
     if [[ "$INSTALL_MODE" == "full" ]]; then
         chmod +x "$INSTALL_DIR/engram-server" 2>/dev/null || true
     fi
-    success "Binaries installed to ${INSTALL_DIR}"
+
+    success "Files installed to ${INSTALL_DIR}"
 }
 
-# Register the plugin with Claude Code
+# ---------------------------------------------------------------------------
+# Write plugin metadata into Claude Code's JSON registry files
+# ---------------------------------------------------------------------------
 register_plugin() {
     local version="$1"
-    local timestamp
+    local timestamp cache_base cache_path plugin_entry statusline_cmd statusline_entry marketplace_entry
+
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
-    # Ensure directories exist
     mkdir -p "$HOME/.claude/plugins"
 
-    # Clean up old cache versions to prevent stale binaries
-    local cache_base
+    # Remove stale cache versions so old binaries cannot shadow the new one
     cache_base=$(dirname "$CACHE_DIR")
     if [[ -d "$cache_base" ]]; then
-        info "Cleaning up old cache versions..."
-        find "$cache_base" -mindepth 1 -maxdepth 1 -type d ! -name "${version#v}" -exec rm -rf {} \; 2>/dev/null || true
+        info "Removing old cache versions..."
+        find "$cache_base" -mindepth 1 -maxdepth 1 -type d \
+            ! -name "${version#v}" -exec rm -rf {} \; 2>/dev/null || true
     fi
 
-    mkdir -p "${CACHE_DIR}/${version}"
+    cache_path="${CACHE_DIR}/${version}"
+    mkdir -p "${cache_path}"
 
-    # Create JSON files if they don't exist
-    [[ ! -f "$PLUGINS_FILE" ]] && echo '{"version": 2, "plugins": {}}' > "$PLUGINS_FILE"
-    [[ ! -f "$SETTINGS_FILE" ]] && echo '{}' > "$SETTINGS_FILE"
+    # Bootstrap JSON files when they do not exist yet
+    [[ ! -f "$PLUGINS_FILE" ]]      && echo '{"version": 2, "plugins": {}}' > "$PLUGINS_FILE"
+    [[ ! -f "$SETTINGS_FILE" ]]     && echo '{}' > "$SETTINGS_FILE"
     [[ ! -f "$MARKETPLACES_FILE" ]] && echo '{}' > "$MARKETPLACES_FILE"
 
-    # Check for jq
     if ! command -v jq &> /dev/null; then
-        warn "jq is not installed. Plugin registration requires jq."
-        warn "Please install jq: brew install jq (macOS) or apt-get install jq (Linux)"
-        warn "Then run: $0 --register-only"
+        warn "jq is not installed — plugin registration requires jq."
+        warn "Install jq: brew install jq (macOS) / apt-get install jq (Linux)"
+        warn "Then re-run: $0 --register-only"
         return 1
     fi
 
-    local cache_path="${CACHE_DIR}/${version}"
-
-    # Copy files to cache directory
-    mkdir -p "$cache_path/.claude-plugin"
-    mkdir -p "$cache_path/hooks"
-    mkdir -p "$cache_path/commands"
+    mkdir -p "$cache_path/.claude-plugin" "$cache_path/hooks" "$cache_path/commands"
     cp -r "$INSTALL_DIR/"* "$cache_path/" 2>/dev/null || true
 
-    # Register in installed_plugins.json
-    local plugin_entry
+    # installed_plugins.json — record install path, version, and timestamp
     plugin_entry=$(cat <<EOF
 [{
     "scope": "user",
@@ -279,16 +253,13 @@ register_plugin() {
 }]
 EOF
 )
-
     jq --arg key "$PLUGIN_KEY" --argjson entry "$plugin_entry" \
         '.plugins[$key] = $entry' "$PLUGINS_FILE" > "${PLUGINS_FILE}.tmp" \
         && mv "${PLUGINS_FILE}.tmp" "$PLUGINS_FILE"
-
     success "Plugin registered in installed_plugins.json"
 
-    # Enable in settings.json and configure statusline
-    local statusline_cmd="node \"$INSTALL_DIR/hooks/statusline.js\""
-    local statusline_entry
+    # settings.json — enable plugin and wire the statusline command
+    statusline_cmd="node \"$INSTALL_DIR/hooks/statusline.js\""
     statusline_entry=$(cat <<EOF
 {
     "type": "command",
@@ -297,16 +268,14 @@ EOF
 }
 EOF
 )
-
     jq --arg key "$PLUGIN_KEY" --argjson statusline "$statusline_entry" \
-        '.enabledPlugins //= {} | .enabledPlugins[$key] = true | .statusLine = $statusline' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
+        '.enabledPlugins //= {} | .enabledPlugins[$key] = true | .statusLine = $statusline' \
+        "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
         && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-
     success "Plugin enabled in settings.json"
     success "Statusline configured in settings.json"
 
-    # Register marketplace
-    local marketplace_entry
+    # known_marketplaces.json — register local directory as the source
     marketplace_entry=$(cat <<EOF
 {
     "source": {
@@ -318,39 +287,36 @@ EOF
 }
 EOF
 )
-
     jq --arg key "engram" --argjson entry "$marketplace_entry" \
         '.[$key] = $entry' "$MARKETPLACES_FILE" > "${MARKETPLACES_FILE}.tmp" \
         && mv "${MARKETPLACES_FILE}.tmp" "$MARKETPLACES_FILE"
-
     success "Marketplace registered in known_marketplaces.json"
 
-    # Note: MCP server registration is handled by the plugin's .mcp.json file.
-    # No need to modify settings.json for MCP — the plugin handles this automatically.
+    # MCP transport is declared in the plugin's .mcp.json — no settings.json edit needed
 }
 
-# Prompt for server connection settings
+# ---------------------------------------------------------------------------
+# Interactive prompt for server URL and API token
+# ---------------------------------------------------------------------------
 setup_connection() {
     echo ""
-    info "Engram uses a remote server for storage. Configure your connection:"
+    info "Engram stores memories on a remote server. Configure the connection:"
     echo ""
 
-    # Prompt for server URL
     local default_url="http://localhost:37777/mcp"
     read -p "  Server URL [${default_url}]: " ENGRAM_URL
     ENGRAM_URL="${ENGRAM_URL:-$default_url}"
 
-    # Ensure URL ends with /mcp
+    # Callers sometimes forget the MCP path segment
     if [[ "$ENGRAM_URL" != */mcp ]]; then
         ENGRAM_URL="${ENGRAM_URL%/}/mcp"
         info "Added /mcp suffix: $ENGRAM_URL"
     fi
 
-    # Prompt for API token
-    read -p "  API Token (empty for no auth): " ENGRAM_API_TOKEN
+    read -p "  API Token (leave blank for no auth): " ENGRAM_API_TOKEN
     ENGRAM_API_TOKEN="${ENGRAM_API_TOKEN:-}"
 
-    # Detect shell profile
+    # Persist to whichever shell profile is present
     local shell_profile=""
     if [[ -f "$HOME/.zshrc" ]]; then
         shell_profile="$HOME/.zshrc"
@@ -361,27 +327,24 @@ setup_connection() {
     fi
 
     if [[ -n "$shell_profile" ]]; then
-        # Remove old entries if present
         sed -i.bak '/^export ENGRAM_URL=/d' "$shell_profile" 2>/dev/null || true
         sed -i.bak '/^export ENGRAM_API_TOKEN=/d' "$shell_profile" 2>/dev/null || true
         rm -f "${shell_profile}.bak"
-
-        # Append new entries
-        echo "export ENGRAM_URL=\"${ENGRAM_URL}\"" >> "$shell_profile"
+        echo "export ENGRAM_URL=\"${ENGRAM_URL}\""      >> "$shell_profile"
         echo "export ENGRAM_API_TOKEN=\"${ENGRAM_API_TOKEN}\"" >> "$shell_profile"
         success "Environment variables written to $shell_profile"
     else
-        warn "Could not detect shell profile. Set these manually:"
+        warn "Could not detect a shell profile. Set these manually:"
         echo "  export ENGRAM_URL=\"${ENGRAM_URL}\""
         echo "  export ENGRAM_API_TOKEN=\"${ENGRAM_API_TOKEN}\""
     fi
 
-    # Export for current session
-    export ENGRAM_URL
-    export ENGRAM_API_TOKEN
+    export ENGRAM_URL ENGRAM_API_TOKEN
 }
 
-# Verify server connectivity
+# ---------------------------------------------------------------------------
+# Sanity-check that the server is reachable
+# ---------------------------------------------------------------------------
 verify_health() {
     local health_url="${ENGRAM_URL%/mcp}/health"
     info "Checking server health at ${health_url}..."
@@ -390,85 +353,76 @@ verify_health() {
         success "Server is reachable"
     else
         warn "Could not reach server at ${health_url}"
-        warn "Make sure your Engram server is running. See docs/DEPLOYMENT.md for setup."
+        warn "Ensure your Engram server is running. See docs/DEPLOYMENT.md for setup."
     fi
 }
 
-# Main installation flow
+# ---------------------------------------------------------------------------
+# Main installation sequence
+# ---------------------------------------------------------------------------
 main() {
     local version="${1:-}"
 
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║           Engram - Installation Script           ║"
-    echo "║     Persistent Memory System for Claude Code CLI          ║"
+    echo "║           Engram - Installation Script                   ║"
+    echo "║     Persistent Memory System for Claude Code CLI         ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
 
-    # Check required dependencies
-    if ! command -v curl &> /dev/null; then
-        error "curl is required but not installed"
-    fi
+    command -v curl &> /dev/null || error "curl is required but not installed"
+    command -v tar  &> /dev/null || error "tar is required but not installed"
 
-    if ! command -v tar &> /dev/null; then
-        error "tar is required but not installed"
-    fi
-
-    # Detect platform
     local platform
     platform=$(detect_platform)
     info "Detected platform: $platform"
 
-    # Get version
     if [[ -z "$version" ]]; then
         info "Fetching latest release..."
         version=$(get_latest_version)
     fi
     info "Installing version: $version"
 
-    # Download and install
     download_release "$version" "$platform"
 
-    # Register plugin
     if register_plugin "$version"; then
         success "Plugin registered successfully"
     else
-        warn "Plugin registration incomplete - please install jq and run again"
+        warn "Plugin registration incomplete — install jq and re-run with --register-only"
     fi
 
-    # Configure server connection
     setup_connection
-
-    # Verify server health
     verify_health
 
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║                  Installation Complete!                   ║"
+    echo "║                  Installation Complete!                  ║"
     echo "╠═══════════════════════════════════════════════════════════╣"
-    echo "║  Restart Claude Code to activate the engram plugin.       ║"
-    echo "║  Then run /engram:doctor to verify the connection.        ║"
-    echo "║                                                           ║"
-    echo "║  Server setup: docs/DEPLOYMENT.md                         ║"
+    echo "║  Restart Claude Code to activate the engram plugin.      ║"
+    echo "║  Then run /engram:doctor to verify the connection.       ║"
+    echo "║                                                          ║"
+    echo "║  Server setup: docs/DEPLOYMENT.md                        ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
 }
 
-# Handle --register-only flag
+# ---------------------------------------------------------------------------
+# Entry points for non-default modes
+# ---------------------------------------------------------------------------
 if [[ "$FLAG_REGISTER_ONLY" == "true" ]]; then
-    version=$(cat "$INSTALL_DIR/.claude-plugin/plugin.json" 2>/dev/null | grep '"version"' | sed -E 's/.*"([^"]+)".*/\1/' || echo "1.0.0")
+    version=$(grep '"version"' "$INSTALL_DIR/.claude-plugin/plugin.json" 2>/dev/null \
+              | sed -E 's/.*"([^"]+)".*/\1/' || echo "1.0.0")
     register_plugin "v$version"
     exit 0
 fi
 
-# Handle --uninstall flag
 if [[ "$FLAG_UNINSTALL" == "true" ]]; then
-    KEEP_DATA=false
-    [[ "$FLAG_KEEP_DATA" == "true" ]] && KEEP_DATA=true
+    local_keep=false
+    [[ "$FLAG_KEEP_DATA" == "true" ]] && local_keep=true
 
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║         Engram - Uninstallation                  ║"
+    echo "║         Engram - Uninstallation                          ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
 
@@ -477,33 +431,34 @@ if [[ "$FLAG_UNINSTALL" == "true" ]]; then
     rm -rf "$CACHE_DIR"
     success "Plugin directories removed"
 
-    # Remove from JSON files (if jq is available)
     if command -v jq &> /dev/null; then
         info "Cleaning up Claude Code configuration..."
         if [[ -f "$PLUGINS_FILE" ]]; then
-            jq 'del(.plugins["'"$PLUGIN_KEY"'"])' "$PLUGINS_FILE" > "${PLUGINS_FILE}.tmp" && mv "${PLUGINS_FILE}.tmp" "$PLUGINS_FILE"
+            jq 'del(.plugins["'"$PLUGIN_KEY"'"])' "$PLUGINS_FILE" \
+                > "${PLUGINS_FILE}.tmp" && mv "${PLUGINS_FILE}.tmp" "$PLUGINS_FILE"
         fi
         if [[ -f "$SETTINGS_FILE" ]]; then
-            # Remove plugin from enabled plugins, remove statusline if it's ours
             jq 'del(.enabledPlugins["'"$PLUGIN_KEY"'"]) |
-                if .statusLine.command | test("engram") then del(.statusLine) else . end' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+                if .statusLine.command | test("engram") then del(.statusLine) else . end' \
+                "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
+                && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
         fi
         if [[ -f "$MARKETPLACES_FILE" ]]; then
-            jq 'del(.["engram"])' "$MARKETPLACES_FILE" > "${MARKETPLACES_FILE}.tmp" && mv "${MARKETPLACES_FILE}.tmp" "$MARKETPLACES_FILE"
+            jq 'del(.["engram"])' "$MARKETPLACES_FILE" \
+                > "${MARKETPLACES_FILE}.tmp" && mv "${MARKETPLACES_FILE}.tmp" "$MARKETPLACES_FILE"
         fi
         success "Configuration cleaned up"
     else
-        warn "jq not found - configuration files not cleaned up"
+        warn "jq not found — configuration files not cleaned up"
     fi
 
-    # Handle data directory
-    DATA_DIR="$HOME/.engram"
-    if [[ -d "$DATA_DIR" ]]; then
-        if [[ "$KEEP_DATA" == "true" ]]; then
-            warn "Keeping data directory: $DATA_DIR"
+    local data_dir="$HOME/.engram"
+    if [[ -d "$data_dir" ]]; then
+        if [[ "$local_keep" == "true" ]]; then
+            warn "Keeping data directory: $data_dir"
         else
             info "Removing data directory..."
-            rm -rf "$DATA_DIR"
+            rm -rf "$data_dir"
             success "Data directory removed"
         fi
     fi

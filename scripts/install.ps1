@@ -1,65 +1,82 @@
-# Engram - Windows Installation Script
-# Usage: irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
+# engram Windows installer (PowerShell)
 #
-# Or with a specific version:
-# $env:ENGRAM_VERSION = "v1.0.0"; irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
+# One-shot install:
+#   irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
+#
+# Pin a specific release:
+#   $env:ENGRAM_VERSION = "v1.0.0"
+#   irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
 
 param(
-    [string]$Version = $env:ENGRAM_VERSION,
+    [string]$Version  = $env:ENGRAM_VERSION,
     [switch]$Uninstall
 )
 
 $ErrorActionPreference = "Stop"
 
-# Configuration
-$GitHubRepo = "thebtf/engram"
-$InstallDir = "$env:USERPROFILE\.claude\plugins\marketplaces\engram"
-$CacheDir = "$env:USERPROFILE\.claude\plugins\cache\engram\engram"
-$PluginsFile = "$env:USERPROFILE\.claude\plugins\installed_plugins.json"
-$SettingsFile = "$env:USERPROFILE\.claude\settings.json"
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+$GitHubRepo       = "thebtf/engram"
+$InstallDir       = "$env:USERPROFILE\.claude\plugins\marketplaces\engram"
+$CacheDir         = "$env:USERPROFILE\.claude\plugins\cache\engram\engram"
+$PluginsFile      = "$env:USERPROFILE\.claude\plugins\installed_plugins.json"
+$SettingsFile     = "$env:USERPROFILE\.claude\settings.json"
 $MarketplacesFile = "$env:USERPROFILE\.claude\plugins\known_marketplaces.json"
-$PluginKey = "engram@engram"
+$PluginKey        = "engram@engram"
 
-function Write-Info { param($Message) Write-Host "[INFO] $Message" -ForegroundColor Blue }
-function Write-Success { param($Message) Write-Host "[OK] $Message" -ForegroundColor Green }
-function Write-Warn { param($Message) Write-Host "[WARN] $Message" -ForegroundColor Yellow }
-function Write-Error { param($Message) Write-Host "[ERROR] $Message" -ForegroundColor Red; exit 1 }
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+function Write-Info    { param($Message) Write-Host "[INFO] $Message"  -ForegroundColor Blue   }
+function Write-Success { param($Message) Write-Host "[OK] $Message"    -ForegroundColor Green  }
+function Write-Warn    { param($Message) Write-Host "[WARN] $Message"  -ForegroundColor Yellow }
+function Write-Err     { param($Message) Write-Host "[ERROR] $Message" -ForegroundColor Red; exit 1 }
 
+# ---------------------------------------------------------------------------
+# Fetch latest release tag
+# ---------------------------------------------------------------------------
 function Get-LatestVersion {
     try {
         $headers = @{}
         if ($env:GITHUB_TOKEN) {
             $headers["Authorization"] = "token $env:GITHUB_TOKEN"
         }
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GitHubRepo/releases/latest" -Headers $headers
+        $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/$GitHubRepo/releases/latest" `
+            -Headers $headers
         return $release.tag_name
-    } catch {
-        $errorMsg = $_.Exception.Message
-        if ($errorMsg -match "rate limit" -or $_.Exception.Response.StatusCode -eq 403) {
+    }
+    catch {
+        $msg = $_.Exception.Message
+        if ($msg -match "rate limit" -or $_.Exception.Response.StatusCode -eq 403) {
             Write-Host ""
             Write-Host "[ERROR] GitHub API rate limit exceeded." -ForegroundColor Red
             Write-Host ""
-            Write-Host "You have a few options:" -ForegroundColor Yellow
-            Write-Host "  1. Wait ~1 hour for the rate limit to reset"
-            Write-Host "  2. Specify a version manually:"
-            Write-Host "     `$env:ENGRAM_VERSION = 'v0.6.1'; irm https://raw.githubusercontent.com/$GitHubRepo/main/scripts/install.ps1 | iex" -ForegroundColor Cyan
-            Write-Host "  3. Use a GitHub token (set `$env:GITHUB_TOKEN)"
+            Write-Host "Options:" -ForegroundColor Yellow
+            Write-Host "  1. Wait ~1 hour for the limit to reset"
+            Write-Host "  2. Pin a version:"
+            Write-Host "       `$env:ENGRAM_VERSION = 'v0.6.1'; irm https://raw.githubusercontent.com/$GitHubRepo/main/scripts/install.ps1 | iex" `
+                       -ForegroundColor Cyan
+            Write-Host "  3. Set `$env:GITHUB_TOKEN to raise the limit"
             exit 1
         }
-        Write-Error "Failed to fetch latest version from GitHub: $_"
+        Write-Err "Failed to fetch latest version from GitHub: $_"
     }
 }
 
+# ---------------------------------------------------------------------------
+# Download release zip and lay out files into $InstallDir
+# ---------------------------------------------------------------------------
 function Install-Release {
-    param([string]$Version)
+    param([string]$Ver)
 
     $TempDir = New-Item -ItemType Directory -Path "$env:TEMP\engram-$(Get-Random)" -Force
 
     try {
-        # Construct download URL
-        $VersionClean = $Version -replace "^v", ""
-        $ArchiveName = "engram_${VersionClean}_windows_amd64.zip"
-        $DownloadUrl = "https://github.com/$GitHubRepo/releases/download/$Version/$ArchiveName"
+        $VersionClean = $Ver -replace "^v", ""
+        $ArchiveName  = "engram_${VersionClean}_windows_amd64.zip"
+        $DownloadUrl  = "https://github.com/$GitHubRepo/releases/download/$Ver/$ArchiveName"
 
         Write-Info "Downloading $ArchiveName..."
         $ZipPath = Join-Path $TempDir "release.zip"
@@ -68,95 +85,89 @@ function Install-Release {
         Write-Info "Extracting archive..."
         Expand-Archive -Path $ZipPath -DestinationPath $TempDir -Force
 
-        # Create installation directories
         Write-Info "Installing to $InstallDir..."
-        New-Item -ItemType Directory -Path "$InstallDir\hooks" -Force | Out-Null
+        New-Item -ItemType Directory -Path "$InstallDir\hooks"         -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\.claude-plugin" -Force | Out-Null
-        New-Item -ItemType Directory -Path "$InstallDir\commands" -Force | Out-Null
+        New-Item -ItemType Directory -Path "$InstallDir\commands"       -Force | Out-Null
 
-        # Copy binaries
+        # Server binary — present in all archives; let callers decide whether to use it
         Copy-Item "$TempDir\engram-server.exe" "$InstallDir\" -Force -ErrorAction SilentlyContinue
-        # Copy JS hooks (required for plugin — stop on error)
-        Copy-Item "$TempDir\hooks\*.js" "$InstallDir\hooks\" -Force -ErrorAction Stop
+
+        # JS hooks are mandatory — stop on error so the failure is visible
+        Copy-Item "$TempDir\hooks\*.js"      "$InstallDir\hooks\" -Force -ErrorAction Stop
         Copy-Item "$TempDir\hooks\hooks.json" "$InstallDir\hooks\" -Force -ErrorAction Stop
 
-        # Copy plugin configuration
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 
-        # Copy slash commands if they exist in the release
         if (Test-Path "$TempDir\commands") {
             Copy-Item "$TempDir\commands\*" "$InstallDir\commands\" -Force -ErrorAction SilentlyContinue
         }
 
-        # Copy skills if they exist in the release
         if (Test-Path "$TempDir\skills") {
             New-Item -ItemType Directory -Path "$InstallDir\skills" -Force | Out-Null
             Copy-Item "$TempDir\skills\*" "$InstallDir\skills\" -Recurse -Force -ErrorAction SilentlyContinue
         }
 
-        # Copy MCP config if it exists in the release
         if (Test-Path "$TempDir\.mcp.json") {
             Copy-Item "$TempDir\.mcp.json" "$InstallDir\.mcp.json" -Force
         }
 
-        # Copy the Claude-specific MCP config referenced by .claude-plugin/plugin.json
+        # Claude-specific transport config (referenced by .claude-plugin/plugin.json)
         if (Test-Path "$TempDir\claude\.mcp.json") {
             New-Item -ItemType Directory -Path "$InstallDir\claude" -Force | Out-Null
             Copy-Item "$TempDir\claude\.mcp.json" "$InstallDir\claude\.mcp.json" -Force
         }
 
-        Write-Success "Binaries installed to $InstallDir"
-    } finally {
+        Write-Success "Files installed to $InstallDir"
+    }
+    finally {
         Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
     }
 }
 
+# ---------------------------------------------------------------------------
+# Write plugin metadata into Claude Code's JSON registry files
+# ---------------------------------------------------------------------------
 function Register-Plugin {
-    param([string]$Version)
+    param([string]$Ver)
 
-    $Timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.000Z")
-    $VersionClean = $Version -replace "^v", ""
-    $CachePath = "$CacheDir\$VersionClean"
+    $Timestamp    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.000Z")
+    $VersionClean = $Ver -replace "^v", ""
+    $CachePath    = "$CacheDir\$VersionClean"
 
-    # Ensure directories exist
     New-Item -ItemType Directory -Path "$env:USERPROFILE\.claude\plugins" -Force | Out-Null
 
-    # Clean up old cache versions to prevent stale binaries
+    # Remove stale cache versions so old binaries cannot shadow the new one
     $CacheBase = Split-Path $CachePath -Parent
     if (Test-Path $CacheBase) {
-        Write-Info "Cleaning up old cache versions..."
-        Get-ChildItem -Path $CacheBase -Directory | Where-Object { $_.Name -ne $VersionClean } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Info "Removing old cache versions..."
+        Get-ChildItem -Path $CacheBase -Directory `
+            | Where-Object { $_.Name -ne $VersionClean } `
+            | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     New-Item -ItemType Directory -Path $CachePath -Force | Out-Null
 
-    # Create JSON files if they don't exist
-    if (-not (Test-Path $PluginsFile)) {
-        '{"version": 2, "plugins": {}}' | Out-File -Encoding UTF8 $PluginsFile
-    }
-    if (-not (Test-Path $SettingsFile)) {
-        '{}' | Out-File -Encoding UTF8 $SettingsFile
-    }
-    if (-not (Test-Path $MarketplacesFile)) {
-        '{}' | Out-File -Encoding UTF8 $MarketplacesFile
-    }
+    # Bootstrap JSON files when they do not exist yet
+    if (-not (Test-Path $PluginsFile))      { '{"version": 2, "plugins": {}}' | Out-File -Encoding UTF8 $PluginsFile }
+    if (-not (Test-Path $SettingsFile))     { '{}' | Out-File -Encoding UTF8 $SettingsFile }
+    if (-not (Test-Path $MarketplacesFile)) { '{}' | Out-File -Encoding UTF8 $MarketplacesFile }
 
-    # Copy files to cache directory
     New-Item -ItemType Directory -Path "$CachePath\.claude-plugin" -Force | Out-Null
-    New-Item -ItemType Directory -Path "$CachePath\hooks" -Force | Out-Null
+    New-Item -ItemType Directory -Path "$CachePath\hooks"          -Force | Out-Null
     Copy-Item "$InstallDir\*" $CachePath -Recurse -Force -ErrorAction SilentlyContinue
 
     try {
-        # Update installed_plugins.json
-        $Plugins = Get-Content $PluginsFile -Raw | ConvertFrom-Json
+        # installed_plugins.json
+        $Plugins     = Get-Content $PluginsFile -Raw | ConvertFrom-Json
         $PluginEntry = @(
             @{
-                scope = "user"
+                scope       = "user"
                 installPath = $CachePath
-                version = $VersionClean
+                version     = $VersionClean
                 installedAt = $Timestamp
                 lastUpdated = $Timestamp
-                isLocal = $true
+                isLocal     = $true
             }
         )
         if (-not $Plugins.plugins) {
@@ -166,132 +177,144 @@ function Register-Plugin {
         $Plugins | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $PluginsFile
         Write-Success "Plugin registered in installed_plugins.json"
 
-        # Update settings.json
+        # settings.json — enable plugin and configure statusline
         $Settings = Get-Content $SettingsFile -Raw | ConvertFrom-Json
         if (-not $Settings.enabledPlugins) {
             $Settings | Add-Member -NotePropertyName "enabledPlugins" -NotePropertyValue @{} -Force
         }
         $Settings.enabledPlugins | Add-Member -NotePropertyName $PluginKey -NotePropertyValue $true -Force
 
-        # Configure statusline
-        $StatuslineCmd = "node `"$InstallDir\hooks\statusline.js`""
-        $StatuslineEntry = @{
-            type = "command"
-            command = $StatuslineCmd
-            padding = 0
-        }
+        $StatuslineCmd   = "node `"$InstallDir\hooks\statusline.js`""
+        $StatuslineEntry = @{ type = "command"; command = $StatuslineCmd; padding = 0 }
         $Settings | Add-Member -NotePropertyName "statusLine" -NotePropertyValue $StatuslineEntry -Force
 
         $Settings | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $SettingsFile
         Write-Success "Plugin enabled in settings.json"
         Write-Success "Statusline configured in settings.json"
 
-        # Note: MCP server registration is handled by the plugin's .mcp.json file.
+        # MCP transport is declared in the plugin's .mcp.json — no settings.json edit needed
 
-        # Update known_marketplaces.json
-        $Marketplaces = Get-Content $MarketplacesFile -Raw | ConvertFrom-Json
+        # known_marketplaces.json
+        $Marketplaces     = Get-Content $MarketplacesFile -Raw | ConvertFrom-Json
         $MarketplaceEntry = @{
-            source = @{
-                source = "directory"
-                path = $InstallDir
-            }
+            source          = @{ source = "directory"; path = $InstallDir }
             installLocation = $InstallDir
-            lastUpdated = $Timestamp
+            lastUpdated     = $Timestamp
         }
         $Marketplaces | Add-Member -NotePropertyName "engram" -NotePropertyValue $MarketplaceEntry -Force
         $Marketplaces | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $MarketplacesFile
         Write-Success "Marketplace registered in known_marketplaces.json"
-    } catch {
+    }
+    catch {
         Write-Warn "Plugin registration encountered an error: $_"
     }
 }
 
+# ---------------------------------------------------------------------------
+# Interactive prompt for server URL and API token
+# ---------------------------------------------------------------------------
 function Setup-Connection {
     Write-Host ""
-    Write-Info "Engram uses a remote server for storage. Configure your connection:"
+    Write-Info "Engram stores memories on a remote server. Configure the connection:"
     Write-Host ""
 
     $DefaultUrl = "http://localhost:37777/mcp"
-    $ServerUrl = Read-Host "  Server URL [$DefaultUrl]"
+    $ServerUrl  = Read-Host "  Server URL [$DefaultUrl]"
     if ([string]::IsNullOrWhiteSpace($ServerUrl)) { $ServerUrl = $DefaultUrl }
 
-    # Ensure URL ends with /mcp
+    # Callers sometimes omit the MCP path segment
     if (-not $ServerUrl.EndsWith("/mcp")) {
         $ServerUrl = $ServerUrl.TrimEnd("/") + "/mcp"
         Write-Info "Added /mcp suffix: $ServerUrl"
     }
 
-    $ApiToken = Read-Host "  API Token (empty for no auth)"
+    $ApiToken = Read-Host "  API Token (leave blank for no auth)"
 
-    # Set persistent user environment variables
-    [Environment]::SetEnvironmentVariable("ENGRAM_URL", $ServerUrl, "User")
-    [Environment]::SetEnvironmentVariable("ENGRAM_API_TOKEN", $ApiToken, "User")
+    # Persist to user environment so new shells inherit the settings
+    [Environment]::SetEnvironmentVariable("ENGRAM_URL",       $ServerUrl, "User")
+    [Environment]::SetEnvironmentVariable("ENGRAM_API_TOKEN", $ApiToken,  "User")
     Write-Success "Environment variables set (ENGRAM_URL, ENGRAM_API_TOKEN)"
 
-    # Also set for current process
-    $env:ENGRAM_URL = $ServerUrl
+    # Also active in the current process
+    $env:ENGRAM_URL       = $ServerUrl
     $env:ENGRAM_API_TOKEN = $ApiToken
 }
 
+# ---------------------------------------------------------------------------
+# Sanity-check that the server is reachable
+# ---------------------------------------------------------------------------
 function Test-ServerHealth {
     $HealthUrl = $env:ENGRAM_URL -replace "/mcp$", "/health"
     Write-Info "Checking server health at $HealthUrl..."
-
     try {
-        $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 5
+        Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 5 | Out-Null
         Write-Success "Server is reachable"
-    } catch {
+    }
+    catch {
         Write-Warn "Could not reach server at $HealthUrl"
-        Write-Warn "Make sure your Engram server is running. See docs/DEPLOYMENT.md for setup."
+        Write-Warn "Ensure your Engram server is running. See docs/DEPLOYMENT.md for setup."
     }
 }
 
+# ---------------------------------------------------------------------------
+# Remove all installed artefacts
+# ---------------------------------------------------------------------------
 function Uninstall-Engram {
     param([switch]$KeepData)
 
     Write-Info "Uninstalling Engram..."
 
-    # Remove directories
     Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force $CacheDir -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $CacheDir   -ErrorAction SilentlyContinue
 
-    # Remove from JSON files
     try {
         if (Test-Path $PluginsFile) {
             $Plugins = Get-Content $PluginsFile -Raw | ConvertFrom-Json
             $Plugins.plugins.PSObject.Properties.Remove($PluginKey)
             $Plugins | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $PluginsFile
         }
+
         if (Test-Path $SettingsFile) {
-            $Settings = Get-Content $SettingsFile -Raw | ConvertFrom-Json
-            if ($Settings.enabledPlugins) {
+            $Settings  = Get-Content $SettingsFile -Raw | ConvertFrom-Json
+            $modified  = $false
+            if ($Settings.enabledPlugins -and $Settings.enabledPlugins.PSObject.Properties[$PluginKey]) {
                 $Settings.enabledPlugins.PSObject.Properties.Remove($PluginKey)
+                $modified = $true
             }
-            # Remove statusline if it's ours
             if ($Settings.statusLine -and $Settings.statusLine.command -match "engram") {
                 $Settings.PSObject.Properties.Remove("statusLine")
+                $modified = $true
             }
-            $Settings | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $SettingsFile
+            if ($modified) {
+                $Settings | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $SettingsFile
+                Write-Success "Removed from settings.json (including statusline)"
+            }
         }
+
         if (Test-Path $MarketplacesFile) {
             $Marketplaces = Get-Content $MarketplacesFile -Raw | ConvertFrom-Json
-            $Marketplaces.PSObject.Properties.Remove("engram")
-            $Marketplaces | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $MarketplacesFile
+            if ($Marketplaces.PSObject.Properties["engram"]) {
+                $Marketplaces.PSObject.Properties.Remove("engram")
+                $Marketplaces | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $MarketplacesFile
+                Write-Success "Removed from known_marketplaces.json"
+            }
         }
-    } catch {
-        Write-Warn "Error cleaning up JSON files: $_"
+    }
+    catch {
+        Write-Warn "Error cleaning up configuration files: $_"
     }
 
-    # Remove environment variables
-    [Environment]::SetEnvironmentVariable("ENGRAM_URL", $null, "User")
+    # Clear persisted env vars
+    [Environment]::SetEnvironmentVariable("ENGRAM_URL",       $null, "User")
     [Environment]::SetEnvironmentVariable("ENGRAM_API_TOKEN", $null, "User")
 
-    # Handle data directory
     $DataDir = "$env:USERPROFILE\.engram"
     if (Test-Path $DataDir) {
         if ($KeepData) {
             Write-Warn "Keeping data directory: $DataDir"
-        } else {
+            Write-Warn "Remove manually later: Remove-Item -Recurse -Force $DataDir"
+        }
+        else {
             Remove-Item -Recurse -Force $DataDir -ErrorAction SilentlyContinue
             Write-Success "Data directory removed"
         }
@@ -300,11 +323,13 @@ function Uninstall-Engram {
     Write-Success "Engram uninstalled successfully"
 }
 
-# Main
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "         Engram - Windows Installation Script          " -ForegroundColor Cyan
-Write-Host "       Persistent Memory System for Claude Code                 " -ForegroundColor Cyan
+Write-Host "         Engram - Windows Installation Script                  " -ForegroundColor Cyan
+Write-Host "       Persistent Memory System for Claude Code                " -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -313,30 +338,24 @@ if ($Uninstall) {
     exit 0
 }
 
-# Get version
 if (-not $Version) {
     Write-Info "Fetching latest release..."
     $Version = Get-LatestVersion
 }
 Write-Info "Installing version: $Version"
 
-# Install
-Install-Release -Version $Version
-Register-Plugin -Version $Version
-
-# Configure server connection
+Install-Release  -Ver $Version
+Register-Plugin  -Ver $Version
 Setup-Connection
-
-# Verify server health
 Test-ServerHealth
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Green
-Write-Host "                  Installation Complete!                        " -ForegroundColor Green
+Write-Host "                  Installation Complete!                       " -ForegroundColor Green
 Write-Host "================================================================" -ForegroundColor Green
-Write-Host "  Restart Claude Code to activate the engram plugin." -ForegroundColor White
-Write-Host "  Then run /engram:doctor to verify the connection." -ForegroundColor White
+Write-Host "  Restart Claude Code to activate the engram plugin."           -ForegroundColor White
+Write-Host "  Then run /engram:doctor to verify the connection."            -ForegroundColor White
 Write-Host ""
-Write-Host "  Server setup: docs/DEPLOYMENT.md" -ForegroundColor White
+Write-Host "  Server setup: docs/DEPLOYMENT.md"                             -ForegroundColor White
 Write-Host "================================================================" -ForegroundColor Green
 Write-Host ""
