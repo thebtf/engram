@@ -391,7 +391,7 @@ func TestWriteToClient_SuccessDelivery(t *testing.T) {
 	c, _ := b.AddClient(w)
 
 	deadCh := make(chan string, 1)
-	b.writeToClient(c, "data: hello\n\n", deadCh)
+	b.writeToClient(c, "data: hello\n\n", deadCh, nil)
 
 	// No dead client should be reported
 	select {
@@ -410,7 +410,7 @@ func TestWriteToClient_WriteError_ReportsDead(t *testing.T) {
 	c, _ := b.AddClient(fw)
 
 	deadCh := make(chan string, 1)
-	b.writeToClient(c, "data: x\n\n", deadCh)
+	b.writeToClient(c, "data: x\n\n", deadCh, nil)
 
 	select {
 	case id := <-deadCh:
@@ -432,7 +432,7 @@ func TestWriteToClient_Timeout_ReportsDead(t *testing.T) {
 	deadCh := make(chan string, 1)
 
 	start := time.Now()
-	b.writeToClient(c, "data: slow\n\n", deadCh)
+	b.writeToClient(c, "data: slow\n\n", deadCh, nil)
 	elapsed := time.Since(start)
 
 	// writeToClient should return after ~WriteTimeout (not blockFor)
@@ -462,8 +462,80 @@ func TestWriteToClient_DoneClosedDuringWrite_NoPanic(t *testing.T) {
 	}()
 
 	deadCh := make(chan string, 2)
-	// must not panic
-	b.writeToClient(c, "data: race\n\n", deadCh)
+	var wg sync.WaitGroup
+	// must not panic; pass wg so the test can join the inner goroutine
+	b.writeToClient(c, "data: race\n\n", deadCh, &wg)
+	// Join the inner goroutine before the test returns so the blockWriter's
+	// fake ResponseWriter is not used after the test completes. Production
+	// Broadcast does not join it — deadClientsCh is buffered and never closed,
+	// so a late send is safe.
+	wg.Wait()
+}
+
+// TestBroadcast_NoPanicOnSlowClientDoneClose verifies that Broadcast does not
+// panic with "send on closed channel" when a client's Done channel is closed
+// while the background write goroutine is still holding WriteMu. This is the
+// real scenario the CRIT finding described: writeToClient returns (via the
+// client.Done case) before the inner goroutine finishes, and the still-running
+// inner goroutine later sends its dead-client report. The fix — a buffered,
+// never-closed deadClientsCh sized for every possible send — is exercised on
+// the real Broadcast code path here.
+func TestBroadcast_NoPanicOnSlowClientDoneClose(t *testing.T) {
+	b := NewBroadcaster()
+	// blockWriter with a duration longer than WriteTimeout so the inner goroutine
+	// outlives writeToClient's select — the real race condition scenario.
+	bw := newBlockWriter(int((WriteTimeout + 200*time.Millisecond).Milliseconds()))
+	c, _ := b.AddClient(bw)
+
+	// Remove the client very shortly after Broadcast starts — this triggers the
+	// client.Done case inside writeToClient while the inner goroutine is blocked.
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		b.RemoveClient(c)
+	}()
+
+	// Broadcast must complete without panicking. Run under race detector (go test
+	// -race) to catch any residual data races.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b.Broadcast(map[string]string{"type": "test"})
+	}()
+
+	select {
+	case <-done:
+		// success — no panic
+	case <-time.After(WriteTimeout + 2*time.Second):
+		t.Fatal("Broadcast did not return within expected time")
+	}
+}
+
+// TestBroadcast_ReturnsWithinTimeoutOnWedgedClient verifies the codex P1
+// finding: a client whose Write blocks far past WriteTimeout must NOT stall
+// Broadcast — Broadcast returns after ~WriteTimeout because it does not join
+// the inner write goroutines.
+func TestBroadcast_ReturnsWithinTimeoutOnWedgedClient(t *testing.T) {
+	b := NewBroadcaster()
+	// Wedged client: blocks 3x WriteTimeout.
+	bw := newBlockWriter(int((3 * WriteTimeout).Milliseconds()))
+	wedged, _ := b.AddClient(bw)
+
+	start := time.Now()
+	b.Broadcast(map[string]string{"type": "test"})
+	elapsed := time.Since(start)
+
+	// Broadcast must return after ~WriteTimeout, not after the wedged Write.
+	if elapsed > WriteTimeout+time.Second {
+		t.Fatalf("Broadcast blocked on wedged client: %v (expected ~%v)", elapsed, WriteTimeout)
+	}
+
+	// The wedged client must have been reported dead and removed.
+	b.mu.RLock()
+	_, stillThere := b.clients[wedged.ID]
+	b.mu.RUnlock()
+	if stillThere {
+		t.Error("wedged client should have been removed after timeout")
+	}
 }
 
 // ---------------------------------------------------------------------------

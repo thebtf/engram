@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -26,6 +25,7 @@ func newTestManager() *Manager {
 		ctx:           ctx,
 		cancel:        cancel,
 		ProcessNotify: make(chan struct{}, 1),
+		cleanupDone:   make(chan struct{}),
 	}
 }
 
@@ -92,10 +92,10 @@ func TestNewManager(t *testing.T) {
 
 	t.Run("returns_non_nil_manager", func(t *testing.T) {
 		m := NewManager(nil)
-		defer m.cancel()
 		if m == nil {
 			t.Fatal("NewManager returned nil")
 		}
+		defer m.cancel()
 	})
 
 	t.Run("session_map_initialised", func(t *testing.T) {
@@ -142,8 +142,11 @@ func TestNewManager(t *testing.T) {
 	t.Run("cleanup_goroutine_stops_on_cancel", func(t *testing.T) {
 		m := NewManager(nil)
 		m.cancel()
+		// Wait on cleanupDone (closed by cleanupLoop when it returns), not
+		// m.ctx.Done() — the context closes synchronously on cancel(), so
+		// waiting on it proves nothing about whether the goroutine has exited.
 		select {
-		case <-m.ctx.Done():
+		case <-m.cleanupDone:
 		case <-time.After(200 * time.Millisecond):
 			t.Fatal("cleanup goroutine did not stop within 200ms after cancel")
 		}
@@ -666,7 +669,7 @@ func TestCleanupLoopExitsOnContextCancel(t *testing.T) {
 func TestInitializeSession_ExistingSession(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns_existing_session_unchanged_when_found", func(t *testing.T) {
+	t.Run("updates_existing_session_when_new_prompt_provided", func(t *testing.T) {
 		m := newTestManager()
 		defer m.cancel()
 		existing := &ActiveSession{
@@ -1180,27 +1183,39 @@ func TestMessageStructures(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// messageMu concurrent append (regression: no data race on queue writes)
+// Concurrent queue writes — regression: no data race via QueueObservation
 // ---------------------------------------------------------------------------
 
-func TestMessageMuConcurrentAppend(t *testing.T) {
+// TestQueueObservationConcurrentAppend verifies that concurrent calls to
+// QueueObservation against the same session do not race and that every
+// observation is enqueued. The test uses the public Manager API instead of
+// touching messageMu directly — if the production code stops protecting the
+// queue with a mutex, the race detector will catch it here.
+func TestQueueObservationConcurrentAppend(t *testing.T) {
 	t.Parallel()
 
-	s := &ActiveSession{pendingMessages: make([]PendingMessage, 0, 64)}
+	m := newTestManager()
+	defer m.cancel()
+	s := &ActiveSession{
+		SessionDBID:     1,
+		pendingMessages: make([]PendingMessage, 0, 64),
+		notify:          make(chan struct{}, 1),
+	}
+	m.sessions[1] = s
+
 	var wg sync.WaitGroup
 	const n = 60
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.messageMu.Lock()
-			s.pendingMessages = append(s.pendingMessages, PendingMessage{Type: MessageTypeObservation})
-			s.messageMu.Unlock()
+			_ = m.QueueObservation(context.Background(), 1, ObservationData{ToolName: "T"})
 		}()
 	}
 	wg.Wait()
-	if len(s.pendingMessages) != n {
-		t.Fatalf("want %d messages, got %d", n, len(s.pendingMessages))
+
+	if depth := m.GetTotalQueueDepth(); depth != n {
+		t.Fatalf("want %d queued messages, got %d", n, depth)
 	}
 }
 
@@ -1232,29 +1247,53 @@ func TestObservationCWDVariants(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// atomic.Bool is goroutine-safe (not a data race)
+// IsAnySessionProcessing — concurrent generatorActive reads via Manager API
 // ---------------------------------------------------------------------------
 
-func TestGeneratorActiveConcurrency(t *testing.T) {
+// TestIsAnySessionProcessingConcurrency verifies that concurrent calls to
+// IsAnySessionProcessing are race-free when sessions transition between active
+// and idle. The test exercises the real Manager contract instead of directly
+// touching generatorActive — if the production code stops using the atomic
+// where required, the race detector will fire on the real path.
+func TestIsAnySessionProcessingConcurrency(t *testing.T) {
 	t.Parallel()
-	var s ActiveSession
+
+	m := newTestManager()
+	defer m.cancel()
+
+	const numSessions = 5
+	for i := int64(1); i <= numSessions; i++ {
+		s := newActiveSession(i)
+		m.sessions[i] = s
+	}
+
 	var wg sync.WaitGroup
-	var stores, loads atomic.Int64
-	for i := 0; i < 50; i++ {
-		wg.Add(2)
+	const readers = 50
+
+	// Concurrently toggle generatorActive on sessions via QueueObservation
+	// (which is the real path that leads to generatorActive being set), while
+	// simultaneously polling IsAnySessionProcessing.
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.generatorActive.Store(true)
-			stores.Add(1)
-		}()
-		go func() {
-			defer wg.Done()
-			_ = s.generatorActive.Load()
-			loads.Add(1)
+			_ = m.IsAnySessionProcessing()
 		}()
 	}
+	for i := int64(1); i <= numSessions; i++ {
+		wg.Add(1)
+		id := i
+		go func() {
+			defer wg.Done()
+			_ = m.QueueObservation(context.Background(), id, ObservationData{ToolName: "T"})
+		}()
+	}
+
 	wg.Wait()
-	if stores.Load() != 50 || loads.Load() != 50 {
-		t.Errorf("unexpected counts: stores=%d loads=%d", stores.Load(), loads.Load())
+
+	// After all goroutines have finished, the queue must hold exactly numSessions
+	// pending messages — one per QueueObservation call.
+	if depth := m.GetTotalQueueDepth(); depth != numSessions {
+		t.Fatalf("want %d queued messages, got %d", numSessions, depth)
 	}
 }
