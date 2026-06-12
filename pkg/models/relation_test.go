@@ -53,6 +53,47 @@ func TestRelationTypeConstants(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AllRelationTypes completeness
+// ---------------------------------------------------------------------------
+
+// TestAllRelationTypes_Completeness verifies that AllRelationTypes contains exactly
+// the full set of RelationType constants — no extras, no omissions.
+// This guards against the production slice drifting from the constants definition.
+func TestAllRelationTypes_Completeness(t *testing.T) {
+	t.Parallel()
+
+	// Canonical set derived from the constants declared in relation.go.
+	expected := []RelationType{
+		RelationCauses,
+		RelationFixes,
+		RelationSupersedes,
+		RelationDependsOn,
+		RelationRelatesTo,
+		RelationEvolvesFrom,
+		RelationLeadsTo,
+		RelationSimilarTo,
+		RelationContradicts,
+		RelationReinforces,
+		RelationInvalidatedBy,
+		RelationExplains,
+		RelationSharesTheme,
+		RelationParallelCtx,
+		RelationSummarizes,
+		RelationPartOf,
+		RelationPrefersOver,
+		RelationModifies,
+		RelationReads,
+		RelationFollows,
+		RelationPromptedBy,
+		RelationReferences,
+		RelationReferencedBy,
+	}
+
+	assert.ElementsMatch(t, expected, AllRelationTypes,
+		"AllRelationTypes must contain exactly all RelationType constants — update AllRelationTypes when adding a new constant")
+}
+
+// ---------------------------------------------------------------------------
 // NewObservationRelation constructor
 // ---------------------------------------------------------------------------
 

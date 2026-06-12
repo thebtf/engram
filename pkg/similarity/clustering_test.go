@@ -276,8 +276,9 @@ func TestClusterObservations_LowThreshold_ClustersSimilar(t *testing.T) {
 	}
 
 	result := ClusterObservations(observations, 0.1)
-	// First two share "authentication"; low threshold should cluster them
-	assert.LessOrEqual(t, len(result), 3)
+	// First two share "authentication" (Jaccard 0.2 >= threshold 0.1) → clustered.
+	// Third is orthogonal → kept. Total: 2 representatives, not 3.
+	assert.Equal(t, 2, len(result), "low threshold must cluster the two authentication observations into one representative")
 }
 
 func TestClusterObservations_UnboundedResult(t *testing.T) {
