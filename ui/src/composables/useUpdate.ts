@@ -15,91 +15,94 @@ export interface UpdateStatus {
   error?: string
 }
 
-const CHECK_INTERVAL = 30 * 60 * 1000 // 30 minutes in milliseconds
+// Background check runs every 30 minutes so the UI can surface available
+// updates without the user having to refresh the page manually.
+const CHECK_INTERVAL_MS = 30 * 60 * 1000
 
 export function useUpdate() {
   const updateInfo = ref<UpdateInfo | null>(null)
   const updateStatus = ref<UpdateStatus>({ state: 'idle', progress: 0, message: '' })
   const isChecking = ref(false)
   const isUpdating = ref(false)
-  let statusInterval: ReturnType<typeof setInterval> | null = null
-  let checkInterval: ReturnType<typeof setInterval> | null = null
 
-  const checkForUpdate = async () => {
+  // Two separate intervals: one for background availability checks,
+  // one for polling in-progress update status at 1 Hz.
+  let statusPollId: ReturnType<typeof setInterval> | null = null
+  let periodicCheckId: ReturnType<typeof setInterval> | null = null
+
+  // Ask the server whether a newer release is available.
+  const checkForUpdate = async (): Promise<void> => {
     isChecking.value = true
     try {
-      const response = await fetch('/api/update/check')
-      if (response.ok) {
-        updateInfo.value = await response.json()
-      }
-    } catch (error) {
-      console.error('Failed to check for updates:', error)
+      const res = await fetch('/api/update/check')
+      if (res.ok) updateInfo.value = await res.json()
+    } catch (err) {
+      console.error('[Update] Check failed:', err)
     } finally {
       isChecking.value = false
     }
   }
 
-  const applyUpdate = async () => {
+  // Trigger a server-side download + apply cycle, then start watching progress.
+  const applyUpdate = async (): Promise<void> => {
     if (!updateInfo.value?.available) return
-
     isUpdating.value = true
     try {
-      const response = await fetch('/api/update/apply', { method: 'POST' })
-      if (response.ok) {
-        // Start polling for status
-        startStatusPolling()
-      }
-    } catch (error) {
-      console.error('Failed to apply update:', error)
+      const res = await fetch('/api/update/apply', { method: 'POST' })
+      if (res.ok) startStatusPolling()
+    } catch (err) {
+      console.error('[Update] Apply failed:', err)
       isUpdating.value = false
     }
   }
 
-  const fetchStatus = async () => {
+  // Fetch the current update state (downloading / verifying / done / error).
+  const fetchStatus = async (): Promise<void> => {
     try {
-      const response = await fetch('/api/update/status')
-      if (response.ok) {
-        updateStatus.value = await response.json()
-
-        // Stop polling when done or error
-        if (updateStatus.value.state === 'done' || updateStatus.value.state === 'error') {
-          stopStatusPolling()
-          isUpdating.value = false
-        }
+      const res = await fetch('/api/update/status')
+      if (!res.ok) return
+      updateStatus.value = await res.json()
+      // Terminal states: stop polling so we don't hammer the endpoint once
+      // the update has finished (or failed).
+      const { state } = updateStatus.value
+      if (state === 'done' || state === 'error') {
+        stopStatusPolling()
+        isUpdating.value = false
       }
-    } catch (error) {
-      console.error('Failed to fetch update status:', error)
+    } catch (err) {
+      console.error('[Update] Status fetch failed:', err)
     }
   }
 
-  const startStatusPolling = () => {
-    if (statusInterval) return
-    statusInterval = setInterval(fetchStatus, 1000)
+  function startStatusPolling(): void {
+    if (statusPollId !== null) return
+    // Fetch immediately so the UI reacts without waiting a full second.
     fetchStatus()
+    statusPollId = setInterval(fetchStatus, 1000)
   }
 
-  const stopStatusPolling = () => {
-    if (statusInterval) {
-      clearInterval(statusInterval)
-      statusInterval = null
+  function stopStatusPolling(): void {
+    if (statusPollId !== null) {
+      clearInterval(statusPollId)
+      statusPollId = null
     }
   }
 
-  const startPeriodicCheck = () => {
-    if (checkInterval) return
-    // Check every hour
-    checkInterval = setInterval(checkForUpdate, CHECK_INTERVAL)
+  function startPeriodicCheck(): void {
+    if (periodicCheckId !== null) return
+    periodicCheckId = setInterval(checkForUpdate, CHECK_INTERVAL_MS)
   }
 
-  const stopPeriodicCheck = () => {
-    if (checkInterval) {
-      clearInterval(checkInterval)
-      checkInterval = null
+  function stopPeriodicCheck(): void {
+    if (periodicCheckId !== null) {
+      clearInterval(periodicCheckId)
+      periodicCheckId = null
     }
   }
 
-  // Check for updates on mount and start periodic checking
   onMounted(() => {
+    // Check immediately on mount so the user sees update state right away,
+    // then schedule recurring background checks.
     checkForUpdate()
     startPeriodicCheck()
   })
@@ -115,6 +118,6 @@ export function useUpdate() {
     isChecking,
     isUpdating,
     checkForUpdate,
-    applyUpdate
+    applyUpdate,
   }
 }
