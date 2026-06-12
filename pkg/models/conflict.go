@@ -7,31 +7,34 @@ import (
 	"time"
 )
 
-// ConflictType represents the type of conflict between observations.
+// ConflictType classifies the nature of a conflict between two observations.
+// The write-lint path (TG5) uses these values to decide correction priority.
 type ConflictType string
 
 const (
-	// ConflictSuperseded means newer observation supersedes older one (same topic, updated info).
+	// ConflictSuperseded: newer observation replaces older on the same topic.
 	ConflictSuperseded ConflictType = "superseded"
-	// ConflictContradicts means observations contain contradictory information.
+	// ConflictContradicts: the two observations carry directly opposing claims.
 	ConflictContradicts ConflictType = "contradicts"
-	// ConflictOutdatedPattern means an outdated pattern/practice was identified.
+	// ConflictOutdatedPattern: an observation codifies a practice that has since been deprecated.
 	ConflictOutdatedPattern ConflictType = "outdated_pattern"
 )
 
-// ConflictResolution indicates which observation to prefer.
+// ConflictResolution indicates which observation a consumer should prefer.
 type ConflictResolution string
 
 const (
-	// ResolutionPreferNewer means prefer the newer observation.
+	// ResolutionPreferNewer: trust the later observation (the common case for corrections).
 	ResolutionPreferNewer ConflictResolution = "prefer_newer"
-	// ResolutionPreferOlder means prefer the older observation (rare).
+	// ResolutionPreferOlder: rare — used when a rollback explicitly reinstates an earlier state.
 	ResolutionPreferOlder ConflictResolution = "prefer_older"
-	// ResolutionManual means manual review is needed.
+	// ResolutionManual: neither heuristic is safe; a human must decide.
 	ResolutionManual ConflictResolution = "manual"
 )
 
-// ObservationConflict tracks conflicting observations.
+// ObservationConflict is the persisted record of a detected conflict between two observations.
+// It is written by the write-lint path (TG5) and read by the retrieval layer to suppress
+// superseded observations from injection.
 type ObservationConflict struct {
 	ResolvedAt      *string            `db:"resolved_at" json:"resolved_at,omitempty"`
 	ConflictType    ConflictType       `db:"conflict_type" json:"conflict_type"`
@@ -45,7 +48,8 @@ type ObservationConflict struct {
 	Resolved        bool               `db:"resolved" json:"resolved"`
 }
 
-// ConflictDetectionResult contains the result of conflict detection.
+// ConflictDetectionResult is the in-memory result of running conflict detection.
+// Callers accumulate these before deciding which records to persist.
 type ConflictDetectionResult struct {
 	Type        ConflictType
 	Resolution  ConflictResolution
@@ -54,7 +58,8 @@ type ConflictDetectionResult struct {
 	HasConflict bool
 }
 
-// NewObservationConflict creates a new conflict record.
+// NewObservationConflict constructs a conflict record ready for persistence.
+// The timestamp is captured at construction time so the record is self-describing.
 func NewObservationConflict(newerID, olderID int64, conflictType ConflictType, resolution ConflictResolution, reason string) *ObservationConflict {
 	now := time.Now()
 	return &ObservationConflict{
@@ -69,7 +74,9 @@ func NewObservationConflict(newerID, olderID int64, conflictType ConflictType, r
 	}
 }
 
-// CorrectionPatterns contains regex patterns that indicate explicit corrections.
+// CorrectionPatterns holds the compiled regexes that signal an explicit correction
+// in an observation's text.  TG5 write-lint depends on all 14 patterns being present.
+// Pattern VALUES are load-bearing — the write-lint integration test pins the regex strings.
 var CorrectionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bactually[,\s]+that\s+was\s+wrong\b`),
 	regexp.MustCompile(`(?i)\bactually[,\s]+that's\s+(wrong|incorrect|not\s+right)\b`),
@@ -87,7 +94,9 @@ var CorrectionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bbetter\s+(approach|way|method|solution)\s+is\b`),
 }
 
-// OpposingChangePatterns detects add/remove conflicts.
+// OpposingChangePatterns maps an action verb to the verb that contradicts it.
+// A newer observation containing the value is opposed by an older containing the key, and vice-versa.
+// Used by DetectOpposingFileChanges to identify add/remove style conflicts.
 var OpposingChangePatterns = map[string]string{
 	"add":     "remove",
 	"added":   "removed",
@@ -100,7 +109,8 @@ var OpposingChangePatterns = map[string]string{
 	"permit":  "block",
 }
 
-// DetectExplicitCorrection checks if text contains explicit correction language.
+// DetectExplicitCorrection reports whether text contains language that signals the author
+// is overriding a prior statement.  Returns the matched fragment as context for the caller.
 func DetectExplicitCorrection(text string) (bool, string) {
 	for _, pattern := range CorrectionPatterns {
 		if match := pattern.FindString(text); match != "" {
@@ -110,44 +120,59 @@ func DetectExplicitCorrection(text string) (bool, string) {
 	return false, ""
 }
 
-// DetectOpposingFileChanges checks if two observations have opposing changes on the same file.
+// DetectOpposingFileChanges returns true when newer and older both modified at least one
+// common file AND their titles/narratives contain opposing change verbs (add vs. remove, etc.).
+// This catches cases where two observations describe contradictory work on the same path.
 func DetectOpposingFileChanges(newer, older *Observation) (bool, string) {
-	newerFiles := make(map[string]bool)
+	// Index newer's modified files for O(1) lookup.
+	newerFiles := make(map[string]bool, len(newer.FilesModified))
 	for _, f := range newer.FilesModified {
 		newerFiles[f] = true
 	}
 
-	var overlappingFiles []string
+	// Find files that appear in both observations.
+	var overlapping []string
 	for _, f := range older.FilesModified {
 		if newerFiles[f] {
-			overlappingFiles = append(overlappingFiles, f)
+			overlapping = append(overlapping, f)
 		}
 	}
 
-	if len(overlappingFiles) == 0 {
+	// No shared path — cannot be an opposing-change conflict.
+	if len(overlapping) == 0 {
 		return false, ""
 	}
 
 	newerText := strings.ToLower(newer.Title.String + " " + newer.Narrative.String)
 	olderText := strings.ToLower(older.Title.String + " " + older.Narrative.String)
 
+	// Check every action/opposite pair in both directions.
 	for action, opposite := range OpposingChangePatterns {
-		if (strings.Contains(newerText, action) && strings.Contains(olderText, opposite)) ||
-			(strings.Contains(newerText, opposite) && strings.Contains(olderText, action)) {
-			return true, "Opposing changes on files: " + strings.Join(overlappingFiles, ", ")
+		newerHasAction := strings.Contains(newerText, action)
+		olderHasOpposite := strings.Contains(olderText, opposite)
+		newerHasOpposite := strings.Contains(newerText, opposite)
+		olderHasAction := strings.Contains(olderText, action)
+
+		if (newerHasAction && olderHasOpposite) || (newerHasOpposite && olderHasAction) {
+			return true, "Opposing changes on files: " + strings.Join(overlapping, ", ")
 		}
 	}
 
 	return false, ""
 }
 
-// DetectConceptTagMismatch checks if observations have same concepts but different recommendations.
+// DetectConceptTagMismatch reports a conflict when newer and older share concept tags
+// AND have overlapping modified files.  Concept overlap alone is not sufficient — the
+// shared file requirement prevents false positives for unrelated observations about the
+// same broad topic (e.g., two unrelated auth improvements in different packages).
 func DetectConceptTagMismatch(newer, older *Observation) (bool, string) {
-	newerConcepts := make(map[string]bool)
+	// Index newer's concepts for O(1) lookup.
+	newerConcepts := make(map[string]bool, len(newer.Concepts))
 	for _, c := range newer.Concepts {
 		newerConcepts[c] = true
 	}
 
+	// Collect concepts shared by both.
 	var overlapping []string
 	for _, c := range older.Concepts {
 		if newerConcepts[c] {
@@ -155,11 +180,13 @@ func DetectConceptTagMismatch(newer, older *Observation) (bool, string) {
 		}
 	}
 
+	// No shared concepts — definitely no concept-tag conflict.
 	if len(overlapping) == 0 {
 		return false, ""
 	}
 
-	newerFiles := make(map[string]bool)
+	// Require at least one overlapping file to confirm the observations touch the same code.
+	newerFiles := make(map[string]bool, len(newer.FilesModified))
 	for _, f := range newer.FilesModified {
 		newerFiles[f] = true
 	}
@@ -172,13 +199,17 @@ func DetectConceptTagMismatch(newer, older *Observation) (bool, string) {
 	return false, ""
 }
 
-// DetectConflict performs comprehensive conflict detection between a new observation
-// and an existing one. Returns detection result.
+// DetectConflict runs all conflict detectors against a (newer, older) pair and returns
+// the first conflict found.  Detection order is intentional:
+//  1. Explicit correction — highest signal, checked first so it wins over weaker signals.
+//  2. Opposing file changes — structural contradiction on a shared path.
+//  3. Concept-tag mismatch — softer signal, checked last.
+//
+// The caller is responsible for deciding whether to persist the result.
 func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
-	result := &ConflictDetectionResult{
-		HasConflict: false,
-	}
+	result := &ConflictDetectionResult{}
 
+	// 1. Explicit correction in narrative text.
 	if newer.Narrative.Valid {
 		if isCorrection, reason := DetectExplicitCorrection(newer.Narrative.String); isCorrection {
 			result.HasConflict = true
@@ -190,6 +221,7 @@ func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
 		}
 	}
 
+	// 2. Explicit correction in title (titles are shorter but equally authoritative).
 	if newer.Title.Valid {
 		if isCorrection, reason := DetectExplicitCorrection(newer.Title.String); isCorrection {
 			result.HasConflict = true
@@ -201,6 +233,7 @@ func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
 		}
 	}
 
+	// 3. Opposing change verbs on shared files.
 	if isOpposing, reason := DetectOpposingFileChanges(newer, older); isOpposing {
 		result.HasConflict = true
 		result.Type = ConflictSuperseded
@@ -210,6 +243,7 @@ func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
 		return result
 	}
 
+	// 4. Same concept tags touching the same files.
 	if isMismatch, reason := DetectConceptTagMismatch(newer, older); isMismatch {
 		result.HasConflict = true
 		result.Type = ConflictSuperseded
@@ -222,22 +256,28 @@ func DetectConflict(newer, older *Observation) *ConflictDetectionResult {
 	return result
 }
 
-// DetectConflictsWithExisting checks a new observation against a list of existing observations.
-// Returns all detected conflicts.
+// DetectConflictsWithExisting checks a newly-arrived observation against a pool of
+// existing observations and returns every conflict found.
+//
+// Filtering rules applied before detection:
+//   - Self-comparison is skipped (newer.ID == older.ID).
+//   - Project-scoped observations only conflict within the same project.
+//     Either party being ScopeGlobal opens cross-project comparison.
 func DetectConflictsWithExisting(newer *Observation, existing []*Observation) []*ConflictDetectionResult {
 	var results []*ConflictDetectionResult
 
 	for _, older := range existing {
+		// Skip self.
 		if older.ID == newer.ID {
 			continue
 		}
 
+		// Skip cross-project pairs where neither party is global.
 		if newer.Project != older.Project && newer.Scope != ScopeGlobal && older.Scope != ScopeGlobal {
 			continue
 		}
 
-		result := DetectConflict(newer, older)
-		if result.HasConflict {
+		if result := DetectConflict(newer, older); result.HasConflict {
 			results = append(results, result)
 		}
 	}

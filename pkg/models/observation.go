@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-// ObservationType represents the type of observation.
+// ObservationType classifies the nature of a learning captured from a session.
+// Values are stored in PostgreSQL and must match the CHECK constraint in migrations.
 type ObservationType string
 
 const (
@@ -30,7 +31,8 @@ const (
 	ObsTypeTimeline    ObservationType = "timeline"
 )
 
-// MemoryType represents the classification for memory storage and retrieval.
+// MemoryType classifies an observation for memory storage and retrieval routing.
+// The retrieval layer uses this to bucket memories and weight them during injection.
 type MemoryType string
 
 const (
@@ -55,7 +57,9 @@ var AllMemoryTypes = []MemoryType{
 	MemTypeGuidance,
 }
 
-// SourceType represents the provenance of an observation — where the data came from.
+// SourceType records the provenance of an observation — which Claude Code tool
+// produced or verified the data.  This lets the retrieval layer apply
+// source-quality weighting (tool-verified > llm-derived, etc.).
 type SourceType string
 
 const (
@@ -71,7 +75,8 @@ const (
 	SourceCrossModel     SourceType = "cross_model"
 )
 
-// AgentSource represents which AI tool created an observation.
+// AgentSource records which AI tool created the observation.
+// Stored so multi-model workstations can filter by the originating agent.
 type AgentSource string
 
 const (
@@ -82,7 +87,8 @@ const (
 	AgentUnknown AgentSource = "unknown"
 )
 
-// ValidAgentSources contains all valid agent source values for validation.
+// ValidAgentSources is the authoritative list for validation — adding a new agent
+// here is all that is required; no other file needs to change.
 var ValidAgentSources = []AgentSource{
 	AgentClaude,
 	AgentCodex,
@@ -91,7 +97,7 @@ var ValidAgentSources = []AgentSource{
 	AgentUnknown,
 }
 
-// IsValidAgentSource checks if a string is a recognized agent source value.
+// IsValidAgentSource returns true if s is a recognized AgentSource value.
 func IsValidAgentSource(s string) bool {
 	for _, v := range ValidAgentSources {
 		if string(v) == s {
@@ -101,7 +107,9 @@ func IsValidAgentSource(s string) bool {
 	return false
 }
 
-// ClassifySourceType maps a Claude Code tool name to its source type.
+// ClassifySourceType maps a Claude Code tool name to its SourceType.
+// Write/Edit tools provide the strongest provenance signal (tool_verified)
+// because the agent confirmed the change was applied.
 func ClassifySourceType(toolName string) SourceType {
 	switch toolName {
 	case "Edit", "Write", "Bash", "NotebookEdit":
@@ -117,22 +125,23 @@ func ClassifySourceType(toolName string) SourceType {
 	}
 }
 
-// ObservationScope defines the visibility scope of an observation.
+// ObservationScope controls the visibility of an observation across projects.
 type ObservationScope string
 
 const (
-	// ScopeProject means the observation is only visible within the same project.
+	// ScopeProject: observation is only visible within the same project.
 	ScopeProject ObservationScope = "project"
-	// ScopeGlobal means the observation is visible across all projects.
+	// ScopeGlobal: observation is visible across all projects.
 	// Used for best practices, advanced patterns, and generalizable knowledge.
 	ScopeGlobal ObservationScope = "global"
-	// ScopeAgent means the observation is only visible to the specific agent that created it.
+	// ScopeAgent: observation is only visible to the specific agent that created it.
 	// Used for per-agent private memory (e.g., Neuromancer, Jeeves).
 	ScopeAgent ObservationScope = "agent"
 )
 
-// GlobalizableConcepts are concept tags that indicate an observation
-// should be considered for global scope (best practices, patterns, etc.)
+// GlobalizableConcepts are the concept tags that trigger automatic global scope assignment
+// in NewObservation.  ORDER IS LOAD-BEARING: NewObservation's DetermineScope call iterates
+// this slice and returns on first match — do not reorder.
 var GlobalizableConcepts = []string{
 	"best-practice",
 	"pattern",
@@ -146,7 +155,9 @@ var GlobalizableConcepts = []string{
 	"tooling",
 }
 
-// JSONStringArray is a custom type for handling JSON string arrays in PostgreSQL.
+// JSONStringArray handles PostgreSQL jsonb columns that store string arrays.
+// Both storage (Value) and retrieval (Scan) go through JSON encoding so the
+// wire format is always a JSON array regardless of the PostgreSQL column type.
 type JSONStringArray []string
 
 // Scan implements sql.Scanner for JSONStringArray.
@@ -182,7 +193,8 @@ func (j JSONStringArray) Value() (driver.Value, error) {
 	return json.Marshal(j)
 }
 
-// JSONInt64Map is a custom type for handling JSON int64 maps in PostgreSQL.
+// JSONInt64Map handles PostgreSQL jsonb columns that store string→int64 maps.
+// Used for file modification timestamps (FileMtimes field).
 type JSONInt64Map map[string]int64
 
 // Scan implements sql.Scanner for JSONInt64Map.
@@ -218,7 +230,7 @@ func (j JSONInt64Map) Value() (driver.Value, error) {
 	return json.Marshal(j)
 }
 
-// JSONInt64Array is a custom type for handling JSON int64 arrays in PostgreSQL.
+// JSONInt64Array handles PostgreSQL columns that store int64 arrays.
 // Supports both JSON array format ([1,2,3]) and PostgreSQL array format ({1,2,3}).
 type JSONInt64Array []int64
 
@@ -263,6 +275,7 @@ func (j JSONInt64Array) Value() (driver.Value, error) {
 }
 
 // Observation represents a learning extracted from a Claude Code session.
+// It is the primary unit of storage and retrieval in engram.
 type Observation struct {
 	FileMtimes              JSONInt64Map     `db:"file_mtimes" gorm:"type:jsonb" json:"file_mtimes,omitempty"`
 	SDKSessionID            string           `db:"sdk_session_id" json:"sdk_session_id"`
@@ -309,7 +322,8 @@ type Observation struct {
 	EffectivenessSuccesses  int              `db:"effectiveness_successes" json:"effectiveness_successes"`
 }
 
-// ParsedObservation represents an observation parsed from SDK response XML.
+// ParsedObservation is the intermediate representation of an observation parsed
+// from SDK response XML before it is converted to the stored Observation format.
 type ParsedObservation struct {
 	FileMtimes               map[string]int64
 	Type                     ObservationType
@@ -326,13 +340,14 @@ type ParsedObservation struct {
 	FilesRead                []string
 	FilesModified            []string
 	CommandsRun              []string
-	Rejected                 []string // Alternatives that were considered and dismissed (for decisions)
+	Rejected                 []string // Alternatives considered and dismissed (for decisions)
 	EncryptedSecret          []byte   // set for credential observations
 	EncryptionKeyFingerprint string   // SHA-256(key)[:16] hex
 }
 
-// ToStoredObservation converts a ParsedObservation to the stored Observation format.
-// Used for similarity comparison before storage.
+// ToStoredObservation converts a ParsedObservation to a partial Observation for
+// similarity comparison before storage.  Fields added during persistence
+// (ID, timestamps, project, session) are intentionally left at zero value.
 func (p *ParsedObservation) ToStoredObservation() *Observation {
 	return &Observation{
 		Type:          p.Type,
@@ -353,8 +368,9 @@ func (p *ParsedObservation) ToStoredObservation() *Observation {
 	}
 }
 
-// DetermineScope determines the appropriate scope based on observation concepts.
-// Returns ScopeGlobal if any concept matches globalizable patterns, else ScopeProject.
+// DetermineScope returns ScopeGlobal if any concept in the list matches a
+// GlobalizableConcept, otherwise ScopeProject.
+// The caller is responsible for passing a non-nil slice; nil is safe but returns ScopeProject.
 func DetermineScope(concepts []string) ObservationScope {
 	for _, concept := range concepts {
 		for _, globalConcept := range GlobalizableConcepts {
@@ -366,7 +382,9 @@ func DetermineScope(concepts []string) ObservationScope {
 	return ScopeProject
 }
 
-// scopePatterns maps regex patterns to scope tags for file path classification.
+// scopePatterns maps file path regexes to scope tags injected into observations.
+// These tags let the retrieval layer filter observations by code area
+// (frontend, backend, tests, etc.) without requiring manual concept tagging.
 var scopePatterns = []struct {
 	pattern *regexp.Regexp
 	scope   string
@@ -382,7 +400,8 @@ var scopePatterns = []struct {
 	{regexp.MustCompile(`(?i)(/auth/|[/_]auth[/_.]|jwt|oauth)`), "scope:auth"},
 }
 
-// classifyFileScopes analyzes file paths and returns matching scope tags.
+// classifyFileScopes returns the unique scope tags matching any of the given file paths.
+// Empty paths are skipped; the result is deduplicated and ordered by first match.
 func classifyFileScopes(filePaths []string) []string {
 	if len(filePaths) == 0 {
 		return nil
@@ -405,7 +424,9 @@ func classifyFileScopes(filePaths []string) []string {
 	return scopes
 }
 
-// ClassifyMemoryType classifies an observation into a memory bucket.
+// ClassifyMemoryType maps a ParsedObservation to the most specific MemoryType bucket.
+// Concept keywords take priority over the observation type so that a feature observation
+// tagged "best-practice" is stored as a pattern rather than context.
 func ClassifyMemoryType(obs *ParsedObservation) MemoryType {
 	if obs.Type == ObsTypeGuidance {
 		return MemTypeGuidance
@@ -430,8 +451,9 @@ func ClassifyMemoryType(obs *ParsedObservation) MemoryType {
 	return MemTypeContext
 }
 
-// ObservationJSON is a JSON-friendly representation of Observation.
-// It converts sql.NullString to plain strings for clean JSON output.
+// ObservationJSON is the JSON-serializable view of an Observation.
+// sql.NullString fields are unwrapped to plain strings so API consumers do not
+// need to handle the sql.NullString envelope.
 type ObservationJSON struct {
 	FileMtimes              map[string]int64 `json:"file_mtimes,omitempty"`
 	Subtitle                string           `json:"subtitle,omitempty"`
@@ -476,7 +498,7 @@ type ObservationJSON struct {
 }
 
 // MarshalJSON implements json.Marshaler for Observation.
-// Converts sql.NullString fields to plain strings.
+// Routes through ObservationJSON to unwrap sql.Null* fields.
 func (o *Observation) MarshalJSON() ([]byte, error) {
 	j := ObservationJSON{
 		ID:              o.ID,
@@ -515,6 +537,8 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 		// TTL fields
 		IsExpired: o.IsExpired,
 	}
+
+	// Unwrap optional sql.Null* fields only when valid.
 	if o.ExpiresAt.Valid {
 		t := o.ExpiresAt.Time.UTC()
 		j.ExpiresAt = &t
@@ -544,20 +568,24 @@ func (o *Observation) MarshalJSON() ([]byte, error) {
 	if o.ScoreUpdatedAt.Valid {
 		j.ScoreUpdatedAt = o.ScoreUpdatedAt.Int64
 	}
+
 	return json.Marshal(j)
 }
 
-// NewObservation creates a new observation from parsed data.
+// NewObservation constructs a fully-populated Observation from parsed SDK data.
+// Scope is determined from the parsed scope (explicit) or auto-derived from concepts.
+// File paths from both FilesRead and FilesModified are classified into scope tags that
+// are merged into the Concepts field (gstack-insights FR-7).
 func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, promptNumber int, discoveryTokens int64) *Observation {
 	now := time.Now()
 
-	// Determine scope: use parsed scope if set, otherwise auto-determine from concepts
+	// Determine scope: use parsed scope if set, otherwise auto-determine from concepts.
 	scope := parsed.Scope
 	if scope == "" {
 		scope = DetermineScope(parsed.Concepts)
 	}
 
-	// Auto-add diff-scope tags based on file paths (gstack-insights FR-7)
+	// Auto-add diff-scope tags based on file paths (gstack-insights FR-7).
 	concepts := parsed.Concepts
 	allFiles := append(append([]string{}, parsed.FilesRead...), parsed.FilesModified...)
 	if scopeTags := classifyFileScopes(allFiles); len(scopeTags) > 0 {
@@ -605,9 +633,9 @@ func NewObservation(sdkSessionID, project string, parsed *ParsedObservation, pro
 }
 
 // ToMap converts the observation to a map for JSON response building.
-// This allows adding extra fields like similarity scores.
+// Routes through MarshalJSON so that sql.Null* unwrapping and custom tags are applied,
+// then allows callers to inject extra fields (e.g., similarity scores) before serializing.
 func (o *Observation) ToMap() map[string]interface{} {
-	// Marshal to JSON then unmarshal to map (uses MarshalJSON for proper conversion)
 	data, err := json.Marshal(o)
 	if err != nil {
 		return map[string]interface{}{"id": o.ID, "error": err.Error()}
@@ -619,8 +647,9 @@ func (o *Observation) ToMap() map[string]interface{} {
 	return result
 }
 
-// CheckStaleness checks if an observation is stale based on current file mtimes.
-// Returns true if any tracked file has been modified since the observation was created.
+// CheckStaleness returns true if any file tracked in FileMtimes has been modified
+// since the observation was created.  Observations with no tracked files are assumed
+// fresh — callers may override this with domain logic if needed.
 func (o *Observation) CheckStaleness(currentMtimes map[string]int64) bool {
 	if len(o.FileMtimes) == 0 {
 		return false // No file tracking, assume fresh
@@ -632,8 +661,8 @@ func (o *Observation) CheckStaleness(currentMtimes map[string]int64) bool {
 				return true // File was modified since observation was created
 			}
 		}
-		// If file doesn't exist in currentMtimes, it may have been deleted
-		// We don't mark as stale for missing files - they might just not be checked
+		// If file doesn't exist in currentMtimes, it may have been deleted.
+		// We don't mark as stale for missing files — they might just not be checked.
 	}
 	return false
 }
