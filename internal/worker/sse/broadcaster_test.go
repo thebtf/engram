@@ -463,10 +463,12 @@ func TestWriteToClient_DoneClosedDuringWrite_NoPanic(t *testing.T) {
 
 	deadCh := make(chan string, 2)
 	var wg sync.WaitGroup
-	// must not panic; pass wg so the inner goroutine is tracked
+	// must not panic; pass wg so the test can join the inner goroutine
 	b.writeToClient(c, "data: race\n\n", deadCh, &wg)
-	// Wait for the inner goroutine to complete before the test returns — this
-	// is what Broadcast does via innerWg.Wait() before close(deadClientsCh).
+	// Join the inner goroutine before the test returns so the blockWriter's
+	// fake ResponseWriter is not used after the test completes. Production
+	// Broadcast does not join it — deadClientsCh is buffered and never closed,
+	// so a late send is safe.
 	wg.Wait()
 }
 
@@ -474,10 +476,10 @@ func TestWriteToClient_DoneClosedDuringWrite_NoPanic(t *testing.T) {
 // panic with "send on closed channel" when a client's Done channel is closed
 // while the background write goroutine is still holding WriteMu. This is the
 // real scenario the CRIT finding described: writeToClient returns (via the
-// client.Done case) before the inner goroutine finishes, then Broadcast closes
-// deadClientsCh, and the still-running inner goroutine tries to send to it.
-// The fix (innerWg tracked in writeToClient + innerWg.Wait() before close) is
-// exercised on the real Broadcast code path here.
+// client.Done case) before the inner goroutine finishes, and the still-running
+// inner goroutine later sends its dead-client report. The fix — a buffered,
+// never-closed deadClientsCh sized for every possible send — is exercised on
+// the real Broadcast code path here.
 func TestBroadcast_NoPanicOnSlowClientDoneClose(t *testing.T) {
 	b := NewBroadcaster()
 	// blockWriter with a duration longer than WriteTimeout so the inner goroutine
@@ -505,6 +507,34 @@ func TestBroadcast_NoPanicOnSlowClientDoneClose(t *testing.T) {
 		// success — no panic
 	case <-time.After(WriteTimeout + 2*time.Second):
 		t.Fatal("Broadcast did not return within expected time")
+	}
+}
+
+// TestBroadcast_ReturnsWithinTimeoutOnWedgedClient verifies the codex P1
+// finding: a client whose Write blocks far past WriteTimeout must NOT stall
+// Broadcast — Broadcast returns after ~WriteTimeout because it does not join
+// the inner write goroutines.
+func TestBroadcast_ReturnsWithinTimeoutOnWedgedClient(t *testing.T) {
+	b := NewBroadcaster()
+	// Wedged client: blocks 3x WriteTimeout.
+	bw := newBlockWriter(int((3 * WriteTimeout).Milliseconds()))
+	wedged, _ := b.AddClient(bw)
+
+	start := time.Now()
+	b.Broadcast(map[string]string{"type": "test"})
+	elapsed := time.Since(start)
+
+	// Broadcast must return after ~WriteTimeout, not after the wedged Write.
+	if elapsed > WriteTimeout+time.Second {
+		t.Fatalf("Broadcast blocked on wedged client: %v (expected ~%v)", elapsed, WriteTimeout)
+	}
+
+	// The wedged client must have been reported dead and removed.
+	b.mu.RLock()
+	_, stillThere := b.clients[wedged.ID]
+	b.mu.RUnlock()
+	if stillThere {
+		t.Error("wedged client should have been removed after timeout")
 	}
 }
 
