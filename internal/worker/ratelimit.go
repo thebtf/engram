@@ -7,71 +7,71 @@ import (
 	"time"
 )
 
-// RateLimiter implements a token bucket rate limiter.
+// RateLimiter is a token-bucket rate limiter. Tokens replenish at the
+// configured rate and are capped at the burst maximum.
 type RateLimiter struct {
-	lastUpdate time.Time
-	rate       float64
-	burst      int
-	tokens     float64
-	requests   int64
-	rejected   int64
-	mu         sync.Mutex
+	updatedAt time.Time
+	rate      float64
+	burst     int
+	available float64
+	totalReqs int64
+	dropped   int64
+	mu        sync.Mutex
 }
 
-// LastUpdateTime returns the last update time.
-// Thread-safe - acquires the limiter's lock.
+// LastUpdateTime returns the timestamp of the most recent token replenishment.
+// Acquires the mutex before reading, making this safe for concurrent callers.
 func (rl *RateLimiter) LastUpdateTime() time.Time {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	return rl.lastUpdate
+	return rl.updatedAt
 }
 
-// lastUpdateTimeUnlocked returns the last update time without locking.
-// Caller must hold rl.mu.
+// lastUpdateTimeUnlocked reads the last update timestamp without acquiring the mutex.
+// The caller must already hold rl.mu.
 func (rl *RateLimiter) lastUpdateTimeUnlocked() time.Time {
-	return rl.lastUpdate
+	return rl.updatedAt
 }
 
-// NewRateLimiter creates a new rate limiter.
-// rate is the number of requests per second to allow.
-// burst is the maximum burst of requests to allow.
+// NewRateLimiter builds a token-bucket limiter.
+// rate is the sustained token refill rate (requests per second).
+// burst is the maximum number of tokens that can accumulate.
 func NewRateLimiter(rate float64, burst int) *RateLimiter {
 	return &RateLimiter{
-		rate:       rate,
-		burst:      burst,
-		tokens:     float64(burst),
-		lastUpdate: time.Now(),
+		rate:      rate,
+		burst:     burst,
+		available: float64(burst),
+		updatedAt: time.Now(),
 	}
 }
 
-// Allow checks if a request should be allowed.
-// Returns true if the request is allowed, false if rate limited.
+// Allow returns true when the request is permitted and consumes one token.
+// Returns false when the bucket is empty, incrementing the rejection counter.
 func (rl *RateLimiter) Allow() bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	rl.requests++
+	rl.totalReqs++
 
-	// Calculate tokens added since last update
+	// Replenish tokens proportional to elapsed time, capped at burst.
 	now := time.Now()
-	elapsed := now.Sub(rl.lastUpdate).Seconds()
-	rl.tokens += elapsed * rl.rate
-	if rl.tokens > float64(rl.burst) {
-		rl.tokens = float64(rl.burst)
+	elapsed := now.Sub(rl.updatedAt).Seconds()
+	rl.available += elapsed * rl.rate
+	if rl.available > float64(rl.burst) {
+		rl.available = float64(rl.burst)
 	}
-	rl.lastUpdate = now
+	rl.updatedAt = now
 
-	// Check if we have a token available
-	if rl.tokens >= 1 {
-		rl.tokens--
+	if rl.available >= 1 {
+		rl.available--
 		return true
 	}
 
-	rl.rejected++
+	rl.dropped++
 	return false
 }
 
-// Stats returns rate limiter statistics.
+// Stats returns a snapshot of the limiter's current configuration and counters.
 func (rl *RateLimiter) Stats() map[string]any {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -79,15 +79,15 @@ func (rl *RateLimiter) Stats() map[string]any {
 	return map[string]any{
 		"rate":           rl.rate,
 		"burst":          rl.burst,
-		"current_tokens": rl.tokens,
-		"total_requests": rl.requests,
-		"rejected":       rl.rejected,
-		"rejection_rate": float64(rl.rejected) / max(float64(rl.requests), 1),
+		"current_tokens": rl.available,
+		"total_requests": rl.totalReqs,
+		"rejected":       rl.dropped,
+		"rejection_rate": float64(rl.dropped) / max(float64(rl.totalReqs), 1),
 	}
 }
 
-// RateLimitMiddleware creates middleware that applies rate limiting.
-// Uses a shared rate limiter for all requests.
+// RateLimitMiddleware wraps a handler with a shared token-bucket rate limiter.
+// Requests that exceed the limit receive 429 Too Many Requests.
 func RateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,123 +100,124 @@ func RateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
 	}
 }
 
-// PerClientRateLimiter implements per-client rate limiting.
+// PerClientRateLimiter maintains independent token-bucket limiters per client key.
+// Idle limiters are evicted periodically to bound memory usage.
 type PerClientRateLimiter struct {
-	lastCleanup     time.Time
-	clients         map[string]*RateLimiter
+	cleanedAt       time.Time
+	entries         map[string]*RateLimiter
 	rate            float64
 	burst           int
-	cleanupInterval time.Duration
-	maxIdleTime     time.Duration
+	sweepInterval   time.Duration
+	idleExpiry      time.Duration
 	mu              sync.Mutex
 }
 
-// NewPerClientRateLimiter creates a new per-client rate limiter.
+// NewPerClientRateLimiter creates a per-client limiter with the given rate and burst.
+// Entries idle longer than 10 minutes are pruned every 5 minutes.
 func NewPerClientRateLimiter(rate float64, burst int) *PerClientRateLimiter {
 	return &PerClientRateLimiter{
-		rate:            rate,
-		burst:           burst,
-		clients:         make(map[string]*RateLimiter),
-		cleanupInterval: 5 * time.Minute,
-		maxIdleTime:     10 * time.Minute,
-		lastCleanup:     time.Now(),
+		rate:          rate,
+		burst:         burst,
+		entries:       make(map[string]*RateLimiter),
+		sweepInterval: 5 * time.Minute,
+		idleExpiry:    10 * time.Minute,
+		cleanedAt:     time.Now(),
 	}
 }
 
-// getLimiter returns a rate limiter for the given client key.
-func (pcrl *PerClientRateLimiter) getLimiter(key string) *RateLimiter {
+// limiterFor retrieves or creates the per-client limiter for key.
+// A periodic sweep evicts entries that have been idle longer than idleExpiry.
+func (pcrl *PerClientRateLimiter) limiterFor(key string) *RateLimiter {
 	pcrl.mu.Lock()
 	defer pcrl.mu.Unlock()
 
-	// Periodic cleanup of idle clients
-	if time.Since(pcrl.lastCleanup) > pcrl.cleanupInterval {
-		pcrl.cleanupLocked()
+	if time.Since(pcrl.cleanedAt) > pcrl.sweepInterval {
+		pcrl.sweepLocked()
 	}
 
-	limiter, exists := pcrl.clients[key]
-	if !exists {
-		limiter = NewRateLimiter(pcrl.rate, pcrl.burst)
-		pcrl.clients[key] = limiter
+	lim, found := pcrl.entries[key]
+	if !found {
+		lim = NewRateLimiter(pcrl.rate, pcrl.burst)
+		pcrl.entries[key] = lim
 	}
 
-	return limiter
+	return lim
 }
 
-// cleanupLocked removes idle limiters. Must be called with lock held.
-// Uses consistent lock ordering: always acquire limiter.mu while holding pcrl.mu.
-// This is safe because the limiter.mu critical section is brief (just reading lastUpdate).
-func (pcrl *PerClientRateLimiter) cleanupLocked() {
-	now := time.Now()
-	keysToDelete := make([]string, 0)
+// sweepLocked removes per-client limiters that have been idle past idleExpiry.
+// Caller must hold pcrl.mu. Acquires each entry's mutex briefly to read its
+// last-update timestamp — the order (pcrl.mu then entry.mu) is consistent
+// throughout this type, so no deadlock can occur.
+func (pcrl *PerClientRateLimiter) sweepLocked() {
+	cutoff := time.Now()
+	var stale []string
 
-	// Check each limiter while holding pcrl.mu
-	// We briefly acquire limiter.mu but the critical section is minimal
-	for key, limiter := range pcrl.clients {
-		limiter.mu.Lock()
-		lastUpdate := limiter.lastUpdateTimeUnlocked()
-		limiter.mu.Unlock()
+	for key, lim := range pcrl.entries {
+		lim.mu.Lock()
+		lastSeen := lim.lastUpdateTimeUnlocked()
+		lim.mu.Unlock()
 
-		if now.Sub(lastUpdate) > pcrl.maxIdleTime {
-			keysToDelete = append(keysToDelete, key)
+		if cutoff.Sub(lastSeen) > pcrl.idleExpiry {
+			stale = append(stale, key)
 		}
 	}
 
-	// Delete collected keys
-	for _, key := range keysToDelete {
-		delete(pcrl.clients, key)
+	for _, key := range stale {
+		delete(pcrl.entries, key)
 	}
-	pcrl.lastCleanup = now
+	pcrl.cleanedAt = cutoff
 }
 
-// Allow checks if a request from the given client should be allowed.
+// Allow returns whether the request from clientKey is within its rate limit.
 func (pcrl *PerClientRateLimiter) Allow(clientKey string) bool {
-	return pcrl.getLimiter(clientKey).Allow()
+	return pcrl.limiterFor(clientKey).Allow()
 }
 
-// Stats returns aggregate statistics.
-// Uses two-phase approach to avoid nested lock acquisition.
+// Stats aggregates counters across all tracked clients.
+// Uses a two-phase approach to avoid nested lock acquisition: collect the
+// entry pointers under pcrl.mu, then read each entry's counters separately.
 func (pcrl *PerClientRateLimiter) Stats() map[string]any {
-	// Phase 1: Collect limiters under pcrl.mu
+	// Phase 1: snapshot entry slice under the parent lock.
 	pcrl.mu.Lock()
 	rate := pcrl.rate
 	burst := pcrl.burst
-	activeClients := len(pcrl.clients)
-	limiters := make([]*RateLimiter, 0, activeClients)
-	for _, limiter := range pcrl.clients {
-		limiters = append(limiters, limiter)
+	count := len(pcrl.entries)
+	snapshot := make([]*RateLimiter, 0, count)
+	for _, lim := range pcrl.entries {
+		snapshot = append(snapshot, lim)
 	}
 	pcrl.mu.Unlock()
 
-	// Phase 2: Collect stats from each limiter (only acquiring limiter.mu, not pcrl.mu)
-	var totalRequests, totalRejected int64
-	for _, limiter := range limiters {
-		limiter.mu.Lock()
-		totalRequests += limiter.requests
-		totalRejected += limiter.rejected
-		limiter.mu.Unlock()
+	// Phase 2: read each entry's counters under its own lock only.
+	var totalReqs, totalDropped int64
+	for _, lim := range snapshot {
+		lim.mu.Lock()
+		totalReqs += lim.totalReqs
+		totalDropped += lim.dropped
+		lim.mu.Unlock()
 	}
 
 	return map[string]any{
 		"rate":           rate,
 		"burst":          burst,
-		"active_clients": activeClients,
-		"total_requests": totalRequests,
-		"total_rejected": totalRejected,
+		"active_clients": count,
+		"total_requests": totalReqs,
+		"total_rejected": totalDropped,
 	}
 }
 
-// PerClientRateLimitMiddleware creates middleware that applies per-client rate limiting.
-// Uses X-Forwarded-For or RemoteAddr to identify clients.
+// PerClientRateLimitMiddleware wraps a handler with per-client rate limiting.
+// The client key is the X-Real-IP header when present, or RemoteAddr otherwise.
 func PerClientRateLimitMiddleware(limiter *PerClientRateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Get client identifier (prefer X-Real-IP from RealIP middleware)
-			clientKey := r.RemoteAddr
-			if xff := r.Header.Get("X-Real-IP"); xff != "" {
-				clientKey = xff
+			// X-Real-IP is set by the RealIP middleware that runs earlier in the chain.
+			key := r.RemoteAddr
+			if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+				key = realIP
 			}
 
-			if !limiter.Allow(clientKey) {
+			if !limiter.Allow(key) {
 				http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
