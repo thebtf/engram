@@ -4,470 +4,429 @@ package models
 import (
 	"database/sql"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestDetectFileOverlapRelation(t *testing.T) {
-	tests := []struct {
-		newer         *Observation
-		older         *Observation
-		name          string
-		wantRelType   RelationType
-		wantMinConfid float64
-		wantRelation  bool
+// ---------------------------------------------------------------------------
+// RelationType constants
+// ---------------------------------------------------------------------------
+
+func TestRelationTypeConstants(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		got  RelationType
+		want string
+	}{
+		{RelationCauses, "causes"},
+		{RelationFixes, "fixes"},
+		{RelationSupersedes, "supersedes"},
+		{RelationDependsOn, "depends_on"},
+		{RelationRelatesTo, "relates_to"},
+		{RelationEvolvesFrom, "evolves_from"},
+		{RelationLeadsTo, "leads_to"},
+		{RelationSimilarTo, "similar_to"},
+		{RelationContradicts, "contradicts"},
+		{RelationReinforces, "reinforces"},
+		{RelationInvalidatedBy, "invalidated_by"},
+		{RelationExplains, "explains"},
+		{RelationSharesTheme, "shares_theme"},
+		{RelationParallelCtx, "parallel_context"},
+		{RelationSummarizes, "summarizes"},
+		{RelationPartOf, "part_of"},
+		{RelationPrefersOver, "prefers_over"},
+		{RelationModifies, "modifies"},
+		{RelationReads, "reads"},
+		{RelationFollows, "follows"},
+		{RelationPromptedBy, "prompted_by"},
+		{RelationReferences, "references"},
+		{RelationReferencedBy, "referenced_by"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(string(c.got), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, RelationType(c.want), c.got)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NewObservationRelation constructor
+// ---------------------------------------------------------------------------
+
+func TestNewObservationRelation_Fields(t *testing.T) {
+	t.Parallel()
+	rel := NewObservationRelation(3, 7, RelationFixes, 0.85, DetectionSourceFileOverlap, "bugfix on feature file")
+
+	assert.Equal(t, int64(3), rel.SourceID)
+	assert.Equal(t, int64(7), rel.TargetID)
+	assert.Equal(t, RelationFixes, rel.RelationType)
+	assert.InDelta(t, 0.85, rel.Confidence, 0.001)
+	assert.Equal(t, DetectionSourceFileOverlap, rel.DetectionSource)
+	assert.Equal(t, "bugfix on feature file", rel.Reason)
+	assert.NotEmpty(t, rel.CreatedAt)
+	assert.Greater(t, rel.CreatedAtEpoch, int64(0))
+}
+
+func TestNewObservationRelation_ZeroConfidence(t *testing.T) {
+	t.Parallel()
+	rel := NewObservationRelation(1, 2, RelationRelatesTo, 0.0, DetectionSourceConceptOverlap, "")
+	assert.Equal(t, float64(0), rel.Confidence)
+}
+
+// ---------------------------------------------------------------------------
+// DetectFileOverlapRelation
+// ---------------------------------------------------------------------------
+
+func TestDetectFileOverlapRelation_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name         string
+		newer        *Observation
+		older        *Observation
+		wantRelType  RelationType
+		wantMinConf  float64
+		wantRelation bool
 	}{
 		{
-			name: "no file overlap",
+			name: "no shared files",
 			newer: &Observation{
 				ID:            1,
-				FilesModified: []string{"file1.go", "file2.go"},
+				FilesModified: []string{"widget.go", "api.go"},
 			},
 			older: &Observation{
 				ID:            2,
-				FilesModified: []string{"file3.go", "file4.go"},
+				FilesModified: []string{"config.go", "env.go"},
 			},
 			wantRelation: false,
 		},
 		{
 			name: "shared modified files",
 			newer: &Observation{
-				ID:            1,
+				ID:            10,
 				Type:          ObsTypeRefactor,
-				FilesModified: []string{"shared.go", "file2.go"},
+				FilesModified: []string{"shared.go", "extra.go"},
 			},
 			older: &Observation{
-				ID:            2,
+				ID:            11,
 				Type:          ObsTypeRefactor,
-				FilesModified: []string{"shared.go", "file4.go"},
+				FilesModified: []string{"shared.go", "other.go"},
 			},
 			wantRelation:  true,
 			wantRelType:   RelationSupersedes,
-			wantMinConfid: 0.5,
+			wantMinConf:   0.5,
 		},
 		{
 			name: "bugfix on feature file",
 			newer: &Observation{
-				ID:            1,
+				ID:            20,
 				Type:          ObsTypeBugfix,
-				FilesModified: []string{"feature.go"},
+				FilesModified: []string{"handler.go"},
 			},
 			older: &Observation{
-				ID:            2,
+				ID:            21,
 				Type:          ObsTypeFeature,
-				FilesModified: []string{"feature.go"},
+				FilesModified: []string{"handler.go"},
 			},
 			wantRelation:  true,
 			wantRelType:   RelationFixes,
-			wantMinConfid: 0.6,
+			wantMinConf:   0.6,
 		},
 		{
 			name: "newer reads older modified",
 			newer: &Observation{
-				ID:            1,
+				ID:            30,
 				Type:          ObsTypeChange,
 				FilesRead:     []string{"dep.go"},
-				FilesModified: []string{"caller.go"},
+				FilesModified: []string{"consumer.go"},
 			},
 			older: &Observation{
-				ID:            2,
+				ID:            31,
 				Type:          ObsTypeDecision,
 				FilesModified: []string{"dep.go"},
 			},
 			wantRelation:  true,
-			wantMinConfid: 0.5,
+			wantMinConf:   0.5,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := DetectFileOverlapRelation(tt.newer, tt.older)
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := DetectFileOverlapRelation(tc.newer, tc.older)
 
-			if tt.wantRelation {
-				if result == nil {
-					t.Fatal("expected relation, got nil")
+			if tc.wantRelation {
+				require.NotNil(t, result, "expected non-nil relation")
+				if tc.wantRelType != "" {
+					assert.Equal(t, tc.wantRelType, result.RelationType)
 				}
-				if tt.wantRelType != "" && result.RelationType != tt.wantRelType {
-					t.Errorf("relation type = %v, want %v", result.RelationType, tt.wantRelType)
-				}
-				if result.Confidence < tt.wantMinConfid {
-					t.Errorf("confidence = %v, want at least %v", result.Confidence, tt.wantMinConfid)
-				}
-				if result.DetectionSource != DetectionSourceFileOverlap {
-					t.Errorf("source = %v, want %v", result.DetectionSource, DetectionSourceFileOverlap)
-				}
+				assert.GreaterOrEqual(t, result.Confidence, tc.wantMinConf)
+				assert.Equal(t, DetectionSourceFileOverlap, result.DetectionSource)
 			} else {
-				if result != nil {
-					t.Errorf("expected no relation, got %+v", result)
-				}
+				assert.Nil(t, result, "expected nil relation")
 			}
 		})
 	}
 }
 
-func TestDetectConceptOverlapRelation(t *testing.T) {
-	tests := []struct {
-		newer         *Observation
-		older         *Observation
-		name          string
-		wantMinConfid float64
-		wantRelation  bool
+// ---------------------------------------------------------------------------
+// DetectConceptOverlapRelation
+// ---------------------------------------------------------------------------
+
+func TestDetectConceptOverlapRelation_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		newer       *Observation
+		older       *Observation
+		wantMinConf float64
+		wantSource  RelationDetectionSource
+		expect      bool
 	}{
 		{
-			name: "no concept overlap",
-			newer: &Observation{
-				ID:       1,
-				Concepts: []string{"auth", "api"},
-			},
-			older: &Observation{
-				ID:       2,
-				Concepts: []string{"database", "caching"},
-			},
-			wantRelation: false,
+			name:   "no shared concepts",
+			newer:  &Observation{ID: 1, Concepts: []string{"database", "migration"}},
+			older:  &Observation{ID: 2, Concepts: []string{"caching", "eviction"}},
+			expect: false,
 		},
 		{
-			name: "shared concepts",
-			newer: &Observation{
-				ID:       1,
-				Concepts: []string{"security", "auth"},
-			},
-			older: &Observation{
-				ID:       2,
-				Concepts: []string{"security", "validation"},
-			},
-			wantRelation:  true,
-			wantMinConfid: 0.4, // security is a high-value concept
+			name:        "single high-value shared concept",
+			newer:       &Observation{ID: 3, Concepts: []string{"security", "tls"}},
+			older:       &Observation{ID: 4, Concepts: []string{"security", "cert"}},
+			expect:      true,
+			wantMinConf: 0.4,
+			wantSource:  DetectionSourceConceptOverlap,
 		},
 		{
-			name: "multiple shared concepts",
-			newer: &Observation{
-				ID:       1,
-				Concepts: []string{"auth", "api", "validation"},
-			},
-			older: &Observation{
-				ID:       2,
-				Concepts: []string{"auth", "api", "database"},
-			},
-			wantRelation:  true,
-			wantMinConfid: 0.5,
+			name:        "multiple shared concepts",
+			newer:       &Observation{ID: 5, Concepts: []string{"auth", "api", "validation"}},
+			older:       &Observation{ID: 6, Concepts: []string{"auth", "api", "logging"}},
+			expect:      true,
+			wantMinConf: 0.5,
+			wantSource:  DetectionSourceConceptOverlap,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := DetectConceptOverlapRelation(tt.newer, tt.older)
-
-			if tt.wantRelation {
-				if result == nil {
-					t.Fatal("expected relation, got nil")
-				}
-				if result.Confidence < tt.wantMinConfid {
-					t.Errorf("confidence = %v, want at least %v", result.Confidence, tt.wantMinConfid)
-				}
-				if result.DetectionSource != DetectionSourceConceptOverlap {
-					t.Errorf("source = %v, want %v", result.DetectionSource, DetectionSourceConceptOverlap)
-				}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := DetectConceptOverlapRelation(tc.newer, tc.older)
+			if tc.expect {
+				require.NotNil(t, result)
+				assert.GreaterOrEqual(t, result.Confidence, tc.wantMinConf)
+				assert.Equal(t, tc.wantSource, result.DetectionSource)
 			} else {
-				if result != nil {
-					t.Errorf("expected no relation, got %+v", result)
-				}
+				assert.Nil(t, result)
 			}
 		})
 	}
 }
 
-func TestDetectTypeProgressionRelation(t *testing.T) {
-	tests := []struct {
-		name         string
-		newerType    ObservationType
-		olderType    ObservationType
-		wantRelType  RelationType
-		wantRelation bool
+// ---------------------------------------------------------------------------
+// DetectTypeProgressionRelation
+// ---------------------------------------------------------------------------
+
+func TestDetectTypeProgressionRelation_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		newerType   ObservationType
+		olderType   ObservationType
+		wantRelType RelationType
+		expect      bool
 	}{
-		{
-			name:         "bugfix fixes discovery",
-			newerType:    ObsTypeBugfix,
-			olderType:    ObsTypeDiscovery,
-			wantRelation: true,
-			wantRelType:  RelationFixes,
-		},
-		{
-			name:         "bugfix fixes feature",
-			newerType:    ObsTypeBugfix,
-			olderType:    ObsTypeFeature,
-			wantRelation: true,
-			wantRelType:  RelationFixes,
-		},
-		{
-			name:         "feature depends on decision",
-			newerType:    ObsTypeFeature,
-			olderType:    ObsTypeDecision,
-			wantRelation: true,
-			wantRelType:  RelationDependsOn,
-		},
-		{
-			name:         "refactor evolves from discovery",
-			newerType:    ObsTypeRefactor,
-			olderType:    ObsTypeDiscovery,
-			wantRelation: true,
-			wantRelType:  RelationEvolvesFrom,
-		},
-		{
-			name:         "no progression discovery to bugfix",
-			newerType:    ObsTypeDiscovery,
-			olderType:    ObsTypeBugfix,
-			wantRelation: false,
-		},
+		{"bugfix → discovery = fixes", ObsTypeBugfix, ObsTypeDiscovery, RelationFixes, true},
+		{"bugfix → feature = fixes", ObsTypeBugfix, ObsTypeFeature, RelationFixes, true},
+		{"feature → decision = depends_on", ObsTypeFeature, ObsTypeDecision, RelationDependsOn, true},
+		{"refactor → discovery = evolves_from", ObsTypeRefactor, ObsTypeDiscovery, RelationEvolvesFrom, true},
+		{"discovery → bugfix = no progression", ObsTypeDiscovery, ObsTypeBugfix, "", false},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			newer := &Observation{ID: 1, Type: tt.newerType}
-			older := &Observation{ID: 2, Type: tt.olderType}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			newer := &Observation{ID: 1, Type: tc.newerType}
+			older := &Observation{ID: 2, Type: tc.olderType}
 			result := DetectTypeProgressionRelation(newer, older)
 
-			if tt.wantRelation {
-				if result == nil {
-					t.Fatal("expected relation, got nil")
-				}
-				if result.RelationType != tt.wantRelType {
-					t.Errorf("relation type = %v, want %v", result.RelationType, tt.wantRelType)
-				}
-				if result.DetectionSource != DetectionSourceTypeProgression {
-					t.Errorf("source = %v, want %v", result.DetectionSource, DetectionSourceTypeProgression)
-				}
+			if tc.expect {
+				require.NotNil(t, result)
+				assert.Equal(t, tc.wantRelType, result.RelationType)
+				assert.Equal(t, DetectionSourceTypeProgression, result.DetectionSource)
 			} else {
-				if result != nil {
-					t.Errorf("expected no relation, got %+v", result)
-				}
+				assert.Nil(t, result)
 			}
 		})
 	}
 }
 
-func TestDetectTemporalProximityRelation(t *testing.T) {
-	baseTime := int64(1700000000000) // some base epoch ms
+// ---------------------------------------------------------------------------
+// DetectTemporalProximityRelation
+// ---------------------------------------------------------------------------
 
-	tests := []struct {
+func TestDetectTemporalProximityRelation_Table(t *testing.T) {
+	t.Parallel()
+	base := int64(1700000000000)
+
+	cases := []struct {
 		name         string
 		newerSession string
 		olderSession string
 		newerTime    int64
 		olderTime    int64
-		wantRelation bool
+		expect       bool
 	}{
 		{
-			name:         "same session close time",
-			newerSession: "session-1",
-			olderSession: "session-1",
-			newerTime:    baseTime + 60000, // 1 minute later
-			olderTime:    baseTime,
-			wantRelation: true,
+			name:         "same session within 5 min — related",
+			newerSession: "sess-A",
+			olderSession: "sess-A",
+			newerTime:    base + 120_000, // 2 min later
+			olderTime:    base,
+			expect:       true,
 		},
 		{
-			name:         "same session far apart",
-			newerSession: "session-1",
-			olderSession: "session-1",
-			newerTime:    baseTime + 600000, // 10 minutes later
-			olderTime:    baseTime,
-			wantRelation: false, // > 5 minutes
+			name:         "same session beyond 5 min — not related",
+			newerSession: "sess-A",
+			olderSession: "sess-A",
+			newerTime:    base + 600_000, // 10 min later
+			olderTime:    base,
+			expect:       false,
 		},
 		{
-			name:         "different sessions close time",
-			newerSession: "session-1",
-			olderSession: "session-2",
-			newerTime:    baseTime + 30000,
-			olderTime:    baseTime,
-			wantRelation: false, // different sessions
+			name:         "different sessions — not related",
+			newerSession: "sess-A",
+			olderSession: "sess-B",
+			newerTime:    base + 30_000,
+			olderTime:    base,
+			expect:       false,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			newer := &Observation{
-				ID:             1,
-				SDKSessionID:   tt.newerSession,
-				CreatedAtEpoch: tt.newerTime,
-			}
-			older := &Observation{
-				ID:             2,
-				SDKSessionID:   tt.olderSession,
-				CreatedAtEpoch: tt.olderTime,
-			}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			newer := &Observation{ID: 1, SDKSessionID: tc.newerSession, CreatedAtEpoch: tc.newerTime}
+			older := &Observation{ID: 2, SDKSessionID: tc.olderSession, CreatedAtEpoch: tc.olderTime}
 			result := DetectTemporalProximityRelation(newer, older)
 
-			if tt.wantRelation {
-				if result == nil {
-					t.Fatal("expected relation, got nil")
-				}
-				if result.DetectionSource != DetectionSourceTemporalProximity {
-					t.Errorf("source = %v, want %v", result.DetectionSource, DetectionSourceTemporalProximity)
-				}
+			if tc.expect {
+				require.NotNil(t, result)
+				assert.Equal(t, DetectionSourceTemporalProximity, result.DetectionSource)
 			} else {
-				if result != nil {
-					t.Errorf("expected no relation, got %+v", result)
-				}
+				assert.Nil(t, result)
 			}
 		})
 	}
 }
 
-func TestDetectNarrativeMentionRelation(t *testing.T) {
-	tests := []struct {
-		name         string
-		narrative    string
-		wantRelType  RelationType
-		wantRelation bool
+// ---------------------------------------------------------------------------
+// DetectNarrativeMentionRelation
+// ---------------------------------------------------------------------------
+
+func TestDetectNarrativeMentionRelation_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		narrative   string
+		wantRelType RelationType
+		expect      bool
 	}{
-		{
-			name:         "fixes language",
-			narrative:    "This change fixes the issue with authentication",
-			wantRelation: true,
-			wantRelType:  RelationFixes,
-		},
-		{
-			name:         "causes language",
-			narrative:    "This decision caused unexpected side effects",
-			wantRelation: true,
-			wantRelType:  RelationCauses,
-		},
-		{
-			name:         "supersedes language",
-			narrative:    "This approach supersedes the previous workaround",
-			wantRelation: true,
-			wantRelType:  RelationSupersedes,
-		},
-		{
-			name:         "depends on language",
-			narrative:    "This feature depends on the authentication module",
-			wantRelation: true,
-			wantRelType:  RelationDependsOn,
-		},
-		{
-			name:         "no relationship language",
-			narrative:    "Added new feature for user management",
-			wantRelation: false,
-		},
+		{"fixes language", "This commit fixes the authentication regression", RelationFixes, true},
+		{"causes language", "This change caused memory pressure in production", RelationCauses, true},
+		{"supersedes language", "This pattern supersedes the v1 approach", RelationSupersedes, true},
+		{"depends on language", "This module depends on the session store", RelationDependsOn, true},
+		{"no relation keyword", "Added pagination to the list endpoint", "", false},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	older := &Observation{ID: 99}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			newer := &Observation{
 				ID:        1,
-				Narrative: sql.NullString{String: tt.narrative, Valid: true},
+				Narrative: sql.NullString{String: tc.narrative, Valid: true},
 			}
-			older := &Observation{ID: 2}
 			result := DetectNarrativeMentionRelation(newer, older)
-
-			if tt.wantRelation {
-				if result == nil {
-					t.Fatal("expected relation, got nil")
-				}
-				if result.RelationType != tt.wantRelType {
-					t.Errorf("relation type = %v, want %v", result.RelationType, tt.wantRelType)
-				}
-				if result.DetectionSource != DetectionSourceNarrativeMention {
-					t.Errorf("source = %v, want %v", result.DetectionSource, DetectionSourceNarrativeMention)
-				}
+			if tc.expect {
+				require.NotNil(t, result)
+				assert.Equal(t, tc.wantRelType, result.RelationType)
+				assert.Equal(t, DetectionSourceNarrativeMention, result.DetectionSource)
 			} else {
-				if result != nil {
-					t.Errorf("expected no relation, got %+v", result)
-				}
+				assert.Nil(t, result)
 			}
 		})
 	}
 }
 
-func TestDetectRelationsWithExisting(t *testing.T) {
+// ---------------------------------------------------------------------------
+// DetectRelationsWithExisting
+// ---------------------------------------------------------------------------
+
+func TestDetectRelationsWithExisting_FindsRelation(t *testing.T) {
+	t.Parallel()
 	newer := &Observation{
-		ID:            1,
-		SDKSessionID:  "session-1",
-		Project:       "test-project",
+		ID:            100,
+		SDKSessionID:  "sess-1",
+		Project:       "backend",
 		Type:          ObsTypeBugfix,
 		FilesModified: []string{"auth.go"},
 		Concepts:      []string{"security", "auth"},
-		Narrative:     sql.NullString{String: "Fixed security issue in auth module", Valid: true},
+		Narrative:     sql.NullString{String: "Fixed security vulnerability in auth module", Valid: true},
 	}
-
-	existing := []*Observation{
+	pool := []*Observation{
 		{
-			ID:            2,
-			SDKSessionID:  "session-1",
-			Project:       "test-project",
+			ID:            200,
+			SDKSessionID:  "sess-1",
+			Project:       "backend",
 			Type:          ObsTypeDiscovery,
 			FilesModified: []string{"auth.go"},
 			Concepts:      []string{"security"},
 		},
 		{
-			ID:            3,
-			SDKSessionID:  "session-2",
-			Project:       "test-project",
+			ID:            201,
+			SDKSessionID:  "sess-2",
+			Project:       "backend",
 			Type:          ObsTypeFeature,
 			FilesModified: []string{"other.go"},
-			Concepts:      []string{"api"},
+			Concepts:      []string{"logging"},
 		},
 		{
-			ID:           4,
-			SDKSessionID: "session-1",
-			Project:      "other-project", // different project
+			ID:           202,
+			SDKSessionID: "sess-1",
+			Project:      "other-proj", // different project — should be skipped
 			Type:         ObsTypeDiscovery,
 		},
 	}
 
-	results := DetectRelationsWithExisting(newer, existing, 0.4)
+	results := DetectRelationsWithExisting(newer, pool, 0.4)
 
-	// Should find relation with observation 2 (file overlap + concept overlap + type progression)
-	// Should not find relation with observation 3 (no overlap)
-	// Should not find relation with observation 4 (different project)
+	require.NotEmpty(t, results, "expected at least one relation")
 
-	if len(results) == 0 {
-		t.Fatal("expected at least one relation")
-	}
-
-	// Check that we found relation with observation 2
-	foundObs2 := false
+	var foundObs200 bool
 	for _, r := range results {
-		if r.TargetID == 2 {
-			foundObs2 = true
-			// Should be high confidence due to multiple signals
-			if r.Confidence < 0.5 {
-				t.Errorf("expected higher confidence for obs 2, got %v", r.Confidence)
-			}
+		if r.TargetID == 200 {
+			foundObs200 = true
+			assert.GreaterOrEqual(t, r.Confidence, 0.5)
 		}
-		// Should not find relation with obs 4
-		if r.TargetID == 4 {
-			t.Error("should not find relation with different project")
-		}
+		assert.NotEqual(t, int64(202), r.TargetID, "must not relate to different-project obs")
 	}
-
-	if !foundObs2 {
-		t.Error("expected to find relation with observation 2")
-	}
+	assert.True(t, foundObs200, "must detect relation with obs 200")
 }
 
-func TestNewObservationRelation(t *testing.T) {
-	rel := NewObservationRelation(1, 2, RelationFixes, 0.8, DetectionSourceFileOverlap, "test reason")
-
-	if rel.SourceID != 1 {
-		t.Errorf("SourceID = %v, want 1", rel.SourceID)
+func TestDetectRelationsWithExisting_EmptyPool(t *testing.T) {
+	t.Parallel()
+	newer := &Observation{
+		ID:      50,
+		Project: "proj",
+		Type:    ObsTypeBugfix,
 	}
-	if rel.TargetID != 2 {
-		t.Errorf("TargetID = %v, want 2", rel.TargetID)
-	}
-	if rel.RelationType != RelationFixes {
-		t.Errorf("RelationType = %v, want %v", rel.RelationType, RelationFixes)
-	}
-	if rel.Confidence != 0.8 {
-		t.Errorf("Confidence = %v, want 0.8", rel.Confidence)
-	}
-	if rel.DetectionSource != DetectionSourceFileOverlap {
-		t.Errorf("DetectionSource = %v, want %v", rel.DetectionSource, DetectionSourceFileOverlap)
-	}
-	if rel.Reason != "test reason" {
-		t.Errorf("Reason = %v, want 'test reason'", rel.Reason)
-	}
-	if rel.CreatedAt == "" {
-		t.Error("CreatedAt should be set")
-	}
-	if rel.CreatedAtEpoch == 0 {
-		t.Error("CreatedAtEpoch should be set")
-	}
+	results := DetectRelationsWithExisting(newer, []*Observation{}, 0.4)
+	assert.Empty(t, results)
 }
