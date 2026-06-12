@@ -1,3 +1,13 @@
+# Deploy the engram documentation website to GitHub Pages.
+#
+# Triggered on pushes to main that touch docs/ content, and on manual
+# workflow_dispatch so operators can force a re-deploy without a docs change.
+#
+# Job names and the deployment environment name are referenced by:
+#   - branch protection rules ("pages" concurrency group)
+#   - the GitHub Pages deployment environment
+# Do not rename them without updating those references.
+
 name: Deploy Website to GitHub Pages
 
 on:
@@ -13,6 +23,8 @@ permissions:
   pages: write
   id-token: write
 
+# Only one deployment runs at a time. A queued run is not cancelled so an
+# in-progress deploy always finishes cleanly.
 concurrency:
   group: "pages"
   cancel-in-progress: false

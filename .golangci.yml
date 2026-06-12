@@ -1,9 +1,14 @@
+# golangci-lint configuration for engram.
+# Run: golangci-lint run ./...
+
 linters-settings:
   govet:
     enable:
+      # fieldalignment catches struct padding waste that inflates memory usage.
       - fieldalignment
   errcheck:
-    # Ignore error checks in test files for common test helpers
+    # These return errors that are safe to ignore in test helpers and
+    # low-consequence write paths; treating them as fatal adds noise.
     exclude-functions:
       - (io.Closer).Close
       - (*encoding/json.Encoder).Encode
@@ -23,8 +28,9 @@ linters:
 issues:
   exclude-dirs:
     - vendor
-  # Exclude some linters from running on test files
   exclude-rules:
+    # Test files call helpers that trigger errcheck and gosec; suppressing
+    # them there keeps the signal-to-noise ratio high for production code.
     - path: _test\.go
       linters:
         - errcheck
