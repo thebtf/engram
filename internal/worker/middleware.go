@@ -53,39 +53,40 @@ var allowedOrigins = map[string]bool{
 	"http://127.0.0.1:37777": true,
 }
 
-// SecurityHeaders middleware adds essential security headers to all responses.
-// These protect against common web vulnerabilities.
+// SecurityHeaders sets defensive HTTP headers on every response.
+// Mitigates clickjacking, MIME-sniffing, XSS, and cross-origin data leaks.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Prevent clickjacking
-		w.Header().Set("X-Frame-Options", "DENY")
+		hdr := w.Header()
 
-		// Prevent MIME type sniffing
-		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// Anti-clickjacking: disallow all framing.
+		hdr.Set("X-Frame-Options", "DENY")
 
-		// Enable XSS filter
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		// MIME-type sniffing: force the declared content-type.
+		hdr.Set("X-Content-Type-Options", "nosniff")
 
-		// Restrict referrer information
-		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		// Legacy XSS filter for older browsers.
+		hdr.Set("X-XSS-Protection", "1; mode=block")
 
-		// Content Security Policy - granular directives
+		// Referrer leakage: send origin only to same-origin destinations.
+		hdr.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		// Content Security Policy — granular per-source directives.
 		// TODO: Remove 'unsafe-inline' from style-src and migrate inline styles to nonce/hash-based CSP.
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'")
+		hdr.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'")
 
-		// Permissions Policy - disable unnecessary features
-		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+		// Permissions Policy — deny access to hardware APIs.
+		hdr.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 
-		// CORS: Use exact match whitelist to prevent bypass attacks
-		origin := r.Header.Get("Origin")
-		if allowedOrigins[origin] {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token, Authorization, X-Request-ID")
+		// CORS — exact-match allowlist prevents suffix-bypass attacks such as "evil-localhost.com".
+		if origin := r.Header.Get("Origin"); allowedOrigins[origin] {
+			hdr.Set("Access-Control-Allow-Origin", origin)
+			hdr.Set("Access-Control-Allow-Credentials", "true")
+			hdr.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			hdr.Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token, Authorization, X-Request-ID")
 		}
 
-		// Handle preflight requests
+		// Preflight requests terminate here; no further processing needed.
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -95,8 +96,10 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// MaxBodySize middleware limits the size of incoming request bodies.
-// This prevents denial of service attacks via large payloads.
+// MaxBodySize guards against denial-of-service via oversized request bodies.
+// Requests whose declared Content-Length exceeds maxBytes are rejected before
+// the body is read; all others are wrapped with http.MaxBytesReader to enforce
+// the limit during streaming reads.
 func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -503,25 +506,27 @@ func (ta *TokenAuth) authenticateSessionCookie(cookieValue string, key []byte) b
 	return true
 }
 
-// ExpensiveOperationLimiter provides stricter rate limiting for expensive operations.
-// It wraps the base per-client rate limiter with additional per-operation limits.
+// ExpensiveOperationLimiter enforces cooldown periods between heavyweight operations.
+// Prevents runaway rebuild loops by recording the last execution timestamp and
+// refusing new executions until the cooldown window elapses.
 type ExpensiveOperationLimiter struct {
-	// Track last execution time per operation type
-	lastRebuild     int64 // Unix timestamp
-	rebuildCooldown int64 // Minimum seconds between rebuilds
-
-	mu sync.Mutex
+	// lastRebuild holds the Unix timestamp of the most recent allowed rebuild.
+	lastRebuild int64
+	// rebuildCooldown is the minimum gap in seconds between successive rebuilds.
+	rebuildCooldown int64
+	mu              sync.Mutex
 }
 
-// NewExpensiveOperationLimiter creates a limiter for expensive operations.
+// NewExpensiveOperationLimiter returns a limiter with a 5-minute rebuild cooldown.
 func NewExpensiveOperationLimiter() *ExpensiveOperationLimiter {
 	return &ExpensiveOperationLimiter{
 		rebuildCooldown: 300, // 5 minutes between rebuilds
 	}
 }
 
-// CanRebuild checks if a vector rebuild operation is allowed.
-// Returns false if a rebuild was triggered too recently.
+// CanRebuild atomically checks whether a rebuild is permitted and, if so,
+// records the current time as the new last-rebuild timestamp.
+// Returns false when the cooldown window has not yet elapsed.
 func (eol *ExpensiveOperationLimiter) CanRebuild() bool {
 	eol.mu.Lock()
 	defer eol.mu.Unlock()
@@ -534,33 +539,31 @@ func (eol *ExpensiveOperationLimiter) CanRebuild() bool {
 	return true
 }
 
-// unixNow returns current Unix timestamp.
-// Separated for easier testing.
+// unixNow returns the current wall-clock time as a Unix timestamp.
+// Isolated into its own function to allow deterministic substitution in tests.
 func unixNow() int64 {
 	return time.Now().Unix()
 }
 
-// RequestID middleware adds a unique request ID to each request.
-// The ID is added to the context and response headers for tracing.
+// RequestID propagates a request correlation ID through the call chain.
+// Reuses any X-Request-ID the client sent; otherwise generates a fresh 8-byte
+// random hex ID. The ID is attached to both the response header and the
+// context so downstream handlers can include it in structured log fields.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check for existing request ID from client
-		requestID := r.Header.Get("X-Request-ID")
-		if requestID == "" {
-			// Generate new request ID
-			idBytes := make([]byte, 8)
-			if _, err := rand.Read(idBytes); err == nil {
-				requestID = hex.EncodeToString(idBytes)
+		id := r.Header.Get("X-Request-ID")
+		if id == "" {
+			buf := make([]byte, 8)
+			if _, err := rand.Read(buf); err == nil {
+				id = hex.EncodeToString(buf)
 			} else {
-				requestID = fmt.Sprintf("%d", time.Now().UnixNano())
+				// Fall back to nanosecond timestamp when crypto/rand fails.
+				id = fmt.Sprintf("%d", time.Now().UnixNano())
 			}
 		}
 
-		// Add to response header
-		w.Header().Set("X-Request-ID", requestID)
-
-		// Add to context
-		ctx := context.WithValue(r.Context(), requestIDKey{}, requestID)
+		w.Header().Set("X-Request-ID", id)
+		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -573,13 +576,13 @@ func GetRequestID(ctx context.Context) string {
 	return ""
 }
 
-// debugRequestLogger logs HTTP requests at DEBUG level using zerolog.
-// Replaces chi's middleware.Logger which uses Go's log package at INFO level.
-// This is a package-level helper; use Service.requestActivityMiddleware to also
-// stamp the per-service last-request timestamp for the sleep-cycle idle gate.
+// debugRequestLogger emits structured HTTP access logs at DEBUG level using zerolog.
+// Chi's built-in middleware.Logger uses the stdlib log package at INFO level, which
+// is too noisy for production deployments. Use Service.requestActivityMiddleware
+// instead when the per-service idle-gate timestamp also needs updating.
 func debugRequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+		started := time.Now()
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
 		log.Debug().
@@ -587,7 +590,7 @@ func debugRequestLogger(next http.Handler) http.Handler {
 			Str("path", r.URL.Path).
 			Int("status", ww.Status()).
 			Int("bytes", ww.BytesWritten()).
-			Dur("duration", time.Since(start)).
+			Dur("duration", time.Since(started)).
 			Str("from", r.RemoteAddr).
 			Msg("HTTP request")
 	})
@@ -618,14 +621,13 @@ func (s *Service) requestActivityMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RequireJSONContentType middleware validates that POST/PUT/PATCH requests
-// have application/json Content-Type header.
+// RequireJSONContentType rejects body-bearing requests (POST/PUT/PATCH) whose
+// Content-Type is not application/json. An empty Content-Type is allowed to
+// accommodate body-less usages of these methods.
 func RequireJSONContentType(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only check for methods that typically have bodies
 		if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" {
 			ct := r.Header.Get("Content-Type")
-			// Allow empty Content-Type for requests without body
 			if ct != "" && !strings.HasPrefix(ct, "application/json") {
 				http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 				return
@@ -635,24 +637,23 @@ func RequireJSONContentType(next http.Handler) http.Handler {
 	})
 }
 
-// ValidateProjectName checks if a project name is safe to use.
-// Returns an error if the name contains path traversal or invalid characters.
+// ValidateProjectName verifies that project is safe for use as a storage key.
+// An empty string is valid and signals "no project filter". Non-empty names
+// are checked for path-traversal sequences, character set conformance, and
+// maximum length.
 func ValidateProjectName(project string) error {
 	if project == "" {
-		return nil // Empty is allowed (means no filter)
+		return nil
 	}
 
-	// Check for path traversal
 	if strings.Contains(project, "..") {
 		return fmt.Errorf("invalid project name: path traversal detected")
 	}
 
-	// Check for valid characters
 	if !projectNamePattern.MatchString(project) {
 		return fmt.Errorf("invalid project name: only alphanumeric, underscore, dash, dot, and slash allowed")
 	}
 
-	// Max length check
 	if len(project) > 500 {
 		return fmt.Errorf("project name too long (max 500 chars)")
 	}
