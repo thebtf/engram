@@ -1,14 +1,21 @@
 #!/bin/bash
-# Engram - Uninstallation Script
-# Usage: curl -sSL https://raw.githubusercontent.com/thebtf/engram-plus/main/scripts/uninstall.sh | bash
+# engram uninstaller — macOS / Linux / Git-Bash
+#
+# Removes plugin files, cache, and Claude Code registry entries.
+# Optionally preserves the data directory (~/.engram/).
+#
+# Usage:
+#   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/uninstall.sh | bash
 #
 # Options:
-#   --keep-data    Keep the data directory (~/.engram/)
+#   --keep-data    Preserve ~/.engram/ (database, embeddings)
 #   --purge        Remove everything including data (default)
 
 set -e
 
-# Configuration
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
 INSTALL_DIR="$HOME/.claude/plugins/marketplaces/engram"
 CACHE_DIR="$HOME/.claude/plugins/cache/engram"
 DATA_DIR="$HOME/.engram"
@@ -17,52 +24,60 @@ SETTINGS_FILE="$HOME/.claude/settings.json"
 MARKETPLACES_FILE="$HOME/.claude/plugins/known_marketplaces.json"
 PLUGIN_KEY="engram@engram"
 
-# Colors for output
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
-# Parse arguments
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
 KEEP_DATA=false
 for arg in "$@"; do
-    case $arg in
-        --keep-data)
-            KEEP_DATA=true
-            ;;
-        --purge)
-            KEEP_DATA=false
-            ;;
+    case "$arg" in
+        --keep-data) KEEP_DATA=true  ;;
+        --purge)     KEEP_DATA=false ;;
     esac
 done
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║         Engram - Uninstallation Script           ║"
+echo "║         Engram - Uninstallation Script                   ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
 
-# Stop server
+# ---------------------------------------------------------------------------
+# Stop any running server process before removing files
+# ---------------------------------------------------------------------------
 info "Stopping server processes..."
 pkill -9 -f 'engram-server' 2>/dev/null || true
 pkill -9 -f '\.claude/plugins/.*/engram-server' 2>/dev/null || true
-# Kill process on port 37777 (use lsof on macOS, ss/fuser on Linux)
+
+# Port 37777 — use whichever tool is available
 if command -v lsof &> /dev/null; then
     lsof -ti :37777 | xargs kill -9 2>/dev/null || true
 elif command -v ss &> /dev/null; then
-    ss -tlnp 'sport = :37777' 2>/dev/null | awk 'NR>1 {print $6}' | grep -oP 'pid=\K[0-9]+' | xargs -r kill -9 2>/dev/null || true
+    ss -tlnp 'sport = :37777' 2>/dev/null \
+        | awk 'NR>1 {print $6}' \
+        | grep -oP 'pid=\K[0-9]+' \
+        | xargs -r kill -9 2>/dev/null || true
 elif command -v fuser &> /dev/null; then
     fuser -k 37777/tcp 2>/dev/null || true
 fi
 sleep 1
-success "Worker processes stopped"
+success "Server processes stopped"
 
-# Remove plugin directories
+# ---------------------------------------------------------------------------
+# Remove plugin and cache directories
+# ---------------------------------------------------------------------------
 info "Removing plugin directories..."
 if [[ -d "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
@@ -76,38 +91,59 @@ if [[ -d "$CACHE_DIR" ]]; then
     success "Removed $CACHE_DIR"
 fi
 
-# Remove from Claude Code configuration (if jq is available)
+# ---------------------------------------------------------------------------
+# Clean up Claude Code registry entries
+# ---------------------------------------------------------------------------
 if command -v jq &> /dev/null; then
     info "Cleaning up Claude Code configuration..."
 
     if [[ -f "$PLUGINS_FILE" ]]; then
-        jq 'del(.plugins["'"$PLUGIN_KEY"'"])' "$PLUGINS_FILE" > "${PLUGINS_FILE}.tmp" && mv "${PLUGINS_FILE}.tmp" "$PLUGINS_FILE"
+        jq 'del(.plugins["'"$PLUGIN_KEY"'"])' "$PLUGINS_FILE" \
+            > "${PLUGINS_FILE}.tmp" && mv "${PLUGINS_FILE}.tmp" "$PLUGINS_FILE"
         success "Removed from installed_plugins.json"
     fi
 
     if [[ -f "$SETTINGS_FILE" ]]; then
-        # Remove plugin from enabled plugins and remove statusline if it's ours
-        jq 'del(.enabledPlugins["'"$PLUGIN_KEY"'"]) | if .statusLine.command | test("engram") then del(.statusLine) else . end' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+        jq 'del(.enabledPlugins["'"$PLUGIN_KEY"'"]) |
+            if (.statusLine.command // "") | test("engram") then del(.statusLine) else . end' \
+            "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
+            && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
         success "Removed from settings.json (including statusline)"
     fi
 
     if [[ -f "$MARKETPLACES_FILE" ]]; then
-        jq 'del(.["engram"])' "$MARKETPLACES_FILE" > "${MARKETPLACES_FILE}.tmp" && mv "${MARKETPLACES_FILE}.tmp" "$MARKETPLACES_FILE"
+        jq 'del(.["engram"])' "$MARKETPLACES_FILE" \
+            > "${MARKETPLACES_FILE}.tmp" && mv "${MARKETPLACES_FILE}.tmp" "$MARKETPLACES_FILE"
         success "Removed from known_marketplaces.json"
     fi
 else
-    warn "jq not found - Claude Code configuration files were not cleaned up"
-    warn "You may need to manually remove engram entries from:"
+    warn "jq not found — configuration files not cleaned up"
+    warn "Remove engram entries manually from:"
     warn "  - $PLUGINS_FILE"
     warn "  - $SETTINGS_FILE"
     warn "  - $MARKETPLACES_FILE"
 fi
 
+# ---------------------------------------------------------------------------
+# Remove environment variables written to shell profiles by the installer
+# ---------------------------------------------------------------------------
+info "Removing Engram environment variables from shell profiles..."
+for _profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+    [[ -f "$_profile" ]] || continue
+    sed -i.bak '/^export ENGRAM_URL=/d'       "$_profile" 2>/dev/null || true
+    sed -i.bak '/^export ENGRAM_API_TOKEN=/d' "$_profile" 2>/dev/null || true
+    sed -i.bak '/^export ENGRAM_TOKEN=/d'     "$_profile" 2>/dev/null || true
+    rm -f "${_profile}.bak"
+    success "Cleaned up $_profile"
+done
+
+# ---------------------------------------------------------------------------
 # Handle data directory
+# ---------------------------------------------------------------------------
 if [[ -d "$DATA_DIR" ]]; then
     if [[ "$KEEP_DATA" == "true" ]]; then
         warn "Keeping data directory: $DATA_DIR"
-        warn "To remove it later, run: rm -rf $DATA_DIR"
+        warn "To remove it later: rm -rf $DATA_DIR"
     else
         info "Removing data directory..."
         rm -rf "$DATA_DIR"
@@ -117,7 +153,7 @@ fi
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║              Uninstallation Complete!                     ║"
+echo "║              Uninstallation Complete!                    ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
 

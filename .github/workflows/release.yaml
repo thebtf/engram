@@ -1,3 +1,12 @@
+# Build and publish a GitHub release using GoReleaser.
+#
+# Triggered by version tags (v*) and manual workflow_dispatch.
+# Uses the goreleaser-cross container so CGO builds work for all
+# published platform targets without a separate cross-compilation setup.
+#
+# Job names and step names are referenced by branch protection rules and
+# release automation — do not rename without updating those dependencies.
+
 name: Release
 
 on:
@@ -14,6 +23,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     container:
+      # goreleaser-cross bundles the CGO toolchains for all supported targets.
+      # The tag tracks the Go version used in go.mod.
       image: ghcr.io/goreleaser/goreleaser-cross:v1.25.7
     steps:
       - name: Install git-lfs
@@ -43,4 +54,3 @@ jobs:
         run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
