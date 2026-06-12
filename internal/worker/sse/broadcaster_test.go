@@ -2,544 +2,757 @@
 package sse
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
 )
 
-// BroadcasterSuite is a test suite for Broadcaster operations.
-type BroadcasterSuite struct {
-	suite.Suite
-	broadcaster *Broadcaster
+// ---------------------------------------------------------------------------
+// Test doubles
+// ---------------------------------------------------------------------------
+
+// recWriter records bytes written and implements http.Flusher.
+// Used in place of a real ResponseWriter for unit tests.
+type recWriter struct {
+	mu     sync.Mutex
+	hdr    http.Header
+	status int
+	buf    []byte
 }
 
-func (s *BroadcasterSuite) SetupTest() {
-	s.broadcaster = NewBroadcaster()
+func newRecWriter() *recWriter {
+	return &recWriter{hdr: make(http.Header), status: http.StatusOK}
 }
 
-func TestBroadcasterSuite(t *testing.T) {
-	suite.Run(t, new(BroadcasterSuite))
+func (r *recWriter) Header() http.Header                { return r.hdr }
+func (r *recWriter) WriteHeader(code int)               { r.status = code }
+func (r *recWriter) Flush()                             {} // no-op: satisfies http.Flusher
+func (r *recWriter) Write(b []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf = append(r.buf, b...)
+	return len(b), nil
+}
+func (r *recWriter) body() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return string(r.buf)
 }
 
-// TestNewBroadcaster tests broadcaster creation.
-func (s *BroadcasterSuite) TestNewBroadcaster() {
-	b := NewBroadcaster()
-	s.NotNil(b)
-	s.NotNil(b.clients)
-	s.Equal(0, b.ClientCount())
+// failWriter returns an error on every Write call.
+type failWriter struct{ hdr http.Header }
+
+func newFailWriter() *failWriter { return &failWriter{hdr: make(http.Header)} }
+func (f *failWriter) Header() http.Header { return f.hdr }
+func (f *failWriter) WriteHeader(int)     {}
+func (f *failWriter) Flush()              {}
+func (f *failWriter) Write([]byte) (int, error) {
+	return 0, fmt.Errorf("simulated write error")
 }
 
-// TestClientCount tests client counting.
-func (s *BroadcasterSuite) TestClientCount() {
-	s.Equal(0, s.broadcaster.ClientCount())
+// blockWriter blocks Write for the given duration (simulates slow/stale connection).
+type blockWriter struct {
+	mu      sync.Mutex
+	hdr     http.Header
+	blockMS int
+	written atomic.Int32
 }
 
-// mockResponseWriter implements http.ResponseWriter and http.Flusher for testing.
-type mockResponseWriter struct {
-	header     http.Header
-	body       []byte
-	statusCode int
-	mu         sync.Mutex
+func newBlockWriter(blockMS int) *blockWriter {
+	return &blockWriter{hdr: make(http.Header), blockMS: blockMS}
 }
-
-func newMockResponseWriter() *mockResponseWriter {
-	return &mockResponseWriter{
-		header:     make(http.Header),
-		statusCode: http.StatusOK,
-	}
-}
-
-func (m *mockResponseWriter) Header() http.Header {
-	return m.header
-}
-
-func (m *mockResponseWriter) Write(data []byte) (int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.body = append(m.body, data...)
+func (b *blockWriter) Header() http.Header { return b.hdr }
+func (b *blockWriter) WriteHeader(int)     {}
+func (b *blockWriter) Flush()              {}
+func (b *blockWriter) Write(data []byte) (int, error) {
+	time.Sleep(time.Duration(b.blockMS) * time.Millisecond)
+	b.written.Add(int32(len(data)))
 	return len(data), nil
 }
 
-func (m *mockResponseWriter) WriteHeader(statusCode int) {
-	m.statusCode = statusCode
-}
+// plainWriter implements ResponseWriter but NOT http.Flusher.
+// Used to test the "streaming not supported" error path.
+type plainWriter struct{ hdr http.Header }
 
-func (m *mockResponseWriter) Flush() {
-	// No-op for testing
-}
+func (p *plainWriter) Header() http.Header            { return p.hdr }
+func (p *plainWriter) Write(b []byte) (int, error)    { return len(b), nil }
+func (p *plainWriter) WriteHeader(int)                {}
 
-func (m *mockResponseWriter) GetBody() []byte {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.body
-}
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
 
-// TestAddClient tests adding clients.
-func (s *BroadcasterSuite) TestAddClient() {
-	w := newMockResponseWriter()
-
-	client, err := s.broadcaster.AddClient(w)
-	s.NoError(err)
-	s.NotNil(client)
-	s.NotEmpty(client.ID)
-	s.NotNil(client.Done)
-	s.Equal(1, s.broadcaster.ClientCount())
-}
-
-// TestAddMultipleClients tests adding multiple clients.
-func (s *BroadcasterSuite) TestAddMultipleClients() {
-	for i := 0; i < 5; i++ {
-		w := newMockResponseWriter()
-		_, err := s.broadcaster.AddClient(w)
-		s.NoError(err)
+func TestNewBroadcaster_InitialState(t *testing.T) {
+	b := NewBroadcaster()
+	if b == nil {
+		t.Fatal("NewBroadcaster returned nil")
 	}
-
-	s.Equal(5, s.broadcaster.ClientCount())
+	if b.clients == nil {
+		t.Fatal("clients map must be initialised")
+	}
+	if n := b.ClientCount(); n != 0 {
+		t.Fatalf("expected 0 clients, got %d", n)
+	}
 }
 
-// TestRemoveClient tests removing clients.
-func (s *BroadcasterSuite) TestRemoveClient() {
-	w := newMockResponseWriter()
-	client, err := s.broadcaster.AddClient(w)
-	s.NoError(err)
+// ---------------------------------------------------------------------------
+// AddClient
+// ---------------------------------------------------------------------------
 
-	s.Equal(1, s.broadcaster.ClientCount())
+func TestAddClient_RequiresFlusher(t *testing.T) {
+	b := NewBroadcaster()
+	p := &plainWriter{hdr: make(http.Header)}
+	_, err := b.AddClient(p)
+	if err == nil {
+		t.Fatal("expected error for non-Flusher writer")
+	}
+	if b.ClientCount() != 0 {
+		t.Fatalf("no client should be registered on error, got %d", b.ClientCount())
+	}
+}
 
-	s.broadcaster.RemoveClient(client)
+func TestAddClient_AssignsUniqueSequentialIDs(t *testing.T) {
+	b := NewBroadcaster()
+	seen := make(map[string]struct{})
+	for i := 0; i < 20; i++ {
+		c, err := b.AddClient(newRecWriter())
+		if err != nil {
+			t.Fatalf("AddClient failed: %v", err)
+		}
+		if c.ID == "" {
+			t.Fatal("empty client ID")
+		}
+		if _, dup := seen[c.ID]; dup {
+			t.Fatalf("duplicate ID: %s", c.ID)
+		}
+		seen[c.ID] = struct{}{}
+	}
+	if b.ClientCount() != 20 {
+		t.Fatalf("expected 20 clients, got %d", b.ClientCount())
+	}
+}
 
-	s.Equal(0, s.broadcaster.ClientCount())
-
-	// Check that Done channel is closed
+func TestAddClient_ClientStructFields(t *testing.T) {
+	b := NewBroadcaster()
+	w := newRecWriter()
+	c, err := b.AddClient(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Writer == nil {
+		t.Error("Writer must be set")
+	}
+	if c.Flusher == nil {
+		t.Error("Flusher must be set")
+	}
+	if c.Done == nil {
+		t.Error("Done channel must be non-nil")
+	}
+	// Done channel must not be closed yet
 	select {
-	case <-client.Done:
-		// Expected - channel is closed
+	case <-c.Done:
+		t.Error("Done channel must be open after AddClient")
 	default:
-		s.Fail("Done channel should be closed")
 	}
 }
 
-// TestBroadcast tests broadcasting messages.
-func (s *BroadcasterSuite) TestBroadcast() {
-	w := newMockResponseWriter()
-	_, err := s.broadcaster.AddClient(w)
-	s.NoError(err)
+// ---------------------------------------------------------------------------
+// RemoveClient
+// ---------------------------------------------------------------------------
 
-	// Broadcast a message
-	s.broadcaster.Broadcast(map[string]string{"type": "test", "message": "hello"})
+func TestRemoveClient_DecrementsCount(t *testing.T) {
+	b := NewBroadcaster()
+	c, _ := b.AddClient(newRecWriter())
+	if b.ClientCount() != 1 {
+		t.Fatal("expected 1 client after add")
+	}
+	b.RemoveClient(c)
+	if b.ClientCount() != 0 {
+		t.Fatalf("expected 0 after remove, got %d", b.ClientCount())
+	}
+}
 
-	// Give time for async write
+func TestRemoveClient_ClosesDoneChannel(t *testing.T) {
+	b := NewBroadcaster()
+	c, _ := b.AddClient(newRecWriter())
+	b.RemoveClient(c)
+	select {
+	case <-c.Done:
+		// correct: channel closed
+	default:
+		t.Error("Done channel must be closed by RemoveClient")
+	}
+}
+
+func TestRemoveClient_UnregisteredClientClosesItsDone(t *testing.T) {
+	b := NewBroadcaster()
+	// Client that was never registered via AddClient
+	phantom := &Client{ID: "phantom", Done: make(chan struct{})}
+	b.RemoveClient(phantom) // must not panic
+	select {
+	case <-phantom.Done:
+		// correct
+	default:
+		t.Error("Done channel must be closed even for unregistered clients")
+	}
+	if b.ClientCount() != 0 {
+		t.Fatalf("count must stay 0, got %d", b.ClientCount())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// removeClientByID
+// ---------------------------------------------------------------------------
+
+func TestRemoveClientByID_RemovesRegistered(t *testing.T) {
+	b := NewBroadcaster()
+	c, _ := b.AddClient(newRecWriter())
+	b.removeClientByID(c.ID)
+	if b.ClientCount() != 0 {
+		t.Fatalf("expected 0, got %d", b.ClientCount())
+	}
+	select {
+	case <-c.Done:
+	default:
+		t.Error("Done channel must be closed")
+	}
+}
+
+func TestRemoveClientByID_AlreadyClosedDone_NoPanic(t *testing.T) {
+	b := NewBroadcaster()
+	c, _ := b.AddClient(newRecWriter())
+	close(c.Done) // pre-close
+	b.removeClientByID(c.ID) // must not panic (double-close guard)
+	if b.ClientCount() != 0 {
+		t.Fatalf("expected 0, got %d", b.ClientCount())
+	}
+}
+
+func TestRemoveClientByID_NonExistentID_NoPanic(t *testing.T) {
+	b := NewBroadcaster()
+	b.removeClientByID("no-such-id") // must not panic
+}
+
+// ---------------------------------------------------------------------------
+// Broadcast
+// ---------------------------------------------------------------------------
+
+func TestBroadcast_EmitsDataFrameFormat(t *testing.T) {
+	b := NewBroadcaster()
+	w := newRecWriter()
+	_, err := b.AddClient(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := map[string]string{"event": "ping"}
+	b.Broadcast(payload)
+
+	// Broadcast writes are concurrent; wait briefly
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if strings.HasPrefix(w.body(), "data: ") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	body := w.body()
+	if !strings.HasPrefix(body, "data: ") {
+		t.Fatalf("expected SSE data: prefix, got %q", body)
+	}
+	if !strings.HasSuffix(body, "\n\n") {
+		t.Fatalf("expected double newline terminator, got %q", body)
+	}
+
+	// Payload must be valid JSON embedded in the frame
+	raw := strings.TrimPrefix(body, "data: ")
+	raw = strings.TrimSuffix(raw, "\n\n")
+	var got map[string]string
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("frame payload not valid JSON: %v", err)
+	}
+	if got["event"] != "ping" {
+		t.Errorf("unexpected payload: %v", got)
+	}
+}
+
+func TestBroadcast_NoClientsDoesNotPanic(t *testing.T) {
+	b := NewBroadcaster()
+	b.Broadcast(map[string]string{"k": "v"}) // must not panic or block
+}
+
+func TestBroadcast_DeliverToAllClients(t *testing.T) {
+	b := NewBroadcaster()
+	const n = 5
+	writers := make([]*recWriter, n)
+	for i := range writers {
+		writers[i] = newRecWriter()
+		b.AddClient(writers[i]) //nolint:errcheck
+	}
+
+	b.Broadcast(map[string]int{"seq": 1})
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		ready := 0
+		for _, w := range writers {
+			if strings.Contains(w.body(), "data:") {
+				ready++
+			}
+		}
+		if ready == n {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	for i, w := range writers {
+		if !strings.Contains(w.body(), "data:") {
+			t.Errorf("client %d did not receive broadcast", i)
+		}
+	}
+}
+
+func TestBroadcast_SkipsClosedDoneClients(t *testing.T) {
+	b := NewBroadcaster()
+	w := newRecWriter()
+	c, _ := b.AddClient(w)
+
+	// Signal the client is gone before broadcast
+	close(c.Done)
+
+	b.Broadcast(map[string]string{"type": "ignored"})
 	time.Sleep(50 * time.Millisecond)
 
-	body := string(w.GetBody())
-	s.Contains(body, "data:")
-	s.Contains(body, "test")
-	s.Contains(body, "hello")
-}
-
-// TestBroadcastNoClients tests broadcasting with no clients.
-func (s *BroadcasterSuite) TestBroadcastNoClients() {
-	// Should not panic
-	s.broadcaster.Broadcast(map[string]string{"type": "test"})
-}
-
-// TestBroadcastMultipleClients tests broadcasting to multiple clients.
-func (s *BroadcasterSuite) TestBroadcastMultipleClients() {
-	writers := make([]*mockResponseWriter, 3)
-	for i := 0; i < 3; i++ {
-		writers[i] = newMockResponseWriter()
-		_, err := s.broadcaster.AddClient(writers[i])
-		s.NoError(err)
-	}
-
-	// Broadcast
-	s.broadcaster.Broadcast(map[string]string{"type": "test"})
-
-	// Give time for async writes
-	time.Sleep(100 * time.Millisecond)
-
-	// All clients should receive the message
-	for i, w := range writers {
-		body := string(w.GetBody())
-		s.Contains(body, "data:", "Client %d should receive data", i)
+	// The writer must have received nothing (client was skipped)
+	if body := w.body(); body != "" {
+		t.Errorf("disconnected client should receive nothing, got %q", body)
 	}
 }
 
-// TestClient tests Client structure.
-func TestClient(t *testing.T) {
-	w := newMockResponseWriter()
-	client := &Client{
-		ID:      "test-client",
-		Writer:  w,
-		Flusher: w,
-		Done:    make(chan struct{}),
-	}
-
-	assert.Equal(t, "test-client", client.ID)
-	assert.NotNil(t, client.Writer)
-	assert.NotNil(t, client.Flusher)
-	assert.NotNil(t, client.Done)
-
-	// Close done channel
-	close(client.Done)
-
-	select {
-	case <-client.Done:
-		// Expected
-	default:
-		t.Error("Done channel should be closed")
-	}
-}
-
-// TestClientUniqueIDs tests that clients get unique IDs.
-func TestClientUniqueIDs(t *testing.T) {
+func TestBroadcast_WriterError_ClientMarkedDead(t *testing.T) {
 	b := NewBroadcaster()
-	ids := make(map[string]bool)
-
-	for i := 0; i < 100; i++ {
-		w := newMockResponseWriter()
-		client, err := b.AddClient(w)
-		require.NoError(t, err)
-
-		// ID should be unique
-		assert.False(t, ids[client.ID], "ID %s should be unique", client.ID)
-		ids[client.ID] = true
+	fw := newFailWriter()
+	c, err := b.AddClient(fw)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
 
-// TestWriteTimeout tests the write timeout constant.
-func TestWriteTimeout(t *testing.T) {
-	assert.Equal(t, 2*time.Second, WriteTimeout)
-}
+	b.Broadcast(map[string]string{"k": "v"})
 
-// TestHandleSSE tests the HandleSSE HTTP handler.
-func TestHandleSSE(t *testing.T) {
-	b := NewBroadcaster()
-
-	// Create a test server
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Set up context that will be cancelled
-		ctx := r.Context()
-
-		// Start goroutine to cancel context after short delay
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			// Request will be cancelled by the test client
-		}()
-
-		// This will block until context is cancelled
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(100 * time.Millisecond):
-			return
+	// After broadcast completes the dead client must be removed
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if b.ClientCount() == 0 {
+			break
 		}
-	})
-
-	_ = handler
-	_ = b
-
-	// Just verify the handler exists and broadcaster can handle SSE
-	req := httptest.NewRequest(http.MethodGet, "/events", nil)
-	rec := httptest.NewRecorder()
-
-	// Can't easily test HandleSSE since it blocks, but we can verify setup
-	assert.NotNil(t, req)
-	assert.NotNil(t, rec)
-}
-
-// TestBroadcastJSON tests broadcasting various JSON types.
-func TestBroadcastJSON(t *testing.T) {
-	tests := []struct {
-		data    interface{}
-		name    string
-		wantErr bool
-	}{
-		{
-			name:    "string map",
-			data:    map[string]string{"key": "value"},
-			wantErr: false,
-		},
-		{
-			name:    "int map",
-			data:    map[string]int{"count": 42},
-			wantErr: false,
-		},
-		{
-			name:    "nested struct",
-			data:    struct{ Name string }{Name: "test"},
-			wantErr: false,
-		},
-		{
-			name:    "array",
-			data:    []string{"a", "b", "c"},
-			wantErr: false,
-		},
-		{
-			name:    "interface map",
-			data:    map[string]interface{}{"type": "test", "count": 1, "active": true},
-			wantErr: false,
-		},
+		time.Sleep(10 * time.Millisecond)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			b := NewBroadcaster()
-			w := newMockResponseWriter()
-			_, err := b.AddClient(w)
-			require.NoError(t, err)
-
-			// Should not panic
-			b.Broadcast(tt.data)
-
-			time.Sleep(50 * time.Millisecond)
-
-			body := string(w.GetBody())
-			assert.Contains(t, body, "data:")
-		})
+	if b.ClientCount() != 0 {
+		t.Errorf("expected dead client to be removed, count=%d", b.ClientCount())
 	}
-}
-
-// TestConcurrentBroadcast tests concurrent broadcasting.
-func TestConcurrentBroadcast(t *testing.T) {
-	b := NewBroadcaster()
-
-	// Add clients
-	for i := 0; i < 10; i++ {
-		w := newMockResponseWriter()
-		_, err := b.AddClient(w)
-		require.NoError(t, err)
-	}
-
-	// Broadcast concurrently
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			b.Broadcast(map[string]int{"index": i})
-		}(i)
-	}
-
-	wg.Wait()
-
-	// Should complete without panics
-	assert.Equal(t, 10, b.ClientCount())
-}
-
-// TestRemoveNonExistentClient tests removing a non-existent client.
-func TestRemoveNonExistentClient(t *testing.T) {
-	b := NewBroadcaster()
-
-	// Create a client but don't add it
-	client := &Client{
-		ID:   "fake-client",
-		Done: make(chan struct{}),
-	}
-
-	// Should not panic
-	b.RemoveClient(client)
-
-	// Done channel should be closed
+	// Done channel should have been closed by removeClientByID
 	select {
-	case <-client.Done:
-		// Expected
+	case <-c.Done:
 	default:
-		t.Error("Done channel should be closed")
+		t.Error("dead client's Done channel should be closed")
 	}
 }
 
-// TestBroadcasterConcurrentAddRemove tests concurrent add/remove operations.
-func TestBroadcasterConcurrentAddRemove(t *testing.T) {
+func TestBroadcast_UnmarshalableData_NoSend(t *testing.T) {
+	b := NewBroadcaster()
+	w := newRecWriter()
+	b.AddClient(w) //nolint:errcheck
+
+	// Channels cannot be JSON-marshalled; Broadcast should log and return, no data written
+	ch := make(chan int)
+	b.Broadcast(ch)
+	time.Sleep(30 * time.Millisecond)
+
+	if body := w.body(); body != "" {
+		t.Errorf("unmarshalable data must not produce output, got %q", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// writeToClient
+// ---------------------------------------------------------------------------
+
+func TestWriteToClient_SuccessDelivery(t *testing.T) {
+	b := NewBroadcaster()
+	w := newRecWriter()
+	c, _ := b.AddClient(w)
+
+	deadCh := make(chan string, 1)
+	b.writeToClient(c, "data: hello\n\n", deadCh, nil)
+
+	// No dead client should be reported
+	select {
+	case id := <-deadCh:
+		t.Errorf("healthy client marked dead: %s", id)
+	default:
+	}
+	if !strings.Contains(w.body(), "hello") {
+		t.Errorf("write not delivered, body=%q", w.body())
+	}
+}
+
+func TestWriteToClient_WriteError_ReportsDead(t *testing.T) {
+	b := NewBroadcaster()
+	fw := newFailWriter()
+	c, _ := b.AddClient(fw)
+
+	deadCh := make(chan string, 1)
+	b.writeToClient(c, "data: x\n\n", deadCh, nil)
+
+	select {
+	case id := <-deadCh:
+		if id != c.ID {
+			t.Errorf("expected %s, got %s", c.ID, id)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("expected dead-client report, got none")
+	}
+}
+
+func TestWriteToClient_Timeout_ReportsDead(t *testing.T) {
+	// The block writer will block longer than WriteTimeout (2s).
+	// We use a duration > WriteTimeout to ensure the timeout path fires.
+	b := NewBroadcaster()
+	bw := newBlockWriter(int((WriteTimeout + 500*time.Millisecond).Milliseconds()))
+	c, _ := b.AddClient(bw)
+
+	deadCh := make(chan string, 1)
+
+	start := time.Now()
+	b.writeToClient(c, "data: slow\n\n", deadCh, nil)
+	elapsed := time.Since(start)
+
+	// writeToClient should return after ~WriteTimeout (not blockFor)
+	if elapsed > WriteTimeout+time.Second {
+		t.Errorf("writeToClient took too long: %v (expected ~%v)", elapsed, WriteTimeout)
+	}
+
+	select {
+	case id := <-deadCh:
+		if id != c.ID {
+			t.Errorf("expected %s, got %s", c.ID, id)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("expected dead-client report for timed-out write")
+	}
+}
+
+func TestWriteToClient_DoneClosedDuringWrite_NoPanic(t *testing.T) {
+	b := NewBroadcaster()
+	bw := newBlockWriter(int((WriteTimeout + 500*time.Millisecond).Milliseconds()))
+	c, _ := b.AddClient(bw)
+
+	// Close Done while write is in progress
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		b.RemoveClient(c)
+	}()
+
+	deadCh := make(chan string, 2)
+	var wg sync.WaitGroup
+	// must not panic; pass wg so the test can join the inner goroutine
+	b.writeToClient(c, "data: race\n\n", deadCh, &wg)
+	// Join the inner goroutine before the test returns so the blockWriter's
+	// fake ResponseWriter is not used after the test completes. Production
+	// Broadcast does not join it — deadClientsCh is buffered and never closed,
+	// so a late send is safe.
+	wg.Wait()
+}
+
+// TestBroadcast_NoPanicOnSlowClientDoneClose verifies that Broadcast does not
+// panic with "send on closed channel" when a client's Done channel is closed
+// while the background write goroutine is still holding WriteMu. This is the
+// real scenario the CRIT finding described: writeToClient returns (via the
+// client.Done case) before the inner goroutine finishes, and the still-running
+// inner goroutine later sends its dead-client report. The fix — a buffered,
+// never-closed deadClientsCh sized for every possible send — is exercised on
+// the real Broadcast code path here.
+func TestBroadcast_NoPanicOnSlowClientDoneClose(t *testing.T) {
+	b := NewBroadcaster()
+	// blockWriter with a duration longer than WriteTimeout so the inner goroutine
+	// outlives writeToClient's select — the real race condition scenario.
+	bw := newBlockWriter(int((WriteTimeout + 200*time.Millisecond).Milliseconds()))
+	c, _ := b.AddClient(bw)
+
+	// Remove the client very shortly after Broadcast starts — this triggers the
+	// client.Done case inside writeToClient while the inner goroutine is blocked.
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		b.RemoveClient(c)
+	}()
+
+	// Broadcast must complete without panicking. Run under race detector (go test
+	// -race) to catch any residual data races.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b.Broadcast(map[string]string{"type": "test"})
+	}()
+
+	select {
+	case <-done:
+		// success — no panic
+	case <-time.After(WriteTimeout + 2*time.Second):
+		t.Fatal("Broadcast did not return within expected time")
+	}
+}
+
+// TestBroadcast_ReturnsWithinTimeoutOnWedgedClient verifies the codex P1
+// finding: a client whose Write blocks far past WriteTimeout must NOT stall
+// Broadcast — Broadcast returns after ~WriteTimeout because it does not join
+// the inner write goroutines.
+func TestBroadcast_ReturnsWithinTimeoutOnWedgedClient(t *testing.T) {
+	b := NewBroadcaster()
+	// Wedged client: blocks 3x WriteTimeout.
+	bw := newBlockWriter(int((3 * WriteTimeout).Milliseconds()))
+	wedged, _ := b.AddClient(bw)
+
+	start := time.Now()
+	b.Broadcast(map[string]string{"type": "test"})
+	elapsed := time.Since(start)
+
+	// Broadcast must return after ~WriteTimeout, not after the wedged Write.
+	if elapsed > WriteTimeout+time.Second {
+		t.Fatalf("Broadcast blocked on wedged client: %v (expected ~%v)", elapsed, WriteTimeout)
+	}
+
+	// The wedged client must have been reported dead and removed.
+	b.mu.RLock()
+	_, stillThere := b.clients[wedged.ID]
+	b.mu.RUnlock()
+	if stillThere {
+		t.Error("wedged client should have been removed after timeout")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ClientCount
+// ---------------------------------------------------------------------------
+
+func TestClientCount_ReflectsAddRemove(t *testing.T) {
+	b := NewBroadcaster()
+
+	if b.ClientCount() != 0 {
+		t.Fatal("initial count must be 0")
+	}
+
+	var clients []*Client
+	for i := 0; i < 8; i++ {
+		c, _ := b.AddClient(newRecWriter())
+		clients = append(clients, c)
+	}
+	if n := b.ClientCount(); n != 8 {
+		t.Fatalf("expected 8, got %d", n)
+	}
+
+	for _, c := range clients[:4] {
+		b.RemoveClient(c)
+	}
+	if n := b.ClientCount(); n != 4 {
+		t.Fatalf("expected 4, got %d", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency safety
+// ---------------------------------------------------------------------------
+
+func TestConcurrency_ConcurrentAddBroadcastRemove(t *testing.T) {
 	b := NewBroadcaster()
 	var wg sync.WaitGroup
 
 	// Concurrent adds
-	for i := 0; i < 50; i++ {
+	const adders = 20
+	clients := make(chan *Client, adders)
+	for i := 0; i < adders; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			w := newMockResponseWriter()
-			client, err := b.AddClient(w)
+			c, err := b.AddClient(newRecWriter())
 			if err == nil {
-				// Random chance to remove
-				if time.Now().UnixNano()%2 == 0 {
-					b.RemoveClient(client)
-				}
+				clients <- c
 			}
 		}()
 	}
 
+	// Concurrent broadcasts
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			b.Broadcast(map[string]int{"i": i})
+		}(i)
+	}
+
 	wg.Wait()
+	close(clients)
 
-	// Should not panic and have some clients
-	count := b.ClientCount()
-	assert.GreaterOrEqual(t, count, 0)
-}
+	// Concurrent removes
+	var wg2 sync.WaitGroup
+	for c := range clients {
+		c := c
+		wg2.Add(1)
+		go func() {
+			defer wg2.Done()
+			b.RemoveClient(c)
+		}()
+	}
+	wg2.Wait()
 
-// TestRemoveClientByID tests removing a client by ID.
-func TestRemoveClientByID(t *testing.T) {
-	b := NewBroadcaster()
-	w := newMockResponseWriter()
-
-	client, err := b.AddClient(w)
-	require.NoError(t, err)
-	assert.Equal(t, 1, b.ClientCount())
-
-	// Remove by ID
-	b.removeClientByID(client.ID)
-	assert.Equal(t, 0, b.ClientCount())
-
-	// Done channel should be closed
-	select {
-	case <-client.Done:
-		// Expected
-	default:
-		t.Error("Done channel should be closed")
+	// Race detector validates no data races; count may vary
+	if n := b.ClientCount(); n < 0 {
+		t.Fatalf("negative count: %d", n)
 	}
 }
 
-// TestRemoveClientByID_NonExistent tests removing a non-existent client by ID.
-func TestRemoveClientByID_NonExistent(t *testing.T) {
+func TestConcurrency_ConcurrentRemoveClientByID(t *testing.T) {
 	b := NewBroadcaster()
+	c, _ := b.AddClient(newRecWriter())
 
-	// Should not panic
-	b.removeClientByID("non-existent-id")
-	assert.Equal(t, 0, b.ClientCount())
+	// Two goroutines racing to remove the same client by ID
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.removeClientByID(c.ID)
+		}()
+	}
+	wg.Wait() // must not panic (double-close guard in removeClientByID)
 }
 
-// TestRemoveClientByID_AlreadyClosed tests removing a client with already closed Done channel.
-func TestRemoveClientByID_AlreadyClosed(t *testing.T) {
-	b := NewBroadcaster()
-	w := newMockResponseWriter()
+// ---------------------------------------------------------------------------
+// WriteTimeout constant
+// ---------------------------------------------------------------------------
 
-	client, err := b.AddClient(w)
-	require.NoError(t, err)
-
-	// Pre-close the Done channel
-	close(client.Done)
-
-	// Should not panic when trying to close again
-	b.removeClientByID(client.ID)
-	assert.Equal(t, 0, b.ClientCount())
+func TestWriteTimeoutValue(t *testing.T) {
+	if WriteTimeout != 2*time.Second {
+		t.Errorf("expected 2s WriteTimeout, got %v", WriteTimeout)
+	}
 }
 
-// TestHandleSSE_NonFlusher tests HandleSSE with a non-flusher response writer.
-func TestHandleSSE_NonFlusher(t *testing.T) {
+// ---------------------------------------------------------------------------
+// KeepaliveInterval constant
+// ---------------------------------------------------------------------------
+
+func TestKeepaliveIntervalValue(t *testing.T) {
+	if KeepaliveInterval != 25*time.Second {
+		t.Errorf("expected 25s KeepaliveInterval, got %v", KeepaliveInterval)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleSSE
+// ---------------------------------------------------------------------------
+
+func TestHandleSSE_RequiresFlusher_Returns500(t *testing.T) {
 	b := NewBroadcaster()
-
-	// Create a response writer that doesn't implement Flusher
-	nonFlusher := &nonFlusherWriter{header: make(http.Header)}
-
+	p := &plainWriter{hdr: make(http.Header)}
 	req := httptest.NewRequest(http.MethodGet, "/events", nil)
-
-	// Should return immediately since writer isn't a Flusher
-	b.HandleSSE(nonFlusher, req)
-
-	// No clients should be added
-	assert.Equal(t, 0, b.ClientCount())
-}
-
-// nonFlusherWriter is a response writer that doesn't implement http.Flusher.
-type nonFlusherWriter struct {
-	header http.Header
-}
-
-func (w *nonFlusherWriter) Header() http.Header            { return w.header }
-func (w *nonFlusherWriter) Write(data []byte) (int, error) { return len(data), nil }
-func (w *nonFlusherWriter) WriteHeader(statusCode int)     {}
-
-// TestWriteToClient_Timeout tests write timeout behavior.
-func TestWriteToClient_Timeout(t *testing.T) {
-	b := NewBroadcaster()
-
-	// Create a slow writer that blocks
-	slowWriter := &slowMockWriter{
-		header:   make(http.Header),
-		blockFor: 5 * time.Second, // Longer than WriteTimeout
-	}
-
-	client, err := b.AddClient(slowWriter)
-	require.NoError(t, err)
-
-	// Create dead client channel
-	deadCh := make(chan string, 1)
-
-	// Try to write - should timeout
-	msg := "data: test\n\n"
-	b.writeToClient(client, msg, deadCh)
-
-	// May report dead client due to timeout
-	// Check if client was reported as dead (with timeout)
-	select {
-	case deadID := <-deadCh:
-		// Client was reported as dead
-		assert.Equal(t, client.ID, deadID)
-	case <-time.After(WriteTimeout + 500*time.Millisecond):
-		// Timed out waiting - also acceptable
+	b.HandleSSE(p, req)
+	// Non-flusher: AddClient returns error → http.Error with 500 is written
+	// plainWriter ignores status, so we just verify no client was added
+	if b.ClientCount() != 0 {
+		t.Errorf("no client should be registered for non-Flusher, got %d", b.ClientCount())
 	}
 }
 
-// slowMockWriter simulates a slow writer for testing timeouts.
-type slowMockWriter struct {
-	header   http.Header
-	blockFor time.Duration
-	mu       sync.Mutex
-}
-
-func (m *slowMockWriter) Header() http.Header {
-	return m.header
-}
-
-func (m *slowMockWriter) Write(data []byte) (int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	time.Sleep(m.blockFor)
-	return len(data), nil
-}
-
-func (m *slowMockWriter) WriteHeader(statusCode int) {}
-
-func (m *slowMockWriter) Flush() {}
-
-// TestBroadcast_InvalidJSON tests broadcasting un-marshalable data.
-func TestBroadcast_InvalidJSON(t *testing.T) {
+func TestHandleSSE_SetsSSEHeaders(t *testing.T) {
 	b := NewBroadcaster()
-	w := newMockResponseWriter()
-	_, err := b.AddClient(w)
-	require.NoError(t, err)
+	srv := httptest.NewServer(http.HandlerFunc(b.HandleSSE))
+	defer srv.Close()
 
-	// channels can't be marshaled to JSON
-	ch := make(chan int)
-	b.Broadcast(ch) // Should log error but not panic
+	resp, err := http.Get(srv.URL) //nolint:noctx
+	if err != nil {
+		t.Fatalf("HTTP GET failed: %v", err)
+	}
+	defer resp.Body.Close()
 
-	// Give time for async processing
-	time.Sleep(20 * time.Millisecond)
-
-	// Body should be empty or not contain the channel data
-	body := string(w.GetBody())
-	assert.NotContains(t, body, "chan")
+	checks := map[string]string{
+		"Content-Type":      "text/event-stream",
+		"Cache-Control":     "no-cache",
+		"Connection":        "keep-alive",
+		"X-Accel-Buffering": "no",
+	}
+	for k, want := range checks {
+		if got := resp.Header.Get(k); got != want {
+			t.Errorf("header %s: got %q, want %q", k, got, want)
+		}
+	}
 }
 
-// TestBroadcast_ClientDoneChannel tests broadcasting when client Done is closed.
-func TestBroadcast_ClientDoneChannel(t *testing.T) {
+func TestHandleSSE_SendsConnectedMessage(t *testing.T) {
 	b := NewBroadcaster()
-	w := newMockResponseWriter()
+	srv := httptest.NewServer(http.HandlerFunc(b.HandleSSE))
+	defer srv.Close()
 
-	client, err := b.AddClient(w)
-	require.NoError(t, err)
+	resp, err := http.Get(srv.URL) //nolint:noctx
+	if err != nil {
+		t.Fatalf("HTTP GET failed: %v", err)
+	}
+	defer resp.Body.Close()
 
-	// Close the done channel
-	close(client.Done)
+	// Read just enough bytes to capture the initial connected frame
+	buf := make([]byte, 256)
+	n, _ := resp.Body.Read(buf)
+	body := string(buf[:n])
 
-	// Broadcast should skip this client
-	b.Broadcast(map[string]string{"type": "test"})
+	if !strings.Contains(body, `"type":"connected"`) {
+		t.Errorf("expected connected message, got %q", body)
+	}
+	if !strings.Contains(body, `"clientId"`) {
+		t.Errorf("expected clientId in connected message, got %q", body)
+	}
+}
 
-	// Give time for async processing
-	time.Sleep(20 * time.Millisecond)
+func TestHandleSSE_ClientRemovedOnContextDone(t *testing.T) {
+	b := NewBroadcaster()
+	srv := httptest.NewServer(http.HandlerFunc(b.HandleSSE))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL) //nolint:noctx
+	if err != nil {
+		t.Fatalf("HTTP GET failed: %v", err)
+	}
+
+	// Wait for client to be registered
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if b.ClientCount() == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if b.ClientCount() != 1 {
+		resp.Body.Close()
+		t.Fatalf("expected 1 client, got %d", b.ClientCount())
+	}
+
+	// Close the response body to signal disconnect to the server
+	resp.Body.Close()
+	srv.Close()
+
+	deadline = time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if b.ClientCount() == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if b.ClientCount() != 0 {
+		t.Errorf("client must be removed after disconnect, got %d", b.ClientCount())
+	}
 }

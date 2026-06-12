@@ -133,9 +133,13 @@ func (b *Broadcaster) Broadcast(data interface{}) {
 		return
 	}
 
-	// Use a channel to collect dead clients from concurrent writes
-	deadClientsCh := make(chan string, len(clients))
-	var wg sync.WaitGroup
+	// Use a channel to collect dead clients from concurrent writes.
+	// Capacity is 2 slots per client (timeout path + write-error path can both
+	// fire for the same client), so no send ever blocks. The channel is never
+	// closed: an inner write goroutine stuck past WriteTimeout may send after
+	// Broadcast returns, and a send on a never-closed buffered channel is safe.
+	deadClientsCh := make(chan string, 2*len(clients))
+	var wg sync.WaitGroup // tracks writeToClient calls
 
 	for _, client := range clients {
 		select {
@@ -145,28 +149,46 @@ func (b *Broadcaster) Broadcast(data interface{}) {
 			wg.Add(1)
 			go func(c *Client) {
 				defer wg.Done()
-				b.writeToClient(c, message, deadClientsCh)
+				b.writeToClient(c, message, deadClientsCh, nil)
 			}(client)
 		}
 	}
 
-	// Wait for all writes to complete (with their individual timeouts)
+	// Wait only for writeToClient calls — each returns within WriteTimeout even
+	// when a client's Write is wedged, so one stuck client cannot stall every
+	// broadcast caller. Inner write goroutines that outlive the timeout are NOT
+	// awaited; their late dead-client reports land in the buffered channel and
+	// the client is re-detected on the next Broadcast pass.
 	wg.Wait()
-	close(deadClientsCh)
 
-	// Remove dead clients
-	for clientID := range deadClientsCh {
-		b.removeClientByID(clientID)
+	// Drain the dead-client reports available now, without closing the channel.
+	for {
+		select {
+		case clientID := <-deadClientsCh:
+			b.removeClientByID(clientID)
+		default:
+			return
+		}
 	}
 }
 
 // writeToClient writes a message to a single client with timeout.
-func (b *Broadcaster) writeToClient(client *Client, message string, deadCh chan<- string) {
-	// Use a timeout channel to prevent blocking on stale connections
+// deadCh must be buffered with enough capacity for every possible send (two
+// per client: timeout path and write-error path) and must never be closed —
+// the inner write goroutine may outlive this call and send late. wg, when
+// non-nil, tracks the inner goroutine's lifetime (used by tests to join it).
+func (b *Broadcaster) writeToClient(client *Client, message string, deadCh chan<- string, wg *sync.WaitGroup) {
+	// Use a done channel to detect when the background write finishes.
 	done := make(chan struct{})
 
+	if wg != nil {
+		wg.Add(1)
+	}
 	go func() {
 		defer close(done)
+		if wg != nil {
+			defer wg.Done()
+		}
 		client.WriteMu.Lock()
 		defer client.WriteMu.Unlock()
 		_, err := client.Writer.Write([]byte(message))
