@@ -88,12 +88,11 @@ func (s *Service) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Privacy check
+	// Private prompts still need a session record and prompt counter so the
+	// hook call-site remains idempotent, but the prompt content is never stored.
 	if privacy.IsEntirelyPrivate(req.Prompt) {
-		// Create session but skip processing
 		sessionID, _ := s.sessionStore.CreateSDKSession(r.Context(), req.ClaudeSessionID, req.Project, "")
 		promptNum, _ := s.sessionStore.IncrementPromptCounter(r.Context(), sessionID)
-
 		writeJSON(w, SessionInitResponse{
 			SessionDBID:  sessionID,
 			PromptNumber: promptNum,
@@ -103,10 +102,11 @@ func (s *Service) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clean prompt
+	// Strip any remaining PII fragments from the prompt before storage.
 	cleanedPrompt := privacy.Clean(req.Prompt)
 
-	// Create session (idempotent)
+	// CreateSDKSession is idempotent on (claude_session_id, project) so repeated
+	// hook invocations within the duplicate-detection window return the same ID.
 	sessionID, err := s.sessionStore.CreateSDKSession(r.Context(), req.ClaudeSessionID, req.Project, cleanedPrompt)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -119,7 +119,6 @@ func (s *Service) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 		s.SetLastPrompt(sessionID, cleanedPrompt)
 	}
 
-	// Increment prompt counter
 	promptNum, err := s.sessionStore.IncrementPromptCounter(r.Context(), sessionID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -181,7 +180,6 @@ func (s *Service) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Initialize session in manager
 	sess, err := s.sessionManager.InitializeSession(r.Context(), id, req.UserPrompt, req.PromptNumber)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -232,7 +230,6 @@ func (s *Service) handleObservation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find session
 	sess, err := s.sessionStore.FindAnySDKSession(r.Context(), req.ClaudeSessionID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -290,7 +287,6 @@ func (s *Service) handleSubagentComplete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Find session
 	sess, err := s.sessionStore.FindAnySDKSession(r.Context(), req.ClaudeSessionID)
 	if err != nil || sess == nil {
 		// Session not found - subagent may have been in a different context
