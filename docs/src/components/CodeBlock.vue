@@ -21,6 +21,7 @@ const props = defineProps({
 })
 
 const copied = ref(false)
+let copyTimeoutId = null
 
 // Write to clipboard and briefly show feedback. Uses the Clipboard API
 // which requires a secure context (https or localhost) — fine for our docs site.
@@ -28,7 +29,8 @@ async function handleCopy() {
   try {
     await navigator.clipboard.writeText(props.code)
     copied.value = true
-    setTimeout(() => { copied.value = false }, 2000)
+    if (copyTimeoutId !== null) clearTimeout(copyTimeoutId)
+    copyTimeoutId = setTimeout(() => { copied.value = false }, 2000)
   } catch {
     // Clipboard write failed (e.g. permissions); silently ignore.
   }

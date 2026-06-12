@@ -93,12 +93,14 @@ const props = defineProps({
 })
 
 const copied = ref(false)
+let copyTimeoutId = null
 
 async function handleCopy() {
   try {
     await navigator.clipboard.writeText(props.installCommand)
     copied.value = true
-    setTimeout(() => { copied.value = false }, 2000)
+    if (copyTimeoutId !== null) clearTimeout(copyTimeoutId)
+    copyTimeoutId = setTimeout(() => { copied.value = false }, 2000)
   } catch {
     // Clipboard write failed; silently ignore.
   }
