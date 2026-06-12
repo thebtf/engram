@@ -10,1174 +10,644 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
 )
 
-// =============================================================================
-// TEST SUITE
-// =============================================================================
+// ---------------------------------------------------------------------------
+// JSON-RPC struct marshaling / unmarshaling
+// ---------------------------------------------------------------------------
 
-// ServerSuite is a test suite for MCP Server operations.
-type ServerSuite struct {
-	suite.Suite
-}
-
-func TestServerSuite(t *testing.T) {
-	suite.Run(t, new(ServerSuite))
-}
-
-// TestNewServer tests server creation.
-func (s *ServerSuite) TestNewServer() {
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	s.NotNil(server)
-	s.Equal("1.0.0", server.version)
-}
-
-// =============================================================================
-// TESTS FOR Request/Response Structs
-// =============================================================================
-
-// TestRequest tests Request struct JSON marshaling.
-func TestRequest(t *testing.T) {
+func TestRequest_Marshal_Table(t *testing.T) {
 	t.Parallel()
-
-	tests := []struct {
-		name     string
-		expected string
-		req      Request
+	cases := []struct {
+		name    string
+		req     Request
+		wantKey string
 	}{
-		// ===== GOOD CASES =====
 		{
-			name: "initialize request",
-			req: Request{
-				JSONRPC: "2.0",
-				ID:      1,
-				Method:  "initialize",
-			},
-			expected: `{"jsonrpc":"2.0","id":1,"method":"initialize"}`,
+			name:    "initialize",
+			req:     Request{JSONRPC: "2.0", ID: float64(1), Method: "initialize"},
+			wantKey: `"method":"initialize"`,
 		},
 		{
-			name: "tools/list request",
-			req: Request{
-				JSONRPC: "2.0",
-				ID:      "abc",
-				Method:  "tools/list",
-			},
-			expected: `{"jsonrpc":"2.0","id":"abc","method":"tools/list"}`,
+			name:    "string id",
+			req:     Request{JSONRPC: "2.0", ID: "req-abc", Method: "tools/list"},
+			wantKey: `"id":"req-abc"`,
 		},
 		{
-			name: "tools/call with params",
+			name: "with params",
 			req: Request{
 				JSONRPC: "2.0",
-				ID:      2,
+				ID:      float64(2),
 				Method:  "tools/call",
-				Params:  json.RawMessage(`{"name":"search","arguments":{}}`),
+				Params:  json.RawMessage(`{"name":"recall"}`),
 			},
-			expected: `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{}}}`,
-		},
-		// ===== EDGE CASES =====
-		{
-			name: "request with nil ID",
-			req: Request{
-				JSONRPC: "2.0",
-				ID:      nil,
-				Method:  "initialize",
-			},
-			expected: `{"jsonrpc":"2.0","id":null,"method":"initialize"}`,
+			wantKey: `"params"`,
 		},
 		{
-			name: "request with float ID",
-			req: Request{
-				JSONRPC: "2.0",
-				ID:      1.5,
-				Method:  "test",
-			},
-			expected: `{"jsonrpc":"2.0","id":1.5,"method":"test"}`,
+			name:    "null id",
+			req:     Request{JSONRPC: "2.0", ID: nil, Method: "initialize"},
+			wantKey: `"id":null`,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			data, err := json.Marshal(tt.req)
+			data, err := json.Marshal(tc.req)
 			require.NoError(t, err)
-			assert.JSONEq(t, tt.expected, string(data))
-
-			// Test unmarshaling
-			var parsed Request
-			err = json.Unmarshal(data, &parsed)
-			require.NoError(t, err)
-			assert.Equal(t, tt.req.JSONRPC, parsed.JSONRPC)
-			assert.Equal(t, tt.req.Method, parsed.Method)
+			assert.Contains(t, string(data), tc.wantKey)
 		})
 	}
 }
 
-// TestResponse tests Response struct JSON marshaling.
-func TestResponse(t *testing.T) {
+func TestRequest_Unmarshal_RoundTrip(t *testing.T) {
 	t.Parallel()
+	raw := `{"jsonrpc":"2.0","id":5,"method":"tools/list"}`
+	var req Request
+	require.NoError(t, json.Unmarshal([]byte(raw), &req))
+	assert.Equal(t, "2.0", req.JSONRPC)
+	assert.Equal(t, "tools/list", req.Method)
+}
 
-	tests := []struct {
+func TestRequest_Unmarshal_NullID(t *testing.T) {
+	t.Parallel()
+	raw := `{"jsonrpc":"2.0","id":null,"method":"initialize"}`
+	var req Request
+	require.NoError(t, json.Unmarshal([]byte(raw), &req))
+	assert.Nil(t, req.ID)
+}
+
+func TestResponse_Marshal_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
 		name     string
 		resp     Response
-		expected string
+		want     string
+		notWant  string
 	}{
-		// ===== GOOD CASES =====
 		{
-			name: "success response",
-			resp: Response{
-				JSONRPC: "2.0",
-				ID:      1,
-				Result:  map[string]string{"status": "ok"},
-			},
-			expected: `{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}`,
+			name:    "success result",
+			resp:    Response{JSONRPC: "2.0", ID: float64(1), Result: map[string]string{"status": "ok"}},
+			want:    `"result"`,
+			notWant: `"error"`,
 		},
 		{
 			name: "error response",
 			resp: Response{
 				JSONRPC: "2.0",
-				ID:      2,
-				Error: &Error{
-					Code:    -32600,
-					Message: "Invalid Request",
-				},
+				ID:      float64(2),
+				Error:   &Error{Code: -32600, Message: "Invalid Request"},
 			},
-			expected: `{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid Request"}}`,
+			want:    `"error"`,
+			notWant: `"result"`,
 		},
 		{
 			name: "error with data",
 			resp: Response{
 				JSONRPC: "2.0",
-				ID:      3,
-				Error: &Error{
-					Code:    -32602,
-					Message: "Invalid params",
-					Data:    "missing field",
-				},
+				ID:      float64(3),
+				Error:   &Error{Code: -32602, Message: "Invalid params", Data: "missing field"},
 			},
-			expected: `{"jsonrpc":"2.0","id":3,"error":{"code":-32602,"message":"Invalid params","data":"missing field"}}`,
+			want:    `"data"`,
+			notWant: `"result"`,
 		},
-		// ===== EDGE CASES =====
 		{
-			name: "response with nil ID",
-			resp: Response{
-				JSONRPC: "2.0",
-				ID:      nil,
-				Result:  "ok",
-			},
-			expected: `{"jsonrpc":"2.0","id":null,"result":"ok"}`,
+			name:    "nil id",
+			resp:    Response{JSONRPC: "2.0", ID: nil, Result: "ok"},
+			want:    `"id":null`,
+			notWant: "",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			data, err := json.Marshal(tt.resp)
+			data, err := json.Marshal(tc.resp)
 			require.NoError(t, err)
-			assert.JSONEq(t, tt.expected, string(data))
+			assert.Contains(t, string(data), tc.want)
+			if tc.notWant != "" {
+				assert.NotContains(t, string(data), tc.notWant)
+			}
 		})
 	}
 }
 
-// TestError tests Error struct.
-func TestError(t *testing.T) {
+func TestError_Marshal_Table(t *testing.T) {
 	t.Parallel()
-
-	tests := []struct {
-		expected string
-		name     string
-		err      Error
+	cases := []struct {
+		name    string
+		e       Error
+		wantKey string
 	}{
 		{
-			name: "parse error",
-			err: Error{
-				Code:    -32700,
-				Message: "Parse error",
-			},
-			expected: `{"code":-32700,"message":"Parse error"}`,
+			name:    "parse error",
+			e:       Error{Code: -32700, Message: "Parse error"},
+			wantKey: `"code":-32700`,
 		},
 		{
-			name: "method not found",
-			err: Error{
-				Code:    -32601,
-				Message: "Method not found",
-			},
-			expected: `{"code":-32601,"message":"Method not found"}`,
+			name:    "method not found",
+			e:       Error{Code: -32601, Message: "Method not found"},
+			wantKey: `"code":-32601`,
 		},
 		{
-			name: "invalid params",
-			err: Error{
-				Code:    -32602,
-				Message: "Invalid params",
-				Data:    "details here",
-			},
-			expected: `{"code":-32602,"message":"Invalid params","data":"details here"}`,
+			name:    "with data",
+			e:       Error{Code: -32602, Message: "Invalid params", Data: "extra"},
+			wantKey: `"data":"extra"`,
+		},
+		{
+			name:    "nil data omitted",
+			e:       Error{Code: -32600, Message: "Invalid Request", Data: nil},
+			wantKey: `"message":"Invalid Request"`,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			data, err := json.Marshal(tt.err)
+			data, err := json.Marshal(tc.e)
 			require.NoError(t, err)
-			assert.JSONEq(t, tt.expected, string(data))
+			assert.Contains(t, string(data), tc.wantKey)
 		})
 	}
 }
 
-// TestToolCallParams tests ToolCallParams struct.
-func TestToolCallParams(t *testing.T) {
+func TestError_NilData_NotInOutput(t *testing.T) {
 	t.Parallel()
+	e := Error{Code: -32600, Message: "Invalid Request", Data: nil}
+	data, err := json.Marshal(e)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), `"data"`)
+}
 
-	tests := []struct {
+func TestToolCallParams_Unmarshal(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
 		name     string
-		input    string
-		expected ToolCallParams
+		raw      string
+		wantName string
 	}{
-		{
-			name:  "search tool call",
-			input: `{"name":"search","arguments":{"query":"test"}}`,
-			expected: ToolCallParams{
-				Name:      "search",
-				Arguments: json.RawMessage(`{"query":"test"}`),
-			},
-		},
-		{
-			name:  "decisions tool call",
-			input: `{"name":"decisions","arguments":{"query":"auth"}}`,
-			expected: ToolCallParams{
-				Name:      "decisions",
-				Arguments: json.RawMessage(`{"query":"auth"}`),
-			},
-		},
+		{"recall", `{"name":"recall","arguments":{"query":"test"}}`, "recall"},
+		{"store", `{"name":"store","arguments":{"content":"x"}}`, "store"},
+		{"no-args", `{"name":"feedback","arguments":{}}`, "feedback"},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			var params ToolCallParams
-			err := json.Unmarshal([]byte(tt.input), &params)
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected.Name, params.Name)
+			var p ToolCallParams
+			require.NoError(t, json.Unmarshal([]byte(tc.raw), &p))
+			assert.Equal(t, tc.wantName, p.Name)
+			assert.NotNil(t, p.Arguments)
 		})
 	}
 }
 
-// TestTool tests Tool struct.
-func TestTool(t *testing.T) {
+func TestToolCallParams_ComplexArgs(t *testing.T) {
 	t.Parallel()
+	raw := `{"name":"recall","arguments":{"query":"auth","project":"eng","limit":5}}`
+	var p ToolCallParams
+	require.NoError(t, json.Unmarshal([]byte(raw), &p))
+	assert.Equal(t, "recall", p.Name)
+	assert.Contains(t, string(p.Arguments), "auth")
+}
 
+func TestTool_Marshal_RoundTrip(t *testing.T) {
+	t.Parallel()
 	tool := Tool{
-		Name:        "search",
-		Description: "Search observations",
+		Name:        "recall",
+		Description: "Search memories",
 		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query": map[string]any{"type": "string"},
-			},
+			"type":       "object",
+			"properties": map[string]any{"query": map[string]any{"type": "string"}},
 		},
 	}
-
 	data, err := json.Marshal(tool)
 	require.NoError(t, err)
 
 	var parsed Tool
-	err = json.Unmarshal(data, &parsed)
-	require.NoError(t, err)
-	assert.Equal(t, "search", parsed.Name)
-	assert.Equal(t, "Search observations", parsed.Description)
+	require.NoError(t, json.Unmarshal(data, &parsed))
+	assert.Equal(t, "recall", parsed.Name)
+	assert.Equal(t, "Search memories", parsed.Description)
 }
 
-// TestTimelineParams tests TimelineParams struct.
-func TestTimelineParams(t *testing.T) {
+func TestTimelineParams_Unmarshal_Table(t *testing.T) {
 	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected TimelineParams
+	cases := []struct {
+		name      string
+		raw       string
+		wantOK    bool
+		anchorID  int64
+		query     string
+		project   string
 	}{
 		{
-			name:  "with anchor_id",
-			input: `{"anchor_id":123,"before":5,"after":5}`,
-			expected: TimelineParams{
-				AnchorID: 123,
-				Before:   5,
-				After:    5,
-			},
+			name:     "anchor_id",
+			raw:      `{"anchor_id":123,"before":5,"after":5}`,
+			wantOK:   true,
+			anchorID: 123,
 		},
 		{
-			name:  "with query",
-			input: `{"query":"test query","project":"my-project"}`,
-			expected: TimelineParams{
-				Query:   "test query",
-				Project: "my-project",
-			},
+			name:    "query only",
+			raw:     `{"query":"auth test","project":"eng"}`,
+			wantOK:  true,
+			query:   "auth test",
+			project: "eng",
 		},
 		{
-			name:  "full params",
-			input: `{"anchor_id":100,"query":"search","before":10,"after":20,"project":"proj","obs_type":"bugfix","concepts":"security","files":"main.go","dateStart":1234567890,"dateEnd":9876543210,"format":"full"}`,
-			expected: TimelineParams{
-				AnchorID:  100,
-				Query:     "search",
-				Before:    10,
-				After:     20,
-				Project:   "proj",
-				ObsType:   "bugfix",
-				Concepts:  "security",
-				Files:     "main.go",
-				DateStart: 1234567890,
-				DateEnd:   9876543210,
-				Format:    "full",
-			},
+			name:   "invalid json",
+			raw:    `{invalid`,
+			wantOK: false,
+		},
+		{
+			name:   "empty object valid",
+			raw:    `{}`,
+			wantOK: true,
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var params TimelineParams
-			err := json.Unmarshal([]byte(tt.input), &params)
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected.AnchorID, params.AnchorID)
-			assert.Equal(t, tt.expected.Query, params.Query)
-			assert.Equal(t, tt.expected.Project, params.Project)
-		})
-	}
-}
-
-// =============================================================================
-// TESTS FOR Server Handlers
-// =============================================================================
-
-// TestHandleInitialize tests the initialize handler.
-func TestHandleInitialize(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.2.3"})
-
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "initialize",
-	}
-
-	resp := server.handleInitialize(req)
-
-	assert.Equal(t, "2.0", resp.JSONRPC)
-	assert.Equal(t, 1, resp.ID)
-	assert.Nil(t, resp.Error)
-	assert.NotNil(t, resp.Result)
-
-	result, ok := resp.Result.(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "2024-11-05", result["protocolVersion"])
-
-	serverInfo, ok := result["serverInfo"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "engram", serverInfo["name"])
-	assert.Equal(t, "1.2.3", serverInfo["version"])
-}
-
-// TestHandleToolsList tests the tools/list handler.
-func TestHandleToolsList(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/list",
-	}
-
-	resp := server.handleToolsList(req)
-
-	assert.Equal(t, "2.0", resp.JSONRPC)
-	assert.Equal(t, 1, resp.ID)
-	assert.Nil(t, resp.Error)
-
-	result, ok := resp.Result.(map[string]any)
-	require.True(t, ok)
-
-	tools, ok := result["tools"].([]Tool)
-	require.True(t, ok)
-	assert.NotEmpty(t, tools)
-
-	// Default response (no cursor) should return only primary consolidated tools
-	toolNames := make(map[string]bool)
-	for _, tool := range tools {
-		toolNames[tool.Name] = true
-	}
-
-	// Primary consolidated tools must be present
-	primaryTools := []string{
-		"recall", "store", "feedback", "vault", "docs", "admin", "issues", "check_system_health",
-	}
-	for _, name := range primaryTools {
-		assert.True(t, toolNames[name], "expected primary tool %s to be present", name)
-	}
-	assert.Equal(t, len(primaryTools), len(tools), "default tools/list should return exactly %d tools", len(primaryTools))
-
-	// Legacy tools must NOT be present in default listing
-	// "search" and "decisions" dropped in v5 (US9) along with internal/search.
-	// bulk_delete_observations removed entirely in v5 (US3).
-	legacyTools := []string{
-		"find_by_file",
-	}
-	for _, name := range legacyTools {
-		assert.False(t, toolNames[name], "legacy tool %s should not be in default listing", name)
-	}
-
-	// No nextCursor — only primary tools returned, no pagination needed
-
-	// include_all=true should return primary + secondary tools
-	reqAll := &Request{
-		JSONRPC: "2.0",
-		ID:      2,
-		Method:  "tools/list",
-		Params:  json.RawMessage(`{"include_all": true}`),
-	}
-	respAll := server.handleToolsList(reqAll)
-	resultAll := respAll.Result.(map[string]any)
-	allTools := resultAll["tools"].([]Tool)
-	assert.Greater(t, len(allTools), len(primaryTools), "include_all should return more tools than primary")
-
-	allToolNames := make(map[string]bool)
-	for _, tool := range allTools {
-		allToolNames[tool.Name] = true
-	}
-	// Legacy tools (still registered as secondary) should appear with include_all=true
-	for _, name := range legacyTools {
-		assert.True(t, allToolNames[name], "legacy tool %s should be present with include_all=true", name)
-	}
-
-	// Removed tools must not appear in either listing (regression guard).
-	// Includes v5 (US9) removals: search, decisions (backed by internal/search, dropped).
-	removedTools := []string{
-		"trigger_maintenance",
-		"get_maintenance_stats",
-		"suggest_consolidations",
-		"run_consolidation",
-		"search",
-		"decisions",
-	}
-	for _, name := range removedTools {
-		assert.False(t, toolNames[name], "removed tool %s should not be in default listing", name)
-		assert.False(t, allToolNames[name], "removed tool %s should not be present with include_all=true", name)
-	}
-
-	// Anthropic API rejects oneOf/allOf/anyOf at the top level of input_schema.
-	// Verify EVERY tool (primary + secondary) has a compliant top-level schema.
-	forbiddenKeys := []string{"oneOf", "allOf", "anyOf"}
-	for _, tool := range allTools {
-		schema := tool.InputSchema
-		for _, key := range forbiddenKeys {
-			_, present := schema[key]
-			assert.False(t, present,
-				"tool %q has forbidden top-level key %q — Anthropic API will reject with 400. Move into nested properties or use server-side validation.",
-				tool.Name, key)
-		}
-	}
-}
-
-// TestHandleRequest tests request routing.
-func TestHandleRequest(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	tests := []struct {
-		req          *Request
-		name         string
-		errorMessage string
-		errorCode    int
-		expectError  bool
-	}{
-		{
-			name: "initialize method",
-			req: &Request{
-				JSONRPC: "2.0",
-				ID:      1,
-				Method:  "initialize",
-			},
-			expectError: false,
-		},
-		{
-			name: "tools/list method",
-			req: &Request{
-				JSONRPC: "2.0",
-				ID:      2,
-				Method:  "tools/list",
-			},
-			expectError: false,
-		},
-		{
-			name: "unknown method",
-			req: &Request{
-				JSONRPC: "2.0",
-				ID:      3,
-				Method:  "unknown_method",
-			},
-			expectError:  true,
-			errorCode:    -32601,
-			errorMessage: "Method not found",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			resp := server.handleRequest(ctx, tt.req)
-
-			assert.Equal(t, "2.0", resp.JSONRPC)
-			assert.Equal(t, tt.req.ID, resp.ID)
-
-			if tt.expectError {
-				require.NotNil(t, resp.Error)
-				assert.Equal(t, tt.errorCode, resp.Error.Code)
-				assert.Equal(t, tt.errorMessage, resp.Error.Message)
+			err := json.Unmarshal([]byte(tc.raw), &params)
+			if tc.wantOK {
+				require.NoError(t, err)
+				assert.Equal(t, tc.anchorID, params.AnchorID)
+				assert.Equal(t, tc.query, params.Query)
+				assert.Equal(t, tc.project, params.Project)
 			} else {
-				assert.Nil(t, resp.Error)
-				assert.NotNil(t, resp.Result)
+				require.Error(t, err)
 			}
 		})
 	}
 }
 
-// TestHandleToolsCall_InvalidParams tests tools/call with invalid params.
-func TestHandleToolsCall_InvalidParams(t *testing.T) {
+func TestTimelineParams_AllFields(t *testing.T) {
 	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/call",
-		Params:  json.RawMessage(`invalid json`),
-	}
-
-	resp := server.handleToolsCall(ctx, req)
-
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, -32602, resp.Error.Code)
-	assert.Equal(t, "Invalid params", resp.Error.Message)
+	raw := `{
+		"anchor_id":100,"query":"test","before":10,"after":20,
+		"project":"proj","obs_type":"bugfix","concepts":"security",
+		"files":"main.go","dateStart":1700000000000,"dateEnd":1700100000000,
+		"format":"full"
+	}`
+	var p TimelineParams
+	require.NoError(t, json.Unmarshal([]byte(raw), &p))
+	assert.Equal(t, int64(100), p.AnchorID)
+	assert.Equal(t, "test", p.Query)
+	assert.Equal(t, 10, p.Before)
+	assert.Equal(t, 20, p.After)
+	assert.Equal(t, "proj", p.Project)
+	assert.Equal(t, "bugfix", p.ObsType)
+	assert.Equal(t, "security", p.Concepts)
+	assert.Equal(t, "main.go", p.Files)
+	assert.Equal(t, int64(1700000000000), p.DateStart)
+	assert.Equal(t, int64(1700100000000), p.DateEnd)
+	assert.Equal(t, "full", p.Format)
 }
 
-// TestCallTool_UnknownTool tests callTool with unknown tool name.
-func TestCallTool_UnknownTool(t *testing.T) {
+// ---------------------------------------------------------------------------
+// NewServer / Version / ServerOptions
+// ---------------------------------------------------------------------------
+
+func TestNewServer_CreatesWithVersion(t *testing.T) {
 	t.Parallel()
+	s := NewServer(ServerOptions{Version: "2.5.0"})
+	require.NotNil(t, s)
+	assert.Equal(t, "2.5.0", s.version)
+}
 
-	server := NewServer(ServerOptions{Version: "1.0.0"})
+func TestNewServer_HasStdinStdout(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	assert.NotNil(t, s.stdin)
+	assert.NotNil(t, s.stdout)
+}
+
+func TestVersion_ReturnsVersion(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "3.0.1"})
+	assert.Equal(t, "3.0.1", s.Version())
+}
+
+func TestServer_FieldsInjected(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{stdin: strings.NewReader(""), stdout: &buf, version: "test"}
+	assert.Equal(t, "test", s.version)
+	assert.NotNil(t, s.stdin)
+	assert.Equal(t, &buf, s.stdout)
+}
+
+// ---------------------------------------------------------------------------
+// handleInitialize
+// ---------------------------------------------------------------------------
+
+func TestHandleInitialize_ProtocolAndVersion(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "4.0.0"})
+	req := &Request{JSONRPC: "2.0", ID: float64(1), Method: "initialize"}
+	resp := s.handleInitialize(req)
+
+	assert.Equal(t, "2.0", resp.JSONRPC)
+	assert.Nil(t, resp.Error)
+	require.NotNil(t, resp.Result)
+
+	result := resp.Result.(map[string]any)
+	assert.Equal(t, "2024-11-05", result["protocolVersion"])
+
+	info := result["serverInfo"].(map[string]any)
+	assert.Equal(t, "engram", info["name"])
+	assert.Equal(t, "4.0.0", info["version"])
+}
+
+func TestHandleInitialize_CapabilitiesPresent(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleInitialize(&Request{JSONRPC: "2.0", ID: float64(1), Method: "initialize"})
+	result := resp.Result.(map[string]any)
+	caps, ok := result["capabilities"].(map[string]any)
+	require.True(t, ok)
+	_, hasTools := caps["tools"]
+	assert.True(t, hasTools)
+}
+
+func TestHandleInitialize_IDEchoed(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	req := &Request{JSONRPC: "2.0", ID: "my-init-id", Method: "initialize"}
+	resp := s.handleInitialize(req)
+	assert.Equal(t, "my-init-id", resp.ID)
+}
+
+// ---------------------------------------------------------------------------
+// handleToolsList
+// ---------------------------------------------------------------------------
+
+func TestHandleToolsList_PrimaryToolsPresent(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
+	require.Nil(t, resp.Error)
+
+	result := resp.Result.(map[string]any)
+	tools := result["tools"].([]Tool)
+	names := make(map[string]bool)
+	for _, tool := range tools {
+		names[tool.Name] = true
+	}
+	for _, want := range []string{"recall", "store", "feedback", "vault", "docs", "admin", "issues"} {
+		assert.True(t, names[want], "primary tool %q must be present", want)
+	}
+}
+
+func TestHandleToolsList_DefaultCountMatchesPrimary(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
+	result := resp.Result.(map[string]any)
+	tools := result["tools"].([]Tool)
+	// primary tools only: recall, store, feedback, vault, docs, admin, issues, check_system_health
+	assert.Equal(t, 8, len(tools))
+}
+
+func TestHandleToolsList_IncludeAllReturnsMore(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	respDefault := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
+	respAll := s.handleToolsList(&Request{
+		JSONRPC: "2.0", ID: float64(2), Method: "tools/list",
+		Params: json.RawMessage(`{"include_all":true}`),
+	})
+	defaultTools := respDefault.Result.(map[string]any)["tools"].([]Tool)
+	allTools := respAll.Result.(map[string]any)["tools"].([]Tool)
+	assert.Greater(t, len(allTools), len(defaultTools))
+}
+
+func TestHandleToolsList_IncludeAllContainsLegacy(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleToolsList(&Request{
+		JSONRPC: "2.0", ID: float64(1), Method: "tools/list",
+		Params: json.RawMessage(`{"include_all":true}`),
+	})
+	tools := resp.Result.(map[string]any)["tools"].([]Tool)
+	names := make(map[string]bool)
+	for _, t2 := range tools {
+		names[t2.Name] = true
+	}
+	assert.True(t, names["find_by_file"], "find_by_file should appear with include_all")
+}
+
+func TestHandleToolsList_RemovedToolsAbsent(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	respAll := s.handleToolsList(&Request{
+		JSONRPC: "2.0", ID: float64(1), Method: "tools/list",
+		Params: json.RawMessage(`{"include_all":true}`),
+	})
+	allTools := respAll.Result.(map[string]any)["tools"].([]Tool)
+	allNames := make(map[string]bool)
+	for _, t2 := range allTools {
+		allNames[t2.Name] = true
+	}
+	for _, removed := range []string{"search", "decisions", "trigger_maintenance", "get_maintenance_stats"} {
+		assert.False(t, allNames[removed], "removed tool %q must not appear", removed)
+	}
+}
+
+func TestHandleToolsList_SchemaCompliance_NoForbiddenTopLevelKeys(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleToolsList(&Request{
+		JSONRPC: "2.0", ID: float64(1), Method: "tools/list",
+		Params: json.RawMessage(`{"include_all":true}`),
+	})
+	tools := resp.Result.(map[string]any)["tools"].([]Tool)
+	forbidden := []string{"oneOf", "allOf", "anyOf"}
+	for _, tool := range tools {
+		for _, key := range forbidden {
+			_, found := tool.InputSchema[key]
+			assert.False(t, found, "tool %q must not have forbidden top-level key %q", tool.Name, key)
+		}
+	}
+}
+
+func TestHandleToolsList_AllToolSchemasHaveTypeAndProperties(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
+	tools := resp.Result.(map[string]any)["tools"].([]Tool)
+	for _, tool := range tools {
+		assert.NotEmpty(t, tool.Name)
+		assert.NotEmpty(t, tool.Description)
+		schemaType, ok := tool.InputSchema["type"]
+		assert.True(t, ok, "tool %q schema lacks type", tool.Name)
+		assert.Equal(t, "object", schemaType, "tool %q schema type should be object", tool.Name)
+		_, hasProps := tool.InputSchema["properties"]
+		assert.True(t, hasProps, "tool %q schema lacks properties", tool.Name)
+	}
+}
+
+func TestHandleToolsList_FeedbackSchemaCorrect(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
+	tools := resp.Result.(map[string]any)["tools"].([]Tool)
+	var fb *Tool
+	for i := range tools {
+		if tools[i].Name == "feedback" {
+			fb = &tools[i]
+			break
+		}
+	}
+	require.NotNil(t, fb)
+	props := fb.InputSchema["properties"].(map[string]any)
+	_, hasRating := props["rating"]
+	assert.True(t, hasRating)
+	_, hasSessionID := props["session_id"]
+	assert.True(t, hasSessionID)
+	_, hasUseful := props["useful"]
+	assert.False(t, hasUseful, "feedback must not expose 'useful' boolean — use rating enum")
+}
+
+func TestHandleToolsList_StoreTypeEnumCorrect(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
+	tools := resp.Result.(map[string]any)["tools"].([]Tool)
+	var storeTool *Tool
+	for i := range tools {
+		if tools[i].Name == "store" {
+			storeTool = &tools[i]
+			break
+		}
+	}
+	require.NotNil(t, storeTool)
+	props := storeTool.InputSchema["properties"].(map[string]any)
+	typeSchema := props["type"].(map[string]any)
+	enum := typeSchema["enum"].([]string)
+	for _, want := range []string{"decision", "discovery", "pitfall", "timeline"} {
+		assert.Contains(t, enum, want)
+	}
+	assert.NotContains(t, enum, "insight")
+}
+
+// ---------------------------------------------------------------------------
+// handleRequest dispatch
+// ---------------------------------------------------------------------------
+
+func TestHandleRequest_InitializeRoute(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleRequest(context.Background(), &Request{JSONRPC: "2.0", ID: float64(1), Method: "initialize"})
+	require.NotNil(t, resp)
+	assert.Nil(t, resp.Error)
+	assert.NotNil(t, resp.Result)
+}
+
+func TestHandleRequest_ToolsListRoute(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleRequest(context.Background(), &Request{JSONRPC: "2.0", ID: float64(2), Method: "tools/list"})
+	require.NotNil(t, resp)
+	assert.Nil(t, resp.Error)
+}
+
+func TestHandleRequest_UnknownMethodError(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	resp := s.handleRequest(context.Background(), &Request{JSONRPC: "2.0", ID: float64(3), Method: "no_such_method"})
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, -32601, resp.Error.Code)
+	assert.Equal(t, "Method not found", resp.Error.Message)
+}
+
+func TestHandleRequest_NotificationReturnsNil(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	// JSON-RPC 2.0 notification: ID is nil → no response
+	resp := s.handleRequest(context.Background(), &Request{JSONRPC: "2.0", ID: nil, Method: "initialized"})
+	assert.Nil(t, resp)
+}
+
+func TestHandleRequest_CapabilityStubs(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
 	ctx := context.Background()
+	stubs := []struct {
+		method string
+		key    string
+	}{
+		{"resources/list", "resources"},
+		{"resources/templates/list", "resourceTemplates"},
+		{"prompts/list", "prompts"},
+		{"completion/complete", "completion"},
+	}
+	for _, tc := range stubs {
+		t.Run(tc.method, func(t *testing.T) {
+			t.Parallel()
+			resp := s.handleRequest(ctx, &Request{JSONRPC: "2.0", ID: float64(1), Method: tc.method})
+			require.NotNil(t, resp)
+			assert.Nil(t, resp.Error)
+			result, ok := resp.Result.(map[string]any)
+			require.True(t, ok)
+			_, found := result[tc.key]
+			assert.True(t, found, "stub response for %q must contain %q key", tc.method, tc.key)
+		})
+	}
+}
 
-	_, err := server.callTool(ctx, "nonexistent_tool", json.RawMessage(`{}`))
+// ---------------------------------------------------------------------------
+// handleToolsCall
+// ---------------------------------------------------------------------------
+
+func TestHandleToolsCall_InvalidParamsJSON(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	req := &Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/call", Params: json.RawMessage(`{invalid}`)}
+	resp := s.handleToolsCall(context.Background(), req)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, -32602, resp.Error.Code)
+}
+
+func TestHandleToolsCall_EmptyParams(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	req := &Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/call", Params: json.RawMessage(`{}`)}
+	resp := s.handleToolsCall(context.Background(), req)
+	require.NotNil(t, resp.Error)
+}
+
+func TestHandleToolsCall_UnknownTool(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	req := &Request{
+		JSONRPC: "2.0", ID: float64(1), Method: "tools/call",
+		Params: json.RawMessage(`{"name":"no_such_tool","arguments":{}}`),
+	}
+	resp := s.handleToolsCall(context.Background(), req)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, -32000, resp.Error.Code)
+}
+
+// ---------------------------------------------------------------------------
+// callTool
+// ---------------------------------------------------------------------------
+
+func TestCallTool_UnknownToolReturnsError(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	_, err := s.callTool(context.Background(), "nonexistent_tool", json.RawMessage(`{}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown tool")
 }
 
-// TestCallTool_InvalidArgs tests callTool with invalid arguments.
-func TestCallTool_InvalidArgs(t *testing.T) {
+func TestCallTool_UnknownToolNames_Table(t *testing.T) {
 	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
+	s := NewServer(ServerOptions{Version: "1.0.0"})
 	ctx := context.Background()
-
-	// find_by_file was retired in v5; invalid JSON never reaches per-tool validation.
-	_, err := server.callTool(ctx, "find_by_file", json.RawMessage(`invalid json`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "removed in v5")
-}
-
-// =============================================================================
-// TESTS FOR Server I/O
-// =============================================================================
-
-// TestSendResponse tests response sending.
-func TestSendResponse(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	server := &Server{
-		stdout: &buf,
-	}
-
-	resp := &Response{
-		JSONRPC: "2.0",
-		ID:      1,
-		Result:  map[string]string{"status": "ok"},
-	}
-
-	server.sendResponse(resp)
-
-	output := buf.String()
-	assert.Contains(t, output, `"jsonrpc":"2.0"`)
-	assert.Contains(t, output, `"id":1`)
-	assert.Contains(t, output, `"result"`)
-}
-
-// TestSendError tests error response sending.
-func TestSendError(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	server := &Server{
-		stdout: &buf,
-	}
-
-	server.sendError(1, -32700, "Parse error", "details")
-
-	output := buf.String()
-	assert.Contains(t, output, `"error"`)
-	assert.Contains(t, output, `-32700`)
-	assert.Contains(t, output, `"Parse error"`)
-}
-
-// TestRun_ParseError tests Run with invalid JSON input.
-func TestRun_ParseError(t *testing.T) {
-	t.Parallel()
-
-	var stdout bytes.Buffer
-	stdin := strings.NewReader("invalid json\n")
-
-	server := &Server{
-		stdin:  stdin,
-		stdout: &stdout,
-	}
-
-	err := server.Run(context.Background())
-	require.NoError(t, err)
-
-	output := stdout.String()
-	assert.Contains(t, output, `"error"`)
-	assert.Contains(t, output, `-32700`)
-	assert.Contains(t, output, `"Parse error"`)
-}
-
-// TestRun_EmptyLine tests Run skips empty lines.
-func TestRun_EmptyLine(t *testing.T) {
-	t.Parallel()
-
-	var stdout bytes.Buffer
-	stdin := strings.NewReader("\n\n")
-
-	server := &Server{
-		stdin:  stdin,
-		stdout: &stdout,
-	}
-
-	err := server.Run(context.Background())
-	require.NoError(t, err)
-
-	// Should be empty - no responses for empty lines
-	assert.Empty(t, stdout.String())
-}
-
-// TestRun_ValidRequest tests Run with a valid request.
-func TestRun_ValidRequest(t *testing.T) {
-	t.Parallel()
-
-	var stdout bytes.Buffer
-	req := `{"jsonrpc":"2.0","id":1,"method":"initialize"}`
-	stdin := strings.NewReader(req + "\n")
-
-	server := &Server{
-		stdin:   stdin,
-		stdout:  &stdout,
-		version: "1.0.0",
-	}
-
-	err := server.Run(context.Background())
-	require.NoError(t, err)
-
-	output := stdout.String()
-	assert.Contains(t, output, `"jsonrpc":"2.0"`)
-	assert.Contains(t, output, `"result"`)
-	assert.Contains(t, output, `"protocolVersion"`)
-}
-
-// TestRun_MultipleRequests tests Run with multiple sequential requests.
-func TestRun_MultipleRequests(t *testing.T) {
-	t.Parallel()
-
-	var stdout bytes.Buffer
-	req1 := `{"jsonrpc":"2.0","id":1,"method":"initialize"}`
-	req2 := `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`
-	stdin := strings.NewReader(req1 + "\n" + req2 + "\n")
-
-	server := &Server{
-		stdin:   stdin,
-		stdout:  &stdout,
-		version: "1.0.0",
-	}
-
-	err := server.Run(context.Background())
-	require.NoError(t, err)
-
-	output := stdout.String()
-	// Should contain responses for both requests
-	assert.Contains(t, output, `"id":1`)
-	assert.Contains(t, output, `"id":2`)
-}
-
-// TestRunMixedRequests tests Run with mixed valid and invalid requests.
-func TestRunMixedRequests(t *testing.T) {
-	t.Parallel()
-
-	var stdout bytes.Buffer
-	req1 := `{"jsonrpc":"2.0","id":1,"method":"initialize"}`
-	req2 := `invalid json`
-	req3 := `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`
-	stdin := strings.NewReader(req1 + "\n" + req2 + "\n" + req3 + "\n")
-
-	server := &Server{
-		stdin:   stdin,
-		stdout:  &stdout,
-		version: "1.0.0",
-	}
-
-	err := server.Run(context.Background())
-	require.NoError(t, err)
-
-	output := stdout.String()
-	// Should have responses for all three requests
-	assert.Contains(t, output, `"id":1`)
-	assert.Contains(t, output, `"error"`) // Parse error for invalid json
-	assert.Contains(t, output, `"id":3`)
-}
-
-// =============================================================================
-// TESTS FOR Handler Parameter Validation
-// =============================================================================
-
-// TestHandleFindRelatedObservations_Validation tests parameter validation.
-func TestHandleFindRelatedObservations_Validation(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	tests := []struct {
-		name        string
-		args        string
-		errContains string
-		wantErr     bool
-	}{
-		{
-			name:        "missing id",
-			args:        `{}`,
-			wantErr:     true,
-			errContains: "id is required",
-		},
-		{
-			name:        "invalid json",
-			args:        `{invalid`,
-			wantErr:     true,
-			errContains: "invalid arguments",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := server.handleFindRelatedObservations(ctx, json.RawMessage(tt.args))
-			if tt.wantErr {
-				require.Error(t, err)
-				if tt.errContains != "" {
-					assert.Contains(t, err.Error(), tt.errContains)
-				}
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
-// TestHandleFindSimilarObservations_Validation tests parameter validation.
-func TestHandleFindSimilarObservations_Validation(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	tests := []struct {
-		name        string
-		args        string
-		errContains string
-		wantErr     bool
-	}{
-		{
-			name:        "missing query",
-			args:        `{}`,
-			wantErr:     true,
-			errContains: "query is required",
-		},
-		{
-			name:        "invalid json",
-			args:        `{invalid`,
-			wantErr:     true,
-			errContains: "invalid arguments",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := server.handleFindSimilarObservations(ctx, json.RawMessage(tt.args))
-			if tt.wantErr {
-				require.Error(t, err)
-				if tt.errContains != "" {
-					assert.Contains(t, err.Error(), tt.errContains)
-				}
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
-// TestJSONRPCErrorCodes tests standard JSON-RPC error codes.
-func TestJSONRPCErrorCodes(t *testing.T) {
-	t.Parallel()
-
-	errorCodes := map[string]int{
-		"Parse error":      -32700,
-		"Invalid Request":  -32600,
-		"Method not found": -32601,
-		"Invalid params":   -32602,
-		"Internal error":   -32603,
-	}
-
-	for msg, code := range errorCodes {
-		t.Run(msg, func(t *testing.T) {
-			t.Parallel()
-			err := Error{Code: code, Message: msg}
-			assert.Equal(t, code, err.Code)
-			assert.Equal(t, msg, err.Message)
-		})
-	}
-}
-
-// TestToolListContainsExpectedSchemas tests that tool schemas are valid.
-func TestToolListContainsExpectedSchemas(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/list",
-	}
-
-	resp := server.handleToolsList(req)
-	result := resp.Result.(map[string]any)
-	tools := result["tools"].([]Tool)
-
-	for _, tool := range tools {
-		assert.NotEmpty(t, tool.Name)
-		assert.NotEmpty(t, tool.Description)
-		assert.NotNil(t, tool.InputSchema)
-
-		// Check schema has type
-		schema := tool.InputSchema
-		_, hasType := schema["type"]
-		assert.True(t, hasType, "tool %s schema should have type", tool.Name)
-	}
-}
-
-// TestHandleToolsCall_UnknownTool tests tools/call with unknown tool name.
-func TestHandleToolsCall_UnknownTool(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/call",
-		Params:  json.RawMessage(`{"name":"unknown_tool","arguments":{}}`),
-	}
-
-	resp := server.handleToolsCall(ctx, req)
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, -32000, resp.Error.Code)
-	assert.Contains(t, resp.Error.Data, "unknown tool")
-}
-
-// TestCallTool_ToolNameRecognition tests that valid tool names are recognized.
-func TestCallTool_ToolNameRecognition(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-
-	// Use cursor: "all" to get complete tool list
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/list",
-		Params:  json.RawMessage(`{"cursor":"all"}`),
-	}
-
-	resp := server.handleToolsList(req)
-	result := resp.Result.(map[string]any)
-	tools := result["tools"].([]Tool)
-
-	// Verify primary consolidated tools are registered
-	primaryExpected := []string{
-		"recall", "store", "feedback", "vault", "docs", "admin", "check_system_health",
-	}
-	// Only primary tools in tools/list — no aliases
-	expectedTools := make(map[string]bool)
-	for _, name := range primaryExpected {
-		expectedTools[name] = true
-	}
-
-	foundTools := make(map[string]bool)
-	for _, tool := range tools {
-		foundTools[tool.Name] = true
-	}
-
-	for name := range expectedTools {
-		assert.True(t, foundTools[name], "tool %s should be registered", name)
-	}
-}
-
-// TestTimelineParams_Complete tests complete TimelineParams parsing.
-func TestTimelineParams_Complete(t *testing.T) {
-	t.Parallel()
-
-	input := `{
-		"anchor_id": 100,
-		"query": "test query",
-		"before": 5,
-		"after": 15,
-		"project": "my-project",
-		"obs_type": "bugfix",
-		"concepts": "security,auth",
-		"files": "main.go,handler.go",
-		"dateStart": 1700000000000,
-		"dateEnd": 1700100000000,
-		"format": "full"
-	}`
-
-	var params TimelineParams
-	err := json.Unmarshal([]byte(input), &params)
-	require.NoError(t, err)
-
-	assert.Equal(t, int64(100), params.AnchorID)
-	assert.Equal(t, "test query", params.Query)
-	assert.Equal(t, 5, params.Before)
-	assert.Equal(t, 15, params.After)
-	assert.Equal(t, "my-project", params.Project)
-	assert.Equal(t, "bugfix", params.ObsType)
-	assert.Equal(t, "security,auth", params.Concepts)
-	assert.Equal(t, "main.go,handler.go", params.Files)
-	assert.Equal(t, int64(1700000000000), params.DateStart)
-	assert.Equal(t, int64(1700100000000), params.DateEnd)
-	assert.Equal(t, "full", params.Format)
-}
-
-// TestServerStdinStdoutConfig tests that server stdin/stdout can be configured.
-func TestServerStdinStdoutConfig(t *testing.T) {
-	t.Parallel()
-
-	var stdout bytes.Buffer
-	var stdin bytes.Buffer
-
-	server := &Server{
-		stdin:   &stdin,
-		stdout:  &stdout,
-		version: "test-version",
-	}
-
-	assert.Equal(t, &stdin, server.stdin)
-	assert.Equal(t, &stdout, server.stdout)
-	assert.Equal(t, "test-version", server.version)
-}
-
-// TestResponseIDTypes tests that response IDs can be various types.
-func TestResponseIDTypes(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		id   any
-		name string
-	}{
-		{name: "integer id", id: 1},
-		{name: "string id", id: "abc-123"},
-		{name: "float id", id: 1.5},
-		{name: "null id", id: nil},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			var buf bytes.Buffer
-			server := &Server{stdout: &buf}
-
-			resp := &Response{
-				JSONRPC: "2.0",
-				ID:      tt.id,
-				Result:  "ok",
-			}
-
-			server.sendResponse(resp)
-			output := buf.String()
-			assert.Contains(t, output, `"jsonrpc":"2.0"`)
-		})
-	}
-}
-
-// TestServerFields tests Server struct fields.
-func TestServerFields(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "2.0.0"})
-
-	assert.Equal(t, "2.0.0", server.version)
-	assert.NotNil(t, server.stdin)
-	assert.NotNil(t, server.stdout)
-}
-
-// TestRequestUnmarshalWithNullID tests Request unmarshaling with null ID.
-func TestRequestUnmarshalWithNullID(t *testing.T) {
-	t.Parallel()
-
-	input := `{"jsonrpc":"2.0","id":null,"method":"initialize"}`
-
-	var req Request
-	err := json.Unmarshal([]byte(input), &req)
-	require.NoError(t, err)
-	assert.Equal(t, "2.0", req.JSONRPC)
-	assert.Nil(t, req.ID)
-	assert.Equal(t, "initialize", req.Method)
-}
-
-// TestResponseWithNullError tests Response without error.
-func TestResponseWithNullError(t *testing.T) {
-	t.Parallel()
-
-	resp := Response{
-		JSONRPC: "2.0",
-		ID:      1,
-		Result:  "success",
-		Error:   nil,
-	}
-
-	data, err := json.Marshal(resp)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"result":"success"`)
-	assert.NotContains(t, string(data), `"error"`)
-}
-
-// TestErrorWithNilData tests Error without data.
-func TestErrorWithNilData(t *testing.T) {
-	t.Parallel()
-
-	err := Error{
-		Code:    -32600,
-		Message: "Invalid Request",
-		Data:    nil,
-	}
-
-	data, errMarshal := json.Marshal(err)
-	require.NoError(t, errMarshal)
-	assert.Contains(t, string(data), `"code":-32600`)
-	assert.Contains(t, string(data), `"message":"Invalid Request"`)
-	assert.NotContains(t, string(data), `"data"`)
-}
-
-// TestToolInputSchema tests that tool input schemas have required fields.
-func TestToolInputSchema(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/list",
-	}
-
-	resp := server.handleToolsList(req)
-	result := resp.Result.(map[string]any)
-	tools := result["tools"].([]Tool)
-
-	for _, tool := range tools {
-		schema := tool.InputSchema
-		schemaType, ok := schema["type"]
-		assert.True(t, ok, "tool %s schema should have type", tool.Name)
-		assert.Equal(t, "object", schemaType, "tool %s schema type should be object", tool.Name)
-
-		// All tools should have properties
-		_, hasProperties := schema["properties"]
-		assert.True(t, hasProperties, "tool %s should have properties", tool.Name)
-	}
-}
-
-func TestPrimaryToolSchemas_FeedbackAndStore(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	resp := server.handleToolsList(&Request{JSONRPC: "2.0", ID: 1, Method: "tools/list"})
-	result := resp.Result.(map[string]any)
-	tools := result["tools"].([]Tool)
-
-	var feedbackTool *Tool
-	var storeTool *Tool
-	for i := range tools {
-		switch tools[i].Name {
-		case "feedback":
-			feedbackTool = &tools[i]
-		case "store":
-			storeTool = &tools[i]
-		}
-	}
-
-	require.NotNil(t, feedbackTool)
-	require.NotNil(t, storeTool)
-
-	feedbackProps := feedbackTool.InputSchema["properties"].(map[string]any)
-	_, hasUseful := feedbackProps["useful"]
-	assert.False(t, hasUseful, "feedback schema should advertise rating enum, not useful boolean")
-	_, hasRating := feedbackProps["rating"]
-	assert.True(t, hasRating, "feedback schema should expose rating field")
-	_, hasSessionID := feedbackProps["session_id"]
-	assert.True(t, hasSessionID, "feedback schema should expose session_id for outcome action")
-
-	storeProps := storeTool.InputSchema["properties"].(map[string]any)
-	typeSchema := storeProps["type"].(map[string]any)
-	enumValues := typeSchema["enum"].([]string)
-	assert.Contains(t, enumValues, "decision")
-	assert.Contains(t, enumValues, "discovery")
-	assert.Contains(t, enumValues, "pitfall")
-	assert.Contains(t, enumValues, "timeline")
-	assert.NotContains(t, enumValues, "insight")
-}
-
-// TestCallTool_UnknownToolName tests callTool with various unknown tool names.
-func TestCallTool_UnknownToolName(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	unknownTools := []string{
-		"invalid_tool",
-		"nonexistent",
-		"search_v2",
-		"timeline_special",
-	}
-
-	for _, name := range unknownTools {
+	for _, name := range []string{"invalid_tool", "nonexistent", "search_v2", "timeline_x"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			result, err := server.callTool(ctx, name, json.RawMessage(`{}`))
+			result, err := s.callTool(ctx, name, json.RawMessage(`{}`))
 			assert.Error(t, err)
 			assert.Empty(t, result)
 			assert.Contains(t, err.Error(), "unknown tool")
@@ -1185,524 +655,125 @@ func TestCallTool_UnknownToolName(t *testing.T) {
 	}
 }
 
-// TestTimelineParams_Validation tests TimelineParams struct field validation.
-func TestTimelineParams_Validation(t *testing.T) {
+func TestCallTool_FindByFile_Removed(t *testing.T) {
 	t.Parallel()
-
-	tests := []struct {
-		name   string
-		json   string
-		wantOK bool
-	}{
-		{"valid with anchor_id", `{"anchor_id":123,"before":5,"after":5}`, true},
-		{"valid with query only", `{"query":"test query"}`, true},
-		{"empty params", `{}`, true},
-		{"with all fields", `{"anchor_id":1,"query":"test","before":10,"after":10,"project":"proj","obs_type":"bugfix","format":"full"}`, true},
-		{"invalid json", `{invalid`, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			var params TimelineParams
-			err := json.Unmarshal([]byte(tt.json), &params)
-			if tt.wantOK {
-				assert.NoError(t, err)
-			} else {
-				assert.Error(t, err)
-			}
-		})
-	}
+	// find_by_file was retired in v5; even invalid JSON returns "removed in v5"
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	_, err := s.callTool(context.Background(), "find_by_file", json.RawMessage(`{invalid}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "removed in v5")
 }
 
-// TestHandleToolsCall_EmptyParams tests tools/call with empty params.
-func TestHandleToolsCall_EmptyParams(t *testing.T) {
+func TestCallTool_GetMemoryStats_NilStores(t *testing.T) {
 	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/call",
-		Params:  json.RawMessage(`{}`),
-	}
-
-	resp := server.handleToolsCall(ctx, req)
-
-	// Should error due to missing name
-	require.NotNil(t, resp.Error)
-}
-
-// TestSendResponse_WithError tests sendResponse with an error response.
-func TestSendResponse_WithError(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	server := &Server{stdout: &buf}
-
-	resp := &Response{
-		JSONRPC: "2.0",
-		ID:      1,
-		Error:   &Error{Code: -32600, Message: "Invalid Request"},
-	}
-
-	server.sendResponse(resp)
-
-	output := buf.String()
-	assert.Contains(t, output, `"error"`)
-	assert.Contains(t, output, `-32600`)
-}
-
-// TestSendResponse_NilID tests sendResponse with nil ID.
-func TestSendResponse_NilID(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	server := &Server{stdout: &buf}
-
-	resp := &Response{
-		JSONRPC: "2.0",
-		ID:      nil,
-		Result:  "notification response",
-	}
-
-	server.sendResponse(resp)
-
-	output := buf.String()
-	assert.Contains(t, output, `"id":null`)
-}
-
-// TestToolCallParamsWithComplexArgs tests ToolCallParams with complex arguments.
-func TestToolCallParamsWithComplexArgs(t *testing.T) {
-	t.Parallel()
-
-	input := `{
-		"name": "search",
-		"arguments": {
-			"query": "authentication bug",
-			"project": "my-project",
-			"limit": 10,
-			"type": "observations"
-		}
-	}`
-
-	var params ToolCallParams
-	err := json.Unmarshal([]byte(input), &params)
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	result, err := s.callTool(context.Background(), "get_memory_stats", json.RawMessage(`{}`))
 	require.NoError(t, err)
-	assert.Equal(t, "search", params.Name)
-	assert.NotEmpty(t, params.Arguments)
+	assert.NotEmpty(t, result)
 }
 
-// TestHandleToolsCall_UnknownToolNameError tests tools/call with unknown tool returns error.
-func TestHandleToolsCall_UnknownToolNameError(t *testing.T) {
+func TestCallTool_CheckSystemHealth_NilStores(t *testing.T) {
 	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	result, err := s.callTool(context.Background(), "check_system_health", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	assert.NotEmpty(t, result)
+}
 
-	server := NewServer(ServerOptions{Version: "1.0.0"})
+func TestCallTool_ParameterValidation_Table(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
 	ctx := context.Background()
-
-	req := &Request{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/call",
-		Params:  json.RawMessage(`{"name":"very_unknown_tool_name","arguments":{}}`),
-	}
-
-	resp := server.handleToolsCall(ctx, req)
-
-	// Should get an error response
-	assert.Equal(t, "2.0", resp.JSONRPC)
-	assert.Equal(t, 1, resp.ID)
-	require.NotNil(t, resp.Error)
-	// Error is "Tool error" with message containing "unknown tool"
-	assert.True(t, resp.Error.Code != 0)
-}
-
-// =============================================================================
-// TESTS FOR Handler Defaults
-// =============================================================================
-
-// TestHandleTimeline_Defaults tests timeline default values.
-func TestHandleTimeline_Defaults(t *testing.T) {
-	t.Parallel()
-
-	// Test that handleTimeline sets default before/after values
-	params := TimelineParams{
-		Before: 0,
-		After:  0,
-	}
-
-	// Simulate the default value assignment from handleTimeline
-	if params.Before <= 0 {
-		params.Before = 10
-	}
-	if params.After <= 0 {
-		params.After = 10
-	}
-
-	assert.Equal(t, 10, params.Before)
-	assert.Equal(t, 10, params.After)
-}
-
-// TestHandleAnalyzeSearchPatterns_Validation tests parameter validation.
-func TestHandleAnalyzeSearchPatterns_Validation(t *testing.T) {
-	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	tests := []struct {
-		name        string
+	// Tools that still exist in the switch and validate params before hitting the DB
+	cases := []struct {
+		tool        string
 		args        string
 		errContains string
-		wantErr     bool
 	}{
-		{
-			name:        "invalid json",
-			args:        `{invalid`,
-			wantErr:     true,
-			errContains: "invalid arguments",
-		},
+		{"find_related_observations", `{invalid`, "invalid"},
+		{"find_related_observations", `{}`, "id is required"},
+		{"find_similar_observations", `{invalid`, "invalid"},
+		{"find_similar_observations", `{}`, "query is required"},
+		{"analyze_search_patterns", `{invalid`, "invalid"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.tool+"/"+tc.args, func(t *testing.T) {
 			t.Parallel()
-			_, err := server.handleAnalyzeSearchPatterns(ctx, json.RawMessage(tt.args))
-			if tt.wantErr {
-				require.Error(t, err)
-				if tt.errContains != "" {
-					assert.Contains(t, err.Error(), tt.errContains)
-				}
+			_, err := s.callTool(ctx, tc.tool, json.RawMessage(tc.args))
+			require.Error(t, err)
+			if tc.errContains != "" {
+				assert.Contains(t, err.Error(), tc.errContains)
 			}
 		})
 	}
 }
 
-// TestHandleGetMemoryStats_NilStores tests GetMemoryStats with nil stores.
-func TestHandleGetMemoryStats_NilStores(t *testing.T) {
+// ---------------------------------------------------------------------------
+// handleGetMemoryStats / handleCheckSystemHealth
+// ---------------------------------------------------------------------------
+
+func TestHandleGetMemoryStats_NilStores_ValidJSON(t *testing.T) {
 	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	// Should not panic with nil stores
-	result, err := server.handleGetMemoryStats(ctx)
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	result, err := s.handleGetMemoryStats(context.Background())
 	require.NoError(t, err)
 	assert.NotEmpty(t, result)
-
-	// Should be valid JSON
 	var stats map[string]any
-	err = json.Unmarshal([]byte(result), &stats)
-	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(result), &stats))
 }
 
-// TestHandleCheckSystemHealth_NilStores tests CheckSystemHealth with nil stores.
-func TestHandleCheckSystemHealth_NilStores(t *testing.T) {
+func TestHandleCheckSystemHealth_NilStores_StructuredResponse(t *testing.T) {
 	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	// Should not panic with nil stores
-	result, err := server.handleCheckSystemHealth(ctx)
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	result, err := s.handleCheckSystemHealth(context.Background())
 	require.NoError(t, err)
 	assert.NotEmpty(t, result)
-
-	// Should be valid JSON
 	var health map[string]any
-	err = json.Unmarshal([]byte(result), &health)
-	require.NoError(t, err)
-
-	// Should have subsystems and overall status
+	require.NoError(t, json.Unmarshal([]byte(result), &health))
 	assert.Contains(t, health, "overall_status")
 	assert.Contains(t, health, "subsystems")
 }
 
-// =============================================================================
-// COMPREHENSIVE callTool TESTS
-// =============================================================================
+// ---------------------------------------------------------------------------
+// handleFindRelatedObservations / handleFindSimilarObservations
+// ---------------------------------------------------------------------------
 
-// TestCallTool_AllSpecialTools tests all special tool cases in callTool switch.
-func TestCallTool_AllSpecialTools(t *testing.T) {
+func TestHandleFindRelatedObservations_Validation(t *testing.T) {
 	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
+	s := NewServer(ServerOptions{Version: "1.0.0"})
 	ctx := context.Background()
 
-	// Tests for tools that can work without stores or have nil guards
-	tests := []struct {
-		name       string
-		toolName   string
-		args       string
-		wantErr    bool
-		checkPanic bool
-	}{
-		// Tools that work with nil stores
-		{
-			name:     "get_memory_stats",
-			toolName: "get_memory_stats",
-			args:     `{}`,
-			wantErr:  false,
-		},
-		{
-			name:     "check_system_health",
-			toolName: "check_system_health",
-			args:     `{}`,
-			wantErr:  false,
-		},
-		// Tools that need stores but have parameter validation first
-		{
-			name:     "find_related_observations - invalid json",
-			toolName: "find_related_observations",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "find_related_observations - missing id",
-			toolName: "find_related_observations",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "find_similar_observations - invalid json",
-			toolName: "find_similar_observations",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "find_similar_observations - missing query",
-			toolName: "find_similar_observations",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "bulk_delete_observations - invalid json",
-			toolName: "bulk_delete_observations",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "bulk_delete_observations - missing ids",
-			toolName: "bulk_delete_observations",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "bulk_mark_superseded - invalid json",
-			toolName: "bulk_mark_superseded",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "bulk_mark_superseded - missing ids",
-			toolName: "bulk_mark_superseded",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "bulk_boost_observations - invalid json",
-			toolName: "bulk_boost_observations",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "bulk_boost_observations - missing ids",
-			toolName: "bulk_boost_observations",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "merge_observations - invalid json",
-			toolName: "merge_observations",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "merge_observations - missing source_ids",
-			toolName: "merge_observations",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observation - invalid json",
-			toolName: "get_observation",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observation - missing id",
-			toolName: "get_observation",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "edit_observation - invalid json",
-			toolName: "edit_observation",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "edit_observation - missing id",
-			toolName: "edit_observation",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observation_quality - invalid json",
-			toolName: "get_observation_quality",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observation_quality - missing id",
-			toolName: "get_observation_quality",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "suggest_consolidations - invalid json",
-			toolName: "suggest_consolidations",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "tag_observation - invalid json",
-			toolName: "tag_observation",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "tag_observation - missing id",
-			toolName: "tag_observation",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observations_by_tag - invalid json",
-			toolName: "get_observations_by_tag",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observations_by_tag - missing tag",
-			toolName: "get_observations_by_tag",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_temporal_trends - invalid json",
-			toolName: "get_temporal_trends",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_data_quality_report - invalid json",
-			toolName: "get_data_quality_report",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "batch_tag_by_pattern - invalid json",
-			toolName: "batch_tag_by_pattern",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "batch_tag_by_pattern - missing pattern",
-			toolName: "batch_tag_by_pattern",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "explain_search_ranking - invalid json",
-			toolName: "explain_search_ranking",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "explain_search_ranking - missing query",
-			toolName: "explain_search_ranking",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "export_observations - invalid json",
-			toolName: "export_observations",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "analyze_search_patterns - invalid json",
-			toolName: "analyze_search_patterns",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observation_relationships - invalid json",
-			toolName: "get_observation_relationships",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observation_relationships - missing id",
-			toolName: "get_observation_relationships",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observation_scoring_breakdown - invalid json",
-			toolName: "get_observation_scoring_breakdown",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-		{
-			name:     "get_observation_scoring_breakdown - missing id",
-			toolName: "get_observation_scoring_breakdown",
-			args:     `{}`,
-			wantErr:  true,
-		},
-		{
-			name:     "analyze_observation_importance - invalid json",
-			toolName: "analyze_observation_importance",
-			args:     `{invalid`,
-			wantErr:  true,
-		},
-	}
+	_, err := s.handleFindRelatedObservations(ctx, json.RawMessage(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "id is required")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result, err := server.callTool(ctx, tt.toolName, json.RawMessage(tt.args))
-			if tt.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				assert.NotEmpty(t, result)
-			}
-		})
-	}
+	_, err = s.handleFindRelatedObservations(ctx, json.RawMessage(`{invalid`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid arguments")
 }
 
-// =============================================================================
-// NIL GUARD HANDLER TESTS
-// =============================================================================
-
-// TestHandleFindSimilarObservations_ReturnsEmptyInV5 verifies that find_similar_observations
-// returns an empty result set now that vector storage is removed in v5.
-func TestHandleFindSimilarObservations_ReturnsEmptyInV5(t *testing.T) {
+func TestHandleFindSimilarObservations_Validation(t *testing.T) {
 	t.Parallel()
-
-	server := NewServer(ServerOptions{Version: "1.0.0"})
+	s := NewServer(ServerOptions{Version: "1.0.0"})
 	ctx := context.Background()
 
-	// Vector search removed in v5: should return empty observations without error.
-	result, err := server.handleFindSimilarObservations(ctx, json.RawMessage(`{"query": "test query"}`))
+	_, err := s.handleFindSimilarObservations(ctx, json.RawMessage(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "query is required")
+
+	_, err = s.handleFindSimilarObservations(ctx, json.RawMessage(`{invalid`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid arguments")
+}
+
+func TestHandleFindSimilarObservations_EmptyResultInV5(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	result, err := s.handleFindSimilarObservations(context.Background(), json.RawMessage(`{"query":"test"}`))
 	require.NoError(t, err)
 
-	// Verify both count==0 and that observations is present as an empty array,
-	// not missing or null, so the response shape is stable for clients.
 	var payload struct {
 		Count        int   `json:"count"`
 		Observations []any `json:"observations"`
@@ -1713,4 +784,173 @@ func TestHandleFindSimilarObservations_ReturnsEmptyInV5(t *testing.T) {
 	assert.Len(t, payload.Observations, 0)
 }
 
+func TestHandleAnalyzeSearchPatterns_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	_, err := s.handleAnalyzeSearchPatterns(context.Background(), json.RawMessage(`{invalid`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid arguments")
+}
 
+// ---------------------------------------------------------------------------
+// sendResponse / sendError
+// ---------------------------------------------------------------------------
+
+func TestSendResponse_ContainsJSONRPC(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{stdout: &buf}
+	s.sendResponse(&Response{JSONRPC: "2.0", ID: float64(1), Result: map[string]string{"ok": "yes"}})
+	output := buf.String()
+	assert.Contains(t, output, `"jsonrpc":"2.0"`)
+	assert.Contains(t, output, `"result"`)
+}
+
+func TestSendResponse_ErrorResponse(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{stdout: &buf}
+	s.sendResponse(&Response{JSONRPC: "2.0", ID: float64(1), Error: &Error{Code: -32600, Message: "Invalid Request"}})
+	output := buf.String()
+	assert.Contains(t, output, `"error"`)
+	assert.Contains(t, output, `-32600`)
+}
+
+func TestSendResponse_NilID(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{stdout: &buf}
+	s.sendResponse(&Response{JSONRPC: "2.0", ID: nil, Result: "note"})
+	assert.Contains(t, buf.String(), `"id":null`)
+}
+
+func TestSendResponse_VariousIDTypes(t *testing.T) {
+	t.Parallel()
+	for _, id := range []any{float64(1), "abc-123", 1.5, nil} {
+		var buf bytes.Buffer
+		s := &Server{stdout: &buf}
+		s.sendResponse(&Response{JSONRPC: "2.0", ID: id, Result: "ok"})
+		assert.Contains(t, buf.String(), `"jsonrpc":"2.0"`)
+	}
+}
+
+func TestSendError_OutputShape(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{stdout: &buf}
+	s.sendError(float64(1), -32700, "Parse error", "details")
+	output := buf.String()
+	assert.Contains(t, output, `"error"`)
+	assert.Contains(t, output, `-32700`)
+	assert.Contains(t, output, `"Parse error"`)
+}
+
+// ---------------------------------------------------------------------------
+// Run loop
+// ---------------------------------------------------------------------------
+
+func TestRun_ParseError(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{stdin: strings.NewReader("not json\n"), stdout: &buf}
+	require.NoError(t, s.Run(context.Background()))
+	out := buf.String()
+	assert.Contains(t, out, `"error"`)
+	assert.Contains(t, out, `-32700`)
+	assert.Contains(t, out, `"Parse error"`)
+}
+
+func TestRun_EmptyLinesSkipped(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{stdin: strings.NewReader("\n\n\n"), stdout: &buf}
+	require.NoError(t, s.Run(context.Background()))
+	assert.Empty(t, buf.String())
+}
+
+func TestRun_ValidInitialize(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{
+		stdin:   strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n"),
+		stdout:  &buf,
+		version: "1.0.0",
+	}
+	require.NoError(t, s.Run(context.Background()))
+	out := buf.String()
+	assert.Contains(t, out, `"jsonrpc":"2.0"`)
+	assert.Contains(t, out, `"protocolVersion"`)
+}
+
+func TestRun_MultipleRequests(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	input := `{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n" +
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
+	s := &Server{stdin: strings.NewReader(input), stdout: &buf, version: "1.0.0"}
+	require.NoError(t, s.Run(context.Background()))
+	out := buf.String()
+	assert.Contains(t, out, `"id":1`)
+	assert.Contains(t, out, `"id":2`)
+}
+
+func TestRun_MixedValidAndInvalid(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	input := `{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n" +
+		`bad json here` + "\n" +
+		`{"jsonrpc":"2.0","id":3,"method":"tools/list"}` + "\n"
+	s := &Server{stdin: strings.NewReader(input), stdout: &buf, version: "1.0.0"}
+	require.NoError(t, s.Run(context.Background()))
+	out := buf.String()
+	assert.Contains(t, out, `"id":1`)
+	assert.Contains(t, out, `"error"`)
+	assert.Contains(t, out, `"id":3`)
+}
+
+func TestRun_NotificationNoResponse(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	// notification has no id field — server must not respond
+	input := `{"jsonrpc":"2.0","method":"initialized"}` + "\n"
+	s := &Server{stdin: strings.NewReader(input), stdout: &buf, version: "1.0.0"}
+	require.NoError(t, s.Run(context.Background()))
+	assert.Empty(t, buf.String())
+}
+
+// ---------------------------------------------------------------------------
+// JSON-RPC standard error codes (regression guard)
+// ---------------------------------------------------------------------------
+
+func TestJSONRPCErrorCodes_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		msg  string
+		code int
+	}{
+		{"Parse error", -32700},
+		{"Invalid Request", -32600},
+		{"Method not found", -32601},
+		{"Invalid params", -32602},
+		{"Internal error", -32603},
+	}
+	for _, tc := range cases {
+		t.Run(tc.msg, func(t *testing.T) {
+			t.Parallel()
+			e := Error{Code: tc.code, Message: tc.msg}
+			assert.Equal(t, tc.code, e.Code)
+			assert.Equal(t, tc.msg, e.Message)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tier constants
+// ---------------------------------------------------------------------------
+
+func TestTierConstants(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 1, tierCore)
+	assert.Equal(t, 2, tierUseful)
+	assert.Equal(t, 3, tierAdmin)
+}

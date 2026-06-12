@@ -5,508 +5,415 @@ import (
 
 	"github.com/thebtf/engram/pkg/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestParseObservations_SingleObservation(t *testing.T) {
-	text := `Some text before
-<observation>
-<type>bugfix</type>
-<title>Fixed null pointer error</title>
-<subtitle>In user service</subtitle>
-<narrative>The service was crashing when user ID was nil</narrative>
+// ---------------------------------------------------------------------------
+// ParseObservations
+// ---------------------------------------------------------------------------
+
+func TestParseObservations_EmptyText(t *testing.T) {
+	result := ParseObservations("", "cid")
+	assert.Empty(t, result)
+}
+
+func TestParseObservations_NoTags(t *testing.T) {
+	result := ParseObservations("plain text with no XML tags at all", "cid")
+	assert.Empty(t, result)
+}
+
+func TestParseObservations_FullObservation(t *testing.T) {
+	text := `<observation>
+<type>feature</type>
+<title>Redis caching layer</title>
+<subtitle>In memory store</subtitle>
+<narrative>Implemented a Redis-backed cache to reduce DB load</narrative>
 <facts>
-<fact>Added nil check</fact>
-<fact>Added unit test</fact>
+<fact>Cache TTL set to 300 seconds</fact>
+<fact>Eviction policy: allkeys-lru</fact>
 </facts>
 <concepts>
-<concept>error-handling</concept>
-<concept>debugging</concept>
+<concept>caching</concept>
+<concept>performance</concept>
 </concepts>
 <files_read>
-<file>user_service.go</file>
+<file>internal/cache/client.go</file>
 </files_read>
 <files_modified>
-<file>user_service.go</file>
-<file>user_service_test.go</file>
+<file>internal/cache/client.go</file>
+<file>internal/cache/client_test.go</file>
 </files_modified>
-</observation>
-Some text after`
+<commands_run>
+<command>go test ./internal/cache/...</command>
+</commands_run>
+</observation>`
 
-	observations := ParseObservations(text, "test-correlation-id")
+	obs := ParseObservations(text, "cid-001")
+	require.Len(t, obs, 1)
 
-	assert.Len(t, observations, 1)
-	obs := observations[0]
-	assert.Equal(t, models.ObservationType("bugfix"), obs.Type)
-	assert.Equal(t, "Fixed null pointer error", obs.Title)
-	assert.Equal(t, "In user service", obs.Subtitle)
-	assert.Equal(t, "The service was crashing when user ID was nil", obs.Narrative)
-	assert.Equal(t, []string{"Added nil check", "Added unit test"}, obs.Facts)
-	assert.Equal(t, []string{"error-handling", "debugging"}, obs.Concepts)
-	assert.Equal(t, []string{"user_service.go"}, obs.FilesRead)
-	assert.Equal(t, []string{"user_service.go", "user_service_test.go"}, obs.FilesModified)
+	o := obs[0]
+	assert.Equal(t, models.ObsTypeFeature, o.Type)
+	assert.Equal(t, "Redis caching layer", o.Title)
+	assert.Equal(t, "In memory store", o.Subtitle)
+	assert.Equal(t, "Implemented a Redis-backed cache to reduce DB load", o.Narrative)
+	assert.Equal(t, []string{"Cache TTL set to 300 seconds", "Eviction policy: allkeys-lru"}, o.Facts)
+	assert.Equal(t, []string{"caching", "performance"}, o.Concepts)
+	assert.Equal(t, []string{"internal/cache/client.go"}, o.FilesRead)
+	assert.Equal(t, []string{"internal/cache/client.go", "internal/cache/client_test.go"}, o.FilesModified)
+	assert.Equal(t, []string{"go test ./internal/cache/..."}, o.CommandsRun)
 }
 
-func TestParseObservations_MultipleObservations(t *testing.T) {
-	text := `
-<observation>
-<type>feature</type>
-<title>Added caching</title>
-<narrative>Implemented Redis caching</narrative>
-<facts><fact>Added cache layer</fact></facts>
-<concepts><concept>caching</concept></concepts>
+func TestParseObservations_MultipleBlocks(t *testing.T) {
+	text := `<observation>
+<type>bugfix</type>
+<title>Nil pointer in auth handler</title>
+<narrative>Added nil guard before token lookup</narrative>
 </observation>
 <observation>
 <type>refactor</type>
-<title>Cleaned up code</title>
-<narrative>Removed dead code</narrative>
-<facts><fact>Removed unused functions</fact></facts>
-<concepts><concept>refactoring</concept></concepts>
-</observation>
-`
+<title>Extract config loader</title>
+<narrative>Moved config loading into a separate package</narrative>
+</observation>`
 
-	observations := ParseObservations(text, "test-id")
-
-	assert.Len(t, observations, 2)
-	assert.Equal(t, models.ObservationType("feature"), observations[0].Type)
-	assert.Equal(t, "Added caching", observations[0].Title)
-	assert.Equal(t, models.ObservationType("refactor"), observations[1].Type)
-	assert.Equal(t, "Cleaned up code", observations[1].Title)
+	obs := ParseObservations(text, "cid-002")
+	require.Len(t, obs, 2)
+	assert.Equal(t, models.ObsTypeBugfix, obs[0].Type)
+	assert.Equal(t, "Nil pointer in auth handler", obs[0].Title)
+	assert.Equal(t, models.ObsTypeRefactor, obs[1].Type)
+	assert.Equal(t, "Extract config loader", obs[1].Title)
 }
 
-func TestParseObservations_TableDriven(t *testing.T) {
-	tests := []struct {
-		name          string
-		input         string
-		expectedType  models.ObservationType
-		expectedTitle string
-		checkConcepts []string
-		expectedCount int
+func TestParseObservations_TypeMapping(t *testing.T) {
+	cases := []struct {
+		xmlType  string
+		wantType models.ObservationType
 	}{
-		{
-			name: "valid_bugfix_observation",
-			input: `<observation>
-<type>bugfix</type>
-<title>Fixed bug</title>
-<narrative>Details</narrative>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeBugfix,
-			expectedTitle: "Fixed bug",
-		},
-		{
-			name: "valid_feature_observation",
-			input: `<observation>
-<type>feature</type>
-<title>New feature</title>
-<narrative>Added new stuff</narrative>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeFeature,
-			expectedTitle: "New feature",
-		},
-		{
-			name: "valid_refactor_observation",
-			input: `<observation>
-<type>refactor</type>
-<title>Code cleanup</title>
-<narrative>Refactored module</narrative>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeRefactor,
-			expectedTitle: "Code cleanup",
-		},
-		{
-			name: "valid_change_observation",
-			input: `<observation>
+		{"bugfix", models.ObsTypeBugfix},
+		{"feature", models.ObsTypeFeature},
+		{"refactor", models.ObsTypeRefactor},
+		{"change", models.ObsTypeChange},
+		{"discovery", models.ObsTypeDiscovery},
+		{"decision", models.ObsTypeDecision},
+		{"guidance", models.ObservationType("guidance")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.xmlType, func(t *testing.T) {
+			text := `<observation><type>` + tc.xmlType + `</type><title>T</title><narrative>N</narrative></observation>`
+			obs := ParseObservations(text, "cid")
+			require.Len(t, obs, 1)
+			assert.Equal(t, tc.wantType, obs[0].Type)
+		})
+	}
+}
+
+func TestParseObservations_InvalidTypeDefaultsToChange(t *testing.T) {
+	text := `<observation>
+<type>not_a_valid_type</type>
+<title>Some work</title>
+<narrative>Did stuff</narrative>
+</observation>`
+
+	obs := ParseObservations(text, "cid")
+	require.Len(t, obs, 1)
+	assert.Equal(t, models.ObsTypeChange, obs[0].Type)
+}
+
+func TestParseObservations_MissingTypeDefaultsToChange(t *testing.T) {
+	text := `<observation>
+<title>No type tag</title>
+<narrative>Did stuff</narrative>
+</observation>`
+
+	obs := ParseObservations(text, "cid")
+	require.Len(t, obs, 1)
+	assert.Equal(t, models.ObsTypeChange, obs[0].Type)
+}
+
+func TestParseObservations_CategoryOverridesType(t *testing.T) {
+	// category=debugging → ObsTypeBugfix regardless of <type> field
+	text := `<observation>
+<category>debugging</category>
 <type>change</type>
-<title>Config update</title>
-<narrative>Changed settings</narrative>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeChange,
-			expectedTitle: "Config update",
-		},
-		{
-			name: "valid_discovery_observation",
-			input: `<observation>
+<title>Debug category win</title>
+<narrative>Category should override type field</narrative>
+</observation>`
+
+	obs := ParseObservations(text, "cid")
+	require.Len(t, obs, 1)
+	assert.Equal(t, models.ObsTypeBugfix, obs[0].Type)
+}
+
+func TestParseObservations_CategoryUserBehavior_LLMDerived(t *testing.T) {
+	text := `<observation>
+<category>user_behavior</category>
+<title>User prefers dark mode</title>
+<narrative>The user consistently selects dark mode</narrative>
+</observation>`
+
+	obs := ParseObservations(text, "cid")
+	require.Len(t, obs, 1)
+	assert.Equal(t, models.ObsTypeGuidance, obs[0].Type)
+	assert.Equal(t, models.SourceLLMDerived, obs[0].SourceType)
+}
+
+func TestParseObservations_InvalidConceptsFiltered(t *testing.T) {
+	text := `<observation>
 <type>discovery</type>
-<title>Found pattern</title>
-<narrative>Discovered new pattern</narrative>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeDiscovery,
-			expectedTitle: "Found pattern",
-		},
-		{
-			name: "valid_decision_observation",
-			input: `<observation>
-<type>decision</type>
-<title>Architecture decision</title>
-<narrative>Chose microservices</narrative>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeDecision,
-			expectedTitle: "Architecture decision",
-		},
-		{
-			name: "invalid_type_defaults_to_change",
-			input: `<observation>
-<type>invalid_type</type>
-<title>Some title</title>
-<narrative>Details</narrative>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeChange,
-			expectedTitle: "Some title",
-		},
-		{
-			name: "missing_type_defaults_to_change",
-			input: `<observation>
-<title>No type specified</title>
-<narrative>Details</narrative>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeChange,
-			expectedTitle: "No type specified",
-		},
-		{
-			name:          "empty_input",
-			input:         "",
-			expectedCount: 0,
-		},
-		{
-			name:          "no_observation_tags",
-			input:         "Just regular text without any observation",
-			expectedCount: 0,
-		},
-		{
-			name: "valid_concepts_filtered",
-			input: `<observation>
-<type>bugfix</type>
-<title>Test</title>
-<narrative>Test</narrative>
+<title>Concept filter test</title>
+<narrative>Test filtering</narrative>
 <concepts>
-<concept>best-practice</concept>
-<concept>invalid-concept</concept>
 <concept>security</concept>
+<concept>made-up-concept</concept>
+<concept>performance</concept>
+<concept>totally-invalid</concept>
 </concepts>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeBugfix,
-			checkConcepts: []string{"best-practice", "security"},
-		},
-		{
-			name: "type_in_concepts_filtered_out",
-			input: `<observation>
+</observation>`
+
+	obs := ParseObservations(text, "cid")
+	require.Len(t, obs, 1)
+	assert.Equal(t, []string{"security", "performance"}, obs[0].Concepts)
+}
+
+func TestParseObservations_TypeNameInConceptsFiltered(t *testing.T) {
+	// The observation type itself should be removed from concepts list
+	text := `<observation>
 <type>bugfix</type>
-<title>Test</title>
+<title>Bug concept test</title>
 <narrative>Test</narrative>
 <concepts>
 <concept>bugfix</concept>
-<concept>security</concept>
+<concept>debugging</concept>
 </concepts>
-</observation>`,
-			expectedCount: 1,
-			expectedType:  models.ObsTypeBugfix,
-			checkConcepts: []string{"security"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			observations := ParseObservations(tt.input, "test-correlation-id")
-
-			assert.Len(t, observations, tt.expectedCount)
-			if tt.expectedCount > 0 {
-				obs := observations[0]
-				assert.Equal(t, tt.expectedType, obs.Type)
-				if tt.expectedTitle != "" {
-					assert.Equal(t, tt.expectedTitle, obs.Title)
-				}
-				if tt.checkConcepts != nil {
-					assert.Equal(t, tt.checkConcepts, obs.Concepts)
-				}
-			}
-		})
-	}
-}
-
-func TestParseObservations_AllValidConcepts(t *testing.T) {
-	// Test all valid concepts are accepted
-	validConcepts := []string{
-		"how-it-works", "why-it-exists", "what-changed", "problem-solution", "gotcha", "pattern", "trade-off",
-		"best-practice", "anti-pattern", "architecture", "security", "performance", "testing", "debugging", "workflow", "tooling",
-		"refactoring", "api", "database", "configuration", "error-handling", "caching", "logging", "auth", "validation",
-	}
-
-	for _, concept := range validConcepts {
-		t.Run("concept_"+concept, func(t *testing.T) {
-			input := `<observation>
-<type>discovery</type>
-<title>Test</title>
-<narrative>Test</narrative>
-<concepts><concept>` + concept + `</concept></concepts>
 </observation>`
 
-			observations := ParseObservations(input, "test-id")
-			assert.Len(t, observations, 1)
-			assert.Contains(t, observations[0].Concepts, concept)
-		})
-	}
+	obs := ParseObservations(text, "cid")
+	require.Len(t, obs, 1)
+	// "bugfix" matches the type → removed; "debugging" is valid → kept
+	assert.Equal(t, []string{"debugging"}, obs[0].Concepts)
 }
 
-func TestParseObservations_ConceptCaseInsensitive(t *testing.T) {
-	input := `<observation>
-<type>discovery</type>
-<title>Test</title>
+func TestParseObservations_ConceptsCaseNormalized(t *testing.T) {
+	text := `<observation>
+<type>feature</type>
+<title>Case test</title>
 <narrative>Test</narrative>
 <concepts>
 <concept>SECURITY</concept>
-<concept>Best-Practice</concept>
-<concept>  caching  </concept>
+<concept>  Performance  </concept>
+<concept>Anti-Pattern</concept>
 </concepts>
 </observation>`
 
-	observations := ParseObservations(input, "test-id")
-
-	assert.Len(t, observations, 1)
-	assert.Equal(t, []string{"security", "best-practice", "caching"}, observations[0].Concepts)
+	obs := ParseObservations(text, "cid")
+	require.Len(t, obs, 1)
+	assert.Contains(t, obs[0].Concepts, "security")
+	assert.Contains(t, obs[0].Concepts, "performance")
+	assert.Contains(t, obs[0].Concepts, "anti-pattern")
 }
 
-func TestParseSummary_ValidSummary(t *testing.T) {
-	text := `Some text before
-<summary>
-<request>User asked to fix the bug</request>
-<investigated>Looked at error logs and stack traces</investigated>
-<learned>The issue was a race condition</learned>
-<completed>Fixed the race condition with mutex</completed>
-<next_steps>Add more tests for concurrent access</next_steps>
-<notes>May need to review similar code elsewhere</notes>
-</summary>
-Some text after`
-
-	summary := ParseSummary(text, 123)
-
-	assert.NotNil(t, summary)
-	assert.Equal(t, "User asked to fix the bug", summary.Request)
-	assert.Equal(t, "Looked at error logs and stack traces", summary.Investigated)
-	assert.Equal(t, "The issue was a race condition", summary.Learned)
-	assert.Equal(t, "Fixed the race condition with mutex", summary.Completed)
-	assert.Equal(t, "Add more tests for concurrent access", summary.NextSteps)
-	assert.Equal(t, "May need to review similar code elsewhere", summary.Notes)
-}
-
-func TestParseSummary_TableDriven(t *testing.T) {
-	tests := []struct {
-		name            string
-		input           string
-		expectedRequest string
-		sessionID       int64
-		expectNil       bool
-	}{
-		{
-			name:      "empty_input",
-			input:     "",
-			sessionID: 1,
-			expectNil: true,
-		},
-		{
-			name:      "no_summary_tag",
-			input:     "Just some text without summary",
-			sessionID: 1,
-			expectNil: true,
-		},
-		{
-			name:      "skip_summary_tag",
-			input:     `<skip_summary reason="No significant changes made"/>`,
-			sessionID: 1,
-			expectNil: true,
-		},
-		{
-			name:      "skip_summary_with_different_reason",
-			input:     `<skip_summary reason="Only read files"/>`,
-			sessionID: 2,
-			expectNil: true,
-		},
-		{
-			name: "valid_summary_minimal",
-			input: `<summary>
-<request>Test request</request>
-</summary>`,
-			sessionID:       3,
-			expectNil:       false,
-			expectedRequest: "Test request",
-		},
-		{
-			name: "valid_summary_all_fields",
-			input: `<summary>
-<request>Full request</request>
-<investigated>Full investigated</investigated>
-<learned>Full learned</learned>
-<completed>Full completed</completed>
-<next_steps>Full next steps</next_steps>
-<notes>Full notes</notes>
-</summary>`,
-			sessionID:       4,
-			expectNil:       false,
-			expectedRequest: "Full request",
-		},
-		{
-			name: "summary_with_empty_fields",
-			input: `<summary>
-<request></request>
-<investigated></investigated>
-</summary>`,
-			sessionID:       5,
-			expectNil:       false,
-			expectedRequest: "",
-		},
+func TestParseObservations_AllValidConcepts(t *testing.T) {
+	wantConcepts := []string{
+		"how-it-works", "why-it-exists", "what-changed", "problem-solution",
+		"gotcha", "pattern", "trade-off", "best-practice", "anti-pattern",
+		"architecture", "security", "performance", "testing", "debugging",
+		"workflow", "tooling", "refactoring", "api", "database",
+		"configuration", "error-handling", "caching", "logging", "auth", "validation",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			summary := ParseSummary(tt.input, tt.sessionID)
-
-			if tt.expectNil {
-				assert.Nil(t, summary)
-			} else {
-				assert.NotNil(t, summary)
-				assert.Equal(t, tt.expectedRequest, summary.Request)
-			}
+	for _, c := range wantConcepts {
+		t.Run(c, func(t *testing.T) {
+			text := `<observation><type>discovery</type><title>T</title><narrative>N</narrative>` +
+				`<concepts><concept>` + c + `</concept></concepts></observation>`
+			obs := ParseObservations(text, "cid")
+			require.Len(t, obs, 1)
+			assert.Contains(t, obs[0].Concepts, c)
 		})
 	}
 }
 
-func TestParseSummary_SkipSummaryPriority(t *testing.T) {
-	// skip_summary should take priority over summary block
-	text := `<skip_summary reason="No changes"/>
-<summary>
-<request>This should be ignored</request>
+// ---------------------------------------------------------------------------
+// ParseSummary
+// ---------------------------------------------------------------------------
+
+func TestParseSummary_NilOnEmpty(t *testing.T) {
+	assert.Nil(t, ParseSummary("", 1))
+}
+
+func TestParseSummary_NilOnNoTag(t *testing.T) {
+	assert.Nil(t, ParseSummary("no summary tag here", 2))
+}
+
+func TestParseSummary_SkipTagReturnsNil(t *testing.T) {
+	text := `<skip_summary reason="No code changes performed"/>`
+	assert.Nil(t, ParseSummary(text, 3))
+}
+
+func TestParseSummary_SkipTagPrecedesBlock(t *testing.T) {
+	// skip_summary wins even when a <summary> block follows
+	text := `<skip_summary reason="trivial session"/>
+<summary><request>should be ignored</request></summary>`
+	assert.Nil(t, ParseSummary(text, 4))
+}
+
+func TestParseSummary_AllFields(t *testing.T) {
+	text := `<summary>
+<request>Implement gRPC auth interceptor</request>
+<investigated>Existing auth middleware and gRPC patterns</investigated>
+<learned>gRPC metadata is the equivalent of HTTP headers for bearer tokens</learned>
+<completed>Added UnaryInterceptor that validates X-Auth-Token metadata</completed>
+<next_steps>Add streaming interceptor and write integration tests</next_steps>
+<notes>Consider caching validated tokens to reduce DB hits</notes>
 </summary>`
 
-	summary := ParseSummary(text, 1)
-	assert.Nil(t, summary)
+	s := ParseSummary(text, 10)
+	require.NotNil(t, s)
+	assert.Equal(t, "Implement gRPC auth interceptor", s.Request)
+	assert.Equal(t, "Existing auth middleware and gRPC patterns", s.Investigated)
+	assert.Equal(t, "gRPC metadata is the equivalent of HTTP headers for bearer tokens", s.Learned)
+	assert.Equal(t, "Added UnaryInterceptor that validates X-Auth-Token metadata", s.Completed)
+	assert.Equal(t, "Add streaming interceptor and write integration tests", s.NextSteps)
+	assert.Equal(t, "Consider caching validated tokens to reduce DB hits", s.Notes)
 }
 
-func TestExtractField_TableDriven(t *testing.T) {
-	tests := []struct {
+func TestParseSummary_MinimalBlock(t *testing.T) {
+	text := `<summary><request>Deploy hotfix</request></summary>`
+	s := ParseSummary(text, 5)
+	require.NotNil(t, s)
+	assert.Equal(t, "Deploy hotfix", s.Request)
+}
+
+func TestParseSummary_EmptyFields(t *testing.T) {
+	text := `<summary><request></request><investigated></investigated></summary>`
+	s := ParseSummary(text, 6)
+	require.NotNil(t, s)
+	assert.Equal(t, "", s.Request)
+}
+
+// ---------------------------------------------------------------------------
+// extractField
+// ---------------------------------------------------------------------------
+
+func TestExtractField_Table(t *testing.T) {
+	cases := []struct {
 		name      string
 		content   string
-		fieldName string
-		expected  string
+		field     string
+		want      string
 	}{
 		{
-			name:      "simple_field",
-			content:   "<title>Test Title</title>",
-			fieldName: "title",
-			expected:  "Test Title",
+			name:    "present field",
+			content: "<title>Rewrite auth handler</title>",
+			field:   "title",
+			want:    "Rewrite auth handler",
 		},
 		{
-			name:      "field_with_whitespace",
-			content:   "<title>  Test Title  </title>",
-			fieldName: "title",
-			expected:  "Test Title",
+			name:    "whitespace trimmed",
+			content: "<narrative>  lots of spaces  </narrative>",
+			field:   "narrative",
+			want:    "lots of spaces",
 		},
 		{
-			name:      "field_not_found",
-			content:   "<other>Value</other>",
-			fieldName: "title",
-			expected:  "",
+			name:    "field not present",
+			content: "<other>value</other>",
+			field:   "title",
+			want:    "",
 		},
 		{
-			name:      "empty_field",
-			content:   "<title></title>",
-			fieldName: "title",
-			expected:  "",
+			name:    "empty tag",
+			content: "<title></title>",
+			field:   "title",
+			want:    "",
 		},
 		{
-			name:      "nested_content",
-			content:   "<wrapper><title>Nested</title></wrapper>",
-			fieldName: "title",
-			expected:  "Nested",
+			name:    "surrounded by siblings",
+			content: "<a>1</a><title>Target</title><b>2</b>",
+			field:   "title",
+			want:    "Target",
 		},
 		{
-			name:      "field_among_others",
-			content:   "<a>A</a><title>Target</title><b>B</b>",
-			fieldName: "title",
-			expected:  "Target",
+			name:    "nested inside parent",
+			content: "<outer><title>Inner</title></outer>",
+			field:   "title",
+			want:    "Inner",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractField(tt.content, tt.fieldName)
-			assert.Equal(t, tt.expected, result)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, extractField(tc.content, tc.field))
 		})
 	}
 }
 
-func TestExtractArrayElements_TableDriven(t *testing.T) {
-	tests := []struct {
+// ---------------------------------------------------------------------------
+// extractArrayElements
+// ---------------------------------------------------------------------------
+
+func TestExtractArrayElements_Table(t *testing.T) {
+	cases := []struct {
 		name        string
 		content     string
 		arrayName   string
-		elementName string
-		expected    []string
+		elemName    string
+		want        []string
 	}{
 		{
-			name:        "simple_array",
-			content:     "<facts><fact>One</fact><fact>Two</fact></facts>",
-			arrayName:   "facts",
-			elementName: "fact",
-			expected:    []string{"One", "Two"},
+			name:      "two elements",
+			content:   "<facts><fact>Alpha</fact><fact>Beta</fact></facts>",
+			arrayName: "facts", elemName: "fact",
+			want: []string{"Alpha", "Beta"},
 		},
 		{
-			name:        "empty_array",
-			content:     "<facts></facts>",
-			arrayName:   "facts",
-			elementName: "fact",
-			expected:    nil,
+			name:      "empty array tag",
+			content:   "<facts></facts>",
+			arrayName: "facts", elemName: "fact",
+			want: nil,
 		},
 		{
-			name:        "array_not_found",
-			content:     "<other><item>Value</item></other>",
-			arrayName:   "facts",
-			elementName: "fact",
-			expected:    nil,
+			name:      "array not present",
+			content:   "<other><item>val</item></other>",
+			arrayName: "facts", elemName: "fact",
+			want: nil,
 		},
 		{
-			name:        "single_element",
-			content:     "<concepts><concept>security</concept></concepts>",
-			arrayName:   "concepts",
-			elementName: "concept",
-			expected:    []string{"security"},
+			name:      "single element",
+			content:   "<concepts><concept>security</concept></concepts>",
+			arrayName: "concepts", elemName: "concept",
+			want: []string{"security"},
 		},
 		{
-			name: "multiline_array",
+			name: "multiline array",
 			content: `<files>
-<file>file1.go</file>
-<file>file2.go</file>
-<file>file3.go</file>
+<file>handler.go</file>
+<file>handler_test.go</file>
+<file>middleware.go</file>
 </files>`,
-			arrayName:   "files",
-			elementName: "file",
-			expected:    []string{"file1.go", "file2.go", "file3.go"},
+			arrayName: "files", elemName: "file",
+			want: []string{"handler.go", "handler_test.go", "middleware.go"},
 		},
 		{
-			name:        "whitespace_trimmed",
-			content:     "<items><item>  trimmed  </item></items>",
-			arrayName:   "items",
-			elementName: "item",
-			expected:    []string{"trimmed"},
+			name:      "whitespace trimmed",
+			content:   "<items><item>  trimmed  </item></items>",
+			arrayName: "items", elemName: "item",
+			want: []string{"trimmed"},
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractArrayElements(tt.content, tt.arrayName, tt.elementName)
-			assert.Equal(t, tt.expected, result)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractArrayElements(tc.content, tc.arrayName, tc.elemName)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
 
-func TestValidObsTypes(t *testing.T) {
-	expected := map[string]bool{
+// ---------------------------------------------------------------------------
+// Package-level variable contracts
+// ---------------------------------------------------------------------------
+
+func TestValidObsTypes_Map(t *testing.T) {
+	want := map[string]bool{
 		"bugfix":    true,
 		"feature":   true,
 		"refactor":  true,
@@ -515,24 +422,23 @@ func TestValidObsTypes(t *testing.T) {
 		"decision":  true,
 		"guidance":  true,
 	}
-	assert.Equal(t, expected, validObsTypes)
+	assert.Equal(t, want, validObsTypes)
 }
 
-func TestValidConcepts(t *testing.T) {
-	// Verify expected concepts are valid
-	expectedValid := []string{
-		"how-it-works", "why-it-exists", "what-changed", "problem-solution", "gotcha", "pattern", "trade-off",
-		"best-practice", "anti-pattern", "architecture", "security", "performance", "testing", "debugging", "workflow", "tooling",
-		"refactoring", "api", "database", "configuration", "error-handling", "caching", "logging", "auth", "validation",
+func TestValidConcepts_PresentAndAbsent(t *testing.T) {
+	mustBePresent := []string{
+		"how-it-works", "why-it-exists", "what-changed", "problem-solution",
+		"gotcha", "pattern", "trade-off", "best-practice", "anti-pattern",
+		"architecture", "security", "performance", "testing", "debugging",
+		"workflow", "tooling", "refactoring", "api", "database",
+		"configuration", "error-handling", "caching", "logging", "auth", "validation",
+	}
+	for _, c := range mustBePresent {
+		assert.True(t, validConcepts[c], "concept %q must be in validConcepts", c)
 	}
 
-	for _, concept := range expectedValid {
-		assert.True(t, validConcepts[concept], "Expected %s to be valid", concept)
-	}
-
-	// Verify invalid concepts
-	invalidConcepts := []string{"random", "invalid", "not-a-concept", "foo", "bar"}
-	for _, concept := range invalidConcepts {
-		assert.False(t, validConcepts[concept], "Expected %s to be invalid", concept)
+	mustBeAbsent := []string{"random", "foo", "bar", "unknown", "xyz"}
+	for _, c := range mustBeAbsent {
+		assert.False(t, validConcepts[c], "concept %q must not be in validConcepts", c)
 	}
 }
