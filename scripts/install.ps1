@@ -171,7 +171,7 @@ function Register-Plugin {
             }
         )
         if (-not $Plugins.plugins) {
-            $Plugins | Add-Member -NotePropertyName "plugins" -NotePropertyValue @{} -Force
+            $Plugins | Add-Member -NotePropertyName "plugins" -NotePropertyValue ([PSCustomObject]@{}) -Force
         }
         $Plugins.plugins | Add-Member -NotePropertyName $PluginKey -NotePropertyValue $PluginEntry -Force
         $Plugins | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $PluginsFile
@@ -180,7 +180,7 @@ function Register-Plugin {
         # settings.json — enable plugin and configure statusline
         $Settings = Get-Content $SettingsFile -Raw | ConvertFrom-Json
         if (-not $Settings.enabledPlugins) {
-            $Settings | Add-Member -NotePropertyName "enabledPlugins" -NotePropertyValue @{} -Force
+            $Settings | Add-Member -NotePropertyName "enabledPlugins" -NotePropertyValue ([PSCustomObject]@{}) -Force
         }
         $Settings.enabledPlugins | Add-Member -NotePropertyName $PluginKey -NotePropertyValue $true -Force
 
@@ -206,7 +206,9 @@ function Register-Plugin {
         Write-Success "Marketplace registered in known_marketplaces.json"
     }
     catch {
-        Write-Warn "Plugin registration encountered an error: $_"
+        Write-Host "[ERROR] Plugin registration failed: $_" -ForegroundColor Red
+        Write-Host "[ERROR] installed_plugins.json / settings.json / known_marketplaces.json may not have been updated." -ForegroundColor Red
+        exit 1
     }
 }
 
@@ -230,14 +232,18 @@ function Setup-Connection {
 
     $ApiToken = Read-Host "  API Token (leave blank for no auth)"
 
-    # Persist to user environment so new shells inherit the settings
+    # Persist to user environment so new shells inherit the settings.
+    # ENGRAM_TOKEN is the canonical runtime name read by .mcp.json; ENGRAM_API_TOKEN
+    # is kept for backward compatibility.
     [Environment]::SetEnvironmentVariable("ENGRAM_URL",       $ServerUrl, "User")
     [Environment]::SetEnvironmentVariable("ENGRAM_API_TOKEN", $ApiToken,  "User")
-    Write-Success "Environment variables set (ENGRAM_URL, ENGRAM_API_TOKEN)"
+    [Environment]::SetEnvironmentVariable("ENGRAM_TOKEN",     $ApiToken,  "User")
+    Write-Success "Environment variables set (ENGRAM_URL, ENGRAM_API_TOKEN, ENGRAM_TOKEN)"
 
     # Also active in the current process
     $env:ENGRAM_URL       = $ServerUrl
     $env:ENGRAM_API_TOKEN = $ApiToken
+    $env:ENGRAM_TOKEN     = $ApiToken
 }
 
 # ---------------------------------------------------------------------------
@@ -263,6 +269,18 @@ function Uninstall-Engram {
     param([switch]$KeepData)
 
     Write-Info "Uninstalling Engram..."
+
+    # Stop any running engram process to release file locks before deletion
+    $engProcs = Get-Process -Name 'engram*' -ErrorAction SilentlyContinue
+    if ($engProcs) {
+        Write-Info "Stopping engram process(es)..."
+        $engProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+        $waited = 0
+        while ((Get-Process -Name 'engram*' -ErrorAction SilentlyContinue) -and $waited -lt 10) {
+            Start-Sleep -Seconds 1
+            $waited++
+        }
+    }
 
     Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $CacheDir   -ErrorAction SilentlyContinue
@@ -304,9 +322,10 @@ function Uninstall-Engram {
         Write-Warn "Error cleaning up configuration files: $_"
     }
 
-    # Clear persisted env vars
+    # Clear persisted env vars (all names the installer may have written)
     [Environment]::SetEnvironmentVariable("ENGRAM_URL",       $null, "User")
     [Environment]::SetEnvironmentVariable("ENGRAM_API_TOKEN", $null, "User")
+    [Environment]::SetEnvironmentVariable("ENGRAM_TOKEN",     $null, "User")
 
     $DataDir = "$env:USERPROFILE\.engram"
     if (Test-Path $DataDir) {

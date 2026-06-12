@@ -134,7 +134,7 @@ start-worker:
 	@echo "Starting worker..."
 	@# Prefer the versioned cache path (where Claude Code resolves the binary);
 	@# fall back to the marketplaces directory for bare installs.
-	@if [ -f "$(HOME)/.claude/plugins/cache/engram/engram/$(VERSION)/worker" ]; then \
+	@if [ -f "$(HOME)/.claude/plugins/cache/engram/engram/$(VERSION)/engram-server" ]; then \
 		nohup $(HOME)/.claude/plugins/cache/engram/engram/$(VERSION)/engram-server \
 			> /tmp/engram-server.log 2>&1 & \
 	else \
@@ -161,8 +161,8 @@ install: build stop-worker
 	@mkdir -p $(HOME)/.claude/plugins/marketplaces/engram/commands
 	cp $(BUILD_DIR)/engram-server $(HOME)/.claude/plugins/marketplaces/engram/
 	cp $(PLUGIN_DIR)/engram/hooks/* $(HOME)/.claude/plugins/marketplaces/engram/hooks/
-	@if [ -d "$(PLUGIN_DIR)/commands" ]; then \
-		cp -r $(PLUGIN_DIR)/commands/* \
+	@if [ -d "$(PLUGIN_DIR)/engram/commands" ]; then \
+		cp -r $(PLUGIN_DIR)/engram/commands/* \
 			$(HOME)/.claude/plugins/marketplaces/engram/commands/ 2>/dev/null || true; \
 	fi
 	cp $(PLUGIN_DIR)/.claude-plugin/plugin.json \

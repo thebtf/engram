@@ -215,12 +215,13 @@ register_plugin() {
 
     mkdir -p "$HOME/.claude/plugins"
 
-    # Remove stale cache versions so old binaries cannot shadow the new one
-    cache_base=$(dirname "$CACHE_DIR")
-    if [[ -d "$cache_base" ]]; then
+    # Remove stale cache versions so old binaries cannot shadow the new one.
+    # CACHE_DIR is the per-plugin directory (.../cache/engram/engram); search
+    # inside it (not its parent) and exclude the version being installed.
+    if [[ -d "$CACHE_DIR" ]]; then
         info "Removing old cache versions..."
-        find "$cache_base" -mindepth 1 -maxdepth 1 -type d \
-            ! -name "${version#v}" -exec rm -rf {} \; 2>/dev/null || true
+        find "$CACHE_DIR" -mindepth 1 -maxdepth 1 -type d \
+            ! -name "${version}" -exec rm -rf {} \; 2>/dev/null || true
     fi
 
     cache_path="${CACHE_DIR}/${version}"
@@ -239,7 +240,7 @@ register_plugin() {
     fi
 
     mkdir -p "$cache_path/.claude-plugin" "$cache_path/hooks" "$cache_path/commands"
-    cp -r "$INSTALL_DIR/"* "$cache_path/" 2>/dev/null || true
+    cp -a "$INSTALL_DIR/." "$cache_path/" 2>/dev/null || true
 
     # installed_plugins.json — record install path, version, and timestamp
     plugin_entry=$(cat <<EOF
@@ -329,9 +330,11 @@ setup_connection() {
     if [[ -n "$shell_profile" ]]; then
         sed -i.bak '/^export ENGRAM_URL=/d' "$shell_profile" 2>/dev/null || true
         sed -i.bak '/^export ENGRAM_API_TOKEN=/d' "$shell_profile" 2>/dev/null || true
+        sed -i.bak '/^export ENGRAM_TOKEN=/d' "$shell_profile" 2>/dev/null || true
         rm -f "${shell_profile}.bak"
-        echo "export ENGRAM_URL=\"${ENGRAM_URL}\""      >> "$shell_profile"
-        echo "export ENGRAM_API_TOKEN=\"${ENGRAM_API_TOKEN}\"" >> "$shell_profile"
+        printf 'export ENGRAM_URL=%q\n' "$ENGRAM_URL"           >> "$shell_profile"
+        printf 'export ENGRAM_API_TOKEN=%q\n' "$ENGRAM_API_TOKEN" >> "$shell_profile"
+        printf 'export ENGRAM_TOKEN=%q\n'     "$ENGRAM_API_TOKEN" >> "$shell_profile"
         success "Environment variables written to $shell_profile"
     else
         warn "Could not detect a shell profile. Set these manually:"
@@ -339,7 +342,8 @@ setup_connection() {
         echo "  export ENGRAM_API_TOKEN=\"${ENGRAM_API_TOKEN}\""
     fi
 
-    export ENGRAM_URL ENGRAM_API_TOKEN
+    ENGRAM_TOKEN="$ENGRAM_API_TOKEN"
+    export ENGRAM_URL ENGRAM_API_TOKEN ENGRAM_TOKEN
 }
 
 # ---------------------------------------------------------------------------
@@ -439,7 +443,7 @@ if [[ "$FLAG_UNINSTALL" == "true" ]]; then
         fi
         if [[ -f "$SETTINGS_FILE" ]]; then
             jq 'del(.enabledPlugins["'"$PLUGIN_KEY"'"]) |
-                if .statusLine.command | test("engram") then del(.statusLine) else . end' \
+                if (.statusLine.command // "") | test("engram") then del(.statusLine) else . end' \
                 "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
                 && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
         fi

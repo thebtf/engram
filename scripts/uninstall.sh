@@ -105,7 +105,7 @@ if command -v jq &> /dev/null; then
 
     if [[ -f "$SETTINGS_FILE" ]]; then
         jq 'del(.enabledPlugins["'"$PLUGIN_KEY"'"]) |
-            if .statusLine.command | test("engram") then del(.statusLine) else . end' \
+            if (.statusLine.command // "") | test("engram") then del(.statusLine) else . end' \
             "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
             && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
         success "Removed from settings.json (including statusline)"
@@ -123,6 +123,19 @@ else
     warn "  - $SETTINGS_FILE"
     warn "  - $MARKETPLACES_FILE"
 fi
+
+# ---------------------------------------------------------------------------
+# Remove environment variables written to shell profiles by the installer
+# ---------------------------------------------------------------------------
+info "Removing Engram environment variables from shell profiles..."
+for _profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+    [[ -f "$_profile" ]] || continue
+    sed -i.bak '/^export ENGRAM_URL=/d'       "$_profile" 2>/dev/null || true
+    sed -i.bak '/^export ENGRAM_API_TOKEN=/d' "$_profile" 2>/dev/null || true
+    sed -i.bak '/^export ENGRAM_TOKEN=/d'     "$_profile" 2>/dev/null || true
+    rm -f "${_profile}.bak"
+    success "Cleaned up $_profile"
+done
 
 # ---------------------------------------------------------------------------
 # Handle data directory

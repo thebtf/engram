@@ -16,13 +16,19 @@ CODEX_OUTPUT_DIR=".codex-plugin"
 CLAUDE_MANIFEST="plugin/engram/.claude-plugin/plugin.json"
 CODEX_MANIFEST="plugin/engram/.codex-plugin/plugin.json"
 
-# Read the version field from a JSON manifest using Node (always available
-# in the GoReleaser cross-compilation container).
+# Read the version field from a JSON manifest using Node.
+# Node is installed as a separate step (actions/setup-node@v4) in release.yaml;
+# guard against it being absent to produce a clear error rather than a cryptic one.
 read_manifest_version() {
+    if ! command -v node >/dev/null 2>&1; then
+        echo "Error: node is required but not found in PATH" >&2
+        exit 1
+    fi
     node -e "
         const fs = require('fs');
         const m  = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-        process.stdout.write(m.version || '');
+        if (!m.version) { process.stderr.write('Error: version field missing in ' + process.argv[1] + '\n'); process.exit(1); }
+        process.stdout.write(m.version);
     " "$1"
 }
 
