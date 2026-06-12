@@ -555,12 +555,16 @@ func (u *Updater) extractTarGz(archivePath, destDir string) error {
 			// means written == MaxExtractedSize (not strictly less), so we
 			// treat equality as the bomb trigger.
 			written, copyErr := io.Copy(outFile, io.LimitReader(tr, MaxExtractedSize))
-			_ = outFile.Close()
 			if copyErr != nil {
+				_ = outFile.Close()
 				return copyErr
 			}
 			if written == MaxExtractedSize {
+				_ = outFile.Close()
 				return fmt.Errorf("file %s exceeds maximum allowed size", header.Name)
+			}
+			if err := outFile.Close(); err != nil {
+				return err
 			}
 		}
 	}
