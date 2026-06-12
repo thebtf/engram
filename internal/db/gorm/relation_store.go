@@ -13,7 +13,9 @@ import (
 )
 
 // RelationCallback is called after relations are stored in the database.
-// Fired AFTER transaction commits, not inside the transaction.
+// The callback fires AFTER the transaction commits so callers observe a
+// consistent DB state when they react to new relations (e.g. triggering
+// graph re-indexing or SSE broadcasts).
 type RelationCallback func(relations []*models.ObservationRelation)
 
 // RelationStore provides relation-related database operations using GORM.
@@ -22,37 +24,45 @@ type RelationStore struct {
 	callback RelationCallback
 }
 
-// NewRelationStore creates a new relation store.
+// NewRelationStore creates a new relation store backed by the given Store.
+// The callback is not set at construction because it is wired after the store
+// is registered in the dependency graph (avoids initialization-order cycles).
 func NewRelationStore(store *Store) *RelationStore {
 	return &RelationStore{
 		db: store.DB,
 	}
 }
 
-// SetCallback sets a callback that fires after relations are stored.
+// SetCallback registers a callback that fires after relations are stored.
 func (s *RelationStore) SetCallback(cb RelationCallback) {
 	s.callback = cb
 }
 
-// StoreRelation stores a new observation relation.
-// Uses INSERT OR IGNORE to handle duplicate (source_id, target_id, relation_type) combinations.
+// toDBRelation converts a pkg/models relation into the GORM model used for
+// persistence. The Reason field is stored as a nullable SQL string because
+// many relations are detected automatically without a human-readable reason.
+func toDBRelation(rel *models.ObservationRelation) *ObservationRelation {
+	db := &ObservationRelation{
+		SourceID:        rel.SourceID,
+		TargetID:        rel.TargetID,
+		RelationType:    rel.RelationType,
+		Confidence:      rel.Confidence,
+		DetectionSource: rel.DetectionSource,
+		CreatedAt:       rel.CreatedAt,
+		CreatedAtEpoch:  rel.CreatedAtEpoch,
+	}
+	if rel.Reason != "" {
+		db.Reason = sql.NullString{String: rel.Reason, Valid: true}
+	}
+	return db
+}
+
+// StoreRelation persists a new observation relation. Duplicate
+// (source_id, target_id, relation_type) combinations are silently ignored via
+// INSERT … ON CONFLICT DO NOTHING; the existing row's ID is returned instead.
 func (s *RelationStore) StoreRelation(ctx context.Context, relation *models.ObservationRelation) (int64, error) {
-	dbRelation := &ObservationRelation{
-		SourceID:        relation.SourceID,
-		TargetID:        relation.TargetID,
-		RelationType:    relation.RelationType,
-		Confidence:      relation.Confidence,
-		DetectionSource: relation.DetectionSource,
-		CreatedAt:       relation.CreatedAt,
-		CreatedAtEpoch:  relation.CreatedAtEpoch,
-	}
+	dbRelation := toDBRelation(relation)
 
-	// Handle nullable fields
-	if relation.Reason != "" {
-		dbRelation.Reason = sql.NullString{String: relation.Reason, Valid: true}
-	}
-
-	// INSERT OR IGNORE using OnConflict
 	result := s.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "source_id"}, {Name: "target_id"}, {Name: "relation_type"}},
@@ -64,8 +74,9 @@ func (s *RelationStore) StoreRelation(ctx context.Context, relation *models.Obse
 		return 0, result.Error
 	}
 
-	// If RowsAffected is 0, the insert was ignored (duplicate)
 	if result.RowsAffected == 0 {
+		// The insert was suppressed by the conflict clause. Look up the
+		// pre-existing relation so callers get a valid ID to work with.
 		var existing ObservationRelation
 		err := s.db.Where("source_id = ? AND target_id = ? AND relation_type = ?",
 			relation.SourceID, relation.TargetID, relation.RelationType).
@@ -76,7 +87,8 @@ func (s *RelationStore) StoreRelation(ctx context.Context, relation *models.Obse
 		return existing.ID, nil
 	}
 
-	// Fire callback AFTER successful store (not inside tx)
+	// Fire callback AFTER the implicit auto-transaction commits, not inside it,
+	// so listeners see a fully committed state.
 	if s.callback != nil {
 		s.callback([]*models.ObservationRelation{relation})
 	}
@@ -84,7 +96,10 @@ func (s *RelationStore) StoreRelation(ctx context.Context, relation *models.Obse
 	return dbRelation.ID, nil
 }
 
-// StoreRelations stores multiple relations in a single transaction.
+// StoreRelations persists multiple relations in a single transaction.
+// Each relation uses INSERT … ON CONFLICT DO NOTHING, so partial overlap with
+// existing rows does not cause the whole batch to fail.
+// The callback fires once after the transaction commits, with all input relations.
 func (s *RelationStore) StoreRelations(ctx context.Context, relations []*models.ObservationRelation) error {
 	if len(relations) == 0 {
 		return nil
@@ -92,24 +107,10 @@ func (s *RelationStore) StoreRelations(ctx context.Context, relations []*models.
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, rel := range relations {
-			dbRelation := &ObservationRelation{
-				SourceID:        rel.SourceID,
-				TargetID:        rel.TargetID,
-				RelationType:    rel.RelationType,
-				Confidence:      rel.Confidence,
-				DetectionSource: rel.DetectionSource,
-				CreatedAt:       rel.CreatedAt,
-				CreatedAtEpoch:  rel.CreatedAtEpoch,
-			}
-
-			if rel.Reason != "" {
-				dbRelation.Reason = sql.NullString{String: rel.Reason, Valid: true}
-			}
-
 			result := tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "source_id"}, {Name: "target_id"}, {Name: "relation_type"}},
 				DoNothing: true,
-			}).Create(dbRelation)
+			}).Create(toDBRelation(rel))
 
 			if result.Error != nil {
 				return result.Error
@@ -121,7 +122,7 @@ func (s *RelationStore) StoreRelations(ctx context.Context, relations []*models.
 		return err
 	}
 
-	// Fire callback AFTER transaction commits
+	// Callback fires after the transaction commits — see StoreRelation for rationale.
 	if s.callback != nil {
 		s.callback(relations)
 	}
@@ -129,7 +130,9 @@ func (s *RelationStore) StoreRelations(ctx context.Context, relations []*models.
 	return nil
 }
 
-// GetRelationsByObservationID retrieves all relations involving an observation (as source or target).
+// GetRelationsByObservationID retrieves all relations in which obsID appears
+// as either the source or the target, ordered by descending confidence then
+// descending epoch.
 func (s *RelationStore) GetRelationsByObservationID(ctx context.Context, obsID int64) ([]*models.ObservationRelation, error) {
 	var relations []ObservationRelation
 
@@ -145,7 +148,7 @@ func (s *RelationStore) GetRelationsByObservationID(ctx context.Context, obsID i
 	return toModelRelations(relations), nil
 }
 
-// GetOutgoingRelations retrieves relations where the observation is the source.
+// GetOutgoingRelations retrieves relations where obsID is the source node.
 func (s *RelationStore) GetOutgoingRelations(ctx context.Context, obsID int64) ([]*models.ObservationRelation, error) {
 	var relations []ObservationRelation
 
@@ -161,7 +164,7 @@ func (s *RelationStore) GetOutgoingRelations(ctx context.Context, obsID int64) (
 	return toModelRelations(relations), nil
 }
 
-// GetIncomingRelations retrieves relations where the observation is the target.
+// GetIncomingRelations retrieves relations where obsID is the target node.
 func (s *RelationStore) GetIncomingRelations(ctx context.Context, obsID int64) ([]*models.ObservationRelation, error) {
 	var relations []ObservationRelation
 
@@ -177,7 +180,8 @@ func (s *RelationStore) GetIncomingRelations(ctx context.Context, obsID int64) (
 	return toModelRelations(relations), nil
 }
 
-// GetRelationsByType retrieves all relations of a specific type.
+// GetRelationsByType retrieves up to limit relations of the specified type,
+// ordered by descending confidence then descending epoch.
 func (s *RelationStore) GetRelationsByType(ctx context.Context, relationType models.RelationType, limit int) ([]*models.ObservationRelation, error) {
 	var relations []ObservationRelation
 
@@ -194,8 +198,8 @@ func (s *RelationStore) GetRelationsByType(ctx context.Context, relationType mod
 	return toModelRelations(relations), nil
 }
 
-// DeleteRelationsByObservationID deletes all relations involving an observation.
-// Called when an observation is deleted.
+// DeleteRelationsByObservationID deletes all relations involving obsID.
+// Called as part of cascading observation deletion.
 func (s *RelationStore) DeleteRelationsByObservationID(ctx context.Context, obsID int64) error {
 	result := s.db.WithContext(ctx).
 		Where("source_id = ? OR target_id = ?", obsID, obsID).
@@ -204,7 +208,7 @@ func (s *RelationStore) DeleteRelationsByObservationID(ctx context.Context, obsI
 	return result.Error
 }
 
-// GetRelationCount returns the count of relations for an observation.
+// GetRelationCount returns the total number of relations (in + out) for obsID.
 func (s *RelationStore) GetRelationCount(ctx context.Context, obsID int64) (int, error) {
 	var count int64
 	err := s.db.WithContext(ctx).
@@ -215,7 +219,9 @@ func (s *RelationStore) GetRelationCount(ctx context.Context, obsID int64) (int,
 	return int(count), err
 }
 
-// GetRelationCountsBatch returns relation counts for the requested observations.
+// GetRelationCountsBatch returns a map of obsID → relation count for all
+// requested observation IDs. Uses a UNION ALL subquery so both directions
+// (source and target) are counted in a single round-trip.
 func (s *RelationStore) GetRelationCountsBatch(ctx context.Context, obsIDs []int64) (map[int64]int, error) {
 	counts := make(map[int64]int, len(obsIDs))
 	if len(obsIDs) == 0 {
@@ -241,7 +247,8 @@ func (s *RelationStore) GetRelationCountsBatch(ctx context.Context, obsIDs []int
 	return counts, nil
 }
 
-// GetAvgConfidenceBatch returns average confidence for the requested observations.
+// GetAvgConfidenceBatch returns a map of obsID → average confidence for all
+// requested observation IDs. Uses a UNION ALL subquery for both edge directions.
 func (s *RelationStore) GetAvgConfidenceBatch(ctx context.Context, obsIDs []int64) (map[int64]float64, error) {
 	avgConfidence := make(map[int64]float64, len(obsIDs))
 	if len(obsIDs) == 0 {
@@ -267,7 +274,7 @@ func (s *RelationStore) GetAvgConfidenceBatch(ctx context.Context, obsIDs []int6
 	return avgConfidence, nil
 }
 
-// GetTotalRelationCount returns the total count of all relations.
+// GetTotalRelationCount returns the total number of relations across all observations.
 func (s *RelationStore) GetTotalRelationCount(ctx context.Context) (int, error) {
 	var count int64
 	err := s.db.WithContext(ctx).
@@ -277,7 +284,8 @@ func (s *RelationStore) GetTotalRelationCount(ctx context.Context) (int, error) 
 	return int(count), err
 }
 
-// GetDistinctNodeCount returns the count of unique observation IDs participating in relations.
+// GetDistinctNodeCount returns the number of unique observation IDs that
+// participate in at least one relation (as source or target).
 func (s *RelationStore) GetDistinctNodeCount(ctx context.Context) (int, error) {
 	var count int64
 	err := s.db.WithContext(ctx).Raw(
@@ -286,7 +294,8 @@ func (s *RelationStore) GetDistinctNodeCount(ctx context.Context) (int, error) {
 	return int(count), err
 }
 
-// GetMaxDegree returns the maximum node degree (combined in+out edges) in the relation graph.
+// GetMaxDegree returns the maximum node degree (combined in-edges + out-edges)
+// across the whole relation graph. Returns 0 when the graph is empty.
 func (s *RelationStore) GetMaxDegree(ctx context.Context) (int, error) {
 	var maxDeg int64
 	err := s.db.WithContext(ctx).Raw(`
@@ -302,7 +311,8 @@ func (s *RelationStore) GetMaxDegree(ctx context.Context) (int, error) {
 	return int(maxDeg), err
 }
 
-// GetHighConfidenceRelations retrieves relations with confidence above threshold.
+// GetHighConfidenceRelations retrieves up to limit relations with
+// confidence ≥ minConfidence, ordered by descending confidence then epoch.
 func (s *RelationStore) GetHighConfidenceRelations(ctx context.Context, minConfidence float64, limit int) ([]*models.ObservationRelation, error) {
 	var relations []ObservationRelation
 
@@ -319,7 +329,7 @@ func (s *RelationStore) GetHighConfidenceRelations(ctx context.Context, minConfi
 	return toModelRelations(relations), nil
 }
 
-// UpdateRelationConfidence updates the confidence of a relation.
+// UpdateRelationConfidence updates the confidence score of a single relation.
 func (s *RelationStore) UpdateRelationConfidence(ctx context.Context, relationID int64, newConfidence float64) error {
 	result := s.db.WithContext(ctx).
 		Model(&ObservationRelation{}).
@@ -329,9 +339,11 @@ func (s *RelationStore) UpdateRelationConfidence(ctx context.Context, relationID
 	return result.Error
 }
 
-// GetRelatedObservationIDs returns IDs of observations related to the given one.
-// This is useful for expanding search results.
-// Uses CASE expression for bidirectional ID lookup (GORM doesn't support this well, so we use raw SQL).
+// GetRelatedObservationIDs returns the IDs of observations directly connected
+// to obsID by at least one relation with confidence ≥ minConfidence. The CASE
+// expression resolves bidirectional edges (source→target and target→source) to
+// the peer ID. Raw SQL is used here because GORM's query builder does not have
+// a clean way to express CASE inside a SELECT column list without raw fragments.
 func (s *RelationStore) GetRelatedObservationIDs(ctx context.Context, obsID int64, minConfidence float64) ([]int64, error) {
 	var ids []int64
 
@@ -345,7 +357,9 @@ func (s *RelationStore) GetRelatedObservationIDs(ctx context.Context, obsID int6
 	return ids, err
 }
 
-// toModelRelation converts a GORM ObservationRelation to a pkg/models ObservationRelation.
+// toModelRelation converts a GORM ObservationRelation to the pkg/models type.
+// ValidFrom and ValidTo are propagated so temporal-validity queries (GetRelationsAsOf)
+// can filter correctly at the model layer without re-hitting the database.
 func toModelRelation(r *ObservationRelation) *models.ObservationRelation {
 	relation := &models.ObservationRelation{
 		ID:              r.ID,
@@ -367,7 +381,7 @@ func toModelRelation(r *ObservationRelation) *models.ObservationRelation {
 	return relation
 }
 
-// toModelRelations converts a slice of GORM ObservationRelations to pkg/models ObservationRelations.
+// toModelRelations converts a slice of GORM relations to pkg/models relations.
 func toModelRelations(relations []ObservationRelation) []*models.ObservationRelation {
 	result := make([]*models.ObservationRelation, len(relations))
 	for i, r := range relations {
@@ -376,8 +390,9 @@ func toModelRelations(relations []ObservationRelation) []*models.ObservationRela
 	return result
 }
 
-// InvalidateRelation sets valid_to = now() on a relation, making it temporally bounded.
-// The relation remains in the database but is filtered out by as-of queries.
+// InvalidateRelation sets valid_to = now() on the specified relation, making it
+// temporally bounded. The row is retained for historical queries; active queries
+// filter it out via as-of predicates.
 func (s *RelationStore) InvalidateRelation(ctx context.Context, relationID int64) error {
 	return s.db.WithContext(ctx).
 		Table("observation_relations").
@@ -385,9 +400,10 @@ func (s *RelationStore) InvalidateRelation(ctx context.Context, relationID int64
 		Update("valid_to", time.Now()).Error
 }
 
-// GetRelationsAsOf returns relations valid at a specific point in time.
-// Relations without valid_from are treated as always-valid from creation.
-// Relations without valid_to are treated as still-valid (open-ended).
+// GetRelationsAsOf returns relations that were valid at asOf for obsID.
+// A relation is valid when:
+//   - valid_from IS NULL (no explicit start) OR valid_from ≤ asOf
+//   - valid_to   IS NULL (still open)       OR valid_to   ≥ asOf
 func (s *RelationStore) GetRelationsAsOf(ctx context.Context, obsID int64, asOf time.Time) ([]*models.ObservationRelation, error) {
 	var relations []ObservationRelation
 
