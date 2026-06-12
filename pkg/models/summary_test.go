@@ -9,20 +9,20 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
 )
 
-// SummarySuite is a test suite for SessionSummary operations.
-type SummarySuite struct {
-	suite.Suite
-}
+// -----------------------------------------------------------------------------
+// Contract: NewSessionSummary
+// - Maps sdkSessionID and project directly onto the struct.
+// - Non-empty parsed fields produce Valid sql.NullString; empty fields produce
+//   Invalid sql.NullString (never stored as NULL-with-value).
+// - promptNumber > 0 produces Valid sql.NullInt64; 0 produces Invalid.
+// - discoveryTokens is stored verbatim.
+// - CreatedAt is an RFC3339 timestamp captured at call time.
+// - CreatedAtEpoch is milliseconds since Unix epoch captured at call time.
+// -----------------------------------------------------------------------------
 
-func TestSummarySuite(t *testing.T) {
-	suite.Run(t, new(SummarySuite))
-}
-
-// TestNewSessionSummary tests summary creation.
-func (s *SummarySuite) TestNewSessionSummary() {
+func TestNewSessionSummary_FullPayload(t *testing.T) {
 	parsed := &ParsedSummary{
 		Request:      "Fix the bug in handler.go",
 		Investigated: "Looked at error logs",
@@ -32,227 +32,248 @@ func (s *SummarySuite) TestNewSessionSummary() {
 		Notes:        "Consider adding mutex",
 	}
 
-	summary := NewSessionSummary("sdk-123", "test-project", parsed, 5, 1000)
+	before := time.Now()
+	s := NewSessionSummary("sdk-abc", "my-project", parsed, 7, 2048)
+	after := time.Now()
 
-	s.NotNil(summary)
-	s.Equal("sdk-123", summary.SDKSessionID)
-	s.Equal("test-project", summary.Project)
-	s.True(summary.Request.Valid)
-	s.Equal("Fix the bug in handler.go", summary.Request.String)
-	s.True(summary.Investigated.Valid)
-	s.True(summary.Learned.Valid)
-	s.True(summary.Completed.Valid)
-	s.True(summary.NextSteps.Valid)
-	s.True(summary.Notes.Valid)
-	s.True(summary.PromptNumber.Valid)
-	s.Equal(int64(5), summary.PromptNumber.Int64)
-	s.Equal(int64(1000), summary.DiscoveryTokens)
-	s.NotEmpty(summary.CreatedAt)
-	s.Greater(summary.CreatedAtEpoch, int64(0))
+	assert.Equal(t, "sdk-abc", s.SDKSessionID)
+	assert.Equal(t, "my-project", s.Project)
+
+	assert.True(t, s.Request.Valid)
+	assert.Equal(t, "Fix the bug in handler.go", s.Request.String)
+	assert.True(t, s.Investigated.Valid)
+	assert.Equal(t, "Looked at error logs", s.Investigated.String)
+	assert.True(t, s.Learned.Valid)
+	assert.Equal(t, "The issue was a race condition", s.Learned.String)
+	assert.True(t, s.Completed.Valid)
+	assert.Equal(t, "Fixed the race condition", s.Completed.String)
+	assert.True(t, s.NextSteps.Valid)
+	assert.Equal(t, "Add more tests", s.NextSteps.String)
+	assert.True(t, s.Notes.Valid)
+	assert.Equal(t, "Consider adding mutex", s.Notes.String)
+
+	assert.True(t, s.PromptNumber.Valid)
+	assert.Equal(t, int64(7), s.PromptNumber.Int64)
+	assert.Equal(t, int64(2048), s.DiscoveryTokens)
+
+	// Timestamp must be an RFC3339 value within the call window.
+	ts, err := time.Parse(time.RFC3339, s.CreatedAt)
+	require.NoError(t, err)
+	assert.False(t, ts.Before(before.Truncate(time.Second)), "CreatedAt should not precede the call")
+	assert.False(t, ts.After(after.Add(time.Second)), "CreatedAt should not exceed the call window")
+
+	assert.GreaterOrEqual(t, s.CreatedAtEpoch, before.UnixMilli())
+	assert.LessOrEqual(t, s.CreatedAtEpoch, after.Add(time.Second).UnixMilli())
 }
 
-// TestNewSessionSummary_EmptyFields tests summary creation with empty fields.
-func (s *SummarySuite) TestNewSessionSummary_EmptyFields() {
-	parsed := &ParsedSummary{
-		Request: "Test request",
-		// All other fields empty
-	}
+func TestNewSessionSummary_EmptyOptionalFields(t *testing.T) {
+	// Only Request is set; all others are empty strings.
+	parsed := &ParsedSummary{Request: "Only request"}
 
-	summary := NewSessionSummary("sdk-123", "project", parsed, 0, 0)
+	s := NewSessionSummary("sdk-1", "proj", parsed, 0, 0)
 
-	s.True(summary.Request.Valid)
-	s.False(summary.Investigated.Valid)
-	s.False(summary.Learned.Valid)
-	s.False(summary.Completed.Valid)
-	s.False(summary.NextSteps.Valid)
-	s.False(summary.Notes.Valid)
-	s.False(summary.PromptNumber.Valid) // 0 is not valid
-	s.Equal(int64(0), summary.DiscoveryTokens)
+	// Request non-empty → Valid.
+	assert.True(t, s.Request.Valid)
+	assert.Equal(t, "Only request", s.Request.String)
+
+	// Empty fields → Invalid (NULL in the DB, omitted in JSON).
+	assert.False(t, s.Investigated.Valid, "empty Investigated should be Invalid")
+	assert.False(t, s.Learned.Valid, "empty Learned should be Invalid")
+	assert.False(t, s.Completed.Valid, "empty Completed should be Invalid")
+	assert.False(t, s.NextSteps.Valid, "empty NextSteps should be Invalid")
+	assert.False(t, s.Notes.Valid, "empty Notes should be Invalid")
+
+	// promptNumber == 0 → Invalid.
+	assert.False(t, s.PromptNumber.Valid, "zero prompt number should be Invalid")
+
+	assert.Equal(t, int64(0), s.DiscoveryTokens)
 }
 
-// TestSessionSummary_MarshalJSON tests JSON marshaling.
-func (s *SummarySuite) TestSessionSummary_MarshalJSON() {
-	summary := &SessionSummary{
-		ID:              1,
-		SDKSessionID:    "sdk-123",
-		Project:         "test-project",
-		Request:         sql.NullString{String: "Test request", Valid: true},
-		Investigated:    sql.NullString{String: "Test investigation", Valid: true},
-		Learned:         sql.NullString{Valid: false}, // Invalid - should be omitted
-		Completed:       sql.NullString{String: "Test completion", Valid: true},
-		NextSteps:       sql.NullString{Valid: false},
-		Notes:           sql.NullString{String: "Test notes", Valid: true},
-		PromptNumber:    sql.NullInt64{Int64: 3, Valid: true},
-		DiscoveryTokens: 500,
-		CreatedAt:       "2024-01-01T00:00:00Z",
-		CreatedAtEpoch:  1704067200000,
-	}
-
-	data, err := json.Marshal(summary)
-	s.NoError(err)
-
-	// Parse the JSON
-	var result map[string]interface{}
-	err = json.Unmarshal(data, &result)
-	s.NoError(err)
-
-	// Check fields
-	s.Equal(float64(1), result["id"])
-	s.Equal("sdk-123", result["sdk_session_id"])
-	s.Equal("test-project", result["project"])
-	s.Equal("Test request", result["request"])
-	s.Equal("Test investigation", result["investigated"])
-	s.Equal("Test completion", result["completed"])
-	s.Equal("Test notes", result["notes"])
-	s.Equal(float64(3), result["prompt_number"])
-	s.Equal(float64(500), result["discovery_tokens"])
-
-	// Empty fields should be omitted
-	_, hasLearned := result["learned"]
-	s.False(hasLearned, "Empty learned should be omitted")
-	_, hasNextSteps := result["next_steps"]
-	s.False(hasNextSteps, "Empty next_steps should be omitted")
+func TestNewSessionSummary_PromptNumber_BoundaryOne(t *testing.T) {
+	// Exactly 1 is the smallest valid prompt number.
+	parsed := &ParsedSummary{Request: "r"}
+	s := NewSessionSummary("s", "p", parsed, 1, 0)
+	assert.True(t, s.PromptNumber.Valid)
+	assert.Equal(t, int64(1), s.PromptNumber.Int64)
 }
 
-// TestSessionSummary_MarshalJSON_AllEmpty tests JSON marshaling with all empty optional fields.
-func (s *SummarySuite) TestSessionSummary_MarshalJSON_AllEmpty() {
-	summary := &SessionSummary{
-		ID:              1,
-		SDKSessionID:    "sdk-123",
-		Project:         "test-project",
-		Request:         sql.NullString{Valid: false},
-		Investigated:    sql.NullString{Valid: false},
-		Learned:         sql.NullString{Valid: false},
-		Completed:       sql.NullString{Valid: false},
-		NextSteps:       sql.NullString{Valid: false},
-		Notes:           sql.NullString{Valid: false},
-		PromptNumber:    sql.NullInt64{Valid: false},
-		DiscoveryTokens: 0,
-		CreatedAt:       "2024-01-01T00:00:00Z",
-		CreatedAtEpoch:  1704067200000,
-	}
-
-	data, err := json.Marshal(summary)
-	s.NoError(err)
-
-	var result map[string]interface{}
-	err = json.Unmarshal(data, &result)
-	s.NoError(err)
-
-	// Required fields should be present
-	s.Equal(float64(1), result["id"])
-	s.Equal("sdk-123", result["sdk_session_id"])
-	s.Equal("test-project", result["project"])
-
-	// Optional fields should be empty strings or omitted
-	request, hasRequest := result["request"]
-	if hasRequest {
-		s.Equal("", request)
-	}
+func TestNewSessionSummary_AllParsedEmpty(t *testing.T) {
+	// All fields empty including Request → all NullString values are Invalid.
+	parsed := &ParsedSummary{}
+	s := NewSessionSummary("s", "p", parsed, 0, 0)
+	assert.False(t, s.Request.Valid)
+	assert.False(t, s.Investigated.Valid)
+	assert.False(t, s.Learned.Valid)
+	assert.False(t, s.Completed.Valid)
+	assert.False(t, s.NextSteps.Valid)
+	assert.False(t, s.Notes.Valid)
+	assert.False(t, s.PromptNumber.Valid)
 }
 
-// TestParsedSummary tests ParsedSummary structure.
-func (s *SummarySuite) TestParsedSummary() {
-	parsed := &ParsedSummary{
-		Request:      "Request text",
-		Investigated: "Investigation text",
-		Learned:      "Learned text",
-		Completed:    "Completed text",
-		NextSteps:    "Next steps text",
-		Notes:        "Notes text",
-	}
+func TestNewSessionSummary_TimestampPrecision(t *testing.T) {
+	// Both CreatedAt and CreatedAtEpoch must represent the same moment
+	// (to within 1 second to account for second truncation in RFC3339).
+	parsed := &ParsedSummary{Request: "r"}
+	s := NewSessionSummary("s", "p", parsed, 1, 0)
 
-	s.Equal("Request text", parsed.Request)
-	s.Equal("Investigation text", parsed.Investigated)
-	s.Equal("Learned text", parsed.Learned)
-	s.Equal("Completed text", parsed.Completed)
-	s.Equal("Next steps text", parsed.NextSteps)
-	s.Equal("Notes text", parsed.Notes)
-}
-
-// TestSessionSummaryJSON tests the JSON-friendly type.
-func (s *SummarySuite) TestSessionSummaryJSON() {
-	j := SessionSummaryJSON{
-		ID:              1,
-		SDKSessionID:    "sdk-123",
-		Project:         "test-project",
-		Request:         "Request",
-		Investigated:    "Investigation",
-		Learned:         "Learned",
-		Completed:       "Completed",
-		NextSteps:       "Next steps",
-		Notes:           "Notes",
-		PromptNumber:    5,
-		DiscoveryTokens: 1000,
-		CreatedAt:       "2024-01-01T00:00:00Z",
-		CreatedAtEpoch:  1704067200000,
-	}
-
-	s.Equal(int64(1), j.ID)
-	s.Equal("sdk-123", j.SDKSessionID)
-	s.Equal("test-project", j.Project)
-	s.Equal("Request", j.Request)
-	s.Equal("Investigation", j.Investigated)
-	s.Equal("Learned", j.Learned)
-	s.Equal("Completed", j.Completed)
-	s.Equal("Next steps", j.NextSteps)
-	s.Equal("Notes", j.Notes)
-	s.Equal(int64(5), j.PromptNumber)
-	s.Equal(int64(1000), j.DiscoveryTokens)
-}
-
-// TestSessionSummary_TimestampValidity tests that timestamps are set correctly.
-func TestSessionSummary_TimestampValidity(t *testing.T) {
-	before := time.Now().Add(-time.Second) // Give 1 second buffer
-
-	parsed := &ParsedSummary{Request: "Test"}
-	summary := NewSessionSummary("sdk-123", "project", parsed, 1, 100)
-
-	after := time.Now().Add(time.Second) // Give 1 second buffer
-
-	// Parse the timestamp
-	createdAt, err := time.Parse(time.RFC3339, summary.CreatedAt)
+	ts, err := time.Parse(time.RFC3339, s.CreatedAt)
 	require.NoError(t, err)
 
-	// Timestamp should be between before and after (with buffer)
-	assert.True(t, createdAt.After(before) || createdAt.Equal(before), "created_at should be >= before")
-	assert.True(t, createdAt.Before(after) || createdAt.Equal(after), "created_at should be <= after")
-
-	// Epoch should also be in range (with buffer)
-	beforeEpoch := before.UnixMilli()
-	afterEpoch := after.UnixMilli()
-	assert.GreaterOrEqual(t, summary.CreatedAtEpoch, beforeEpoch, "epoch should be >= before epoch")
-	assert.LessOrEqual(t, summary.CreatedAtEpoch, afterEpoch, "epoch should be <= after epoch")
+	epochFromString := ts.UnixMilli()
+	// Allow 1 000 ms difference because RFC3339 truncates sub-second.
+	diff := s.CreatedAtEpoch - epochFromString
+	if diff < 0 {
+		diff = -diff
+	}
+	assert.Less(t, diff, int64(1001), "CreatedAtEpoch and CreatedAt must agree within 1 s")
 }
 
-// TestSessionSummary_JSONRoundTrip tests that summaries can be marshaled and unmarshaled.
+// -----------------------------------------------------------------------------
+// Contract: SessionSummary.MarshalJSON
+// - Valid NullString → field present in JSON with the string value.
+// - Invalid NullString → field absent from JSON output (omitempty).
+// - Valid NullInt64 → field present; Invalid → absent.
+// - Non-nullable fields (ID, SDKSessionID, Project, DiscoveryTokens,
+//   CreatedAt, CreatedAtEpoch) are always present.
+// -----------------------------------------------------------------------------
+
+func TestSessionSummary_MarshalJSON_ValidFields(t *testing.T) {
+	s := &SessionSummary{
+		ID:              42,
+		SDKSessionID:    "sdk-xyz",
+		Project:         "proj-a",
+		Request:         sql.NullString{String: "req", Valid: true},
+		Investigated:    sql.NullString{String: "inv", Valid: true},
+		Learned:         sql.NullString{String: "lrn", Valid: true},
+		Completed:       sql.NullString{String: "cmp", Valid: true},
+		NextSteps:       sql.NullString{String: "nxt", Valid: true},
+		Notes:           sql.NullString{String: "note", Valid: true},
+		PromptNumber:    sql.NullInt64{Int64: 3, Valid: true},
+		DiscoveryTokens: 500,
+		CreatedAt:       "2024-06-01T00:00:00Z",
+		CreatedAtEpoch:  1717200000000,
+	}
+
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &m))
+
+	assert.Equal(t, float64(42), m["id"])
+	assert.Equal(t, "sdk-xyz", m["sdk_session_id"])
+	assert.Equal(t, "proj-a", m["project"])
+	assert.Equal(t, "req", m["request"])
+	assert.Equal(t, "inv", m["investigated"])
+	assert.Equal(t, "lrn", m["learned"])
+	assert.Equal(t, "cmp", m["completed"])
+	assert.Equal(t, "nxt", m["next_steps"])
+	assert.Equal(t, "note", m["notes"])
+	assert.Equal(t, float64(3), m["prompt_number"])
+	assert.Equal(t, float64(500), m["discovery_tokens"])
+	assert.Equal(t, "2024-06-01T00:00:00Z", m["created_at"])
+	assert.Equal(t, float64(1717200000000), m["created_at_epoch"])
+}
+
+func TestSessionSummary_MarshalJSON_InvalidFieldsOmitted(t *testing.T) {
+	s := &SessionSummary{
+		ID:           1,
+		SDKSessionID: "sdk-1",
+		Project:      "p",
+		// All optional NullString/NullInt64 Invalid
+		Request:      sql.NullString{Valid: false},
+		Investigated: sql.NullString{Valid: false},
+		Learned:      sql.NullString{Valid: false},
+		Completed:    sql.NullString{Valid: false},
+		NextSteps:    sql.NullString{Valid: false},
+		Notes:        sql.NullString{Valid: false},
+		PromptNumber: sql.NullInt64{Valid: false},
+		CreatedAt:    "2024-06-01T00:00:00Z",
+	}
+
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &m))
+
+	// Required fields must remain.
+	assert.Contains(t, m, "id")
+	assert.Contains(t, m, "sdk_session_id")
+	assert.Contains(t, m, "project")
+	assert.Contains(t, m, "created_at")
+
+	// Optional invalid fields must be absent.
+	for _, key := range []string{"investigated", "learned", "completed", "next_steps", "notes", "prompt_number"} {
+		_, present := m[key]
+		assert.False(t, present, "field %q should be omitted when Invalid", key)
+	}
+}
+
+func TestSessionSummary_MarshalJSON_MixedValidity(t *testing.T) {
+	// Some valid, some not — only valid ones appear.
+	s := &SessionSummary{
+		ID:           5,
+		SDKSessionID: "s",
+		Project:      "p",
+		Request:      sql.NullString{String: "r", Valid: true},
+		Investigated: sql.NullString{Valid: false},
+		Learned:      sql.NullString{String: "l", Valid: true},
+		Completed:    sql.NullString{Valid: false},
+		NextSteps:    sql.NullString{String: "n", Valid: true},
+		Notes:        sql.NullString{Valid: false},
+		PromptNumber: sql.NullInt64{Valid: false},
+		CreatedAt:    "2024-01-01T00:00:00Z",
+	}
+
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &m))
+
+	assert.Equal(t, "r", m["request"])
+	assert.Equal(t, "l", m["learned"])
+	assert.Equal(t, "n", m["next_steps"])
+
+	_, hasInvestigated := m["investigated"]
+	assert.False(t, hasInvestigated)
+	_, hasCompleted := m["completed"]
+	assert.False(t, hasCompleted)
+	_, hasNotes := m["notes"]
+	assert.False(t, hasNotes)
+	_, hasPN := m["prompt_number"]
+	assert.False(t, hasPN)
+}
+
+// -----------------------------------------------------------------------------
+// Contract: JSON round-trip — marshal SessionSummary → unmarshal into
+// SessionSummaryJSON — field values must survive the round trip exactly.
+// -----------------------------------------------------------------------------
+
 func TestSessionSummary_JSONRoundTrip(t *testing.T) {
 	original := &SessionSummary{
-		ID:              1,
-		SDKSessionID:    "sdk-123",
-		Project:         "test-project",
-		Request:         sql.NullString{String: "Test request", Valid: true},
-		Investigated:    sql.NullString{String: "Test investigation", Valid: true},
-		Learned:         sql.NullString{String: "Test learned", Valid: true},
-		Completed:       sql.NullString{String: "Test completed", Valid: true},
-		NextSteps:       sql.NullString{String: "Test next steps", Valid: true},
-		Notes:           sql.NullString{String: "Test notes", Valid: true},
-		PromptNumber:    sql.NullInt64{Int64: 5, Valid: true},
-		DiscoveryTokens: 1000,
+		ID:              99,
+		SDKSessionID:    "sdk-round",
+		Project:         "round-project",
+		Request:         sql.NullString{String: "req-round", Valid: true},
+		Investigated:    sql.NullString{String: "inv-round", Valid: true},
+		Learned:         sql.NullString{String: "lrn-round", Valid: true},
+		Completed:       sql.NullString{String: "cmp-round", Valid: true},
+		NextSteps:       sql.NullString{String: "nxt-round", Valid: true},
+		Notes:           sql.NullString{String: "note-round", Valid: true},
+		PromptNumber:    sql.NullInt64{Int64: 12, Valid: true},
+		DiscoveryTokens: 9999,
 		CreatedAt:       "2024-01-01T00:00:00Z",
 		CreatedAtEpoch:  1704067200000,
 	}
 
-	// Marshal
 	data, err := json.Marshal(original)
 	require.NoError(t, err)
 
-	// Unmarshal into JSON type
 	var result SessionSummaryJSON
-	err = json.Unmarshal(data, &result)
-	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, &result))
 
-	// Verify
 	assert.Equal(t, original.ID, result.ID)
 	assert.Equal(t, original.SDKSessionID, result.SDKSessionID)
 	assert.Equal(t, original.Project, result.Project)
@@ -264,4 +285,100 @@ func TestSessionSummary_JSONRoundTrip(t *testing.T) {
 	assert.Equal(t, original.Notes.String, result.Notes)
 	assert.Equal(t, original.PromptNumber.Int64, result.PromptNumber)
 	assert.Equal(t, original.DiscoveryTokens, result.DiscoveryTokens)
+	assert.Equal(t, original.CreatedAt, result.CreatedAt)
+	assert.Equal(t, original.CreatedAtEpoch, result.CreatedAtEpoch)
+}
+
+// -----------------------------------------------------------------------------
+// Contract: ParsedSummary — plain value struct with six string fields.
+// All fields are independent; zero value is the empty string.
+// -----------------------------------------------------------------------------
+
+func TestParsedSummary_FieldAssignment(t *testing.T) {
+	p := &ParsedSummary{
+		Request:      "R",
+		Investigated: "I",
+		Learned:      "L",
+		Completed:    "C",
+		NextSteps:    "N",
+		Notes:        "No",
+	}
+	assert.Equal(t, "R", p.Request)
+	assert.Equal(t, "I", p.Investigated)
+	assert.Equal(t, "L", p.Learned)
+	assert.Equal(t, "C", p.Completed)
+	assert.Equal(t, "N", p.NextSteps)
+	assert.Equal(t, "No", p.Notes)
+}
+
+func TestParsedSummary_ZeroValue(t *testing.T) {
+	var p ParsedSummary
+	assert.Equal(t, "", p.Request)
+	assert.Equal(t, "", p.Investigated)
+	assert.Equal(t, "", p.Learned)
+	assert.Equal(t, "", p.Completed)
+	assert.Equal(t, "", p.NextSteps)
+	assert.Equal(t, "", p.Notes)
+}
+
+// -----------------------------------------------------------------------------
+// Contract: SessionSummaryJSON — JSON-serializable mirror of SessionSummary.
+// All fields are plain Go types (no sql.Null*). omitempty applies to optional
+// string and int64 fields, so zero values drop from output.
+// -----------------------------------------------------------------------------
+
+func TestSessionSummaryJSON_DirectFields(t *testing.T) {
+	j := SessionSummaryJSON{
+		ID:              7,
+		SDKSessionID:    "sdk-j",
+		Project:         "proj-j",
+		Request:         "req-j",
+		Investigated:    "inv-j",
+		Learned:         "lrn-j",
+		Completed:       "cmp-j",
+		NextSteps:       "nxt-j",
+		Notes:           "note-j",
+		PromptNumber:    4,
+		DiscoveryTokens: 128,
+		CreatedAt:       "2024-03-15T12:00:00Z",
+		CreatedAtEpoch:  1710504000000,
+	}
+
+	assert.Equal(t, int64(7), j.ID)
+	assert.Equal(t, "sdk-j", j.SDKSessionID)
+	assert.Equal(t, "proj-j", j.Project)
+	assert.Equal(t, "req-j", j.Request)
+	assert.Equal(t, "inv-j", j.Investigated)
+	assert.Equal(t, "lrn-j", j.Learned)
+	assert.Equal(t, "cmp-j", j.Completed)
+	assert.Equal(t, "nxt-j", j.NextSteps)
+	assert.Equal(t, "note-j", j.Notes)
+	assert.Equal(t, int64(4), j.PromptNumber)
+	assert.Equal(t, int64(128), j.DiscoveryTokens)
+	assert.Equal(t, "2024-03-15T12:00:00Z", j.CreatedAt)
+	assert.Equal(t, int64(1710504000000), j.CreatedAtEpoch)
+}
+
+func TestSessionSummaryJSON_OmitemptyZeroOptionals(t *testing.T) {
+	// Zero-value optional fields should be absent from JSON output due to omitempty.
+	j := SessionSummaryJSON{
+		ID:           1,
+		SDKSessionID: "s",
+		Project:      "p",
+		CreatedAt:    "2024-01-01T00:00:00Z",
+		// All omitempty fields left at zero values.
+	}
+
+	data, err := json.Marshal(j)
+	require.NoError(t, err)
+
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &m))
+
+	for _, key := range []string{"request", "investigated", "learned", "completed", "next_steps", "notes", "prompt_number"} {
+		_, present := m[key]
+		assert.False(t, present, "zero-value omitempty field %q should be absent", key)
+	}
+	// discovery_tokens has no omitempty — zero value must be present.
+	assert.Contains(t, m, "discovery_tokens")
 }
