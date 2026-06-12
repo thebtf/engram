@@ -388,12 +388,14 @@ func TestRelationStore_InvalidateRelation(t *testing.T) {
 	err = rs.InvalidateRelation(ctx, id)
 	require.NoError(t, err)
 
-	// After invalidation the relation should not appear in GetRelationsAsOf with future time.
-	past := time.Now().Add(-time.Hour)
-	results, err := rs.GetRelationsAsOf(ctx, 8105, past)
+	// After invalidation the relation should not appear in GetRelationsAsOf with a
+	// future as-of time. InvalidateRelation sets valid_to ≈ now; querying at
+	// now+1h means valid_to < asOf, so the row no longer satisfies the filter.
+	future := time.Now().Add(time.Hour)
+	results, err := rs.GetRelationsAsOf(ctx, 8105, future)
 	require.NoError(t, err)
 	for _, r := range results {
-		assert.NotEqual(t, id, r.ID, "invalidated relation must not appear for past time")
+		assert.NotEqual(t, id, r.ID, "invalidated relation must not appear for future time")
 	}
 }
 
