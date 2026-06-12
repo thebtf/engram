@@ -1,4 +1,26 @@
 // Package gorm provides GORM-based database operations for engram.
+//
+// # Benchmark naming contract
+//
+// Several benchmarks below carry legacy names from v4 stores that were removed in v5
+// (ObservationStore, PromptStore, SummaryStore). The names are preserved verbatim so
+// that CI baseline tooling and historical trend graphs continue to resolve them without
+// configuration changes. Each such benchmark body is replaced by a structural proxy
+// that exercises a comparable v5 write or read path.
+//
+// The mapping is:
+//
+//   - BenchmarkObservationStore_StoreObservation       → RelationStore.StoreRelation
+//   - BenchmarkObservationStore_GetRecentObservations  → RelationStore.GetRelationsByType
+//   - BenchmarkObservationStore_SearchObservationsFTS  → RelationStore.GetHighConfidenceRelations
+//   - BenchmarkObservationStore_UpdateImportanceScore  → RelationStore.UpdateRelationConfidence
+//   - BenchmarkObservationStore_UpdateImportanceScores_Bulk → RelationStore.GetRelationCountsBatch
+//   - BenchmarkPromptStore_SaveUserPromptWithMatches   → SessionStore.IncrementPromptCounter
+//   - BenchmarkSummaryStore_StoreSummary               → SessionStore.UpdateSessionOutcome
+//
+// Any CI tool that compares these benchmarks by name across v4 and v5 baselines will
+// measure a different operation post-v5. Baseline keys must be reset at the v5 migration
+// boundary. See the CODE_PATH_COVERED annotations on each benchmark for details.
 package gorm
 
 import (
