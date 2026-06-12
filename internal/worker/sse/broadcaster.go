@@ -33,17 +33,19 @@ type Client struct {
 type Broadcaster struct {
 	clients map[string]*Client
 	mu      sync.RWMutex
-	nextID  int
+	seq     int
 }
 
-// NewBroadcaster creates a new SSE broadcaster.
+// NewBroadcaster returns an empty SSE broadcaster ready to accept connections.
 func NewBroadcaster() *Broadcaster {
 	return &Broadcaster{
 		clients: make(map[string]*Client),
 	}
 }
 
-// AddClient adds a new SSE client connection.
+// AddClient registers a new SSE connection and returns the Client.
+// Returns an error when the ResponseWriter does not support flushing,
+// which is required for SSE streaming.
 func (b *Broadcaster) AddClient(w http.ResponseWriter) (*Client, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -51,63 +53,63 @@ func (b *Broadcaster) AddClient(w http.ResponseWriter) (*Client, error) {
 	}
 
 	b.mu.Lock()
-	b.nextID++
-	id := fmt.Sprintf("client-%d", b.nextID)
-	client := &Client{
+	b.seq++
+	id := fmt.Sprintf("client-%d", b.seq)
+	c := &Client{
 		ID:      id,
 		Writer:  w,
 		Flusher: flusher,
 		Done:    make(chan struct{}),
 	}
-	b.clients[id] = client
-	clientCount := len(b.clients)
+	b.clients[id] = c
+	n := len(b.clients)
 	b.mu.Unlock()
 
 	log.Debug().
 		Str("clientId", id).
-		Int("totalClients", clientCount).
+		Int("totalClients", n).
 		Msg("SSE client connected")
 
-	return client, nil
+	return c, nil
 }
 
-// RemoveClient removes a client connection.
+// RemoveClient unregisters the client and signals its Done channel.
 func (b *Broadcaster) RemoveClient(client *Client) {
 	b.mu.Lock()
 	delete(b.clients, client.ID)
-	clientCount := len(b.clients)
+	n := len(b.clients)
 	b.mu.Unlock()
 
 	close(client.Done)
 
 	log.Debug().
 		Str("clientId", client.ID).
-		Int("totalClients", clientCount).
+		Int("totalClients", n).
 		Msg("SSE client disconnected")
 }
 
 // removeClientByID removes a client by ID (for dead client cleanup).
 func (b *Broadcaster) removeClientByID(id string) {
 	b.mu.Lock()
-	client, exists := b.clients[id]
-	if exists {
+	c, found := b.clients[id]
+	if found {
 		delete(b.clients, id)
 	}
-	clientCount := len(b.clients)
+	n := len(b.clients)
 	b.mu.Unlock()
 
-	if exists && client.Done != nil {
+	if found && c.Done != nil {
 		select {
-		case <-client.Done:
+		case <-c.Done:
 			// Already closed
 		default:
-			close(client.Done)
+			close(c.Done)
 		}
 	}
 
 	log.Debug().
 		Str("clientId", id).
-		Int("totalClients", clientCount).
+		Int("totalClients", n).
 		Msg("Dead SSE client removed")
 }
 

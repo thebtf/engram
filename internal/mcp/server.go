@@ -291,19 +291,18 @@ type Tool struct {
 	tier        int            // not exported, not serialized — used for tiering
 }
 
-// Run starts the MCP server loop.
+// Run processes incoming JSON-RPC requests from stdin until ctx is cancelled
+// or stdin is closed. Each newline-delimited JSON object is dispatched to
+// handleRequest and the response written back to stdout.
 func (s *Server) Run(ctx context.Context) error {
 	scanner := bufio.NewScanner(s.stdin)
-
-	// Channel to signal when scanner is done
-	scanDone := make(chan error, 1)
+	finished := make(chan error, 1)
 
 	go func() {
 		for scanner.Scan() {
-			// Check for context cancellation before processing
 			select {
 			case <-ctx.Done():
-				scanDone <- ctx.Err()
+				finished <- ctx.Err()
 				return
 			default:
 			}
@@ -319,19 +318,17 @@ func (s *Server) Run(ctx context.Context) error {
 				continue
 			}
 
-			resp := s.handleRequest(ctx, &req)
-			if resp != nil {
+			if resp := s.handleRequest(ctx, &req); resp != nil {
 				s.sendResponse(resp)
 			}
 		}
-		scanDone <- scanner.Err()
+		finished <- scanner.Err()
 	}()
 
-	// Wait for either context cancellation or scanner completion
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case err := <-scanDone:
+	case err := <-finished:
 		if err != nil {
 			return fmt.Errorf("scanner error: %w", err)
 		}
@@ -339,10 +336,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// handleRequest dispatches the request to the appropriate handler.
-// JSON-RPC 2.0 notifications (requests without "id") MUST NOT receive a response.
+// handleRequest routes a parsed JSON-RPC request to the appropriate handler.
+// Per JSON-RPC 2.0, notifications (ID == nil) must not produce a response.
 func (s *Server) handleRequest(ctx context.Context, req *Request) *Response {
-	// JSON-RPC 2.0: notifications have no "id" field — server MUST NOT respond.
 	if req.ID == nil {
 		s.handleNotification(req)
 		return nil
@@ -370,15 +366,12 @@ func (s *Server) handleRequest(ctx context.Context, req *Request) *Response {
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
-			Error: &Error{
-				Code:    -32601,
-				Message: "Method not found",
-			},
+			Error:   &Error{Code: -32601, Message: "Method not found"},
 		}
 	}
 }
 
-// handleNotification processes JSON-RPC 2.0 notifications (no response sent).
+// handleNotification logs JSON-RPC 2.0 notifications; no response is sent.
 func (s *Server) handleNotification(req *Request) {
 	switch req.Method {
 	case "initialized", "notifications/initialized":
@@ -1447,38 +1440,31 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 }
 
-// handleToolsCall handles tool invocations.
+// handleToolsCall decodes a tools/call request, invokes the named tool, and
+// wraps the result (or error) in the standard MCP content response shape.
 func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 	var params ToolCallParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
-			Error: &Error{
-				Code:    -32602,
-				Message: "Invalid params",
-				Data:    err.Error(),
-			},
+			Error:   &Error{Code: -32602, Message: "Invalid params", Data: err.Error()},
 		}
 	}
 
 	result, err := s.callTool(ctx, params.Name, params.Arguments)
 	if err != nil {
-		// Truncated args for debugging (first 200 chars)
-		argsStr := string(params.Arguments)
-		if len(argsStr) > 200 {
-			argsStr = argsStr[:200] + "..."
+		// Truncate and redact args before logging to avoid leaking secrets.
+		args := string(params.Arguments)
+		if len(args) > 200 {
+			args = args[:200] + "..."
 		}
-		argsStr = privacy.RedactSecrets(argsStr)
-		log.Error().Err(err).Str("tool", params.Name).Str("args", argsStr).Msg("Tool call failed")
+		args = privacy.RedactSecrets(args)
+		log.Error().Err(err).Str("tool", params.Name).Str("args", args).Msg("Tool call failed")
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
-			Error: &Error{
-				Code:    -32000,
-				Message: "Tool error: " + err.Error(),
-				Data:    err.Error(),
-			},
+			Error:   &Error{Code: -32000, Message: "Tool error: " + err.Error(), Data: err.Error()},
 		}
 	}
 
@@ -1487,10 +1473,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 		ID:      req.ID,
 		Result: map[string]any{
 			"content": []map[string]any{
-				{
-					"type": "text",
-					"text": result,
-				},
+				{"type": "text", "text": result},
 			},
 		},
 	}
@@ -1658,158 +1641,124 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 	}
 }
 
-// handleFindRelatedObservations finds observations related to a given observation ID.
-// v5 (US3): observation store removed; returns related IDs only (no full observation fetch).
+// handleFindRelatedObservations returns observation IDs related to the given ID.
+// v5 (US3): the full observation store is gone; only relation IDs are returned.
 func (s *Server) handleFindRelatedObservations(ctx context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
 	}
 
-	var params struct {
-		ID            int64
-		MinConfidence float64
-		Limit         int
-	}
-	params.ID = coerceInt64(m["id"], 0)
-	params.MinConfidence = coerceFloat64(m["min_confidence"], 0)
-	params.Limit = coerceInt(m["limit"], 0)
+	id := coerceInt64(m["id"], 0)
+	minConf := coerceFloat64(m["min_confidence"], 0)
+	limit := coerceInt(m["limit"], 0)
 
-	if params.ID <= 0 {
+	if id <= 0 {
 		return "", fmt.Errorf("id is required and must be a positive integer")
 	}
 	if s.relationStore == nil {
 		return "", fmt.Errorf("related observations unavailable: relation store not configured")
 	}
-	if params.MinConfidence < 0 {
-		params.MinConfidence = 0.5
+	if minConf < 0 {
+		minConf = 0.5
 	}
-	if params.Limit == 0 {
-		params.Limit = 20
+	if limit == 0 {
+		limit = 20
 	}
-	if params.Limit > 100 {
-		params.Limit = 100
+	if limit > 100 {
+		limit = 100
 	}
 
-	relatedIDs, err := s.relationStore.GetRelatedObservationIDs(ctx, params.ID, params.MinConfidence)
+	related, err := s.relationStore.GetRelatedObservationIDs(ctx, id, minConf)
 	if err != nil {
 		return "", fmt.Errorf("failed to get related observations: %w", err)
 	}
-	if relatedIDs == nil {
-		relatedIDs = []int64{}
+	if related == nil {
+		related = []int64{}
 	}
-	if len(relatedIDs) > params.Limit {
-		relatedIDs = relatedIDs[:params.Limit]
+	if len(related) > limit {
+		related = related[:limit]
 	}
 
 	// v5 (US3): observation store removed; return IDs only.
-	response := map[string]any{
-		"observation_ids": relatedIDs,
-		"count":           len(relatedIDs),
+	out, err := json.Marshal(map[string]any{
+		"observation_ids": related,
+		"count":           len(related),
 		"note":            "Full observation fetch unavailable in v5 — pass the returned IDs to tools that accept observation IDs",
-	}
-
-	output, err := json.Marshal(response)
+	})
 	if err != nil {
 		return "", fmt.Errorf("marshal response: %w", err)
 	}
-	return string(output), nil
+	return string(out), nil
 }
 
-// handleFindByFileObservations finds observations related to a file path.
-// v5 (US3): observation store removed; tool returns not-available error.
+// handleFindByFileObservations is a tombstone for the removed v5 find_by_file tool.
+// The observation store was dropped in v5 (US3).
 func (s *Server) handleFindByFileObservations(_ context.Context, _ json.RawMessage) (string, error) {
 	return "", fmt.Errorf("find_by_file removed in v5 (US3) — use recall(action=\"search\") to locate relevant memories and recall(action=\"get\") to inspect a specific memory")
 }
 
-// sendResponse sends a JSON-RPC response.
+// sendResponse serialises resp to JSON and writes it as a single line to stdout.
 func (s *Server) sendResponse(resp *Response) {
-	data, err := json.Marshal(resp)
+	b, err := json.Marshal(resp)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to marshal response")
 		return
 	}
-	fmt.Fprintln(s.stdout, string(data))
+	fmt.Fprintln(s.stdout, string(b))
 }
 
-// sendError sends a JSON-RPC error response.
+// sendError constructs a JSON-RPC error response and sends it via sendResponse.
 func (s *Server) sendError(id any, code int, message string, data any) {
-	resp := &Response{
+	s.sendResponse(&Response{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error: &Error{
-			Code:    code,
-			Message: message,
-			Data:    data,
-		},
-	}
-	s.sendResponse(resp)
+		Error:   &Error{Code: code, Message: message, Data: data},
+	})
 }
 
-// handleFindSimilarObservations finds observations semantically similar to a query.
-func (s *Server) handleFindSimilarObservations(ctx context.Context, args json.RawMessage) (string, error) {
+// handleFindSimilarObservations returns an empty result set.
+// Vector search was removed in v5 when the content_chunks table was dropped.
+func (s *Server) handleFindSimilarObservations(_ context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
 	}
 
-	var params struct {
-		Query         string
-		Project       string
-		MinSimilarity float64
-		Limit         int
-	}
-	params.Query = coerceString(m["query"], "")
-	params.Project = coerceString(m["project"], "")
-	params.MinSimilarity = coerceFloat64(m["min_similarity"], 0)
-	params.Limit = coerceInt(m["limit"], 0)
-
-	if params.Query == "" {
+	query := coerceString(m["query"], "")
+	if query == "" {
 		return "", fmt.Errorf("query is required")
 	}
 
-	if params.MinSimilarity == 0 {
-		params.MinSimilarity = 0.7
-	}
-	if params.Limit == 0 {
-		params.Limit = 10
-	}
-	if params.Limit > 50 {
-		params.Limit = 50
+	minSim := coerceFloat64(m["min_similarity"], 0)
+	if minSim == 0 {
+		minSim = 0.7
 	}
 
-	// Vector search removed in v5 (content_chunks table dropped). Return empty result set.
-	response := map[string]any{
+	out, err := json.Marshal(map[string]any{
 		"observations":   []any{},
 		"count":          0,
-		"min_similarity": params.MinSimilarity,
+		"min_similarity": minSim,
 		"note":           "Vector similarity search removed in v5; use recall(action=\"search\") for FTS-based retrieval",
-	}
-
-	output, err := json.Marshal(response)
+	})
 	if err != nil {
 		return "", fmt.Errorf("marshal response: %w", err)
 	}
-
-	return string(output), nil
+	return string(out), nil
 }
 
-// handleGetMemoryStats returns statistics about the memory system.
-func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
-	stats := make(map[string]any, 8) // Pre-allocate for expected stats keys
-
-	// Vector storage and search.Manager removed in v5 (US9); no vector/search stats available.
-
-	output, err := json.Marshal(stats)
+// handleGetMemoryStats returns memory system statistics.
+// Vector storage and search.Manager were removed in v5 (US9); the map is intentionally empty.
+func (s *Server) handleGetMemoryStats(_ context.Context) (string, error) {
+	out, err := json.Marshal(map[string]any{})
 	if err != nil {
 		return "", fmt.Errorf("marshal response: %w", err)
 	}
-
-	return string(output), nil
+	return string(out), nil
 }
 
-// handleBulkDeleteObservations — removed in v5 (US3); observations table dropped.
 // handleBackfillStatus returns backfill run status via the injected status function.
+// handleBulkDeleteObservations was removed in v5 (US3); the observations table was dropped.
 func (s *Server) handleBackfillStatus() (string, error) {
 	if s.backfillStatusFunc == nil {
 		return "", fmt.Errorf("backfill status not available")
@@ -1818,11 +1767,11 @@ func (s *Server) handleBackfillStatus() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get backfill status: %w", err)
 	}
-	data, err := json.MarshalIndent(status, "", "  ")
+	b, err := json.MarshalIndent(status, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal backfill status: %w", err)
 	}
-	return string(data), nil
+	return string(b), nil
 }
 
 // handleCheckSystemHealth performs comprehensive system health checks.
@@ -1963,28 +1912,21 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 	return string(output), nil
 }
 
-// handleAnalyzeSearchPatterns analyzes search query patterns.
+// handleAnalyzeSearchPatterns returns a stub analysis response.
+// Observation-era search metrics were removed in v5 along with the observations table.
 func (s *Server) handleAnalyzeSearchPatterns(_ context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
 	}
 
-	var params struct {
-		Days int
-		TopN int
-	}
-	params.Days = coerceInt(m["days"], 0)
-	params.TopN = coerceInt(m["top_n"], 0)
-	if params.Days <= 0 {
-		params.Days = 7
-	}
-	if params.TopN <= 0 {
-		params.TopN = 10
+	days := coerceInt(m["days"], 0)
+	if days <= 0 {
+		days = 7
 	}
 
-	analysis := map[string]any{
-		"period":              fmt.Sprintf("Last %d days", params.Days),
+	out, err := json.Marshal(map[string]any{
+		"period":              fmt.Sprintf("Last %d days", days),
 		"top_queries":         []map[string]any{},
 		"zero_result_queries": []string{},
 		"insights": []string{
@@ -1994,21 +1936,19 @@ func (s *Server) handleAnalyzeSearchPatterns(_ context.Context, args json.RawMes
 		"total_searches": 0,
 		"unique_queries": 0,
 		"note":           "search metrics unavailable in v5",
-	}
-
-	output, err := json.Marshal(analysis)
+	})
 	if err != nil {
 		return "", fmt.Errorf("marshal analysis: %w", err)
 	}
-	return string(output), nil
+	return string(out), nil
 }
 
-// handleSearchSessions — removed in v5 (US3); indexed_sessions table dropped.
+// handleSearchSessions is a tombstone for the removed v5 search_sessions tool.
 func (s *Server) handleSearchSessions(_ context.Context, _ json.RawMessage) (string, error) {
 	return "", fmt.Errorf("search_sessions removed in v5 (US3) — indexed_sessions table dropped")
 }
 
-// handleListSessions — removed in v5 (US3); indexed_sessions table dropped.
+// handleListSessions is a tombstone for the removed v5 list_sessions tool.
 func (s *Server) handleListSessions(_ context.Context, _ json.RawMessage) (string, error) {
 	return "", fmt.Errorf("list_sessions removed in v5 (US3) — indexed_sessions table dropped")
 }
