@@ -1,5 +1,7 @@
 <template>
   <div class="text-center relative">
+    <!-- Numbered circle — the amber border gives it visual weight on the
+         dark background without needing a filled background color. -->
     <div class="w-14 h-14 sm:w-20 sm:h-20 bg-slate-900 border-2 border-amber-500 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6 text-amber-500 font-bold text-xl sm:text-3xl relative z-10">
       {{ number }}
     </div>

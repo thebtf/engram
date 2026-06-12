@@ -2,8 +2,14 @@
   <footer class="border-t border-slate-800 py-10 sm:py-16 relative">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col md:flex-row justify-between items-center gap-4 sm:gap-6">
       <div class="flex flex-wrap justify-center gap-4 sm:gap-6">
-        <a v-for="link in links" :key="link.href" :href="link.href" target="_blank"
-           class="text-slate-500 hover:text-white text-xs sm:text-sm transition-colors animated-underline">
+        <a
+          v-for="link in links"
+          :key="link.href"
+          :href="link.href"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-slate-500 hover:text-white text-xs sm:text-sm transition-colors animated-underline"
+        >
           {{ link.label }}
         </a>
       </div>

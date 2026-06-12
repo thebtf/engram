@@ -1,23 +1,28 @@
 <template>
   <div class="bg-slate-950 text-white min-h-screen relative overflow-hidden">
-    <!-- Animated Background -->
+
+    <!-- Animated background layer — sits behind all content, pointer-events
+         disabled so it never intercepts clicks. -->
     <div class="fixed inset-0 pointer-events-none">
-      <!-- Gradient orbs -->
+      <!-- Ambient gradient orbs -->
       <div class="absolute top-0 left-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl animate-float"></div>
       <div class="absolute bottom-1/4 right-1/4 w-80 h-80 bg-amber-400/5 rounded-full blur-3xl animate-float-delayed"></div>
       <div class="absolute top-1/2 right-0 w-64 h-64 bg-slate-700/20 rounded-full blur-3xl animate-glow"></div>
 
-      <!-- Grid pattern -->
+      <!-- Subtle grid overlay -->
       <div class="absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.03)_1px,transparent_1px)] bg-[size:50px_50px]"></div>
 
       <!-- Floating particles -->
-      <div v-for="i in 12" :key="i"
-           class="particle animate-particle"
-           :style="{
-             left: `${(i * 8.3) % 100}%`,
-             animationDelay: `${i * 1.5}s`,
-             animationDuration: `${15 + (i % 5) * 3}s`
-           }"></div>
+      <div
+        v-for="i in 12"
+        :key="i"
+        class="particle animate-particle"
+        :style="{
+          left: `${(i * 8.3) % 100}%`,
+          animationDelay: `${i * 1.5}s`,
+          animationDuration: `${15 + (i % 5) * 3}s`
+        }"
+      ></div>
     </div>
 
     <NavBar :mobile-menu-open="mobileMenuOpen" @toggle-menu="mobileMenuOpen = !mobileMenuOpen" />
@@ -29,10 +34,11 @@
       subtitle="Stop re-explaining your codebase. Engram captures bug fixes, architecture decisions, and coding patterns - then brings them back exactly when you need them."
     />
 
-    <!-- Dashboard Preview -->
+    <!-- Dashboard preview screenshot -->
     <section class="py-12 lg:py-16 px-4 sm:px-6 relative">
       <div class="max-w-6xl mx-auto">
         <div class="relative rounded-xl overflow-hidden border border-slate-700/50 shadow-2xl shadow-amber-500/5">
+          <!-- Fade-to-background gradient so the screenshot bleeds into the page -->
           <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none z-10"></div>
           <img
             src="/engram.jpg"
@@ -40,11 +46,11 @@
             class="w-full h-auto"
           />
         </div>
-        <p class="text-center text-slate-500 text-sm mt-4">The dashboard at localhost:37777 - browse, search, and manage your memories. View graph stats, vector metrics, storage savings, and performance analytics.</p>
+        <p class="text-center text-slate-500 text-sm mt-4">The dashboard at localhost:37777 - browse, search, and manage your memories. View graph stats, FTS/vector search metrics, storage savings, and performance analytics.</p>
       </div>
     </section>
 
-    <!-- Problem Section -->
+    <!-- Problem section -->
     <section class="py-20 lg:py-28 px-4 sm:px-6 relative">
       <div class="max-w-6xl mx-auto grid lg:grid-cols-2 gap-8 lg:gap-16 items-center">
         <div>
@@ -83,7 +89,7 @@
       </div>
     </section>
 
-    <!-- Features Section -->
+    <!-- Features section -->
     <section id="features" class="py-20 lg:py-28 bg-slate-900/30 relative">
       <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-slate-700 to-transparent"></div>
       <div class="max-w-6xl mx-auto px-4 sm:px-6">
@@ -100,7 +106,7 @@
       </div>
     </section>
 
-    <!-- Knowledge Graph Preview -->
+    <!-- Knowledge graph preview -->
     <section class="py-16 lg:py-20 px-4 sm:px-6 relative">
       <div class="max-w-5xl mx-auto">
         <SectionHeader title="See how knowledge connects" subtitle="The knowledge graph reveals relationships between your memories automatically" />
@@ -115,12 +121,12 @@
       </div>
     </section>
 
-    <!-- Before/After Section -->
+    <!-- Before / after comparison -->
     <section class="py-20 lg:py-28 px-4 sm:px-6">
       <div class="max-w-6xl mx-auto">
         <SectionHeader title="The difference" subtitle="Same question. Different experience." />
         <div class="grid md:grid-cols-2 gap-6 sm:gap-8">
-          <!-- Before -->
+          <!-- Without Engram -->
           <div class="glass rounded-2xl p-5 sm:p-6 relative border-red-500/20">
             <div class="absolute top-3 sm:top-4 right-3 sm:right-4 bg-red-500/20 text-red-400 px-2 sm:px-3 py-1 rounded-full text-xs font-medium">Without Engram</div>
             <div class="space-y-3 sm:space-y-4 mt-8">
@@ -137,7 +143,7 @@
             </div>
           </div>
 
-          <!-- After -->
+          <!-- With Engram -->
           <div class="glass rounded-2xl p-5 sm:p-6 relative border-green-500/20">
             <div class="absolute top-3 sm:top-4 right-3 sm:right-4 bg-green-500/20 text-green-400 px-2 sm:px-3 py-1 rounded-full text-xs font-medium">With Engram</div>
             <div class="space-y-3 sm:space-y-4 mt-8">
@@ -154,11 +160,12 @@
       </div>
     </section>
 
-    <!-- How It Works Section -->
+    <!-- How it works -->
     <section id="how-it-works" class="py-20 lg:py-28 px-4 sm:px-6 bg-slate-900/30">
       <div class="max-w-6xl mx-auto">
         <SectionHeader title="Zero setup. Zero maintenance." subtitle="Install once, benefit forever. Engram works silently in the background." />
         <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8 relative">
+          <!-- Connecting line visible on large screens -->
           <div class="hidden lg:block absolute top-10 left-[60px] right-[60px] h-0.5 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 opacity-30"></div>
           <StepCard
             v-for="step in steps"
@@ -171,11 +178,12 @@
       </div>
     </section>
 
-    <!-- Installation Section -->
+    <!-- Installation section -->
     <section id="installation" class="py-20 lg:py-28 px-4 sm:px-6">
       <div class="max-w-6xl mx-auto">
         <SectionHeader title="Quick install" subtitle="One command. No configuration. No account required." />
 
+        <!-- Platform tabs -->
         <div class="flex flex-wrap justify-center gap-2 mb-6 sm:mb-8">
           <button
             v-for="tab in installTabs"
@@ -218,7 +226,7 @@
             <br>
             <span class="text-amber-400">make build && make install</span>
             <br><br>
-            <span class="text-slate-500"># Requires: Go 1.24+, Node.js 18+, CGO compiler</span>
+            <span class="text-slate-500"># Requires: Go 1.25+, Node.js 18+, CGO compiler</span>
           </CodeBlock>
         </div>
 
@@ -229,7 +237,7 @@
       </div>
     </section>
 
-    <!-- Requirements Section -->
+    <!-- Requirements section -->
     <section id="requirements" class="py-20 lg:py-28 px-4 sm:px-6 bg-slate-900/30">
       <div class="max-w-6xl mx-auto">
         <SectionHeader title="Requirements" subtitle="Minimal dependencies. Everything else is built-in." />
@@ -241,7 +249,11 @@
               <span class="text-white font-semibold text-sm sm:text-base">That's all you need</span>
             </div>
             <div class="space-y-3">
-              <div v-for="req in requiredDeps" :key="req.name" class="flex items-start gap-3 p-3 bg-slate-800/50 rounded-lg">
+              <div
+                v-for="req in requiredDeps"
+                :key="req.name"
+                class="flex items-start gap-3 p-3 bg-slate-800/50 rounded-lg"
+              >
                 <i :class="[req.icon, 'text-amber-500 mt-0.5']"></i>
                 <div>
                   <code class="text-white text-xs sm:text-sm font-semibold">{{ req.name }}</code>
@@ -251,14 +263,14 @@
             </div>
             <p class="text-slate-500 text-xs mt-4">
               <i class="fas fa-info-circle mr-1"></i>
-              No Python. No external services. Semantic search with local embeddings is built-in.
+              No Python. No extra services required. PostgreSQL handles both full-text and vector search.
             </p>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Configuration Section -->
+    <!-- Configuration section -->
     <section id="configuration" class="py-20 lg:py-28 px-4 sm:px-6 bg-slate-900/30">
       <div class="max-w-6xl mx-auto">
         <SectionHeader title="Fully configurable" subtitle="Works out of the box, but adapts to your preferences" />
@@ -278,9 +290,13 @@
 <span class="text-slate-500">}</span></code></pre>
           </div>
 
-          <!-- Config options list -->
+          <!-- Config option cards -->
           <div class="space-y-3 sm:space-y-4">
-            <div v-for="config in configOptions" :key="config.name" class="glass rounded-xl p-4 hover:border-amber-500/20 transition-colors">
+            <div
+              v-for="config in configOptions"
+              :key="config.name"
+              class="glass rounded-xl p-4 hover:border-amber-500/20 transition-colors"
+            >
               <div class="flex items-start gap-3">
                 <div class="w-8 h-8 bg-amber-500/15 rounded-lg flex items-center justify-center text-amber-500 flex-shrink-0 text-sm">
                   <i :class="config.icon"></i>
@@ -295,12 +311,12 @@
         </div>
 
         <p class="text-center text-slate-500 mt-6 sm:mt-8 text-xs sm:text-sm">
-          All settings can also be set via environment variables. See <a href="https://github.com/thebtf/engram#configuration" target="_blank" class="text-amber-400 hover:underline">full documentation</a> for all options.
+          All settings can also be set via environment variables. See <a href="https://github.com/thebtf/engram#configuration" target="_blank" rel="noopener noreferrer" class="text-amber-400 hover:underline">full documentation</a> for all options.
         </p>
       </div>
     </section>
 
-    <!-- Technical Details -->
+    <!-- Technical details section -->
     <section class="py-20 lg:py-28 px-4 sm:px-6">
       <div class="max-w-6xl mx-auto">
         <SectionHeader title="Under the hood" subtitle="Built with simplicity and performance in mind" />
@@ -333,14 +349,14 @@
       </div>
     </section>
 
-    <!-- Trust Section -->
+    <!-- Trust / maintainer section -->
     <section class="py-20 lg:py-28 px-4 sm:px-6 bg-slate-900/30">
       <div class="max-w-4xl mx-auto">
         <SectionHeader title="Open source. Real person." subtitle="Not another anonymous package - built by a developer you can verify" />
 
         <div class="glass rounded-2xl p-6 sm:p-8 text-center">
           <div class="flex flex-col sm:flex-row items-center justify-center gap-6 sm:gap-8 mb-6">
-            <a href="https://github.com/lukaszraczylo" target="_blank" class="group">
+            <a href="https://github.com/lukaszraczylo" target="_blank" rel="noopener noreferrer" class="group">
               <img
                 src="https://github.com/lukaszraczylo.png"
                 alt="Lukasz Raczylo"
@@ -351,13 +367,13 @@
               <h3 class="text-white font-semibold text-lg sm:text-xl mb-1">Lukasz Raczylo</h3>
               <p class="text-slate-400 text-sm mb-3">Principal Engineer & Open Source Maintainer</p>
               <div class="flex flex-wrap justify-center sm:justify-start gap-3">
-                <a href="https://github.com/lukaszraczylo" target="_blank" class="text-slate-500 hover:text-white transition-colors text-sm">
+                <a href="https://github.com/lukaszraczylo" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-white transition-colors text-sm">
                   <i class="fab fa-github mr-1"></i>GitHub
                 </a>
-                <a href="https://linkedin.com/in/lukaszraczylo" target="_blank" class="text-slate-500 hover:text-white transition-colors text-sm">
+                <a href="https://linkedin.com/in/lukaszraczylo" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-white transition-colors text-sm">
                   <i class="fab fa-linkedin mr-1"></i>LinkedIn
                 </a>
-                <a href="https://raczylo.com" target="_blank" class="text-slate-500 hover:text-white transition-colors text-sm">
+                <a href="https://raczylo.com" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-white transition-colors text-sm">
                   <i class="fas fa-globe mr-1"></i>Website
                 </a>
               </div>
@@ -388,7 +404,7 @@
       </div>
     </section>
 
-    <!-- FAQ Section -->
+    <!-- FAQ section -->
     <section id="faq" class="py-20 lg:py-28 px-4 sm:px-6">
       <div class="max-w-4xl mx-auto">
         <SectionHeader title="Questions?" />
@@ -424,8 +440,8 @@ const activeTab = ref('macos')
 
 const features = [
   { icon: 'fas fa-brain', title: 'Learns as you work', description: 'Every bug fix, every architecture decision, every "aha moment" - captured automatically without breaking your flow.' },
-  { icon: 'fas fa-search', title: 'Two-stage retrieval', description: 'Cross-encoder reranking delivers highly relevant results. Finds what you need even with vague queries like "that auth thing".' },
-  { icon: 'fas fa-project-diagram', title: 'Graph-based search', description: 'LEANN Phase 2: Graph relationships between observations (file overlap, semantic similarity, temporal proximity) for smarter context retrieval.' },
+  { icon: 'fas fa-search', title: 'Hybrid retrieval', description: 'Three-tier search: exact match, vector similarity (pgvector HNSW), and full-text search (tsvector BM25) fused with RRF reranking for consistently relevant results.' },
+  { icon: 'fas fa-project-diagram', title: 'Graph-based search', description: 'Graph relationships between observations (file overlap, semantic similarity, temporal proximity) for smarter context retrieval beyond keyword matching.' },
   { icon: 'fas fa-microchip', title: 'AST-aware chunking', description: 'Intelligent code splitting respects function boundaries. Go, Python, and TypeScript code is chunked at semantic boundaries, not arbitrary line counts.' },
   { icon: 'fas fa-database', title: 'Hybrid vector storage', description: 'LEANN-inspired selective storage: frequently-accessed "hub" observations store embeddings, others recompute on-demand. 60-80% storage savings with <50ms latency.' },
   { icon: 'fas fa-folder-tree', title: 'Project-aware context', description: 'Your React knowledge stays in React projects. Your Go patterns stay in Go projects. No context pollution.' },
