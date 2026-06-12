@@ -1,4 +1,7 @@
-// Package golang provides AST-aware chunking for Go source files.
+// Package golang provides AST-aware chunking for Go source files. It parses
+// Go source with go/parser and emits one Chunk per top-level declaration:
+// functions, methods, types (struct, interface, alias), constants, and
+// variables. The resulting chunks feed the code-intelligence retrieval pipeline.
 package golang
 
 import (
@@ -18,7 +21,7 @@ type Chunker struct {
 	options chunking.ChunkOptions
 }
 
-// NewChunker creates a new Go chunker.
+// NewChunker creates a new Go chunker with the given options.
 func NewChunker(options chunking.ChunkOptions) *Chunker {
 	return &Chunker{options: options}
 }
@@ -33,44 +36,45 @@ func (c *Chunker) SupportedExtensions() []string {
 	return []string{".go"}
 }
 
-// Chunk parses a Go source file and returns semantic code chunks.
+// Chunk parses a Go source file and returns one semantic Chunk per top-level
+// declaration. The context is threaded through for future cancellation support
+// but is not yet checked internally (parsing is CPU-bound and fast).
 func (c *Chunker) Chunk(ctx context.Context, filePath string) ([]chunking.Chunk, error) {
-	// Read file content
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
 	}
 
-	// Parse the Go file
+	// Parse with comment retention so DocComment fields can be populated.
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filePath, content, parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("parse Go file: %w", err)
 	}
 
-	chunks := make([]chunking.Chunk, 0)
+	// Split into lines once; each extraction helper indexes into this slice to
+	// avoid repeatedly scanning the raw byte slice.
 	sourceLines := strings.Split(string(content), "\n")
 
-	// Extract chunks from declarations
+	chunks := make([]chunking.Chunk, 0)
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
-			chunk := c.extractFunction(fset, d, sourceLines, filePath)
-			if chunk != nil {
+			if chunk := c.extractFunction(fset, d, sourceLines, filePath); chunk != nil {
 				chunks = append(chunks, *chunk)
 			}
 		case *ast.GenDecl:
-			extracted := c.extractGenDecl(fset, d, sourceLines, filePath)
-			chunks = append(chunks, extracted...)
+			chunks = append(chunks, c.extractGenDecl(fset, d, sourceLines, filePath)...)
 		}
 	}
 
 	return chunks, nil
 }
 
-// extractFunction extracts a function or method declaration as a chunk.
+// extractFunction turns a function or method declaration into a Chunk.
+// Returns nil when the declaration is unexported and IncludePrivate is false,
+// which is the common case for filtering internal helpers from retrieval.
 func (c *Chunker) extractFunction(fset *token.FileSet, fn *ast.FuncDecl, sourceLines []string, filePath string) *chunking.Chunk {
-	// Skip unexported if configured
 	if !c.options.IncludePrivate && !fn.Name.IsExported() {
 		return nil
 	}
@@ -86,7 +90,7 @@ func (c *Chunker) extractFunction(fset *token.FileSet, fn *ast.FuncDecl, sourceL
 		EndLine:   endPos.Line,
 	}
 
-	// Determine if this is a method or a function
+	// Presence of a receiver list distinguishes methods from package-level functions.
 	if fn.Recv != nil && len(fn.Recv.List) > 0 {
 		chunk.Type = chunking.ChunkTypeMethod
 		chunk.ParentName = c.extractReceiverType(fn.Recv)
@@ -94,13 +98,9 @@ func (c *Chunker) extractFunction(fset *token.FileSet, fn *ast.FuncDecl, sourceL
 		chunk.Type = chunking.ChunkTypeFunction
 	}
 
-	// Extract content
 	chunk.Content = c.extractLines(sourceLines, startPos.Line, endPos.Line)
-
-	// Extract signature (function declaration without body)
 	chunk.Signature = c.extractFunctionSignature(fn, fset, sourceLines)
 
-	// Extract doc comment
 	if c.options.IncludeDocComments && fn.Doc != nil {
 		chunk.DocComment = strings.TrimSpace(fn.Doc.Text())
 	}
@@ -108,21 +108,20 @@ func (c *Chunker) extractFunction(fset *token.FileSet, fn *ast.FuncDecl, sourceL
 	return chunk
 }
 
-// extractGenDecl extracts general declarations (type, const, var).
+// extractGenDecl handles general declarations (type, const, var blocks). A
+// single GenDecl may contain multiple specs (e.g. a const block), so this
+// returns a slice.
 func (c *Chunker) extractGenDecl(fset *token.FileSet, gd *ast.GenDecl, sourceLines []string, filePath string) []chunking.Chunk {
 	var chunks []chunking.Chunk
 
 	for _, spec := range gd.Specs {
 		switch s := spec.(type) {
 		case *ast.TypeSpec:
-			chunk := c.extractTypeSpec(fset, gd, s, sourceLines, filePath)
-			if chunk != nil {
+			if chunk := c.extractTypeSpec(fset, gd, s, sourceLines, filePath); chunk != nil {
 				chunks = append(chunks, *chunk)
 			}
 		case *ast.ValueSpec:
-			// Handle const and var declarations
-			chunk := c.extractValueSpec(fset, gd, s, sourceLines, filePath)
-			if chunk != nil {
+			if chunk := c.extractValueSpec(fset, gd, s, sourceLines, filePath); chunk != nil {
 				chunks = append(chunks, *chunk)
 			}
 		}
@@ -131,9 +130,11 @@ func (c *Chunker) extractGenDecl(fset *token.FileSet, gd *ast.GenDecl, sourceLin
 	return chunks
 }
 
-// extractTypeSpec extracts a type declaration (struct, interface, type alias).
+// extractTypeSpec extracts a type declaration as a Chunk. Struct types are
+// mapped to ChunkTypeClass so the retrieval layer can apply object-oriented
+// queries uniformly across languages (Go structs fill the same conceptual role
+// as classes in OO languages).
 func (c *Chunker) extractTypeSpec(fset *token.FileSet, gd *ast.GenDecl, ts *ast.TypeSpec, sourceLines []string, filePath string) *chunking.Chunk {
-	// Skip unexported if configured
 	if !c.options.IncludePrivate && !ts.Name.IsExported() {
 		return nil
 	}
@@ -150,17 +151,15 @@ func (c *Chunker) extractTypeSpec(fset *token.FileSet, gd *ast.GenDecl, ts *ast.
 		Content:   c.extractLines(sourceLines, startPos.Line, endPos.Line),
 	}
 
-	// Determine chunk type based on type expression
 	switch ts.Type.(type) {
 	case *ast.StructType:
-		chunk.Type = chunking.ChunkTypeClass // Treat struct as class
+		chunk.Type = chunking.ChunkTypeClass // Structs model classes in the retrieval taxonomy.
 	case *ast.InterfaceType:
 		chunk.Type = chunking.ChunkTypeInterface
 	default:
 		chunk.Type = chunking.ChunkTypeType
 	}
 
-	// Extract doc comment
 	if c.options.IncludeDocComments && gd.Doc != nil {
 		chunk.DocComment = strings.TrimSpace(gd.Doc.Text())
 	}
@@ -168,10 +167,12 @@ func (c *Chunker) extractTypeSpec(fset *token.FileSet, gd *ast.GenDecl, ts *ast.
 	return chunk
 }
 
-// extractValueSpec extracts const or var declarations.
+// extractValueSpec extracts a const or var declaration as a Chunk. The chunk
+// is skipped when all declared names are unexported and IncludePrivate is false.
 func (c *Chunker) extractValueSpec(fset *token.FileSet, gd *ast.GenDecl, vs *ast.ValueSpec, sourceLines []string, filePath string) *chunking.Chunk {
-	// Skip if all names are unexported and we're excluding private
 	if !c.options.IncludePrivate {
+		// Only skip when every name in this spec is unexported. A spec can
+		// legitimately mix exported and unexported names inside the same block.
 		allUnexported := true
 		for _, name := range vs.Names {
 			if name.IsExported() {
@@ -187,7 +188,7 @@ func (c *Chunker) extractValueSpec(fset *token.FileSet, gd *ast.GenDecl, vs *ast
 	startPos := fset.Position(gd.Pos())
 	endPos := fset.Position(gd.End())
 
-	// Use first name as the chunk name, join multiple if present
+	// Join multiple names (e.g. "A, B = 1, 2") into a single readable label.
 	names := make([]string, len(vs.Names))
 	for i, name := range vs.Names {
 		names[i] = name.Name
@@ -202,14 +203,12 @@ func (c *Chunker) extractValueSpec(fset *token.FileSet, gd *ast.GenDecl, vs *ast
 		Content:   c.extractLines(sourceLines, startPos.Line, endPos.Line),
 	}
 
-	// Set type based on token
 	if gd.Tok == token.CONST {
 		chunk.Type = chunking.ChunkTypeConst
 	} else {
 		chunk.Type = chunking.ChunkTypeVar
 	}
 
-	// Extract doc comment
 	if c.options.IncludeDocComments && gd.Doc != nil {
 		chunk.DocComment = strings.TrimSpace(gd.Doc.Text())
 	}
@@ -217,7 +216,9 @@ func (c *Chunker) extractValueSpec(fset *token.FileSet, gd *ast.GenDecl, vs *ast
 	return chunk
 }
 
-// extractReceiverType extracts the receiver type name from a method.
+// extractReceiverType returns the base type name from a method receiver list.
+// Both value receivers (T) and pointer receivers (*T) resolve to "T", because
+// the receiver type — not the indirection — identifies the owning struct.
 func (c *Chunker) extractReceiverType(recv *ast.FieldList) string {
 	if len(recv.List) == 0 {
 		return ""
@@ -236,45 +237,48 @@ func (c *Chunker) extractReceiverType(recv *ast.FieldList) string {
 	return ""
 }
 
-// extractFunctionSignature extracts the function signature without the body.
+// extractFunctionSignature returns the function signature text without the
+// body braces. When the opening brace is on the same line as the declaration
+// (the common Go style), it slices up to the brace. When the declaration spans
+// multiple lines (unusual but valid), it takes all lines up to the brace line
+// and trims the brace itself.
 func (c *Chunker) extractFunctionSignature(fn *ast.FuncDecl, fset *token.FileSet, sourceLines []string) string {
 	if fn.Body == nil {
-		// No body, return entire declaration
+		// External or interface stub — the whole declaration is the signature.
 		startPos := fset.Position(fn.Pos())
 		endPos := fset.Position(fn.End())
 		return c.extractLines(sourceLines, startPos.Line, endPos.Line)
 	}
 
-	// Extract from start of function to just before body
 	startPos := fset.Position(fn.Pos())
 	bodyPos := fset.Position(fn.Body.Pos())
 
-	// If body is on the same line, extract just that line up to the opening brace
 	if startPos.Line == bodyPos.Line {
+		// Single-line declaration: slice the source line up to the opening brace.
 		line := sourceLines[startPos.Line-1]
-		// Find the opening brace position
 		if idx := strings.Index(line[startPos.Column-1:], "{"); idx >= 0 {
 			return strings.TrimSpace(line[startPos.Column-1 : startPos.Column-1+idx])
 		}
 		return strings.TrimSpace(line[startPos.Column-1:])
 	}
 
-	// Get lines from start to the line containing the opening brace
+	// Multi-line declaration: collect lines through the brace line, then
+	// strip the brace and any trailing whitespace.
 	sig := c.extractLines(sourceLines, startPos.Line, bodyPos.Line)
-	// Remove the opening brace and anything after it
 	if idx := strings.Index(sig, "{"); idx >= 0 {
 		sig = sig[:idx]
 	}
 	return strings.TrimSpace(sig)
 }
 
-// extractLines extracts a range of lines from source (1-indexed, inclusive).
+// extractLines returns the source text for the 1-indexed inclusive range
+// [start, end]. Returns empty string for invalid or out-of-bounds ranges.
 func (c *Chunker) extractLines(lines []string, start, end int) string {
 	if start < 1 || end < start || start > len(lines) {
 		return ""
 	}
 
-	// Adjust for 0-indexed array (start and end are 1-indexed)
+	// Convert 1-indexed bounds to 0-indexed slice bounds.
 	startIdx := start - 1
 	endIdx := end
 	if endIdx > len(lines) {
