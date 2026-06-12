@@ -7,6 +7,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-06-12
+
+### Added
+
+- **Milestone F — TG1: Privacy scopes (4-tier).** Memories now carry a
+  `privacy_scope` field with four levels: `private`, `project`, `shared`,
+  `global`. Retrieval paths enforce scope visibility when
+  `ENGRAM_VNEXT_F_ENABLED=true`. Migration: `125_privacy_scope_addition`.
+
+- **Milestone F — TG2: Knowledge node taxonomy (13 types).** The knowledge
+  graph extended with typed nodes: `concept`, `entity`, `process`, `decision`,
+  `pattern`, `skill`, `tool`, `artifact`, `role`, `constraint`, `goal`,
+  `event`, `unknown`. The `graph` MCP tool gains an `add_node` action and
+  `node_type` filter on `get_edges` when `ENGRAM_VNEXT_F_ENABLED=true`.
+  Migrations: `126_knowledge_nodes_table`, `127_edge_discriminators`.
+
+- **Milestone F — TG3: Explainable rerank + ranking rationale.** `recall_memory`
+  (and the legacy `recall` tool under `ENGRAM_VNEXT_ENABLED=true`) now returns
+  an optional `rationale` object per result with fields: `recency_days`,
+  `confidence`, `citation_count`, `tier`, `substring_match`,
+  `filters_applied`. Pass `explain=true` to activate. Store-level
+  `ListWithFilters` added (`confidence_min`, `include_superseded`, `limit`).
+
+- **Milestone F — TG4: Crystallization candidates.** Memories that pass the
+  crystallization gate are staged as candidates before promotion. New MCP tools
+  (active when `ENGRAM_VNEXT_F_ENABLED=true`): `list_candidates`,
+  `promote_candidate`, `reject_candidate`, `supersede_candidate`. Migration:
+  `132_crystallization_candidates`.
+
+- **Milestone F — TG5: Write-lint two-phase protocol.** `store_memory` with
+  `ENGRAM_VNEXT_F_ENABLED=true` runs a two-phase write-lint check before
+  committing: Phase 1 returns conflict signals and a resolution token; Phase 2
+  accepts the token to complete the write. Includes a redaction middleware layer
+  controlled by `ENGRAM_REDACTION_RULES_PATH`. `dry_run=true` support added to
+  `store_memory`, `promote_candidate`, and all bulk ops.
+
+- **Milestone F — TG6: Governance operations.** Bulk-op snapshots for
+  rollback/audit, export/import bundles (ZIP format with SHA-256 manifest),
+  dry-run flag across all write paths, and configurable snapshot retention.
+  New MCP tools (active when `ENGRAM_VNEXT_F_ENABLED=true`): `list_snapshots`,
+  `rollback_snapshot`, `pin_snapshot`, `redaction_rules_status`. Bulk tools:
+  `bulk_promote`, `bulk_delete`, `bulk_supersede`. Migration:
+  `133_bulk_op_snapshots`, `134_bulk_op_snapshots_jsonb_checks`.
+
+- **W2: Crystallization pipeline wiring.** Session-end crystallization fires
+  when `ENGRAM_CRYSTALLIZATION_ENABLED=true`. Audit trail wired into
+  create/delete/supersede/edit paths and sleep cycle promotion/demotion. Audit
+  log 90-day retention in `runRetentionCleanup`.
+
+- **W2: `purge_project` admin operation.** `admin(action="purge_project")`
+  deletes all memories, candidates, edges, and vectors for a project with
+  double-entry confirmation. Active when `ENGRAM_VNEXT_ENABLED=true`. Migration:
+  `130_source_workstation_id`.
+
+- **W3: Hybrid retrieval read path.** `recall_memory` and `recall(action="similar")`
+  under `ENGRAM_VNEXT_ENABLED=true` use a three-tier hybrid pipeline: Tier 0
+  exact text match, Tier 1 vector (FindSimilar), Tier 2 FTS (SearchFTS), fused
+  with Reciprocal Rank Fusion (RRF) and FR-C4 recency/confidence scoring.
+  Clock-skew fix: all DB timestamp comparisons now use SQL `NOW()` instead of
+  Go-side timestamps.
+
+- **FR-E2: Claude Code adapter reference documentation.** `docs/arch/` gains the
+  `claude-code-adapter` reference guide. Dead `PostCompact` MCP tool registration
+  removed.
+
+- **U1–U3: Upstream decoupling.** Contract-driven test rewrites (9 suites
+  across two batches, U1), behavior-preserving rewrites of upstream Go
+  infrastructure (U2: update, session manager, gorm store, sdk processor,
+  service fragments), and `pkg/models` rewrites (U3). Dead `pkg/models/scoring.go`
+  deleted (zero callers).
+
+### Changed
+
+- **`admin` tool schema is flag-aware.** When `ENGRAM_VNEXT_ENABLED=false`
+  (default), the `admin` tool description and schema are byte-identical to
+  pre-v6.5.0 (no `purge_project`, no `confirm` field). The extended schema
+  activates only when `ENGRAM_VNEXT_ENABLED=true`.
+
+- **`recall(action="similar")` forwards to hybrid path under flag.**
+  With `ENGRAM_VNEXT_ENABLED=true`, `similar` translates `min_similarity` to
+  `vec_threshold` and delegates to `recall_memory` with `tier_filter=tier1_vector`.
+  Flag-OFF behavior is byte-identical to v6.4.15.
+
+- **Tier default changed to `episodic`.** New memories (INSERT without explicit
+  tier) now default to `tier='episodic'` per spec FR-B2. Existing rows are not
+  rewritten. Migration: `131_tier_default_episodic`.
+
+- **`recall_memory` gains `tier_filter` param** (under `ENGRAM_LIFECYCLE_ENABLED`).
+  Invalid values return a structured `invalid_tier_filter:` error.
+
+### Fixed
+
+- **SSE broadcast: wedged-client panic and blocking.** A client whose write
+  stalled past the 2s write timeout could panic the broadcaster (send on
+  closed channel) or block every subsequent broadcast for all clients.
+  Dead-client reports now flow through a buffered never-closed channel;
+  `Broadcast` returns within the write timeout and stalled clients are
+  removed on the next broadcast pass.
+
+- **Clock-skew in `List` / `SearchFTS` / `GetByIDs`.** Queries comparing
+  memory timestamps now use `NOW()` (database time) instead of `time.Now()`
+  (Go server time), removing false recency ordering when server and DB clocks
+  diverge.
+
+- **Synchronous self-update backup rollback.** The self-update path now rolls
+  back the backup atomically on error rather than leaving a partial state.
+
+- **`outFile.Close` error on success path.** The file-write helper now checks
+  the `Close` error even when the write itself succeeded, preventing silent
+  data loss on flush failure.
+
+- **W4: Privacy-scope bypass closure (P1–P3).** Three paths that could return
+  memories above the caller's scope ceiling were closed under
+  `ENGRAM_VNEXT_F_ENABLED=true`: session-start injection, direct store list,
+  and FTS search.
+
 ## [6.4.15] - 2026-06-10
 
 ### Added
@@ -912,7 +1028,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.4.15...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.5.0...HEAD
+[6.5.0]: https://github.com/thebtf/engram/compare/v6.4.15...v6.5.0
 [6.4.15]: https://github.com/thebtf/engram/compare/v6.4.14...v6.4.15
 [6.4.14]: https://github.com/thebtf/engram/compare/v6.4.13...v6.4.14
 [6.4.13]: https://github.com/thebtf/engram/compare/v6.4.12...v6.4.13
