@@ -19,15 +19,24 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// RequestDeduplicator tracks recent requests to prevent duplicates.
+// ---------------------------------------------------------------------------
+// Request deduplication
+// ---------------------------------------------------------------------------
+
+// RequestDeduplicator prevents the same tool execution from being processed
+// twice within a short window. This matters because hooks can fire multiple
+// times for the same event (e.g., retries, UI refresh) and duplicate
+// observations pollute the knowledge base with redundant entries.
 type RequestDeduplicator struct {
-	seen    map[string]int64 // hash -> timestamp
+	seen    map[string]int64 // hash -> Unix timestamp of first sighting
 	mu      sync.RWMutex
 	ttlSecs int64
 	maxSize int
 }
 
-// NewRequestDeduplicator creates a new deduplicator.
+// NewRequestDeduplicator creates a deduplicator with the given TTL (seconds)
+// and capacity. Once the map reaches maxSize, expired entries are evicted
+// before adding new ones — this bounds memory without a background goroutine.
 func NewRequestDeduplicator(ttlSecs int64, maxSize int) *RequestDeduplicator {
 	return &RequestDeduplicator{
 		seen:    make(map[string]int64),
@@ -36,7 +45,7 @@ func NewRequestDeduplicator(ttlSecs int64, maxSize int) *RequestDeduplicator {
 	}
 }
 
-// IsDuplicate checks if a request hash was seen recently.
+// IsDuplicate returns true if the given hash was recorded within the TTL window.
 func (d *RequestDeduplicator) IsDuplicate(hash string) bool {
 	now := time.Now().Unix()
 
@@ -44,20 +53,20 @@ func (d *RequestDeduplicator) IsDuplicate(hash string) bool {
 	ts, exists := d.seen[hash]
 	d.mu.RUnlock()
 
-	if exists && now-ts < d.ttlSecs {
-		return true
-	}
-	return false
+	return exists && now-ts < d.ttlSecs
 }
 
-// Record marks a request hash as seen.
+// Record marks the hash as seen at the current time.
+// If the map is at capacity, entries older than TTL are evicted first.
 func (d *RequestDeduplicator) Record(hash string) {
 	now := time.Now().Unix()
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Evict old entries if at capacity
+	// Evict expired entries when at capacity to keep memory bounded.
+	// We evict lazily here rather than in a background goroutine to avoid
+	// the complexity of goroutine ownership and shutdown ordering.
 	if len(d.seen) >= d.maxSize {
 		threshold := now - d.ttlSecs
 		for k, ts := range d.seen {
@@ -70,14 +79,21 @@ func (d *RequestDeduplicator) Record(hash string) {
 	d.seen[hash] = now
 }
 
-// hashRequest creates a hash of a request for deduplication.
+// hashRequest produces a short (16-char) SHA-256 prefix over tool name, input,
+// and the first 1000 chars of output. Truncating the output is intentional:
+// large outputs that differ only in trailing whitespace should not create
+// distinct dedup keys.
 func hashRequest(toolName, input, output string) string {
 	h := sha256.New()
 	h.Write([]byte(toolName))
 	h.Write([]byte(input))
-	h.Write([]byte(output[:min(len(output), 1000)])) // Only hash first 1000 chars of output
-	return hex.EncodeToString(h.Sum(nil))[:16]       // Short hash is sufficient
+	h.Write([]byte(output[:min(len(output), 1000)]))
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
+
+// ---------------------------------------------------------------------------
+// Processor — type and callbacks
+// ---------------------------------------------------------------------------
 
 // BroadcastFunc is a callback for broadcasting events to SSE clients.
 type BroadcastFunc func(event map[string]any)
@@ -88,12 +104,13 @@ type SyncObservationFunc func(obs *models.Observation)
 // SyncSummaryFunc is a callback for syncing summaries to vector DB.
 type SyncSummaryFunc func(summary *models.SessionSummary)
 
-// MaxVectorSyncWorkers is the maximum number of concurrent vector sync operations.
-// This prevents unbounded goroutine spawning during high-volume observation ingestion.
+// MaxVectorSyncWorkers caps the worker pool that drains the vector sync channel.
+// Without this bound, a burst of observations would spawn an unbounded number
+// of goroutines and exhaust resources in the embedding service.
 const MaxVectorSyncWorkers = 8
 
 // Processor handles SDK agent processing of observations and summaries.
-// Field order optimized for memory alignment (fieldalignment).
+// Fields are ordered for cache-line alignment (fieldalignment).
 type Processor struct {
 	broadcastFunc       BroadcastFunc
 	syncObservationFunc SyncObservationFunc
@@ -105,31 +122,38 @@ type Processor struct {
 	vectorSyncWg        sync.WaitGroup
 }
 
-// SetBroadcastFunc sets the broadcast callback for SSE events.
+// SetBroadcastFunc sets the SSE broadcast callback.
 func (p *Processor) SetBroadcastFunc(fn BroadcastFunc) {
 	p.broadcastFunc = fn
 }
 
-// SetSyncObservationFunc sets the callback for syncing observations to vector DB.
+// SetSyncObservationFunc sets the observation vector-sync callback.
 func (p *Processor) SetSyncObservationFunc(fn SyncObservationFunc) {
 	p.syncObservationFunc = fn
 }
 
-// SetSyncSummaryFunc sets the callback for syncing summaries to vector DB.
+// SetSyncSummaryFunc sets the summary vector-sync callback.
 func (p *Processor) SetSyncSummaryFunc(fn SyncSummaryFunc) {
 	p.syncSummaryFunc = fn
 }
 
-// SetDedupConfig is retained for compatibility but is a no-op in v5.
+// SetDedupConfig is retained for API compatibility but is a no-op in v5.
+// The deduplicator is now configured at construction time via NewProcessor.
 func (p *Processor) SetDedupConfig(_ float64, _ int) {}
 
-// broadcast sends an event via the broadcast callback if set.
+// broadcast delivers an event to SSE clients via the registered callback.
+// A nil callback is a valid no-op state (before wiring, or in tests).
 func (p *Processor) broadcast(event map[string]any) {
 	if p.broadcastFunc != nil {
 		p.broadcastFunc(event)
 	}
 }
 
+// enqueueObservationSync submits an observation to the bounded worker pool.
+// If the channel is full, it falls back to a direct goroutine so that the
+// calling request is not blocked — the tradeoff is an unbounded goroutine
+// spike under extreme load, which is acceptable because the primary bound
+// (the worker pool channel) absorbs the normal-load case.
 func (p *Processor) enqueueObservationSync(obs *models.Observation) {
 	if p.syncObservationFunc == nil || obs == nil {
 		return
@@ -145,19 +169,29 @@ func (p *Processor) enqueueObservationSync(obs *models.Observation) {
 	go p.syncObservationFunc(obs)
 }
 
-// NewProcessor creates a new SDK processor.
+// ---------------------------------------------------------------------------
+// Constructor
+// ---------------------------------------------------------------------------
+
+// NewProcessor creates a fully configured Processor. The vector sync worker
+// pool is NOT started here; call StartVectorSyncWorkers after wiring
+// SetSyncObservationFunc to avoid workers draining a nil callback.
 func NewProcessor() *Processor {
 	cfg := config.Get()
 	return &Processor{
 		model:          cfg.Model,
-		deduplicator:   NewRequestDeduplicator(300, 1000),                      // 5-minute TTL, 1000 max entries
-		vectorSyncChan: make(chan *models.Observation, MaxVectorSyncWorkers*2), // Buffered channel
+		deduplicator:   NewRequestDeduplicator(300, 1000),                      // 5-min TTL, 1 000 max entries
+		vectorSyncChan: make(chan *models.Observation, MaxVectorSyncWorkers*2), // buffered to absorb short bursts
 		vectorSyncDone: make(chan struct{}),
 	}
 }
 
-// StartVectorSyncWorkers starts the bounded worker pool for vector sync operations.
-// Call this after setting the sync function via SetSyncObservationFunc.
+// ---------------------------------------------------------------------------
+// Worker pool lifecycle
+// ---------------------------------------------------------------------------
+
+// StartVectorSyncWorkers launches the bounded worker pool. Must be called
+// after SetSyncObservationFunc so workers have a valid callback.
 func (p *Processor) StartVectorSyncWorkers() {
 	for i := 0; i < MaxVectorSyncWorkers; i++ {
 		p.vectorSyncWg.Add(1)
@@ -166,20 +200,25 @@ func (p *Processor) StartVectorSyncWorkers() {
 	log.Info().Int("workers", MaxVectorSyncWorkers).Msg("Vector sync worker pool started")
 }
 
-// StopVectorSyncWorkers gracefully stops the worker pool.
+// StopVectorSyncWorkers signals workers to stop and waits for them to finish
+// draining the channel. This is a synchronous shutdown — the caller blocks
+// until all in-flight observations are processed.
 func (p *Processor) StopVectorSyncWorkers() {
 	close(p.vectorSyncDone)
 	p.vectorSyncWg.Wait()
 	log.Info().Msg("Vector sync worker pool stopped")
 }
 
-// vectorSyncWorker is a worker goroutine that processes vector sync requests.
+// vectorSyncWorker is a long-running goroutine in the sync pool.
+// On shutdown signal (vectorSyncDone closed) it drains any remaining items
+// from the channel before returning, so observations queued before StopVectorSyncWorkers
+// are not silently dropped.
 func (p *Processor) vectorSyncWorker() {
 	defer p.vectorSyncWg.Done()
 	for {
 		select {
 		case <-p.vectorSyncDone:
-			// Drain remaining items before exiting
+			// Drain: process all queued observations before exiting.
 			for {
 				select {
 				case obs := <-p.vectorSyncChan:
@@ -198,14 +237,20 @@ func (p *Processor) vectorSyncWorker() {
 	}
 }
 
-// IsAvailable always returns true — LLM backend removed in v5.
+// ---------------------------------------------------------------------------
+// Core processing
+// ---------------------------------------------------------------------------
+
+// IsAvailable always returns true — the LLM backend was removed in v5.
+// This method exists to satisfy callers that gate on model availability.
 func (p *Processor) IsAvailable() bool {
 	return true
 }
 
-// ProcessObservation no longer persists observations in v5/PR-B.
-// The observation and summary subsystem is being retired; this method now performs
-// only lightweight filtering/dedup bookkeeping and exits explicitly.
+// ProcessObservation performs lightweight pre-filtering and dedup bookkeeping.
+// In v5/PR-B the observation persistence and LLM extraction subsystem was
+// retired; this method preserves the filtering contract so downstream
+// code that checks return values continues to work without change.
 func (p *Processor) ProcessObservation(_ context.Context, sdkSessionID, project string, toolName string, toolInput, toolResponse any, _ int, _ string, _ ...string) error {
 	if shouldSkipTool(toolName) {
 		log.Debug().Str("tool", toolName).Msg("SDK observation extraction skipped for uninteresting tool in v5")
@@ -234,8 +279,9 @@ func (p *Processor) ProcessObservation(_ context.Context, sdkSessionID, project 
 	return nil
 }
 
-
-// ProcessSummary processes a session summary request.
+// ProcessSummary is a stub that logs and returns nil. In v5 the session
+// summary subsystem was retired — this signature is retained so callers
+// compile without modification.
 func (p *Processor) ProcessSummary(_ context.Context, sessionDBID int64, sdkSessionID, project, userPrompt, lastUserMsg, lastAssistantMsg string) error {
 	log.Info().
 		Int64("sessionId", sessionDBID).
@@ -248,100 +294,252 @@ func (p *Processor) ProcessSummary(_ context.Context, sessionDBID int64, sdkSess
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Tool filtering
+// ---------------------------------------------------------------------------
 
-// shouldSkipTool returns true for tools that aren't worth processing.
+// shouldSkipTool returns true for tools that produce no meaningful knowledge.
+// The skip list is intentionally conservative — unknown tools pass through
+// so that new tools are not silently ignored.
 func shouldSkipTool(toolName string) bool {
-	// Skip tools that rarely produce meaningful observations
-	skipTools := map[string]bool{
-		// Internal tracking tools
-		"TodoWrite":  true,
-		"Task":       true,
-		"TaskOutput": true,
-
-		// File discovery tools (just listings, no insights)
-		"Glob":      true,
-		"ListDir":   true,
-		"LS":        true,
-		"KillShell": true,
-
-		// Question/interaction tools (no code insights)
-		"AskUserQuestion": true,
-
-		// Plan mode tools (planning, not execution)
-		"EnterPlanMode": true,
-		"ExitPlanMode":  true,
-
-		// Skill/command execution (meta-operations)
-		"Skill":        true,
-		"SlashCommand": true,
-
-		// High-volume, low-value tools — create noise without meaningful observations
-		"Read":      true,
-		"Grep":      true,
-		"WebSearch": true,
+	switch toolName {
+	// Internal task-tracking tools — not code operations.
+	case "TodoWrite", "Task", "TaskOutput":
+		return true
+	// File discovery tools — listings with no semantic content.
+	case "Glob", "ListDir", "LS", "KillShell":
+		return true
+	// Interactive tools — not executable artifacts.
+	case "AskUserQuestion":
+		return true
+	// Plan-mode meta-tools — control flow, not work.
+	case "EnterPlanMode", "ExitPlanMode":
+		return true
+	// Skill/command dispatch — meta-operations on the agent itself.
+	case "Skill", "SlashCommand":
+		return true
+	// High-volume, low-value tools that flood the dedup table without insight.
+	// Valuable knowledge should be saved via store_memory instead.
+	case "Read", "Grep", "WebSearch":
+		return true
 	}
-
-	skip, found := skipTools[toolName]
-	if found {
-		return skip
-	}
-	return false // Process remaining tools: Edit, Write, Bash, WebFetch, NotebookEdit
+	// All other tools (Edit, Write, Bash, WebFetch, NotebookEdit, …) pass through.
+	return false
 }
 
-// shouldSkipTrivialOperation performs local pre-filtering to skip trivial operations
-// without making a Haiku API call. Returns true if the operation is too trivial to process.
+// shouldSkipTrivialOperation applies a whitelist filter before making any API
+// call. Only tool outputs that are likely to contain actionable knowledge reach
+// the next stage. The whitelist inverts the default: skip everything except the
+// explicitly interesting cases.
 func shouldSkipTrivialOperation(toolName, inputStr, outputStr string) bool {
-	// Skip if output is too small to be meaningful
+	// Too-short outputs carry no useful signal regardless of tool.
 	if len(outputStr) < 50 {
 		return true
 	}
 
-	// WHITELIST approach: only process tool outputs that are likely to contain
-	// meaningful insights. Skip everything else. This inverted logic prevents
-	// garbage observations (PowerShell errors, auth failures, etc.) from
-	// polluting the knowledge base and degrading agent performance.
 	lowerInput := strings.ToLower(inputStr)
 
 	switch toolName {
 	case "Edit", "Write":
-		// Code modifications — always interesting (architecture, decisions)
+		// Code modifications always carry architectural signal.
 		return false
 
 	case "Bash":
-		// Only process build/test results — they reveal project state
-		interestingCommands := []string{
-			// Go
-			"go build", "go test", "go vet",
-			// Node/JS
-			"npm run build", "npm test", "npx tsc",
-			// Rust
-			"cargo build", "cargo test", "cargo clippy",
-			// .NET
-			"dotnet build", "dotnet test", "dotnet publish",
-			// Make/Docker
-			"make ", "docker build", "docker compose",
-			// Python
-			"pytest", "python -m pytest",
-			// JS test runners
-			"jest", "vitest",
-		}
-		for _, cmd := range interestingCommands {
-			if strings.Contains(lowerInput, cmd) {
+		// Only build/test invocations reveal project state worth recording.
+		for _, interesting := range interestingBashCommands {
+			if strings.Contains(lowerInput, interesting) {
 				return false
 			}
 		}
-		// All other Bash outputs: skip (git, ls, curl, echo, etc.)
+		// All other Bash outputs (git, ls, curl, echo, etc.) are noise.
 		return true
 
 	default:
-		// All other tools (Read, Grep, Agent, WebFetch, etc.): skip
-		// These produce high-volume, low-insight observations.
-		// Valuable knowledge should be saved explicitly via store_memory.
+		// Everything else (Read, Grep, Agent, WebFetch, …) is high-volume, low-insight.
 		return true
 	}
 }
 
-// toJSONString converts an interface to a JSON string.
+// interestingBashCommands lists the command prefixes that indicate a
+// build or test invocation worth recording as an observation.
+var interestingBashCommands = []string{
+	// Go
+	"go build", "go test", "go vet",
+	// Node/JS
+	"npm run build", "npm test", "npx tsc",
+	// Rust
+	"cargo build", "cargo test", "cargo clippy",
+	// .NET
+	"dotnet build", "dotnet test", "dotnet publish",
+	// Make/Docker
+	"make ", "docker build", "docker compose",
+	// Python
+	"pytest", "python -m pytest",
+	// JS test runners
+	"jest", "vitest",
+}
+
+// ---------------------------------------------------------------------------
+// Filter helpers: self-referential and meaningful-content checks
+// ---------------------------------------------------------------------------
+
+// isSelfReferentialSummary returns true when the summary describes the memory
+// agent's own initialization or waiting state rather than actual user work.
+// Two or more matching phrases are required to avoid false positives — any
+// single phrase might appear legitimately in real work summaries.
+func isSelfReferentialSummary(summary *models.ParsedSummary) bool {
+	content := strings.ToLower(
+		summary.Request + " " + summary.Completed + " " + summary.Learned +
+			" " + summary.NextSteps + " " + summary.Investigated + " " + summary.Notes,
+	)
+
+	matchCount := 0
+	for _, phrase := range selfReferentialPhrases {
+		if strings.Contains(content, phrase) {
+			matchCount++
+			if matchCount >= 2 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// selfReferentialPhrases is the vocabulary that indicates a summary about the
+// memory agent itself rather than the user's work. Each phrase is lowercase
+// to match the lowercased content string.
+var selfReferentialPhrases = []string{
+	// Agent role references
+	"memory extraction",
+	"memory agent",
+	"extraction agent",
+	"hook execution",
+	"hook mechanism",
+	// Session meta-state
+	"session initialization",
+	"session setup",
+	"session has just started",
+	"session just started",
+	"agent initialization",
+	"no technical learnings",
+	"no code or project work",
+	// Waiting states
+	"waiting for the user",
+	"waiting for user",
+	"awaiting actual",
+	"awaiting claude code",
+	"awaiting tool",
+	"awaiting user",
+	// Meta checkpoint references
+	"progress checkpoint",
+	"checkpoint request",
+	// Common no-work phrases
+	"no work has been completed",
+	"no work completed",
+	"no work done",
+	"no actual work",
+	"nothing has been completed",
+	"nothing completed",
+	// Role/guideline parroting
+	"role definition",
+	"operational guidelines",
+	"providing role",
+	"providing guidelines",
+	// System prompt echoes
+	"extract meaningful observations",
+	"meaningful learnings",
+	"analyze tool executions",
+	"observations for future sessions",
+	// Empty session indicators
+	"empty session",
+	"no substantive work",
+	"no meaningful work",
+	"just beginning",
+	"just begun",
+}
+
+// hasMeaningfulContent returns true when the assistant message contains
+// evidence of real technical work. This guards against generating summaries
+// for sessions that were only system-message exchanges.
+func hasMeaningfulContent(assistantMsg string) bool {
+	// Short messages never contain enough substance for a useful summary.
+	if len(strings.TrimSpace(assistantMsg)) < 200 {
+		return false
+	}
+
+	lowerMsg := strings.ToLower(assistantMsg)
+
+	// Bail early if multiple skip indicators are present — the message is
+	// almost certainly a system-only or hook-status response.
+	skipCount := 0
+	for _, skip := range metaSkipIndicators {
+		if strings.Contains(lowerMsg, skip) {
+			skipCount++
+			if skipCount >= 2 {
+				return false
+			}
+		}
+	}
+
+	// Require at least two work indicators so incidental mentions of file
+	// extensions don't pass the filter.
+	matchCount := 0
+	for _, indicator := range workIndicators {
+		if strings.Contains(lowerMsg, strings.ToLower(indicator)) {
+			matchCount++
+			if matchCount >= 2 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// metaSkipIndicators are strings that appear in system-only or hook-status
+// messages but rarely in messages about real user work.
+var metaSkipIndicators = []string{
+	"hook success",
+	"callback hook",
+	"session start",
+	"sessionstart",
+	"system-reminder",
+	"memory extraction agent",
+	"memory agent",
+	"extraction agent",
+	"no technical learnings",
+	"waiting for",
+	"waiting to",
+	"no code or project work",
+	"no substantive",
+	"no work has been completed",
+	"no work done",
+	"awaiting tool",
+	"awaiting user",
+	"role definition",
+	"operational guidelines",
+	"analyze tool executions",
+	"extract meaningful observations",
+}
+
+// workIndicators are strings that appear when Claude is doing real technical
+// work — file extensions, modification verbs, code keywords.
+var workIndicators = []string{
+	// File extensions signal concrete artifacts were touched.
+	".go", ".ts", ".js", ".py", ".md", ".json", ".yaml", ".yml",
+	// Modification verbs signal actions were taken.
+	"edited", "modified", "created", "deleted", "updated", "changed",
+	"added", "removed", "fixed", "implemented", "refactored",
+	// Code constructs confirm code was discussed or written.
+	"```", "lines ", "function ", "const ", "var ", "let ",
+	"type ", "struct ", "class ", "def ", "func ",
+}
+
+// ---------------------------------------------------------------------------
+// JSON and file utilities
+// ---------------------------------------------------------------------------
+
+// toJSONString serialises v to a JSON string. String values pass through
+// unchanged so that pre-serialised tool inputs are not double-encoded.
 func toJSONString(v any) string {
 	if v == nil {
 		return ""
@@ -356,28 +554,28 @@ func toJSONString(v any) string {
 	return string(b)
 }
 
-// safeResolvePath resolves a path relative to cwd and validates it doesn't escape the cwd directory.
-// Returns the resolved absolute path and true if valid, or empty string and false if path traversal detected.
-// This function is a security sanitizer for path traversal attacks.
+// safeResolvePath resolves path relative to cwd and verifies the result does
+// not escape cwd. This is the security boundary for all file-system access in
+// the processor — path traversal attacks via crafted tool inputs are rejected
+// here before any os.Stat or os.ReadFile call.
 func safeResolvePath(path, cwd string) (string, bool) {
-	// Clean the input path to normalize any .. or . components
 	cleanPath := filepath.Clean(path)
 
-	// Reject paths that explicitly contain parent directory traversal after cleaning
+	// A path that still contains ".." after cleaning has escaped the base.
 	if strings.Contains(cleanPath, "..") {
 		return "", false
 	}
 
 	if filepath.IsAbs(cleanPath) {
-		// For absolute paths, verify they're within cwd if cwd is specified
-		if cwd != "" {
-			cleanCwd := filepath.Clean(cwd)
-			// Use filepath.Rel for cross-platform safety (handles case-insensitive
-			// Windows paths correctly, unlike strings.HasPrefix)
-			rel, err := filepath.Rel(cleanCwd, cleanPath)
-			if err != nil || strings.HasPrefix(rel, "..") {
-				return "", false
-			}
+		if cwd == "" {
+			return cleanPath, true
+		}
+		// For absolute paths, use filepath.Rel for cross-platform correctness.
+		// On Windows, strings.HasPrefix would fail on case-insensitive comparisons.
+		cleanCwd := filepath.Clean(cwd)
+		rel, err := filepath.Rel(cleanCwd, cleanPath)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return "", false
 		}
 		return cleanPath, true
 	}
@@ -386,14 +584,11 @@ func safeResolvePath(path, cwd string) (string, bool) {
 		return cleanPath, true
 	}
 
-	// Clean the cwd first
 	cleanCwd := filepath.Clean(cwd)
-
-	// Join and clean the path
 	absPath := filepath.Join(cleanCwd, cleanPath)
 
-	// Use filepath.Rel to verify the path is actually within cwd
-	// If Rel returns a path starting with "..", it escapes the base
+	// filepath.Rel is the canonical escape check — it returns ".." prefix when
+	// the joined path leaves the base directory.
 	rel, err := filepath.Rel(cleanCwd, absPath)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", false
@@ -402,49 +597,48 @@ func safeResolvePath(path, cwd string) (string, bool) {
 	return absPath, true
 }
 
-// captureFileMtimes captures current modification times for tracked files.
-// Returns a map of absolute file paths to their mtime in epoch milliseconds.
-// For large file lists (>10 files), uses parallel stat calls for better performance.
+// captureFileMtimes returns a map of path → mtime (Unix milliseconds) for all
+// unique paths in filesRead and filesModified. Paths that fail validation or
+// do not exist are silently omitted — remote/Docker setups where the server
+// cannot stat client paths are the normal case, not an error.
 func captureFileMtimes(filesRead, filesModified []string, cwd string) map[string]int64 {
-	// Combine all unique file paths
+	// Deduplicate: a path that appears in both read and modified lists should
+	// produce only one entry.
 	allPaths := make(map[string]struct{}, len(filesRead)+len(filesModified))
-	for _, path := range filesRead {
-		allPaths[path] = struct{}{}
+	for _, p := range filesRead {
+		allPaths[p] = struct{}{}
 	}
-	for _, path := range filesModified {
-		allPaths[path] = struct{}{}
+	for _, p := range filesModified {
+		allPaths[p] = struct{}{}
 	}
 
-	// For small lists, use sequential processing (goroutine overhead not worth it)
+	// Goroutine overhead outweighs the benefit for small path lists.
 	if len(allPaths) <= 10 {
 		return captureFileMtimesSequential(allPaths, cwd)
 	}
-
-	// For larger lists, parallelize with bounded concurrency
 	return captureFileMtimesParallel(allPaths, cwd)
 }
 
-// captureFileMtimesSequential captures mtimes sequentially (efficient for small lists).
+// captureFileMtimesSequential stats paths one at a time. Used for short lists
+// where spawning goroutines would cost more than the parallelism saves.
 func captureFileMtimesSequential(paths map[string]struct{}, cwd string) map[string]int64 {
 	mtimes := make(map[string]int64, len(paths))
-
 	for path := range paths {
 		absPath, ok := safeResolvePath(path, cwd)
 		if !ok {
-			// Skip paths that attempt directory traversal
 			continue
 		}
-
-		info, err := os.Stat(absPath)
-		if err == nil {
+		if info, err := os.Stat(absPath); err == nil {
 			mtimes[path] = info.ModTime().UnixMilli()
 		}
 	}
-
 	return mtimes
 }
 
-// captureFileMtimesParallel captures mtimes in parallel with bounded concurrency.
+// captureFileMtimesParallel stats paths using a bounded goroutine pool.
+// A semaphore of 8 slots prevents the kernel from being flooded with concurrent
+// stat syscalls, which can cause measurable slowdown on network-mounted
+// filesystems.
 func captureFileMtimesParallel(paths map[string]struct{}, cwd string) map[string]int64 {
 	type mtimeResult struct {
 		path  string
@@ -452,58 +646,57 @@ func captureFileMtimesParallel(paths map[string]struct{}, cwd string) map[string
 	}
 
 	results := make(chan mtimeResult, len(paths))
-	sem := make(chan struct{}, 8) // Limit to 8 concurrent stat calls
+	sem := make(chan struct{}, 8) // limit concurrent stat calls
 	var wg sync.WaitGroup
 
 	for path := range paths {
 		wg.Add(1)
 		go func(p string) {
 			defer wg.Done()
-			sem <- struct{}{}        // Acquire
-			defer func() { <-sem }() // Release
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
 			absPath, ok := safeResolvePath(p, cwd)
 			if !ok {
-				// Skip paths that attempt directory traversal
 				return
 			}
-
-			info, err := os.Stat(absPath)
-			if err == nil {
+			if info, err := os.Stat(absPath); err == nil {
 				results <- mtimeResult{path: p, mtime: info.ModTime().UnixMilli()}
 			}
 		}(path)
 	}
 
-	// Close results channel when all goroutines complete
+	// Close results after all goroutines finish so the range loop below
+	// terminates cleanly. This goroutine owns the results channel's close.
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
 
-	// Collect results
 	mtimes := make(map[string]int64, len(paths))
 	for res := range results {
 		mtimes[res.path] = res.mtime
 	}
-
 	return mtimes
 }
 
-// GetFileMtimes returns current modification times for a list of file paths.
-// This is used for staleness checking when injecting context.
-// In Docker/remote mode, os.Stat on client paths returns error → empty map (no-op).
+// GetFileMtimes returns current modification times for a flat list of paths.
+// Used by the context injection layer to detect stale files before injecting
+// their content. In Docker/remote mode, os.Stat on client paths returns an
+// error and the result is an empty map — this is the intended no-op behaviour.
 func GetFileMtimes(paths []string, cwd string) map[string]int64 {
 	return captureFileMtimes(paths, nil, cwd)
 }
 
-// GetFileContent reads file content for verification purposes.
-// Returns content and ok status. In Docker/remote mode, files don't exist → ("", false).
+// GetFileContent reads a file for verification purposes.
+// Returns (content, true) on success. Returns ("", false) when the path fails
+// validation, the file does not exist, or the read fails — callers should treat
+// false as "content unavailable, skip verification", not as an error.
+// Content is truncated to 2 000 bytes: enough context for staleness checking
+// without paying the cost of reading large generated files.
 func GetFileContent(path, cwd string) (string, bool) {
-
 	absPath, ok := safeResolvePath(path, cwd)
 	if !ok {
-		// Reject paths that attempt directory traversal
 		return "", false
 	}
 
@@ -512,153 +705,8 @@ func GetFileContent(path, cwd string) (string, bool) {
 		return "", false
 	}
 
-	// Limit to first 2000 chars for verification (enough context, not too expensive)
 	if len(content) > 2000 {
 		return string(content[:2000]) + "\n...[truncated]", true
 	}
 	return string(content), true
 }
-
-
-// isSelfReferentialSummary checks if a summary describes the memory agent itself
-// rather than actual user work. These summaries should be filtered out.
-func isSelfReferentialSummary(summary *models.ParsedSummary) bool {
-	// Combine all summary fields for checking
-	content := strings.ToLower(summary.Request + " " + summary.Completed + " " + summary.Learned + " " + summary.NextSteps + " " + summary.Investigated + " " + summary.Notes)
-
-	// Indicators that the summary is about the memory agent, not user work
-	selfReferentialPhrases := []string{
-		// Agent references
-		"memory extraction",
-		"memory agent",
-		"extraction agent",
-		"hook execution",
-		"hook mechanism",
-		// Session meta-state
-		"session initialization",
-		"session setup",
-		"session has just started",
-		"session just started",
-		"agent initialization",
-		"no technical learnings",
-		"no code or project work",
-		// Waiting states
-		"waiting for the user",
-		"waiting for user",
-		"awaiting actual",
-		"awaiting claude code",
-		"awaiting tool",
-		"awaiting user",
-		// Meta checkpoint references
-		"progress checkpoint",
-		"checkpoint request",
-		// Common no-work phrases
-		"no work has been completed",
-		"no work completed",
-		"no work done",
-		"no actual work",
-		"nothing has been completed",
-		"nothing completed",
-		// Role/guideline parroting
-		"role definition",
-		"operational guidelines",
-		"providing role",
-		"providing guidelines",
-		// System prompt echoes
-		"extract meaningful observations",
-		"meaningful learnings",
-		"analyze tool executions",
-		"observations for future sessions",
-		// Empty session indicators
-		"empty session",
-		"no substantive work",
-		"no meaningful work",
-		"just beginning",
-		"just begun",
-	}
-
-	matchCount := 0
-	for _, phrase := range selfReferentialPhrases {
-		if strings.Contains(content, phrase) {
-			matchCount++
-		}
-	}
-
-	// If the summary mentions 2+ self-referential phrases, it's about the agent
-	return matchCount >= 2
-}
-
-// hasMeaningfulContent checks if the assistant response contains meaningful content
-// worth generating a summary for. This filters out initial greetings, empty sessions,
-// and sessions where only system messages were exchanged.
-func hasMeaningfulContent(assistantMsg string) bool {
-	// Skip if empty or too short (need substantial content)
-	if len(strings.TrimSpace(assistantMsg)) < 200 {
-		return false
-	}
-
-	lowerMsg := strings.ToLower(assistantMsg)
-
-	// Skip messages that are primarily about system/hook status or meta-instructions
-	skipIndicators := []string{
-		// System/hook markers
-		"hook success",
-		"callback hook",
-		"session start",
-		"sessionstart",
-		"system-reminder",
-		// Agent self-references
-		"memory extraction agent",
-		"memory agent",
-		"extraction agent",
-		// No-work indicators
-		"no technical learnings",
-		"waiting for",
-		"waiting to",
-		"no code or project work",
-		"no substantive",
-		"no work has been completed",
-		"no work done",
-		"awaiting tool",
-		"awaiting user",
-		// Meta-instruction echoes
-		"role definition",
-		"operational guidelines",
-		"analyze tool executions",
-		"extract meaningful observations",
-	}
-
-	skipCount := 0
-	for _, skip := range skipIndicators {
-		if strings.Contains(lowerMsg, skip) {
-			skipCount++
-		}
-	}
-	// If multiple skip indicators found, this is likely a system-only session
-	if skipCount >= 2 {
-		return false
-	}
-
-	// Check for indicators of actual work being done
-	workIndicators := []string{
-		// Concrete file operations (with paths)
-		".go", ".ts", ".js", ".py", ".md", ".json", ".yaml", ".yml",
-		// Code modifications
-		"edited", "modified", "created", "deleted", "updated", "changed",
-		"added", "removed", "fixed", "implemented", "refactored",
-		// Tool results
-		"```", "lines ", "function ", "const ", "var ", "let ",
-		"type ", "struct ", "class ", "def ", "func ",
-	}
-
-	matchCount := 0
-	for _, indicator := range workIndicators {
-		if strings.Contains(lowerMsg, strings.ToLower(indicator)) {
-			matchCount++
-		}
-	}
-
-	// Require at least 2 work indicators to generate a summary
-	return matchCount >= 2
-}
-

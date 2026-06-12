@@ -15,7 +15,9 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Store represents the GORM database connection with PostgreSQL support.
+// Store is the central database handle. It wraps a GORM DB for ORM queries and
+// the underlying *sql.DB for pool management and raw SQL that GORM cannot express
+// (e.g. tsvector full-text queries, COPY statements).
 type Store struct {
 	healthCacheTime time.Time
 	DB              *gorm.DB
@@ -26,16 +28,60 @@ type Store struct {
 	healthCacheMu   sync.RWMutex
 }
 
-// Config holds database configuration.
+// Config holds the parameters needed to open a Store.
+// DSN accepts any libpq-style connection string; MaxConns defaults to 10 when
+// zero or negative because PostgreSQL connections carry ~5 MB server-side memory
+// overhead each — uncapped pools exhaust RAM under burst traffic.
 type Config struct {
 	DSN      string          // PostgreSQL DSN (e.g. postgres://user:pass@host/db)
 	MaxConns int             // Maximum number of open connections (default: 10)
 	LogLevel logger.LogLevel // GORM log level (logger.Silent for production)
 }
 
-// NewStore creates a new Store connected to PostgreSQL.
+// NewStore opens a PostgreSQL connection, configures the connection pool,
+// verifies reachability, runs all pending migrations, and warms the pool.
+// It is the single entry point for obtaining a Store.
 func NewStore(cfg Config) (*Store, error) {
-	// 1. Open GORM with PostgreSQL driver
+	db, err := openGORM(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("get sql.DB: %w", err)
+	}
+
+	maxConns := resolveMaxConns(cfg.MaxConns)
+	configurePool(sqlDB, maxConns)
+
+	if err := sqlDB.Ping(); err != nil {
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+
+	store := &Store{
+		DB:             db,
+		sqlDB:          sqlDB,
+		metrics:        NewPoolMetrics(100), // sliding window of 100 latency samples
+		healthCacheTTL: 5 * time.Second,     // avoid hammering DB during health polls
+	}
+
+	if err := runMigrations(db); err != nil {
+		return nil, fmt.Errorf("run migrations: %w", err)
+	}
+
+	// Pre-create connections so the first real request does not pay cold-start
+	// latency. We warm half the pool — enough to absorb a burst without spending
+	// startup time on connections that may never be needed.
+	store.WarmPool(maxConns / 2)
+
+	return store, nil
+}
+
+// openGORM opens GORM with the PostgreSQL driver.
+// PrepareStmt is enabled because engram runs a small, stable query set;
+// server-side prepared statements reduce per-query parse/plan overhead.
+func openGORM(cfg Config) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{
 		Logger:      logger.Default.LogMode(cfg.LogLevel),
 		PrepareStmt: true,
@@ -44,47 +90,36 @@ func NewStore(cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open gorm postgres: %w", err)
 	}
+	return db, nil
+}
 
-	// 2. Get underlying *sql.DB for pool configuration
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("get sql.DB: %w", err)
-	}
-
-	// 3. Configure connection pool (PostgreSQL connections are expensive)
-	maxConns := cfg.MaxConns
+// resolveMaxConns returns maxConns if positive, otherwise the default of 10.
+func resolveMaxConns(maxConns int) int {
 	if maxConns <= 0 {
-		maxConns = 10
+		return 10
 	}
+	return maxConns
+}
+
+// configurePool sets pool limits that match PostgreSQL's resource model:
+//   - MaxOpen caps server-side memory (one server process per connection).
+//   - MaxIdle = MaxOpen/2 keeps a modest reserve without hoarding.
+//   - ConnMaxLifetime recycles connections to avoid long-lived server state drift.
+//   - ConnMaxIdleTime reclaims idle connections during low-traffic periods.
+func configurePool(sqlDB *sql.DB, maxConns int) {
 	sqlDB.SetMaxOpenConns(maxConns)
 	sqlDB.SetMaxIdleConns(maxConns / 2)
 	sqlDB.SetConnMaxLifetime(1 * time.Hour)
 	sqlDB.SetConnMaxIdleTime(10 * time.Minute)
-
-	// 4. Verify connection
-	if err := sqlDB.Ping(); err != nil {
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-
-	store := &Store{
-		DB:             db,
-		sqlDB:          sqlDB,
-		metrics:        NewPoolMetrics(100), // Track last 100 latency samples
-		healthCacheTTL: 5 * time.Second,     // Cache health checks for 5 seconds
-	}
-
-	// 5. Run migrations
-	if err := runMigrations(db); err != nil {
-		return nil, fmt.Errorf("run migrations: %w", err)
-	}
-
-	// 6. Warm connection pool
-	store.WarmPool(maxConns / 2)
-
-	return store, nil
 }
 
-// WarmPool pre-creates connections to avoid cold start latency.
+// WarmPool pre-creates connections to eliminate cold-start latency on the first
+// real request after server startup. Each goroutine acquires a connection,
+// executes a trivial ping to ensure the connection is fully negotiated, then
+// returns the connection to the pool (Close on a pool-acquired Conn returns it,
+// not destroys it). We call wg.Wait so that WarmPool blocks until every warmup
+// attempt has completed or timed out — the caller (NewStore) should not proceed
+// until the pool is ready.
 func (s *Store) WarmPool(numConns int) {
 	if numConns <= 0 {
 		numConns = 4
@@ -102,9 +137,9 @@ func (s *Store) WarmPool(numConns int) {
 			if err != nil {
 				return
 			}
-			// Execute a simple query to ensure the connection is fully initialized
+			// PingContext forces the driver to complete the connection handshake.
 			_ = conn.PingContext(ctx)
-			// Return connection to pool (don't close it)
+			// Close returns the connection to the pool; it does not destroy it.
 			_ = conn.Close()
 		}()
 	}
@@ -112,41 +147,44 @@ func (s *Store) WarmPool(numConns int) {
 	log.Debug().Int("connections", numConns).Msg("Connection pool warmed")
 }
 
-// Close closes the database connection.
+// Close shuts down the connection pool. Call this during graceful shutdown.
 func (s *Store) Close() error {
 	return s.sqlDB.Close()
 }
 
-// Ping verifies the database connection is alive.
+// Ping verifies that at least one database connection is alive and responsive.
 func (s *Store) Ping() error {
 	return s.sqlDB.Ping()
 }
 
-// GetRawDB returns the underlying *sql.DB for operations GORM can't handle.
-// Use this for:
-// - tsvector full-text search queries
-// - Complex raw SQL queries
+// GetRawDB exposes the underlying *sql.DB for operations GORM cannot express:
+//   - tsvector full-text search with @@ operator
+//   - COPY FROM/TO for bulk imports
+//   - Advisory locks and other raw SQL constructs
 func (s *Store) GetRawDB() *sql.DB {
 	return s.sqlDB
 }
 
-// GetDB returns the GORM DB instance for standard queries.
+// GetDB exposes the GORM DB instance for standard typed queries.
 func (s *Store) GetDB() *gorm.DB {
 	return s.DB
 }
 
-// Stats returns database connection pool statistics.
+// Stats returns a snapshot of the connection pool counters. Callers can
+// expose these via /health or metrics endpoints.
 func (s *Store) Stats() sql.DBStats {
 	return s.sqlDB.Stats()
 }
 
-// Optimize runs ANALYZE to update query planner statistics.
-// Should be called periodically (e.g., daily) during low activity.
+// Optimize runs ANALYZE to refresh query planner statistics.
+// PostgreSQL's query planner relies on per-column statistics (pg_statistic);
+// after large bulk writes the statistics become stale and the planner picks
+// suboptimal plans. This should be called during scheduled maintenance windows,
+// not on every write — ANALYZE locks tables briefly.
 func (s *Store) Optimize(ctx context.Context) error {
 	log.Info().Msg("Starting database optimization")
 	start := time.Now()
 
-	// ANALYZE updates statistics for query optimizer
 	if _, err := s.sqlDB.ExecContext(ctx, "ANALYZE"); err != nil {
 		return fmt.Errorf("analyze: %w", err)
 	}
@@ -155,12 +193,11 @@ func (s *Store) Optimize(ctx context.Context) error {
 	return nil
 }
 
-// HealthCheck performs a comprehensive health check with latency measurement.
-// Returns detailed health information including connection pool stats and query latency.
-// Results are cached for healthCacheTTL (default 5 seconds) to reduce database load
-// from frequent monitoring calls.
+// HealthCheck returns a cached health snapshot, refreshing it when the cache
+// is older than healthCacheTTL. The cache prevents a thundering herd of health
+// probes from each translating into a live DB query under high monitoring frequency.
 func (s *Store) HealthCheck(ctx context.Context) *HealthInfo {
-	// Fast path: check cache with read lock
+	// Fast path: return cached result under read lock if still fresh.
 	s.healthCacheMu.RLock()
 	if s.cachedHealth != nil && time.Since(s.healthCacheTime) < s.healthCacheTTL {
 		cached := s.cachedHealth
@@ -169,10 +206,9 @@ func (s *Store) HealthCheck(ctx context.Context) *HealthInfo {
 	}
 	s.healthCacheMu.RUnlock()
 
-	// Slow path: perform actual health check
+	// Slow path: perform a live check then cache.
 	info := s.performHealthCheck(ctx)
 
-	// Cache the result
 	s.healthCacheMu.Lock()
 	s.cachedHealth = info
 	s.healthCacheTime = time.Now()
@@ -181,12 +217,12 @@ func (s *Store) HealthCheck(ctx context.Context) *HealthInfo {
 	return info
 }
 
-// HealthCheckForce performs a health check bypassing the cache.
-// Use this when you need real-time health data (e.g., debugging, alerting).
+// HealthCheckForce bypasses the cache and performs a live health check.
+// Use this when real-time data is required (alerting pipelines, debug endpoints).
 func (s *Store) HealthCheckForce(ctx context.Context) *HealthInfo {
 	info := s.performHealthCheck(ctx)
 
-	// Update the cache with fresh data
+	// Keep the cache consistent so the next regular HealthCheck sees fresh data.
 	s.healthCacheMu.Lock()
 	s.cachedHealth = info
 	s.healthCacheTime = time.Now()
@@ -195,37 +231,30 @@ func (s *Store) HealthCheckForce(ctx context.Context) *HealthInfo {
 	return info
 }
 
-// performHealthCheck does the actual health check work.
+// performHealthCheck runs the actual health probe. It measures pool occupancy,
+// executes a minimal "SELECT 1" to measure query latency, and degrades the
+// status when thresholds are exceeded. Callers should use HealthCheck or
+// HealthCheckForce rather than calling this directly.
 func (s *Store) performHealthCheck(ctx context.Context) *HealthInfo {
 	info := &HealthInfo{
 		Status:    "healthy",
 		Timestamp: time.Now(),
 	}
 
-	// Check pool stats
 	stats := s.sqlDB.Stats()
-	info.PoolStats = PoolStats{
-		OpenConnections:   stats.OpenConnections,
-		InUse:             stats.InUse,
-		Idle:              stats.Idle,
-		WaitCount:         stats.WaitCount,
-		WaitDuration:      stats.WaitDuration,
-		MaxIdleClosed:     stats.MaxIdleClosed,
-		MaxLifetimeClosed: stats.MaxLifetimeClosed,
-	}
+	info.PoolStats = poolStatsFromDBStats(stats)
 
-	// Record pool stats for metrics tracking
 	if s.metrics != nil {
 		s.metrics.RecordPoolStats(stats)
 	}
 
-	// Measure query latency with a simple SELECT
+	// A SELECT 1 measures round-trip latency without any table I/O, giving a
+	// clean signal of network and server overhead.
 	start := time.Now()
 	var dummy int
 	err := s.sqlDB.QueryRowContext(ctx, "SELECT 1").Scan(&dummy)
 	info.QueryLatency = time.Since(start)
 
-	// Record latency for historical tracking
 	if s.metrics != nil {
 		s.metrics.RecordLatency(info.QueryLatency)
 		info.HistoricalMetrics = s.metrics.GetMetricsSummary()
@@ -237,19 +266,40 @@ func (s *Store) performHealthCheck(ctx context.Context) *HealthInfo {
 		return info
 	}
 
-	// Check for connection saturation (degraded if pool is heavily used)
+	applyHealthThresholds(info, stats)
+	return info
+}
+
+// poolStatsFromDBStats converts sql.DBStats into the exported PoolStats shape.
+func poolStatsFromDBStats(stats sql.DBStats) PoolStats {
+	return PoolStats{
+		OpenConnections:   stats.OpenConnections,
+		InUse:             stats.InUse,
+		Idle:              stats.Idle,
+		WaitCount:         stats.WaitCount,
+		WaitDuration:      stats.WaitDuration,
+		MaxIdleClosed:     stats.MaxIdleClosed,
+		MaxLifetimeClosed: stats.MaxLifetimeClosed,
+	}
+}
+
+// applyHealthThresholds degrades the health status when measurable signals
+// cross the warning thresholds. Status only moves toward worse states, never
+// back to healthy within a single check.
+func applyHealthThresholds(info *HealthInfo, stats sql.DBStats) {
+	// Pool saturation: >80 % in-use is a sign of connection pressure.
 	if stats.InUse > 0 && float64(stats.InUse)/float64(stats.OpenConnections) > 0.8 {
 		info.Status = "degraded"
 		info.Warning = "Connection pool heavily utilized"
 	}
 
-	// Check for wait contention
+	// Wait contention: sustained waits indicate requests are queuing for connections.
 	if stats.WaitCount > 100 && stats.WaitDuration > 100*time.Millisecond {
 		info.Status = "degraded"
 		info.Warning = "Connection pool contention detected"
 	}
 
-	// Check query latency (warn if > 10ms for simple query)
+	// Query latency: a SELECT 1 taking >10 ms signals network or server load.
 	if info.QueryLatency > 10*time.Millisecond {
 		if info.Status == "healthy" {
 			info.Status = "degraded"
@@ -257,18 +307,17 @@ func (s *Store) performHealthCheck(ctx context.Context) *HealthInfo {
 		info.Warning = fmt.Sprintf("Slow query latency: %v", info.QueryLatency)
 	}
 
-	// Check historical latency trend (degraded if P95 is high)
-	if s.metrics != nil && info.HistoricalMetrics.P95Latency > 50*time.Millisecond {
+	// P95 latency trend: sustained high P95 catches degradation that single
+	// samples miss.
+	if info.HistoricalMetrics.P95Latency > 50*time.Millisecond {
 		if info.Status == "healthy" {
 			info.Status = "degraded"
 		}
 		info.Warning = fmt.Sprintf("High P95 latency: %v", info.HistoricalMetrics.P95Latency)
 	}
-
-	return info
 }
 
-// HealthInfo contains database health check results.
+// HealthInfo carries the result of a database health check.
 type HealthInfo struct {
 	Timestamp         time.Time      `json:"timestamp"`
 	Status            string         `json:"status"`
@@ -279,7 +328,7 @@ type HealthInfo struct {
 	QueryLatency      time.Duration  `json:"query_latency_ns"`
 }
 
-// PoolStats contains connection pool statistics.
+// PoolStats is the JSON-serialisable snapshot of connection pool counters.
 type PoolStats struct {
 	OpenConnections   int           `json:"open_connections"`
 	InUse             int           `json:"in_use"`
@@ -290,17 +339,20 @@ type PoolStats struct {
 	MaxLifetimeClosed int64         `json:"max_lifetime_closed"`
 }
 
-// QueryTimeout constants for different query types.
+// Query timeout constants for different workload classes.
+// Sized to reflect the expected cost of each operation class:
+//   - FastQueryTimeout: health checks and single-row lookups
+//   - DefaultQueryTimeout: filtered list queries and small JOINs
+//   - SlowQueryTimeout: bulk operations, index rebuilds, analytics aggregates
 const (
-	// DefaultQueryTimeout is the default timeout for regular queries.
 	DefaultQueryTimeout = 5 * time.Second
-	// FastQueryTimeout is for queries that should be very fast (health checks, etc).
-	FastQueryTimeout = 1 * time.Second
-	// SlowQueryTimeout is for queries that may take longer (bulk operations, rebuilds).
-	SlowQueryTimeout = 30 * time.Second
+	FastQueryTimeout    = 1 * time.Second
+	SlowQueryTimeout    = 30 * time.Second
 )
 
-// PoolMetrics tracks historical connection pool metrics with a sliding window.
+// PoolMetrics tracks a sliding window of query latency samples and pool
+// statistics peaks. The fixed-size ring buffer avoids unbounded growth while
+// providing enough data to compute a meaningful P95.
 type PoolMetrics struct {
 	lastSampleTime time.Time
 	latencySamples []time.Duration
@@ -314,10 +366,12 @@ type PoolMetrics struct {
 	mu             sync.RWMutex
 }
 
-// NewPoolMetrics creates a new pool metrics collector with the given window size.
+// NewPoolMetrics creates a PoolMetrics collector. windowSize controls how many
+// latency samples are kept; older samples are overwritten in ring-buffer order.
+// Defaults to 100 when windowSize is zero or negative.
 func NewPoolMetrics(windowSize int) *PoolMetrics {
 	if windowSize <= 0 {
-		windowSize = 100 // Default: track last 100 samples
+		windowSize = 100
 	}
 	return &PoolMetrics{
 		latencySamples: make([]time.Duration, windowSize),
@@ -326,7 +380,7 @@ func NewPoolMetrics(windowSize int) *PoolMetrics {
 	}
 }
 
-// RecordLatency records a query latency sample.
+// RecordLatency adds one query latency observation to the ring buffer.
 func (m *PoolMetrics) RecordLatency(latency time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -340,7 +394,7 @@ func (m *PoolMetrics) RecordLatency(latency time.Duration) {
 	m.lastSampleTime = time.Now()
 }
 
-// RecordPoolStats records pool statistics for peak tracking.
+// RecordPoolStats updates peak-tracking counters from a pool stats snapshot.
 func (m *PoolMetrics) RecordPoolStats(stats sql.DBStats) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -354,7 +408,9 @@ func (m *PoolMetrics) RecordPoolStats(stats sql.DBStats) {
 	m.totalWaitTime += stats.WaitDuration
 }
 
-// GetMetricsSummary returns a summary of collected metrics.
+// GetMetricsSummary returns an aggregate snapshot of all recorded metrics.
+// P95 is computed only when at least 20 samples are available — below that
+// threshold the sorted approximation is not statistically meaningful.
 func (m *PoolMetrics) GetMetricsSummary() MetricsSummary {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -372,40 +428,45 @@ func (m *PoolMetrics) GetMetricsSummary() MetricsSummary {
 		return summary
 	}
 
-	// Calculate latency statistics
-	var total time.Duration
-	var min, max time.Duration = m.latencySamples[0], m.latencySamples[0]
+	summary.MinLatency, summary.MaxLatency, summary.AvgLatency = computeLatencyStats(m.latencySamples[:m.latencyCount])
 
-	for i := 0; i < m.latencyCount; i++ {
-		sample := m.latencySamples[i]
-		total += sample
-		if sample < min {
-			min = sample
-		}
-		if sample > max {
-			max = sample
-		}
-	}
-
-	summary.AvgLatency = total / time.Duration(m.latencyCount)
-	summary.MinLatency = min
-	summary.MaxLatency = max
-
-	// Calculate P95 latency (approximate using sorted samples)
 	if m.latencyCount >= 20 {
-		// Copy samples for sorting
-		samples := make([]time.Duration, m.latencyCount)
-		copy(samples, m.latencySamples[:m.latencyCount])
-		// Use slices.Sort for O(n log n) instead of O(n²) insertion sort
-		slices.Sort(samples)
-		p95Idx := int(float64(len(samples)) * 0.95)
-		summary.P95Latency = samples[p95Idx]
+		summary.P95Latency = computeP95(m.latencySamples[:m.latencyCount])
 	}
 
 	return summary
 }
 
-// MetricsSummary contains aggregated pool metrics.
+// computeLatencyStats returns min, max, and average for the given sample slice.
+// Called while holding m.mu.RLock — must not acquire any locks.
+func computeLatencyStats(samples []time.Duration) (min, max, avg time.Duration) {
+	min, max = samples[0], samples[0]
+	var total time.Duration
+	for _, s := range samples {
+		total += s
+		if s < min {
+			min = s
+		}
+		if s > max {
+			max = s
+		}
+	}
+	avg = total / time.Duration(len(samples))
+	return min, max, avg
+}
+
+// computeP95 returns the approximate P95 latency from a sample slice.
+// We sort a copy to avoid mutating the ring buffer and use the 95th percentile
+// index. slices.Sort is O(n log n) — acceptable for a window of ≤100 samples.
+func computeP95(samples []time.Duration) time.Duration {
+	cp := make([]time.Duration, len(samples))
+	copy(cp, samples)
+	slices.Sort(cp)
+	p95Idx := int(float64(len(cp)) * 0.95)
+	return cp[p95Idx]
+}
+
+// MetricsSummary is the JSON-serialisable aggregate of collected metrics.
 type MetricsSummary struct {
 	LastSampleTime time.Time     `json:"last_sample_time"`
 	TotalQueries   int64         `json:"total_queries"`
@@ -419,7 +480,8 @@ type MetricsSummary struct {
 	TotalWaitTime  time.Duration `json:"total_wait_time_ns"`
 }
 
-// GetMetrics returns the current metrics without performing a health check.
+// GetMetrics returns the current metrics snapshot without performing a health check.
+// Useful for metrics-scraping endpoints that want counters without the live DB probe.
 func (s *Store) GetMetrics() MetricsSummary {
 	if s.metrics == nil {
 		return MetricsSummary{}
@@ -427,25 +489,27 @@ func (s *Store) GetMetrics() MetricsSummary {
 	return s.metrics.GetMetricsSummary()
 }
 
-// ResetMetrics resets the metrics collector (useful for testing or after major changes).
+// ResetMetrics replaces the metrics collector with a fresh one of the same window
+// size. Useful after a major schema change or performance test to clear historical
+// data that no longer reflects the current workload.
 func (s *Store) ResetMetrics() {
 	if s.metrics != nil {
 		s.metrics = NewPoolMetrics(s.metrics.windowSize)
 	}
 }
 
-// WithTimeout wraps a context with the given timeout and logs slow queries.
-// Returns the wrapped context and a cancel function that should be called when done.
+// WithTimeout wraps a context with the given timeout and returns a cancel function
+// that also logs slow operations. The log is emitted on cancel, not at timeout
+// deadline, so every call path (success, error, timeout) gets the slow-query warning.
 func (s *Store) WithTimeout(ctx context.Context, timeout time.Duration, operation string) (context.Context, context.CancelFunc) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	start := time.Now()
 
-	// Return wrapped cancel that logs if query was slow
 	return timeoutCtx, func() {
 		elapsed := time.Since(start)
 		cancel()
 
-		// Log slow queries (> 100ms)
+		// 100 ms is the threshold where application users begin to notice latency.
 		if elapsed > 100*time.Millisecond {
 			log.Warn().
 				Str("operation", operation).
@@ -456,8 +520,9 @@ func (s *Store) WithTimeout(ctx context.Context, timeout time.Duration, operatio
 	}
 }
 
-// ExecWithTimeout executes a raw SQL query with timeout.
-// Returns error if query takes longer than timeout.
+// ExecWithTimeout executes a raw SQL statement with a deadline. Returns an
+// explicit timeout error message that includes the query text so that logs
+// are actionable without cross-referencing the call site.
 func (s *Store) ExecWithTimeout(ctx context.Context, timeout time.Duration, query string, args ...any) error {
 	timeoutCtx, cancel := s.WithTimeout(ctx, timeout, "exec")
 	defer cancel()
@@ -472,7 +537,9 @@ func (s *Store) ExecWithTimeout(ctx context.Context, timeout time.Duration, quer
 	return nil
 }
 
-// QueryRowWithTimeout executes a row query with timeout.
+// QueryRowWithTimeout executes a single-row query with a deadline.
+// The cancel function leaks if the caller never calls row.Scan; callers that
+// need strict cleanup should wrap the returned row in a defer.
 func (s *Store) QueryRowWithTimeout(ctx context.Context, timeout time.Duration, query string, args ...any) *sql.Row {
 	timeoutCtx, cancel := s.WithTimeout(ctx, timeout, "query_row")
 	// Note: cancel will be called when row.Scan() completes or errors
@@ -480,14 +547,18 @@ func (s *Store) QueryRowWithTimeout(ctx context.Context, timeout time.Duration, 
 	return s.sqlDB.QueryRowContext(timeoutCtx, query, args...)
 }
 
-// TransactionWithTimeout wraps a transaction function with timeout handling.
-// The transaction is automatically rolled back if the context times out.
+// TransactionWithTimeout wraps fn in a GORM transaction that is automatically
+// rolled back if the context deadline is exceeded. The pre-flight select on
+// the Done channel prevents fn from starting against an already-expired context,
+// which would result in a misleading "context canceled" error from the first
+// query inside fn rather than from the transaction wrapper.
 func (s *Store) TransactionWithTimeout(ctx context.Context, timeout time.Duration, fn func(*gorm.DB) error) error {
 	timeoutCtx, cancel := s.WithTimeout(ctx, timeout, "transaction")
 	defer cancel()
 
 	return s.DB.WithContext(timeoutCtx).Transaction(func(tx *gorm.DB) error {
-		// Check context before proceeding
+		// Guard against callers that pass a context that was already expired
+		// before this transaction was entered.
 		select {
 		case <-timeoutCtx.Done():
 			return timeoutCtx.Err()
