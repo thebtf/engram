@@ -603,40 +603,43 @@ func (u *Updater) installBinariesToDir(extractDir, destDir string, binaries []st
 		}
 
 		dest := filepath.Join(destDir, rel)
-		u.backupBinary(dest)
+		backup, hasBackup := u.backupBinary(dest)
 
 		if err := copyFile(src, dest); err != nil {
+			if hasBackup {
+				_ = os.Rename(backup, dest) // best-effort rollback to the old binary
+			}
 			return fmt.Errorf("failed to install %s: %w", dest, err)
 		}
 		// #nosec G302 — executables require 0755
 		if err := os.Chmod(dest, 0755); err != nil {
+			if hasBackup {
+				_ = os.Rename(backup, dest)
+			}
 			return fmt.Errorf("failed to chmod %s: %w", dest, err)
+		}
+		if hasBackup {
+			_ = os.Remove(backup) // install succeeded — drop the rollback copy
 		}
 	}
 	return nil
 }
 
-// backupBinary renames dest to dest+".bak" and registers a deferred
-// cleanup/restore: if dest is present after the install the backup is
-// removed; if dest is absent (copy failed) the backup is restored.
-func (u *Updater) backupBinary(dest string) {
+// backupBinary moves dest aside to dest+".bak" so the caller can roll back a
+// failed install. Returns the backup path and whether a backup was created.
+// Cleanup is the caller's responsibility and must run synchronously after the
+// copy attempt — a goroutine (or a loop-local defer) races with the copy and
+// can remove or restore the backup while the new binary is mid-write.
+func (u *Updater) backupBinary(dest string) (string, bool) {
 	if _, err := os.Stat(dest); err != nil {
-		return // nothing to back up
+		return "", false // nothing to back up
 	}
 	backup := dest + ".bak"
 	if err := os.Rename(dest, backup); err != nil {
 		log.Warn().Err(err).Str("file", dest).Msg("Failed to backup, continuing anyway")
-		return
+		return "", false
 	}
-	// Defer runs after installBinariesToDir returns — either success
-	// (remove the backup) or failure (restore from backup).
-	go func(backup, dest string) {
-		if _, err := os.Stat(dest); err == nil {
-			_ = os.Remove(backup)
-		} else {
-			_ = os.Rename(backup, dest)
-		}
-	}(backup, dest)
+	return backup, true
 }
 
 // getInstallDirectories returns the primary installDir followed by any
