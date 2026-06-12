@@ -39,7 +39,7 @@ func TestConfigSuite(t *testing.T) {
 	suite.Run(t, new(ConfigSuite))
 }
 
-// TestDefault tests default configuration values.
+// TestDefault verifies default configuration values.
 func (s *ConfigSuite) TestDefault() {
 	cfg := Default()
 
@@ -52,6 +52,67 @@ func (s *ConfigSuite) TestDefault() {
 	s.Equal("narrative", cfg.ContextFullField)
 	s.Equal(DefaultObservationTypes, cfg.ContextObsTypes)
 	s.Equal(DefaultObservationConcepts, cfg.ContextObsConcepts)
+}
+
+// TestDefault_HubStorageStrategy verifies hub storage strategy default.
+func (s *ConfigSuite) TestDefault_HubStorageStrategy() {
+	cfg := Default()
+	s.Equal("hub", cfg.VectorStorageStrategy)
+	s.Equal(5, cfg.HubThreshold)
+}
+
+// TestDefault_MemoryLimits verifies memory limit defaults.
+func (s *ConfigSuite) TestDefault_MemoryLimits() {
+	cfg := Default()
+	s.Equal(10000, cfg.StoreMemoryHardLimit)
+	s.Equal(1000, cfg.StoreMemorySoftLimit)
+	s.InDelta(0.92, cfg.StoreMemoryDedupThreshold, 1e-9)
+}
+
+// TestDefault_SignalWeights verifies that default signal weights are populated.
+func (s *ConfigSuite) TestDefault_SignalWeights() {
+	cfg := Default()
+	s.NotEmpty(cfg.SignalWeights)
+	s.InDelta(1.0, cfg.SignalWeights["git_commit"], 1e-9)
+	s.InDelta(3.0, cfg.SignalWeights["pr_merged"], 1e-9)
+	s.InDelta(-0.5, cfg.SignalWeights["error_streak"], 1e-9)
+}
+
+// TestDefault_InjectUnifiedTrue verifies that InjectUnified defaults to true (FR-3).
+func (s *ConfigSuite) TestDefault_InjectUnifiedTrue() {
+	cfg := Default()
+	s.True(cfg.InjectUnified, "InjectUnified must default to true so the unified inject path is active")
+}
+
+// TestDefault_EnforceSourceProjectTrue verifies that EnforceSourceProject defaults to true (T010).
+func (s *ConfigSuite) TestDefault_EnforceSourceProjectTrue() {
+	cfg := Default()
+	s.True(cfg.EnforceSourceProject, "EnforceSourceProject must default to true")
+}
+
+// TestDefault_InjectLimits verifies inject limit defaults.
+func (s *ConfigSuite) TestDefault_InjectLimits() {
+	cfg := Default()
+	s.Equal(20, cfg.AlwaysInjectLimit)
+	s.Equal(15, cfg.ProjectInjectLimit)
+}
+
+// TestDefault_OutcomeRecorder verifies outcome recorder interval default.
+func (s *ConfigSuite) TestDefault_OutcomeRecorder() {
+	cfg := Default()
+	s.Equal(15, cfg.OutcomeRecorderIntervalMinutes)
+}
+
+// TestDefault_TelemetryEnabled verifies telemetry is on by default.
+func (s *ConfigSuite) TestDefault_TelemetryEnabled() {
+	cfg := Default()
+	s.True(cfg.TelemetryEnabled)
+}
+
+// TestDefault_ContextMaxTokens verifies context max tokens default.
+func (s *ConfigSuite) TestDefault_ContextMaxTokens() {
+	cfg := Default()
+	s.Equal(8000, cfg.ContextMaxTokens)
 }
 
 // TestInjectUnifiedDefaultTrue verifies that ENGRAM_INJECT_UNIFIED defaults to true (FR-3).
@@ -69,25 +130,40 @@ func (s *ConfigSuite) TestInjectUnifiedEnvOverride() {
 	s.False(cfg.InjectUnified, "ENGRAM_INJECT_UNIFIED=false must activate the legacy inject path")
 }
 
-// TestDataDir tests data directory path.
+// TestInjectUnifiedEnvOverrideTrue verifies that ENGRAM_INJECT_UNIFIED=true is accepted.
+func (s *ConfigSuite) TestInjectUnifiedEnvOverrideTrue() {
+	s.T().Setenv("ENGRAM_INJECT_UNIFIED", "true")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.InjectUnified)
+}
+
+// TestDataDir verifies data directory path contains .engram.
 func (s *ConfigSuite) TestDataDir() {
 	dir := DataDir()
 	s.Contains(dir, ".engram")
 }
 
-// TestDBPath tests database path.
+// TestDBPath verifies database path contains engram.db.
 func (s *ConfigSuite) TestDBPath() {
 	path := DBPath()
 	s.Contains(path, "engram.db")
 }
 
-// TestSettingsPath tests settings file path.
+// TestDBPath_EnvOverride verifies ENGRAM_DB_PATH env overrides the default.
+func (s *ConfigSuite) TestDBPath_EnvOverride() {
+	s.T().Setenv("ENGRAM_DB_PATH", "/custom/path/engram.db")
+	path := DBPath()
+	s.Equal("/custom/path/engram.db", path)
+}
+
+// TestSettingsPath verifies settings file path contains settings.json.
 func (s *ConfigSuite) TestSettingsPath() {
 	path := SettingsPath()
 	s.Contains(path, "settings.json")
 }
 
-// TestEnsureDataDir tests data directory creation.
+// TestEnsureDataDir verifies data directory creation.
 func (s *ConfigSuite) TestEnsureDataDir() {
 	err := EnsureDataDir()
 	s.NoError(err)
@@ -98,13 +174,11 @@ func (s *ConfigSuite) TestEnsureDataDir() {
 	s.True(info.IsDir())
 }
 
-// TestEnsureSettings tests settings file creation.
+// TestEnsureSettings verifies settings file creation, idempotency.
 func (s *ConfigSuite) TestEnsureSettings() {
-	// First ensure data dir exists
 	err := EnsureDataDir()
 	s.NoError(err)
 
-	// Ensure settings creates default file
 	err = EnsureSettings()
 	s.NoError(err)
 
@@ -113,24 +187,23 @@ func (s *ConfigSuite) TestEnsureSettings() {
 	s.NoError(err)
 	s.False(info.IsDir())
 
-	// Second call should not error (file exists)
+	// Second call must not error (idempotent).
 	err = EnsureSettings()
 	s.NoError(err)
 }
 
-// TestEnsureAll tests full initialization.
+// TestEnsureAll verifies full initialization.
 func (s *ConfigSuite) TestEnsureAll() {
 	err := EnsureAll()
 	s.NoError(err)
 
-	// Verify dir and settings exist
 	_, err = os.Stat(DataDir())
 	s.NoError(err)
 	_, err = os.Stat(SettingsPath())
 	s.NoError(err)
 }
 
-// TestLoad_TableDriven tests configuration loading with various scenarios.
+// TestLoad_TableDriven tests configuration loading with various JSON scenarios.
 func (s *ConfigSuite) TestLoad_TableDriven() {
 	tests := []struct {
 		name           string
@@ -185,7 +258,6 @@ func (s *ConfigSuite) TestLoad_TableDriven() {
 
 	for _, tt := range tests {
 		s.Run(tt.name, func() {
-			// Create fresh temp dir
 			tempDir, err := os.MkdirTemp("", "config-test-*")
 			s.Require().NoError(err)
 			defer os.RemoveAll(tempDir)
@@ -193,7 +265,6 @@ func (s *ConfigSuite) TestLoad_TableDriven() {
 			os.Setenv("HOME", tempDir)
 			os.Setenv("USERPROFILE", tempDir)
 
-			// Create data dir
 			err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
 			s.Require().NoError(err)
 
@@ -216,58 +287,451 @@ func (s *ConfigSuite) TestLoad_TableDriven() {
 	}
 }
 
-// TestGetWorkerPort_TableDriven tests worker port retrieval with various scenarios.
-func TestGetWorkerPort_TableDriven(t *testing.T) {
-	tests := []struct {
-		name     string
-		envValue string
-		wantPort int
-		setEnv   bool
-	}{
-		{
-			name:     "no env, use default",
-			envValue: "",
-			wantPort: DefaultWorkerPort,
-			setEnv:   false,
-		},
-		{
-			name:     "env set to valid port",
-			envValue: "38888",
-			wantPort: 38888,
-			setEnv:   true,
-		},
-		{
-			name:     "env set to invalid value",
-			envValue: "invalid",
-			wantPort: DefaultWorkerPort,
-			setEnv:   true,
-		},
-	}
+// TestLoad_JSONContextSettings tests JSON-based context settings.
+func (s *ConfigSuite) TestLoad_JSONContextSettings() {
+	tempDir, err := os.MkdirTemp("", "config-test-ctx-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Save original env
-			origEnv := os.Getenv("ENGRAM_WORKER_PORT")
-			defer os.Setenv("ENGRAM_WORKER_PORT", origEnv)
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
 
-			if tt.setEnv {
-				os.Setenv("ENGRAM_WORKER_PORT", tt.envValue)
-			} else {
-				os.Unsetenv("ENGRAM_WORKER_PORT")
-			}
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
 
-			// We can't easily test GetWorkerPort since it uses Get() which caches
-			// So we test the env parsing logic directly
-			if tt.setEnv && tt.envValue != "" {
-				if tt.wantPort != DefaultWorkerPort {
-					assert.Equal(t, tt.envValue, os.Getenv("ENGRAM_WORKER_PORT"))
-				}
-			}
-		})
-	}
+	settingsJSON := `{
+		"ENGRAM_CONTEXT_FULL_COUNT": 50,
+		"ENGRAM_CONTEXT_SESSION_COUNT": 20,
+		"ENGRAM_CONTEXT_OBS_TYPES": "bugfix,feature",
+		"ENGRAM_CONTEXT_OBS_CONCEPTS": "security,performance",
+		"ENGRAM_CONTEXT_RELEVANCE_THRESHOLD": 0.5,
+		"ENGRAM_CONTEXT_MAX_PROMPT_RESULTS": 15,
+		"ENGRAM_VECTOR_STORAGE_STRATEGY": "flat",
+		"ENGRAM_HUB_THRESHOLD": 10,
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": false
+	}`
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(settingsJSON), 0600)
+	s.Require().NoError(err)
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal(50, cfg.ContextFullCount)
+	s.Equal(20, cfg.ContextSessionCount)
+	s.Equal([]string{"bugfix", "feature"}, cfg.ContextObsTypes)
+	s.Equal([]string{"security", "performance"}, cfg.ContextObsConcepts)
+	s.InDelta(0.5, cfg.ContextRelevanceThreshold, 1e-9)
+	s.Equal(15, cfg.ContextMaxPromptResults)
+	s.Equal("flat", cfg.VectorStorageStrategy)
+	s.Equal(10, cfg.HubThreshold)
+	s.False(cfg.EnforceSourceProject)
 }
 
-// TestSplitTrim tests the splitTrim helper function.
+// TestLoad_DBPathFromJSON verifies ENGRAM_DB_PATH in JSON settings is applied.
+func (s *ConfigSuite) TestLoad_DBPathFromJSON() {
+	tempDir, err := os.MkdirTemp("", "config-test-dbpath-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	customPath := "/custom/db/path.db"
+	settingsJSON := `{"ENGRAM_DB_PATH": "` + customPath + `"}`
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(settingsJSON), 0600)
+	s.Require().NoError(err)
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal(customPath, cfg.DBPath)
+}
+
+// TestLoad_EnvOverrides verifies environment variable overrides take effect.
+func (s *ConfigSuite) TestLoad_EnvOverrides() {
+	// Create a temp dir with a settings file setting some values
+	tempDir, err := os.MkdirTemp("", "config-env-override-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	// Env vars override JSON settings
+	s.T().Setenv("ENGRAM_DB_PATH", "/env-override/engram.db")
+	s.T().Setenv("ENGRAM_WORKER_HOST", "10.0.0.1")
+	s.T().Setenv("ENGRAM_AUTH_ADMIN_TOKEN", "secret-token")
+	s.T().Setenv("ENGRAM_CONTEXT_MAX_TOKENS", "4000")
+	s.T().Setenv("DATABASE_DSN", "postgres://localhost/test")
+	s.T().Setenv("DATABASE_MAX_CONNS", "20")
+	s.T().Setenv("WORKSTATION_ID", "ws-001")
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+
+	s.Equal("/env-override/engram.db", cfg.DBPath)
+	s.Equal("10.0.0.1", cfg.WorkerHost)
+	s.Equal("secret-token", cfg.WorkerToken)
+	s.Equal(4000, cfg.ContextMaxTokens)
+	s.Equal("postgres://localhost/test", cfg.DatabaseDSN)
+	s.Equal(20, cfg.DatabaseMaxConns)
+	s.Equal("ws-001", cfg.WorkstationID)
+}
+
+// TestLoad_EnvOverrides_Limits verifies inject limit env overrides.
+func (s *ConfigSuite) TestLoad_EnvOverrides_Limits() {
+	tempDir, err := os.MkdirTemp("", "config-env-limits-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	s.T().Setenv("ENGRAM_ALWAYS_INJECT_LIMIT", "30")
+	s.T().Setenv("ENGRAM_PROJECT_INJECT_LIMIT", "25")
+	s.T().Setenv("ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES", "5")
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal(30, cfg.AlwaysInjectLimit)
+	s.Equal(25, cfg.ProjectInjectLimit)
+	s.Equal(5, cfg.OutcomeRecorderIntervalMinutes)
+}
+
+// TestLoad_Telemetry verifies ENGRAM_TELEMETRY_ENABLED=false turns off telemetry.
+func (s *ConfigSuite) TestLoad_Telemetry() {
+	tempDir, err := os.MkdirTemp("", "config-telemetry-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	s.T().Setenv("ENGRAM_TELEMETRY_ENABLED", "false")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.False(cfg.TelemetryEnabled)
+
+	// "0" also disables
+	s.T().Setenv("ENGRAM_TELEMETRY_ENABLED", "0")
+	cfg, err = Load()
+	s.Require().NoError(err)
+	s.False(cfg.TelemetryEnabled)
+}
+
+// TestLoad_EncryptionKeys verifies ENGRAM_VAULT_KEY and fallback ENGRAM_ENCRYPTION_KEY.
+func (s *ConfigSuite) TestLoad_EncryptionKeys() {
+	tempDir, err := os.MkdirTemp("", "config-enc-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	// Primary key name takes precedence
+	s.T().Setenv("ENGRAM_VAULT_KEY", "primary-vault-key")
+	s.T().Setenv("ENGRAM_ENCRYPTION_KEY", "fallback-key")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal("primary-vault-key", cfg.EncryptionKey)
+
+	// Without primary, fallback is used
+	os.Unsetenv("ENGRAM_VAULT_KEY")
+	s.T().Setenv("ENGRAM_ENCRYPTION_KEY", "only-enc-key")
+	cfg, err = Load()
+	s.Require().NoError(err)
+	s.Equal("only-enc-key", cfg.EncryptionKey)
+}
+
+// TestLoad_EncryptionKeyFile verifies ENGRAM_ENCRYPTION_KEY_FILE env override.
+func (s *ConfigSuite) TestLoad_EncryptionKeyFile() {
+	tempDir, err := os.MkdirTemp("", "config-enc-file-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	s.T().Setenv("ENGRAM_ENCRYPTION_KEY_FILE", "/vault/key.hex")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal("/vault/key.hex", cfg.EncryptionKeyFile)
+}
+
+// TestLoad_AuthentikSSO verifies Authentik SSO env overrides.
+func (s *ConfigSuite) TestLoad_AuthentikSSO() {
+	tempDir, err := os.MkdirTemp("", "config-authentik-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	s.T().Setenv("ENGRAM_AUTHENTIK_ENABLED", "true")
+	s.T().Setenv("ENGRAM_AUTHENTIK_AUTO_PROVISION", "1")
+	s.T().Setenv("ENGRAM_AUTHENTIK_TRUSTED_PROXIES", "192.168.1.1,10.0.0.1")
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.AuthentikEnabled)
+	s.True(cfg.AuthentikAutoProvision)
+	s.Equal([]string{"192.168.1.1", "10.0.0.1"}, cfg.AuthentikTrustedProxies)
+}
+
+// TestLoad_AuthSkipLocal verifies ENGRAM_AUTH_SKIP_LOCAL and ENGRAM_AUTH_TRUSTED_PROXY.
+func (s *ConfigSuite) TestLoad_AuthSkipLocal() {
+	tempDir, err := os.MkdirTemp("", "config-auth-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	s.T().Setenv("ENGRAM_AUTH_SKIP_LOCAL", "true")
+	s.T().Setenv("ENGRAM_AUTH_TRUSTED_PROXY", "172.16.0.1")
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.AuthSkipLocal)
+	s.Equal("172.16.0.1", cfg.AuthTrustedProxy)
+}
+
+// TestLoad_EnforceSourceProjectEnvOverride verifies env override for EnforceSourceProject.
+func (s *ConfigSuite) TestLoad_EnforceSourceProjectEnvOverride() {
+	tempDir, err := os.MkdirTemp("", "config-esp-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	s.T().Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.False(cfg.EnforceSourceProject)
+}
+
+// TestLoad_LogBufferSize verifies ENGRAM_LOG_BUFFER_SIZE env override.
+func (s *ConfigSuite) TestLoad_LogBufferSize() {
+	tempDir, err := os.MkdirTemp("", "config-logbuf-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	s.T().Setenv("ENGRAM_LOG_BUFFER_SIZE", "50000")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal(50000, cfg.LogBufferSize)
+}
+
+// TestLoad_CollectionConfig verifies COLLECTION_CONFIG env override.
+func (s *ConfigSuite) TestLoad_CollectionConfig() {
+	tempDir, err := os.MkdirTemp("", "config-collection-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	s.T().Setenv("COLLECTION_CONFIG", "/my/collections.yml")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal("/my/collections.yml", cfg.CollectionConfigPath)
+}
+
+// TestReload verifies that Reload returns a new config and detects changed fields.
+func (s *ConfigSuite) TestReload() {
+	tempDir, err := os.MkdirTemp("", "config-reload-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	// Initial load
+	cfg1, _, err := Reload()
+	s.Require().NoError(err)
+	s.NotNil(cfg1)
+
+	// Reload again — no changes
+	cfg2, changed, err := Reload()
+	s.Require().NoError(err)
+	s.NotNil(cfg2)
+	s.Empty(changed)
+}
+
+// TestReload_DetectsChanges verifies Reload detects model and port changes.
+func (s *ConfigSuite) TestReload_DetectsChanges() {
+	tempDir, err := os.MkdirTemp("", "config-reload-chg-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	// Write initial settings
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"),
+		[]byte(`{"ENGRAM_MODEL": "haiku"}`), 0600)
+	s.Require().NoError(err)
+
+	_, _, err = Reload()
+	s.Require().NoError(err)
+
+	// Update settings to a different model
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"),
+		[]byte(`{"ENGRAM_MODEL": "sonnet"}`), 0600)
+	s.Require().NoError(err)
+
+	cfg, changed, err := Reload()
+	s.Require().NoError(err)
+	s.Equal("sonnet", cfg.Model)
+	s.Contains(changed, "model")
+}
+
+// TestGet verifies the global config getter returns a valid non-nil config.
+func TestGet(t *testing.T) {
+	origHome := os.Getenv("HOME")
+	tempDir, err := os.MkdirTemp("", "config-get-test-*")
+	require.NoError(t, err)
+	defer func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origHome)
+		os.RemoveAll(tempDir)
+	}()
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	require.NoError(t, err)
+
+	cfg := Get()
+	require.NotNil(t, cfg)
+	assert.Greater(t, cfg.WorkerPort, 0)
+	assert.NotEmpty(t, cfg.Model)
+}
+
+// TestGetWorkerPort_WithEnv verifies GetWorkerPort reads ENGRAM_WORKER_PORT env.
+func TestGetWorkerPort_WithEnv(t *testing.T) {
+	origEnv := os.Getenv("ENGRAM_WORKER_PORT")
+	defer os.Setenv("ENGRAM_WORKER_PORT", origEnv)
+
+	os.Setenv("ENGRAM_WORKER_PORT", "45678")
+	port := GetWorkerPort()
+	assert.Equal(t, 45678, port)
+
+	os.Setenv("ENGRAM_WORKER_PORT", "not-a-number")
+	port = GetWorkerPort()
+	assert.Greater(t, port, 0) // falls back to config
+
+	os.Setenv("ENGRAM_WORKER_PORT", "0")
+	port = GetWorkerPort()
+	assert.Greater(t, port, 0) // zero is invalid
+
+	os.Unsetenv("ENGRAM_WORKER_PORT")
+	port = GetWorkerPort()
+	assert.Greater(t, port, 0)
+}
+
+// TestGetWorkerHost verifies GetWorkerHost env priority then config then default.
+func TestGetWorkerHost(t *testing.T) {
+	origEnv := os.Getenv("ENGRAM_WORKER_HOST")
+	defer os.Setenv("ENGRAM_WORKER_HOST", origEnv)
+
+	// Env variable takes priority
+	os.Setenv("ENGRAM_WORKER_HOST", "192.168.1.100")
+	host := GetWorkerHost()
+	assert.Equal(t, "192.168.1.100", host)
+
+	// No env — falls back to config (default "127.0.0.1")
+	os.Unsetenv("ENGRAM_WORKER_HOST")
+	host = GetWorkerHost()
+	assert.NotEmpty(t, host)
+}
+
+// TestGetWorkerToken verifies GetWorkerToken reads ENGRAM_AUTH_ADMIN_TOKEN env.
+func TestGetWorkerToken(t *testing.T) {
+	origEnv := os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")
+	defer os.Setenv("ENGRAM_AUTH_ADMIN_TOKEN", origEnv)
+
+	os.Setenv("ENGRAM_AUTH_ADMIN_TOKEN", "my-admin-token")
+	token := GetWorkerToken()
+	assert.Equal(t, "my-admin-token", token)
+
+	os.Unsetenv("ENGRAM_AUTH_ADMIN_TOKEN")
+	// Falls back to config value (likely empty in test env)
+	token = GetWorkerToken()
+	_ = token // may be empty string; just ensure no panic
+}
+
+// TestGetDatabaseDSN verifies GetDatabaseDSN reads DATABASE_DSN env.
+func TestGetDatabaseDSN(t *testing.T) {
+	origEnv := os.Getenv("DATABASE_DSN")
+	defer os.Setenv("DATABASE_DSN", origEnv)
+
+	os.Setenv("DATABASE_DSN", "postgres://user:pass@localhost/testdb")
+	dsn := GetDatabaseDSN()
+	assert.Equal(t, "postgres://user:pass@localhost/testdb", dsn)
+
+	os.Unsetenv("DATABASE_DSN")
+	dsn = GetDatabaseDSN() // falls back to config
+	_ = dsn
+}
+
+// TestGetCollectionConfigPath verifies path fallback when env is unset.
+func TestGetCollectionConfigPath(t *testing.T) {
+	origEnv := os.Getenv("COLLECTION_CONFIG")
+	defer os.Setenv("COLLECTION_CONFIG", origEnv)
+
+	os.Setenv("COLLECTION_CONFIG", "/explicit/collections.yml")
+	path := GetCollectionConfigPath()
+	assert.Equal(t, "/explicit/collections.yml", path)
+
+	os.Unsetenv("COLLECTION_CONFIG")
+	path = GetCollectionConfigPath()
+	assert.Contains(t, path, "collections.yml")
+}
+
+// TestGetWorkstationID verifies WORKSTATION_ID env is read correctly.
+func TestGetWorkstationID(t *testing.T) {
+	origEnv := os.Getenv("WORKSTATION_ID")
+	defer os.Setenv("WORKSTATION_ID", origEnv)
+
+	os.Setenv("WORKSTATION_ID", "ws-prod-1")
+	id := GetWorkstationID()
+	assert.Equal(t, "ws-prod-1", id)
+
+	os.Unsetenv("WORKSTATION_ID")
+	id = GetWorkstationID()
+	assert.Empty(t, id)
+}
+
+// TestSplitTrim verifies the splitTrim helper.
 func TestSplitTrim(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -299,6 +763,16 @@ func TestSplitTrim(t *testing.T) {
 			input:    "bugfix,,feature,,",
 			expected: []string{"bugfix", "feature"},
 		},
+		{
+			name:     "only commas",
+			input:    ",,,",
+			expected: []string{},
+		},
+		{
+			name:     "spaces only segments",
+			input:    " , , ",
+			expected: []string{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -309,7 +783,7 @@ func TestSplitTrim(t *testing.T) {
 	}
 }
 
-// TestDefaultObservationTypes tests default observation types.
+// TestDefaultObservationTypes verifies the default observation type list.
 func TestDefaultObservationTypes(t *testing.T) {
 	expected := []string{
 		"bugfix", "feature", "refactor", "change", "discovery", "decision",
@@ -317,7 +791,7 @@ func TestDefaultObservationTypes(t *testing.T) {
 	assert.Equal(t, expected, DefaultObservationTypes)
 }
 
-// TestDefaultObservationConcepts tests default observation concepts.
+// TestDefaultObservationConcepts verifies the default observation concept list.
 func TestDefaultObservationConcepts(t *testing.T) {
 	expected := []string{
 		"how-it-works", "why-it-exists", "what-changed",
@@ -326,7 +800,7 @@ func TestDefaultObservationConcepts(t *testing.T) {
 	assert.Equal(t, expected, DefaultObservationConcepts)
 }
 
-// TestCriticalConcepts tests critical concepts list.
+// TestCriticalConcepts verifies the critical concepts list.
 func TestCriticalConcepts(t *testing.T) {
 	expected := []string{
 		"gotcha", "pattern", "problem-solution", "trade-off",
@@ -334,63 +808,8 @@ func TestCriticalConcepts(t *testing.T) {
 	assert.Equal(t, expected, CriticalConcepts)
 }
 
-// TestGet tests the global config getter.
-func TestGet(t *testing.T) {
-	// Save and restore HOME
-	origHome := os.Getenv("HOME")
-	tempDir, err := os.MkdirTemp("", "config-get-test-*")
-	require.NoError(t, err)
-	defer func() {
-		os.Setenv("HOME", origHome)
-		os.Setenv("USERPROFILE", origHome)
-		os.RemoveAll(tempDir)
-	}()
-	os.Setenv("HOME", tempDir)
-	os.Setenv("USERPROFILE", tempDir)
-
-	// Create data dir
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
-	require.NoError(t, err)
-
-	// Get() should return a valid config
-	cfg := Get()
-	require.NotNil(t, cfg)
-	assert.Greater(t, cfg.WorkerPort, 0)
-	assert.NotEmpty(t, cfg.Model)
-}
-
-// TestGetWorkerPort_WithEnv tests GetWorkerPort with environment variable.
-func TestGetWorkerPort_WithEnv(t *testing.T) {
-	// Save original env
-	origEnv := os.Getenv("ENGRAM_WORKER_PORT")
-	defer os.Setenv("ENGRAM_WORKER_PORT", origEnv)
-
-	// Test with valid port in env
-	os.Setenv("ENGRAM_WORKER_PORT", "45678")
-	port := GetWorkerPort()
-	assert.Equal(t, 45678, port)
-
-	// Test with invalid port (should fall back to config)
-	os.Setenv("ENGRAM_WORKER_PORT", "not-a-number")
-	port = GetWorkerPort()
-	// Should return from Get().WorkerPort, which is default
-	assert.Greater(t, port, 0)
-
-	// Test with zero port (should fall back to config)
-	os.Setenv("ENGRAM_WORKER_PORT", "0")
-	port = GetWorkerPort()
-	// Zero is invalid, so should use default
-	assert.Greater(t, port, 0)
-
-	// Test with no env (should use config)
-	os.Unsetenv("ENGRAM_WORKER_PORT")
-	port = GetWorkerPort()
-	assert.Greater(t, port, 0)
-}
-
-// TestLoad_ContextSettings tests context-related settings loading.
+// TestLoad_ContextSettings tests loading of context settings from JSON file.
 func TestLoad_ContextSettings(t *testing.T) {
-	// Create temp dir
 	tempDir, err := os.MkdirTemp("", "config-test-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
@@ -402,7 +821,6 @@ func TestLoad_ContextSettings(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 	defer os.Setenv("USERPROFILE", origUserProfile)
 
-	// Create data dir and settings
 	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
 	require.NoError(t, err)
 
