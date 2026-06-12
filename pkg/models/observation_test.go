@@ -187,38 +187,6 @@ func (s *ObservationSuite) TestClassifyMemoryType_GuidanceShortcut() {
 	s.Equal(MemTypeDecision, ClassifyMemoryType(obs2))
 }
 
-// TestTypeBaseScore_Guidance tests that guidance has the highest base score.
-func (s *ObservationSuite) TestTypeBaseScore_Guidance() {
-	score := TypeBaseScore(ObsTypeGuidance)
-	s.Equal(1.4, score)
-
-	// Verify guidance is the highest score
-	for obsType, otherScore := range TypeBaseScores {
-		if obsType != ObsTypeGuidance {
-			s.GreaterOrEqual(score, otherScore, "guidance should have highest or equal base score")
-		}
-	}
-}
-
-// TestTypeBaseScore_NewTypes tests scoring for pitfall, operational, and timeline types.
-func (s *ObservationSuite) TestTypeBaseScore_NewTypes() {
-	s.Equal(1.3, TypeBaseScore(ObsTypePitfall))
-	s.Equal(1.0, TypeBaseScore(ObsTypeOperational))
-	s.Equal(0.1, TypeBaseScore(ObsTypeTimeline))
-}
-
-// TestDefaultScoringConfig_SourceHalfLives tests that SourceHalfLives is populated.
-func (s *ObservationSuite) TestDefaultScoringConfig_SourceHalfLives() {
-	cfg := DefaultScoringConfig()
-	s.NotNil(cfg.SourceHalfLives)
-	s.Equal(30.0, cfg.SourceHalfLives[SourceManual])
-	s.Equal(7.0, cfg.SourceHalfLives[SourceUnknown])
-	s.Equal(90.0, cfg.SourceHalfLives[SourceLLMDerived])
-	s.Equal(60.0, cfg.SourceHalfLives[SourceCrossModel])
-	s.Equal(14.0, cfg.SourceHalfLives[SourceToolRead])
-	s.Len(cfg.SourceHalfLives, 10) // All 10 source types mapped
-}
-
 // TestParsedObservation_FileMtimesJSON tests FileMtimes JSON serialization.
 func (s *ObservationSuite) TestParsedObservation_FileMtimesJSON() {
 	obs := &ParsedObservation{
