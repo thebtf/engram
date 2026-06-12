@@ -55,18 +55,22 @@ import (
 	googlegrpc "google.golang.org/grpc"
 )
 
-// Service configuration constants
+// Timing and capacity constants for the worker service.
+// Adjust via env-gated config rather than changing defaults here.
 const (
-	// DefaultHTTPTimeout is the default timeout for HTTP requests.
+	// DefaultHTTPTimeout caps handler execution on routes that use Timeout middleware.
+	// SSE routes opt out explicitly — they need unbounded connection lifetime.
 	DefaultHTTPTimeout = 30 * time.Second
 
-	// ReadyPollInterval is how often WaitReady checks initialization status.
+	// ReadyPollInterval is the sleep between readiness checks in WaitReady.
 	ReadyPollInterval = 50 * time.Millisecond
 
-	// StaleQueueSize is the buffer size for background stale verification.
+	// StaleQueueSize is the channel depth for background stale-check requests.
+	// Excess requests are silently dropped to avoid blocking callers.
 	StaleQueueSize = 100
 
-	// QueueProcessInterval is how often the background queue processor runs.
+	// QueueProcessInterval is the fallback tick rate for the observation queue processor.
+	// The processor also fires immediately on each new-observation notification.
 	QueueProcessInterval = 2 * time.Second
 )
 
@@ -84,13 +88,14 @@ type RetrievalStats struct {
 	LastUpdated        int64 `json:"last_updated"`        // Unix timestamp of last update (atomic)
 }
 
-// maxRetrievalStatsProjects limits the number of projects tracked to prevent unbounded memory growth.
+// maxRetrievalStatsProjects caps the per-project stats map. Projects beyond this
+// limit evict oldest entries to keep memory bounded.
 const maxRetrievalStatsProjects = 500
 
-// retrievalStatsMaxAge is the maximum age for retrieval stats before cleanup (24 hours).
+// retrievalStatsMaxAge is the expiry window for idle-project stats entries.
 const retrievalStatsMaxAge = 24 * time.Hour
 
-// maxRecentQueries is the maximum number of recent queries to track.
+// maxRecentQueries is the ring-buffer size for in-process recent-query analytics.
 const maxRecentQueries = 100
 
 // Service is the main worker service orchestrator.
@@ -247,7 +252,8 @@ func (s *Service) evictStalePrompts() {
 	})
 }
 
-// cachedCount stores a cached count value with expiration.
+// cachedCount holds a point-in-time observation count with a wall-clock timestamp
+// so callers can apply a TTL check without querying the database on every request.
 type cachedCount struct {
 	timestamp time.Time
 	count     int
@@ -262,13 +268,15 @@ func (s *Service) getVault() (*crypto.Vault, error) {
 	return s.vault, s.vaultErr
 }
 
-// staleVerifyRequest represents a request to verify a stale observation in background
+// staleVerifyRequest carries the parameters for a background staleness check.
+// It is sent over the buffered staleQueue channel from injection handlers.
 type staleVerifyRequest struct {
 	cwd           string
 	observationID int64
 }
 
-// RecentSearchQuery tracks a search query for analytics.
+// RecentSearchQuery is one entry in the in-process ring buffer of recent semantic
+// searches. Exported for the /api/search/recent handler JSON response.
 type RecentSearchQuery struct {
 	Timestamp time.Time `json:"timestamp"`
 	Query     string    `json:"query"`
@@ -277,50 +285,55 @@ type RecentSearchQuery struct {
 	Results   int       `json:"results"`
 }
 
-// setupCallbacks configures callbacks on stores and processors.
-func (s *Service) setupCallbacks(
-	sessionManager *session.Manager,
-) {
-	// Set callbacks for session lifecycle events
-	if sessionManager != nil {
-		sessionManager.SetOnSessionCreated(func(id int64) {
-			s.broadcastProcessingStatus()
-			s.sseBroadcaster.Broadcast(map[string]any{
-				"type":   "session",
-				"action": "created",
-				"id":     id,
-			})
-		})
-		sessionManager.SetOnSessionDeleted(func(id int64) {
-			s.broadcastProcessingStatus()
-			s.sseBroadcaster.Broadcast(map[string]any{
-				"type":   "session",
-				"action": "deleted",
-				"id":     id,
-			})
-		})
+// setupCallbacks wires session-lifecycle hooks so the SSE broadcaster pushes
+// real-time create/delete events to dashboard subscribers. Both callbacks also
+// refresh the processing-status banner so the UI queue depth stays current.
+func (s *Service) setupCallbacks(mgr *session.Manager) {
+	if mgr == nil {
+		return
 	}
+
+	mgr.SetOnSessionCreated(func(id int64) {
+		s.broadcastProcessingStatus()
+		s.sseBroadcaster.Broadcast(map[string]any{
+			"type":   "session",
+			"action": "created",
+			"id":     id,
+		})
+	})
+
+	mgr.SetOnSessionDeleted(func(id int64) {
+		s.broadcastProcessingStatus()
+		s.sseBroadcaster.Broadcast(map[string]any{
+			"type":   "session",
+			"action": "deleted",
+			"id":     id,
+		})
+	})
 }
 
-// NewService creates a new worker service with deferred initialization.
-// The service starts immediately with health endpoint available,
-// while database and SDK initialization happens in the background.
+// NewService constructs the worker service and returns it ready to call Start.
+// Lightweight infra (router, SSE broadcaster, rate limiter, cognitive platform)
+// is assembled synchronously so that the health endpoint is immediately
+// reachable. All database-dependent work is deferred to initializeAsync, which
+// runs in a goroutine. Callers should watch WaitReady or poll /api/ready before
+// issuing data-plane requests.
 func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) {
 	cfg := config.Get()
 
-	// Create context
+	// Cancellable root context — cancelled in Shutdown to drain all goroutines.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create router and SSE broadcaster (lightweight, no dependencies)
 	router := chi.NewRouter()
 	sseBroadcaster := sse.NewBroadcaster()
 
-	// Determine install directory (plugin location)
+	// Resolve the Claude Code plugin directory so the updater can locate the
+	// installed package without relying on a hardcoded absolute path.
 	homeDir, _ := os.UserHomeDir()
 	installDir := fmt.Sprintf("%s/.claude/plugins/marketplaces/engram", homeDir)
 
-	// Create rate limiter with generous limits (100 req/sec, burst of 200)
-	// These limits are per-client and allow for intensive CLI usage
+	// 100 req/sec with a burst allowance of 200 keeps interactive CLI usage
+	// completely unthrottled while protecting against runaway automation.
 	rateLimiter := NewPerClientRateLimiter(100.0, 200)
 
 	tokenAuth, err := NewTokenAuth(config.GetWorkerToken())
@@ -421,6 +434,8 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		return nil, fmt.Errorf("start cognitive hint queue: %w", err)
 	}
 
+	// Assemble the service struct. Fields that require database access are left
+	// nil here and populated by initializeAsync under initMu before ready is set.
 	svc := &Service{
 		version:            version,
 		config:             cfg,
@@ -437,7 +452,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		logBuffer:          logBuffer,
 		backfillTracker:    newBackfillTracker(),
 		cachedObsCounts:    make(map[string]cachedCount),
-		statsCacheTTL:      time.Minute, // Cache stats for 1 minute
+		statsCacheTTL:      time.Minute,
 		mcpHealth:          mcp.NewMCPHealth(),
 		eventBus:           &projectevents.Bus{},
 
@@ -449,7 +464,8 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		flagConfig:              flagCfg,
 	}
 
-	// Setup middleware and routes (health endpoint works immediately)
+	// Routes and middleware are registered synchronously so /health responds
+	// immediately without waiting for the database to come up.
 	svc.setupMiddleware()
 	svc.setupRoutes()
 
@@ -464,7 +480,8 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		}
 	}
 
-	// Start async initialization
+	// Kick off heavy initialization in the background. The service is already
+	// accepting requests at this point; data-plane routes gate on s.ready.
 	go svc.initializeAsync()
 
 	return svc, nil
@@ -480,17 +497,19 @@ func (s *Service) createChunkManager() *chunking.Manager {
 	return chunking.NewManager(chunkers, opts)
 }
 
-// initializeAsync performs heavy initialization in the background.
+// initializeAsync runs all database-dependent startup work in a background goroutine.
+// On completion it sets s.ready so that data-plane HTTP and gRPC handlers unblock.
+// On any fatal error it calls setInitError which surfaces through /api/health.
 func (s *Service) initializeAsync() {
-	log.Info().Msg("Starting async initialization...")
+	log.Info().Msg("background init: starting")
 
-	// Ensure data directory and settings exist
+	// Verify data directory layout and settings file presence before the first DB dial.
 	if err := config.EnsureAll(); err != nil {
 		s.setInitError(fmt.Errorf("ensure data dir: %w", err))
 		return
 	}
 
-	// Initialize database (this includes migrations - can be slow)
+	// Open the PostgreSQL connection pool and run pending schema migrations.
 	store, err := gorm.NewStore(gorm.Config{
 		DSN:      s.config.DatabaseDSN,
 		MaxConns: s.config.DatabaseMaxConns,
@@ -500,14 +519,14 @@ func (s *Service) initializeAsync() {
 		return
 	}
 
-	// Create store wrappers
+	// Thin store wrappers that scope queries to their respective tables.
 	sessionStore := gorm.NewSessionStore(store)
 	relationStore := gorm.NewRelationStore(store)
 
-	// Create session manager
+	// Session manager owns active-session state and the queue notification channel.
 	sessionManager := session.NewManager(sessionStore)
 
-	// Create SDK processor
+	// SDK processor pipelines raw tool observations into memories.
 	processor := sdk.NewProcessor()
 	processor.SetBroadcastFunc(func(event map[string]any) {
 		s.sseBroadcaster.Broadcast(event)
@@ -561,7 +580,9 @@ func (s *Service) initializeAsync() {
 		purgeStore = gorm.NewPurgeStore(store)
 	}
 
-	// Set all the initialized components
+	// Publish all store handles under initMu so downstream code that inspects
+	// them (e.g., handler middleware) sees a consistent snapshot once ready fires.
+	// Dedup config was removed in v5 (US11) — the SDK processor now uses fixed defaults.
 	s.initMu.Lock()
 	s.store = store
 	s.sessionStore = sessionStore
@@ -582,7 +603,6 @@ func (s *Service) initializeAsync() {
 	s.relationStore = relationStore
 	s.sessionManager = sessionManager
 	s.processor = processor
-	// Dedup config removed in v5 (US11) — SDK processor uses fixed defaults.
 	s.initMu.Unlock()
 
 	// Wire crystallization candidate store (Milestone-F TG4).
@@ -835,9 +855,10 @@ func (s *Service) initializeAsync() {
 	s.retrievalStatsLogStore = retrievalStatsLogStore
 	s.initMu.Unlock()
 
-	// Mark as ready
+	// All stores are wired. Flip the ready flag so /api/ready and requireReady
+	// middleware start passing requests through to the data-plane handlers.
 	s.ready.Store(true)
-	log.Info().Msg("Async initialization complete - service ready")
+	log.Info().Msg("background init: complete, service ready")
 
 	// Start project reaper (hourly cleanup of hard-expired soft-deleted projects).
 	projectReaper := reaper.New(store.DB)
@@ -857,36 +878,36 @@ func (s *Service) initializeAsync() {
 		s.startSleepCycle(s.ctx)
 	}
 
-	// Start queue processor if SDK processor is available
+	// Start the observation queue processor only when the SDK processor is wired.
+	// processQueue blocks on ProcessNotify or a fallback ticker — both are
+	// non-nil at this point, but guard the allocation explicitly.
 	if processor != nil {
 		s.wg.Add(1)
 		go s.processQueue()
 	}
 
-	// Start file watchers for auto-recreation on deletion
+	// Watch config and database files for external changes.
 	s.startWatchers()
 }
 
-// startWatchers initializes and starts file watchers for database and config.
+// startWatchers registers filesystem notification handlers for config hot-reload.
+// Database-file watching is not applicable for PostgreSQL (server-managed file).
 func (s *Service) startWatchers() {
-	// Database file watcher is not applicable for PostgreSQL (no local file to watch).
-
-	// Watch config file for changes (triggers process exit for restart)
 	configPath := config.SettingsPath()
-	configWatcher, err := watcher.New(configPath, func() {
-		log.Warn().Str("path", configPath).Msg("Config file changed, reloading...")
+	cw, err := watcher.New(configPath, func() {
+		log.Warn().Str("path", configPath).Msg("config file modified — triggering hot-reload")
 		s.reloadConfig()
 	})
 	if err != nil {
-		log.Warn().Err(err).Msg("Failed to create config watcher")
-	} else {
-		s.configWatcher = configWatcher
-		if err := configWatcher.Start(); err != nil {
-			log.Warn().Err(err).Msg("Failed to start config watcher")
-		} else {
-			log.Info().Str("path", configPath).Msg("Config file watcher started")
-		}
+		log.Warn().Err(err).Str("path", configPath).Msg("config watcher: init failed, hot-reload disabled")
+		return
 	}
+	if err := cw.Start(); err != nil {
+		log.Warn().Err(err).Str("path", configPath).Msg("config watcher: start failed, hot-reload disabled")
+		return
+	}
+	s.configWatcher = cw
+	log.Info().Str("path", configPath).Msg("config watcher active")
 }
 
 // reloadConfig hot-reloads configuration from disk without process restart.
@@ -922,45 +943,47 @@ func isCrystallizationEnabled() bool {
 	return os.Getenv("ENGRAM_CRYSTALLIZATION_ENABLED") == "true"
 }
 
-// setInitError records an initialization error.
+// setInitError stores a fatal startup error and logs it. Once set, the error
+// is visible through GetInitError and surfaced by the /api/health handler.
+// Called only from initializeAsync — never after ready is true.
 func (s *Service) setInitError(err error) {
 	s.initMu.Lock()
 	s.initError = err
 	s.initMu.Unlock()
-	log.Error().Err(err).Msg("Async initialization failed")
+	log.Error().Err(err).Msg("background init: fatal error")
 }
 
-// GetInitError returns any initialization error.
+// GetInitError returns any error recorded during background initialization.
+// Returns nil when initialization completed successfully or is still in progress.
 func (s *Service) GetInitError() error {
 	s.initMu.RLock()
 	defer s.initMu.RUnlock()
 	return s.initError
 }
 
-// queueStaleVerification queues a stale observation for background verification.
-// This is non-blocking - if the queue is full, the request is dropped.
+// queueStaleVerification sends a staleness-check request to the background
+// processor. The channel is initialised lazily on the first call. If the
+// channel is full the request is silently discarded — callers must not block
+// on delivery.
 func (s *Service) queueStaleVerification(observationID int64, cwd string) {
-	// Initialize queue on first use
 	s.staleQueueOnce.Do(func() {
 		s.staleQueue = make(chan staleVerifyRequest, StaleQueueSize)
 		s.wg.Add(1)
 		go s.processStaleQueue()
 	})
 
-	// Non-blocking send - drop if queue is full
 	select {
 	case s.staleQueue <- staleVerifyRequest{observationID: observationID, cwd: cwd}:
-		// Queued
+		// accepted
 	default:
-		// Queue full, drop
-		log.Debug().Int64("id", observationID).Msg("Stale verification queue full, dropping")
+		log.Debug().Int64("id", observationID).Msg("stale-verify queue full, request dropped")
 	}
 }
 
-// processStaleQueue processes stale observations in the background.
+// processStaleQueue drains staleQueue, dispatching each request to
+// verifyStaleObservation until the service context is cancelled.
 func (s *Service) processStaleQueue() {
 	defer s.wg.Done()
-
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -971,15 +994,14 @@ func (s *Service) processStaleQueue() {
 	}
 }
 
-// verifyStaleObservation verifies a single stale observation in the background.
+// verifyStaleObservation handles one background staleness-check request.
+// Observation-era stale verification was retired in v5; this is a no-op
+// retained so the queue infrastructure remains functional for future use.
 func (s *Service) verifyStaleObservation(req staleVerifyRequest) {
-	// Wait for service to be ready
 	if !s.ready.Load() {
 		return
 	}
-
-	// Observation-era background stale verification was removed in v5.
-	_ = req
+	_ = req // retired in v5
 }
 
 // mcpHandlerAdapter wraps mcp.Server to implement grpcserver.MCPHandler.
@@ -1042,46 +1064,52 @@ func (a *mcpHandlerAdapter) ServerInfo() (string, string) {
 	return "engram", a.mcpServer.Version()
 }
 
-// setupMiddleware configures HTTP middleware.
+// setupMiddleware registers global HTTP middleware on the router.
+// Order is intentional — each layer depends on the output of the layers above it:
+//
+//  1. RequestID     — attach a trace ID before anything else logs
+//  2. requestActivity — record last-request timestamp for the sleep-cycle idle gate
+//  3. debugRequestLogger — structured log line per request
+//  4. Recoverer     — catch panics from all downstream handlers
+//  5. RealIP        — unwrap X-Forwarded-For before rate-limit keying
+//  6. SecurityHeaders — X-Frame-Options, HSTS, CSP
+//  7. MaxBodySize   — 10 MB cap prevents DoS via oversized payloads
+//  8. RequireJSONContentType — enforce Content-Type on mutating requests
+//  9. Compress(5)   — gzip responses; level 5 balances latency vs ratio
+//  10. Rate limiter  — per-client token bucket (after RealIP for accurate keying)
+//  11. TokenAuth     — bearer-token or session-cookie validation
+//
+// Timeout middleware is not applied globally because SSE connections need
+// an unbounded write lifetime. Routes that require timeouts apply them individually.
 func (s *Service) setupMiddleware() {
-	// Add request ID first so all subsequent logs can include it
 	s.router.Use(RequestID)
-
-	// Stamp last-request timestamp for the sleep-cycle idle gate (T014 AC).
-	// Must be before the logger so even health-check traffic counts as activity.
 	s.router.Use(s.requestActivityMiddleware)
-
 	s.router.Use(debugRequestLogger)
 	s.router.Use(middleware.Recoverer)
 	s.router.Use(middleware.RealIP)
-
-	// Add security headers (X-Frame-Options, X-Content-Type-Options, CSP, etc.)
 	s.router.Use(SecurityHeaders)
-
-	// Add request body size limit (10MB) to prevent DoS via large payloads
 	s.router.Use(MaxBodySize(10 * 1024 * 1024))
-
-	// Require JSON Content-Type for POST/PUT/PATCH requests
 	s.router.Use(RequireJSONContentType)
-
-	// Add gzip compression for responses >1KB (reduces bandwidth ~70% for JSON)
-	s.router.Use(middleware.Compress(5)) // Level 5 = good balance of speed vs compression
-
-	// Apply per-client rate limiting (after RealIP so we get the real client IP)
+	s.router.Use(middleware.Compress(5))
 	if s.rateLimiter != nil {
 		s.router.Use(PerClientRateLimitMiddleware(s.rateLimiter))
 	}
 	if s.tokenAuth != nil {
 		s.router.Use(s.tokenAuth.Middleware)
 	}
-
-	// Note: Timeout middleware is applied per-route, not globally,
-	// to avoid killing SSE connections which need to stay open indefinitely
 }
 
-// setupRoutes configures HTTP routes.
+// setupRoutes registers all HTTP routes on the router.
+//
+// Route groups:
+//   - Public (no auth):  auth login/logout, setup, registration
+//   - Pre-ready:         health, version, readiness, update, restart, SSE, logs
+//   - DB-ready group:    all data-plane endpoints — gated by requireReady
+//
+// The pre-ready group is intentionally ungated so that the health hook,
+// update checks, and dashboard SSE stream work before the database is available.
 func (s *Service) setupRoutes() {
-	// Serve Vue dashboard from embedded static files
+	// Dashboard static assets served from the embedded filesystem.
 	s.router.Get("/", serveIndex)
 	s.router.Get("/assets/*", serveAssets)
 	s.router.Get("/branding/*", serveAssets)
@@ -1109,16 +1137,16 @@ func (s *Service) setupRoutes() {
 		r.Put("/users/{id}", s.handleAdminUpdateUser)
 	})
 
-	// Health check (both root and API-prefixed for compatibility)
-	// Returns 200 immediately so hooks can connect quickly during init
-	// Also returns version for stale worker detection
+	// Health returns 200 as soon as the process starts; hooks rely on this
+	// for the initial connection handshake before the database is ready.
+	// Both paths exist for backward compatibility with older hook versions.
 	s.router.Get("/health", s.handleHealth)
 	s.router.Get("/api/health", s.handleHealth)
 
-	// Version endpoint for hooks to check if worker needs restart
+	// Version lets hooks detect a stale worker process after an update.
 	s.router.Get("/api/version", s.handleVersion)
 
-	// Readiness check - returns 200 only when fully initialized
+	// Ready returns 200 only once initializeAsync has completed successfully.
 	s.router.Get("/api/ready", s.handleReady)
 
 	// MCP health counters (public — no auth required, lightweight)
@@ -1178,12 +1206,13 @@ func (s *Service) setupRoutes() {
 	// endpoint is always available and useful for LiteLLM proxy configuration.
 	s.router.Get("/v1/models", s.handleListModels)
 
-	// Routes that require DB to be ready
+	// All routes below require database readiness.
+	// requireReady returns 503 with a descriptive body until initializeAsync completes.
 	s.router.Group(func(r chi.Router) {
 		r.Use(s.requireReady)
 		r.Use(middleware.Timeout(DefaultHTTPTimeout))
 
-		// Session routes
+		// Session lifecycle
 		r.Post("/api/sessions/init", s.handleSessionInit)
 		r.Get("/api/sessions/list", s.handleListSessions)
 		r.Get("/api/sessions", s.handleGetSessionByClaudeID)
@@ -1208,7 +1237,7 @@ func (s *Service) setupRoutes() {
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)
 
-		// Data routes
+		// Observation and project data
 		r.Get("/api/observations", s.handleGetObservations)
 		r.Get("/api/projects", s.handleGetProjects)
 		r.Delete("/api/projects/{id}", s.handleDeleteProject)
@@ -1241,14 +1270,14 @@ func (s *Service) setupRoutes() {
 		r.Patch("/api/issues/{id}", s.handleUpdateIssue)
 		r.Delete("/api/issues/{id}", s.handleDeleteIssue)
 
-		// Relation routes (knowledge graph)
+		// Knowledge-graph relation queries
 		r.Get("/api/relations/stats", s.handleGetRelationStats)
 		r.Get("/api/relations/type/{type}", s.handleGetRelationsByType)
 		r.Get("/api/observations/{id}/relations", s.handleGetRelations)
 		r.Get("/api/observations/{id}/graph", s.handleGetRelationGraph)
 		r.Get("/api/observations/{id}/related", s.handleGetRelatedObservations)
 
-		// Search analytics
+		// Search usage analytics
 		r.Get("/api/search/recent", s.handleGetRecentQueries)
 		r.Get("/api/search/analytics", s.handleGetSearchAnalytics)
 		r.Post("/api/analytics/search-misses", s.handleSearchMissAnalytics)
@@ -1283,14 +1312,16 @@ func (s *Service) setupRoutes() {
 	})
 }
 
-// recordRetrievalStatsExtended records retrieval stats including staleness metrics.
+// recordRetrievalStatsExtended accumulates per-project retrieval metrics atomically.
+// The map entry is created under a write lock; all numeric updates then use atomic
+// operations so readers never need to hold the lock while scanning counters.
+// If the map is at capacity, aged-out entries are evicted before inserting a new key.
 func (s *Service) recordRetrievalStatsExtended(project string, served, verified, deleted, staleExcluded, freshCount, duplicatesRemoved int64, isSearch bool) {
 	now := time.Now().Unix()
 
 	s.retrievalStatsMu.Lock()
 	stats := s.retrievalStats[project]
 	if stats == nil {
-		// Cleanup old entries if we're at capacity
 		if len(s.retrievalStats) >= maxRetrievalStatsProjects {
 			s.cleanupRetrievalStatsLocked()
 		}
@@ -1338,25 +1369,26 @@ func (s *Service) recordRetrievalStatsExtended(project string, served, verified,
 	}
 }
 
-// cleanupRetrievalStatsLocked removes stale entries from retrievalStats.
-// Must be called with retrievalStatsMu held.
+// cleanupRetrievalStatsLocked evicts project entries whose LastUpdated timestamp
+// is older than retrievalStatsMaxAge. Caller must hold retrievalStatsMu for write.
 func (s *Service) cleanupRetrievalStatsLocked() {
 	cutoff := time.Now().Add(-retrievalStatsMaxAge).Unix()
-	for project, stats := range s.retrievalStats {
+	for proj, stats := range s.retrievalStats {
 		if atomic.LoadInt64(&stats.LastUpdated) < cutoff {
-			delete(s.retrievalStats, project)
+			delete(s.retrievalStats, proj)
 		}
 	}
 }
 
-// GetRetrievalStats returns a copy of the retrieval stats for a project.
-// If project is empty, returns aggregate stats across all projects.
+// GetRetrievalStats returns a point-in-time snapshot of retrieval counters.
+// When project is non-empty the snapshot is scoped to that project only.
+// When project is empty the counters are summed across all tracked projects.
+// All counter reads are atomic so callers do not need the stats lock.
 func (s *Service) GetRetrievalStats(project string) RetrievalStats {
 	s.retrievalStatsMu.RLock()
 	defer s.retrievalStatsMu.RUnlock()
 
 	if project != "" {
-		// Return stats for specific project
 		stats := s.retrievalStats[project]
 		if stats == nil {
 			return RetrievalStats{}
@@ -1374,20 +1406,20 @@ func (s *Service) GetRetrievalStats(project string) RetrievalStats {
 		}
 	}
 
-	// Aggregate stats across all projects
-	var result RetrievalStats
+	// Sum across all projects for a cluster-level view.
+	var agg RetrievalStats
 	for _, stats := range s.retrievalStats {
-		result.TotalRequests += atomic.LoadInt64(&stats.TotalRequests)
-		result.ObservationsServed += atomic.LoadInt64(&stats.ObservationsServed)
-		result.VerifiedStale += atomic.LoadInt64(&stats.VerifiedStale)
-		result.DeletedInvalid += atomic.LoadInt64(&stats.DeletedInvalid)
-		result.SearchRequests += atomic.LoadInt64(&stats.SearchRequests)
-		result.ContextInjections += atomic.LoadInt64(&stats.ContextInjections)
-		result.StaleExcluded += atomic.LoadInt64(&stats.StaleExcluded)
-		result.FreshCount += atomic.LoadInt64(&stats.FreshCount)
-		result.DuplicatesRemoved += atomic.LoadInt64(&stats.DuplicatesRemoved)
+		agg.TotalRequests += atomic.LoadInt64(&stats.TotalRequests)
+		agg.ObservationsServed += atomic.LoadInt64(&stats.ObservationsServed)
+		agg.VerifiedStale += atomic.LoadInt64(&stats.VerifiedStale)
+		agg.DeletedInvalid += atomic.LoadInt64(&stats.DeletedInvalid)
+		agg.SearchRequests += atomic.LoadInt64(&stats.SearchRequests)
+		agg.ContextInjections += atomic.LoadInt64(&stats.ContextInjections)
+		agg.StaleExcluded += atomic.LoadInt64(&stats.StaleExcluded)
+		agg.FreshCount += atomic.LoadInt64(&stats.FreshCount)
+		agg.DuplicatesRemoved += atomic.LoadInt64(&stats.DuplicatesRemoved)
 	}
-	return result
+	return agg
 }
 
 // trackSearchQuery records a search query for analytics.
@@ -1402,14 +1434,12 @@ func (s *Service) trackSearchQuery(query, project, queryType string, results int
 		sqlStore.LogQuery(project, query, queryType, results, latencyMs)
 	}
 
-	// Also maintain the in-memory ring buffer for low-latency in-process access.
+	// Ring buffer write: decrement head with wrap-around so the newest entry
+	// is always at index 0 of a virtual ordered view. O(1), no allocation.
 	s.recentQueriesMu.Lock()
 	defer s.recentQueriesMu.Unlock()
 
-	// Move head back (wrapping around) and insert at new head position
-	// This puts the newest item at the head
 	s.recentQueriesHead = (s.recentQueriesHead - 1 + maxRecentQueries) % maxRecentQueries
-
 	s.recentQueriesBuf[s.recentQueriesHead] = RecentSearchQuery{
 		Query:     query,
 		Project:   project,
@@ -1417,23 +1447,19 @@ func (s *Service) trackSearchQuery(query, project, queryType string, results int
 		Results:   results,
 		Timestamp: time.Now(),
 	}
-
-	// Increase length up to max
 	if s.recentQueriesLen < maxRecentQueries {
 		s.recentQueriesLen++
 	}
 }
 
-// getCachedObservationCount returns observation count for a project, using cache if available.
-// Falls back to database query if cache is expired or missing.
+// getCachedObservationCount returns the total observation count for a project,
+// using the in-process cache when the entry is fresher than statsCacheTTL.
+// A cache miss triggers a synchronous DB read across the v5 stores.
 func (s *Service) getCachedObservationCount(ctx context.Context, project string) (int, error) {
-	// Check cache first
 	s.cachedObsCountsMu.RLock()
-	if cached, ok := s.cachedObsCounts[project]; ok {
-		if time.Since(cached.timestamp) < s.statsCacheTTL {
-			s.cachedObsCountsMu.RUnlock()
-			return cached.count, nil
-		}
+	if cached, ok := s.cachedObsCounts[project]; ok && time.Since(cached.timestamp) < s.statsCacheTTL {
+		s.cachedObsCountsMu.RUnlock()
+		return cached.count, nil
 	}
 	s.cachedObsCountsMu.RUnlock()
 
@@ -1455,19 +1481,17 @@ func (s *Service) getCachedObservationCount(ctx context.Context, project string)
 		count += len(rules)
 	}
 
-	// Update cache
+	// Refresh the cache entry for this project.
 	s.cachedObsCountsMu.Lock()
-	s.cachedObsCounts[project] = cachedCount{
-		count:     count,
-		timestamp: time.Now(),
-	}
+	s.cachedObsCounts[project] = cachedCount{count: count, timestamp: time.Now()}
 	s.cachedObsCountsMu.Unlock()
 
 	return count, nil
 }
 
-// Start starts the worker service.
-// The HTTP server starts immediately; database initialization happens async.
+// Start binds the TCP listener and launches the HTTP and gRPC servers via cmux.
+// The HTTP server begins accepting requests immediately; data-plane routes
+// return 503 until initializeAsync completes and sets the ready flag.
 func (s *Service) Start() error {
 	port := config.GetWorkerPort()
 
@@ -1501,16 +1525,21 @@ func (s *Service) Start() error {
 	host := config.GetWorkerHost()
 	addr := fmt.Sprintf("%s:%d", host, port)
 
+	// WriteTimeout is deliberately 0: SSE connections are long-lived and must not
+	// be cut off by a write deadline. All other routes enforce DefaultHTTPTimeout
+	// via per-route middleware instead of a global server timeout.
 	s.server = &http.Server{
 		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      0, // Disabled for SSE (long-lived connections)
+		WriteTimeout:      0,
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Check if we're in restart mode (after update)
+	// ENGRAM_RESTART=1 is set by the updater before exec-restarting the process.
+	// In restart mode we retry the bind up to 10 times to allow the old process
+	// to release the port before we claim it.
 	isRestart := os.Getenv("ENGRAM_RESTART") == "1"
 
 	// startWithListener binds a TCP listener and launches HTTP + optional gRPC via cmux.
@@ -1585,231 +1614,222 @@ func (s *Service) Start() error {
 	go func() {
 		defer s.wg.Done()
 
+		// Bind attempts: 1 on a fresh start, up to 10 on a post-update restart.
 		maxRetries := 1
 		if isRestart {
-			maxRetries = 10 // Retry up to 10 times during restart
+			maxRetries = 10
 		}
-
 		for i := 0; i < maxRetries; i++ {
 			if err := startWithListener(); err != nil {
 				if i < maxRetries-1 && isRestart {
-					log.Warn().Err(err).Int("retry", i+1).Msg("Port not ready, retrying...")
+					log.Warn().Err(err).Int("attempt", i+1).Msg("port not yet free, retrying bind")
 					time.Sleep(500 * time.Millisecond)
 					continue
 				}
-				log.Error().Err(err).Msg("Failed to start listener")
+				log.Error().Err(err).Msg("listener bind failed")
 			}
 			return
 		}
 	}()
 
-	// Note: Queue processor is started in initializeAsync() after DB is ready
+	// Queue processor is started in initializeAsync after the DB is ready.
 
 	log.Info().
 		Int("port", port).
 		Int("pid", getPID()).
 		Bool("restart_mode", isRestart).
-		Msg("Worker HTTP server started (initialization in progress)")
+		Msg("HTTP server started — waiting for async init")
 
 	return nil
 }
 
-// processQueue processes the observation queue in the background.
-// Processes immediately when notified, or every QueueProcessInterval as fallback.
+// processQueue runs as a long-lived goroutine tracked by s.wg.
+// It calls processAllSessions immediately when the session manager notifies
+// of a new pending observation, and also on a periodic fallback tick so
+// that observations are never silently abandoned if a notification is missed.
 func (s *Service) processQueue() {
 	defer s.wg.Done()
 
-	ticker := time.NewTicker(QueueProcessInterval)
-	defer ticker.Stop()
+	tick := time.NewTicker(QueueProcessInterval)
+	defer tick.Stop()
 
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-s.sessionManager.ProcessNotify:
-			// Immediate processing when observation is queued
 			s.processAllSessions()
-		case <-ticker.C:
-			// Fallback periodic processing
+		case <-tick.C:
 			s.processAllSessions()
 		}
 	}
 }
 
-// processAllSessions processes pending messages for all active sessions.
-// Messages are processed in parallel using goroutines, with concurrency
-// limited by the processor's semaphore.
+// processAllSessions drains the pending-message queues for every active session
+// and dispatches each message to the SDK processor in a goroutine. Concurrency
+// is bounded by the processor's internal semaphore. The function blocks until
+// all dispatched goroutines finish, then pushes an updated processing-status
+// event to dashboard subscribers.
 func (s *Service) processAllSessions() {
-	// Get all sessions with pending messages
-	sessions := s.sessionManager.GetAllSessions()
+	activeSessions := s.sessionManager.GetAllSessions()
 
 	var wg sync.WaitGroup
-
-	for _, sess := range sessions {
-		// Get pending messages
-		messages := s.sessionManager.DrainMessages(sess.SessionDBID)
-		if len(messages) == 0 {
+	for _, sess := range activeSessions {
+		msgs := s.sessionManager.DrainMessages(sess.SessionDBID)
+		if len(msgs) == 0 {
 			continue
 		}
-
-		// Process each message in a goroutine
-		for _, msg := range messages {
+		for _, msg := range msgs {
 			wg.Add(1)
 			go func(sess *session.ActiveSession, msg session.PendingMessage) {
 				defer wg.Done()
-
 				switch msg.Type {
 				case session.MessageTypeObservation:
-					if msg.Observation != nil {
-						err := s.processor.ProcessObservation(
-							s.ctx,
-							sess.SDKSessionID,
-							sess.Project,
-							msg.Observation.ToolName,
-							msg.Observation.ToolInput,
-							msg.Observation.ToolResponse,
-							msg.Observation.PromptNumber,
-							msg.Observation.CWD,
-							msg.Observation.UserPrompt,
-						)
-						if err != nil {
-							log.Error().Err(err).
-								Str("tool", msg.Observation.ToolName).
-								Msg("Failed to process observation")
-						}
+					if msg.Observation == nil {
+						return
+					}
+					if err := s.processor.ProcessObservation(
+						s.ctx,
+						sess.SDKSessionID,
+						sess.Project,
+						msg.Observation.ToolName,
+						msg.Observation.ToolInput,
+						msg.Observation.ToolResponse,
+						msg.Observation.PromptNumber,
+						msg.Observation.CWD,
+						msg.Observation.UserPrompt,
+					); err != nil {
+						log.Error().Err(err).Str("tool", msg.Observation.ToolName).Msg("observation processing failed")
 					}
 
 				case session.MessageTypeSummarize:
-					if msg.Summarize != nil {
-						err := s.processor.ProcessSummary(
-							s.ctx,
-							sess.SessionDBID,
-							sess.SDKSessionID,
-							sess.Project,
-							sess.UserPrompt,
-							msg.Summarize.LastUserMessage,
-							msg.Summarize.LastAssistantMessage,
-						)
-						if err != nil {
-							log.Error().Err(err).
-								Int64("sessionId", sess.SessionDBID).
-								Msg("Failed to process summary")
-						}
-						// Delete session after summary
-						s.sessionManager.DeleteSession(sess.SessionDBID)
+					if msg.Summarize == nil {
+						return
 					}
+					if err := s.processor.ProcessSummary(
+						s.ctx,
+						sess.SessionDBID,
+						sess.SDKSessionID,
+						sess.Project,
+						sess.UserPrompt,
+						msg.Summarize.LastUserMessage,
+						msg.Summarize.LastAssistantMessage,
+					); err != nil {
+						log.Error().Err(err).Int64("sessionId", sess.SessionDBID).Msg("summary processing failed")
+					}
+					// Session is complete after a summary — remove it from the active set.
+					s.sessionManager.DeleteSession(sess.SessionDBID)
 				}
 			}(sess, msg)
 		}
 	}
-
-	// Wait for all goroutines to complete
 	wg.Wait()
-
-	// Broadcast status after processing
 	s.broadcastProcessingStatus()
 }
 
-// Shutdown gracefully shuts down the service.
+// Shutdown performs an ordered graceful stop of all service components.
+// The phased sequence is:
+//
+//	1. Cancel root context  — signals all goroutines to stop accepting new work
+//	2. HTTP + gRPC servers  — stop accepting new connections (in-flight requests drain)
+//	3. Config watcher       — avoid spurious hot-reload during teardown
+//	4. Background workers   — cognitive queue, write-lint janitor
+//	5. Session manager      — flush pending observation/summary messages
+//	6. WaitGroup drain      — wait up to the caller-supplied context deadline
+//	7. Database             — closed last because components above may still read it
+//
+// The caller supplies the deadline via ctx. If the deadline fires before the
+// WaitGroup drains, teardown continues and a warning is logged. The first
+// component error (if any) is returned; subsequent errors are only logged.
 func (s *Service) Shutdown(ctx context.Context) error {
-	log.Info().Msg("Starting graceful shutdown...")
+	log.Info().Msg("graceful shutdown: starting")
 	start := time.Now()
 
-	// Cancel context to signal all background goroutines
+	// Signal all background goroutines.
 	s.cancel()
 
-	// Create error collector
 	var shutdownErrors []error
-	var mu sync.Mutex
-	collectError := func(name string, err error) {
-		if err != nil {
-			mu.Lock()
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("%s: %w", name, err))
-			mu.Unlock()
-			log.Error().Err(err).Str("component", name).Msg("Shutdown error")
+	var errMu sync.Mutex
+	collectError := func(component string, err error) {
+		if err == nil {
+			return
 		}
+		errMu.Lock()
+		shutdownErrors = append(shutdownErrors, fmt.Errorf("%s: %w", component, err))
+		errMu.Unlock()
+		log.Error().Err(err).Str("component", component).Msg("shutdown error")
 	}
 
-	// Phase 1: Stop accepting new work (HTTP server and gRPC server shutdown first)
-	log.Debug().Msg("Phase 1: Stopping HTTP and gRPC servers...")
+	// Phase 1: stop accepting new requests.
+	log.Debug().Msg("shutdown phase 1: HTTP + gRPC servers")
 	if s.server != nil {
-		if err := s.server.Shutdown(ctx); err != nil {
-			collectError("http_server", err)
-		}
+		collectError("http_server", s.server.Shutdown(ctx))
 	}
 	if s.grpcServer != nil {
 		s.grpcServer.GracefulStop()
 	}
 
-	// Phase 2: Stop file watchers (prevent new DB recreation)
-	log.Debug().Msg("Phase 2: Stopping watchers...")
+	// Phase 2: stop filesystem watchers.
+	log.Debug().Msg("shutdown phase 2: watchers")
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Stop()
 	}
 
-	// Phase 3: Stop background workers (drain queues)
-	log.Debug().Msg("Phase 3: Stopping background workers...")
+	// Phase 3: stop background workers.
+	log.Debug().Msg("shutdown phase 3: background workers")
 	if s.cognitiveQueueLifecycle != nil {
 		collectError("cognitive_hint_queue", s.cognitiveQueueLifecycle.Stop())
 	}
-	// TG5: Stop write-lint token store janitor goroutine.
 	if s.writelintTokenStore != nil {
 		s.writelintTokenStore.Close()
 	}
 
-	// Phase 4: Shutdown sessions (flush pending work)
-	log.Debug().Msg("Phase 4: Shutting down sessions...")
+	// Phase 4: flush pending session work.
+	log.Debug().Msg("shutdown phase 4: sessions")
 	if s.sessionManager != nil {
 		s.sessionManager.ShutdownAll(ctx)
 	}
 
-	// Phase 5: Wait for goroutines with timeout
-	log.Debug().Msg("Phase 5: Waiting for goroutines...")
-	done := make(chan struct{})
+	// Phase 5: wait for all goroutines to exit.
+	log.Debug().Msg("shutdown phase 5: draining goroutines")
+	drained := make(chan struct{})
 	go func() {
 		s.wg.Wait()
-		close(done)
+		close(drained)
 	}()
-
 	select {
-	case <-done:
-		log.Debug().Msg("All goroutines finished")
+	case <-drained:
+		log.Debug().Msg("all goroutines exited")
 	case <-ctx.Done():
-		log.Warn().Msg("Timeout waiting for goroutines - forcing shutdown")
+		log.Warn().Msg("shutdown: goroutine drain timed out, forcing")
 	}
 
-	// Phase 6: Close AI/ML services (close models)
-	log.Debug().Msg("Phase 6: Closing AI/ML services...")
-	// Phase 7: Close database last (other components may need it)
-	log.Debug().Msg("Phase 8: Closing database...")
+	// Phase 6 (placeholder): AI/ML model teardown — nothing to do currently.
+
+	// Phase 7: close database — done last so phases above can still query.
+	log.Debug().Msg("shutdown phase 7: database")
 	if s.store != nil {
 		collectError("database", s.store.Close())
 	}
 
 	elapsed := time.Since(start)
 	if len(shutdownErrors) > 0 {
-		log.Warn().
-			Int("errors", len(shutdownErrors)).
-			Dur("elapsed", elapsed).
-			Msg("Worker shutdown completed with errors")
+		log.Warn().Int("errors", len(shutdownErrors)).Dur("elapsed", elapsed).Msg("shutdown completed with errors")
 		return shutdownErrors[0]
 	}
 
-	log.Info().
-		Dur("elapsed", elapsed).
-		Msg("Worker service shutdown complete")
+	log.Info().Dur("elapsed", elapsed).Msg("graceful shutdown complete")
 	return nil
 }
 
-// broadcastProcessingStatus broadcasts the current processing status.
+// broadcastProcessingStatus pushes the current queue state to all dashboard
+// SSE subscribers. Called after every session event and batch-process cycle
+// so the UI processing indicator and queue-depth badge stay accurate.
 func (s *Service) broadcastProcessingStatus() {
-	isProcessing := s.sessionManager.IsAnySessionProcessing()
-	queueDepth := s.sessionManager.GetTotalQueueDepth()
-
 	s.sseBroadcaster.Broadcast(map[string]any{
 		"type":         "processing_status",
-		"isProcessing": isProcessing,
-		"queueDepth":   queueDepth,
+		"isProcessing": s.sessionManager.IsAnySessionProcessing(),
+		"queueDepth":   s.sessionManager.GetTotalQueueDepth(),
 	})
 }
 
