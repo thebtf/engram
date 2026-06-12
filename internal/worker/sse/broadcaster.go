@@ -133,9 +133,12 @@ func (b *Broadcaster) Broadcast(data interface{}) {
 		return
 	}
 
-	// Use a channel to collect dead clients from concurrent writes
+	// Use a channel to collect dead clients from concurrent writes.
+	// innerWg tracks the background write goroutines spawned inside writeToClient;
+	// deadClientsCh must not be closed until all of them have returned.
 	deadClientsCh := make(chan string, len(clients))
-	var wg sync.WaitGroup
+	var wg sync.WaitGroup      // tracks writeToClient calls (outer)
+	var innerWg sync.WaitGroup // tracks background write goroutines (inner)
 
 	for _, client := range clients {
 		select {
@@ -145,13 +148,17 @@ func (b *Broadcaster) Broadcast(data interface{}) {
 			wg.Add(1)
 			go func(c *Client) {
 				defer wg.Done()
-				b.writeToClient(c, message, deadClientsCh)
+				b.writeToClient(c, message, deadClientsCh, &innerWg)
 			}(client)
 		}
 	}
 
-	// Wait for all writes to complete (with their individual timeouts)
+	// Wait for all writeToClient calls to return (each has released its timeout
+	// select), then wait for the inner write goroutines to finish before closing
+	// the channel — closing while an inner goroutine still holds a reference to
+	// deadClientsCh would cause a panic: send on closed channel.
 	wg.Wait()
+	innerWg.Wait()
 	close(deadClientsCh)
 
 	// Remove dead clients
@@ -161,12 +168,20 @@ func (b *Broadcaster) Broadcast(data interface{}) {
 }
 
 // writeToClient writes a message to a single client with timeout.
-func (b *Broadcaster) writeToClient(client *Client, message string, deadCh chan<- string) {
-	// Use a timeout channel to prevent blocking on stale connections
+// wg, when non-nil, is used to track the lifetime of the inner write goroutine;
+// callers must call wg.Wait() before closing deadCh to avoid send-on-closed-channel.
+func (b *Broadcaster) writeToClient(client *Client, message string, deadCh chan<- string, wg *sync.WaitGroup) {
+	// Use a done channel to detect when the background write finishes.
 	done := make(chan struct{})
 
+	if wg != nil {
+		wg.Add(1)
+	}
 	go func() {
 		defer close(done)
+		if wg != nil {
+			defer wg.Done()
+		}
 		client.WriteMu.Lock()
 		defer client.WriteMu.Unlock()
 		_, err := client.Writer.Write([]byte(message))

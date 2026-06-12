@@ -76,7 +76,11 @@ type Manager struct {
 	onDeleted     func(int64)
 	cancel        context.CancelFunc
 	ProcessNotify chan struct{}
-	mu            sync.RWMutex
+	// cleanupDone is closed by cleanupLoop when it exits. Tests can wait on this
+	// channel to confirm the background goroutine has stopped, not merely that the
+	// context has been cancelled.
+	cleanupDone chan struct{}
+	mu          sync.RWMutex
 }
 
 // NewManager creates a new session manager.
@@ -88,6 +92,7 @@ func NewManager(sessionStore *gorm.SessionStore) *Manager {
 		ctx:           ctx,
 		cancel:        cancel,
 		ProcessNotify: make(chan struct{}, 1),
+		cleanupDone:   make(chan struct{}),
 	}
 	// Start background cleanup goroutine
 	go m.cleanupLoop()
@@ -96,6 +101,7 @@ func NewManager(sessionStore *gorm.SessionStore) *Manager {
 
 // cleanupLoop periodically removes stale sessions.
 func (m *Manager) cleanupLoop() {
+	defer close(m.cleanupDone)
 	ticker := time.NewTicker(CleanupInterval)
 	defer ticker.Stop()
 
