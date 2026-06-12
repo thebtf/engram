@@ -15,34 +15,36 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// SessionStore provides session-related database operations using GORM.
+// SessionStore implements session-related database operations backed by GORM.
 type SessionStore struct {
 	db *gorm.DB
 }
 
 var (
-	// ErrSessionNotFound indicates that no matching session row exists for the provided identifier.
+	// ErrSessionNotFound is returned when no session row matches the given identifier.
 	ErrSessionNotFound = errors.New("session not found")
-	// ErrSessionOutcomeConflict indicates that a different outcome was already recorded for the session.
+	// ErrSessionOutcomeConflict is returned when a conflicting outcome is already recorded.
 	ErrSessionOutcomeConflict = errors.New("session outcome conflict")
 )
 
-// NewSessionStore creates a new session store.
+// NewSessionStore wraps a Store's database connection for session operations.
 func NewSessionStore(store *Store) *SessionStore {
 	return &SessionStore{db: store.DB}
 }
 
-// CreateSDKSession creates a new SDK session (idempotent - returns existing ID if exists).
-// This is the KEY to how engram stays unified across hooks.
+// CreateSDKSession upserts an SDK session row and returns the row's numeric ID.
+// INSERT OR IGNORE (via OnConflict DoNothing) makes the call idempotent — when
+// the session already exists, project/user_prompt are refreshed if non-empty,
+// and the existing ID is returned. This is the KEY to how engram stays unified
+// across hooks: multiple hook firings with the same claude_session_id converge
+// on a single row.
 func (s *SessionStore) CreateSDKSession(ctx context.Context, claudeSessionID, project, userPrompt string) (int64, error) {
 	now := time.Now()
 
-	session := &SDKSession{
+	row := &SDKSession{
 		ClaudeSessionID: claudeSessionID,
-		SDKSessionID: func() sql.NullString {
-			return sql.NullString{String: claudeSessionID, Valid: true}
-		}(),
-		Project: project,
+		SDKSessionID:    sql.NullString{String: claudeSessionID, Valid: true},
+		Project:         project,
 		UserPrompt: func() sql.NullString {
 			if userPrompt != "" {
 				return sql.NullString{String: userPrompt, Valid: true}
@@ -54,180 +56,168 @@ func (s *SessionStore) CreateSDKSession(ctx context.Context, claudeSessionID, pr
 		StartedAtEpoch: now.UnixMilli(),
 	}
 
-	// CRITICAL: INSERT OR IGNORE makes this idempotent
-	// Use OnConflict with DoNothing to achieve INSERT OR IGNORE behavior
 	result := s.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "claude_session_id"}},
 			DoNothing: true,
 		}).
-		Create(session)
+		Create(row)
 
 	if result.Error != nil {
 		return 0, result.Error
 	}
 
-	// Check if insert happened
 	if result.RowsAffected == 0 {
-		// Session exists - UPDATE project and user_prompt if we have non-empty values
+		// Row already existed — refresh project/prompt when the caller supplies them.
 		if project != "" {
-			updates := map[string]interface{}{
-				"project": project,
-			}
+			patch := map[string]interface{}{"project": project}
 			if userPrompt != "" {
-				updates["user_prompt"] = userPrompt
+				patch["user_prompt"] = userPrompt
 			}
 			if err := s.db.WithContext(ctx).
 				Model(&SDKSession{}).
 				Where("claude_session_id = ?", claudeSessionID).
-				Updates(updates).Error; err != nil {
+				Updates(patch).Error; err != nil {
 				return 0, fmt.Errorf("failed to update session: %w", err)
 			}
 		}
 
-		// Fetch existing session
 		var existing SDKSession
-		err := s.db.WithContext(ctx).
+		if err := s.db.WithContext(ctx).
 			Where("claude_session_id = ?", claudeSessionID).
-			First(&existing).Error
-		if err != nil {
+			First(&existing).Error; err != nil {
 			return 0, err
 		}
 		return existing.ID, nil
 	}
 
-	return session.ID, nil
+	return row.ID, nil
 }
 
-// GetSessionByID retrieves a session by its database ID.
+// GetSessionByID loads a session row by its primary key.
+// Returns (nil, nil) when no row with that ID exists.
 func (s *SessionStore) GetSessionByID(ctx context.Context, id int64) (*models.SDKSession, error) {
-	var sess SDKSession
-	err := s.db.WithContext(ctx).First(&sess, id).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
-	if err != nil {
+	var row SDKSession
+	if err := s.db.WithContext(ctx).First(&row, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
 		return nil, err
 	}
-	return toModelSDKSession(&sess), nil
+	return toModelSDKSession(&row), nil
 }
 
-// FindAnySDKSession finds any session by Claude session ID (any status).
+// FindAnySDKSession looks up a session by its Claude-issued session ID.
+// Any status is considered; returns (nil, nil) when no matching row exists.
 func (s *SessionStore) FindAnySDKSession(ctx context.Context, claudeSessionID string) (*models.SDKSession, error) {
-	var sess SDKSession
-	err := s.db.WithContext(ctx).
+	var row SDKSession
+	if err := s.db.WithContext(ctx).
 		Where("claude_session_id = ?", claudeSessionID).
-		First(&sess).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
-	if err != nil {
+		First(&row).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
 		return nil, err
 	}
-	return toModelSDKSession(&sess), nil
+	return toModelSDKSession(&row), nil
 }
 
-// ResolveClaudeSessionID resolves a session identifier to its canonical Claude session ID.
-// Accepts either a Claude session ID or a numeric DB ID string.
+// ResolveClaudeSessionID converts a session identifier to its canonical Claude session ID.
+// The identifier may be either a Claude session ID string or a decimal DB primary-key string.
 func (s *SessionStore) ResolveClaudeSessionID(ctx context.Context, sessionIdentifier string) (string, error) {
-	sess, _, err := resolveSessionForOutcome(s.db.WithContext(ctx), sessionIdentifier)
+	row, _, err := resolveSessionForOutcome(s.db.WithContext(ctx), sessionIdentifier)
 	if err != nil {
 		return "", err
 	}
-	if sess == nil {
+	if row == nil {
 		return "", fmt.Errorf("%w: %s", ErrSessionNotFound, sessionIdentifier)
 	}
-	return sess.ClaudeSessionID, nil
+	return row.ClaudeSessionID, nil
 }
 
-// IncrementPromptCounter increments the prompt counter and returns the new value.
-// Uses a single SQL query with RETURNING clause for optimal performance.
+// IncrementPromptCounter atomically increments the session's prompt counter
+// and returns the updated value. Uses a single UPDATE … RETURNING query on
+// PostgreSQL for minimal round-trips; falls back to a two-query increment +
+// fetch on databases that do not support RETURNING.
 func (s *SessionStore) IncrementPromptCounter(ctx context.Context, id int64) (int, error) {
-	// Use raw SQL with RETURNING to get updated value in single query
-	// PostgreSQL supports RETURNING natively
-	var newCounter int
+	var updated int
 	err := s.db.WithContext(ctx).Raw(`
 		UPDATE sdk_sessions
 		SET prompt_counter = COALESCE(prompt_counter, 0) + 1
 		WHERE id = ?
 		RETURNING prompt_counter
-	`, id).Scan(&newCounter).Error
+	`, id).Scan(&updated).Error
 
 	if err != nil {
-		// Fallback if RETURNING clause fails
-		if err.Error() == "near \"RETURNING\": syntax error" || newCounter == 0 {
-			// Atomic increment
-			updateErr := s.db.WithContext(ctx).
+		// Fall back when the driver does not support RETURNING (e.g. SQLite).
+		if err.Error() == "near \"RETURNING\": syntax error" || updated == 0 {
+			if uerr := s.db.WithContext(ctx).
 				Model(&SDKSession{}).
 				Where("id = ?", id).
-				Update("prompt_counter", gorm.Expr("COALESCE(prompt_counter, 0) + 1")).Error
-			if updateErr != nil {
-				return 0, updateErr
+				Update("prompt_counter", gorm.Expr("COALESCE(prompt_counter, 0) + 1")).Error; uerr != nil {
+				return 0, uerr
 			}
 
-			// Fetch updated value
-			var sess SDKSession
-			fetchErr := s.db.WithContext(ctx).
+			var row SDKSession
+			if ferr := s.db.WithContext(ctx).
 				Select("prompt_counter").
-				First(&sess, id).Error
-			if fetchErr != nil {
-				return 0, fetchErr
+				First(&row, id).Error; ferr != nil {
+				return 0, ferr
 			}
-			return sess.PromptCounter, nil
+			return row.PromptCounter, nil
 		}
 		return 0, err
 	}
 
-	return newCounter, nil
+	return updated, nil
 }
 
-// GetPromptCounter returns the current prompt counter for a session.
+// GetPromptCounter returns the current prompt counter value for the given session ID.
 func (s *SessionStore) GetPromptCounter(ctx context.Context, id int64) (int, error) {
-	var sess SDKSession
-	err := s.db.WithContext(ctx).
+	var row SDKSession
+	if err := s.db.WithContext(ctx).
 		Select("prompt_counter").
-		First(&sess, id).Error
-	if err != nil {
+		First(&row, id).Error; err != nil {
 		return 0, err
 	}
-	return sess.PromptCounter, nil
+	return row.PromptCounter, nil
 }
 
-// GetSessionsToday returns the count of sessions started today.
+// GetSessionsToday counts sessions whose started_at_epoch falls on or after
+// midnight local time (the start of the current calendar day).
 func (s *SessionStore) GetSessionsToday(ctx context.Context) (int, error) {
-	// Get start of today in milliseconds
 	now := time.Now()
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	startEpoch := startOfDay.UnixMilli()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
-	var count int64
-	err := s.db.WithContext(ctx).
+	var n int64
+	if err := s.db.WithContext(ctx).
 		Model(&SDKSession{}).
-		Where("started_at_epoch >= ?", startEpoch).
-		Count(&count).Error
-
-	return int(count), err
+		Where("started_at_epoch >= ?", midnight.UnixMilli()).
+		Count(&n).Error; err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
-// GetAllProjects returns all unique project names.
+// GetAllProjects returns the sorted, deduplicated list of non-empty project names
+// that appear across all sdk_sessions rows.
 func (s *SessionStore) GetAllProjects(ctx context.Context) ([]string, error) {
-	var projects []string
-	err := s.db.WithContext(ctx).
+	var names []string
+	if err := s.db.WithContext(ctx).
 		Model(&SDKSession{}).
 		Distinct("project").
 		Where("project IS NOT NULL AND project != ''").
 		Order("project ASC").
-		Pluck("project", &projects).Error
-
-	return projects, err
+		Pluck("project", &names).Error; err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
-// ListSDKSessions returns a paginated list of SDK sessions, optionally filtered by project.
-// Results are ordered by started_at DESC (newest first). Returns sessions and total count.
+// ListSDKSessions returns a paginated page of sessions with the total matching count.
+// Filters are additive: project, minPrompts, from/to epoch millisecond range.
+// Results are ordered newest-first (started_at_epoch DESC, id DESC).
 func (s *SessionStore) ListSDKSessions(ctx context.Context, project string, limit, offset, minPrompts int, from, to int64) ([]*models.SDKSession, int64, error) {
-	var sessions []SDKSession
-	var total int64
-
 	q := s.db.WithContext(ctx).Model(&SDKSession{})
 	if project != "" {
 		q = q.Where("project = ?", project)
@@ -242,22 +232,24 @@ func (s *SessionStore) ListSDKSessions(ctx context.Context, project string, limi
 		q = q.Where("started_at_epoch <= ?", to)
 	}
 
+	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
+	var rows []SDKSession
 	if err := q.Order("started_at_epoch DESC, id DESC").
 		Limit(limit).
 		Offset(offset).
-		Find(&sessions).Error; err != nil {
+		Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 
-	result := make([]*models.SDKSession, len(sessions))
-	for i := range sessions {
-		result[i] = toModelSDKSession(&sessions[i])
+	out := make([]*models.SDKSession, len(rows))
+	for i := range rows {
+		out[i] = toModelSDKSession(&rows[i])
 	}
-	return result, total, nil
+	return out, total, nil
 }
 
 // UpdateSessionOutcome records the outcome of a session identified by Claude session ID or numeric DB ID.
@@ -380,14 +372,17 @@ func (s *SessionStore) GetOutcome(ctx context.Context, sessionID string) (string
 	return "", nil
 }
 
+// resolveSessionForOutcome looks up a session by either a numeric DB-ID string or
+// a Claude session-ID string. Returns the matching row (nil when not found),
+// a flag indicating whether the input was a numeric ID, and any store error.
 func resolveSessionForOutcome(tx *gorm.DB, sessionIdentifier string) (*SDKSession, bool, error) {
-	isNumericIDInput := false
+	numericInput := false
+
 	if numericID, err := strconv.ParseInt(sessionIdentifier, 10, 64); err == nil && numericID > 0 {
-		isNumericIDInput = true
-		var byID SDKSession
-		err = tx.Where("id = ?", numericID).First(&byID).Error
-		if err == nil {
-			return &byID, true, nil
+		numericInput = true
+		var byPK SDKSession
+		if err = tx.Where("id = ?", numericID).First(&byPK).Error; err == nil {
+			return &byPK, true, nil
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, true, err
@@ -395,14 +390,13 @@ func resolveSessionForOutcome(tx *gorm.DB, sessionIdentifier string) (*SDKSessio
 	}
 
 	var byClaudeID SDKSession
-	err := tx.Where("claude_session_id = ?", sessionIdentifier).First(&byClaudeID).Error
-	if err == nil {
-		return &byClaudeID, isNumericIDInput, nil
+	if err := tx.Where("claude_session_id = ?", sessionIdentifier).First(&byClaudeID).Error; err == nil {
+		return &byClaudeID, numericInput, nil
+	} else if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, numericInput, nil
+	} else {
+		return nil, numericInput, err
 	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, isNumericIDInput, nil
-	}
-	return nil, isNumericIDInput, err
 }
 
 // UpdateUtilityPropagatedAt records when utility propagation was last triggered for a session.
@@ -588,25 +582,25 @@ func (s *SessionStore) UpdateInjectionStrategy(ctx context.Context, claudeSessio
 	return result.Error
 }
 
-// toModelSDKSession converts a GORM SDKSession to pkg/models.SDKSession.
-func toModelSDKSession(sess *SDKSession) *models.SDKSession {
+// toModelSDKSession projects a GORM SDKSession row onto the pkg/models.SDKSession DTO.
+func toModelSDKSession(row *SDKSession) *models.SDKSession {
 	return &models.SDKSession{
-		ID:                  sess.ID,
-		ClaudeSessionID:     sess.ClaudeSessionID,
-		SDKSessionID:        sess.SDKSessionID,
-		Project:             sess.Project,
-		UserPrompt:          sess.UserPrompt,
-		WorkerPort:          sess.WorkerPort,
-		PromptCounter:       int64(sess.PromptCounter),
-		Status:              models.SessionStatus(sess.Status),
-		StartedAt:           sess.StartedAt,
-		StartedAtEpoch:      sess.StartedAtEpoch,
-		CompletedAt:         sess.CompletedAt,
-		CompletedAtEpoch:    sess.CompletedAtEpoch,
-		Outcome:             sess.Outcome,
-		OutcomeReason:       sess.OutcomeReason,
-		OutcomeRecordedAt:   sess.OutcomeRecordedAt,
-		UtilityPropagatedAt: sess.UtilityPropagatedAt,
-		InjectionStrategy:   sess.InjectionStrategy,
+		ID:                  row.ID,
+		ClaudeSessionID:     row.ClaudeSessionID,
+		SDKSessionID:        row.SDKSessionID,
+		Project:             row.Project,
+		UserPrompt:          row.UserPrompt,
+		WorkerPort:          row.WorkerPort,
+		PromptCounter:       int64(row.PromptCounter),
+		Status:              models.SessionStatus(row.Status),
+		StartedAt:           row.StartedAt,
+		StartedAtEpoch:      row.StartedAtEpoch,
+		CompletedAt:         row.CompletedAt,
+		CompletedAtEpoch:    row.CompletedAtEpoch,
+		Outcome:             row.Outcome,
+		OutcomeReason:       row.OutcomeReason,
+		OutcomeRecordedAt:   row.OutcomeRecordedAt,
+		UtilityPropagatedAt: row.UtilityPropagatedAt,
+		InjectionStrategy:   row.InjectionStrategy,
 	}
 }
