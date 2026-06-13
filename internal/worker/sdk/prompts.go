@@ -24,7 +24,9 @@ var ObservationConcepts = []string{
 	"trade-off",
 }
 
-// ToolExecution represents a tool execution for observation.
+// ToolExecution carries the context needed to build a single observation prompt.
+// UserIntent holds the user message that preceded the tool call (Learning Memory v3 FR-4),
+// enabling the extraction model to correlate tool outcomes with developer intent.
 type ToolExecution struct {
 	ToolName       string
 	ToolInput      string
@@ -36,6 +38,9 @@ type ToolExecution struct {
 }
 
 // BuildObservationPrompt builds a prompt for processing a tool observation.
+// Tool input and output are JSON-pretty-printed when parseable; raw strings are
+// used as fallback so malformed output never blocks observation capture.
+// Values are truncated to keep prompts within the extraction model's context budget.
 func BuildObservationPrompt(exec ToolExecution) string {
 	// Safely parse tool_input and tool_output
 	var toolInput interface{}
@@ -71,7 +76,9 @@ func BuildObservationPrompt(exec ToolExecution) string {
 	return sb.String()
 }
 
-// SummaryRequest contains data for building a summary prompt.
+// SummaryRequest holds the session data needed to build a progress summary prompt.
+// LastAssistantMessage is prepended when present so the extraction model can
+// ground its summary in the agent's most recent output.
 type SummaryRequest struct {
 	SDKSessionID         string
 	Project              string
@@ -82,6 +89,8 @@ type SummaryRequest struct {
 }
 
 // BuildSummaryPrompt builds a prompt requesting a session summary.
+// The prompt text is a byte-contract: the extraction model's behavior depends
+// on the exact wording. Do not alter the literal strings below.
 func BuildSummaryPrompt(req SummaryRequest) string {
 	var sb strings.Builder
 
@@ -114,5 +123,6 @@ Thank you, this summary will be very useful for keeping track of our progress!`)
 	return sb.String()
 }
 
+// truncate delegates to strutil.Truncate. Aliased here so callers in this
+// package don't need to import strutil directly.
 var truncate = strutil.Truncate
-
