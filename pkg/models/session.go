@@ -19,7 +19,8 @@ const (
 // SDKSession represents a Claude Code session tracked by the memory system.
 // Nullable fields use sql.Null* types because they are genuinely absent until
 // the session reaches the corresponding lifecycle stage (e.g. CompletedAt is
-// NULL until the session ends). MarshalJSON handles the wire format.
+// NULL until the session ends). MarshalJSON only normalizes UtilityPropagatedAt;
+// the other sql.Null* fields still use the default JSON encoding.
 type SDKSession struct {
 	ClaudeSessionID  string         `db:"claude_session_id" json:"claude_session_id"`
 	Project          string         `db:"project" json:"project"`
