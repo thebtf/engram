@@ -17,6 +17,9 @@ const (
 )
 
 // SDKSession represents a Claude Code session tracked by the memory system.
+// Nullable fields use sql.Null* types because they are genuinely absent until
+// the session reaches the corresponding lifecycle stage (e.g. CompletedAt is
+// NULL until the session ends). MarshalJSON handles the wire format.
 type SDKSession struct {
 	ClaudeSessionID  string         `db:"claude_session_id" json:"claude_session_id"`
 	Project          string         `db:"project" json:"project"`
@@ -88,6 +91,8 @@ func (s SDKSession) MarshalJSON() ([]byte, error) {
 }
 
 // ActiveSession represents an in-memory active session being processed.
+// It is the live tracking record held by the worker while a Claude Code session
+// is running; it is never persisted directly (SDKSession is the DB row).
 type ActiveSession struct {
 	StartTime              time.Time
 	ClaudeSessionID        string
