@@ -28,13 +28,18 @@ func (m *mgTestChunker) Chunk(_ context.Context, filePath string) ([]Chunk, erro
 func (m *mgTestChunker) Language() Language          { return LanguageGo }
 func (m *mgTestChunker) SupportedExtensions() []string { return []string{".go", ".py", ".ts"} }
 
-// mgMultiExtChunker registers a configurable set of extensions and returns no chunks.
-// Used for SupportedExtensions aggregation tests.
+// mgMultiExtChunker registers a configurable set of extensions.
+// When id is non-empty, Chunk returns a single Chunk with Name set to id so
+// that collision tests can verify which chunker won the registration race.
 type mgMultiExtChunker struct {
 	exts []string
+	id   string
 }
 
 func (m *mgMultiExtChunker) Chunk(_ context.Context, _ string) ([]Chunk, error) {
+	if m.id != "" {
+		return []Chunk{{Name: m.id}}, nil
+	}
 	return nil, nil
 }
 
@@ -116,14 +121,16 @@ func TestManager_SupportedExtensions_AggregatesAllChunkers(t *testing.T) {
 }
 
 // TestManager_SupportedExtensions_LastChunkerWinsOnCollision verifies that when two
-// chunkers register the same extension, the later registration overwrites the earlier one
-// and the extension appears exactly once in SupportedExtensions.
+// chunkers register the same extension, the later registration overwrites the earlier one:
+// (a) the extension appears exactly once in SupportedExtensions, and (b) ChunkFile routes
+// the extension to the last registered chunker, not the first.
 func TestManager_SupportedExtensions_LastChunkerWinsOnCollision(t *testing.T) {
 	m := NewManager([]Chunker{
-		&mgMultiExtChunker{exts: []string{".go", ".ts"}},
-		&mgMultiExtChunker{exts: []string{".go", ".py"}}, // overlaps on .go
+		&mgMultiExtChunker{exts: []string{".go", ".ts"}, id: "first"},
+		&mgMultiExtChunker{exts: []string{".go", ".py"}, id: "second"}, // overlaps on .go
 	}, DefaultChunkOptions())
 
+	// (a) .go must appear exactly once in the aggregated extensions list.
 	count := 0
 	for _, ext := range m.SupportedExtensions() {
 		if ext == ".go" {
@@ -132,6 +139,16 @@ func TestManager_SupportedExtensions_LastChunkerWinsOnCollision(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf(".go should appear exactly once after collision, got %d", count)
+	}
+
+	// (b) ChunkFile must route .go to the second (last) chunker.
+	// mgMultiExtChunker.Chunk ignores the file path, so no real file is needed.
+	chunks, err := m.ChunkFile(context.Background(), "test.go")
+	if err != nil {
+		t.Fatalf("ChunkFile failed: %v", err)
+	}
+	if len(chunks) != 1 || chunks[0].Name != "second" {
+		t.Errorf("expected last registered chunker ('second') to win, got chunks: %+v", chunks)
 	}
 }
 

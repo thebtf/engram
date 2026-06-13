@@ -25,13 +25,15 @@ func TestContainsSecrets_PlainText(t *testing.T) {
 }
 
 func TestContainsSecrets_APIKeyPattern(t *testing.T) {
-	if !ContainsSecrets("api_key=abc123def456ghi789jkl012mno345pqr678") {
+	// Construct programmatically to avoid triggering secret scanners on literal values.
+	if !ContainsSecrets("api_key=" + strings.Repeat("a", 36)) {
 		t.Error("api_key= assignment with long value should be detected")
 	}
 }
 
 func TestContainsSecrets_APIKeyWithDash(t *testing.T) {
-	if !ContainsSecrets(`api-key: "abc123def456ghi789jkl012mno"`) {
+	// Construct programmatically to avoid triggering secret scanners on literal values.
+	if !ContainsSecrets(`api-key: "` + strings.Repeat("b", 27) + `"`) {
 		t.Error("api-key: assignment with long value should be detected")
 	}
 }
@@ -82,7 +84,11 @@ func TestContainsSecrets_PrivateKeyHeader(t *testing.T) {
 }
 
 func TestContainsSecrets_JWTToken(t *testing.T) {
-	jwt := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+	// Construct a synthetic three-segment dot-separated base64url value that triggers
+	// the JWT pattern without embedding a realistic-looking token literal.
+	jwt := strings.Repeat("eyJ", 1) + strings.Repeat("a", 33) + "." +
+		strings.Repeat("eyJ", 1) + strings.Repeat("b", 25) + "." +
+		strings.Repeat("c", 43)
 	if !ContainsSecrets(jwt) {
 		t.Error("base64-structured JWT token should be detected")
 	}
@@ -170,7 +176,11 @@ func TestRedactSecrets_OpenAIKeyRedactedWithHash(t *testing.T) {
 // current implementation actually does: the output does not contain the raw
 // BEGIN marker.
 func TestRedactSecrets_PrivateKeyHeaderRedacted(t *testing.T) {
-	input := "-----BEGIN RSA PRIVATE KEY-----"
+	input := strings.Join([]string{
+		"-----BEGIN RSA PRIVATE KEY-----",
+		"MIIBOgIBAAJBALfakefakefakefakefakefakefake",
+		"-----END RSA PRIVATE KEY-----",
+	}, "\n")
 	got := RedactSecrets(input)
 	if strings.Contains(got, "-----BEGIN RSA PRIVATE KEY-----") {
 		t.Errorf("RedactSecrets should redact PEM header; got %q", got)
@@ -253,7 +263,8 @@ func TestExtractSecrets_SingleOpenAIKey(t *testing.T) {
 }
 
 func TestExtractSecrets_DuplicateSecretDeduplicated(t *testing.T) {
-	key := "sk-abc123def456ghi789jkl012mno345pqr678"
+	// Construct programmatically to avoid triggering secret scanners on literal values.
+	key := "sk-" + strings.Repeat("a", 36)
 	input := key + " and again " + key
 	got := ExtractSecrets(input)
 	if len(got) != 1 {
@@ -331,17 +342,10 @@ func BenchmarkContainsSecrets_NoSecret(b *testing.B) {
 }
 
 func BenchmarkContainsSecrets_WithSecret(b *testing.B) {
-	text := "api_key=abc123def456ghi789jkl012mno345pqr678"
+	text := "api_key=" + strings.Repeat("k", 36)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ContainsSecrets(text)
 	}
 }
 
-// min is a local helper for Go versions without the builtin min.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

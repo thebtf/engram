@@ -44,7 +44,8 @@ const (
 type Chunk struct {
 	// Metadata holds arbitrary key-value annotations set by the chunker.
 	Metadata   map[string]interface{}
-	// FilePath is the absolute path of the source file this chunk came from.
+	// FilePath is the source path of the file this chunk came from, as supplied
+	// by the caller. The value is preserved verbatim and may be relative or absolute.
 	FilePath   string
 	// Language is the source language detected for this file.
 	Language   Language
