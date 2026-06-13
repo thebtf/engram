@@ -6,9 +6,11 @@ import (
 	"github.com/thebtf/engram/pkg/similarity"
 )
 
-// clusterObservations groups similar observations and returns only one representative per cluster.
-// Uses Jaccard similarity on extracted terms from title, narrative, and facts.
-// Delegates to pkg/similarity for the actual clustering logic.
+// clusterObservations deduplicates a result set by grouping observations that
+// share high Jaccard similarity across their title, narrative, and fact terms.
+// Only one representative per cluster is returned. Clustering logic is owned
+// by pkg/similarity; this wrapper keeps the worker API stable if the
+// implementation moves.
 func clusterObservations(observations []*models.Observation, similarityThreshold float64) []*models.Observation {
 	return similarity.ClusterObservations(observations, similarityThreshold)
 }
