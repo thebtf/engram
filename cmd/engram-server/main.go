@@ -1,4 +1,4 @@
-// Package main provides the entry point for the worker service.
+// Package main provides the entry point for the engram server process.
 package main
 
 import (
@@ -33,7 +33,8 @@ func main() {
 		return
 	}
 
-	// Setup logging with ring buffer for /api/logs endpoint
+	// Configure structured logging; attach a ring buffer so /api/logs can
+	// tail recent log output without a separate log aggregator.
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	cfg := config.Get()
 	bufSize := cfg.LogBufferSize
@@ -55,19 +56,19 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to create service")
 	}
 
-	// Start service
+	// Bring up listeners and background workers.
 	if err := svc.Start(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to start service")
 	}
 
-	// Wait for shutdown signal
+	// Block until the OS delivers SIGINT or SIGTERM.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	log.Info().Msg("Received shutdown signal")
 
-	// Graceful shutdown with timeout
+	// Allow in-flight requests up to 30 s before forcing teardown.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
