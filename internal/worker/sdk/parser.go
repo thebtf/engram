@@ -5,74 +5,88 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/thebtf/engram/pkg/models"
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/pkg/models"
 )
 
+// Package-level compiled regexes. Compiled once at init to avoid per-call overhead.
+// The (?s) flag enables DOTALL so '.' crosses newline boundaries inside XML blocks.
 var (
-	// Observation parsing
+	// observationRegex extracts the inner content of each <observation>…</observation> block.
 	observationRegex = regexp.MustCompile(`(?s)<observation>(.*?)</observation>`)
 
-	// Summary parsing
-	summaryRegex     = regexp.MustCompile(`(?s)<summary>(.*?)</summary>`)
+	// summaryRegex extracts the inner content of a <summary>…</summary> block.
+	summaryRegex = regexp.MustCompile(`(?s)<summary>(.*?)</summary>`)
+
+	// skipSummaryRegex matches an explicit <skip_summary reason="…"/> directive.
+	// When present, the session intentionally produced no summary (e.g. too early in session).
 	skipSummaryRegex = regexp.MustCompile(`<skip_summary\s+reason="([^"]+)"\s*/>`)
-
-	// Valid observation types
-	validObsTypes = map[string]bool{
-		"bugfix":    true,
-		"feature":   true,
-		"refactor":  true,
-		"change":    true,
-		"discovery": true,
-		"decision":  true,
-		"guidance":  true,
-	}
-
-	// categoryTypeMap maps extraction category names to observation types.
-	// Categories from the category-based extraction prompt (both live and backfill).
-	categoryTypeMap = map[string]models.ObservationType{
-		"decision":      models.ObsTypeDecision,
-		"correction":    models.ObsTypeDiscovery,  // corrections reveal user preferences
-		"debugging":     models.ObsTypeBugfix,
-		"gotcha":        models.ObsTypeDiscovery,
-		"pattern":       models.ObsTypeDiscovery,
-		"user_behavior": models.ObsTypeGuidance,
-	}
-
-	// Valid concepts - expanded list matching GlobalizableConcepts and common use cases
-	validConcepts = map[string]bool{
-		// Semantic concepts
-		"how-it-works":     true,
-		"why-it-exists":    true,
-		"what-changed":     true,
-		"problem-solution": true,
-		"gotcha":           true,
-		"pattern":          true,
-		"trade-off":        true,
-		// Globalizable concepts (from models.GlobalizableConcepts)
-		"best-practice": true,
-		"anti-pattern":  true,
-		"architecture":  true,
-		"security":      true,
-		"performance":   true,
-		"testing":       true,
-		"debugging":     true,
-		"workflow":      true,
-		"tooling":       true,
-		// Additional useful concepts
-		"refactoring":    true,
-		"api":            true,
-		"database":       true,
-		"configuration":  true,
-		"error-handling": true,
-		"caching":        true,
-		"logging":        true,
-		"auth":           true,
-		"validation":     true,
-	}
 )
 
+// validObsTypes is the closed set of observation type strings the extraction
+// prompt can emit. Anything outside this set falls back to "change".
+var validObsTypes = map[string]bool{
+	"bugfix":    true,
+	"feature":   true,
+	"refactor":  true,
+	"change":    true,
+	"discovery": true,
+	"decision":  true,
+	"guidance":  true,
+}
+
+// categoryTypeMap translates the structured category field (from the
+// category-based extraction prompt, both live and backfill variants) into the
+// canonical ObservationType used throughout the system. Category takes priority
+// over the free-text <type> field when both are present.
+var categoryTypeMap = map[string]models.ObservationType{
+	"decision":      models.ObsTypeDecision,
+	"correction":    models.ObsTypeDiscovery,  // corrections reveal user preferences
+	"debugging":     models.ObsTypeBugfix,
+	"gotcha":        models.ObsTypeDiscovery,
+	"pattern":       models.ObsTypeDiscovery,
+	"user_behavior": models.ObsTypeGuidance,
+}
+
+// validConcepts is the closed set of concept tags the system accepts.
+// It covers both the standard semantic vocabulary and the GlobalizableConcepts
+// set (concepts worth promoting to global scope in future releases).
+// Any concept not in this set is logged and dropped before storage.
+var validConcepts = map[string]bool{
+	// Semantic concepts
+	"how-it-works":     true,
+	"why-it-exists":    true,
+	"what-changed":     true,
+	"problem-solution": true,
+	"gotcha":           true,
+	"pattern":          true,
+	"trade-off":        true,
+	// Globalizable concepts (from models.GlobalizableConcepts)
+	"best-practice": true,
+	"anti-pattern":  true,
+	"architecture":  true,
+	"security":      true,
+	"performance":   true,
+	"testing":       true,
+	"debugging":     true,
+	"workflow":      true,
+	"tooling":       true,
+	// Additional useful concepts
+	"refactoring":    true,
+	"api":            true,
+	"database":       true,
+	"configuration":  true,
+	"error-handling": true,
+	"caching":        true,
+	"logging":        true,
+	"auth":           true,
+	"validation":     true,
+}
+
 // ParseObservations parses observation XML blocks from SDK response text.
+// Each <observation>…</observation> block is decoded into a ParsedObservation.
+// Invalid types and unknown concepts are logged and dropped rather than stored,
+// keeping the knowledge graph clean.
 func ParseObservations(text string, correlationID string) []*models.ParsedObservation {
 	var observations []*models.ParsedObservation
 
@@ -84,7 +98,7 @@ func ParseObservations(text string, correlationID string) []*models.ParsedObserv
 
 		obsContent := match[1]
 
-		// Extract fields
+		// Extract all fields from the observation block.
 		category := extractField(obsContent, "category")
 		obsType := extractField(obsContent, "type")
 		title := extractField(obsContent, "title")
@@ -163,8 +177,10 @@ func ParseObservations(text string, correlationID string) []*models.ParsedObserv
 }
 
 // ParseSummary parses a summary XML block from SDK response text.
+// Returns nil when the agent explicitly skipped the summary (skip_summary directive)
+// or when no summary block is present in the response.
 func ParseSummary(text string, sessionID int64) *models.ParsedSummary {
-	// Check for skip_summary first
+	// A skip_summary directive means the agent intentionally produced no summary.
 	if skipMatch := skipSummaryRegex.FindStringSubmatch(text); skipMatch != nil {
 		log.Info().
 			Int64("sessionId", sessionID).
@@ -191,7 +207,9 @@ func ParseSummary(text string, sessionID int64) *models.ParsedSummary {
 	}
 }
 
-// extractField extracts a simple field value from XML content.
+// extractField pulls the text content of a simple XML element from a content string.
+// The pattern is compiled per-call; fields are called rarely enough that this
+// does not show up in profiling.
 func extractField(content, fieldName string) string {
 	pattern := regexp.MustCompile(`<` + fieldName + `>([^<]*)</` + fieldName + `>`)
 	match := pattern.FindStringSubmatch(content)
@@ -201,11 +219,13 @@ func extractField(content, fieldName string) string {
 	return strings.TrimSpace(match[1])
 }
 
-// extractArrayElements extracts array elements from XML content.
+// extractArrayElements pulls all <elementName>…</elementName> children from
+// within a named <arrayName>…</arrayName> block. Returns nil (not empty slice)
+// when the outer block is absent, which signals "field not present" to callers.
 func extractArrayElements(content, arrayName, elementName string) []string {
 	var elements []string
 
-	// Find the array block
+	// Locate the wrapping array block first.
 	arrayPattern := regexp.MustCompile(`(?s)<` + arrayName + `>(.*?)</` + arrayName + `>`)
 	arrayMatch := arrayPattern.FindStringSubmatch(content)
 	if len(arrayMatch) < 2 {
@@ -214,7 +234,7 @@ func extractArrayElements(content, arrayName, elementName string) []string {
 
 	arrayContent := arrayMatch[1]
 
-	// Extract individual elements
+	// Extract individual elements from within the array block.
 	elementPattern := regexp.MustCompile(`<` + elementName + `>([^<]+)</` + elementName + `>`)
 	elementMatches := elementPattern.FindAllStringSubmatch(arrayContent, -1)
 	for _, match := range elementMatches {
