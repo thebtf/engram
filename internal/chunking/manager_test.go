@@ -7,156 +7,211 @@ import (
 	"testing"
 )
 
-// mockChunker is a test chunker that returns dummy chunks
-type mockChunker struct{}
+// mgTestChunker is a multi-extension test chunker for manager-level integration scenarios.
+// It handles .go, .py, and .ts to allow ChunkFiles tests across extension variety.
+type mgTestChunker struct{}
 
-func (m *mockChunker) Chunk(ctx context.Context, filePath string) ([]Chunk, error) {
-	// Just return an empty chunk for testing
+func (m *mgTestChunker) Chunk(_ context.Context, filePath string) ([]Chunk, error) {
 	return []Chunk{
 		{
 			FilePath:  filePath,
 			Language:  LanguageGo,
 			Type:      ChunkTypeFunction,
 			Name:      "TestFunc",
+			Content:   "func TestFunc() {}",
 			StartLine: 1,
-			EndLine:   1,
-			Content:   "test",
+			EndLine:   5,
 		},
 	}, nil
 }
 
-func (m *mockChunker) Language() Language {
-	return LanguageGo
-}
+func (m *mgTestChunker) Language() Language          { return LanguageGo }
+func (m *mgTestChunker) SupportedExtensions() []string { return []string{".go", ".py", ".ts"} }
 
-func (m *mockChunker) SupportedExtensions() []string {
-	return []string{".go", ".py", ".ts"}
-}
-
-func TestManager_ChunkMultipleFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create a Go file
-	goFile := filepath.Join(tmpDir, "test.go")
-	goCode := `package main
-
-func Hello() string {
-	return "hello"
-}
-`
-	if err := os.WriteFile(goFile, []byte(goCode), 0600); err != nil {
-		t.Fatalf("Failed to create Go file: %v", err)
-	}
-
-	// Create a Python file
-	pyFile := filepath.Join(tmpDir, "test.py")
-	pyCode := `def greet(name):
-    return f"Hello, {name}!"
-
-class User:
-    def __init__(self, name):
-        self.name = name
-`
-	if err := os.WriteFile(pyFile, []byte(pyCode), 0600); err != nil {
-		t.Fatalf("Failed to create Python file: %v", err)
-	}
-
-	// Create a TypeScript file
-	tsFile := filepath.Join(tmpDir, "test.ts")
-	tsCode := `function add(a: number, b: number): number {
-    return a + b;
-}
-
-class Calculator {
-    multiply(a: number, b: number): number {
-        return a * b;
-    }
-}
-`
-	if err := os.WriteFile(tsFile, []byte(tsCode), 0600); err != nil {
-		t.Fatalf("Failed to create TypeScript file: %v", err)
-	}
-
-	// Create manager
-	manager := NewManager([]Chunker{&mockChunker{}}, DefaultChunkOptions())
-
-	// Test SupportsFile
-	if !manager.SupportsFile(goFile) {
-		t.Error("Manager should support .go files")
-	}
-	if !manager.SupportsFile(pyFile) {
-		t.Error("Manager should support .py files")
-	}
-	if !manager.SupportsFile(tsFile) {
-		t.Error("Manager should support .ts files")
-	}
-
-	unsupportedFile := filepath.Join(tmpDir, "test.txt")
-	if manager.SupportsFile(unsupportedFile) {
-		t.Error("Manager should not support .txt files")
-	}
-
-	// Test ChunkFiles
-	results, errs := manager.ChunkFiles(context.Background(), []string{goFile, pyFile, tsFile})
-	if len(errs) > 0 {
-		t.Errorf("ChunkFiles returned errors: %v", errs)
-	}
-
-	if len(results) != 3 {
-		t.Errorf("Expected results for 3 files, got %d", len(results))
-	}
-
-	// Verify each file has chunks
-	for _, file := range []string{goFile, pyFile, tsFile} {
-		if chunks, ok := results[file]; !ok || len(chunks) == 0 {
-			t.Errorf("No chunks found for file %s", file)
-		}
-	}
-}
-
-// mockChunkerWithExts is a test chunker with configurable extensions
-type mockChunkerWithExts struct {
+// mgMultiExtChunker registers a configurable set of extensions.
+// When id is non-empty, Chunk returns a single Chunk with Name set to id so
+// that collision tests can verify which chunker won the registration race.
+type mgMultiExtChunker struct {
 	exts []string
+	id   string
 }
 
-func (m *mockChunkerWithExts) Chunk(ctx context.Context, filePath string) ([]Chunk, error) {
+func (m *mgMultiExtChunker) Chunk(_ context.Context, _ string) ([]Chunk, error) {
+	if m.id != "" {
+		return []Chunk{{Name: m.id}}, nil
+	}
 	return nil, nil
 }
 
-func (m *mockChunkerWithExts) Language() Language {
-	return LanguageGo
+func (m *mgMultiExtChunker) Language() Language          { return LanguageGo }
+func (m *mgMultiExtChunker) SupportedExtensions() []string { return m.exts }
+
+// =============================================================================
+// CONTRACT: Manager — multi-extension integration (ChunkFiles across file types)
+// =============================================================================
+
+// TestManager_ChunkFiles_MultiExtensionIntegration verifies that ChunkFiles routes
+// files with different extensions to the same registered chunker and collects all results.
+func TestManager_ChunkFiles_MultiExtensionIntegration(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	goFile := filepath.Join(tmpDir, "main.go")
+	pyFile := filepath.Join(tmpDir, "script.py")
+	tsFile := filepath.Join(tmpDir, "app.ts")
+	for _, f := range []string{goFile, pyFile, tsFile} {
+		if err := os.WriteFile(f, []byte("content"), 0600); err != nil {
+			t.Fatalf("create %s: %v", f, err)
+		}
+	}
+
+	m := NewManager([]Chunker{&mgTestChunker{}}, DefaultChunkOptions())
+
+	// All three extensions must be recognized.
+	for _, f := range []string{goFile, pyFile, tsFile} {
+		if !m.SupportsFile(f) {
+			t.Errorf("SupportsFile(%q) = false, want true", f)
+		}
+	}
+	// An unregistered extension must not be recognized.
+	if m.SupportsFile(filepath.Join(tmpDir, "data.txt")) {
+		t.Error("SupportsFile(.txt) = true, want false")
+	}
+
+	results, errs := m.ChunkFiles(context.Background(), []string{goFile, pyFile, tsFile})
+	if len(errs) > 0 {
+		t.Fatalf("ChunkFiles errors: %v", errs)
+	}
+	if len(results) != 3 {
+		t.Errorf("want results for 3 files, got %d", len(results))
+	}
+	for _, f := range []string{goFile, pyFile, tsFile} {
+		if chunks := results[f]; len(chunks) == 0 {
+			t.Errorf("no chunks for %s", f)
+		}
+	}
 }
 
-func (m *mockChunkerWithExts) SupportedExtensions() []string {
-	return m.exts
-}
+// =============================================================================
+// CONTRACT: Manager.SupportedExtensions — aggregation across multiple chunkers
+// =============================================================================
 
-func TestManager_SupportedExtensions(t *testing.T) {
-
-	// Create manager with mock chunkers
-	manager := NewManager([]Chunker{
-		&mockChunkerWithExts{exts: []string{".go"}},
-		&mockChunkerWithExts{exts: []string{".py", ".pyw"}},
+// TestManager_SupportedExtensions_AggregatesAllChunkers verifies that
+// SupportedExtensions returns the union of extensions from all registered chunkers.
+func TestManager_SupportedExtensions_AggregatesAllChunkers(t *testing.T) {
+	m := NewManager([]Chunker{
+		&mgMultiExtChunker{exts: []string{".go"}},
+		&mgMultiExtChunker{exts: []string{".py", ".pyw"}},
 	}, DefaultChunkOptions())
 
-	exts := manager.SupportedExtensions()
-	expectedExts := map[string]bool{
-		".go":  false,
-		".py":  false,
-		".pyw": false,
-	}
+	exts := m.SupportedExtensions()
+	want := map[string]bool{".go": false, ".py": false, ".pyw": false}
 
 	for _, ext := range exts {
-		if _, ok := expectedExts[ext]; ok {
-			expectedExts[ext] = true
+		if _, ok := want[ext]; ok {
+			want[ext] = true
 		} else {
-			t.Errorf("Unexpected extension: %s", ext)
+			t.Errorf("unexpected extension: %s", ext)
+		}
+	}
+	for ext, found := range want {
+		if !found {
+			t.Errorf("expected extension %s not found in SupportedExtensions", ext)
+		}
+	}
+}
+
+// TestManager_SupportedExtensions_LastChunkerWinsOnCollision verifies that when two
+// chunkers register the same extension, the later registration overwrites the earlier one:
+// (a) the extension appears exactly once in SupportedExtensions, and (b) ChunkFile routes
+// the extension to the last registered chunker, not the first.
+func TestManager_SupportedExtensions_LastChunkerWinsOnCollision(t *testing.T) {
+	m := NewManager([]Chunker{
+		&mgMultiExtChunker{exts: []string{".go", ".ts"}, id: "first"},
+		&mgMultiExtChunker{exts: []string{".go", ".py"}, id: "second"}, // overlaps on .go
+	}, DefaultChunkOptions())
+
+	// (a) .go must appear exactly once in the aggregated extensions list.
+	count := 0
+	for _, ext := range m.SupportedExtensions() {
+		if ext == ".go" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf(".go should appear exactly once after collision, got %d", count)
+	}
+
+	// (b) ChunkFile must route .go to the second (last) chunker.
+	// mgMultiExtChunker.Chunk ignores the file path, so no real file is needed.
+	chunks, err := m.ChunkFile(context.Background(), "test.go")
+	if err != nil {
+		t.Fatalf("ChunkFile failed: %v", err)
+	}
+	if len(chunks) != 1 || chunks[0].Name != "second" {
+		t.Errorf("expected last registered chunker ('second') to win, got chunks: %+v", chunks)
+	}
+}
+
+// =============================================================================
+// CONTRACT: Manager — ChunkFiles error isolation
+// =============================================================================
+
+// TestManager_ChunkFiles_UnrecognizedFilesProduceErrors verifies that files with
+// unregistered extensions are reported as errors and do not prevent other files
+// from being processed.
+func TestManager_ChunkFiles_UnrecognizedFilesProduceErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	goFile := filepath.Join(tmpDir, "ok.go")
+	txtFile := filepath.Join(tmpDir, "bad.txt")
+	for _, f := range []string{goFile, txtFile} {
+		if err := os.WriteFile(f, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
 		}
 	}
 
-	for ext, found := range expectedExts {
-		if !found {
-			t.Errorf("Expected extension %s not found", ext)
-		}
+	m := NewManager([]Chunker{&mgTestChunker{}}, DefaultChunkOptions())
+	results, errs := m.ChunkFiles(context.Background(), []string{goFile, txtFile})
+
+	if len(errs) != 1 {
+		t.Errorf("want 1 error, got %d: %v", len(errs), errs)
+	}
+	if _, ok := results[goFile]; !ok {
+		t.Error("goFile should appear in results despite error on txtFile")
+	}
+	if _, ok := results[txtFile]; ok {
+		t.Error("txtFile should not appear in results")
+	}
+}
+
+// TestManager_ChunkFiles_FilesWithNoChunksAreExcluded verifies that a file whose
+// chunker returns zero chunks is omitted from the result map (no empty entry).
+func TestManager_ChunkFiles_FilesWithNoChunksAreExcluded(t *testing.T) {
+	tmpDir := t.TempDir()
+	f := filepath.Join(tmpDir, "empty.go")
+	if err := os.WriteFile(f, []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use mgMultiExtChunker which always returns nil (no chunks).
+	m := NewManager([]Chunker{&mgMultiExtChunker{exts: []string{".go"}}}, DefaultChunkOptions())
+	results, errs := m.ChunkFiles(context.Background(), []string{f})
+
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if _, ok := results[f]; ok {
+		t.Error("file producing zero chunks should be omitted from results map")
+	}
+}
+
+// TestManager_ChunkFiles_EmptyInputProducesEmptyOutput verifies ChunkFiles is a
+// no-op for an empty file list.
+func TestManager_ChunkFiles_EmptyInputProducesEmptyOutput(t *testing.T) {
+	m := NewManager([]Chunker{&mgTestChunker{}}, DefaultChunkOptions())
+	results, errs := m.ChunkFiles(context.Background(), nil)
+	if len(results) != 0 || len(errs) != 0 {
+		t.Errorf("empty input should yield empty results and errors; got results=%d errs=%d",
+			len(results), len(errs))
 	}
 }
