@@ -28,7 +28,7 @@ const (
 )
 
 // ObservationTypes is the canonical list of observation types.
-// Used by both Go backend and served to frontend.
+// Served to both Go backend and frontend — keep this the single source of truth.
 var ObservationTypes = []string{
 	"bugfix",
 	"feature",
@@ -38,8 +38,7 @@ var ObservationTypes = []string{
 	"change",
 }
 
-// observationTypeSet is a pre-computed map for O(1) type validation.
-// Initialized at package load time.
+// observationTypeSet is built once at package init for O(1) validation.
 var observationTypeSet = func() map[string]struct{} {
 	m := make(map[string]struct{}, len(ObservationTypes))
 	for _, t := range ObservationTypes {
@@ -48,16 +47,16 @@ var observationTypeSet = func() map[string]struct{} {
 	return m
 }()
 
-// IsValidObservationType returns true if the type is valid (O(1) lookup).
+// IsValidObservationType returns true when t is a recognised observation type.
 func IsValidObservationType(t string) bool {
 	_, ok := observationTypeSet[t]
 	return ok
 }
 
 // ConceptTypes is the canonical list of valid concept types.
-// Used by both Go backend and served to frontend.
+// Served to both Go backend and frontend — keep this the single source of truth.
 var ConceptTypes = []string{
-	// Semantic concepts
+	// Semantic concepts that describe the nature of an observation.
 	"how-it-works",
 	"why-it-exists",
 	"what-changed",
@@ -65,7 +64,8 @@ var ConceptTypes = []string{
 	"gotcha",
 	"pattern",
 	"trade-off",
-	// Globalizable concepts (from models.GlobalizableConcepts)
+	// Globalizable concepts (from models.GlobalizableConcepts) that can
+	// propagate across project boundaries via crystallization.
 	"best-practice",
 	"anti-pattern",
 	"architecture",
@@ -75,7 +75,8 @@ var ConceptTypes = []string{
 	"debugging",
 	"workflow",
 	"tooling",
-	// Additional useful concepts
+	// Additional useful concepts that fit neither semantic nor globalizable buckets
+	// but appear frequently enough to warrant a first-class type.
 	"refactoring",
 	"api",
 	"database",
@@ -87,7 +88,7 @@ var ConceptTypes = []string{
 	"validation",
 }
 
-// conceptTypeSet is a pre-computed map for O(1) concept validation.
+// conceptTypeSet is built once at package init for O(1) validation.
 var conceptTypeSet = func() map[string]struct{} {
 	m := make(map[string]struct{}, len(ConceptTypes))
 	for _, t := range ConceptTypes {
@@ -96,13 +97,14 @@ var conceptTypeSet = func() map[string]struct{} {
 	return m
 }()
 
-// IsValidConceptType returns true if the concept type is valid (O(1) lookup).
+// IsValidConceptType returns true when t is a recognised concept type.
 func IsValidConceptType(t string) bool {
 	_, ok := conceptTypeSet[t]
 	return ok
 }
 
-// writeJSON writes a JSON response with proper error handling.
+// writeJSON encodes data as JSON and writes it to w.
+// Encoding errors are logged but cannot be propagated — headers are already sent.
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(data); err != nil {

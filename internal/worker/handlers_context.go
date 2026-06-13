@@ -27,6 +27,9 @@ type sessionStartContextProvider interface {
 	GetSessionStartContext(context.Context, *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error)
 }
 
+// behavioralRulesToObservations converts behavioral rules into the observation shape
+// expected by context-inject callers. Rules use guidance type so downstream consumers
+// can distinguish them from user-authored observations.
 func behavioralRulesToObservations(rules []*models.BehavioralRule) []*models.Observation {
 	result := make([]*models.Observation, 0, len(rules))
 	for _, rule := range rules {
@@ -57,6 +60,9 @@ func behavioralRulesToObservations(rules []*models.BehavioralRule) []*models.Obs
 	return result
 }
 
+// memoriesToObservations converts memory records into the observation shape.
+// Used in the backward-compat observations field when the v5 memory store is the
+// source of truth and no observation rows exist.
 func memoriesToObservations(mems []*models.Memory) []*models.Observation {
 	result := make([]*models.Observation, 0, len(mems))
 	for _, mem := range mems {
@@ -106,7 +112,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	agentID := r.URL.Query().Get("agent_id")
 	filesBeingEdited := r.URL.Query()["files_being_edited"]
 
-	// For POST requests, allow JSON body to override query params.
+	// POST body overrides query params — allows large payloads that would exceed URL limits.
 	var obsTypeFilter string
 	if r.Method == http.MethodPost && r.Body != nil {
 		var body struct {
@@ -143,7 +149,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Also accept agent_id as query param fallback for project
+	// Query-param fallback for agent_id → project mapping.
 	if project == "" && agentID != "" {
 		project = agentID
 	}
@@ -158,7 +164,6 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	// access to client filesystems.
 	cwd = ""
 
-	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -170,6 +175,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	if limit > 0 && (maxResults <= 0 || limit < maxResults) {
 		maxResults = limit
 	}
+
 	retrievalMeta := &retrievalMetadata{}
 	retrievalCtx := withRetrievalRequest(r.Context(), agentID, cwd, retrievalMeta)
 	clusteredObservations, similarityScores, err := s.RetrieveRelevant(retrievalCtx, project, query, RetrievalOptions{
@@ -180,6 +186,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
 	threshold := retrievalMeta.threshold
 	expandedQueries := retrievalMeta.expandedQueries
 	detectedIntent := retrievalMeta.detectedIntent
@@ -187,7 +194,8 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	freshCount := retrievalMeta.freshCount
 	duplicatesRemoved := retrievalMeta.duplicatesRemoved
 	totalResults := retrievalMeta.totalResults
-	// Filter by observation type if requested (e.g., obs_type=guidance for behavioral rules)
+
+	// Optional post-filter by observation type (e.g., obs_type=guidance for behavioral rules).
 	if obsTypeFilter != "" {
 		filtered := make([]*models.Observation, 0, len(clusteredObservations))
 		for _, obs := range clusteredObservations {
@@ -197,6 +205,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 		clusteredObservations = filtered
 	}
+
 	// Record retrieval stats with staleness metrics
 	s.recordRetrievalStatsExtended(project, int64(len(clusteredObservations)), 0, 0,
 		int64(staleCount), int64(freshCount), int64(duplicatesRemoved), true)
@@ -211,7 +220,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		Float64("threshold", threshold).
 		Msg("Prompt-based observation search")
 
-	// Build response with similarity scores
+	// Attach similarity scores to each observation for caller ranking.
 	obsWithScores := make([]map[string]any, len(clusteredObservations))
 	for i, obs := range clusteredObservations {
 		obsMap := obs.ToMap()
@@ -238,7 +247,6 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		s.trackSearchMiss(project, query)
 	}
 
-	// Track this search for analytics
 	s.trackSearchQuery(query, project, "observations", len(clusteredObservations), float32(time.Since(searchStart).Milliseconds()))
 
 	// Always-inject tier: backed by behavioral_rules in v5.
@@ -298,14 +306,13 @@ func (s *Service) handleFileContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse comma-separated file paths
 	files := strings.Split(filesParam, ",")
 	if len(files) == 0 {
 		http.Error(w, "at least one file required", http.StatusBadRequest)
 		return
 	}
 
-	// Limit to reasonable number of files
+	// Cap to a reasonable number to prevent excessive query expansion.
 	maxFiles := 20
 	if len(files) > maxFiles {
 		files = files[:maxFiles]
@@ -433,7 +440,7 @@ func compactObservationsWithLimit(observations []*models.Observation, fullCount 
 	result := make([]map[string]any, len(observations))
 	for i, obs := range observations {
 		if fullCount >= 0 && i >= fullCount {
-			// Condensed: only id, type, title, subtitle
+			// Condensed: only id, type, title, subtitle — omit narrative and facts to save tokens.
 			m := map[string]any{
 				"id":    obs.ID,
 				"type":  obs.Type,
@@ -627,6 +634,7 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 		return
 	}
 
+	// grpcInternalServer is set during init; guard before use.
 	s.initMu.RLock()
 	grpcSrv := s.grpcInternalServer
 	s.initMu.RUnlock()
@@ -662,6 +670,7 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 	})
 }
 
+// grpcCodeToHTTP maps gRPC status codes to HTTP status codes for error forwarding.
 func grpcCodeToHTTP(code codes.Code) int {
 	switch code {
 	case codes.InvalidArgument:
@@ -734,12 +743,12 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		filesBeingEdited = r.URL.Query()["files_being_edited"]
 	}
 
-	// Fall back to agent_id as session proxy when no explicit session_id provided
+	// Fall back to agent_id as session proxy when no explicit session_id provided.
 	if sessionID == "" {
 		sessionID = agentID
 	}
 
-	// agent_id acts as project scope for OpenClaw agents without filesystem context
+	// agent_id acts as project scope for OpenClaw agents without filesystem context.
 	if project == "" && agentID != "" {
 		project = agentID
 	}
@@ -753,7 +762,6 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		project = gorm.ResolveProjectID(r.Context(), s.store.DB, project)
 	}
 
-	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -764,6 +772,8 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	// access to client filesystems.
 	cwd = ""
 
+	// When a legacy project ID is provided alongside a canonical one, upsert the
+	// mapping so future requests using the legacy ID resolve correctly.
 	if legacyProject != "" && legacyProject != project {
 		displayName := project
 		if idx := strings.Index(project, "_"); idx > 0 {
@@ -776,13 +786,14 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	// Limit observations for fast startup (configurable, default 100)
+	// Observation limits come from config; fall back to constants when config is absent.
 	limit := s.config.ContextObservations
 	if limit <= 0 {
 		limit = DefaultContextLimit
 	}
 
-	// Full count determines how many observations get full detail (configurable, default 25)
+	// fullCount determines how many observations get full detail (narrative + facts).
+	// Observations beyond this index get condensed format to save tokens.
 	fullCount := s.config.ContextFullCount
 	if fullCount <= 0 {
 		fullCount = 25
@@ -798,7 +809,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply staleness filter to recent observations
+	// Apply staleness filter to recent observations.
 	var staleCount int
 	recentFresh := make([]*models.Observation, 0, len(recentRaw))
 	for _, obs := range recentRaw {
@@ -817,7 +828,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		recentFresh = append(recentFresh, obs)
 	}
 
-	// Build a set of IDs already in the recent section for deduplication
+	// Build a set of IDs already in the recent section for deduplication across sections.
 	recentIDs := make(map[int64]struct{}, len(recentFresh))
 	for _, obs := range recentFresh {
 		recentIDs[obs.ID] = struct{}{}
@@ -870,7 +881,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add guidance IDs to recent dedup set
+	// Add guidance IDs to the dedup set so always-inject doesn't repeat them.
 	for _, obs := range guidanceObservations {
 		recentIDs[obs.ID] = struct{}{}
 	}
@@ -950,7 +961,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		allFreshObservations = append(allFreshObservations, obs)
 	}
 
-	// Merge relevant observations into the union (those not already in allFreshObservations)
+	// Merge relevant observations into the union (those not already in allFreshObservations).
 	allFreshIDs := make(map[int64]struct{}, len(allFreshObservations))
 	for _, obs := range allFreshObservations {
 		allFreshIDs[obs.ID] = struct{}{}
@@ -963,34 +974,30 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Cluster the union to remove duplicates (clustering threshold removed in v5)
+	// Cluster the union to remove duplicates (clustering threshold removed in v5).
 	clusteredObservations := unionObservations
 	duplicatesRemoved := 0
 
-	// Record retrieval stats with staleness metrics
 	s.recordRetrievalStatsExtended(project, int64(len(clusteredObservations)), 0, 0,
 		int64(staleCount), int64(len(allFreshObservations)), int64(duplicatesRemoved), false)
 
-	// Apply token budget: estimate tokens and trim observations to fit
+	// Apply token budget: trim observations to fit within the configured limit.
 	tokenBudget := s.config.ContextMaxTokens
 	var tokenEstimate int
 	var budgetTrimmed int
 
 	if tokenBudget > 0 {
-		// Estimate tokens per observation (~4 chars per token for English)
-		// Reserve 20% of budget for guidance
+		// Reserve 20% of the budget for guidance; main observations get the remainder.
 		guidanceBudget := tokenBudget / 5
 		mainBudget := tokenBudget - guidanceBudget
 
-		// Trim guidance first
 		guidanceObservations, _, _ = trimToTokenBudget(guidanceObservations, guidanceBudget)
 
-		// Trim main observations
 		var mainTrimmed int
 		clusteredObservations, mainTrimmed, tokenEstimate = trimToTokenBudget(clusteredObservations, mainBudget)
 		budgetTrimmed = mainTrimmed
 
-		// Also trim recent and relevant sections to not exceed what's in clustered
+		// Sync recent and relevant sections to only include what survived the budget trim.
 		clusteredIDs := make(map[int64]struct{}, len(clusteredObservations))
 		for _, obs := range clusteredObservations {
 			clusteredIDs[obs.ID] = struct{}{}
@@ -1143,7 +1150,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check if compact format is requested
+	// Check if compact format is requested.
 	compact := r.URL.Query().Get("format") == "compact"
 
 	if compact {

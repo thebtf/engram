@@ -13,8 +13,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Watcher monitors a file or directory for deletion and calls onDelete when removed.
-// It watches the parent directory since fsnotify cannot watch non-existent files.
+// Watcher monitors a target path for deletion and calls onDelete when it disappears.
+// We watch the parent directory rather than the target itself because fsnotify cannot
+// subscribe to paths that do not yet exist — and the whole point is to detect removal.
 type Watcher struct {
 	ctx        context.Context
 	onDelete   func()
@@ -27,8 +28,8 @@ type Watcher struct {
 	running    bool
 }
 
-// New creates a new Watcher for the given target path.
-// The onDelete callback is called when the target is deleted.
+// New creates a Watcher for the given target path.
+// onDelete is called once the target is confirmed deleted (after the debounce window).
 func New(targetPath string, onDelete func()) (*Watcher, error) {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -44,11 +45,13 @@ func New(targetPath string, onDelete func()) (*Watcher, error) {
 		watcher:    fsw,
 		ctx:        ctx,
 		cancel:     cancel,
-		debounce:   100 * time.Millisecond,
+		// 100 ms debounce absorbs rapid create/remove pairs (e.g. atomic rename).
+		debounce: 100 * time.Millisecond,
 	}, nil
 }
 
-// Start begins watching for file deletion events.
+// Start begins watching for deletion events.
+// Idempotent: a second call while already running is a no-op.
 func (w *Watcher) Start() error {
 	w.mu.Lock()
 	if w.running {
@@ -58,17 +61,18 @@ func (w *Watcher) Start() error {
 	w.running = true
 	w.mu.Unlock()
 
-	// Add watch on parent directory
+	// Best-effort initial watch — the parent may not exist yet.
 	if err := w.addWatch(); err != nil {
 		log.Warn().Err(err).Str("path", w.parentPath).Msg("Failed to add initial watch")
-		// Continue anyway - we'll try to re-establish later
+		// Carry on; re-establishment is handled in the event loop.
 	}
 
 	go w.watchLoop()
 	return nil
 }
 
-// Stop stops the watcher.
+// Stop cancels the watch and releases fsnotify resources.
+// Idempotent: a second call while already stopped is a no-op.
 func (w *Watcher) Stop() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -82,16 +86,19 @@ func (w *Watcher) Stop() error {
 	return w.watcher.Close()
 }
 
-// addWatch adds the parent directory to the watch list.
+// addWatch registers the parent directory with fsnotify.
+// Returns an error when the parent does not exist yet.
 func (w *Watcher) addWatch() error {
-	// Ensure parent exists
 	if _, err := os.Stat(w.parentPath); os.IsNotExist(err) {
 		return err
 	}
 	return w.watcher.Add(w.parentPath)
 }
 
-// watchLoop is the main event loop.
+// watchLoop is the goroutine driving the fsnotify event loop.
+// It debounces deletion events to tolerate atomic rename operations
+// and cancels the pending callback when the target is re-created within
+// the debounce window.
 func (w *Watcher) watchLoop() {
 	var (
 		debounceTimer *time.Timer
@@ -101,6 +108,8 @@ func (w *Watcher) watchLoop() {
 	for {
 		select {
 		case <-w.ctx.Done():
+			// Graceful shutdown: drain the pending timer so its goroutine does not fire
+			// after the watcher has been closed.
 			if debounceTimer != nil {
 				debounceTimer.Stop()
 			}
@@ -108,14 +117,14 @@ func (w *Watcher) watchLoop() {
 
 		case event, ok := <-w.watcher.Events:
 			if !ok {
+				// Channel closed — fsnotify watcher was shut down.
 				return
 			}
 
-			// Check if this event is for our target
 			eventPath := filepath.Clean(event.Name)
 			targetPath := filepath.Clean(w.targetPath)
 
-			// Handle parent directory deletion (entire data dir removed)
+			// Parent directory itself was deleted (e.g. entire data dir removed).
 			if eventPath == w.parentPath && event.Op&fsnotify.Remove != 0 {
 				log.Info().Str("path", w.parentPath).Msg("Parent directory deleted")
 				pendingDelete = true
@@ -128,7 +137,7 @@ func (w *Watcher) watchLoop() {
 				continue
 			}
 
-			// Handle target file/directory deletion
+			// Target file or directory was deleted.
 			if eventPath == targetPath && event.Op&fsnotify.Remove != 0 {
 				log.Info().Str("path", w.targetPath).Msg("Target deleted")
 				pendingDelete = true
@@ -141,14 +150,16 @@ func (w *Watcher) watchLoop() {
 				continue
 			}
 
-			// Handle parent directory recreation (re-establish watch)
+			// Parent was re-created after being removed — re-establish the watch so future
+			// events in the directory are still visible.
 			if eventPath == w.parentPath && event.Op&fsnotify.Create != 0 {
 				log.Info().Str("path", w.parentPath).Msg("Parent directory recreated, re-establishing watch")
 				_ = w.addWatch()
 				continue
 			}
 
-			// If target was recreated after pending delete, cancel the callback
+			// Target was re-created inside the debounce window — cancel the deletion callback.
+			// This handles atomic swaps where a new file lands before the old one is confirmed gone.
 			if pendingDelete && eventPath == targetPath && event.Op&fsnotify.Create != 0 {
 				log.Info().Str("path", w.targetPath).Msg("Target recreated, cancelling deletion callback")
 				pendingDelete = false
@@ -166,16 +177,18 @@ func (w *Watcher) watchLoop() {
 	}
 }
 
-// handleDeletion calls the onDelete callback and attempts to re-establish the watch.
+// handleDeletion fires the onDelete callback and attempts to re-register the watch.
+// Called from a time.AfterFunc goroutine (one per debounce window) — not from the
+// main event loop, so it must not block the watch loop.
 func (w *Watcher) handleDeletion() {
 	log.Info().Str("path", w.targetPath).Msg("Triggering deletion callback")
 
-	// Call the callback
 	if w.onDelete != nil {
 		w.onDelete()
 	}
 
-	// Try to re-establish watch after a short delay (parent may have been recreated)
+	// Give the caller's onDelete handler time to recreate the parent directory,
+	// then attempt to re-register so subsequent events are still caught.
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		if err := w.addWatch(); err != nil {
