@@ -10,6 +10,8 @@ import (
 
 // secretPatterns contains compiled regular expressions for detecting secrets.
 // These patterns are designed to catch common secret formats with minimal false positives.
+// Pattern order matters: more specific patterns (e.g., full PEM block) appear after
+// header-only patterns so both can match independently when needed.
 var secretPatterns = []*regexp.Regexp{
 	// API keys with common prefixes
 	regexp.MustCompile(`(?i)(api[_-]?key|apikey)\s*[:=]\s*['"]?[a-zA-Z0-9_-]{20,}['"]?`),
@@ -75,6 +77,8 @@ func ExtractSecrets(text string) []DetectedSecret {
 		return nil
 	}
 
+	// seen deduplicates by deterministic name; the same raw value matched by
+	// two different patterns maps to the same hash and is stored only once.
 	seen := make(map[string]struct{})
 	var results []DetectedSecret
 
@@ -175,4 +179,3 @@ func RedactSecrets(text string) string {
 	}
 	return result
 }
-

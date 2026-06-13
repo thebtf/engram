@@ -15,6 +15,10 @@ import (
 // EnsureSessionExists creates a session if it doesn't exist.
 // Uses INSERT OR IGNORE pattern for atomic idempotent creation (single query instead of COUNT + INSERT).
 // This is shared between stores to avoid duplication.
+//
+// The ON CONFLICT DO NOTHING approach is safe for concurrent daemon restarts:
+// if two processes race to create the same sdk_session_id, exactly one INSERT
+// wins and the other is a no-op with no error returned.
 func EnsureSessionExists(ctx context.Context, db *gorm.DB, sdkSessionID, project string) error {
 	now := time.Now()
 	session := &SDKSession{
@@ -38,6 +42,9 @@ func EnsureSessionExists(ctx context.Context, db *gorm.DB, sdkSessionID, project
 }
 
 // sqlNullString creates a sql.NullString from a string.
+// Empty string produces an invalid (NULL) NullString, not a valid empty string,
+// because empty sdk_session_id values are meaningless and should not occupy a
+// unique index slot.
 func sqlNullString(s string) sql.NullString {
 	if s == "" {
 		return sql.NullString{Valid: false}
@@ -93,6 +100,8 @@ type PaginationParams struct {
 }
 
 // ParsePaginationParams parses both limit and offset from an HTTP request.
+// Convenience wrapper around ParseLimitParam + ParseOffsetParam for the
+// common case where callers need both values together.
 func ParsePaginationParams(r *http.Request, defaultLimit int) PaginationParams {
 	return PaginationParams{
 		Limit:  ParseLimitParam(r, defaultLimit),

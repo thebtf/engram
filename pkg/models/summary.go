@@ -8,6 +8,9 @@ import (
 )
 
 // SessionSummary represents a summary of a Claude Code session.
+// Nullable fields use sql.NullString because they may be absent in the DB row
+// when the extraction model produces an empty summary. MarshalJSON converts
+// them to plain strings for clean JSON output (no {"String":"…","Valid":true} wire noise).
 type SessionSummary struct {
 	CreatedAt       string         `db:"created_at" json:"created_at"`
 	SDKSessionID    string         `db:"sdk_session_id" json:"sdk_session_id"`
@@ -25,6 +28,7 @@ type SessionSummary struct {
 }
 
 // ParsedSummary represents a summary parsed from SDK response XML.
+// Fields map 1:1 to the <summary> XML elements emitted by BuildSummaryPrompt.
 type ParsedSummary struct {
 	Request      string
 	Investigated string
@@ -35,6 +39,8 @@ type ParsedSummary struct {
 }
 
 // NewSessionSummary creates a new session summary from parsed data.
+// promptNumber is stored as NullInt64 with Valid=false when zero so the
+// DB column stays NULL rather than 0 for sessions without a prompt number.
 func NewSessionSummary(sdkSessionID, project string, parsed *ParsedSummary, promptNumber int, discoveryTokens int64) *SessionSummary {
 	now := time.Now()
 	return &SessionSummary{
@@ -72,7 +78,7 @@ type SessionSummaryJSON struct {
 }
 
 // MarshalJSON implements json.Marshaler for SessionSummary.
-// Converts sql.NullString fields to plain strings.
+// Converts sql.NullString fields to plain strings, omitting fields where Valid is false.
 func (s *SessionSummary) MarshalJSON() ([]byte, error) {
 	j := SessionSummaryJSON{
 		ID:              s.ID,

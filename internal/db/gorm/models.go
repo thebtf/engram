@@ -17,6 +17,10 @@ import (
 // and already implement sql.Scanner and driver.Valuer interfaces.
 
 // SDKSession represents a Claude Code session.
+// sdk_sessions is the primary lifecycle table: one row per Claude Code process
+// invocation. ClaudeSessionID and SDKSessionID each have unique indexes; the
+// former is set immediately on session-start, the latter arrives with the first
+// hook event and may be null for short-lived sessions.
 type SDKSession struct {
 	ClaudeSessionID     string         `gorm:"uniqueIndex;not null"`
 	Project             string         `gorm:"index;not null"`
@@ -51,6 +55,9 @@ func (s *SDKSession) BeforeCreate(tx *gorm.DB) error {
 }
 
 // ObservationConflict tracks conflicts between observations.
+// Conflict lifecycle: detected (unresolved=0) → reviewed → resolved (resolved=1).
+// idx_conflicts_unresolved is a composite index on (resolved, detected_at_epoch DESC)
+// for efficient "show me open conflicts newest-first" queries.
 type ObservationConflict struct {
 	ConflictType    models.ConflictType       `gorm:"type:text;check:conflict_type IN ('superseded', 'contradicts', 'outdated_pattern');not null"`
 	Resolution      models.ConflictResolution `gorm:"type:text;check:resolution IN ('prefer_newer', 'prefer_older', 'manual');not null"`
@@ -78,6 +85,9 @@ func (c *ObservationConflict) BeforeCreate(tx *gorm.DB) error {
 }
 
 // ObservationRelation tracks relationships between observations.
+// The uniqueIndex on (source_id, target_id, relation_type) prevents duplicate
+// edges of the same type between the same pair of observations.
+// Confidence defaults to 0.5 (neutral); callers set it based on detection quality.
 type ObservationRelation struct {
 	RelationType    models.RelationType            `gorm:"type:text;check:relation_type IN ('causes', 'fixes', 'supersedes', 'depends_on', 'relates_to', 'evolves_from', 'leads_to', 'similar_to', 'contradicts', 'reinforces', 'invalidated_by', 'explains', 'shares_theme', 'parallel_context', 'summarizes', 'part_of', 'prefers_over', 'modifies', 'reads', 'follows', 'prompted_by', 'references', 'referenced_by');index:idx_relations_type;uniqueIndex:idx_relations_unique,priority:3;not null"`
 	DetectionSource models.RelationDetectionSource `gorm:"type:text;check:detection_source IN ('file_overlap', 'embedding_similarity', 'temporal_proximity', 'narrative_mention', 'concept_overlap', 'type_progression', 'creative_association');not null"`
@@ -109,6 +119,9 @@ func (r *ObservationRelation) BeforeCreate(tx *gorm.DB) error {
 }
 
 // ConceptWeight stores configurable weights for importance scoring.
+// Weights are seeded from migrations and tunable at runtime via the admin API.
+// Default weight 0.1 gives concepts a small-but-non-zero boost; callers that
+// want a concept to be ignored entirely should remove the row rather than set 0.
 type ConceptWeight struct {
 	Concept   string  `gorm:"primaryKey;type:text"`
 	UpdatedAt string  `gorm:"not null"`
@@ -129,6 +142,8 @@ func (c *ConceptWeight) BeforeCreate(tx *gorm.DB) error {
 }
 
 // Content holds deduplicated document bodies keyed by SHA-256 hash.
+// The hash is computed by the ingestion layer; GORM does not generate it.
+// Deduplication: two documents with identical content share one Content row.
 type Content struct {
 	Hash      string    `gorm:"primaryKey;type:text" json:"hash"`
 	Doc       string    `gorm:"type:text;not null" json:"doc"`
@@ -139,6 +154,8 @@ type Content struct {
 func (Content) TableName() string { return "content" }
 
 // Document represents an ingested file in a collection.
+// The (collection, path) pair is unique: re-ingesting the same file updates
+// the Hash field and triggers re-embedding downstream.
 type Document struct {
 	ID         int64          `gorm:"primaryKey;autoIncrement" json:"id"`
 	Collection string         `gorm:"type:text;not null;uniqueIndex:idx_doc_collection_path" json:"collection"`
@@ -169,6 +186,8 @@ type ContentChunk struct {
 func (ContentChunk) TableName() string { return "content_chunks" }
 
 // TelemetrySnapshot stores periodic telemetry measurements.
+// idx_telemetry_type_time is a composite index on (snapshot_type, created_at_epoch DESC)
+// enabling efficient "latest N snapshots of type X" range scans.
 type TelemetrySnapshot struct {
 	ID             int64  `gorm:"primaryKey;autoIncrement"`
 	SnapshotType   string `gorm:"type:text;not null;index:idx_telemetry_type_time,priority:1"`

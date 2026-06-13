@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// Tag regexes use (?s) DOTALL + non-greedy `.*?` so multi-line content between
+// open and close tags is captured without consuming adjacent blocks.
+// These patterns are byte-contract: changing them breaks the privacy boundary
+// between user-marked private content and stored memories.
 var (
 	// privateTagRegex matches <private>...</private> tags
 	privateTagRegex = regexp.MustCompile(`(?s)<private>.*?</private>`)
@@ -20,6 +24,8 @@ func StripPrivateTags(text string) string {
 }
 
 // StripMemoryTags removes all <engram-context>...</engram-context> content from text.
+// These tags carry previously injected context and must be stripped before the
+// content is processed or stored to avoid circular re-injection.
 func StripMemoryTags(text string) string {
 	return memoryTagRegex.ReplaceAllString(text, "")
 }
@@ -32,6 +38,7 @@ func StripAllTags(text string) string {
 }
 
 // IsEntirelyPrivate checks if the text is entirely within <private> tags.
+// Used to short-circuit storage when the entire user message is marked private.
 func IsEntirelyPrivate(text string) bool {
 	stripped := StripPrivateTags(text)
 	return strings.TrimSpace(stripped) == ""

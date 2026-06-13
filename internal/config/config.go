@@ -91,6 +91,9 @@ type Config struct {
 	AuthentikTrustedProxies []string `json:"authentik_trusted_proxies"`
 }
 
+// globalConfig is the singleton Config instance, lazily initialized by Get().
+// configOnce ensures Load() runs exactly once. configMu guards reads and
+// writes during hot-reload (Reload()).
 var (
 	globalConfig *Config
 	configOnce   sync.Once
@@ -155,6 +158,8 @@ func EnsureAll() error {
 }
 
 // Default returns a Config with default values.
+// All defaults that operators see in documentation are defined here — changing
+// any value here is an operator-facing contract change.
 func Default() *Config {
 	return &Config{
 		WorkerPort:                     DefaultWorkerPort,
@@ -194,6 +199,8 @@ func Default() *Config {
 }
 
 // Load loads configuration from the settings file, merging with defaults.
+// Precedence (highest to lowest): env vars → settings.json → Default().
+// Fields marked env-only (WorkerHost, WorkerToken, etc.) are never read from JSON.
 func Load() (*Config, error) {
 	cfg := Default()
 
@@ -342,6 +349,7 @@ func Load() (*Config, error) {
 }
 
 // splitTrim splits a comma-separated string and trims whitespace.
+// Empty segments are dropped so "a,,b" produces ["a","b"] not ["a","","b"].
 func splitTrim(s string) []string {
 	parts := strings.Split(s, ",")
 	result := make([]string, 0, len(parts))
@@ -355,6 +363,8 @@ func splitTrim(s string) []string {
 }
 
 // Get returns the global configuration, loading it if necessary.
+// The first call triggers Load(); subsequent calls return the cached value.
+// Use Reload() to hot-swap the config without restarting the server.
 func Get() *Config {
 	configOnce.Do(func() {
 		var err error
@@ -468,4 +478,3 @@ func GetCollectionConfigPath() string {
 func GetWorkstationID() string {
 	return strings.TrimSpace(os.Getenv("WORKSTATION_ID"))
 }
-

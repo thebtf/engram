@@ -10,12 +10,16 @@ import (
 )
 
 // Manager dispatches files to appropriate language-specific chunkers.
+// Each registered Chunker declares the file extensions it handles; Manager
+// routes ChunkFile calls by extension at O(1) map lookup.
 type Manager struct {
 	chunkers map[string]Chunker // extension -> chunker
 	options  ChunkOptions
 }
 
 // NewManager creates a new chunking manager with the given chunkers.
+// Chunkers are indexed by the extensions returned from SupportedExtensions().
+// When two chunkers claim the same extension, the last one registered wins.
 func NewManager(chunkers []Chunker, options ChunkOptions) *Manager {
 	m := &Manager{
 		chunkers: make(map[string]Chunker),
@@ -34,6 +38,9 @@ func NewManager(chunkers []Chunker, options ChunkOptions) *Manager {
 
 // ChunkFile chunks a single file using the appropriate language chunker.
 // Returns an error if no chunker is found for the file extension.
+// After chunking, MinLines and MaxChunkSize filters are applied: chunks that
+// are too small are silently dropped; chunks that exceed the size limit are
+// logged and dropped (not truncated, to avoid splitting semantic units).
 func (m *Manager) ChunkFile(ctx context.Context, filePath string) ([]Chunk, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	chunker, ok := m.chunkers[ext]
@@ -72,6 +79,7 @@ func (m *Manager) ChunkFile(ctx context.Context, filePath string) ([]Chunk, erro
 // ChunkFiles chunks multiple files in parallel.
 // Returns a map of file path to chunks, and any errors encountered.
 // Errors for individual files do not stop processing of other files.
+// Files that produce zero chunks after filtering are omitted from the result map.
 func (m *Manager) ChunkFiles(ctx context.Context, filePaths []string) (map[string][]Chunk, []error) {
 	results := make(map[string][]Chunk)
 	var errors []error
@@ -98,6 +106,7 @@ func (m *Manager) SupportsFile(filePath string) bool {
 }
 
 // SupportedExtensions returns all file extensions supported by registered chunkers.
+// Order is non-deterministic (map iteration); callers should sort if stable output matters.
 func (m *Manager) SupportedExtensions() []string {
 	exts := make([]string, 0, len(m.chunkers))
 	for ext := range m.chunkers {
