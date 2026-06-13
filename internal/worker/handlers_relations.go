@@ -24,6 +24,7 @@ const DefaultRelationsLimit = 50
 // @Failure 500 {string} string "internal error"
 // @Router /api/observations/{id}/relations [get]
 func (s *Service) handleGetRelations(w http.ResponseWriter, r *http.Request) {
+	// Relations detail endpoint removed in v5 (observation persistence dropped).
 	http.Error(w, "relations detail endpoint removed in v5", http.StatusGone)
 }
 
@@ -40,17 +41,19 @@ func (s *Service) handleGetRelations(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "internal error"
 // @Router /api/observations/{id}/graph [get]
 func (s *Service) handleGetRelationGraph(w http.ResponseWriter, r *http.Request) {
+	// Relation graph endpoint removed in v5 (observation persistence dropped).
 	http.Error(w, "relation graph endpoint removed in v5", http.StatusGone)
 }
 
-// handleGetRelatedObservations godoc
 // relatedObservationRef is the v5-compatible response shape for related-observation
-// lookups now that observation persistence has been removed.
+// lookups. In v5 we return only the ID and the stored relation confidence rather
+// than the full observation payload, because observation rows no longer exist.
 type relatedObservationRef struct {
 	ID         int64   `json:"id"`
 	Confidence float64 `json:"confidence"`
 }
 
+// handleGetRelatedObservations godoc
 // @Summary Get related observations
 // @Description Returns related observation IDs with their actual relation confidence in v5.
 // @Tags Relations
@@ -70,7 +73,7 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Get minimum confidence parameter (default 0.4)
+	// Default confidence threshold matches the retrieval pipeline's soft floor.
 	minConfidence := 0.4
 	if confStr := r.URL.Query().Get("min_confidence"); confStr != "" {
 		if c, err := strconv.ParseFloat(confStr, 64); err == nil && c >= 0 && c <= 1 {
@@ -84,6 +87,8 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Deduplicate: when a relation appears with both source=id and target=id,
+	// keep the highest confidence entry for the partner node.
 	refs := make([]relatedObservationRef, 0, len(relations))
 	seen := make(map[int64]int, len(relations))
 	for _, relation := range relations {
@@ -91,6 +96,7 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 			continue
 		}
 
+		// Resolve the partner ID — skip self-referential edges.
 		relatedID := relation.SourceID
 		if relatedID == id {
 			relatedID = relation.TargetID
@@ -100,6 +106,7 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 		}
 
 		if idx, ok := seen[relatedID]; ok {
+			// Already seen this partner — keep the higher confidence score.
 			if relation.Confidence > refs[idx].Confidence {
 				refs[idx].Confidence = relation.Confidence
 			}
@@ -131,7 +138,8 @@ func (s *Service) handleGetRelatedObservations(w http.ResponseWriter, r *http.Re
 func (s *Service) handleGetRelationsByType(w http.ResponseWriter, r *http.Request) {
 	relType := chi.URLParam(r, "type")
 
-	// Validate relation type
+	// Validate before hitting the DB — unknown types would return empty results
+	// silently, making API misuse invisible.
 	validType := false
 	for _, t := range models.AllRelationTypes {
 		if string(t) == relType {
@@ -174,21 +182,20 @@ func (s *Service) handleGetRelationsByType(w http.ResponseWriter, r *http.Reques
 // @Failure 500 {string} string "internal error"
 // @Router /api/relations/stats [get]
 func (s *Service) handleGetRelationStats(w http.ResponseWriter, r *http.Request) {
-	// Get total relation count
 	totalCount, err := s.relationStore.GetTotalRelationCount(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Get high confidence relations count
+	// 0.7 matches the threshold used by the knowledge graph dashboard widget.
 	highConfRelations, err := s.relationStore.GetHighConfidenceRelations(r.Context(), 0.7, 1000)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Count by relation type
+	// Per-type breakdown used by the graph dashboard.
 	typeCounts := make(map[string]int)
 	for _, t := range models.AllRelationTypes {
 		relations, err := s.relationStore.GetRelationsByType(r.Context(), t, 1000)
