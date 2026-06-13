@@ -1,6 +1,7 @@
-// Package chunking provides AST-aware code chunking for semantic code search.
-// Chunks code files into logical units (functions, classes, methods) that preserve
-// semantic boundaries for better vector embedding and retrieval.
+// Package chunking provides AST-aware code chunking for semantic indexing.
+// It splits source files at logical boundaries — functions, methods, types —
+// so that each embedded unit corresponds to one coherent piece of code rather
+// than an arbitrary byte window.
 package chunking
 
 import (
@@ -9,51 +10,65 @@ import (
 	"strings"
 )
 
-// ChunkType represents the type of code chunk.
+// ChunkType classifies the kind of declaration a Chunk represents.
 type ChunkType string
 
 const (
-	// ChunkTypeFunction represents a standalone function.
+	// ChunkTypeFunction is a top-level function declaration.
 	ChunkTypeFunction ChunkType = "function"
-	// ChunkTypeMethod represents a method on a class/struct/type.
+	// ChunkTypeMethod is a method bound to a struct or named type.
 	ChunkTypeMethod ChunkType = "method"
-	// ChunkTypeClass represents a class or struct definition.
+	// ChunkTypeClass is a struct or class-like composite type definition.
 	ChunkTypeClass ChunkType = "class"
-	// ChunkTypeInterface represents an interface definition.
+	// ChunkTypeInterface is an interface declaration.
 	ChunkTypeInterface ChunkType = "interface"
-	// ChunkTypeType represents a type alias or type definition.
+	// ChunkTypeType is a named type alias or type definition.
 	ChunkTypeType ChunkType = "type"
-	// ChunkTypeConst represents constant declarations.
+	// ChunkTypeConst covers constant declaration blocks.
 	ChunkTypeConst ChunkType = "const"
-	// ChunkTypeVar represents variable declarations.
+	// ChunkTypeVar covers package-level variable declarations.
 	ChunkTypeVar ChunkType = "var"
 )
 
-// Language represents a programming language.
+// Language identifies the source programming language of a chunk.
 type Language string
 
 const (
-	// LanguageGo represents the Go programming language.
+	// LanguageGo is the Go programming language.
 	LanguageGo Language = "go"
 )
 
-// Chunk represents a semantic code chunk with AST-derived boundaries.
+// Chunk is a single semantic unit extracted from a source file.
+// Boundaries come from the AST so that the chunk maps to one declaration
+// rather than a fixed byte range that may straddle logical boundaries.
 type Chunk struct {
+	// Metadata holds arbitrary key-value annotations set by the chunker.
 	Metadata   map[string]interface{}
+	// FilePath is the absolute path of the source file this chunk came from.
 	FilePath   string
+	// Language is the source language detected for this file.
 	Language   Language
+	// Type classifies the declaration (function, method, type, …).
 	Type       ChunkType
+	// Name is the declared identifier (e.g. function name, type name).
 	Name       string
+	// ParentName is the receiver type for methods, empty for top-level declarations.
 	ParentName string
+	// Content is the full source text of the declaration.
 	Content    string
+	// Signature is the declaration header without the body, used for ranking.
 	Signature  string
+	// DocComment is the doc-comment that immediately precedes the declaration.
 	DocComment string
+	// StartLine is the 1-based line number of the opening token.
 	StartLine  int
+	// EndLine is the 1-based line number of the closing token.
 	EndLine    int
 }
 
-// Identifier returns a human-readable identifier for this chunk.
-// Format: "ParentName.Name" for methods, "Name" for top-level.
+// Identifier returns a stable human-readable label for this chunk.
+// Methods are formatted as "ReceiverType.MethodName"; top-level declarations
+// use the bare name.
 func (c *Chunk) Identifier() string {
 	if c.ParentName != "" {
 		return fmt.Sprintf("%s.%s", c.ParentName, c.Name)
@@ -61,28 +76,26 @@ func (c *Chunk) Identifier() string {
 	return c.Name
 }
 
-// LineRange returns a human-readable line range.
-// Format: "L123-L456"
+// LineRange returns the source span as a compact label, e.g. "L12-L34".
 func (c *Chunk) LineRange() string {
 	return fmt.Sprintf("L%d-L%d", c.StartLine, c.EndLine)
 }
 
-// SearchableContent returns content optimized for semantic search.
-// Combines signature, doc comment, and content in a structured format.
+// SearchableContent assembles the text that will be embedded for semantic search.
+// The signature comes first so similarity queries match on the declaration
+// header before falling back to body text; the doc-comment follows for
+// natural-language proximity; the content body comes last.
 func (c *Chunk) SearchableContent() string {
 	var parts []string
 
-	// Include signature for functions/methods
 	if c.Signature != "" {
 		parts = append(parts, c.Signature)
 	}
 
-	// Include doc comment
 	if c.DocComment != "" {
 		parts = append(parts, c.DocComment)
 	}
 
-	// Include actual content
 	if c.Content != "" {
 		parts = append(parts, c.Content)
 	}
@@ -90,40 +103,45 @@ func (c *Chunk) SearchableContent() string {
 	return strings.Join(parts, "\n\n")
 }
 
-// Chunker is the interface for language-specific code chunkers.
+// Chunker is the contract that language-specific parsers implement.
+// Each Chunker handles one language and registers itself by file extension.
 type Chunker interface {
-	// Chunk parses a source file and returns semantic code chunks.
-	// Returns an error if the file cannot be parsed or read.
+	// Chunk parses filePath and returns the semantic units it contains.
+	// An error is returned when the file cannot be read or the AST walk fails.
 	Chunk(ctx context.Context, filePath string) ([]Chunk, error)
 
-	// Language returns the language this chunker supports.
+	// Language reports the programming language this chunker handles.
 	Language() Language
 
-	// SupportedExtensions returns file extensions this chunker handles.
-	// Example: []string{".go"} for Go chunker
+	// SupportedExtensions lists the file extensions (with leading dot) that
+	// this chunker claims, e.g. []string{".go"}.
 	SupportedExtensions() []string
 }
 
-// ChunkOptions provides options for chunking behavior.
+// ChunkOptions controls how the Manager filters chunks after parsing.
 type ChunkOptions struct {
-	// MaxChunkSize is the maximum size of a chunk in bytes.
-	// Chunks larger than this will be split (respecting boundaries where possible).
-	// 0 means no limit.
+	// MaxChunkSize is the upper byte limit for a chunk's Content field.
+	// Chunks that exceed this limit are dropped rather than truncated so that
+	// semantic boundaries remain intact. 0 disables the limit.
 	MaxChunkSize int
 
-	// IncludeDocComments controls whether to include documentation comments.
+	// IncludeDocComments controls whether doc-comment text is populated on
+	// returned chunks. When false, DocComment is left empty.
 	IncludeDocComments bool
 
-	// IncludePrivate controls whether to include private/unexported symbols.
+	// IncludePrivate controls whether unexported (private) symbols are returned.
+	// Set to false to index only the public API surface.
 	IncludePrivate bool
 
-	// MinLines is the minimum number of lines for a chunk to be included.
-	// Chunks smaller than this will be skipped.
-	// 0 means no minimum.
+	// MinLines is the minimum line span a chunk must cover to be kept.
+	// Chunks shorter than this are silently dropped. 0 disables the minimum.
 	MinLines int
 }
 
-// DefaultChunkOptions returns sensible default options.
+// DefaultChunkOptions returns the options used when none are specified explicitly.
+// The defaults are tuned for comprehensive in-repo semantic search: all symbols
+// are indexed (including private ones), doc-comments are captured, and only an
+// 8 KB upper bound is enforced to stay well under typical embedding token limits.
 func DefaultChunkOptions() ChunkOptions {
 	return ChunkOptions{
 		MaxChunkSize:       8192, // ~8KB per chunk (well under token limit)
