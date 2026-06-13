@@ -40,6 +40,8 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	memoryType := r.URL.Query().Get("memory_type")
 	concept := strings.TrimSpace(r.URL.Query().Get("concept"))
 
+	// matchesFilters is evaluated per-observation after the DB/search fetch.
+	// Inline closure avoids threading multiple filter params through helper signatures.
 	matchesFilters := func(observation *models.Observation) bool {
 		if observation == nil {
 			return false
@@ -70,7 +72,6 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 		return false
 	}
 
-	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -78,6 +79,8 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 
 	searchStart := time.Now()
 	scopeFilter := retrievalScope{Project: project}
+
+	// requestedCount is the minimum we need to correctly slice the page.
 	requestedCount := pagination.Offset + pagination.Limit
 	if requestedCount <= 0 {
 		requestedCount = pagination.Limit
@@ -91,6 +94,9 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 		overfetchStep = DefaultObservationsLimit
 	}
 
+	// Overfetch loop: because filtering happens in-memory after the DB call, we
+	// may not get enough matching rows on the first attempt. Double the fetch limit
+	// each iteration until we have enough or the source is exhausted.
 	fetchLimit := requestedCount
 	filtered := make([]*models.Observation, 0, fetchLimit)
 	exhausted := false
@@ -113,10 +119,12 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if len(observations) < fetchLimit {
+			// Source returned fewer rows than requested — nothing more to fetch.
 			exhausted = true
 			break
 		}
 		if len(filtered) > requestedCount {
+			// We have more than enough; stop early to avoid unnecessary work.
 			break
 		}
 
@@ -133,6 +141,8 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 		page = (pagination.Offset / pagination.Limit) + 1
 	}
 
+	// total and hasMore carry different meanings depending on whether we exhausted
+	// the source. When exhausted we know the exact total; otherwise we know a lower bound.
 	total := int64(len(filtered))
 	hasMore := false
 	if exhausted {
@@ -187,7 +197,8 @@ func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cache for 5 minutes - project list changes infrequently
+	// Project list changes infrequently; 5-minute cache avoids repeated DB hits
+	// during dashboard load-bursts.
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	writeJSON(w, projects)
 }
@@ -201,7 +212,7 @@ func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/types [get]
 func (s *Service) handleGetTypes(w http.ResponseWriter, r *http.Request) {
-	// Cache for 24 hours - these values are compile-time constants
+	// These values are compile-time constants; 24-hour cache is safe.
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	writeJSON(w, map[string]any{
 		"observation_types": ObservationTypes,
@@ -218,10 +229,10 @@ func (s *Service) handleGetTypes(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/models [get]
 func (s *Service) handleGetModels(w http.ResponseWriter, _ *http.Request) {
-	// Cache for 1 hour - model list is static during runtime
+	// Model list is static at runtime; 1-hour cache prevents dashboard spam.
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
-	// Embedding models removed in v5 (content_chunks table dropped)
+	// Embedding models removed in v5 (content_chunks table dropped).
 	writeJSON(w, map[string]any{
 		"models":  []any{},
 		"default": nil,
@@ -242,7 +253,6 @@ func (s *Service) handleGetModels(w http.ResponseWriter, _ *http.Request) {
 func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 
-	// Validate project name to prevent path traversal
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -263,7 +273,7 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		"ready":            s.ready.Load(),
 	}
 
-	// Add memory stats
+	// Memory stats — cheap runtime call, always included for diagnostics.
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 	response["memory"] = map[string]any{
@@ -278,7 +288,7 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		"gc_pause_total_ms": float64(memStats.PauseTotalNs) / 1e6,
 	}
 
-	// Add database health if available
+	// Database health — only when the store is initialized.
 	if s.store != nil {
 		dbHealth := s.store.HealthCheck(r.Context())
 		response["database"] = map[string]any{
@@ -292,7 +302,6 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	// observationCount was backed by the removed observations store in v5.
 	// Keep only projectObservations, which now comes from v5 stores via cache.
 
-	// Include project-specific observation count if project is specified
 	if project != "" {
 		count, err := s.getCachedObservationCount(r.Context(), project)
 		if err == nil {
@@ -301,7 +310,6 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add rate limiter stats
 	if s.rateLimiter != nil {
 		response["rateLimiter"] = s.rateLimiter.Stats()
 	}
@@ -322,7 +330,8 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleGetRetrievalStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 
-	// Try persistent DB stats first, fall back to in-memory.
+	// Prefer persistent DB stats for accurate time-range queries.
+	// Fall back to in-memory when the log store is unavailable (e.g. during init).
 	s.initMu.RLock()
 	logStore := s.retrievalStatsLogStore
 	s.initMu.RUnlock()
@@ -342,7 +351,7 @@ func (s *Service) handleGetRetrievalStats(w http.ResponseWriter, r *http.Request
 		log.Warn().Err(err).Msg("failed to get retrieval stats from DB, falling back to in-memory")
 	}
 
-	// Fallback to in-memory stats (no time range support).
+	// In-memory fallback (no time range support).
 	stats := s.GetRetrievalStats(project)
 	writeJSON(w, stats)
 }
@@ -400,6 +409,7 @@ func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Reques
 	s.initMu.RUnlock()
 
 	if store == nil {
+		// Return a zero-value response rather than 500 — the store may be initializing.
 		writeJSON(w, map[string]any{
 			"total_searches":   0,
 			"searches_today":   0,
@@ -456,13 +466,13 @@ func (s *Service) handleVectorHealth(w http.ResponseWriter, _ *http.Request) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/graph/stats [get]
 func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
-	// Get relation count (edges) - this represents the knowledge graph
+	// Edge count from the relations table represents the knowledge graph edges.
 	edgeCount, err := s.relationStore.GetTotalRelationCount(r.Context())
 	if err != nil {
 		edgeCount = 0
 	}
 
-	// Count by relation type
+	// Per-type edge breakdown for the graph dashboard widget.
 	edgeTypes := make(map[string]int)
 	for _, t := range models.AllRelationTypes {
 		relations, err := s.relationStore.GetRelationsByType(r.Context(), t, 10000)
@@ -471,25 +481,24 @@ func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get unique observation IDs involved in relations (real node count)
+	// Node count: distinct observation IDs that appear in at least one relation.
 	nodeCount, err := s.relationStore.GetDistinctNodeCount(r.Context())
 	if err != nil {
 		nodeCount = 0
 	}
 
-	// Calculate average degree (each edge contributes to 2 nodes)
+	// Average degree: each undirected edge contributes to two nodes.
 	var avgDegree float64
 	if nodeCount > 0 {
 		avgDegree = float64(edgeCount*2) / float64(nodeCount)
 	}
 
-	// Max degree from SQL
 	maxDegree, err := s.relationStore.GetMaxDegree(r.Context())
 	if err != nil {
 		maxDegree = 0
 	}
 
-	// Graph is enabled if we have any edges (relations)
+	// Graph is considered "enabled" only when real edges exist.
 	enabled := edgeCount > 0
 
 	writeJSON(w, map[string]any{
