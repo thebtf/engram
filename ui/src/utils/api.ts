@@ -5,20 +5,24 @@ const DEFAULT_TIMEOUT = 10000 // 10 seconds
 const MAX_RETRIES = 3
 const RETRY_DELAY = 1000 // 1 second base delay
 
+/** Options accepted by the internal fetch helpers. */
 interface FetchOptions {
   timeout?: number
   signal?: AbortSignal
   retries?: number
 }
 
+/**
+ * Low-level GET helper. Enforces a per-request deadline via AbortController
+ * and merges it with any caller-supplied signal so both timeouts and explicit
+ * cancellation are respected.
+ */
 async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
   const { timeout = DEFAULT_TIMEOUT, signal } = options
 
-  // Create timeout abort controller
   const timeoutController = new AbortController()
   const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
 
-  // Combine signals if both provided
   const combinedSignal = signal
     ? combineAbortSignals(signal, timeoutController.signal)
     : timeoutController.signal
@@ -30,11 +34,10 @@ async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T>
     }
     return response.json()
   } catch (err) {
-    // Re-throw abort errors (user cancellation)
     if (err instanceof Error && err.name === 'AbortError') {
-      // Check if it was a timeout vs user abort
+      // Distinguish user-initiated cancellation from deadline expiry.
       if (signal?.aborted) {
-        throw err // User cancelled
+        throw err
       }
       throw new Error('Request timed out')
     }
@@ -44,7 +47,10 @@ async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T>
   }
 }
 
-// Helper to combine multiple abort signals
+/**
+ * Merges N abort signals into one: the returned signal fires as soon as any
+ * source signal fires.
+ */
 function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
   const controller = new AbortController()
   for (const signal of signals) {
@@ -57,7 +63,10 @@ function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
   return controller.signal
 }
 
-// Fetch with retry logic
+/**
+ * GET with exponential-backoff retry. Aborts immediately on user cancellation
+ * or 4xx responses; retries on network errors and 5xx.
+ */
 async function fetchWithRetry<T>(url: string, options: FetchOptions = {}): Promise<T> {
   const { retries = MAX_RETRIES, ...fetchOptions } = options
   let lastError: Error | null = null
