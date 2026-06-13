@@ -20,8 +20,8 @@ import (
 func (s *Service) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	info, err := s.updater.CheckForUpdate(r.Context())
 	if err != nil {
-		// Return a proper JSON response for errors instead of 500
-		// This allows the frontend to handle it gracefully
+		// Downgrade to a JSON error payload so the frontend can handle 403 rate-limits
+		// without treating them as opaque 500s.
 		writeJSON(w, map[string]any{
 			"available":       false,
 			"current_version": s.version,
@@ -43,7 +43,6 @@ func (s *Service) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "internal error"
 // @Router /api/update/apply [post]
 func (s *Service) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
-	// First check for update
 	info, err := s.updater.CheckForUpdate(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -58,7 +57,8 @@ func (s *Service) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply update in background with tracking for graceful shutdown
+	// Run the download + replace in the background so this request returns immediately.
+	// s.wg tracks in-flight goroutines for graceful shutdown.
 	s.wg.Go(func() {
 		if err := s.updater.ApplyUpdate(s.ctx, info); err != nil {
 			log.Error().Err(err).Msg("Update failed")
@@ -112,7 +112,7 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	components := []ComponentHealth{}
 	overall := "healthy"
 
-	// Check Worker Service
+	// Worker Service — degraded during startup, unhealthy when init failed.
 	workerStatus := ComponentHealth{Name: "Worker Service", Status: "healthy"}
 	if !s.ready.Load() {
 		if err := s.GetInitError(); err != nil {
@@ -129,7 +129,7 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	components = append(components, workerStatus)
 
-	// Check Database
+	// Database — nil store means init never completed.
 	dbStatus := ComponentHealth{Name: "PostgreSQL", Status: "healthy"}
 	if s.store == nil {
 		dbStatus.Status = "unhealthy"
@@ -142,7 +142,7 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	components = append(components, dbStatus)
 
-	// Check SDK Processor
+	// SDK Processor — unavailable when Claude CLI is not installed; degraded, not fatal.
 	sdkStatus := ComponentHealth{Name: "SDK Processor", Status: "healthy"}
 	if s.processor == nil {
 		sdkStatus.Status = "degraded"
@@ -159,7 +159,7 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	components = append(components, sdkStatus)
 
-	// Check SSE Broadcaster
+	// SSE Broadcaster — must be present; clients cannot receive events without it.
 	sseStatus := ComponentHealth{Name: "SSE Broadcaster", Status: "healthy"}
 	if s.sseBroadcaster == nil {
 		sseStatus.Status = "unhealthy"
@@ -168,7 +168,6 @@ func (s *Service) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	components = append(components, sseStatus)
 
-	// Calculate uptime
 	uptime := time.Since(s.startTime).Round(time.Second).String()
 
 	writeJSON(w, SelfCheckResponse{
@@ -195,18 +194,16 @@ func (s *Service) handleUpdateRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send response before restarting
+	// Flush the success response before the process exits.
 	writeJSON(w, map[string]any{
 		"success": true,
 		"message": "Restarting worker...",
 	})
-
-	// Flush the response
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
 
-	// Restart in background after response is sent
+	// Restart after the response is written so the client receives it first.
 	go func() {
 		if err := s.updater.Restart(); err != nil {
 			log.Error().Err(err).Msg("Failed to restart worker")
@@ -225,21 +222,18 @@ func (s *Service) handleUpdateRestart(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleRestart(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msg("Manual restart requested via API")
 
-	// Send response before restarting
+	// Flush the success response before the process exits.
 	writeJSON(w, map[string]any{
 		"success": true,
 		"message": "Restarting worker...",
 		"version": s.version,
 	})
-
-	// Flush the response
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
 
-	// Restart in background after response is sent
+	// Small delay to give the HTTP write buffer time to drain before exec.
 	go func() {
-		// Small delay to ensure response is sent
 		time.Sleep(100 * time.Millisecond)
 		if err := s.updater.Restart(); err != nil {
 			log.Error().Err(err).Msg("Failed to restart worker")
