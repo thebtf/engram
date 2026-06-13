@@ -95,8 +95,8 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Overfetch loop: because filtering happens in-memory after the DB call, we
-	// may not get enough matching rows on the first attempt. Double the fetch limit
-	// each iteration until we have enough or the source is exhausted.
+	// may not get enough matching rows on the first attempt. Increase the fetch limit
+	// by overfetchStep each iteration until we have enough or the source is exhausted.
 	fetchLimit := requestedCount
 	filtered := make([]*models.Observation, 0, fetchLimit)
 	exhausted := false
