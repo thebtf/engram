@@ -147,8 +147,8 @@ func TestComplete_RetrySucceeds(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	// Use a background context; the backoff sleeps (2s total for 2 retries) are
-	// real but acceptable in a test environment. The race detector is unaffected
+	// Use a background context; the backoff sleeps (6s total: 2s + 4s for 2 retries)
+	// are real but acceptable in a test environment. The race detector is unaffected
 	// because attempts is only written in the handler goroutine.
 	got, err := c.Complete(context.Background(), "sys", "usr")
 	if err != nil {

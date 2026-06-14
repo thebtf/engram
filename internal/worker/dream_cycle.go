@@ -255,7 +255,11 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		ids[i] = t.ID
 	}
 	if markErr := ts.MarkProcessed(ctx, ids); markErr != nil {
-		log.Warn().Err(markErr).Msg("dream-cycle: failed to mark transcripts processed")
+		// MarkProcessed failure is a hard stop: without the processed_at stamp the
+		// watermark must not advance, or these transcripts fall behind the watermark
+		// with processed_at=NULL and are silently lost from future runs.
+		log.Warn().Err(markErr).Msg("dream-cycle: failed to mark transcripts processed, watermark not advanced (will retry)")
+		return
 	}
 
 	pruned, pruneErr := ts.PruneProcessed(ctx)
