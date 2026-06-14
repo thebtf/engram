@@ -4165,6 +4165,41 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		// Migration 135: session_transcripts — raw transcript storage for async LLM processing.
+		// Transcripts are written by the stop hook (or session-end path), picked up by the
+		// worker's transcript processor, and marked processed once LLM analysis completes.
+		// The partial index on (created_at) WHERE processed_at IS NULL keeps unprocessed-row
+		// scans O(unprocessed) rather than O(all), which matters as the table grows.
+		{
+			ID: "135_session_transcripts",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS session_transcripts (
+						id           BIGSERIAL PRIMARY KEY,
+						session_id   TEXT        NOT NULL,
+						project      TEXT        NOT NULL,
+						content      TEXT        NOT NULL,
+						byte_len     INTEGER     NOT NULL,
+						created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+						processed_at TIMESTAMPTZ NULL
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_session_transcripts_unprocessed
+						ON session_transcripts (created_at) WHERE processed_at IS NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_session_transcripts_session
+						ON session_transcripts (session_id)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 135: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				// Indexes are dropped automatically with the table.
+				return tx.Exec("DROP TABLE IF EXISTS session_transcripts").Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

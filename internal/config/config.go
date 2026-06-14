@@ -89,6 +89,12 @@ type Config struct {
 	AuthentikEnabled        bool     `json:"authentik_enabled"`
 	AuthentikAutoProvision  bool     `json:"authentik_auto_provision"`
 	AuthentikTrustedProxies []string `json:"authentik_trusted_proxies"`
+
+	// TranscriptRetentionDays controls how many days of unprocessed session
+	// transcripts are retained. 0 (the default) means no automatic pruning of
+	// unprocessed rows — semantics are enforced by TranscriptStore.PruneUnprocessedOlderThan.
+	// Env: ENGRAM_TRANSCRIPT_RETENTION_DAYS
+	TranscriptRetentionDays int `json:"transcript_retention_days"`
 }
 
 // globalConfig is the singleton Config instance, lazily initialized by Get().
@@ -343,6 +349,11 @@ func Load() (*Config, error) {
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_TRUSTED_PROXY")); v != "" {
 		cfg.AuthTrustedProxy = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_TRANSCRIPT_RETENTION_DAYS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.TranscriptRetentionDays = n
+		}
 	}
 
 	return cfg, nil

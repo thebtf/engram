@@ -69,6 +69,20 @@ gracefully to FTS-only (no vector tier).
 | `ENGRAM_EMBEDDING_MODEL` | `text-embedding` | Model name sent in the request body. |
 | `ENGRAM_EMBEDDING_API_KEY` | (none) | When set, sent as `Authorization: Bearer <key>`. Empty = no auth header (key-less LAN endpoint). |
 
+### LLM
+
+The LLM client (`internal/llm/client.go`) calls an OpenAI-compatible
+`/v1/chat/completions` endpoint. It is used for inference-backed crystallization
+and query expansion. This is an **external API only** — no local inference is
+bundled. When `ENGRAM_LLM_URL` is empty the client is disabled and all
+crystallization features that require inference become a no-op.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENGRAM_LLM_URL` | (none) | Base URL of the chat completions endpoint. Empty = LLM disabled (crystallization inference is a no-op). |
+| `ENGRAM_LLM_MODEL` | `chat-default` | Model name sent in the request body. |
+| `ENGRAM_LLM_API_KEY` | (none) | When set, sent as `Authorization: Bearer <key>`. Empty = no auth header (key-less LAN endpoint). |
+
 ### Vector Storage
 
 | Variable | Default | Description |
@@ -106,17 +120,17 @@ have been applied.
 | `ENGRAM_VNEXT_F_ENABLED` | `false` | Milestone F gate (requires `ENGRAM_VNEXT_ENABLED=true` for the full feature set). Enables privacy-scope enforcement, knowledge node taxonomy, TG3 rationale/filters, crystallization candidates + tools, write-lint two-phase protocol, governance + bulk-op tools, snapshot rollback, and the redaction layer. |
 | `ENGRAM_GRAPH_ENABLED` | `false` | Enables the knowledge graph subsystem and `graph` MCP tool (Milestone C). |
 | `ENGRAM_ADAPTIVE_ENABLED` | `false` | Enables adaptive memory segmentation and adaptive brief retrieval (`get_memory_brief`). |
-| `ENGRAM_CRYSTALLIZATION_ENABLED` | `false` | Enables session-end crystallization: deterministic extraction of decisions from agent output, stored as `epistemic_type=decision, tier=episodic` memories (Milestone D). Requires `ENGRAM_VNEXT_ENABLED=true` for the audit trail. **Extraction is English-only** — the patterns (`internal/crystallization/extract.go`) match English trigger phrases (`decided`, `chose…over`, `the reason is`, `going forward`, `we should`); non-English decision text is not captured. |
+| `ENGRAM_CRYSTALLIZATION_ENABLED` | `false` | Enables crystallization (Milestone D, LLM pipeline). On session-end the redacted transcript is persisted to `session_transcripts`; an async dream-cycle (rides the sleep tick) reads unprocessed transcripts, extracts decisions/lessons via the LLM (`ENGRAM_LLM_URL`), and routes them to crystallization candidates. **Language-independent** — decisions are extracted and stored in their original language with a `lang:<code>` tag (the legacy English-only regex extractor was removed). When `ENGRAM_LLM_URL` is unset the dream-cycle is a no-op. Requires `ENGRAM_VNEXT_ENABLED=true` for the audit trail and `ENGRAM_VNEXT_F_ENABLED=true` for the candidate routing path. |
+| `ENGRAM_TRANSCRIPT_RETENTION_DAYS` | `0` | Max age (days) before an **unprocessed** `session_transcripts` row is pruned. `0` = no prune of unprocessed rows (unbounded growth accepted during a prolonged LLM outage in exchange for zero silent data loss; operator opts into a safety cap). Processed rows are always pruned on the dream-cycle tick regardless of this value. |
 
 ### Removed in v5/v6
 
-v5 removals fall into two categories. **Permanent architectural shifts** (auth model, transport model) are gone for good. **Transitional strip-down items** (embedding, LLM, graph, retrieval) were removed because the pre-v5 implementations were non-functional; they are being rebuilt from scratch across the vnext milestones (lifecycle, graph, retrieval, crystallization — see `internal/lifecycle`, `internal/graph`, `internal/retrieval`, `internal/crystallization` packages already landing on main). Do not set transitional vars until the rebuilt subsystem ships.
+v5 removals fall into two categories. **Permanent architectural shifts** (auth model, transport model) are gone for good. **Transitional strip-down items** (graph, retrieval) were removed because the pre-v5 implementations were non-functional; they are being rebuilt from scratch across the vnext milestones (lifecycle, graph, retrieval, crystallization — see `internal/lifecycle`, `internal/graph`, `internal/retrieval`, `internal/crystallization` packages already landing on main). The embedding and LLM clients have been rebuilt and are active — see the Embedding and LLM sections above.
 
 These variables are no longer read by the **server runtime** — do not set them for the server:
 
 - `ENGRAM_API_TOKEN` / `API_TOKEN` → the server reads `ENGRAM_AUTH_ADMIN_TOKEN` (v5 — permanent architectural shift). **Exception:** the `engram-import` CLI tool still reads `ENGRAM_API_TOKEN` for its own Bearer auth (`cmd/engram-import/main.go`); set it only when running that tool, not for the server.
 - `EMBEDDING_PROVIDER`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_TRUNCATE` (and the `ENGRAM_EMBEDDING_PROVIDER` / `ENGRAM_EMBEDDING_BASE_URL` / `ENGRAM_EMBEDDING_MODEL_NAME` / `ENGRAM_EMBEDDING_DIMENSIONS` / `ENGRAM_EMBEDDING_TRUNCATE` compose aliases) → the rebuilt embedding client reads `ENGRAM_EMBEDDING_URL`, `ENGRAM_EMBEDDING_MODEL`, and `ENGRAM_EMBEDDING_API_KEY` (see the Embedding section above). The old names are ignored.
-- `ENGRAM_LLM_*` (`ENGRAM_LLM_URL`, `ENGRAM_LLM_API_KEY`, `ENGRAM_LLM_MODEL`) → the server uses no LLM at runtime. Crystallization extraction is deterministic (regex); ranking rationale is arithmetic. LLM-backed features (query expansion, skill extraction, reranker) are planned in the absorption MEM-track and will define their own env names when shipped. Do not set until then.
 - `GRAPH_PROVIDER`, `FALKORDB_*` (and the `ENGRAM_GRAPH_PROVIDER` / `ENGRAM_FALKORDB_*` compose aliases) → no FalkorDB backend exists in the code. The knowledge graph is PostgreSQL-backed (`ENGRAM_GRAPH_ENABLED`). The old names are ignored.
 - `ENGRAM_MODEL`, `ENGRAM_CONTEXT_OBSERVATIONS`, `ENGRAM_CONTEXT_FULL_COUNT`, `ENGRAM_CONTEXT_SESSION_COUNT` → removed or renamed
 

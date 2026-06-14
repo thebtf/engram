@@ -54,14 +54,16 @@ func TestCrystallizationLifecycle_FullPath(t *testing.T) {
 	storeWrapper := &gormdb.Store{DB: db}
 	ms := gormdb.NewMemoryStore(storeWrapper)
 
-	// Step 1: extract a decision from mock content.
-	content := "We decided to use pgvector for similarity search because it integrates natively with PostgreSQL."
-	decisions := crystallization.ExtractDecisions(content)
-	require.NotEmpty(t, decisions, "ExtractDecisions must find at least one decision in the test content")
-
+	// Step 1: construct a decision directly (regex extraction path removed; LLM path
+	// tested separately via LLMExtractor unit tests).
 	sessionID := "integration-test-session-t029"
 	project := "integration-test-project-t029"
-	decision := decisions[0]
+	decision := crystallization.ExtractedDecision{
+		Text:           "decided to use pgvector for similarity search because it integrates natively with PostgreSQL",
+		Confidence:     0.9,
+		Lang:           "en",
+		ProposedTarget: "rule",
+	}
 
 	// Step 2: RouteDecision → should create a pending candidate.
 	// Pass nil memChecker — integration test focus is candidate path; memory check is
@@ -131,11 +133,15 @@ func TestCrystallizationLifecycle_FlagOff(t *testing.T) {
 	auditStore := gormdb.NewAuditStore(db)
 	cs := gormdb.NewCandidateStore(db, auditStore)
 
-	content := "We decided to use Redis because latency requirements demand sub-millisecond reads."
-	decisions := crystallization.ExtractDecisions(content)
-	require.NotEmpty(t, decisions)
+	// Construct a decision directly (regex extraction path removed).
+	decision := crystallization.ExtractedDecision{
+		Text:           "decided to use Redis because latency requirements demand sub-millisecond reads",
+		Confidence:     0.9,
+		Lang:           "en",
+		ProposedTarget: "rule",
+	}
 
-	result, err := crystallization.RouteDecision(ctx, decisions[0], "sess-flag-off", "proj-flag-off", cs, nil)
+	result, err := crystallization.RouteDecision(ctx, decision, "sess-flag-off", "proj-flag-off", cs, nil)
 	assert.NoError(t, err, "flag-off RouteDecision must not error")
 	assert.Nil(t, result, "flag-off RouteDecision must return nil (legacy path signal)")
 }

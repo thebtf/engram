@@ -192,6 +192,36 @@ func (s *ConfigSuite) TestEnsureSettings() {
 	s.NoError(err)
 }
 
+// TestDefault_TranscriptRetentionDays verifies that TranscriptRetentionDays
+// defaults to 0 (no pruning of unprocessed rows — semantics enforced in
+// TranscriptStore.PruneUnprocessedOlderThan).
+func (s *ConfigSuite) TestDefault_TranscriptRetentionDays() {
+	cfg := Default()
+	s.Equal(0, cfg.TranscriptRetentionDays,
+		"TranscriptRetentionDays must default to 0 (no-prune sentinel)")
+}
+
+// TestTranscriptRetentionDays_EnvParse verifies that
+// ENGRAM_TRANSCRIPT_RETENTION_DAYS is parsed to the Config int field.
+func (s *ConfigSuite) TestTranscriptRetentionDays_EnvParse() {
+	s.T().Setenv("ENGRAM_TRANSCRIPT_RETENTION_DAYS", "30")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal(30, cfg.TranscriptRetentionDays,
+		"ENGRAM_TRANSCRIPT_RETENTION_DAYS=30 must set TranscriptRetentionDays to 30")
+}
+
+// TestTranscriptRetentionDays_EnvDefault verifies that an unset env var
+// leaves TranscriptRetentionDays at 0.
+func (s *ConfigSuite) TestTranscriptRetentionDays_EnvDefault() {
+	// Ensure the env var is absent.
+	s.T().Setenv("ENGRAM_TRANSCRIPT_RETENTION_DAYS", "")
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal(0, cfg.TranscriptRetentionDays,
+		"unset ENGRAM_TRANSCRIPT_RETENTION_DAYS must leave TranscriptRetentionDays at 0")
+}
+
 // TestEnsureAll verifies full initialization.
 func (s *ConfigSuite) TestEnsureAll() {
 	err := EnsureAll()
