@@ -18,11 +18,17 @@ var ErrEmbeddingDisabled = fmt.Errorf("embedding: disabled (ENGRAM_EMBEDDING_URL
 type Client struct {
 	baseURL    string
 	model      string
+	apiKey     string
 	httpClient *http.Client
 }
 
 // NewClient creates an embedding Client from environment variables.
 // Returns ErrEmbeddingDisabled if ENGRAM_EMBEDDING_URL is empty.
+//
+// When ENGRAM_EMBEDDING_API_KEY is set, requests carry an
+// "Authorization: Bearer <key>" header. When it is empty, no Authorization
+// header is sent — supporting key-less endpoints such as a LAN LiteLLM or
+// Ollama proxy on a trusted network.
 func NewClient() (*Client, error) {
 	baseURL := os.Getenv("ENGRAM_EMBEDDING_URL")
 	if baseURL == "" {
@@ -35,6 +41,7 @@ func NewClient() (*Client, error) {
 	return &Client{
 		baseURL: baseURL,
 		model:   model,
+		apiKey:  os.Getenv("ENGRAM_EMBEDDING_API_KEY"),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -81,6 +88,9 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 		return nil, fmt.Errorf("embedding: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	// Simple retry: 3 attempts with exponential backoff
 	var lastErr error
