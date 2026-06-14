@@ -37,42 +37,27 @@ services:
     ports:
       - "${WORKER_PORT:-37777}:37777"
     environment:
+      # Names below match exactly what the Go server reads. Do not reintroduce
+      # legacy names (ENGRAM_API_TOKEN, ENGRAM_EMBEDDING_BASE_URL/MODEL_NAME,
+      # ENGRAM_LLM_*, ENGRAM_FALKORDB_*) — the code ignores them.
       DATABASE_DSN: "postgres://engram:${POSTGRES_PASSWORD:-engram}@postgres:5432/engram?sslmode=disable"
       ENGRAM_WORKER_HOST: "0.0.0.0"
       ENGRAM_WORKER_PORT: "37777"
-      ENGRAM_API_TOKEN: "${API_TOKEN:-}"
-      ENGRAM_EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-openai}"
-      ENGRAM_EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
-      ENGRAM_EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
-      ENGRAM_EMBEDDING_MODEL_NAME: "${EMBEDDING_MODEL_NAME:-}"
-      ENGRAM_EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-4096}"
-      ENGRAM_EMBEDDING_TRUNCATE: "${EMBEDDING_TRUNCATE:-true}"
-      # LLM for observation extraction (OpenAI-compatible)
-      ENGRAM_LLM_URL: "${ENGRAM_LLM_URL:-${EMBEDDING_BASE_URL:-}}"
-      ENGRAM_LLM_API_KEY: "${ENGRAM_LLM_API_KEY:-${EMBEDDING_API_KEY:-}}"
-      ENGRAM_LLM_MODEL: "${ENGRAM_LLM_MODEL:-gpt-4o-mini}"
-      # Optional: FalkorDB graph backend
-      ENGRAM_GRAPH_PROVIDER: "${GRAPH_PROVIDER:-}"
-      ENGRAM_FALKORDB_ADDR: "${FALKORDB_ADDR:-}"
-      ENGRAM_FALKORDB_PASSWORD: "${FALKORDB_PASSWORD:-}"
-      ENGRAM_FALKORDB_GRAPH_NAME: "${FALKORDB_GRAPH_NAME:-engram}"
+      ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
+      ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
+      # Embedding (semantic memory). Empty URL = embedding disabled (FTS-only recall).
+      ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
+      ENGRAM_EMBEDDING_MODEL: "${ENGRAM_EMBEDDING_MODEL:-text-embedding}"
+      ENGRAM_EMBEDDING_API_KEY: "${ENGRAM_EMBEDDING_API_KEY:-}"
+      # vNext feature flags (all default OFF; flag-OFF == v6.4.15 byte-identical).
+      ENGRAM_VNEXT_ENABLED: "${ENGRAM_VNEXT_ENABLED:-false}"
+      ENGRAM_LIFECYCLE_ENABLED: "${ENGRAM_LIFECYCLE_ENABLED:-false}"
+      ENGRAM_VNEXT_F_ENABLED: "${ENGRAM_VNEXT_F_ENABLED:-false}"
+      ENGRAM_CRYSTALLIZATION_ENABLED: "${ENGRAM_CRYSTALLIZATION_ENABLED:-false}"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
-  # Optional: FalkorDB graph database for multi-hop relation traversal.
-  # Uncomment to enable graph-augmented search and relation exploration.
-  # Then set GRAPH_PROVIDER=falkordb and FALKORDB_ADDR=falkordb:6379 in .env
-  #
-  # falkordb:
-  #   image: falkordb/falkordb:latest
-  #   ports:
-  #     - "${FALKORDB_PORT:-6379}:6379"
-  #   volumes:
-  #     - falkordb_data:/data
-  #   restart: unless-stopped
-
 volumes:
   pgdata:
-  # falkordb_data:

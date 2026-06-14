@@ -56,6 +56,19 @@ are silently ignored (compiled defaults used).
 | `ENGRAM_INJECT_UNIFIED` | `true` | Unified injection mode (same retrieval as search). Set `false` as emergency rollback. |
 | `ENGRAM_ENFORCE_SOURCE_PROJECT` | `false` | Strict project isolation for memory retrieval. |
 
+### Embedding
+
+The embedding client (`internal/embedding/client.go`) calls an OpenAI-compatible
+`/v1/embeddings` endpoint. It powers the vector tier of hybrid retrieval. When
+`ENGRAM_EMBEDDING_URL` is empty the client is disabled and hybrid recall degrades
+gracefully to FTS-only (no vector tier).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENGRAM_EMBEDDING_URL` | (none) | Base URL of the embeddings endpoint. Empty = embedding disabled. |
+| `ENGRAM_EMBEDDING_MODEL` | `text-embedding` | Model name sent in the request body. |
+| `ENGRAM_EMBEDDING_API_KEY` | (none) | When set, sent as `Authorization: Bearer <key>`. Empty = no auth header (key-less LAN endpoint). |
+
 ### Vector Storage
 
 | Variable | Default | Description |
@@ -100,9 +113,10 @@ v5 removals fall into two categories. **Permanent architectural shifts** (auth m
 
 These variables no longer exist — do not set them:
 
-- `ENGRAM_API_TOKEN` → replaced by `ENGRAM_AUTH_ADMIN_TOKEN` (v5 — permanent architectural shift)
-- `EMBEDDING_PROVIDER`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS` → removed in the v5 strip-down; server-side embedding is being rebuilt in vnext (`internal/embedding`). Do not set until the rebuilt subsystem ships.
-- `ENGRAM_LLM_*` → removed in the v5 strip-down; server-side LLM enhancement is planned to return in a later vnext milestone. Do not set until that ships.
+- `ENGRAM_API_TOKEN` / `API_TOKEN` → replaced by `ENGRAM_AUTH_ADMIN_TOKEN` (v5 — permanent architectural shift)
+- `EMBEDDING_PROVIDER`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_TRUNCATE` (and the `ENGRAM_EMBEDDING_PROVIDER` / `ENGRAM_EMBEDDING_BASE_URL` / `ENGRAM_EMBEDDING_MODEL_NAME` / `ENGRAM_EMBEDDING_DIMENSIONS` / `ENGRAM_EMBEDDING_TRUNCATE` compose aliases) → the rebuilt embedding client reads `ENGRAM_EMBEDDING_URL`, `ENGRAM_EMBEDDING_MODEL`, and `ENGRAM_EMBEDDING_API_KEY` (see the Embedding section above). The old names are ignored.
+- `ENGRAM_LLM_*` (`ENGRAM_LLM_URL`, `ENGRAM_LLM_API_KEY`, `ENGRAM_LLM_MODEL`) → the server uses no LLM at runtime. Crystallization extraction is deterministic (regex); ranking rationale is arithmetic. LLM-backed features (query expansion, skill extraction, reranker) are planned in the absorption MEM-track and will define their own env names when shipped. Do not set until then.
+- `GRAPH_PROVIDER`, `FALKORDB_*` (and the `ENGRAM_GRAPH_PROVIDER` / `ENGRAM_FALKORDB_*` compose aliases) → no FalkorDB backend exists in the code. The knowledge graph is PostgreSQL-backed (`ENGRAM_GRAPH_ENABLED`). The old names are ignored.
 - `ENGRAM_MODEL`, `ENGRAM_CONTEXT_OBSERVATIONS`, `ENGRAM_CONTEXT_FULL_COUNT`, `ENGRAM_CONTEXT_SESSION_COUNT` → removed or renamed
 
 ## settings.json Keys
