@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.1] - 2026-06-14
+
+### Added
+
+- **Embedding endpoint authentication.** The embedding client now sends
+  `Authorization: Bearer <key>` when `ENGRAM_EMBEDDING_API_KEY` is set. When the
+  key is empty no header is sent, preserving key-less LAN endpoints byte-identically.
+  This unblocks keyed OpenAI-compatible embedding endpoints (e.g. a LiteLLM proxy
+  fronting Nebius). Required for the vector tier of hybrid retrieval under
+  `ENGRAM_VNEXT_ENABLED=true`. (#266)
+
+### Fixed
+
+- **docker-compose / `.env` environment-name drift.** `docker-compose.yml` set env
+  names the server does not read (`ENGRAM_EMBEDDING_BASE_URL`/`MODEL_NAME`,
+  `ENGRAM_API_TOKEN`), so embedding and admin-token configuration supplied via
+  compose never reached the running server. Corrected to the names the Go code
+  actually reads (`ENGRAM_EMBEDDING_URL`/`MODEL`/`API_KEY`,
+  `ENGRAM_AUTH_ADMIN_TOKEN`); removed dead `ENGRAM_LLM_*`/`FALKORDB_*` keys.
+  Rewrote `.env.example` and `docs/arch/CONFIGURATION.md` to the real contract
+  (vault key documented as 64-hex, not base64; `DATABASE_DSN` override now
+  interpolated in compose). (#266)
+
+### Changed
+
+- **Upstream decoupling U4–U8 (behavior-preserving).** Contract-driven rewrites
+  of the remaining upstream-attributed code: docs site + UI composables (U4/U6),
+  install/uninstall/register scripts + goreleaser/golangci/CI config (U5/U7),
+  worker handlers, watcher, SDK, config, privacy, chunking, models, static, main,
+  clustering, and the LICENSE copyright line (U8). All changes preserve observable
+  behavior; existing tests pass unchanged as the contract net. Blame on
+  upstream-authored logic reduced to zero. (#256–#265)
+
 ## [6.5.0] - 2026-06-12
 
 ### Added
