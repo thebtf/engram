@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.2] - 2026-06-14
+
+### Fixed
+
+- **Embedding base-URL normalization.** Operators who set `ENGRAM_EMBEDDING_URL`
+  with a trailing `/v1` (e.g. a LiteLLM proxy URL like `https://host/v1`) caused
+  the client to build `https://host/v1/v1/embeddings`, producing repeated
+  `HTTP 404 {"detail":"Not Found"}` errors on every embedding batch. The client
+  now parses the URL and strips exactly one trailing `/v1` path segment via
+  `net/url.Parse` (operating on the path, not a string suffix, so a host that
+  ends in `v1` is left intact). Both `https://host` and `https://host/v1` now
+  resolve to the same correct endpoint. (#267)
+- **Stale "removed in v5" vector health.** `check_system_health`,
+  `handleVectorHealth`, `handleVectorMetrics`, and the MCP `vectorHealth` tool
+  reported pgvector as permanently removed — a stale message from the v5 HTTP-MCP
+  removal. They now report live pgvector status, gated on `ENGRAM_VNEXT_ENABLED`.
+  `handleVectorMetrics` additionally distinguishes transient startup state from a
+  permanently disabled/failed embedding store after readiness. (#267)
+
+### Added
+
+- **Server-side embedding telemetry.** `EmbeddingStats` (chunk count, memories
+  with chunks, last-chunk timestamp, model, dimension) is exposed via
+  `Store.Stats(ctx)` and surfaced in `/api/stats/vnext` and the vector-metrics
+  endpoint. Operators can verify embeddings are being written by querying the
+  server instead of running manual `psql` — health checks belong in the server.
+  (#267)
+
 ## [6.5.1] - 2026-06-14
 
 ### Added
