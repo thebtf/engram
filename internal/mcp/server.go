@@ -1803,24 +1803,30 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 		var injectionCount int64
 		injErr := db.WithContext(ctx).Raw(`SELECT count(*) FROM injection_log`).Scan(&injectionCount).Error
 
-		var citationCount int64
-		citErr := db.WithContext(ctx).Raw(`SELECT count(*) FROM citation_log WHERE cited = true`).Scan(&citationCount).Error
-
-		var uncitedCount int64
-		uncErr := db.WithContext(ctx).Raw(`SELECT count(*) FROM citation_log WHERE cited = false`).Scan(&uncitedCount).Error
+		type citationRow struct {
+			Cited bool
+			Count int64
+		}
+		var citRows []citationRow
+		citErr := db.WithContext(ctx).Raw(`SELECT cited, count(*) AS count FROM citation_log GROUP BY cited`).Scan(&citRows).Error
 
 		if injErr != nil {
 			log.Debug().Err(injErr).Msg("get_memory_stats: injection_log count failed")
 		}
 		if citErr != nil {
-			log.Debug().Err(citErr).Msg("get_memory_stats: citation_log (cited) count failed")
-		}
-		if uncErr != nil {
-			log.Debug().Err(uncErr).Msg("get_memory_stats: citation_log (uncited) count failed")
+			log.Debug().Err(citErr).Msg("get_memory_stats: citation_log count failed")
 		}
 
-		// Include the section only when all three queries succeeded.
-		if injErr == nil && citErr == nil && uncErr == nil {
+		// Include the section only when both queries succeeded.
+		if injErr == nil && citErr == nil {
+			var citationCount, uncitedCount int64
+			for _, r := range citRows {
+				if r.Cited {
+					citationCount = r.Count
+				} else {
+					uncitedCount = r.Count
+				}
+			}
 			var noiseRatio float64
 			if total := citationCount + uncitedCount; total > 0 {
 				noiseRatio = float64(uncitedCount) / float64(total)
