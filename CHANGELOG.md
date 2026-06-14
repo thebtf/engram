@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.6.0] - 2026-06-14
+
+### Added
+
+- **LLM-based crystallization (FR-7 Milestone D).** Crystallization now extracts
+  decisions/lessons from session transcripts via an LLM, **language-independent** —
+  decisions stated in Russian, Chinese, or any language are captured and stored in
+  their original language with a `lang:<code>` tag. This replaces the previous
+  English-only regex extractor (a deliberate Milestone-A stub) that captured nothing
+  for non-English work (measured EN=2/RU=0/ZH=0). (#268)
+  - **Async dream-cycle.** Session transcripts are persisted (redacted) at session-end
+    to a new `session_transcripts` table (migration 135); an async job riding the
+    existing sleep-cycle tick reads unprocessed transcripts, builds an adaptive
+    per-session/per-batch digest, extracts decisions via the LLM, and routes them to
+    crystallization candidates. Runs only when idle (≥4h) with new activity (≥10 memories).
+  - **`internal/llm`** — OpenAI-compatible chat client (external API only, no
+    server-side inference). `ENGRAM_LLM_URL` / `ENGRAM_LLM_MODEL` / `ENGRAM_LLM_API_KEY`
+    (Bearer auth when key set). When `ENGRAM_LLM_URL` is unset the dream-cycle is a no-op.
+  - **`ENGRAM_TRANSCRIPT_RETENTION_DAYS`** (default `0` = no prune of unprocessed
+    transcripts; processed rows are always pruned on the dream-cycle tick).
+  - Structural-loss check guards against lossy candidate supersession.
+
+### Removed
+
+- **Legacy English-only regex decision extractor** (`decisionPatterns` /
+  `ExtractDecisions`) and the synchronous session-end `runCrystallization` path —
+  replaced entirely by the LLM dream-cycle. (#268)
+
+### Notes
+
+- Feature-gated by `ENGRAM_CRYSTALLIZATION_ENABLED` (flag-OFF is byte-identical to
+  pre-feature: no transcript writes, no dream-cycle, no new goroutines). Candidate
+  routing additionally requires `ENGRAM_VNEXT_F_ENABLED=true`. To activate, provide
+  an external OpenAI-compatible chat endpoint and set the `ENGRAM_LLM_*` vars.
+
 ## [6.5.2] - 2026-06-14
 
 ### Fixed
