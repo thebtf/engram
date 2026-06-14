@@ -680,6 +680,62 @@ func TestCallTool_CheckSystemHealth_NilStores(t *testing.T) {
 	assert.NotEmpty(t, result)
 }
 
+// TestCheckSystemHealth_VectorSubsystem asserts that the vectors subsystem in
+// the health report:
+//   - is NOT marked as removed (Removed=false after feat/embedding-hardening)
+//   - carries the ENGRAM_VNEXT_ENABLED-aware message (not the old "permanently removed" text)
+//
+// Note: no t.Parallel() here — subtests use t.Setenv which requires a serial parent.
+func TestCheckSystemHealth_VectorSubsystem(t *testing.T) {
+	t.Run("vnext_disabled", func(t *testing.T) {
+		t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+		s := NewServer(ServerOptions{Version: "1.0.0"})
+		result, err := s.callTool(context.Background(), "check_system_health", json.RawMessage(`{}`))
+		require.NoError(t, err)
+
+		var report map[string]any
+		require.NoError(t, json.Unmarshal([]byte(result), &report))
+
+		subsystems, ok := report["subsystems"].(map[string]any)
+		require.True(t, ok, "subsystems key missing from health report")
+
+		vectors, ok := subsystems["vectors"].(map[string]any)
+		require.True(t, ok, "vectors subsystem missing from health report")
+
+		// Removed must be false (omitempty — either absent or false).
+		if removed, exists := vectors["removed"]; exists {
+			assert.False(t, removed.(bool), "vectors.removed must be false")
+		}
+
+		// Message must NOT contain the old stale copy.
+		msg, _ := vectors["message"].(string)
+		assert.NotContains(t, msg, "permanently removed",
+			"vectors message must not say 'permanently removed'")
+		// Message must reference ENGRAM_VNEXT_ENABLED.
+		assert.Contains(t, msg, "ENGRAM_VNEXT_ENABLED",
+			"vectors message must reference ENGRAM_VNEXT_ENABLED when disabled")
+	})
+
+	t.Run("vnext_enabled", func(t *testing.T) {
+		t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+		s := NewServer(ServerOptions{Version: "1.0.0"})
+		result, err := s.callTool(context.Background(), "check_system_health", json.RawMessage(`{}`))
+		require.NoError(t, err)
+
+		var report map[string]any
+		require.NoError(t, json.Unmarshal([]byte(result), &report))
+
+		subsystems, ok := report["subsystems"].(map[string]any)
+		require.True(t, ok, "subsystems key missing from health report")
+
+		vectors, ok := subsystems["vectors"].(map[string]any)
+		require.True(t, ok, "vectors subsystem missing from health report")
+
+		msg, _ := vectors["message"].(string)
+		assert.Contains(t, msg, "active", "vectors message must say 'active' when ENGRAM_VNEXT_ENABLED=true")
+	})
+}
+
 func TestCallTool_ParameterValidation_Table(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "1.0.0"})

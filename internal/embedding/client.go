@@ -8,11 +8,35 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
 // ErrEmbeddingDisabled is returned when no embedding URL is configured.
 var ErrEmbeddingDisabled = fmt.Errorf("embedding: disabled (ENGRAM_EMBEDDING_URL not set)")
+
+// normalizeEmbeddingBaseURL strips a trailing "/v1" path segment (and any
+// surrounding slashes) so that operators may supply either:
+//
+//	https://host        → https://host
+//	https://host/       → https://host
+//	https://host/v1     → https://host
+//	https://host/v1/    → https://host
+//
+// Only a trailing PATH segment named "v1" is removed. A "v1" that forms part
+// of the host name (e.g. https://v1.example.com) is left intact.
+func normalizeEmbeddingBaseURL(raw string) string {
+	// Trim any trailing slashes first.
+	u := strings.TrimRight(raw, "/")
+	// Strip exactly one trailing "/v1" path segment if present.
+	if strings.HasSuffix(u, "/v1") {
+		u = u[:len(u)-3]
+	}
+	// Trim again in case the URL was "https://host/v1/" → after first trim
+	// "https://host/v1" → stripped to "https://host" (no trailing slash needed).
+	u = strings.TrimRight(u, "/")
+	return u
+}
 
 // Client communicates with a LiteLLM-compatible /v1/embeddings endpoint.
 type Client struct {
@@ -30,10 +54,11 @@ type Client struct {
 // header is sent — supporting key-less endpoints such as a LAN LiteLLM or
 // Ollama proxy on a trusted network.
 func NewClient() (*Client, error) {
-	baseURL := os.Getenv("ENGRAM_EMBEDDING_URL")
-	if baseURL == "" {
+	rawURL := os.Getenv("ENGRAM_EMBEDDING_URL")
+	if rawURL == "" {
 		return nil, ErrEmbeddingDisabled
 	}
+	baseURL := normalizeEmbeddingBaseURL(rawURL)
 	model := os.Getenv("ENGRAM_EMBEDDING_MODEL")
 	if model == "" {
 		model = "text-embedding"

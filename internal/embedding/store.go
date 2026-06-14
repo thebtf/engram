@@ -2,12 +2,76 @@ package embedding
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 )
+
+// EmbeddingStats summarises the current state of the content_chunks table.
+// All fields are zero/nil when no chunks exist (empty table is not an error).
+type EmbeddingStats struct {
+	ChunkCount         int64      `json:"chunk_count"`
+	MemoriesWithChunks int64      `json:"memories_with_chunks"`
+	LastChunkAt        *time.Time `json:"last_chunk_at"`
+	Model              string     `json:"model"`
+	Dimension          int        `json:"dimension"`
+}
+
+// Stats returns aggregate telemetry for the content_chunks table.
+// Returns a zero-value EmbeddingStats (no error) when the table is empty.
+func (s *Store) Stats(ctx context.Context) (EmbeddingStats, error) {
+	var stats EmbeddingStats
+
+	// Total chunk count.
+	if err := s.db.WithContext(ctx).
+		Raw(`SELECT count(*) FROM content_chunks`).
+		Scan(&stats.ChunkCount).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return EmbeddingStats{}, fmt.Errorf("embedding stats: chunk count: %w", err)
+	}
+
+	// Distinct memories that have at least one chunk.
+	if err := s.db.WithContext(ctx).
+		Raw(`SELECT count(DISTINCT memory_id) FROM content_chunks`).
+		Scan(&stats.MemoriesWithChunks).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return EmbeddingStats{}, fmt.Errorf("embedding stats: memories count: %w", err)
+	}
+
+	// Most-recent chunk timestamp (nullable — NULL when table is empty).
+	var lastAt *time.Time
+	if err := s.db.WithContext(ctx).
+		Raw(`SELECT max(created_at) FROM content_chunks`).
+		Scan(&lastAt).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return EmbeddingStats{}, fmt.Errorf("embedding stats: last chunk at: %w", err)
+	}
+	stats.LastChunkAt = lastAt
+
+	// Most recently used model (empty string when table is empty).
+	var model *string
+	if err := s.db.WithContext(ctx).
+		Raw(`SELECT model FROM content_chunks ORDER BY created_at DESC LIMIT 1`).
+		Scan(&model).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return EmbeddingStats{}, fmt.Errorf("embedding stats: model: %w", err)
+	}
+	if model != nil {
+		stats.Model = *model
+	}
+
+	// Embedding dimension via pgvector's vector_dims function (0 when table is empty).
+	var dim *int
+	if err := s.db.WithContext(ctx).
+		Raw(`SELECT vector_dims(embedding) FROM content_chunks LIMIT 1`).
+		Scan(&dim).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return EmbeddingStats{}, fmt.Errorf("embedding stats: dimension: %w", err)
+	}
+	if dim != nil {
+		stats.Dimension = *dim
+	}
+
+	return stats, nil
+}
 
 // Chunk represents a row in the content_chunks table.
 type Chunk struct {
