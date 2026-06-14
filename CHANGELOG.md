@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.6.1] - 2026-06-14
+
+### Added
+
+- **Agent-accessible telemetry via MCP.** The `get_memory_stats` MCP tool (and
+  `admin` action `stats`) previously returned an empty `{}` stub. It now returns
+  real server-side telemetry the agent can read through its per-workstation MCP
+  keycard — no admin token, no workstation secret: `memory` (counts by status +
+  total), `vnext` (injection/citation/uncited counts + noise_ratio, gated on
+  `ENGRAM_VNEXT_ENABLED`), `embedding` (chunk_count, memories_with_chunks,
+  last_chunk_at, model, dimension — reusing `embedding.Store.Stats`), and
+  `candidates` (pending/total, under `ENGRAM_VNEXT_F_ENABLED`). Each section is
+  independently guarded — telemetry never errors when a subsystem is nil or off.
+  This puts the closed-loop learning signal (citation rate, noise ratio) and the
+  embedding write-verification (chunk_count) directly in the agent's hands. (#269)
+
 ## [6.6.0] - 2026-06-14
 
 ### Added
