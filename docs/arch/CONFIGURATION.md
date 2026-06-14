@@ -80,9 +80,9 @@ gracefully to FTS-only (no vector tier).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENGRAM_VAULT_KEY` | (none) | AES-256-GCM master key (base64). Primary name. |
-| `ENGRAM_ENCRYPTION_KEY` | (none) | Alias for `ENGRAM_VAULT_KEY`. |
-| `ENGRAM_ENCRYPTION_KEY_FILE` | (none) | Path to file containing the master key. |
+| `ENGRAM_VAULT_KEY` | (none) | AES-256-GCM master key — **64 hex chars (= 32 bytes)**, e.g. `openssl rand -hex 32`. Decoded via `hex.DecodeString` in `internal/crypto.NewVault`; a base64 value will fail at startup. Primary name. |
+| `ENGRAM_ENCRYPTION_KEY` | (none) | Alias for `ENGRAM_VAULT_KEY` (same 64-hex format). |
+| `ENGRAM_ENCRYPTION_KEY_FILE` | (none) | Path to a file containing the master key as 32 raw bytes or 64 hex chars. |
 
 ### Operational
 
@@ -101,19 +101,20 @@ have been applied.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENGRAM_VNEXT_ENABLED` | `false` | Master vNext gate. Enables retention cron for injection_log and citation_log cleanup (Milestone A). |
-| `ENGRAM_LIFECYCLE_ENABLED` | `false` | Enables the sleep cycle (tier promotion/demotion) for memory lifecycle management (Milestone B). |
+| `ENGRAM_VNEXT_ENABLED` | `false` | Master vNext gate. Enables retention cron, hybrid retrieval (`recall_memory` / `recall similar` / `recall explain`), `purge_project`, and the audit trail. |
+| `ENGRAM_LIFECYCLE_ENABLED` | `false` | Enables the sleep cycle (tier promotion/demotion) and the `tier_filter` recall parameter. |
+| `ENGRAM_VNEXT_F_ENABLED` | `false` | Milestone F gate (requires `ENGRAM_VNEXT_ENABLED=true` for the full feature set). Enables privacy-scope enforcement, knowledge node taxonomy, TG3 rationale/filters, crystallization candidates + tools, write-lint two-phase protocol, governance + bulk-op tools, snapshot rollback, and the redaction layer. |
 | `ENGRAM_GRAPH_ENABLED` | `false` | Enables the knowledge graph subsystem and `graph` MCP tool (Milestone C). |
 | `ENGRAM_ADAPTIVE_ENABLED` | `false` | Enables adaptive memory segmentation and adaptive brief retrieval (`get_memory_brief`). |
-| `ENGRAM_CRYSTALLIZATION_ENABLED` | `false` | Enables session-end crystallization pipeline: deterministic extraction of decisions from agent output, stored as `epistemic_type=decision, tier=episodic` memories (Milestone D). Requires `ENGRAM_VNEXT_ENABLED=true` for the audit trail to fire. |
+| `ENGRAM_CRYSTALLIZATION_ENABLED` | `false` | Enables session-end crystallization: deterministic extraction of decisions from agent output, stored as `epistemic_type=decision, tier=episodic` memories (Milestone D). Requires `ENGRAM_VNEXT_ENABLED=true` for the audit trail. **Extraction is English-only** — the patterns (`internal/crystallization/extract.go`) match English trigger phrases (`decided`, `chose…over`, `the reason is`, `going forward`, `we should`); non-English decision text is not captured. |
 
 ### Removed in v5/v6
 
 v5 removals fall into two categories. **Permanent architectural shifts** (auth model, transport model) are gone for good. **Transitional strip-down items** (embedding, LLM, graph, retrieval) were removed because the pre-v5 implementations were non-functional; they are being rebuilt from scratch across the vnext milestones (lifecycle, graph, retrieval, crystallization — see `internal/lifecycle`, `internal/graph`, `internal/retrieval`, `internal/crystallization` packages already landing on main). Do not set transitional vars until the rebuilt subsystem ships.
 
-These variables no longer exist — do not set them:
+These variables are no longer read by the **server runtime** — do not set them for the server:
 
-- `ENGRAM_API_TOKEN` / `API_TOKEN` → replaced by `ENGRAM_AUTH_ADMIN_TOKEN` (v5 — permanent architectural shift)
+- `ENGRAM_API_TOKEN` / `API_TOKEN` → the server reads `ENGRAM_AUTH_ADMIN_TOKEN` (v5 — permanent architectural shift). **Exception:** the `engram-import` CLI tool still reads `ENGRAM_API_TOKEN` for its own Bearer auth (`cmd/engram-import/main.go`); set it only when running that tool, not for the server.
 - `EMBEDDING_PROVIDER`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_TRUNCATE` (and the `ENGRAM_EMBEDDING_PROVIDER` / `ENGRAM_EMBEDDING_BASE_URL` / `ENGRAM_EMBEDDING_MODEL_NAME` / `ENGRAM_EMBEDDING_DIMENSIONS` / `ENGRAM_EMBEDDING_TRUNCATE` compose aliases) → the rebuilt embedding client reads `ENGRAM_EMBEDDING_URL`, `ENGRAM_EMBEDDING_MODEL`, and `ENGRAM_EMBEDDING_API_KEY` (see the Embedding section above). The old names are ignored.
 - `ENGRAM_LLM_*` (`ENGRAM_LLM_URL`, `ENGRAM_LLM_API_KEY`, `ENGRAM_LLM_MODEL`) → the server uses no LLM at runtime. Crystallization extraction is deterministic (regex); ranking rationale is arithmetic. LLM-backed features (query expansion, skill extraction, reranker) are planned in the absorption MEM-track and will define their own env names when shipped. Do not set until then.
 - `GRAPH_PROVIDER`, `FALKORDB_*` (and the `ENGRAM_GRAPH_PROVIDER` / `ENGRAM_FALKORDB_*` compose aliases) → no FalkorDB backend exists in the code. The knowledge graph is PostgreSQL-backed (`ENGRAM_GRAPH_ENABLED`). The old names are ignored.

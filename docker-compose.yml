@@ -40,7 +40,9 @@ services:
       # Names below match exactly what the Go server reads. Do not reintroduce
       # legacy names (ENGRAM_API_TOKEN, ENGRAM_EMBEDDING_BASE_URL/MODEL_NAME,
       # ENGRAM_LLM_*, ENGRAM_FALKORDB_*) — the code ignores them.
-      DATABASE_DSN: "postgres://engram:${POSTGRES_PASSWORD:-engram}@postgres:5432/engram?sslmode=disable"
+      # Defaults to the bundled postgres service; set DATABASE_DSN in .env to
+      # point at an external database instead.
+      DATABASE_DSN: "${DATABASE_DSN:-postgres://engram:${POSTGRES_PASSWORD:-engram}@postgres:5432/engram?sslmode=disable}"
       ENGRAM_WORKER_HOST: "0.0.0.0"
       ENGRAM_WORKER_PORT: "37777"
       ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"

@@ -8,12 +8,18 @@ import (
 	"testing"
 )
 
-// captureServer returns a test server that records the Authorization header of
-// the last request and replies with a valid single-vector embedding response.
-func captureServer(t *testing.T, gotAuth *string) *httptest.Server {
+// captureServer returns a test server that publishes the Authorization header
+// of each request onto authChan and replies with a valid single-vector
+// embedding response. A buffered channel (not a shared pointer) carries the
+// value across the goroutine boundary so the test is race-free under -race;
+// loopback socket I/O is not a happens-before edge for the race detector.
+func captureServer(t *testing.T, authChan chan<- string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*gotAuth = r.Header.Get("Authorization")
+		select {
+		case authChan <- r.Header.Get("Authorization"):
+		default:
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
@@ -36,8 +42,8 @@ func TestNewClient_DisabledWithoutURL(t *testing.T) {
 // TestEmbed_SendsBearerWhenKeySet asserts that ENGRAM_EMBEDDING_API_KEY produces
 // an "Authorization: Bearer <key>" header on the outgoing request.
 func TestEmbed_SendsBearerWhenKeySet(t *testing.T) {
-	var gotAuth string
-	srv := captureServer(t, &gotAuth)
+	authChan := make(chan string, 1)
+	srv := captureServer(t, authChan)
 	defer srv.Close()
 
 	t.Setenv("ENGRAM_EMBEDDING_URL", srv.URL)
@@ -50,6 +56,7 @@ func TestEmbed_SendsBearerWhenKeySet(t *testing.T) {
 	if _, err := c.Embed(context.Background(), []string{"hello"}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
+	gotAuth := <-authChan
 	if want := "Bearer secret-key-123"; gotAuth != want {
 		t.Fatalf("Authorization header = %q, want %q", gotAuth, want)
 	}
@@ -58,8 +65,8 @@ func TestEmbed_SendsBearerWhenKeySet(t *testing.T) {
 // TestEmbed_NoAuthHeaderWhenKeyEmpty asserts the key-less path: with no
 // ENGRAM_EMBEDDING_API_KEY, no Authorization header is sent (LAN proxy case).
 func TestEmbed_NoAuthHeaderWhenKeyEmpty(t *testing.T) {
-	var gotAuth string
-	srv := captureServer(t, &gotAuth)
+	authChan := make(chan string, 1)
+	srv := captureServer(t, authChan)
 	defer srv.Close()
 
 	t.Setenv("ENGRAM_EMBEDDING_URL", srv.URL)
@@ -72,6 +79,7 @@ func TestEmbed_NoAuthHeaderWhenKeyEmpty(t *testing.T) {
 	if _, err := c.Embed(context.Background(), []string{"hello"}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
+	gotAuth := <-authChan
 	if gotAuth != "" {
 		t.Fatalf("Authorization header = %q, want empty", gotAuth)
 	}
