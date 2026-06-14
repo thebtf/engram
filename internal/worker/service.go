@@ -136,11 +136,16 @@ type Service struct {
 	citationLogStore       *gorm.CitationLogStore
 	injectionTracker       *injection.Tracker
 	injectionLogStore      *gorm.InjectionLogStore
-	crystallizeFunc        func(context.Context, string, string, string, *gorm.MemoryStore) // test hook; nil uses runCrystallization
 	candidateStore         *gorm.CandidateStore     // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	snapshotStore          *gorm.SnapshotStore      // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	writelintTokenStore    writelint.TokenStore     // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	redactionRules         []redaction.CompiledRule // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
+	transcriptStore        *gorm.TranscriptStore    // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
+	// transcriptCreatorOverride is a test seam: when non-nil it replaces
+	// transcriptStore in the handleSessionEnd persistence goroutine, letting unit
+	// tests assert the real handler path (redact → Create) without a live DB.
+	// Production code never sets this field.
+	transcriptCreatorOverride transcriptCreator
 	agentStatsStore        *gorm.AgentStatsStore
 	versionStore           *gorm.VersionStore
 	retrievalHooks         *retrievalHooks
@@ -190,6 +195,28 @@ type Service struct {
 	// ensuring new-memory counting is accurate regardless of total database size.
 	// In-process only — resets to 0 on server restart (documented behaviour).
 	sleepCycleWatermarkID atomic.Int64
+
+	// dreamWatermark stores the Unix nanosecond timestamp of the max created_at
+	// seen at the end of the last successful dream-cycle run. In-process only —
+	// resets to 0 on server restart (zero = time.Unix(0,0) = epoch, so all
+	// unprocessed transcripts are visible on the first tick after restart).
+	dreamWatermark atomic.Int64
+
+	// dreamExtractorFunc is a test seam: when non-nil it replaces the real LLM
+	// extractor in runDreamCrystallization. Production code never sets this field.
+	// Mirrors the crystallizeFunc seam used by handlers_hooks.go.
+	dreamExtractorFunc dreamExtractFunc
+
+	// dreamTranscriptStoreOverride is a test seam: when non-nil it replaces the
+	// real *gorm.TranscriptStore in runDreamCrystallization. Satisfies the
+	// dreamTranscriptStore interface. Production code never sets this field.
+	dreamTranscriptStoreOverride dreamTranscriptStore
+
+	// dreamCandidateStoreOverride is a test seam: when non-nil it replaces the
+	// real *gorm.CandidateStore in runDreamCrystallization. Satisfies the
+	// dreamCandidateWriter interface (worker-local mirror of crystallization.CandidateWriter).
+	// Production code never sets this field.
+	dreamCandidateStoreOverride dreamCandidateWriter
 
 	// Cognitive v7 platform substrate (FR-7). The four cross-subsystem
 	// primitives plus the resolved feature-flag snapshot. cognitiveQueueLifecycle
@@ -581,6 +608,10 @@ func (s *Service) initializeAsync() {
 		purgeStore = gorm.NewPurgeStore(store)
 	}
 
+	// Create transcript store for T003 session-end persistence (always created;
+	// the handler goroutine is gated by isCrystallizationEnabled() at call time).
+	transcriptStore := gorm.NewTranscriptStore(store.GetDB())
+
 	// Publish all store handles under initMu so downstream code that inspects
 	// them (e.g., handler middleware) sees a consistent snapshot once ready fires.
 	// Dedup config was removed in v5 (US11) — the SDK processor now uses fixed defaults.
@@ -600,6 +631,7 @@ func (s *Service) initializeAsync() {
 	s.versionStore = versionStore
 	s.auditStore = auditStore
 	s.purgeStore = purgeStore
+	s.transcriptStore = transcriptStore
 	s.tokenStore = tokenStore
 	s.relationStore = relationStore
 	s.sessionManager = sessionManager
@@ -608,7 +640,7 @@ func (s *Service) initializeAsync() {
 
 	// Wire crystallization candidate store (Milestone-F TG4).
 	// Gated on ENGRAM_VNEXT_F_ENABLED so production deployments without the flag
-	// see no change in behaviour (candidateStore stays nil → legacy path in runCrystallization).
+	// see no change in behaviour (candidateStore stays nil → dream-cycle RouteDecision returns nil).
 	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
 		candidateStore := gorm.NewCandidateStore(store.GetDB(), auditStore)
 		s.SetCandidateStore(candidateStore)

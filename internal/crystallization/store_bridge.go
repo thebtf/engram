@@ -12,7 +12,7 @@ import (
 // Privacy redaction is applied to decision text before the content is set.
 //
 // Parameters:
-//   - decisions: output from ExtractDecisions; nil or empty → nil returned.
+//   - decisions: output from LLMExtractor.Extract; nil or empty → nil returned.
 //   - sessionID:  MCP session identifier used to build the session provenance tag.
 //   - project:    project slug to scope the memory.
 //

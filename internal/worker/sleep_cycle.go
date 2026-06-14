@@ -193,6 +193,26 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		}
 	}
 
+	// Dream-cycle crystallization: extract decisions from session transcripts and
+	// route them to candidates. Gated by ENGRAM_CRYSTALLIZATION_ENABLED so it
+	// runs on the same tick as the memory sleep cycle and shares its idle/count
+	// trigger conditions. Candidates additionally require ENGRAM_VNEXT_F_ENABLED
+	// (enforced inside runDreamCrystallization via RouteDecision).
+	//
+	// Runs SYNCHRONOUSLY inside this (s.wg-tracked) sleep-cycle goroutine. The LLM
+	// client has a 30s per-attempt timeout with 3 attempts + 2s/4s backoff, so an
+	// unreachable endpoint could block this goroutine for ~36s. Bound that blast
+	// radius with an explicit sub-context deadline so a slow/hung LLM cannot stall
+	// the sleep goroutine beyond a known ceiling; the 4h tick interval means this
+	// is well within budget.
+	if isCrystallizationEnabled() {
+		// LLM worst-case budget: 30s/attempt × 3 attempts + 2s + 4s backoff = 96s.
+		// Use 120s to cover that budget with margin; 60s was insufficient.
+		dreamCtx, dreamCancel := context.WithTimeout(ctx, 120*time.Second)
+		s.runDreamCrystallization(dreamCtx)
+		dreamCancel()
+	}
+
 	// Advance watermark only when the run completed without errors and the
 	// context was not cancelled. Skipping on failure ensures no memories are
 	// silently orphaned from future counts.

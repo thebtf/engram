@@ -1,51 +1,27 @@
-// Package crystallization provides session-end decision and pattern extraction.
+// Package crystallization provides LLM-based session decision extraction.
 package crystallization
 
-import (
-	"regexp"
-	"strings"
-)
-
-// ExtractedDecision represents a decision found in agent output.
+// ExtractedDecision represents a decision extracted from agent output.
+//
+// Fields are populated by the LLM extraction path (LLMExtractor.Extract).
+// The Text, Pattern, and Position fields are retained for compatibility with
+// any stored candidate records written by the previous regex path.
 type ExtractedDecision struct {
 	Text     string `json:"text"`
 	Pattern  string `json:"pattern"`
 	Position int    `json:"position"`
-}
 
-var decisionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(?:decided|decision)\s+(?:to\s+)?(.{10,200}?)(?:\.|$)`),
-	regexp.MustCompile(`(?i)chose\s+(.{3,200}?)\s+(?:over|instead of)\s+(.{3,200}?)(?:\.|$)`),
-	regexp.MustCompile(`(?i)the reason (?:is|was)\s+(.{10,200}?)(?:\.|$)`),
-	regexp.MustCompile(`(?i)going forward[,:]?\s+(.{10,200}?)(?:\.|$)`),
-	regexp.MustCompile(`(?i)we should\s+(.{10,200}?)(?:\.|$)`),
-}
-
-// ExtractDecisions scans agent output text for decision patterns.
-// Returns deduplicated decisions found via deterministic pattern matching.
-func ExtractDecisions(text string) []ExtractedDecision {
-	if text == "" {
-		return nil
-	}
-
-	var results []ExtractedDecision
-	seen := make(map[string]bool)
-
-	for _, pat := range decisionPatterns {
-		matches := pat.FindAllStringSubmatchIndex(text, -1)
-		for _, loc := range matches {
-			fullMatch := strings.TrimSpace(text[loc[0]:loc[1]])
-			normalized := strings.ToLower(fullMatch)
-			if seen[normalized] {
-				continue
-			}
-			seen[normalized] = true
-			results = append(results, ExtractedDecision{
-				Text:     fullMatch,
-				Pattern:  pat.String(),
-				Position: loc[0],
-			})
-		}
-	}
-	return results
+	// Lang is the detected BCP-47-ish language code of the decision text, e.g. "ru", "en", "zh".
+	Lang string `json:"lang,omitempty"`
+	// Confidence is the LLM-assigned extraction confidence in [0, 1].
+	Confidence float64 `json:"confidence,omitempty"`
+	// Recurrence is an optional count of how many times this decision pattern recurs across
+	// the digest. Zero means single occurrence or unknown.
+	Recurrence int `json:"recurrence,omitempty"`
+	// Evidence holds supporting text snippets cited by the LLM for this decision.
+	Evidence []string `json:"evidence,omitempty"`
+	// ProposedTarget is the suggested promotion target, typically "rule" for session decisions.
+	ProposedTarget string `json:"proposed_target,omitempty"`
+	// PrivacyStatus records the result of any privacy classification applied to this decision.
+	PrivacyStatus string `json:"privacy_status,omitempty"`
 }
