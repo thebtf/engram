@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 )
 
 // minimalStore is a minimal stand-in for *gorm.Store that satisfies the field
@@ -85,7 +85,6 @@ func TestHandleStatsVnext_EmbeddingFieldCompiles(t *testing.T) {
 	svc := &Service{}
 	svc.initMu = sync.RWMutex{}
 	svc.initMu.RLock()
-	_ = svc.embeddingStore // must be *embedding.Store
+	var _ *embedding.Store = svc.embeddingStore // compile-time type assertion
 	svc.initMu.RUnlock()
-	_ = (*gorm.Store)(nil) // import used
 }

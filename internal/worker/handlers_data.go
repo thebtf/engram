@@ -538,9 +538,15 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RUnlock()
 
 	if embStore == nil {
+		msg := "pgvector subsystem available; embedding store not yet initialised"
+		enabled := true
+		if s.ready.Load() {
+			msg = "embedding store unavailable (embedding disabled or failed to initialize)"
+			enabled = false
+		}
 		writeJSON(w, map[string]any{
-			"enabled": true,
-			"message": "pgvector subsystem available; embedding store not yet initialised",
+			"enabled": enabled,
+			"message": msg,
 		})
 		return
 	}

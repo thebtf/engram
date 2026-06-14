@@ -116,18 +116,14 @@ func TestStoreStats_Populated(t *testing.T) {
 	tx, rollback := openTestTx(t, db)
 	defer rollback()
 
-	// Insert a minimal parent memory row.
-	// Only `project` and `content` are required; all other columns have DB defaults.
-	if err := tx.Exec(
-		`INSERT INTO memories (project, content) VALUES ('__test__', 'stats test memory')`,
-	).Error; err != nil {
-		t.Fatalf("insert parent memory: %v", err)
-	}
-
-	// Retrieve the auto-assigned ID so the FK on content_chunks is satisfied.
+	// Insert parent row and fetch ID atomically via RETURNING.
 	var memoryID int64
-	if err := tx.Raw(`SELECT lastval()`).Scan(&memoryID).Error; err != nil {
-		t.Fatalf("get lastval for memory id: %v", err)
+	if err := tx.Raw(
+		`INSERT INTO memories (project, content)
+		 VALUES ('__test__', 'stats test memory')
+		 RETURNING id`,
+	).Scan(&memoryID).Error; err != nil {
+		t.Fatalf("insert parent memory returning id: %v", err)
 	}
 
 	// Insert 2 chunks with a 4096-dim vector matching the production schema.

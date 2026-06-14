@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -26,16 +27,22 @@ var ErrEmbeddingDisabled = fmt.Errorf("embedding: disabled (ENGRAM_EMBEDDING_URL
 // Only a trailing PATH segment named "v1" is removed. A "v1" that forms part
 // of the host name (e.g. https://v1.example.com) is left intact.
 func normalizeEmbeddingBaseURL(raw string) string {
-	// Trim any trailing slashes first.
-	u := strings.TrimRight(raw, "/")
-	// Strip exactly one trailing "/v1" path segment if present.
-	if strings.HasSuffix(u, "/v1") {
-		u = u[:len(u)-3]
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		// Unparseable input: return as-is rather than corrupt it.
+		return raw
 	}
-	// Trim again in case the URL was "https://host/v1/" → after first trim
-	// "https://host/v1" → stripped to "https://host" (no trailing slash needed).
-	u = strings.TrimRight(u, "/")
-	return u
+	// Strip exactly one trailing "/v1" path segment if present.
+	// Operating on parsed.Path avoids the false-positive where the host
+	// itself ends with "v1" (e.g. "https://v1" would corrupt to "https:"
+	// under a pure string-suffix match on the full URL string).
+	path := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(path, "/v1") {
+		parsed.Path = path[:len(path)-3]
+	} else {
+		parsed.Path = path
+	}
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 // Client communicates with a LiteLLM-compatible /v1/embeddings endpoint.
