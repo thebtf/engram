@@ -26,6 +26,7 @@ import (
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/writelint"
+	gormlib "gorm.io/gorm"
 )
 
 // Server is the MCP server that exposes engram tools.
@@ -63,6 +64,7 @@ type Server struct {
 	backfillStatusFunc     func() (any, error)
 	writeLint              *writelint.Orchestrator  // T035: two-phase write-lint protocol (nil → legacy path)
 	redactionRules         []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
+	statsDB                *gormlib.DB              // raw DB handle for stats raw-SQL queries; set via SetStatsDB
 	version                string
 }
 
@@ -203,6 +205,14 @@ func (s *Server) SetRedactionRules(rules []redaction.CompiledRule) {
 func (s *Server) SetEmbeddingStores(client *embedding.Client, store *embedding.Store) {
 	s.embeddingClient = client
 	s.embeddingStore = store
+}
+
+// SetStatsDB wires the raw gorm.DB handle used by handleGetMemoryStats for
+// injection_log / citation_log / memories-by-status raw SQL queries.
+// Must be called with the same *gorm.DB handle the worker Service uses
+// (s.store.GetDB()) to share the connection pool.
+func (s *Server) SetStatsDB(db *gormlib.DB) {
+	s.statsDB = db
 }
 
 // HandleRequest dispatches a JSON-RPC request and returns the response.
@@ -1747,10 +1757,129 @@ func (s *Server) handleFindSimilarObservations(_ context.Context, args json.RawM
 	return string(out), nil
 }
 
-// handleGetMemoryStats returns memory system statistics.
-// Vector storage and search.Manager were removed in v5 (US9); the map is intentionally empty.
-func (s *Server) handleGetMemoryStats(_ context.Context) (string, error) {
-	out, err := json.Marshal(map[string]any{})
+// handleGetMemoryStats returns real server-side telemetry for the MCP agent.
+// Sections whose backing store / DB handle is nil are omitted rather than causing
+// an error — telemetry must never fail just because a subsystem is off.
+func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
+	result := map[string]any{
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	db := s.statsDB
+	if db == nil {
+		result["note"] = "stats db not wired"
+		out, err := json.Marshal(result)
+		if err != nil {
+			return "", fmt.Errorf("marshal response: %w", err)
+		}
+		return string(out), nil
+	}
+
+	// --- memory section: by-status counts from the memories table ---
+	type statusRow struct {
+		Status string
+		Count  int64
+	}
+	var memRows []statusRow
+	if err := db.WithContext(ctx).
+		Raw(`SELECT status, count(*) AS count FROM memories WHERE deleted_at IS NULL GROUP BY status`).
+		Scan(&memRows).Error; err != nil {
+		log.Debug().Err(err).Msg("get_memory_stats: memories by-status query failed")
+	} else {
+		byStatus := make(map[string]int64, len(memRows))
+		var total int64
+		for _, r := range memRows {
+			byStatus[r.Status] = r.Count
+			total += r.Count
+		}
+		result["memory"] = map[string]any{
+			"by_status": byStatus,
+			"total":     total,
+		}
+	}
+
+	// --- vnext section: injection / citation counts (gated on ENGRAM_VNEXT_ENABLED) ---
+	if vnextEnabled() {
+		var injectionCount int64
+		injErr := db.WithContext(ctx).Raw(`SELECT count(*) FROM injection_log`).Scan(&injectionCount).Error
+
+		type citationRow struct {
+			Cited bool
+			Count int64
+		}
+		var citRows []citationRow
+		citErr := db.WithContext(ctx).Raw(`SELECT cited, count(*) AS count FROM citation_log GROUP BY cited`).Scan(&citRows).Error
+
+		if injErr != nil {
+			log.Debug().Err(injErr).Msg("get_memory_stats: injection_log count failed")
+		}
+		if citErr != nil {
+			log.Debug().Err(citErr).Msg("get_memory_stats: citation_log count failed")
+		}
+
+		// Include the section only when both queries succeeded.
+		if injErr == nil && citErr == nil {
+			var citationCount, uncitedCount int64
+			for _, r := range citRows {
+				if r.Cited {
+					citationCount = r.Count
+				} else {
+					uncitedCount = r.Count
+				}
+			}
+			var noiseRatio float64
+			if total := citationCount + uncitedCount; total > 0 {
+				noiseRatio = float64(uncitedCount) / float64(total)
+			}
+			result["vnext"] = map[string]any{
+				"injection_count": injectionCount,
+				"citation_count":  citationCount,
+				"uncited_count":   uncitedCount,
+				"noise_ratio":     noiseRatio,
+			}
+		}
+	}
+
+	// --- embedding section: reuse embeddingStore.Stats ---
+	if s.embeddingStore != nil {
+		if embStats, err := s.embeddingStore.Stats(ctx); err != nil {
+			log.Debug().Err(err).Msg("get_memory_stats: embedding stats unavailable")
+		} else {
+			result["embedding"] = embStats
+		}
+	}
+
+	// --- candidates section: by-status counts from crystallization_candidates ---
+	// db is non-nil here — the early return at the top of the function guarantees it.
+	// crystallization_candidates (migration 132) has NO deleted_at column; lifecycle
+	// is tracked via the status enum (pending/promoted/rejected/superseded/decayed),
+	// so no soft-delete filter applies.
+	if s.candidateStore != nil {
+		type candRow struct {
+			Status string
+			Count  int64
+		}
+		var candRows []candRow
+		if err := db.WithContext(ctx).
+			Raw(`SELECT status, count(*) AS count FROM crystallization_candidates GROUP BY status`).
+			Scan(&candRows).Error; err != nil {
+			log.Debug().Err(err).Msg("get_memory_stats: crystallization_candidates count failed")
+		} else {
+			var pending, total int64
+			for _, r := range candRows {
+				total += r.Count
+				if r.Status == "pending" {
+					pending = r.Count
+				}
+			}
+			result["candidates"] = map[string]any{
+				"pending": pending,
+				"total":   total,
+			}
+		}
+	}
+
+	out, err := json.Marshal(result)
 	if err != nil {
 		return "", fmt.Errorf("marshal response: %w", err)
 	}

@@ -670,6 +670,32 @@ func TestCallTool_GetMemoryStats_NilStores(t *testing.T) {
 	result, err := s.callTool(context.Background(), "get_memory_stats", json.RawMessage(`{}`))
 	require.NoError(t, err)
 	assert.NotEmpty(t, result)
+
+	// Shape: nil statsDB path must return generated_at and a note, never panic.
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result), &parsed), "result must be valid JSON")
+	assert.Contains(t, parsed, "generated_at", "generated_at key must be present in nil-db response")
+	assert.Contains(t, parsed, "note", "note key must be present when statsDB is nil")
+}
+
+// TestGetMemoryStats_NilDB_NoMemoryOrVnextSections verifies that the nil-statsDB
+// path omits memory and vnext sections (they require DB access) and never errors.
+func TestGetMemoryStats_NilDB_NoMemoryOrVnextSections(t *testing.T) {
+	t.Parallel()
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+	// statsDB is nil — simulates the server not yet being fully wired.
+	result, err := s.handleGetMemoryStats(context.Background())
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result), &parsed))
+
+	assert.Contains(t, parsed, "generated_at")
+	assert.Contains(t, parsed, "note")
+	assert.NotContains(t, parsed, "memory", "memory section must be absent without a DB")
+	assert.NotContains(t, parsed, "vnext", "vnext section must be absent without a DB")
+	assert.NotContains(t, parsed, "embedding", "embedding section must be absent without embeddingStore")
+	assert.NotContains(t, parsed, "candidates", "candidates section must be absent without candidateStore")
 }
 
 func TestCallTool_CheckSystemHealth_NilStores(t *testing.T) {

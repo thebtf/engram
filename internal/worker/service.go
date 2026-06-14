@@ -776,6 +776,11 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
+	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
+	// citation_log / memories-by-status raw SQL queries. Uses the same shared
+	// *gorm.DB the service already holds to reuse the connection pool.
+	mcpServer.SetStatsDB(store.GetDB())
+
 	// Wire purge store for the purge_project admin action (Milestone D T008).
 	// Gated behind ENGRAM_VNEXT_ENABLED: mirrors wireVnextStores pattern.
 	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
