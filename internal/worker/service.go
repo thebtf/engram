@@ -169,6 +169,7 @@ type Service struct {
 	feedbackUpdater        *feedback.Updater
 	segmentStore           *gorm.SegmentStore
 	embeddingClient        *embedding.Client
+	embeddingStore         *embedding.Store
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
 	vaultOnce              sync.Once
@@ -813,6 +814,7 @@ func (s *Service) initializeAsync() {
 
 		s.initMu.Lock()
 		s.embeddingClient = embClient
+		s.embeddingStore = embStore
 		s.initMu.Unlock()
 	}
 
@@ -1159,7 +1161,7 @@ func (s *Service) setupRoutes() {
 	// Admin/management routes — authentication applied globally via setupMiddleware.
 	// Grouped for logical organization; no additional middleware needed.
 	s.router.Group(func(r chi.Router) {
-		// Vector metrics/health endpoints (return disabled status since vectors removed in v5)
+		// Vector metrics/health endpoints — report live pgvector subsystem status
 		r.Get("/api/vectors/health", s.handleVectorHealth)
 		r.Get("/api/vector/metrics", s.handleVectorMetrics)
 		r.Get("/api/graph/stats", s.handleGraphStats)

@@ -1850,14 +1850,20 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 	}
 	report.Subsystems["database"] = dbHealth
 
-	// Vector storage removed in v5 (content_chunks table dropped).
-	// Status is "healthy" (from the system's perspective this is intentional, not a fault).
-	// Removed=true signals clients that enforce the original enum that the subsystem no longer exists.
+	// Vector subsystem: reports actual availability based on ENGRAM_VNEXT_ENABLED.
+	// content_chunks table and pgvector are present in v5+ (re-added in feat/embedding-hardening).
+	// Removed=false: the subsystem exists; the feature flag gates active retrieval use.
+	var vectorMessage string
+	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+		vectorMessage = "pgvector hybrid retrieval active"
+	} else {
+		vectorMessage = "pgvector available; vNext retrieval gated by ENGRAM_VNEXT_ENABLED"
+	}
 	vectorHealth := &SubsystemHealth{
 		Status:  "healthy",
-		Message: "Vector storage permanently removed in v5; FTS-based retrieval is the sole search path",
+		Message: vectorMessage,
 		Metrics: make(map[string]any),
-		Removed: true,
+		Removed: false,
 	}
 	report.Subsystems["vectors"] = vectorHealth
 

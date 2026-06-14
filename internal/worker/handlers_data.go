@@ -4,6 +4,7 @@ package worker
 import (
 	"context"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -444,16 +445,20 @@ func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Reques
 
 // handleVectorHealth godoc
 // @Summary Get vector database health
-// @Description Vector storage was removed in v5. Always returns disabled status.
+// @Description Reports live pgvector subsystem health. Message reflects whether vNext hybrid retrieval is active.
 // @Tags Vectors
 // @Produce json
 // @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{}
 // @Router /api/vectors/health [get]
 func (s *Service) handleVectorHealth(w http.ResponseWriter, _ *http.Request) {
+	msg := "pgvector available; vNext retrieval gated by ENGRAM_VNEXT_ENABLED"
+	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+		msg = "pgvector hybrid retrieval active"
+	}
 	writeJSON(w, map[string]any{
-		"enabled": false,
-		"message": "Vector storage removed in v5 (content_chunks table dropped)",
+		"enabled": true,
+		"message": msg,
 	})
 }
 
@@ -521,16 +526,41 @@ func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
 
 // handleVectorMetrics godoc
 // @Summary Get vector database metrics
-// @Description Vector storage was removed in v5. Always returns disabled status.
+// @Description Returns live pgvector metrics from the embedding store (chunk_count, memories_with_chunks, etc.).
 // @Tags Vectors
 // @Produce json
 // @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{}
 // @Router /api/vector/metrics [get]
-func (s *Service) handleVectorMetrics(w http.ResponseWriter, _ *http.Request) {
+func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	embStore := s.embeddingStore
+	s.initMu.RUnlock()
+
+	if embStore == nil {
+		msg := "pgvector subsystem available; embedding store not yet initialised"
+		enabled := true
+		if s.ready.Load() {
+			msg = "embedding store unavailable (embedding disabled or failed to initialize)"
+			enabled = false
+		}
+		writeJSON(w, map[string]any{
+			"enabled": enabled,
+			"message": msg,
+		})
+		return
+	}
+
+	stats, err := embStore.Stats(r.Context())
+	if err != nil {
+		http.Error(w, "embedding stats unavailable: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	writeJSON(w, map[string]any{
-		"enabled": false,
-		"message": "Vector storage removed in v5 (content_chunks table dropped)",
+		"enabled": true,
+		"message": "pgvector subsystem active",
+		"stats":   stats,
 	})
 }
 

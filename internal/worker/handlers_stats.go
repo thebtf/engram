@@ -3,16 +3,21 @@ package worker
 import (
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
+
+	"github.com/thebtf/engram/internal/embedding"
 )
 
 // vnextStatsResponse is the JSON shape returned by GET /api/stats/vnext.
 type vnextStatsResponse struct {
-	InjectionCount int64              `json:"injection_count"`
-	CitationCount  int64              `json:"citation_count"`
-	UncitedCount   int64              `json:"uncited_count"`
-	NoiseRatio     float64            `json:"noise_ratio"`
-	WriteGateStats map[string]int64   `json:"write_gate_stats"`
-	GeneratedAt    time.Time          `json:"generated_at"`
+	InjectionCount int64                      `json:"injection_count"`
+	CitationCount  int64                      `json:"citation_count"`
+	UncitedCount   int64                      `json:"uncited_count"`
+	NoiseRatio     float64                    `json:"noise_ratio"`
+	WriteGateStats map[string]int64           `json:"write_gate_stats"`
+	GeneratedAt    time.Time                  `json:"generated_at"`
+	Embedding      *embedding.EmbeddingStats  `json:"embedding,omitempty"`
 }
 
 // handleStatsVnext godoc
@@ -85,5 +90,20 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 		WriteGateStats: writeGate,
 		GeneratedAt:    time.Now().UTC(),
 	}
+
+	// Populate embedding telemetry when the embedding store is available.
+	// Errors are non-fatal: log and leave the field nil so the stats response
+	// always succeeds even when the embedding subsystem is unhealthy.
+	s.initMu.RLock()
+	embStore := s.embeddingStore
+	s.initMu.RUnlock()
+	if embStore != nil {
+		if embStats, err := embStore.Stats(ctx); err != nil {
+			log.Debug().Err(err).Msg("stats/vnext: embedding stats unavailable")
+		} else {
+			resp.Embedding = &embStats
+		}
+	}
+
 	writeJSON(w, resp)
 }
