@@ -1,5 +1,7 @@
 /**
- * Format a timestamp as relative time (e.g., "5m ago", "2h ago")
+ * Converts a Unix-epoch number or ISO date string to a human-readable
+ * relative label such as "5m ago" or "2h ago". Values older than 7 days
+ * fall back to the locale date string.
  */
 export function formatRelativeTime(dateOrEpoch: string | number): string {
   const timestamp = typeof dateOrEpoch === 'number' ? dateOrEpoch : new Date(dateOrEpoch).getTime()
@@ -20,7 +22,8 @@ export function formatRelativeTime(dateOrEpoch: string | number): string {
 }
 
 /**
- * Format uptime duration string
+ * Converts a Go duration string (e.g. "1h30m45.123456789s") into a compact
+ * display form suitable for dashboard uptime widgets.
  */
 export function formatUptime(uptimeStr: string): string {
   // Parse Go duration string (e.g., "1h30m45.123456789s")
@@ -41,27 +44,30 @@ export function formatUptime(uptimeStr: string): string {
 }
 
 /**
- * Safely format a date as relative time, returning "—" for null/undefined/invalid values.
+ * Wraps formatRelativeTime with null/undefined/zero-value safety. Returns the
+ * em-dash placeholder (—) for any absent or un-parseable value.
  */
 export function safeDateFormat(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === '' || value === 0) return '\u2014'
+  if (value === null || value === undefined || value === '' || value === 0) return '—'
   const date = new Date(typeof value === 'number' ? value : value)
-  if (isNaN(date.getTime())) return '\u2014'
+  if (isNaN(date.getTime())) return '—'
   return formatRelativeTime(date.getTime())
 }
 
 /**
- * Safely format a date as an absolute date string, returning "—" for null/undefined/invalid values.
+ * Like safeDateFormat but returns a full locale date string instead of a
+ * relative label. Returns the em-dash placeholder for absent or invalid values.
  */
 export function safeAbsoluteDate(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === '' || value === 0) return '\u2014'
+  if (value === null || value === undefined || value === '' || value === 0) return '—'
   const date = new Date(typeof value === 'number' ? value : value)
-  if (isNaN(date.getTime())) return '\u2014'
+  if (isNaN(date.getTime())) return '—'
   return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 /**
- * Truncate text to a maximum length with ellipsis
+ * Truncates a string to maxLength, appending an ellipsis when the input
+ * exceeds the limit.
  */
 export function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text
@@ -69,7 +75,8 @@ export function truncate(text: string, maxLength: number): string {
 }
 
 /**
- * Escape HTML entities
+ * Replaces HTML special characters with their entity equivalents to prevent
+ * injection when rendering user-supplied strings as markup.
  */
 export function escapeHtml(text: string): string {
   const map: Record<string, string> = {
@@ -83,7 +90,8 @@ export function escapeHtml(text: string): string {
 }
 
 /**
- * Parse JSON safely with fallback
+ * Parses a JSON string or passes through an already-decoded array. Returns
+ * the fallback value when the input is not parseable as JSON.
  */
 export function parseJsonSafe<T>(value: unknown, fallback: T): T {
   if (Array.isArray(value)) return value as T
@@ -98,7 +106,8 @@ export function parseJsonSafe<T>(value: unknown, fallback: T): T {
 }
 
 /**
- * Get string value safely from potentially nullable fields
+ * Coerces an unknown value to string, returning an empty string for null or
+ * undefined inputs.
  */
 export function getString(value: unknown): string {
   if (typeof value === 'string') return value
