@@ -36,11 +36,16 @@ func NewTranscriptStore(db *gorm.DB) *TranscriptStore {
 
 // Create inserts t into the database. If t.ByteLen is 0 it is computed
 // from len(t.Content) so callers do not have to set it explicitly.
-// CreatedAt is set to now() by the database DEFAULT; the Go-side value
-// is left as-is so tests can supply an explicit timestamp when needed.
+// CreatedAt must be a real timestamp for the dream-cycle watermark query
+// (created_at >= watermark). The GORM tag autoCreateTime:false means GORM
+// will NOT auto-populate this field, so we set it here when zero. Tests that
+// supply an explicit CreatedAt (non-zero) are unaffected.
 func (s *TranscriptStore) Create(ctx context.Context, t *SessionTranscript) error {
 	if t.ByteLen == 0 {
 		t.ByteLen = len(t.Content)
+	}
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = time.Now()
 	}
 	// Use Omit("ProcessedAt") so a nil ProcessedAt is stored as NULL rather
 	// than the zero time that GORM would otherwise write.
