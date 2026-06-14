@@ -111,6 +111,12 @@ func tolerantParseJSONArray(raw string) ([]llmDecisionItem, error) {
 		// No array brackets found; attempt a plain unmarshal as a last resort.
 		var items []llmDecisionItem
 		if err := json.Unmarshal([]byte(s), &items); err != nil {
+			// LLMs occasionally return a single object instead of a one-element
+			// array. Try unmarshalling as a single item and wrap it in a slice.
+			var single llmDecisionItem
+			if errSingle := json.Unmarshal([]byte(s), &single); errSingle == nil {
+				return []llmDecisionItem{single}, nil
+			}
 			return nil, err
 		}
 		return items, nil
@@ -119,6 +125,12 @@ func tolerantParseJSONArray(raw string) ([]llmDecisionItem, error) {
 	slice := s[start : end+1]
 	var items []llmDecisionItem
 	if err := json.Unmarshal([]byte(slice), &items); err != nil {
+		// Same single-object fallback for the bracketed case (e.g. stray content
+		// after the closing bracket caused the slice to be mis-extracted).
+		var single llmDecisionItem
+		if errSingle := json.Unmarshal([]byte(slice), &single); errSingle == nil {
+			return []llmDecisionItem{single}, nil
+		}
 		return nil, err
 	}
 	return items, nil

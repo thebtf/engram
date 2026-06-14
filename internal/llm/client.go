@@ -120,16 +120,11 @@ func (c *Client) Complete(ctx context.Context, system, user string) (string, err
 	}
 
 	endpoint := c.baseURL + "/v1/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("llm: create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
 
 	// 3-attempt exponential backoff, identical in shape to embedding/client.go.
+	// The http.Request is recreated on every attempt: http.Client.Do mutates
+	// request state (Body consumed, internal redirect tracking) so a single
+	// *http.Request must not be reused across Do calls.
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
@@ -138,7 +133,15 @@ func (c *Client) Complete(ctx context.Context, system, user string) (string, err
 				return "", ctx.Err()
 			case <-time.After(time.Duration(1<<attempt) * time.Second):
 			}
-			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return "", fmt.Errorf("llm: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		}
 
 		resp, doErr := c.httpClient.Do(req)
@@ -161,10 +164,14 @@ func (c *Client) Complete(ctx context.Context, system, user string) (string, err
 
 		var result chatResponse
 		if err := json.Unmarshal(respBody, &result); err != nil {
-			return "", fmt.Errorf("llm: decode response: %w", err)
+			// Malformed JSON can be a transient proxy/network artefact — retry.
+			lastErr = fmt.Errorf("llm: decode response: %w", err)
+			continue
 		}
 		if len(result.Choices) == 0 {
-			return "", fmt.Errorf("llm: response contained no choices")
+			// Empty choices can be a transient upstream issue — retry.
+			lastErr = fmt.Errorf("llm: response contained no choices")
+			continue
 		}
 		return result.Choices[0].Message.Content, nil
 	}

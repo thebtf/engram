@@ -206,7 +206,9 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 	// the sleep goroutine beyond a known ceiling; the 4h tick interval means this
 	// is well within budget.
 	if isCrystallizationEnabled() {
-		dreamCtx, dreamCancel := context.WithTimeout(ctx, 60*time.Second)
+		// LLM worst-case budget: 30s/attempt × 3 attempts + 2s + 4s backoff = 96s.
+		// Use 120s to cover that budget with margin; 60s was insufficient.
+		dreamCtx, dreamCancel := context.WithTimeout(ctx, 120*time.Second)
 		s.runDreamCrystallization(dreamCtx)
 		dreamCancel()
 	}
