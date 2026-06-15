@@ -4229,6 +4229,15 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					// FK existed at deletion time, so it is semantically consistent,
 					// not data loss: the audit event (action/reason/actor/timestamp)
 					// is preserved, only the dangling pointer is cleared.
+					//
+					// LOCK NOTE: the orphan UPDATE and the ADD CONSTRAINT both run in
+					// the gormigrate transaction, holding ACCESS EXCLUSIVE on audit_log
+					// for the duration. Acceptable for engram's single-server scale
+					// (audit_log is small; orphan rows are rare-to-zero). If this ever
+					// runs against a very large audit_log, split into a pre-migration
+					// batched UPDATE (committed separately) followed by ADD CONSTRAINT,
+					// or use ADD CONSTRAINT ... NOT VALID + VALIDATE CONSTRAINT to avoid
+					// the long validation lock.
 					`UPDATE audit_log
 						SET memory_id = NULL
 						WHERE memory_id IS NOT NULL
