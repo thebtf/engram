@@ -85,9 +85,6 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 		// Dropped in v5 (US9): timeline backed by search.Manager.
 		return "", fmt.Errorf("recall: action %q not supported in v5 (timeline search removed — use recall(action=\"search\") instead)", action)
 
-	case "related":
-		return s.handleFindRelatedObservations(ctx, args)
-
 	case "sessions":
 		query := coerceString(m["query"], "")
 		if query != "" {
@@ -114,12 +111,9 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 		// Flag-OFF: exact tombstone string from origin/main (byte-identical).
 		return "", fmt.Errorf("recall: action %q not supported in v5 (search ranking removed)", action)
 
-	case "reasoning":
-		return s.handleReasoningSearch(ctx, args)
-
 	default:
 		return "", fmt.Errorf(
-			"unknown recall action: %q (valid: search, by_file, related, reasoning)",
+			"unknown recall action: %q (valid: search, by_file)",
 			action,
 		)
 	}
@@ -446,47 +440,3 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	return string(output), nil
 }
 
-// handleReasoningSearch retrieves reasoning traces by project.
-func (s *Server) handleReasoningSearch(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	project := coerceString(m["project"], "")
-	limit := coerceInt(m["limit"], 5)
-
-	if s.reasoningStore == nil {
-		return "Reasoning traces not available (store not configured).", nil
-	}
-
-	traces, err := s.reasoningStore.SearchByProject(ctx, project, limit)
-	if err != nil {
-		return "", fmt.Errorf("reasoning search: %w", err)
-	}
-
-	if len(traces) == 0 {
-		return "No reasoning traces found for this project.", nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Reasoning Traces (%d found)\n\n", len(traces)))
-
-	for i, t := range traces {
-		sb.WriteString(fmt.Sprintf("## Trace %d (quality: %.0f%%)\n", i+1, t.QualityScore*100))
-
-		// Parse steps from JSONB string
-		var steps []struct {
-			Type    string `json:"type"`
-			Content string `json:"content"`
-		}
-		if jsonErr := json.Unmarshal([]byte(t.Steps), &steps); jsonErr == nil {
-			for _, step := range steps {
-				sb.WriteString(fmt.Sprintf("  [%s] %s\n", strings.ToUpper(step.Type), step.Content))
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String(), nil
-}

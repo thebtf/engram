@@ -236,33 +236,9 @@ type APIToken struct {
 
 func (APIToken) TableName() string { return "api_tokens" }
 
-// ReasoningTrace stores an agent's reasoning chain (System 2 memory).
-// Each trace captures the multi-step reasoning process an agent used
-// to arrive at a decision, enabling future agents to learn from
-// high-quality reasoning patterns.
-type ReasoningTrace struct {
-	SDKSessionID   string  `gorm:"column:sdk_session_id;index"`
-	Project        string  `gorm:"index;default:''"`
-	Steps          string  `gorm:"type:jsonb;default:'[]'"`
-	TaskContext    string  `gorm:"type:jsonb;default:'{}'"`
-	ID             int64   `gorm:"primaryKey;autoIncrement"`
-	QualityScore   float64 `gorm:"column:quality_score;type:real;default:0;index"`
-	CreatedAt      time.Time
-	CreatedAtEpoch int64 `gorm:"column:created_at_epoch;default:0"`
-}
-
-func (ReasoningTrace) TableName() string { return "reasoning_traces" }
-
-// BeforeCreate hook to ensure timestamps are set.
-func (r *ReasoningTrace) BeforeCreate(tx *gorm.DB) error {
-	if r.CreatedAtEpoch == 0 {
-		r.CreatedAtEpoch = time.Now().UnixMilli()
-	}
-	if r.CreatedAt.IsZero() {
-		r.CreatedAt = time.Now()
-	}
-	return nil
-}
+// (ReasoningTrace struct removed in CR-2a of provenance-cleanup: its store and all
+// readers/writers are gone. The reasoning_traces table — created by migration 065 via
+// raw SQL, not AutoMigrate — stays live until its CR-3 DROP migration.)
 
 // Issue represents a cross-project issue filed by an agent.
 // Lifecycle: open → acknowledged → resolved ⟲ reopened

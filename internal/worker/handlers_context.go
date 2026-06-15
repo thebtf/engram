@@ -459,35 +459,6 @@ func compactObservationsWithLimit(observations []*models.Observation, fullCount 
 	return result
 }
 
-// applyActiveVersions replaces each observation's narrative with its active ObservationVersion
-// narrative when one exists. Returns a new slice; original observation pointers are not mutated.
-// Errors from the version store are silently logged — the original narrative is used as fallback.
-func applyActiveVersions(ctx context.Context, vs *gorm.VersionStore, observations []*models.Observation) []*models.Observation {
-	if len(observations) == 0 || vs == nil {
-		return observations
-	}
-
-	result := make([]*models.Observation, len(observations))
-	for i, obs := range observations {
-		active, err := vs.GetActiveVersion(ctx, obs.ID)
-		if err != nil {
-			log.Debug().Err(err).Int64("obs_id", obs.ID).Msg("Failed to fetch active observation version; using original narrative")
-			result[i] = obs
-			continue
-		}
-		if active == nil {
-			result[i] = obs
-			continue
-		}
-		// Shallow copy — only swap the narrative field so the original model is not mutated.
-		copy := *obs
-		copy.Narrative.String = active.Narrative
-		copy.Narrative.Valid = true
-		result[i] = &copy
-	}
-
-	return result
-}
 
 type sessionStartCompatibilityResponse struct {
 	Issues      []map[string]any `json:"issues"`
@@ -1027,17 +998,9 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	// Agent stats fetch + A/B injection strategy selector were removed in v5.
 	var selectedStrategy string
 
-	// Apply active version substitution (APO-lite, Phase 5).
-	// For each observation in guidance and always-inject sections, check whether an active
-	// ObservationVersion exists. When one does, replace the narrative in a shallow copy so
-	// the original model record is not mutated.
-	s.initMu.RLock()
-	versionStore := s.versionStore
-	s.initMu.RUnlock()
-	if versionStore != nil {
-		guidanceObservations = applyActiveVersions(ctx, versionStore, guidanceObservations)
-		alwaysInjectObservations = applyActiveVersions(ctx, versionStore, alwaysInjectObservations)
-	}
+	// (Active-version narrative substitution — APO-lite Phase 5, backed by the
+	// observation_versions table — was removed in CR-2a of provenance-cleanup: the
+	// table is unpopulated post-v5 demolition and its store/readers are gone.)
 
 	// Snapshot the vNext stores + flag once. CR-1 (provenance-cleanup): injection_log
 	// (mig 106) is now the SOLE injection-record sink for BOTH response strategies —

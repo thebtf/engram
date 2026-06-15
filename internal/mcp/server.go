@@ -34,14 +34,12 @@ import (
 type Server struct {
 	stdin                  io.Reader
 	stdout                 io.Writer
-	relationStore          *gorm.RelationStore
 	sessionStore           *gorm.SessionStore
 	collectionRegistry     *collections.Registry
 	sessionIdxStore        *sessions.Store
 	documentStore          *gorm.DocumentStore
 	versionedDocumentStore *gorm.VersionedDocumentStore
 	chunkManager           *chunking.Manager
-	reasoningStore         *gorm.ReasoningTraceStore
 	issueStore             *gorm.IssueStore
 	embeddingClient        *embedding.Client
 	embeddingStore         *embedding.Store
@@ -70,7 +68,6 @@ type Server struct {
 // ServerOptions holds the dependencies injected into the MCP Server.
 type ServerOptions struct {
 	Version            string
-	RelationStore      *gorm.RelationStore
 	SessionStore       *gorm.SessionStore
 	CollectionRegistry *collections.Registry
 	SessionIdxStore    *sessions.Store
@@ -84,7 +81,6 @@ func NewServer(opts ServerOptions) *Server {
 		version:            opts.Version,
 		stdin:              os.Stdin,
 		stdout:             os.Stdout,
-		relationStore:      opts.RelationStore,
 		sessionStore:       opts.SessionStore,
 		collectionRegistry: opts.CollectionRegistry,
 		sessionIdxStore:    opts.SessionIdxStore,
@@ -101,11 +97,6 @@ func (s *Server) SetBackfillStatusFunc(fn func() (any, error)) {
 // SetVersionedDocumentStore sets the versioned document store for document MCP tools.
 func (s *Server) SetVersionedDocumentStore(vds *gorm.VersionedDocumentStore) {
 	s.versionedDocumentStore = vds
-}
-
-// SetReasoningStore sets the reasoning trace store for System 2 memory tools.
-func (s *Server) SetReasoningStore(rs *gorm.ReasoningTraceStore) {
-	s.reasoningStore = rs
 }
 
 // SetIssueStore sets the issue store for cross-project agent issue tracking.
@@ -464,7 +455,7 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 
 | Tool | Purpose | Key Actions |
 |------|---------|-------------|
-| ` + "`recall`" + ` | **Search & retrieve** memories | search (default), preset, by_file, by_concept, by_type, similar, timeline, related, get, sessions, explain, reasoning |
+| ` + "`recall`" + ` | **Search & retrieve** memories | search (default), by_file |
 | ` + "`store`" + ` | **Save** memories, edit, merge, import | create (default), edit, merge, import |
 | ` + "`feedback`" + ` | **Rate** quality, suppress, record outcomes | rate, suppress, outcome |
 | ` + "`issues`" + ` | **Cross-project issue tracking** between agents | create, list, get, update, comment, reopen |
@@ -543,7 +534,6 @@ Use ` + "`store(action=\"import\", path=\"...\")`" + ` to bulk import pre-author
 **After fixing a bug:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture root cause and fix.
 **After research:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture findings. (Do NOT use memory_type values like ` + "`insight`" + ` in the observation ` + "`type`" + ` field.)
 **Found a bug in another project:** ` + "`issues(action=\"create\", title=\"...\", target_project=\"...\", priority=\"high\")`" + ` — NOT store.
-**Debugging:** ` + "`recall(action=\"related\", id=N)`" + ` to trace cause chains.
 **Secrets:** ` + "`vault(action=\"store\")`" + ` for API keys. Never store secrets in observations.
 
 ## Markdown Formatting (MANDATORY for all text content)
@@ -709,18 +699,16 @@ func (s *Server) primaryTools() []Tool {
 	return []Tool{
 		{
 			Name:        "recall",
-			Description: "Search and retrieve memories. Actions: search (default, trivial SQL filter over memories), by_file, related, reasoning.",
+			Description: "Search and retrieve memories. Actions: search (default, trivial SQL filter over memories), by_file.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":         map[string]any{"type": "string", "enum": []string{"search", "by_file", "related", "reasoning"}, "default": "search", "description": "Action to perform"},
-					"query":          map[string]any{"type": "string", "description": "Search query / substring filter (for search)"},
-					"files":          map[string]any{"type": "string", "description": "File paths (for action=by_file)"},
-					"id":             map[string]any{"type": "number", "description": "Observation ID (for action=related)"},
-					"project":        map[string]any{"type": "string", "description": "Project name filter"},
-					"limit":          map[string]any{"type": "number", "description": "Max results"},
-					"min_confidence": map[string]any{"type": "number", "description": "Min confidence 0-1 (for action=related)"},
+					"action":  map[string]any{"type": "string", "enum": []string{"search", "by_file"}, "default": "search", "description": "Action to perform"},
+					"query":   map[string]any{"type": "string", "description": "Search query / substring filter (for search)"},
+					"files":   map[string]any{"type": "string", "description": "File paths (for action=by_file)"},
+					"project": map[string]any{"type": "string", "description": "Project name filter"},
+					"limit":   map[string]any{"type": "number", "description": "Max results"},
 				},
 			},
 		},
@@ -851,20 +839,6 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		// find_by_file_context, find_by_type, timeline, get_recent_context, get_context_timeline,
 		// get_timeline_by_query removed in v5 (US9) — backed by internal/search which is dropped.
-		{
-			Name:        "find_related_observations",
-			Description: "Find observations related to a given observation ID filtered by confidence threshold. Returns related observations sorted by confidence score. Useful for discovering relevant context.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"id"},
-				"properties": map[string]any{
-					"id":             map[string]any{"type": "number", "description": "Observation ID"},
-					"min_confidence": map[string]any{"type": "number", "default": 0.5, "minimum": 0.0, "maximum": 1.0, "description": "Minimum confidence threshold"},
-					"limit":          map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
-				},
-			},
-		},
 		{
 			Name:        "find_similar_observations",
 			Description: "Find observations semantically similar to a query or observation. Uses vector similarity search to find related content. Useful for detecting duplicates before creating new observations.",
@@ -1503,8 +1477,6 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 
 	// Legacy alias handlers for non-search tools
 	switch name {
-	case "find_related_observations":
-		return s.handleFindRelatedObservations(ctx, args)
 	case "find_similar_observations":
 		return s.handleFindSimilarObservations(ctx, args)
 	case "get_memory_stats":
@@ -1643,57 +1615,6 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
-}
-
-// handleFindRelatedObservations returns observation IDs related to the given ID.
-// v5 (US3): the full observation store is gone; only relation IDs are returned.
-func (s *Server) handleFindRelatedObservations(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	id := coerceInt64(m["id"], 0)
-	minConf := coerceFloat64(m["min_confidence"], 0)
-	limit := coerceInt(m["limit"], 0)
-
-	if id <= 0 {
-		return "", fmt.Errorf("id is required and must be a positive integer")
-	}
-	if s.relationStore == nil {
-		return "", fmt.Errorf("related observations unavailable: relation store not configured")
-	}
-	if minConf < 0 {
-		minConf = 0.5
-	}
-	if limit == 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
-	related, err := s.relationStore.GetRelatedObservationIDs(ctx, id, minConf)
-	if err != nil {
-		return "", fmt.Errorf("failed to get related observations: %w", err)
-	}
-	if related == nil {
-		related = []int64{}
-	}
-	if len(related) > limit {
-		related = related[:limit]
-	}
-
-	// v5 (US3): observation store removed; return IDs only.
-	out, err := json.Marshal(map[string]any{
-		"observation_ids": related,
-		"count":           len(related),
-		"note":            "Full observation fetch unavailable in v5 — pass the returned IDs to tools that accept observation IDs",
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-	return string(out), nil
 }
 
 // handleFindByFileObservations is a tombstone for the removed v5 find_by_file tool.

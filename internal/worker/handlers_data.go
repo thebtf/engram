@@ -463,68 +463,6 @@ func (s *Service) handleVectorHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleGraphStats godoc
-// @Summary Get graph statistics
-// @Description Returns graph statistics for the dashboard, using relation data to compute knowledge graph metrics.
-// @Tags Graph
-// @Produce json
-// @Security ApiKeyAuth
-// @Success 200 {object} map[string]interface{}
-// @Router /api/graph/stats [get]
-func (s *Service) handleGraphStats(w http.ResponseWriter, r *http.Request) {
-	// Edge count from the relations table represents the knowledge graph edges.
-	edgeCount, err := s.relationStore.GetTotalRelationCount(r.Context())
-	if err != nil {
-		edgeCount = 0
-	}
-
-	// Per-type edge breakdown for the graph dashboard widget.
-	edgeTypes := make(map[string]int)
-	for _, t := range models.AllRelationTypes {
-		relations, err := s.relationStore.GetRelationsByType(r.Context(), t, 10000)
-		if err == nil {
-			edgeTypes[string(t)] = len(relations)
-		}
-	}
-
-	// Node count: distinct observation IDs that appear in at least one relation.
-	nodeCount, err := s.relationStore.GetDistinctNodeCount(r.Context())
-	if err != nil {
-		nodeCount = 0
-	}
-
-	// Average degree: each undirected edge contributes to two nodes.
-	var avgDegree float64
-	if nodeCount > 0 {
-		avgDegree = float64(edgeCount*2) / float64(nodeCount)
-	}
-
-	maxDegree, err := s.relationStore.GetMaxDegree(r.Context())
-	if err != nil {
-		maxDegree = 0
-	}
-
-	// Graph is considered "enabled" only when real edges exist.
-	enabled := edgeCount > 0
-
-	writeJSON(w, map[string]any{
-		"enabled":      enabled,
-		"nodeCount":    nodeCount,
-		"edgeCount":    edgeCount,
-		"avgDegree":    avgDegree,
-		"maxDegree":    maxDegree,
-		"minDegree":    0,
-		"medianDegree": 0.0,
-		"edgeTypes":    edgeTypes,
-		"config": map[string]any{
-			"maxHops":            2,
-			"branchFactor":       10,
-			"edgeWeight":         0.3,
-			"rebuildIntervalMin": 30,
-		},
-	})
-}
-
 // handleVectorMetrics godoc
 // @Summary Get vector database metrics
 // @Description Returns live pgvector metrics from the embedding store (chunk_count, memories_with_chunks, etc.).

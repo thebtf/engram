@@ -104,7 +104,6 @@ type Service struct {
 	ctx                    context.Context
 	initError              error
 	server                 *http.Server
-	relationStore          *gorm.RelationStore
 	sessionManager         *session.Manager
 	sseBroadcaster         *sse.Broadcaster
 	processor              *sdk.Processor
@@ -146,7 +145,6 @@ type Service struct {
 	// Production code never sets this field.
 	transcriptCreatorOverride transcriptCreator
 	agentStatsStore        *gorm.AgentStatsStore
-	versionStore           *gorm.VersionStore
 	retrievalHooks         *retrievalHooks
 	authHandlers           *AuthHandlers
 	version                string
@@ -548,7 +546,6 @@ func (s *Service) initializeAsync() {
 
 	// Thin store wrappers that scope queries to their respective tables.
 	sessionStore := gorm.NewSessionStore(store)
-	relationStore := gorm.NewRelationStore(store)
 
 	// Session manager owns active-session state and the queue notification channel.
 	sessionManager := session.NewManager(sessionStore)
@@ -578,14 +575,9 @@ func (s *Service) initializeAsync() {
 	// Create agent stats store for Phase 4 agent-specific effectiveness tracking
 	agentStatsStore := gorm.NewAgentStatsStore(store.GetDB())
 
-	// Create version store for Phase 5 APO-lite observation rewrites
-	versionStore := gorm.NewVersionStore(store.GetDB())
-
 	// Create issue store for cross-project agent issues
 	issueStore := gorm.NewIssueStore(store.GetDB())
 
-	// Create reasoning trace store for System 2 memory (reasoning chains)
-	reasoningStore := gorm.NewReasoningTraceStore(store)
 
 	// Create memory + behavioral rules + credential stores for US3 observations split.
 	// All three stores are wired here (Commit E — T021).
@@ -625,12 +617,10 @@ func (s *Service) initializeAsync() {
 	s.behavioralRulesStore = behavioralRulesStore
 	s.feedbackUpdater = feedbackUpdater
 	s.agentStatsStore = agentStatsStore
-	s.versionStore = versionStore
 	s.auditStore = auditStore
 	s.purgeStore = purgeStore
 	s.transcriptStore = transcriptStore
 	s.tokenStore = tokenStore
-	s.relationStore = relationStore
 	s.sessionManager = sessionManager
 	s.processor = processor
 	s.initMu.Unlock()
@@ -745,7 +735,6 @@ func (s *Service) initializeAsync() {
 
 	mcpServer := mcp.NewServer(mcp.ServerOptions{
 		Version:            s.version,
-		RelationStore:      relationStore,
 		SessionStore:       sessionStore,
 		CollectionRegistry: collectionRegistry,
 		SessionIdxStore:    sessionIdxStore,
@@ -761,8 +750,6 @@ func (s *Service) initializeAsync() {
 	// Wire versioned document store into MCP server for collaborative document tools.
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
 
-	// Wire reasoning trace store into MCP server for System 2 memory recall.
-	mcpServer.SetReasoningStore(reasoningStore)
 	mcpServer.SetIssueStore(issueStore)
 
 	// Wire memory + behavioral rules stores (US3 Commit C).
@@ -1199,7 +1186,6 @@ func (s *Service) setupRoutes() {
 		// Vector metrics/health endpoints — report live pgvector subsystem status
 		r.Get("/api/vectors/health", s.handleVectorHealth)
 		r.Get("/api/vector/metrics", s.handleVectorMetrics)
-		r.Get("/api/graph/stats", s.handleGraphStats)
 
 		// Update endpoints (work before DB is ready)
 		r.Get("/api/update/check", s.handleUpdateCheck)
@@ -1306,13 +1292,6 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/issues/{id}", s.handleGetIssue)
 		r.Patch("/api/issues/{id}", s.handleUpdateIssue)
 		r.Delete("/api/issues/{id}", s.handleDeleteIssue)
-
-		// Knowledge-graph relation queries
-		r.Get("/api/relations/stats", s.handleGetRelationStats)
-		r.Get("/api/relations/type/{type}", s.handleGetRelationsByType)
-		r.Get("/api/observations/{id}/relations", s.handleGetRelations)
-		r.Get("/api/observations/{id}/graph", s.handleGetRelationGraph)
-		r.Get("/api/observations/{id}/related", s.handleGetRelatedObservations)
 
 		// Search usage analytics
 		r.Get("/api/search/recent", s.handleGetRecentQueries)

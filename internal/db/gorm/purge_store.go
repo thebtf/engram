@@ -22,7 +22,6 @@ type PurgeReceipt struct {
 	CitationCount  int64     `json:"citation_count"`
 	ChunkCount     int64     `json:"chunk_count"`
 	PromotionCount int64     `json:"promotion_count"`
-	TraceCount     int64     `json:"trace_count"`
 }
 
 // PurgeStore handles project-scoped hard deletion.
@@ -66,8 +65,7 @@ func NewPurgeStore(store *Store) *PurgeStore {
 //     `credentials` table and are explicitly excluded (vault concern).
 //  9. behavioral_rules WHERE project = ? (project column is *string / NULLable;
 //     NULL = global rule — those are never touched).
-// 10. reasoning_traces WHERE project = ? — System-2 memory (reasoning chains)
-//     scoped to this project; purged to prevent sensitive data leaks.
+//     (Former step 10 — reasoning_traces — removed in CR-2a; store + writers gone.)
 //
 // All child-table deletes use SQL subqueries (DELETE … WHERE … IN (SELECT id
 // FROM memories WHERE project = ?)) rather than a Go-side ID slice, which
@@ -184,15 +182,9 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.RuleCount = r.RowsAffected
 
-		// --- Step 10: reasoning_traces for this project ---
-		// System-2 memory (reasoning chains) is project-scoped and contains
-		// sensitive code, file paths, and proprietary logic. Purge to prevent
-		// data leaks after project deletion.
-		r = tx.Exec("DELETE FROM reasoning_traces WHERE project = ?", project)
-		if r.Error != nil {
-			return fmt.Errorf("delete reasoning_traces: %w", r.Error)
-		}
-		receipt.TraceCount = r.RowsAffected
+		// (Former step 10 — DELETE FROM reasoning_traces — removed in CR-2a of
+		// provenance-cleanup: the reasoning_traces store and all writers are gone,
+		// the table is unpopulated, and it is scheduled for DROP in CR-3.)
 
 		// --- Step 11: write the purge audit row inside the transaction ---
 		// memory_id is nullable (*int64); pass nil to indicate project-level event.
