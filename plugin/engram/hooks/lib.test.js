@@ -169,10 +169,25 @@ test('JS git ID algorithm matches Go ResolveProjectSlug for canonical test vecto
 // handler, ahead of any stdin parsing or server call.
 const { execFileSync } = require('node:child_process');
 
+// Quiet-mode aliases that must NOT leak from the dev/CI environment into the
+// child, or they would override the per-test values (e.g. an inherited
+// ENGRAM_QUIET=0 would defeat the config-file quiet:true test). Stripped before
+// merging the test-specific env.
+const QUIET_ENV_ALIASES = [
+  'ENGRAM_QUIET',
+  'ENGRAM_QUIET_HOOKS',
+  'CLAUDE_PLUGIN_OPTION_ENGRAM_QUIET',
+  'CLAUDE_PLUGIN_OPTION_engram_quiet',
+  'CLAUDE_PLUGIN_OPTION_QUIET',
+  'CLAUDE_PLUGIN_OPTION_quiet',
+];
+
 function runHookProcess(scriptName, env) {
+  const baseEnv = { ...process.env };
+  for (const k of QUIET_ENV_ALIASES) delete baseEnv[k];
   const out = execFileSync('node', [path.join(__dirname, scriptName)], {
     input: JSON.stringify({ session_id: 'quiet-test', cwd: __dirname }),
-    env: { ...process.env, ...env },
+    env: { ...baseEnv, ...env },
     encoding: 'utf8',
     stdio: ['pipe', 'pipe', 'ignore'],
   });
