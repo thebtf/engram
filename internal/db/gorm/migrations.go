@@ -4200,6 +4200,63 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec("DROP TABLE IF EXISTS session_transcripts").Error
 			},
 		},
+		// 136_audit_log_memory_fk — provenance-cleanup CR-4 (decision D7).
+		// audit_log.memory_id was created (migration 115) as a nullable BIGINT with
+		// NO foreign key — the last dangling entity *_id in the schema_integrity
+		// guardrail baseline. Operator decision (2026-06-15): add an FK to
+		// memories(id) ON DELETE SET NULL rather than CASCADE or a permanent
+		// whitelist. SET NULL preserves the audit row (action/reason/actor/
+		// timestamp) as a project-level event after its referenced memory is
+		// deleted, so post-deletion audit history survives — CASCADE would erase
+		// it. memory_id is already nullable (AuditLogEntry.MemoryID *int64), so the
+		// SET NULL target type fits without a column change.
+		//
+		// Idempotent: DROP CONSTRAINT IF EXISTS before ADD so re-runs are safe.
+		// Additive constraint only — no table drop, no data migration, no prod
+		// verify-empty park required.
+		{
+			ID: "136_audit_log_memory_fk",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE audit_log
+						DROP CONSTRAINT IF EXISTS fk_audit_log_memory`,
+					// Null out any orphan references BEFORE adding the constraint.
+					// On an upgraded DB, audit_log may hold rows whose memory_id
+					// points to a memory that was hard-deleted (e.g. bulkops
+					// rollback HardDeleteTx) while the audit row remained — those
+					// orphans would make ADD CONSTRAINT fail FK validation. Nulling
+					// them is exactly what ON DELETE SET NULL would have done had the
+					// FK existed at deletion time, so it is semantically consistent,
+					// not data loss: the audit event (action/reason/actor/timestamp)
+					// is preserved, only the dangling pointer is cleared.
+					//
+					// LOCK NOTE: the orphan UPDATE and the ADD CONSTRAINT both run in
+					// the gormigrate transaction, holding ACCESS EXCLUSIVE on audit_log
+					// for the duration. Acceptable for engram's single-server scale
+					// (audit_log is small; orphan rows are rare-to-zero). If this ever
+					// runs against a very large audit_log, split into a pre-migration
+					// batched UPDATE (committed separately) followed by ADD CONSTRAINT,
+					// or use ADD CONSTRAINT ... NOT VALID + VALIDATE CONSTRAINT to avoid
+					// the long validation lock.
+					`UPDATE audit_log
+						SET memory_id = NULL
+						WHERE memory_id IS NOT NULL
+							AND NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = audit_log.memory_id)`,
+					`ALTER TABLE audit_log
+						ADD CONSTRAINT fk_audit_log_memory
+							FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 136: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS fk_audit_log_memory`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

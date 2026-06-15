@@ -275,7 +275,15 @@ func (j JSONInt64Array) Value() (driver.Value, error) {
 }
 
 // Observation represents a learning extracted from a Claude Code session.
-// It is the primary unit of storage and retrieval in engram.
+//
+// Deprecated: the observations table was dropped in v5 (migration 099) and
+// Memory is now the primary unit of storage and retrieval. This struct is
+// retained only as a transitional response/transport shape for the few HTTP
+// surfaces still being migrated to Memory JSON (provenance-cleanup CR-4
+// reshapes the inject/dashboard responses; full struct removal is the CR-6
+// precondition once no caller depends on the Observation shape). The ObsType*
+// and related enum values remain in active use and are NOT deprecated. Do not
+// introduce new code that depends on Observation — use models.Memory.
 type Observation struct {
 	FileMtimes              JSONInt64Map     `db:"file_mtimes" gorm:"type:jsonb" json:"file_mtimes,omitempty"`
 	SDKSessionID            string           `db:"sdk_session_id" json:"sdk_session_id"`

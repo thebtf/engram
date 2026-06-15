@@ -78,10 +78,13 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	// edit is the CR's GREEN proof. Literal all-RED proof: evidence/cr0-red-proof.txt.
 	baseline := []string{
 		"agent_observation_stats.observation_id", // CR-2/CR-3 drop table
-		"audit_log.memory_id",                    // CR-4: add FK to memories(id) or whitelist with retention rationale
 		"observation_injections.observation_id",  // CR-3 drop table (after CR-1 rewire)
 		"observation_versions.observation_id",    // CR-2/CR-3 drop table
 	}
+	// CR-4 (migration 136, decision D7): audit_log.memory_id gained an FK to
+	// memories(id) ON DELETE SET NULL, so it is no longer a dangling entity *_id
+	// and was removed from this known-debt baseline. That removal is CR-4's
+	// schema_integrity GREEN proof.
 
 	require.Equal(t, baseline, violations,
 		"dangling entity *_id drift changed vs known-debt baseline. A NEW entry is a regression "+
