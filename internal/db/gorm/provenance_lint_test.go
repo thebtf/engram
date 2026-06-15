@@ -1,7 +1,6 @@
 package gorm
 
 import (
-	"fmt"
 	"sort"
 	"testing"
 
@@ -46,11 +45,33 @@ func TestProvenanceLint_LiveTablesAreKeepSetOrVNext(t *testing.T) {
 		if _, ok := allowedPreVNextTables[table.Name]; ok {
 			continue
 		}
-		violations = append(violations, fmt.Sprintf("%s created by migration %s", table.Name, table.CreatingMigrationID))
+		violations = append(violations, table.Name)
 	}
 	sort.Strings(violations)
 
-	require.NotEmpty(t, violations, "RED guardrail defect: expected current tree to expose pre-vNext non-keep-set live tables")
-	require.Contains(t, violations, "observation_injections created by migration 058_observation_injections_table")
-	require.Empty(t, violations, "live tables must be keep-set/protected data or created by migration >=105; found %v", violations)
+	// Known-debt baseline (CR-0 decision D1, see .agent/specs/provenance-cleanup/
+	// decisions.md). The guardrail can't assert zero violations during the epic —
+	// the demolition debt below is exactly what CR-1..CR-3 remove, and CI would be
+	// red for every intermediate CR. Instead it pins the CURRENT debt: the test is
+	// GREEN while violations match the baseline, and FAILS on (a) any NEW pre-vNext
+	// non-keep table — regression toward the demolished state — or (b) a baseline
+	// entry that is cleaned without shrinking this list. Each CR that drops a table
+	// MUST delete it from the baseline; that edit is the CR's GREEN proof. The
+	// literal all-RED proof is preserved at evidence/cr0-red-proof.txt + commit 2f0faef.
+	baseline := []string{
+		"agent_observation_stats", // CR-2 drop (observation-derived, empty)
+		"concept_weights",         // CR-2 drop (derived weights)
+		"observation_conflicts",   // CR-2 drop (observation-derived)
+		"observation_injections",  // CR-3 drop (after CR-1 citation rewire)
+		"observation_relations",   // CR-2 drop (observation-derived)
+		"observation_versions",    // CR-2 drop (observation-derived)
+		"reasoning_traces",        // CR-2 drop (observation-derived)
+		"search_misses",           // CR-2 drop (derived telemetry)
+		"vectors",                 // CR-2 drop (legacy embedding store)
+	}
+
+	require.Equal(t, baseline, violations,
+		"provenance drift changed vs known-debt baseline. If a NEW pre-vNext non-keep table appeared, "+
+			"that is a regression — keep-set it with a reason or revert. If a baseline table was cleaned, "+
+			"remove it from the baseline in this test (that edit is the CR's GREEN proof). Got %v", violations)
 }

@@ -69,18 +69,24 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	}
 	sort.Strings(violations)
 
-	require.NotEmpty(t, violations, "RED guardrail defect: expected current tree to expose dangling entity ID columns")
-	// observation_* dangling ids point at the dropped observations table — they
-	// disappear when CR-2/CR-3 drop those orphan tables (GREEN transition).
-	require.Contains(t, violations, "observation_versions.observation_id")
-	require.Contains(t, violations, "agent_observation_stats.observation_id")
-	require.Contains(t, violations, "observation_injections.observation_id")
-	// audit_log.memory_id is genuine missing-FK drift in a KEPT vNext table: it
-	// references memories(id) but declares no FK. Disposition (add FK with the
-	// right ON DELETE, or whitelist with a retention rationale) is CR-4 scope;
-	// asserted here so its expected-RED status is documented, not silent.
-	require.Contains(t, violations, "audit_log.memory_id")
-	require.Empty(t, violations, "entity *_id columns require a FK or whitelist entry; found %v", violations)
+	// Known-debt baseline (CR-0 decision D1, see .agent/specs/provenance-cleanup/
+	// decisions.md). RED-in-CI is incompatible with the operator's CI-green merge
+	// gate across the epic, so the guardrail pins the CURRENT dangling-id debt: it
+	// is GREEN while violations match the baseline, and FAILS on (a) a NEW dangling
+	// entity *_id column — regression — or (b) a baseline column cleaned without
+	// shrinking this list. Each CR that removes a dangler MUST delete it here; that
+	// edit is the CR's GREEN proof. Literal all-RED proof: evidence/cr0-red-proof.txt.
+	baseline := []string{
+		"agent_observation_stats.observation_id", // CR-2/CR-3 drop table
+		"audit_log.memory_id",                    // CR-4: add FK to memories(id) or whitelist with retention rationale
+		"observation_injections.observation_id",  // CR-3 drop table (after CR-1 rewire)
+		"observation_versions.observation_id",    // CR-2/CR-3 drop table
+	}
+
+	require.Equal(t, baseline, violations,
+		"dangling entity *_id drift changed vs known-debt baseline. A NEW entry is a regression "+
+			"(add a FK or a whitelist reason). A removed entry means a CR cleaned it — delete it from "+
+			"the baseline in this test (that edit is the CR's GREEN proof). Got %v", violations)
 }
 
 func domainEntityNames(schema *migrationmeta.Schema) map[string]bool {

@@ -3,67 +3,25 @@
 ## Overview
 
 PostgreSQL 17 with pgvector + pgvectorscale extensions. Schema managed by
-gormigrate with **96 migrations**. Tables created via `AutoMigrate` followed by
-explicit DDL for pgvector columns, FTS indexes, and constraints.
+gormigrate. Tables are created via raw `CREATE TABLE` DDL or `AutoMigrate`,
+followed by explicit DDL for pgvector columns, FTS indexes, and constraints.
 
-Current table count: **25**.
+The authoritative live-table list and exact migration/table counts are
+**generated** from `internal/db/gorm/migrations.go` into the generated-tables
+block at the bottom of this file. Regenerate after any schema migration with:
 
-## Tables
+```
+go run ./tools/gen-data-model
+```
 
-### Core Memory
+The `datamodel_drift_test.go` guardrail fails if the committed block falls out of
+sync with the migration list, so the counts never silently rot.
 
-| Table | Purpose |
-|-------|---------|
-| `memories` | Primary memory store. Typed observations (decision, bugfix, feature, refactor, discovery, change, guidance, credential, entity, wiki, pitfall, operational, timeline). Includes importance_score, scope (project/global), always_inject flag, FTS via tsvector. |
-| `content` | Chunked content for vector search. Associated with memories. |
-| `content_chunks` | Individual vector-indexed chunks with pgvector embeddings. |
-| `concept_weights` | Concept tag weights for memory retrieval boosting. |
-| `observation_conflicts` | Tracks conflicting memories for resolution. |
-| `observation_relations` | Graph edges between memories (relates_to, supersedes, etc.). |
-| `observation_versions` | Version history for memory edits. |
-| `reasoning_traces` | Captured reasoning chains from agent sessions. |
-
-### Sessions and Telemetry
-
-| Table | Purpose |
-|-------|---------|
-| `sdk_sessions` | Claude Code session records (session ID, project, timestamps). |
-| `search_query_log` | Search query analytics (query text, result count, latency). |
-| `retrieval_stats_log` | Retrieval performance metrics per query. |
-| `agent_observation_stats` | Per-agent memory usage statistics. |
-| `telemetry_snapshots` | Periodic system health snapshots. |
-| `projects` | Project registry (name, slug, metadata). |
-
-### Credentials and Auth
-
-| Table | Purpose |
-|-------|---------|
-| `credentials` | AES-256-GCM encrypted secrets. Scoped by project. |
-| `api_tokens` | Worker keycards for v6 two-tier auth. Per-workstation. |
-| `users` | Dashboard user accounts. |
-| `invitations` | Pending user invitations. |
-| `sessions` | Dashboard auth sessions (not Claude Code sessions). |
-
-### Issues
-
-| Table | Purpose |
-|-------|---------|
-| `issues` | Cross-project issue tracker. Lifecycle: open → acknowledged → resolved → closed. |
-| `issue_comments` | Threaded comments on issues. |
-
-### Documents
-
-| Table | Purpose |
-|-------|---------|
-| `documents` | Collection-based document store with chunked vector search. |
-| `versioned_documents` | Git-style versioned documents (path + project + version). |
-| `versioned_document_comments` | Line-anchored comments on document versions. |
-
-### Rules
-
-| Table | Purpose |
-|-------|---------|
-| `behavioral_rules` | Always-inject guidance rules. Project-scoped or global. Applied at session start. |
+> **Note (v5 demolition in progress):** several `observation_*` tables and other
+> pre-vNext tables still appear as live in the generated block but are slated for
+> removal by the `provenance-cleanup` epic (CR-2/CR-3). They are tracked by the
+> CR-0 provenance guardrails (`provenance_lint_test.go`, `schema_integrity_test.go`)
+> until dropped. Do not build new code against them.
 
 ## Key Schema Patterns
 
@@ -75,16 +33,69 @@ Current table count: **25**.
 
 ## Migration History
 
-96 gormigrate migrations spanning:
+gormigrate migrations run automatically on server startup, broadly spanning:
 - Core tables and indexes (001–019)
 - FTS and vector search setup (020–040)
 - Pattern/graph system (added then removed in v5)
 - Session and telemetry tracking (050–070)
-- Credential vault and encryption (071–080)
-- Issue tracker (081–090)
-- Auth and token system (091–100)
-- v5 table drops and cleanup (100–110)
-- v6 two-tier auth (110+)
+- Credential vault and encryption (071–090)
+- Issue tracker + auth (070–080)
+- v5 table drops and cleanup (083–110)
+- vNext: injection/citation logs, knowledge graph, crystallization, transcripts (106–135)
 
-Migrations run automatically on server startup. Irreversible by design —
-rollback requires manual SQL.
+The exact migration count is in the generated block below. Migrations are
+irreversible by design — rollback requires manual SQL or a backup restore.
+
+## Tables
+
+The list below is generated. Do not edit it by hand; run `go run ./tools/gen-data-model`.
+
+<!-- BEGIN GENERATED TABLES -->
+Generated from `internal/db/gorm/migrations.go`.
+
+Migration count: **124**.
+
+Live table count: **39**.
+
+| Table | Creating migration |
+| --- | --- |
+| `sdk_sessions` | `001_core_tables` |
+| `vectors` | `006_sqlite_vec_vectors` |
+| `concept_weights` | `007_concept_weights` |
+| `observation_conflicts` | `008_observation_conflicts` |
+| `observation_relations` | `011_observation_relations` |
+| `content` | `017_content_addressable_storage` |
+| `documents` | `017_content_addressable_storage` |
+| `telemetry_snapshots` | `026_telemetry_snapshots` |
+| `projects` | `030_projects_table` |
+| `search_misses` | `033_create_search_misses` |
+| `api_tokens` | `036_api_tokens` |
+| `search_query_log` | `037_search_query_log` |
+| `retrieval_stats_log` | `038_retrieval_stats_log` |
+| `system_config` | `050_system_config` |
+| `versioned_document_comments` | `051_documents` |
+| `versioned_documents` | `051_documents` |
+| `observation_injections` | `058_observation_injections_table` |
+| `agent_observation_stats` | `060_agent_observation_stats` |
+| `observation_versions` | `061_observation_versions` |
+| `reasoning_traces` | `065_reasoning_traces` |
+| `issue_comments` | `070_agent_issues` |
+| `issues` | `070_agent_issues` |
+| `invitations` | `080_create_auth_tables` |
+| `sessions` | `080_create_auth_tables` |
+| `users` | `080_create_auth_tables` |
+| `credentials` | `087_credentials` |
+| `memories` | `088_memories` |
+| `behavioral_rules` | `089_behavioral_rules` |
+| `injection_log` | `106_injection_log` |
+| `citation_log` | `107_citation_log` |
+| `content_chunks` | `108_content_chunks` |
+| `promotion_log` | `112_promotion_log` |
+| `knowledge_edges` | `113_knowledge_edges` |
+| `audit_log` | `115_audit_log` |
+| `session_segments` | `120_session_segments` |
+| `knowledge_nodes` | `126_knowledge_nodes_table` |
+| `crystallization_candidates` | `132_crystallization_candidates` |
+| `bulk_op_snapshots` | `133_bulk_op_snapshots` |
+| `session_transcripts` | `135_session_transcripts` |
+<!-- END GENERATED TABLES -->

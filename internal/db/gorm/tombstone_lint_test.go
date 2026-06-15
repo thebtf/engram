@@ -59,7 +59,9 @@ func TestTombstoneLint_RemovedInVersionCommentsDoNotNameLiveTables(t *testing.T)
 					if mentionsTable(candidateText, table.Name) {
 						rel, relErr := filepath.Rel(root, path)
 						require.NoError(t, relErr)
-						violations = append(violations, rel+":"+lineString(fset.Position(comment.Pos()).Line)+" names live table "+table.Name+" in tombstone comment")
+						// Key on file:table (no line number) so the baseline is
+						// stable against unrelated line shifts in the same file.
+						violations = append(violations, filepath.ToSlash(rel)+" -> "+table.Name)
 					}
 				}
 			}
@@ -67,11 +69,48 @@ func TestTombstoneLint_RemovedInVersionCommentsDoNotNameLiveTables(t *testing.T)
 		return nil
 	})
 	require.NoError(t, err)
-	sort.Strings(violations)
+	violations = uniqueSorted(violations)
 
-	require.NotEmpty(t, violations, "RED guardrail defect: expected current tree to expose stale tombstone comments")
-	require.True(t, violationMentions(violations, "content_chunks"), "expected stale content_chunks tombstone comment, got %v", violations)
-	require.Empty(t, violations, "tombstone comments must not name live tables; found %v", violations)
+	// Known-debt baseline (CR-0 decision D1, see .agent/specs/provenance-cleanup/
+	// decisions.md). These are the stale "removed/dropped in vN" comments that name
+	// a still-LIVE table (content_chunks restored@108, injection_log restored@106).
+	// CR-5 (contract honesty) rewords them; each reword removes its entry here, and
+	// that edit is CR-5's GREEN proof. The guardrail FAILS now on any NEW stale
+	// tombstone (a comment claiming a live table is dead — a fresh lie) and stays
+	// GREEN while the set matches this baseline. Literal all-RED proof:
+	// evidence/cr0-red-proof.txt.
+	baseline := []string{
+		"internal/db/gorm/models.go -> content_chunks",
+		"internal/mcp/server.go -> content_chunks",
+		"internal/mcp/store_supersession_test.go -> content_chunks",
+		"internal/mcp/tools_documents.go -> content_chunks",
+		"internal/mcp/tools_recall.go -> content_chunks",
+		"internal/worker/handlers_context.go -> content_chunks",
+		"internal/worker/handlers_data.go -> content_chunks",
+		"internal/worker/reaper/reaper.go -> injection_log",
+		"internal/worker/retrieval.go -> content_chunks",
+		"internal/worker/trigger_matcher.go -> content_chunks",
+	}
+
+	require.Equal(t, baseline, violations,
+		"stale-tombstone drift changed vs known-debt baseline. A NEW entry means a comment now claims a "+
+			"LIVE table is dead (a fresh lie) — reword it. A removed entry means CR-5 cleaned a comment — "+
+			"delete it from the baseline here (that edit is the GREEN proof). Got %v", violations)
+}
+
+// uniqueSorted dedupes and sorts a string slice (a file:table pair can be
+// produced twice when a 2-line continuation window re-scans the next comment).
+func uniqueSorted(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func cleanComment(text string) string {
