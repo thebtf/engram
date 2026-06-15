@@ -233,7 +233,8 @@ func (s *Service) handleGetModels(w http.ResponseWriter, _ *http.Request) {
 	// Model list is static at runtime; 1-hour cache prevents dashboard spam.
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
-	// Embedding models removed in v5 (content_chunks table dropped).
+	// The server-side embedding-model registry was removed in v5 (embeddings are now
+	// computed via external API, not on-box), so this list is intentionally empty.
 	writeJSON(w, map[string]any{
 		"models":  []any{},
 		"default": nil,

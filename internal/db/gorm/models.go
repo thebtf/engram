@@ -170,9 +170,11 @@ type Document struct {
 // TableName returns the table name for Document.
 func (Document) TableName() string { return "documents" }
 
-// ContentChunk held per-chunk embeddings for a content hash.
-// Removed in v5: content_chunks table dropped (migration 085).
-// This type is retained as a shell so document_store.go compiles without changes.
+// ContentChunk is the legacy hash-based chunk shell. The original content_chunks
+// table (hash+seq) was dropped in migration 085; migration 108 restored a
+// content_chunks table with a DIFFERENT schema (memory_id FK, not hash), so this
+// hash-based type no longer mirrors the live table. It is retained only so
+// document_store.go compiles; new code uses the mig-108 schema.
 type ContentChunk struct {
 	Hash      string    `gorm:"type:text;not null;primaryKey" json:"hash"`
 	Seq       int       `gorm:"primaryKey" json:"seq"`

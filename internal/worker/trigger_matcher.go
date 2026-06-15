@@ -153,7 +153,8 @@ func (s *Service) matchMemoryTriggers(ctx context.Context, req MemoryTriggerRequ
 }
 
 func (s *Service) matchEditWriteSemanticTriggers(_ context.Context, _ MemoryTriggerRequest) ([]MemoryTriggerMatch, error) {
-	// Vector search removed in v5 (content_chunks table dropped). No semantic triggers.
+	// Semantic (vector) edit/write triggers were removed in v5 and not rewired to the
+	// migration-108 content_chunks table, so this returns no semantic matches.
 	return []MemoryTriggerMatch{}, nil
 }
 

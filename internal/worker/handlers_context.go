@@ -318,9 +318,11 @@ func (s *Service) handleFileContext(w http.ResponseWriter, r *http.Request) {
 		files = files[:maxFiles]
 	}
 
-	// Vector search removed in v5 (content_chunks table dropped). Return empty results.
-	// "deprecated" and "message" allow clients to distinguish feature-removal
-	// from a genuine empty-result search, preventing silent degradation.
+	// The file-context vector-search feature was removed in v5; this endpoint is a
+	// stable no-op. (The content_chunks table itself was later restored at migration
+	// 108 for vNext memory embeddings, but this file-search path was not rewired.)
+	// "deprecated" and "message" let clients distinguish feature-removal from a
+	// genuine empty-result search, preventing silent degradation.
 	writeJSON(w, map[string]any{
 		"files":      files,
 		"results":    map[string]any{},

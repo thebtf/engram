@@ -52,8 +52,9 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 		return "", fmt.Errorf("recall: action %q not supported in v5 (type-lane search removed — use recall(action=\"search\") instead)", action)
 
 	case "similar":
-		// Dropped in v5 (US9): vector similarity search removed (content_chunks dropped).
-		// Reinstated under flag via recall_memory when ENGRAM_VNEXT_ENABLED=true (W3).
+		// The v5 demolition removed observation vector-similarity search (US9).
+		// vNext reinstated it on the migration-108 content_chunks table, gated by
+		// ENGRAM_VNEXT_ENABLED=true (W3); flag-off returns an empty result.
 		if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
 			// Under flag-ON: translate min_similarity into the hybrid vector threshold
 			// (VecThreshold on HybridOptions) and forward to recall_memory.

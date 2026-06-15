@@ -72,30 +72,17 @@ func TestTombstoneLint_RemovedInVersionCommentsDoNotNameLiveTables(t *testing.T)
 	violations = uniqueSorted(violations)
 
 	// Known-debt baseline (CR-0 decision D1, see .agent/specs/provenance-cleanup/
-	// decisions.md). These are the stale "removed/dropped in vN" comments that name
-	// a still-LIVE table (content_chunks restored@108, injection_log restored@106).
-	// CR-5 (contract honesty) rewords them; each reword removes its entry here, and
-	// that edit is CR-5's GREEN proof. The guardrail FAILS now on any NEW stale
-	// tombstone (a comment claiming a live table is dead — a fresh lie) and stays
-	// GREEN while the set matches this baseline. Literal all-RED proof:
-	// evidence/cr0-red-proof.txt.
-	baseline := []string{
-		"internal/db/gorm/models.go -> content_chunks",
-		"internal/mcp/server.go -> content_chunks",
-		"internal/mcp/store_supersession_test.go -> content_chunks",
-		"internal/mcp/tools_documents.go -> content_chunks",
-		"internal/mcp/tools_recall.go -> content_chunks",
-		"internal/worker/handlers_context.go -> content_chunks",
-		"internal/worker/handlers_data.go -> content_chunks",
-		"internal/worker/reaper/reaper.go -> injection_log",
-		"internal/worker/retrieval.go -> content_chunks",
-		"internal/worker/trigger_matcher.go -> content_chunks",
-	}
+	// decisions.md). CR-5 (contract honesty) reworded every stale "removed/dropped
+	// in vN" comment that named a still-LIVE table (content_chunks restored@108,
+	// injection_log restored@106), so the baseline is now EMPTY: the guardrail is
+	// pure regression protection — it FAILS on ANY new comment that claims a live
+	// table is dead (a fresh lie). Re-populating this list would re-admit drift.
+	// Literal pre-cleanup proof: evidence/cr0-red-proof.txt + git history.
+	var baseline []string
 
-	require.Equal(t, baseline, violations,
-		"stale-tombstone drift changed vs known-debt baseline. A NEW entry means a comment now claims a "+
-			"LIVE table is dead (a fresh lie) — reword it. A removed entry means CR-5 cleaned a comment — "+
-			"delete it from the baseline here (that edit is the GREEN proof). Got %v", violations)
+	require.ElementsMatch(t, baseline, violations,
+		"stale-tombstone drift changed vs known-debt baseline (now empty). A NEW entry means a comment "+
+			"now claims a LIVE table is dead (a fresh lie) — reword it. Got %v", violations)
 }
 
 // uniqueSorted dedupes and sorts a string slice (a file:table pair can be

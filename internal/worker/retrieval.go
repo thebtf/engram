@@ -117,7 +117,9 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	baseSimilarityScores := make(map[int64]float64)
 	observations := make([]*models.Observation, 0)
 
-	// Vector search removed in v5 (content_chunks table dropped). Use FTS-only retrieval.
+	// This legacy observation-retrieval path is FTS-only: its vector leg was removed
+	// in v5 and not rewired to the migration-108 content_chunks table (vNext hybrid
+	// retrieval lives elsewhere). Use FTS-only retrieval here.
 	scopeFilter := retrievalScope{Project: project, AgentID: state.agentID}
 	fallbackObservations, fallbackErr := s.searchFallbackObservations(ctx, query, scopeFilter, limit)
 	if fallbackErr != nil {
