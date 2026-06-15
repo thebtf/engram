@@ -4200,6 +4200,41 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec("DROP TABLE IF EXISTS session_transcripts").Error
 			},
 		},
+		// 136_audit_log_memory_fk — provenance-cleanup CR-4 (decision D7).
+		// audit_log.memory_id was created (migration 115) as a nullable BIGINT with
+		// NO foreign key — the last dangling entity *_id in the schema_integrity
+		// guardrail baseline. Operator decision (2026-06-15): add an FK to
+		// memories(id) ON DELETE SET NULL rather than CASCADE or a permanent
+		// whitelist. SET NULL preserves the audit row (action/reason/actor/
+		// timestamp) as a project-level event after its referenced memory is
+		// deleted, so post-deletion audit history survives — CASCADE would erase
+		// it. memory_id is already nullable (AuditLogEntry.MemoryID *int64), so the
+		// SET NULL target type fits without a column change.
+		//
+		// Idempotent: DROP CONSTRAINT IF EXISTS before ADD so re-runs are safe.
+		// Additive constraint only — no table drop, no data migration, no prod
+		// verify-empty park required.
+		{
+			ID: "136_audit_log_memory_fk",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE audit_log
+						DROP CONSTRAINT IF EXISTS fk_audit_log_memory`,
+					`ALTER TABLE audit_log
+						ADD CONSTRAINT fk_audit_log_memory
+							FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 136: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS fk_audit_log_memory`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
