@@ -144,7 +144,6 @@ type Service struct {
 	// tests assert the real handler path (redact → Create) without a live DB.
 	// Production code never sets this field.
 	transcriptCreatorOverride transcriptCreator
-	agentStatsStore        *gorm.AgentStatsStore
 	retrievalHooks         *retrievalHooks
 	authHandlers           *AuthHandlers
 	version                string
@@ -572,9 +571,6 @@ func (s *Service) initializeAsync() {
 	// Create citation log store for vNext Phase A citation tracking (migration 107).
 	citationLogStore := gorm.NewCitationLogStore(store)
 
-	// Create agent stats store for Phase 4 agent-specific effectiveness tracking
-	agentStatsStore := gorm.NewAgentStatsStore(store.GetDB())
-
 	// Create issue store for cross-project agent issues
 	issueStore := gorm.NewIssueStore(store.GetDB())
 
@@ -616,7 +612,6 @@ func (s *Service) initializeAsync() {
 	s.memoryStore = memoryStore
 	s.behavioralRulesStore = behavioralRulesStore
 	s.feedbackUpdater = feedbackUpdater
-	s.agentStatsStore = agentStatsStore
 	s.auditStore = auditStore
 	s.purgeStore = purgeStore
 	s.transcriptStore = transcriptStore

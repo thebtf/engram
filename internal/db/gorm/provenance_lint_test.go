@@ -59,15 +59,12 @@ func TestProvenanceLint_LiveTablesAreKeepSetOrVNext(t *testing.T) {
 	// MUST delete it from the baseline; that edit is the CR's GREEN proof. The
 	// literal all-RED proof is preserved at evidence/cr0-red-proof.txt + commit 2f0faef.
 	baseline := []string{
-		"agent_observation_stats", // CR-2 drop (observation-derived, empty)
-		"concept_weights",         // CR-2 drop (derived weights)
-		"observation_conflicts",   // CR-2 drop (observation-derived)
-		"observation_injections",  // CR-3 drop (after CR-1 citation rewire)
-		"observation_relations",   // CR-2 drop (observation-derived)
-		"observation_versions",    // CR-2 drop (observation-derived)
-		"reasoning_traces",        // CR-2 drop (observation-derived)
-		"search_misses",           // CR-2 drop (derived telemetry)
-		"vectors",                 // CR-2 drop (legacy embedding store)
+		// CR-2b (migration 137) dropped the 8 empty/derived observation-era tables
+		// that previously sat here. Their removal from this baseline is CR-2b's
+		// provenance_lint GREEN proof. Only observation_injections remains — it is
+		// dropped by CR-3 (migration after the CR-1 citation rewire), at which point
+		// this baseline becomes empty and the guardrail is pure regression protection.
+		"observation_injections", // CR-3 drop (after CR-1 citation rewire)
 	}
 
 	require.Equal(t, baseline, violations,

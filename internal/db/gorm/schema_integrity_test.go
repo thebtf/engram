@@ -28,12 +28,10 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 		"session_transcripts.session_id":            "external SDK session identifier (TEXT), not a row FK",
 		"session_transcripts.claude_session_id":     "external Claude session identifier (TEXT), not a row FK",
 		"sdk_sessions.claude_session_id":            "external Claude session identifier (TEXT), not a row FK",
-		// reasoning_traces.sdk_session_id + session_segments.session_id are the
-		// same external-session-string class as the entries above (TEXT, not a
-		// FK to sdk_sessions.id). reasoning_traces is additionally slated for
-		// DROP in CR-2; whitelisting the column keeps T001 focused on genuine
-		// dangling-entity drift rather than external-id false positives.
-		"reasoning_traces.sdk_session_id":           "external SDK session identifier (TEXT), not a row FK",
+		// session_segments.session_id is an external-session-string (TEXT, not a
+		// FK to sdk_sessions.id). The former reasoning_traces.sdk_session_id entry
+		// was removed in CR-2b: migration 137 drops reasoning_traces, so a whitelist
+		// key for a non-existent table is dead.
 		"session_segments.session_id":               "external SDK session identifier (TEXT), not a row FK",
 		"telemetry_snapshots.last_operation_id":     "opaque operation identifier",
 		// Self-referential version-tree pointers: a version row may reference a
@@ -77,9 +75,12 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	// shrinking this list. Each CR that removes a dangler MUST delete it here; that
 	// edit is the CR's GREEN proof. Literal all-RED proof: evidence/cr0-red-proof.txt.
 	baseline := []string{
-		"agent_observation_stats.observation_id", // CR-2/CR-3 drop table
-		"observation_injections.observation_id",  // CR-3 drop table (after CR-1 rewire)
-		"observation_versions.observation_id",    // CR-2/CR-3 drop table
+		// CR-2b (migration 137) dropped agent_observation_stats and
+		// observation_versions; their dangling observation_id entries were removed
+		// from this baseline as CR-2b's schema_integrity GREEN proof. Only
+		// observation_injections.observation_id remains — its table is dropped by
+		// CR-3 (after the CR-1 citation rewire), which empties this baseline.
+		"observation_injections.observation_id", // CR-3 drop table (after CR-1 rewire)
 	}
 	// CR-4 (migration 136, decision D7): audit_log.memory_id gained an FK to
 	// memories(id) ON DELETE SET NULL, so it is no longer a dangling entity *_id

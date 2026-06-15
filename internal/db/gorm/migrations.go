@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // runMigrations runs all database migrations using gormigrate.
@@ -249,44 +248,79 @@ func runMigrations(db *gorm.DB) error {
 		// Migration 007: Concept weights table with seed data
 		{
 			ID: "007_concept_weights",
+			// Raw-SQL CREATE + seed. Originally gorm AutoMigrate(&ConceptWeight{})
+			// + Create(&weights). Converted to raw SQL in CR-2b of provenance-cleanup
+			// so the ConceptWeight struct can be deleted (concept_weights is dropped by
+			// migration 137). gormigrate skips already-applied IDs, so this only affects
+			// fresh installs; the DDL is transcribed verbatim from the gorm-generated
+			// schema (verified byte-identical via pg_dump). Created here, dropped at 137
+			// within the same release, but the create/seed stays faithful so intermediate
+			// migration steps and fresh-install replay succeed.
 			Migrate: func(tx *gorm.DB) error {
-				if err := tx.AutoMigrate(&ConceptWeight{}); err != nil {
-					return err
+				if err := tx.Exec(`CREATE TABLE IF NOT EXISTS concept_weights (
+					concept    text NOT NULL,
+					updated_at text NOT NULL,
+					weight     real NOT NULL DEFAULT 0.1,
+					CONSTRAINT concept_weights_pkey PRIMARY KEY (concept)
+				)`).Error; err != nil {
+					return fmt.Errorf("migration 007: create concept_weights: %w", err)
 				}
 
-				// Seed default concept weights
+				// Seed default concept weights (INSERT ... ON CONFLICT DO NOTHING).
 				now := time.Now().Format(time.RFC3339)
-				weights := []ConceptWeight{
-					{Concept: "security", Weight: 0.30, UpdatedAt: now},
-					{Concept: "gotcha", Weight: 0.25, UpdatedAt: now},
-					{Concept: "best-practice", Weight: 0.20, UpdatedAt: now},
-					{Concept: "anti-pattern", Weight: 0.20, UpdatedAt: now},
-					{Concept: "architecture", Weight: 0.15, UpdatedAt: now},
-					{Concept: "performance", Weight: 0.15, UpdatedAt: now},
-					{Concept: "error-handling", Weight: 0.15, UpdatedAt: now},
-					{Concept: "pattern", Weight: 0.10, UpdatedAt: now},
-					{Concept: "testing", Weight: 0.10, UpdatedAt: now},
-					{Concept: "debugging", Weight: 0.10, UpdatedAt: now},
-					{Concept: "workflow", Weight: 0.05, UpdatedAt: now},
-					{Concept: "tooling", Weight: 0.05, UpdatedAt: now},
+				if err := tx.Exec(`INSERT INTO concept_weights (concept, weight, updated_at) VALUES
+					('security', 0.30, ?), ('gotcha', 0.25, ?), ('best-practice', 0.20, ?),
+					('anti-pattern', 0.20, ?), ('architecture', 0.15, ?), ('performance', 0.15, ?),
+					('error-handling', 0.15, ?), ('pattern', 0.10, ?), ('testing', 0.10, ?),
+					('debugging', 0.10, ?), ('workflow', 0.05, ?), ('tooling', 0.05, ?)
+					ON CONFLICT (concept) DO NOTHING`,
+					now, now, now, now, now, now, now, now, now, now, now, now).Error; err != nil {
+					return fmt.Errorf("migration 007: seed concept_weights: %w", err)
 				}
-
-				// INSERT OR IGNORE equivalent in GORM
-				return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&weights).Error
+				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
-				return tx.Migrator().DropTable("concept_weights")
+				return tx.Exec(`DROP TABLE IF EXISTS concept_weights`).Error
 			},
 		},
 
 		// Migration 008: Observation conflicts table
 		{
 			ID: "008_observation_conflicts",
+			// Raw-SQL CREATE. Originally gorm AutoMigrate(&ObservationConflict{}).
+			// Converted in CR-2b of provenance-cleanup so the ObservationConflict
+			// struct can be deleted (observation_conflicts is dropped by migration
+			// 137). gormigrate skips applied IDs, so this only affects fresh installs;
+			// DDL transcribed verbatim from the gorm-generated schema (pg_dump-verified).
 			Migrate: func(tx *gorm.DB) error {
-				return tx.AutoMigrate(&ObservationConflict{})
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS observation_conflicts (
+						conflict_type     text NOT NULL,
+						resolution        text NOT NULL,
+						detected_at       text NOT NULL,
+						reason            text,
+						resolved_at       text,
+						id                bigserial PRIMARY KEY,
+						newer_obs_id      bigint NOT NULL,
+						older_obs_id      bigint NOT NULL,
+						detected_at_epoch bigint NOT NULL,
+						resolved          bigint DEFAULT 0,
+						CONSTRAINT chk_observation_conflicts_conflict_type CHECK (conflict_type IN ('superseded', 'contradicts', 'outdated_pattern')),
+						CONSTRAINT chk_observation_conflicts_resolution CHECK (resolution IN ('prefer_newer', 'prefer_older', 'manual'))
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_conflicts_newer ON observation_conflicts (newer_obs_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_conflicts_older ON observation_conflicts (older_obs_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_conflicts_unresolved ON observation_conflicts (resolved, detected_at_epoch DESC)`,
+				}
+				for _, s := range stmts {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 008: %w", err)
+					}
+				}
+				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
-				return tx.Migrator().DropTable("observation_conflicts")
+				return tx.Exec(`DROP TABLE IF EXISTS observation_conflicts`).Error
 			},
 		},
 
@@ -357,11 +391,52 @@ func runMigrations(db *gorm.DB) error {
 		// Migration 011: Observation relations table
 		{
 			ID: "011_observation_relations",
+			// Raw-SQL CREATE. Originally gorm AutoMigrate(&ObservationRelation{}).
+			// Converted in CR-2b of provenance-cleanup so the ObservationRelation
+			// struct can be deleted (observation_relations is dropped by migration
+			// 137). gormigrate skips applied IDs, so this only affects fresh installs.
+			//
+			// The DDL is transcribed verbatim from the gorm-generated schema (pg_dump-
+			// verified). CRITICAL: the CHECK constraint names chk_observation_relations_
+			// relation_type and chk_observation_relations_detection_source MUST match
+			// exactly — later applied migrations (077 extended relation types, 2254
+			// detection_source) DROP CONSTRAINT IF EXISTS by these exact names and
+			// re-ADD them. The relation_type list here is the full post-077 set (23
+			// values), matching what AutoMigrate(current-struct) produced; the later
+			// migrations are idempotent drop-then-add against it.
 			Migrate: func(tx *gorm.DB) error {
-				return tx.AutoMigrate(&ObservationRelation{})
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS observation_relations (
+						relation_type    text NOT NULL,
+						detection_source text NOT NULL,
+						created_at       text NOT NULL,
+						reason           text,
+						id               bigserial PRIMARY KEY,
+						source_id        bigint NOT NULL,
+						target_id        bigint NOT NULL,
+						confidence       real NOT NULL DEFAULT 0.5,
+						created_at_epoch bigint NOT NULL,
+						valid_from       timestamp with time zone,
+						valid_to         timestamp with time zone,
+						CONSTRAINT chk_observation_relations_detection_source CHECK (detection_source IN ('file_overlap', 'embedding_similarity', 'temporal_proximity', 'narrative_mention', 'concept_overlap', 'type_progression', 'creative_association')),
+						CONSTRAINT chk_observation_relations_relation_type CHECK (relation_type IN ('causes', 'fixes', 'supersedes', 'depends_on', 'relates_to', 'evolves_from', 'leads_to', 'similar_to', 'contradicts', 'reinforces', 'invalidated_by', 'explains', 'shares_theme', 'parallel_context', 'summarizes', 'part_of', 'prefers_over', 'modifies', 'reads', 'follows', 'prompted_by', 'references', 'referenced_by'))
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_relations_both ON observation_relations (source_id, target_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_relations_confidence ON observation_relations (confidence DESC)`,
+					`CREATE INDEX IF NOT EXISTS idx_relations_source ON observation_relations (source_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_relations_target ON observation_relations (target_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_relations_type ON observation_relations (relation_type)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_relations_unique ON observation_relations (source_id, target_id, relation_type)`,
+				}
+				for _, s := range stmts {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 011: %w", err)
+					}
+				}
+				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
-				return tx.Migrator().DropTable("observation_relations")
+				return tx.Exec(`DROP TABLE IF EXISTS observation_relations`).Error
 			},
 		},
 
@@ -4255,6 +4330,56 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: func(tx *gorm.DB) error {
 				return tx.Exec(`ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS fk_audit_log_memory`).Error
+			},
+		},
+		// Migration 137 — provenance-cleanup CR-2b: drop the 8 empty/derived
+		// observation-era tables. Every table here has zero live Go readers/writers
+		// (CR-2a removed the stores; CR-2b removes the last dead store + purge coupling
+		// in the same change) and is flagged by the provenance_lint / schema_integrity
+		// guardrails. The parent `observations` table was already dropped at migration
+		// 099, so the dangling observation_id columns have no enforced FK — DROP order
+		// among these eight is unconstrained.
+		//
+		// PARKED on operator prod verify-empty (Hard Stop #1): this migration is only
+		// merged after the operator confirms each table is empty (concept_weights ≤ 12
+		// seed rows) on the production database. The verify-empty SQL lives in
+		// .agent/specs/provenance-cleanup/evidence/cr2b-verify-empty.sql.
+		//
+		// Rollback is intentionally a no-op: these tables held only derived/telemetry
+		// data with no upstream source to reconstruct from. A faithful recreate would
+		// produce an empty table of the old shape with no rows, which is indistinguishable
+		// from "not rolled back" for every consumer (all readers are already gone). The
+		// CREATE bodies remain in migrations 006/007/008/011/033/060/061/065 for fresh-
+		// install replay up to this point; 137 then removes them.
+		{
+			ID: "137_drop_observation_era_tables",
+			// NOTE: each DROP is a separate string literal (not a loop over a slice)
+			// so the static migration parser (internal/db/gorm/migrationmeta) and the
+			// DATA_MODEL.md generator recognize every dropped table name. A
+			// concatenated `"DROP TABLE " + var` is invisible to the literal-only
+			// dropTablePattern regex, which would leave these tables counted as live.
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`DROP TABLE IF EXISTS observation_conflicts CASCADE`,
+					`DROP TABLE IF EXISTS observation_relations CASCADE`,
+					`DROP TABLE IF EXISTS agent_observation_stats CASCADE`,
+					`DROP TABLE IF EXISTS observation_versions CASCADE`,
+					`DROP TABLE IF EXISTS reasoning_traces CASCADE`,
+					`DROP TABLE IF EXISTS concept_weights CASCADE`,
+					`DROP TABLE IF EXISTS vectors CASCADE`,
+					`DROP TABLE IF EXISTS search_misses CASCADE`,
+				}
+				for _, s := range stmts {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 137: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				// Intentionally irreversible: dropped tables held only derived data
+				// with no source to reconstruct. See migration comment above.
+				return nil
 			},
 		},
 	})
