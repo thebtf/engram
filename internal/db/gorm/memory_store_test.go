@@ -217,4 +217,40 @@ func TestMemoryStore_SearchFTS_OrFallback(t *testing.T) {
 	oneHit, err := ms.SearchFTS(ctx, proj, "launcher", 10)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(oneHit), 1, "single-term query must match content directly")
+
+	// Quoted-phrase over-specified query (PR #270 review): a quoted phrase plus a
+	// loose term spans both memories. The AND pass yields zero (no memory has the
+	// "mcp launcher" phrase AND "deferred"), so the OR-fallback runs. The phrase
+	// must survive tokenization intact — a naive strings.Fields split would
+	// shatter "mcp launcher" and corrupt the rebuilt OR query, returning empty.
+	phraseHits, err := ms.SearchFTS(ctx, proj, `"mcp launcher" deferred`, 10)
+	require.NoError(t, err, "SearchFTS quoted-phrase OR fallback should not error")
+	require.GreaterOrEqual(t, len(phraseHits), 1,
+		"PR #270: quoted phrase + loose term must survive OR-fallback tokenization, not return empty")
+}
+
+// TestTokenizeFTSTerms is a pure unit test (no DB) for the OR-fallback tokenizer
+// added in PR #270. It locks the two behaviors the Gemini reviewer flagged:
+// quoted phrases stay intact, and literal boolean operators are dropped.
+func TestTokenizeFTSTerms(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{"plain terms", "launcher install aimux", []string{"launcher", "install", "aimux"}},
+		{"quoted phrase preserved", `"mcp launcher" install`, []string{`"mcp launcher"`, "install"}},
+		{"literal OR dropped", "a OR b", []string{"a", "b"}},
+		{"literal AND/NOT dropped", "a AND b NOT c", []string{"a", "b", "c"}},
+		{"mixed quoted + operator", `"foo bar" OR baz`, []string{`"foo bar"`, "baz"}},
+		{"collapses whitespace", "  a   b\t c ", []string{"a", "b", "c"}},
+		{"single term", "launcher", []string{"launcher"}},
+		{"empty", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tokenizeFTSTerms(tc.query)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }

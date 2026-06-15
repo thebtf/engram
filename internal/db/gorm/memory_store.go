@@ -782,6 +782,48 @@ func (s *MemoryStore) ListBySourceAgentAndTag(ctx context.Context, project, sour
 	return result, nil
 }
 
+// tokenizeFTSTerms splits an FTS query into terms for the OR-fallback while
+// preserving "double quoted phrases" as single terms and dropping any literal
+// boolean operators the user typed. A naive strings.Fields split breaks both:
+// `"mcp launcher" install` becomes `"mcp`, `launcher"`, `install` (the phrase is
+// shattered and the stray quotes corrupt the rebuilt query), and `a OR b`
+// becomes `a`, `OR`, `b` which re-joins to `a OR OR OR b`. Returned terms keep
+// their surrounding quotes so websearch_to_tsquery still parses each phrase as a
+// phrase in the OR pass.
+func tokenizeFTSTerms(query string) []string {
+	var terms []string
+	var current strings.Builder
+	inQuotes := false
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		term := current.String()
+		current.Reset()
+		// Drop literal boolean operators (case-insensitive) that the user typed —
+		// the fallback supplies its own " OR " joins, so a bare OR/AND/NOT term
+		// would produce malformed tsquery input like `a OR OR OR b`.
+		switch strings.ToUpper(term) {
+		case "OR", "AND", "NOT":
+			return
+		}
+		terms = append(terms, term)
+	}
+	for _, r := range query {
+		switch {
+		case r == '"':
+			current.WriteRune(r)
+			inQuotes = !inQuotes
+		case (r == ' ' || r == '\t' || r == '\n' || r == '\r') && !inQuotes:
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return terms
+}
+
 // SearchFTS performs a full-text search against the memories table using the
 // search_vector GENERATED ALWAYS column (migration 088). The query string is
 // parsed with websearch_to_tsquery (supports quoted phrases, + for AND, - for NOT).
@@ -848,7 +890,12 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 	// websearch_to_tsquery("a OR b OR c") parses to the OR tsquery `a | b | c`
 	// and never errors on bad syntax, so the OR string is injection-safe.
 	if len(rows) == 0 {
-		terms := strings.Fields(query)
+		// tokenizeFTSTerms preserves "double quoted phrases" as single terms so
+		// the AND pass's phrase support is not silently broken by the fallback,
+		// and drops any literal OR the user already typed (PR #270 review: naive
+		// strings.Fields turns `"mcp launcher" install` into `"mcp`/`launcher"`
+		// and `a OR b` into `a OR OR OR b`).
+		terms := tokenizeFTSTerms(query)
 		if len(terms) >= 2 {
 			orQuery := strings.Join(terms, " OR ")
 			var orRows []Memory
