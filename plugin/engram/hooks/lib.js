@@ -419,6 +419,28 @@ function drainStdin() {
   });
 }
 
+// clearReinjectionFile removes <cwd>/.engram/reinjection.md if present.
+// pre-compact.js writes that file (the agent reads it via @.engram/reinjection.md
+// on the next turn) and is the only path that deletes it when stale. Under quiet
+// mode the PreCompact handler is skipped, so a previously-written file would keep
+// replaying old hints — defeating the "zero hints" promise. The quiet path clears
+// it directly. Best-effort: never throws, no server calls. `rawInput` is the hook
+// JSON already read from stdin (so the pipe is drained); cwd is parsed from it.
+function clearReinjectionFile(rawInput) {
+  try {
+    if (!rawInput || !rawInput.trim()) return;
+    const parsed = JSON.parse(rawInput);
+    const cwd = typeof parsed.cwd === 'string' ? parsed.cwd : '';
+    if (!cwd) return;
+    const reinjectionFile = path.join(cwd, '.engram', 'reinjection.md');
+    if (fs.existsSync(reinjectionFile)) {
+      fs.unlinkSync(reinjectionFile);
+    }
+  } catch {
+    // Malformed JSON, missing cwd, permission error — non-fatal.
+  }
+}
+
 // Claude Code validates hookSpecificOutput as a discriminated union by hookEventName.
 // Only PreToolUse, UserPromptSubmit, PostToolUse have defined schemas with hookEventName.
 // Other hooks (PostCompact, SessionStart, etc.) must omit hookEventName entirely
@@ -501,11 +523,14 @@ async function RunHook(hookName, handler) {
 
   // Quiet mode: emit an empty pass-through response and skip the handler.
   // No context injection, no server calls. See isQuietMode() for rationale.
-  // Drain stdin first: a no-op must stay silent even when the host is streaming
-  // a large payload (e.g. PostToolUse after a verbose Bash/Agent call), or the
-  // writer hits EPIPE and quiet mode surfaces as a hook failure.
+  // readAllStdin() fully drains the pipe (so a large payload mid-write does not
+  // give the host EPIPE) AND yields the payload, from which we clear any stale
+  // .engram/reinjection.md — the one hint channel the agent reads directly
+  // (@-import), out of band from hooks, so skipping PreCompact alone would leave
+  // it replaying. Clearing it keeps the "zero hints" promise. Best-effort.
   if (isQuietMode()) {
-    await drainStdin();
+    const rawInput = await readAllStdin();
+    clearReinjectionFile(rawInput);
     writeResponse(hookName);
     return;
   }

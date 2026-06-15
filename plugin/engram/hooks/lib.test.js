@@ -282,3 +282,22 @@ test('quiet mode drains a large stdin payload without EPIPE', () => {
   assert.strictEqual(out, '{"continue":true}',
     'quiet mode must drain large stdin and return a clean no-op (no EPIPE)');
 });
+
+test('quiet mode clears a stale .engram/reinjection.md', (t) => {
+  // .engram/reinjection.md is written by pre-compact.js and read directly by the
+  // agent (@-import), out of band from hooks. Quiet mode skips PreCompact (the
+  // only path that deletes it when stale), so the quiet path must clear it or it
+  // keeps replaying old hints — breaking "zero hints".
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-reinj-'));
+  t.after(() => { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch (_) {} });
+  const engramDir = path.join(cwd, '.engram');
+  fs.mkdirSync(engramDir, { recursive: true });
+  const reinjFile = path.join(engramDir, 'reinjection.md');
+  fs.writeFileSync(reinjFile, '# stale hints\n- old memory\n');
+
+  const payload = JSON.stringify({ session_id: 'quiet-reinj', cwd });
+  const out = runHookProcess('session-start.js', { ENGRAM_QUIET: '1' }, payload);
+  assert.strictEqual(out, '{"continue":true}', 'quiet mode returns a clean no-op');
+  assert.strictEqual(fs.existsSync(reinjFile), false,
+    'quiet mode must delete the stale .engram/reinjection.md');
+});
