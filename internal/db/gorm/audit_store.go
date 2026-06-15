@@ -61,11 +61,22 @@ func (s *AuditStore) GetByMemory(ctx context.Context, memoryID int64, limit int)
 
 // LogAudit is a convenience method that satisfies the lifecycle.AuditLogger interface.
 // It records a minimal audit entry with only action, actor, and optional memory_id.
+//
+// memoryID == 0 means "no specific memory" — a project-level event (e.g.
+// write_lint_signaled, write_lint_aborted, candidate_pending_created all call
+// LogAudit(ctx, 0, ...)). It is stored as NULL, NOT 0: migration 136 adds an FK
+// audit_log.memory_id → memories(id), and there is no memories.id = 0, so a
+// literal 0 would violate the constraint and the insert would fail (callers
+// swallow the error, silently dropping the audit event). nil pointer → SQL NULL,
+// which the ON DELETE SET NULL FK accepts. This mirrors the project-level
+// convention already used by PurgeProject (MemoryID: nil).
 func (s *AuditStore) LogAudit(ctx context.Context, memoryID int64, action, actor string) error {
 	entry := AuditLogEntry{
-		MemoryID: &memoryID,
-		Action:   action,
-		Actor:    actor,
+		Action: action,
+		Actor:  actor,
+	}
+	if memoryID != 0 {
+		entry.MemoryID = &memoryID
 	}
 	return s.Log(ctx, entry)
 }

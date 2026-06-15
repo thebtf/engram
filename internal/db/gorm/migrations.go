@@ -4241,7 +4241,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					`UPDATE audit_log
 						SET memory_id = NULL
 						WHERE memory_id IS NOT NULL
-							AND memory_id NOT IN (SELECT id FROM memories)`,
+							AND NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = audit_log.memory_id)`,
 					`ALTER TABLE audit_log
 						ADD CONSTRAINT fk_audit_log_memory
 							FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL`,
