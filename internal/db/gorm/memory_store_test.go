@@ -166,3 +166,55 @@ func TestMemoryStore_List_FiltersByProject(t *testing.T) {
 	assert.Equal(t, proj2, list2[0].Project)
 	assert.Equal(t, "proj2 memory A", list2[0].Content)
 }
+
+// TestMemoryStore_SearchFTS_OrFallback is the regression test for issue #281:
+// recall_memory (hybrid FTS leg) returned "No memories found" for an
+// over-specified multi-word query because websearch_to_tsquery ANDs all terms,
+// requiring every term in a single memory's content. The OR-fallback retries
+// with the terms OR-combined when the AND pass is empty.
+//
+// Anti-stub contract: if SearchFTS drops the OR-fallback (reverts to AND-only),
+// the over-specified-query subtest fails because no single memory contains all
+// four query terms.
+func TestMemoryStore_SearchFTS_OrFallback(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-fts-orfallback'`)
+
+	store := &Store{DB: db}
+	ms := NewMemoryStore(store)
+	ctx := context.Background()
+
+	const proj = "test-fts-orfallback"
+
+	// Two memories, each holding only SOME of the eventual query's terms. No
+	// single memory contains all of {updated, deferred, launcher, install}.
+	_, err := ms.Create(ctx, &models.Memory{
+		Project: proj,
+		Content: "the mcp launcher install reconnect races on windows post-exit",
+	})
+	require.NoError(t, err)
+	_, err = ms.Create(ctx, &models.Memory{
+		Project: proj,
+		Content: "upgrade apply uses updated deferred standard procedure",
+	})
+	require.NoError(t, err)
+
+	// AND pass: every term in ONE memory's content. "launcher install" both
+	// live in memory 1 → precise match returns it.
+	andHits, err := ms.SearchFTS(ctx, proj, "launcher install", 10)
+	require.NoError(t, err, "SearchFTS AND pass should not error")
+	require.GreaterOrEqual(t, len(andHits), 1, "AND pass: both terms in one memory must match")
+
+	// Over-specified query (issue #281 repro): all four terms span TWO memories,
+	// so the AND pass yields zero. The OR-fallback must surface partial matches.
+	orHits, err := ms.SearchFTS(ctx, proj, "updated deferred launcher install", 10)
+	require.NoError(t, err, "SearchFTS OR fallback should not error")
+	require.GreaterOrEqual(t, len(orHits), 1,
+		"issue #281: over-specified multi-word query must return partial matches via OR-fallback, not empty")
+
+	// Single-term query: no fallback path, must still match directly.
+	oneHit, err := ms.SearchFTS(ctx, proj, "launcher", 10)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(oneHit), 1, "single-term query must match content directly")
+}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -809,8 +810,7 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 	// inserted rows (see ListWithOffset comment for full rationale).
 	// NULLIF comparison uses ''::tsquery cast — PostgreSQL has no implicit
 	// tsquery ↔ unknown conversion and raises "operator does not exist" otherwise.
-	var rows []Memory
-	err := s.db.WithContext(ctx).Raw(`
+	const ftsQuerySQL = `
 		WITH parsed AS (
 			SELECT websearch_to_tsquery('english', ?) AS wsq,
 			       plainto_tsquery('english', ?)      AS ptq
@@ -826,10 +826,40 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 		ORDER BY ts_rank_cd(m.search_vector,
 		             COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)) DESC
 		LIMIT ?
-	`, query, query, project, limit).Scan(&rows).Error
+	`
+
+	// Precision-first pass: websearch_to_tsquery / plainto_tsquery both AND all
+	// terms together, so a multi-word query matches only memories whose content
+	// contains EVERY term. That is the precise result and is preferred when it
+	// returns anything.
+	var rows []Memory
+	err := s.db.WithContext(ctx).Raw(ftsQuerySQL, query, query, project, limit).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("SearchFTS project=%q: %w", project, err)
 	}
+
+	// OR-fallback (issue #281): when the AND pass returns nothing AND the query
+	// has 2+ terms, retry with the terms OR-combined. Root cause of the empty-
+	// result bug: an over-specified multi-word query (e.g. "updated_deferred
+	// mcp-launcher install aimux") requires all terms in one memory's content;
+	// no single memory has them all, so the AND pass yields zero even when
+	// strongly-related memories exist. The OR pass surfaces partial matches,
+	// ranked by ts_rank_cd so the most-relevant (most terms matched) sort first.
+	// websearch_to_tsquery("a OR b OR c") parses to the OR tsquery `a | b | c`
+	// and never errors on bad syntax, so the OR string is injection-safe.
+	if len(rows) == 0 {
+		terms := strings.Fields(query)
+		if len(terms) >= 2 {
+			orQuery := strings.Join(terms, " OR ")
+			var orRows []Memory
+			orErr := s.db.WithContext(ctx).Raw(ftsQuerySQL, orQuery, orQuery, project, limit).Scan(&orRows).Error
+			if orErr != nil {
+				return nil, fmt.Errorf("SearchFTS project=%q (OR fallback): %w", project, orErr)
+			}
+			rows = orRows
+		}
+	}
+
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
 		result[i] = memoryRowToModel(&rows[i])
