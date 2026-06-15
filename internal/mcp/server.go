@@ -442,7 +442,7 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 **BEFORE every task:**
 1. ` + "`recall(query=\"...\")`" + ` — check what is already known about this topic.
 2. ` + "`recall(action=\"by_file\", files=\"path/to/file\")`" + ` — before modifying any file.
-3. ` + "`recall(action=\"preset\", preset=\"decisions\", query=\"...\")`" + ` — before architectural decisions.
+3. ` + "`recall(query=\"prior decisions about ...\")`" + ` — before architectural decisions.
 
 **AFTER every task:**
 4. ` + "`store(content=\"...\", title=\"...\", tags=\"...\")`" + ` — save decisions, discoveries, patterns, and lessons learned. If you learned something worth knowing next session, store it.
@@ -1620,7 +1620,7 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 // handleFindByFileObservations is a tombstone for the removed v5 find_by_file tool.
 // The observation store was dropped in v5 (US3).
 func (s *Server) handleFindByFileObservations(_ context.Context, _ json.RawMessage) (string, error) {
-	return "", fmt.Errorf("find_by_file removed in v5 (US3) — use recall(action=\"search\") to locate relevant memories and recall(action=\"get\") to inspect a specific memory")
+	return "", fmt.Errorf("find_by_file removed in v5 (US3) — use recall(action=\"search\") to locate relevant memories, or recall(action=\"by_file\") to find memories about a specific file")
 }
 
 // sendResponse serialises resp to JSON and writes it as a single line to stdout.
