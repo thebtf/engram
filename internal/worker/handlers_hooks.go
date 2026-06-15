@@ -59,7 +59,7 @@ func (s *Service) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 
 	// Capture stores under initMu so the goroutines hold stable references.
 	s.initMu.RLock()
-	injectionStore := s.injectionStore
+	injLogStore := s.injectionLogStore
 	memStore := s.memoryStore
 	citationStore := s.citationLogStore
 	feedbackUpdater := s.feedbackUpdater
@@ -104,14 +104,21 @@ func (s *Service) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.wg.Add(1)
-	go s.processCitationsAsync(capturedSessionID, capturedProject, capturedOutput, injectionStore, memStore, citationStore, feedbackUpdater)
+	go s.processCitationsAsync(capturedSessionID, capturedProject, capturedOutput, injLogStore, memStore, citationStore, feedbackUpdater)
 }
 
 // processCitationsAsync performs citation detection for a finished session.
 // It is always called from a goroutine and must not block the HTTP response path.
+//
+// CR-1 (provenance-cleanup): reads the injected memory IDs from injection_log
+// (mig 106) via InjectionLogStore.GetBySession — the SOLE injection sink — instead
+// of the legacy observation_injections table. GetBySession concatenates the
+// memory_ids array of every matching row WITHOUT deduplicating, so a memory
+// injected across multiple log rows appears more than once; this function dedups
+// the IDs (Step 2 seen-map) before loading memories. Do not remove that loop.
 func (s *Service) processCitationsAsync(
 	sessionID, project, agentOutput string,
-	injectionStore *gormdb.InjectionStore,
+	injLogStore *gormdb.InjectionLogStore,
 	memStore *gormdb.MemoryStore,
 	citationStore *gormdb.CitationLogStore,
 	feedbackUpdater *feedback.Updater,
@@ -120,7 +127,7 @@ func (s *Service) processCitationsAsync(
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
-	if injectionStore == nil || memStore == nil || citationStore == nil {
+	if injLogStore == nil || memStore == nil || citationStore == nil {
 		log.Warn().
 			Str("session_id", sessionID).
 			Str("project", project).
@@ -128,15 +135,16 @@ func (s *Service) processCitationsAsync(
 		return
 	}
 
-	// Step 1: Retrieve the memory IDs that were injected for this session.
-	injections, err := injectionStore.GetInjectionsBySession(ctx, sessionID)
+	// Step 1: Retrieve the memory IDs that were injected for this session from
+	// injection_log (the vNext sink — replaces the dropped observation_injections read).
+	injectedIDs, err := injLogStore.GetBySession(ctx, sessionID)
 	if err != nil {
 		log.Error().Err(err).
 			Str("session_id", sessionID).
 			Msg("session_end: failed to fetch injection records")
 		return
 	}
-	if len(injections) == 0 {
+	if len(injectedIDs) == 0 {
 		log.Debug().
 			Str("session_id", sessionID).
 			Msg("session_end: no injection records found, skipping citation detection")
@@ -144,20 +152,20 @@ func (s *Service) processCitationsAsync(
 	}
 
 	// Step 2: Load the full memory objects for each injected ID.
-	// Deduplicate IDs first — the same memory can appear in multiple sections.
-	seen := make(map[int64]struct{}, len(injections))
-	memories := make([]*models.Memory, 0, len(injections))
-	for _, inj := range injections {
-		if _, already := seen[inj.ObservationID]; already {
+	// Deduplicate IDs first — the same memory can appear across multiple log rows.
+	seen := make(map[int64]struct{}, len(injectedIDs))
+	memories := make([]*models.Memory, 0, len(injectedIDs))
+	for _, id := range injectedIDs {
+		if _, already := seen[id]; already {
 			continue
 		}
-		seen[inj.ObservationID] = struct{}{}
+		seen[id] = struct{}{}
 
-		mem, loadErr := memStore.Get(ctx, inj.ObservationID)
+		mem, loadErr := memStore.Get(ctx, id)
 		if loadErr != nil {
 			// Memory may have been deleted since injection; skip silently.
 			log.Debug().Err(loadErr).
-				Int64("memory_id", inj.ObservationID).
+				Int64("memory_id", id).
 				Msg("session_end: could not load injected memory, skipping")
 			continue
 		}

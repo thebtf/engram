@@ -132,7 +132,6 @@ type Service struct {
 	grpcInternalServer     sessionStartContextProvider
 	searchQueryLogStore    *gorm.SearchQueryLogStore
 	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
-	injectionStore         *gorm.InjectionStore
 	citationLogStore       *gorm.CitationLogStore
 	injectionTracker       *injection.Tracker
 	injectionLogStore      *gorm.InjectionLogStore
@@ -568,10 +567,9 @@ func (s *Service) initializeAsync() {
 	invitationStore := gorm.NewInvitationStore(store.DB)
 	authSessionStore := gorm.NewAuthSessionStore(store.DB)
 
-	// Create injection store for closed-loop learning
-	injectionStore := gorm.NewInjectionStore(store.GetDB())
-
-	// Create injection log store for vNext Phase A injection tracking (migration 106).
+	// Create injection log store for vNext injection tracking (migration 106).
+	// CR-1 (provenance-cleanup): the legacy InjectionStore (observation_injections)
+	// was removed — injection_log is now the sole injection-record sink.
 	injectionLogStore := gorm.NewInjectionLogStore(store)
 
 	// Create citation log store for vNext Phase A citation tracking (migration 107).
@@ -618,7 +616,6 @@ func (s *Service) initializeAsync() {
 	s.initMu.Lock()
 	s.store = store
 	s.sessionStore = sessionStore
-	s.injectionStore = injectionStore
 	s.injectionLogStore = injectionLogStore
 	s.citationLogStore = citationLogStore
 	s.injectionTracker = injection.NewTracker(injectionLogStore)
@@ -755,7 +752,6 @@ func (s *Service) initializeAsync() {
 		DocumentStore:      documentStore,
 		ChunkManager:       chunkManager,
 	})
-	mcpServer.SetInjectionStore(injectionStore)
 
 	// Wire backfill status into MCP server.
 	mcpServer.SetBackfillStatusFunc(func() (any, error) {

@@ -1037,40 +1037,60 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		alwaysInjectObservations = applyActiveVersions(ctx, versionStore, alwaysInjectObservations)
 	}
 
+	// Snapshot the vNext stores + flag once. CR-1 (provenance-cleanup): injection_log
+	// (mig 106) is now the SOLE injection-record sink for BOTH response strategies —
+	// the legacy observation_injections write (InjectionStore.RecordInjections) is
+	// gone, so observation_injections is no longer written and CR-3 can drop it.
+	s.initMu.RLock()
+	vnextMemStore := s.memoryStore
+	vnextTracker := s.injectionTracker
+	injLogStore := s.injectionLogStore
+	s.initMu.RUnlock()
+
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+
 	// Record injection events asynchronously (closed-loop learning Phase 1).
 	// Fire-and-forget: injection tracking is non-critical; errors are silently dropped.
-	if sessionID != "" && s.injectionStore != nil {
+	// Only the LEGACY (clustering) response path records here — when vNext Thompson
+	// is enabled the scored-set write happens in the Thompson block below, so this is
+	// gated on !vnextEnabled to avoid double-writing the same session to injection_log.
+	if !vnextEnabled && sessionID != "" && injLogStore != nil {
 		capturedAlwaysInject := alwaysInjectObservations
 		capturedRecent := recentFresh
 		capturedRelevant := relevantObservations
 		capturedSessionID := sessionID
-		injStore := s.injectionStore
+		capturedProject := project
+		capturedMemStore := vnextMemStore
 		go func() {
-			var records []gorm.InjectionRecord
-			for _, obs := range capturedAlwaysInject {
-				records = append(records, gorm.InjectionRecord{ObservationID: obs.ID, SessionID: capturedSessionID, InjectionSection: "always_inject"})
+			seen := make(map[int64]struct{})
+			var ids []int64
+			for _, group := range [][]*models.Observation{capturedAlwaysInject, capturedRecent, capturedRelevant} {
+				for _, obs := range group {
+					if _, dup := seen[obs.ID]; dup {
+						continue
+					}
+					seen[obs.ID] = struct{}{}
+					ids = append(ids, obs.ID)
+				}
 			}
-			for _, obs := range capturedRecent {
-				records = append(records, gorm.InjectionRecord{ObservationID: obs.ID, SessionID: capturedSessionID, InjectionSection: "recent"})
+			if len(ids) == 0 {
+				return
 			}
-			for _, obs := range capturedRelevant {
-				records = append(records, gorm.InjectionRecord{ObservationID: obs.ID, SessionID: capturedSessionID, InjectionSection: "relevant"})
+			if err := injLogStore.Record(context.Background(), capturedSessionID, capturedProject, ids); err != nil {
+				log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_log: legacy-path record failed")
 			}
-			if len(records) > 0 {
-				_ = injStore.RecordInjections(context.Background(), records)
+			if capturedMemStore != nil {
+				if err := capturedMemStore.BatchIncrementInjected(context.Background(), ids); err != nil {
+					log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_count: legacy-path increment failed")
+				}
 			}
 		}()
 	}
 
 	// --- vNext Thompson Sampling path (ENGRAM_VNEXT_ENABLED=true) ---
 	// When enabled, replaces the response with a Thompson-sampled memory selection.
-	// The existing legacy path above remains unchanged when the flag is not set.
-	s.initMu.RLock()
-	vnextMemStore := s.memoryStore
-	vnextTracker := s.injectionTracker
-	s.initMu.RUnlock()
-
-	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	// The legacy clustering response above still builds the recent/relevant/guidance
+	// sections; only the injection-record write differs by strategy.
 	if vnextEnabled && vnextMemStore != nil {
 		topK := 15
 		const maxTopK = 100
@@ -1095,21 +1115,36 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			}
 			scored := injection.Score(vnextMems, topK, scoreOpts)
 
-			// Fire-and-forget injection tracking.
-			if sessionID != "" && vnextTracker != nil {
-				capturedScored := scored
-				capturedSID := sessionID
-				capturedProj := project
-				tracker := vnextTracker
-				go tracker.Track(context.Background(), capturedSID, capturedProj, capturedScored)
-			}
-
 			// Build the selected memory slice for response.
 			selectedMems := make([]*models.Memory, 0, topK)
 			for _, sm := range scored {
 				if sm.Selected && sm.Memory != nil {
 					selectedMems = append(selectedMems, sm.Memory)
 				}
+			}
+
+			// Fire-and-forget injection tracking (CR-1): Tracker.Track records the
+			// scored selection to injection_log; BatchIncrementInjected wires the
+			// injection_count denominator for the citation-rate signal (drift T1).
+			if sessionID != "" && vnextTracker != nil {
+				capturedScored := scored
+				capturedSID := sessionID
+				capturedProj := project
+				tracker := vnextTracker
+				capturedSelected := selectedMems
+				capturedMemStore := vnextMemStore
+				go func() {
+					tracker.Track(context.Background(), capturedSID, capturedProj, capturedScored)
+					if capturedMemStore != nil && len(capturedSelected) > 0 {
+						ids := make([]int64, 0, len(capturedSelected))
+						for _, m := range capturedSelected {
+							ids = append(ids, m.ID)
+						}
+						if err := capturedMemStore.BatchIncrementInjected(context.Background(), ids); err != nil {
+							log.Warn().Err(err).Str("session_id", capturedSID).Msg("injection_count: thompson-path increment failed")
+						}
+					}
+				}()
 			}
 
 			explorationRatio := injection.ExplorationRatio(scored)

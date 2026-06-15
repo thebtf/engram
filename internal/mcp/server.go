@@ -36,7 +36,6 @@ type Server struct {
 	stdout                 io.Writer
 	relationStore          *gorm.RelationStore
 	sessionStore           *gorm.SessionStore
-	injectionStore         *gorm.InjectionStore
 	collectionRegistry     *collections.Registry
 	sessionIdxStore        *sessions.Store
 	documentStore          *gorm.DocumentStore
@@ -92,11 +91,6 @@ func NewServer(opts ServerOptions) *Server {
 		documentStore:      opts.DocumentStore,
 		chunkManager:       opts.ChunkManager,
 	}
-}
-
-// SetInjectionStore sets the injection store for learning MCP tools.
-func (s *Server) SetInjectionStore(is *gorm.InjectionStore) {
-	s.injectionStore = is
 }
 
 // SetBackfillStatusFunc sets the function to retrieve backfill run status.
