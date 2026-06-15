@@ -170,14 +170,30 @@ Tool: check_system_health()
 
 ### Quiet mode (mute all hook injection)
 
-Set `ENGRAM_QUIET=1` (alias `ENGRAM_QUIET_HOOKS=1`) in the same env where you
-put `ENGRAM_URL`/`ENGRAM_TOKEN` to make every engram hook a no-op: no
-session-start behavioral rules / memories / issues, no pre-tool-use or
-pre-compact context, and no per-hook server calls. The MCP tools still work —
-only the automatic hook injection is silenced.
+Quiet mode makes every engram hook a no-op: no session-start behavioral rules /
+memories / issues, no pre-tool-use or pre-compact context, and no per-hook
+server calls. The MCP tools still work — only the automatic hook injection is
+silenced. Use it when injected context is more noise than signal: a stale or
+mis-scoped server-side rule set, focused development, or any session where
+"zero hints" beats "wrong hints".
 
-Use it when injected context is more noise than signal: a stale or mis-scoped
-server-side rule set, focused development, or any session where "zero hints"
-beats "wrong hints". Truthy values: `1`, `true`, `yes`, `on` (case-insensitive);
-unset or anything else leaves hooks fully active. Honored identically by Claude
-Code and Codex (shared hooks). Reversible — unset the variable to restore.
+Set it the same way you set credentials for your harness:
+
+- **Claude Code** — env var `ENGRAM_QUIET=1` (alias `ENGRAM_QUIET_HOOKS=1`) in
+  `~/.claude/settings.json` `env`, next to `ENGRAM_URL`/`ENGRAM_TOKEN`. The
+  plugin-config option `engram_quiet` also works (`CLAUDE_PLUGIN_OPTION_*`).
+- **Codex ≥0.139** — env vars are NOT forwarded to plugin hook children
+  (openai/codex#24401), so the env var will NOT work. Add `"quiet": true` to
+  `~/.engram/config.json` instead, alongside `server_url`/`api_token`:
+
+  ```json
+  {
+    "server_url": "http://your-server:37777",
+    "api_token": "engram_<keycard>",
+    "quiet": true
+  }
+  ```
+
+Truthy values: `true` (boolean) or the strings `1`/`true`/`yes`/`on`
+(case-insensitive); unset or anything else leaves hooks fully active. Reversible
+— remove the var/key to restore. Explicit env always wins over the config file.

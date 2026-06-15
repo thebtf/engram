@@ -46,9 +46,10 @@ function resolveConfigFilePath() {
 
 /**
  * Read and parse the engram config file.
- * Returns { server_url, api_token } on success (values trimmed, may be empty strings).
- * Returns null on missing or malformed file — callers must treat null as "not configured here".
- * Never throws.
+ * Returns { server_url, api_token, quiet } on success (server_url/api_token
+ * trimmed strings, may be empty; quiet is the raw value — boolean or string —
+ * or undefined when absent). Returns null on missing or malformed file —
+ * callers must treat null as "not configured here". Never throws.
  */
 function readEngramConfigFile(configFilePath) {
   try {
@@ -63,6 +64,7 @@ function readEngramConfigFile(configFilePath) {
     return {
       server_url: typeof parsed.server_url === 'string' ? parsed.server_url.trim() : '',
       api_token: typeof parsed.api_token === 'string' ? parsed.api_token.trim() : '',
+      quiet: parsed.quiet,
     };
   } catch {
     // Missing file, permission error, or malformed JSON — skip silently.
@@ -199,7 +201,19 @@ function isInternalHook() {
  * CLAUDE_PLUGIN_OPTION_<KEY> (case follows the manifest), so those aliases are
  * checked too — letting the switch be flipped via the plugin config UI, not
  * only a raw env var. Explicit ENGRAM_* env always wins (checked first).
+ *
+ * Config-file fallback: Codex ≥0.139 no longer forwards env vars to plugin hook
+ * children (openai/codex#24401 — the same reason credentials moved to
+ * ~/.engram/config.json), so an env-only switch would silently fail to mute
+ * Codex — exactly the client this exists for. So a `"quiet"` key in the engram
+ * config file is honored too, sitting alongside server_url/api_token. Accepts
+ * boolean true or a truthy string ("1"/"true"/"yes"/"on").
  */
+function isTruthyFlag(value) {
+  if (value === true) return true;
+  return typeof value === 'string' && /^(1|true|yes|on)$/i.test(value.trim());
+}
+
 function isQuietMode() {
   const raw = configuredPluginEnv(
     'ENGRAM_QUIET',
@@ -209,7 +223,12 @@ function isQuietMode() {
     'CLAUDE_PLUGIN_OPTION_QUIET',
     'CLAUDE_PLUGIN_OPTION_quiet'
   );
-  return /^(1|true|yes|on)$/i.test(raw);
+  if (isTruthyFlag(raw)) {
+    return true;
+  }
+  // Fallback to the engram config file (Codex ≥0.139 hook children see no env).
+  const cf = readEngramConfigFile(resolveConfigFilePath());
+  return !!cf && isTruthyFlag(cf.quiet);
 }
 
 /**

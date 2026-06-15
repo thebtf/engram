@@ -212,3 +212,21 @@ test('quiet mode accepts truthy aliases and ignores falsey values', (t) => {
   assert.notStrictEqual(active, '{"continue":true}',
     'ENGRAM_QUIET=0 must leave the hook active (handler runs)');
 });
+
+test('quiet mode is honored from the engram config file (Codex ≥0.139 path, no env)', (t) => {
+  // Codex ≥0.139 does not forward env vars to plugin hook children, so the
+  // switch must also be readable from ~/.engram/config.json (here pointed at a
+  // temp file via ENGRAM_CONFIG_FILE). No ENGRAM_QUIET env is set.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-cfg-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} });
+  const cfgPath = path.join(dir, 'config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({
+    server_url: 'http://127.0.0.1:9/unreachable',
+    api_token: 'engram_test',
+    quiet: true,
+  }));
+
+  const out = runHookProcess('session-start.js', { ENGRAM_CONFIG_FILE: cfgPath });
+  assert.strictEqual(out, '{"continue":true}',
+    'quiet:true in the config file must mute hooks even with no quiet env var');
+});
