@@ -193,6 +193,14 @@ function isInternalHook() {
  * hatch — useful while a server-side rule set is stale or mis-scoped, or during
  * focused development where injected context is more distracting than helpful.
  *
+ * SCOPE: this gates hook CONTEXT INJECTION only (the prompt noise). It does NOT
+ * disable the MCP daemon — the store/recall/vault/issues tools must keep working
+ * in quiet mode, so the SessionStart binary bootstrap (scripts/ensure-binary.js,
+ * which downloads/updates the daemon binary only when missing or version-stale)
+ * intentionally runs regardless of this flag. That bootstrap injects no context;
+ * it is the prerequisite for the tools quiet mode preserves. To stop all MCP
+ * activity, disable the plugin instead of using quiet mode.
+ *
  * Truthy values: "1", "true", "yes", "on" (case-insensitive). Anything else
  * (including unset/empty) leaves hooks fully active. Honored for both Claude
  * Code and Codex because both consume these same hooks.

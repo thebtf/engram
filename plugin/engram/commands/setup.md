@@ -172,10 +172,19 @@ Tool: check_system_health()
 
 Quiet mode makes every engram hook a no-op: no session-start behavioral rules /
 memories / issues, no pre-tool-use or pre-compact context, and no per-hook
-server calls. The MCP tools still work — only the automatic hook injection is
-silenced. Use it when injected context is more noise than signal: a stale or
+server calls. Use it when injected context is more noise than signal: a stale or
 mis-scoped server-side rule set, focused development, or any session where
 "zero hints" beats "wrong hints".
+
+**Scope — what quiet mode does and does NOT silence.** Quiet mode silences hook
+*context injection* (the prompt noise). It deliberately does NOT disable the MCP
+daemon: the `store`/`recall`/`vault`/`issues`/... tools keep working, so the
+SessionStart binary bootstrap (`ensure-binary.js`, which downloads/updates the
+daemon binary only when it is missing or version-stale) still runs. That is by
+design — muting injection must not break the tools. The bootstrap is rare (only
+on first install or a version bump), best-effort, and non-fatal; it makes no
+context injection. If you want zero MCP activity too, disable the engram plugin
+rather than using quiet mode.
 
 Set it the same way you set credentials for your harness:
 
