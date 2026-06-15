@@ -1049,48 +1049,12 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 
-	// Record injection events asynchronously (closed-loop learning Phase 1).
-	// Fire-and-forget: injection tracking is non-critical; errors are silently dropped.
-	// Only the LEGACY (clustering) response path records here — when vNext Thompson
-	// is enabled the scored-set write happens in the Thompson block below, so this is
-	// gated on !vnextEnabled to avoid double-writing the same session to injection_log.
-	if !vnextEnabled && sessionID != "" && injLogStore != nil {
-		capturedAlwaysInject := alwaysInjectObservations
-		capturedRecent := recentFresh
-		capturedRelevant := relevantObservations
-		capturedSessionID := sessionID
-		capturedProject := project
-		capturedMemStore := vnextMemStore
-		go func() {
-			seen := make(map[int64]struct{})
-			var ids []int64
-			for _, group := range [][]*models.Observation{capturedAlwaysInject, capturedRecent, capturedRelevant} {
-				for _, obs := range group {
-					if _, dup := seen[obs.ID]; dup {
-						continue
-					}
-					seen[obs.ID] = struct{}{}
-					ids = append(ids, obs.ID)
-				}
-			}
-			if len(ids) == 0 {
-				return
-			}
-			if err := injLogStore.Record(context.Background(), capturedSessionID, capturedProject, ids); err != nil {
-				log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_log: legacy-path record failed")
-			}
-			if capturedMemStore != nil {
-				if err := capturedMemStore.BatchIncrementInjected(context.Background(), ids); err != nil {
-					log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_count: legacy-path increment failed")
-				}
-			}
-		}()
-	}
-
 	// --- vNext Thompson Sampling path (ENGRAM_VNEXT_ENABLED=true) ---
-	// When enabled, replaces the response with a Thompson-sampled memory selection.
-	// The legacy clustering response above still builds the recent/relevant/guidance
-	// sections; only the injection-record write differs by strategy.
+	// When enabled AND scoring succeeds, replaces the response with a Thompson-sampled
+	// memory selection and records the scored set to injection_log, then returns. When
+	// scoring fails it falls through to the legacy clustering response below, which
+	// records its OWN injection set after this block (so a fallback session is never
+	// left without injection_log rows — PR #272 review).
 	if vnextEnabled && vnextMemStore != nil {
 		topK := 15
 		const maxTopK = 100
@@ -1133,14 +1097,18 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				tracker := vnextTracker
 				capturedSelected := selectedMems
 				capturedMemStore := vnextMemStore
+				s.wg.Add(1)
 				go func() {
-					tracker.Track(context.Background(), capturedSID, capturedProj, capturedScored)
+					defer s.wg.Done()
+					trkCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+					defer cancel()
+					tracker.Track(trkCtx, capturedSID, capturedProj, capturedScored)
 					if capturedMemStore != nil && len(capturedSelected) > 0 {
 						ids := make([]int64, 0, len(capturedSelected))
 						for _, m := range capturedSelected {
 							ids = append(ids, m.ID)
 						}
-						if err := capturedMemStore.BatchIncrementInjected(context.Background(), ids); err != nil {
+						if err := capturedMemStore.BatchIncrementInjected(trkCtx, ids); err != nil {
 							log.Warn().Err(err).Str("session_id", capturedSID).Msg("injection_count: thompson-path increment failed")
 						}
 					}
@@ -1183,6 +1151,52 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+	}
+
+	// Legacy (clustering) response path — reached when vNext is disabled OR when the
+	// Thompson scoring path errored and fell through (the success path returned above).
+	// Record the clustering injection set to injection_log + increment injection_count.
+	// This is the ONLY recording for this response, so it runs for BOTH the flag-off and
+	// the vnext-fallback cases (PR #272 review: a fallback session must not be left
+	// without injection_log rows, or session-end citation detection silently skips it).
+	if sessionID != "" && injLogStore != nil {
+		capturedAlwaysInject := alwaysInjectObservations
+		capturedRecent := recentFresh
+		capturedRelevant := relevantObservations
+		capturedSessionID := sessionID
+		capturedProject := project
+		capturedMemStore := vnextMemStore
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			recCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+			defer cancel()
+			seen := make(map[int64]struct{})
+			var ids []int64
+			for _, group := range [][]*models.Observation{capturedAlwaysInject, capturedRecent, capturedRelevant} {
+				for _, obs := range group {
+					if obs == nil {
+						continue
+					}
+					if _, dup := seen[obs.ID]; dup {
+						continue
+					}
+					seen[obs.ID] = struct{}{}
+					ids = append(ids, obs.ID)
+				}
+			}
+			if len(ids) == 0 {
+				return
+			}
+			if err := injLogStore.Record(recCtx, capturedSessionID, capturedProject, ids); err != nil {
+				log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_log: legacy-path record failed")
+			}
+			if capturedMemStore != nil {
+				if err := capturedMemStore.BatchIncrementInjected(recCtx, ids); err != nil {
+					log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_count: legacy-path increment failed")
+				}
+			}
+		}()
 	}
 
 	// Check if compact format is requested.

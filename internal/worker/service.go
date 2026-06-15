@@ -900,10 +900,12 @@ func (s *Service) initializeAsync() {
 	s.projectReaper = projectReaper
 	projectReaper.Start(s.ctx)
 
-	// Start retention cron for injection_log and citation_log cleanup (vNext Phase A).
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
-		s.startRetentionCron(s.ctx)
-	}
+	// Start retention cron for injection_log and citation_log cleanup.
+	// CR-1 (provenance-cleanup, PR #272 review): injection_log + citation_log are now
+	// written on EVERY session regardless of ENGRAM_VNEXT_ENABLED (the flag only selects
+	// the response algorithm), so retention must run unconditionally — otherwise flag-off
+	// (default) deployments grow these append-only tables without the promised cleanup.
+	s.startRetentionCron(s.ctx)
 
 	// Start sleep cycle goroutine when lifecycle is enabled (milestone-B T014).
 	// Trigger conditions per T014 AC: >=10 new memories since last cycle (tracked
