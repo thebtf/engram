@@ -1722,7 +1722,9 @@ func (s *Server) sendError(id any, code int, message string, data any) {
 }
 
 // handleFindSimilarObservations returns an empty result set.
-// Vector search was removed in v5 when the content_chunks table was dropped.
+// The observation-vector-search feature was retired in v5; this tool is a no-op
+// shell. (content_chunks was later restored at migration 108 for vNext memory
+// embeddings, but this legacy observation-similarity tool was not rewired to it.)
 func (s *Server) handleFindSimilarObservations(_ context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {

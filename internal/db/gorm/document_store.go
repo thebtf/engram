@@ -13,10 +13,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// ErrChunkStorageUnsupported is returned by chunk methods when content_chunks
-// table has been dropped in v5. Callers should treat this as a graceful
-// "feature removed" signal and degrade accordingly.
-var ErrChunkStorageUnsupported = errors.New("chunk storage unsupported: content_chunks table dropped in v5")
+// ErrChunkStorageUnsupported is returned by the document chunk methods, whose
+// storage path was retired in v5 and never rewired to the migration-108
+// content_chunks table (which is memory-keyed, not document-keyed). Callers
+// should treat this as a graceful "feature removed" signal and degrade accordingly.
+var ErrChunkStorageUnsupported = errors.New("document chunk storage unsupported: the document-chunk path was retired in v5")
 
 // DocumentStore provides document and chunk persistence for content-addressable storage.
 type DocumentStore struct {

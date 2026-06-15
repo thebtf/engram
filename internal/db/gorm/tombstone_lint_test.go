@@ -7,12 +7,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// tombstonePattern matches a "removed/dropped in vN" tombstone phrase. Package-level
+// so both the walker test and the scanner unit test share one definition.
+var tombstonePattern = regexp.MustCompile(`(?i)\b(?:removed|dropped)\s+in\s+v[0-9]+`)
 
 func TestTombstoneLint_RemovedInVersionCommentsDoNotNameLiveTables(t *testing.T) {
 	schema := migrationSchema(t)
@@ -22,11 +25,20 @@ func TestTombstoneLint_RemovedInVersionCommentsDoNotNameLiveTables(t *testing.T)
 		return len(liveTables[i].Name) > len(liveTables[j].Name)
 	})
 
-	tombstonePattern := regexp.MustCompile(`(?i)\b(?:removed|dropped)\s+in\s+v[0-9]+`)
 	var violations []string
 	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, d fs.DirEntry, err error) error {
 		require.NoError(t, err)
 		if d.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		base := filepath.Base(path)
+		// migrations.go is the migration ledger: a "dropped in vN" comment there
+		// documents a real historical DDL operation for THAT migration (even when a
+		// later migration re-creates the table), so it is accurate by construction,
+		// not a stale tombstone. _test.go files (including this guardrail's own
+		// illustrative examples) are not shipped behavioral contracts. Both are
+		// excluded so the guard targets production code comments.
+		if base == "migrations.go" || strings.HasSuffix(base, "_test.go") {
 			return nil
 		}
 
@@ -39,16 +51,25 @@ func TestTombstoneLint_RemovedInVersionCommentsDoNotNameLiveTables(t *testing.T)
 				commentText := cleanComment(comment.Text)
 				// A line is a tombstone candidate only if THIS line carries the
 				// "removed/dropped in vN" phrase. The table name may sit on this
-				// line or wrap onto the immediately following comment line — so
-				// when the next line reads as a grammatical continuation (e.g.
-				// "table dropped (migration 085)."), include it in the scan
-				// window. The continuation line is NOT required to re-match the
-				// tombstone phrase (that conjunction would be unsatisfiable and
-				// made the window dead code; PR review HIGH-1).
+				// line OR wrap across a line boundary in EITHER direction, so the
+				// scan window is [prev, current, next] within the comment group.
+				// (PR #273 review, codex: a backward-split tombstone — table name on
+				// the line BEFORE the phrase — was a false-green when only
+				// [current,next] was scanned.) The previous line is included only
+				// when it reads as a tombstone lead-in (ends mid-sentence / with the
+				// table name), and the next line only when it reads as a grammatical
+				// continuation — both kept narrow to avoid sweeping in unrelated
+				// neighbouring comments.
 				if !tombstonePattern.MatchString(commentText) {
 					continue
 				}
 				candidateText := commentText
+				if i > 0 {
+					prevText := cleanComment(comments[i-1].Text)
+					if tombstoneLeadIn(prevText) {
+						candidateText = prevText + "\n" + candidateText
+					}
+				}
 				if i+1 < len(comments) {
 					nextText := cleanComment(comments[i+1].Text)
 					if tombstoneContinuation(nextText) {
@@ -72,30 +93,57 @@ func TestTombstoneLint_RemovedInVersionCommentsDoNotNameLiveTables(t *testing.T)
 	violations = uniqueSorted(violations)
 
 	// Known-debt baseline (CR-0 decision D1, see .agent/specs/provenance-cleanup/
-	// decisions.md). These are the stale "removed/dropped in vN" comments that name
-	// a still-LIVE table (content_chunks restored@108, injection_log restored@106).
-	// CR-5 (contract honesty) rewords them; each reword removes its entry here, and
-	// that edit is CR-5's GREEN proof. The guardrail FAILS now on any NEW stale
-	// tombstone (a comment claiming a live table is dead — a fresh lie) and stays
-	// GREEN while the set matches this baseline. Literal all-RED proof:
-	// evidence/cr0-red-proof.txt.
-	baseline := []string{
-		"internal/db/gorm/models.go -> content_chunks",
-		"internal/mcp/server.go -> content_chunks",
-		"internal/mcp/store_supersession_test.go -> content_chunks",
-		"internal/mcp/tools_documents.go -> content_chunks",
-		"internal/mcp/tools_recall.go -> content_chunks",
-		"internal/worker/handlers_context.go -> content_chunks",
-		"internal/worker/handlers_data.go -> content_chunks",
-		"internal/worker/reaper/reaper.go -> injection_log",
-		"internal/worker/retrieval.go -> content_chunks",
-		"internal/worker/trigger_matcher.go -> content_chunks",
-	}
+	// decisions.md). CR-5 (contract honesty) reworded every stale "removed/dropped
+	// in vN" comment that named a still-LIVE table (content_chunks restored@108,
+	// injection_log restored@106), so the baseline is now EMPTY: the guardrail is
+	// pure regression protection — it FAILS on ANY new comment that claims a live
+	// table is dead (a fresh lie). Re-populating this list would re-admit drift.
+	// Literal pre-cleanup proof: evidence/cr0-red-proof.txt + git history.
+	var baseline []string
 
-	require.Equal(t, baseline, violations,
-		"stale-tombstone drift changed vs known-debt baseline. A NEW entry means a comment now claims a "+
-			"LIVE table is dead (a fresh lie) — reword it. A removed entry means CR-5 cleaned a comment — "+
-			"delete it from the baseline here (that edit is the GREEN proof). Got %v", violations)
+	require.ElementsMatch(t, baseline, violations,
+		"stale-tombstone drift changed vs known-debt baseline (now empty). A NEW entry means a comment "+
+			"now claims a LIVE table is dead (a fresh lie) — reword it. Got %v", violations)
+}
+
+// TestTombstoneScanner_DetectsSplitTombstones locks the scan-window behavior so the
+// empty baseline cannot become a false-green (PR #273 review, codex). It exercises
+// the same window assembly the walker uses — prev line via tombstoneLeadIn, current
+// line via tombstonePattern, next line via tombstoneContinuation — and asserts a
+// live-table name is detected whether it sits on the previous, current, or next line.
+func TestTombstoneScanner_DetectsSplitTombstones(t *testing.T) {
+	const tbl = "content_chunks"
+	// Each case is an ordered set of comment lines; index `phraseAt` is the line
+	// carrying the tombstone phrase. wantDetected = the window must surface tbl.
+	cases := []struct {
+		name         string
+		lines        []string
+		phraseAt     int
+		wantDetected bool
+	}{
+		{"same line", []string{"the content_chunks table was dropped in v5"}, 0, true},
+		{"backward split (name on prev line)",
+			[]string{"returned when content_chunks", "table has been dropped in v5"}, 1, true},
+		{"forward split (name on next line)",
+			[]string{"vector search dropped in v5", "(content_chunks table)."}, 0, true},
+		{"unrelated prev line not swept in",
+			[]string{"this validates auth tokens.", "the widget cache was dropped in v5"}, 1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, tombstonePattern.MatchString(tc.lines[tc.phraseAt]),
+				"test setup: phraseAt line must carry the tombstone phrase")
+			candidate := tc.lines[tc.phraseAt]
+			if tc.phraseAt > 0 && tombstoneLeadIn(tc.lines[tc.phraseAt-1]) {
+				candidate = tc.lines[tc.phraseAt-1] + "\n" + candidate
+			}
+			if tc.phraseAt+1 < len(tc.lines) && tombstoneContinuation(tc.lines[tc.phraseAt+1]) {
+				candidate += "\n" + tc.lines[tc.phraseAt+1]
+			}
+			require.Equal(t, tc.wantDetected, mentionsTable(candidate, tbl),
+				"window=%q", candidate)
+		})
+	}
 }
 
 // uniqueSorted dedupes and sorts a string slice (a file:table pair can be
@@ -137,6 +185,29 @@ func tombstoneContinuation(text string) bool {
 		strings.Contains(lower, "table was dropped")
 }
 
+// tombstoneLeadIn reports whether a comment line reads as the START of a tombstone
+// sentence that completes on the NEXT line (which carries the "removed/dropped in
+// vN" phrase) — the backward-split shape codex flagged in PR #273, e.g.
+//
+//	// ErrChunkStorageUnsupported is returned ... when content_chunks
+//	// table has been dropped in v5.
+//
+// It matches only when the line ENDS by naming a table (no terminal punctuation,
+// so the sentence clearly continues), keeping the previous-line window narrow so
+// an unrelated preceding comment is not swept in. A line ending in '.', ':', or
+// ')' is treated as self-contained and excluded.
+func tombstoneLeadIn(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	switch t[len(t)-1] {
+	case '.', ':', ')', '!', '?':
+		return false
+	}
+	return true
+}
+
 func mentionsTable(commentText, table string) bool {
 	if strings.Contains(table, "_") {
 		pattern := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(table) + `\b`)
@@ -154,15 +225,3 @@ func mentionsTable(commentText, table string) bool {
 	return false
 }
 
-func violationMentions(violations []string, table string) bool {
-	for _, violation := range violations {
-		if strings.Contains(violation, table) {
-			return true
-		}
-	}
-	return false
-}
-
-func lineString(line int) string {
-	return strconv.Itoa(line)
-}

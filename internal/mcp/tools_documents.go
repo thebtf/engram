@@ -190,8 +190,10 @@ func (s *Server) handleRemoveDocument(ctx context.Context, args json.RawMessage)
 }
 
 // handleIngestDocument ingests a document into a collection.
-// Embedding/chunk storage removed in v5 (content_chunks table dropped).
-// In v5, only document metadata is upserted; chunk-level search is unavailable.
+// Document chunk/embedding storage was retired in v5; only document metadata is
+// upserted and chunk-level search is unavailable. (content_chunks was restored at
+// migration 108 for vNext MEMORY embeddings — a memory-keyed schema — but the
+// document-chunk path was not rewired to it.)
 func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.documentStore == nil {
 		return "", fmt.Errorf("document store not available")
@@ -228,7 +230,8 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 }
 
 // handleSearchCollection searches document chunks in a collection.
-// Chunk-level vector search removed in v5 (content_chunks table dropped).
+// Document chunk-level vector search was retired in v5 and never rewired to the
+// migration-108 content_chunks table (which is memory-keyed, not document-keyed).
 func (s *Server) handleSearchCollection(_ context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {
@@ -245,7 +248,7 @@ func (s *Server) handleSearchCollection(_ context.Context, args json.RawMessage)
 		return "", fmt.Errorf("query is required")
 	}
 
-	// Vector chunk search removed in v5 (content_chunks table dropped).
+	// Document chunk vector search was retired in v5 (not rewired to mig-108 content_chunks).
 	msg := "Document chunk search removed in v5; use find_relevant_memories for observation-level FTS retrieval"
 	if params.Collection != "" {
 		msg += fmt.Sprintf(" (collection %q)", params.Collection)
