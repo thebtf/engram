@@ -4220,6 +4220,19 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				stmts := []string{
 					`ALTER TABLE audit_log
 						DROP CONSTRAINT IF EXISTS fk_audit_log_memory`,
+					// Null out any orphan references BEFORE adding the constraint.
+					// On an upgraded DB, audit_log may hold rows whose memory_id
+					// points to a memory that was hard-deleted (e.g. bulkops
+					// rollback HardDeleteTx) while the audit row remained — those
+					// orphans would make ADD CONSTRAINT fail FK validation. Nulling
+					// them is exactly what ON DELETE SET NULL would have done had the
+					// FK existed at deletion time, so it is semantically consistent,
+					// not data loss: the audit event (action/reason/actor/timestamp)
+					// is preserved, only the dangling pointer is cleared.
+					`UPDATE audit_log
+						SET memory_id = NULL
+						WHERE memory_id IS NOT NULL
+							AND memory_id NOT IN (SELECT id FROM memories)`,
 					`ALTER TABLE audit_log
 						ADD CONSTRAINT fk_audit_log_memory
 							FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL`,
