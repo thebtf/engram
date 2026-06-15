@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.7.0] - 2026-06-15
+
+### Added
+
+- **ENGRAM_QUIET hook kill-switch.** A new quiet mode suppresses all
+  hook-injected context (behavioral rules, reinjection hints, session-start
+  output) while keeping the MCP tools working, so a workstation can run
+  zero-hint sessions during development. Activate via `ENGRAM_QUIET` /
+  `ENGRAM_QUIET_HOOKS` (Claude Code, also exposed as the `engram_quiet` plugin
+  option), or via `"quiet": true` in `~/.engram/config.json` for Codex ≥0.139,
+  which forwards no environment to hook children. A present (non-empty) env var
+  decides outright (truthy mutes, falsey forces active); an absent env var falls
+  back to the config-file key. Scope boundary: quiet silences hook *context
+  injection* only — it does not disable the MCP daemon (`ensure-binary` still
+  bootstraps it). The quiet branch also clears any stale
+  `.engram/reinjection.md` so the out-of-band `@`-import hint channel does not
+  replay old content. (#276)
+
+### Changed
+
+- **provenance-cleanup epic (NVMD-ENG-1), CR-0 through CR-5.** Demolition of the
+  v5 observation-era schema debt behind CI guardrails:
+  - CR-0: known-debt baseline guardrails (schema-integrity, provenance-lint,
+    tombstone-lint, DATA_MODEL drift) that fail on any *new* drift toward the
+    demolished state. (#271)
+  - CR-1: citation/injection sink unified on `injection_log`; legacy
+    `observation_injections` left with zero live Go readers/writers. (#272)
+  - CR-2a: removed the relation/version/reasoning reader + store surface. (#274)
+  - CR-4: `Observation` struct marked deprecated; `audit_log.memory_id` gained a
+    foreign key to `memories(id)` with `ON DELETE SET NULL` (migration 136), and
+    project-level audit events now store `NULL` instead of `memory_id = 0`. (#275)
+  - CR-5: reworded stale "removed in vN" tombstone comments that named live
+    tables; tombstone-lint baseline reaches empty.
+
+### Fixed
+
+- **FTS recall on over-specified multi-word queries.** `SearchFTS` AND-ed every
+  term, so a long multi-word query returned nothing; it now falls back to an OR
+  match when the AND pass is empty and there are ≥2 terms, preserving quoted
+  phrases and skipping the fallback for negation (`-term`) queries. (#281)
+
 ## [6.6.1] - 2026-06-14
 
 ### Added
