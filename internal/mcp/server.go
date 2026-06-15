@@ -1620,7 +1620,7 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 // handleFindByFileObservations is a tombstone for the removed v5 find_by_file tool.
 // The observation store was dropped in v5 (US3).
 func (s *Server) handleFindByFileObservations(_ context.Context, _ json.RawMessage) (string, error) {
-	return "", fmt.Errorf("find_by_file removed in v5 (US3) — use recall(action=\"search\") to locate relevant memories, or recall(action=\"by_file\") to find memories about a specific file")
+	return "", fmt.Errorf("find_by_file removed in v5 (US3) — file-scoped observation lookup no longer exists; use recall(action=\"search\") with the file path or a related term in the query")
 }
 
 // sendResponse serialises resp to JSON and writes it as a single line to stdout.
