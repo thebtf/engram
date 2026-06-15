@@ -58,17 +58,13 @@ func TestProvenanceLint_LiveTablesAreKeepSetOrVNext(t *testing.T) {
 	// entry that is cleaned without shrinking this list. Each CR that drops a table
 	// MUST delete it from the baseline; that edit is the CR's GREEN proof. The
 	// literal all-RED proof is preserved at evidence/cr0-red-proof.txt + commit 2f0faef.
-	baseline := []string{
-		"agent_observation_stats", // CR-2 drop (observation-derived, empty)
-		"concept_weights",         // CR-2 drop (derived weights)
-		"observation_conflicts",   // CR-2 drop (observation-derived)
-		"observation_injections",  // CR-3 drop (after CR-1 citation rewire)
-		"observation_relations",   // CR-2 drop (observation-derived)
-		"observation_versions",    // CR-2 drop (observation-derived)
-		"reasoning_traces",        // CR-2 drop (observation-derived)
-		"search_misses",           // CR-2 drop (derived telemetry)
-		"vectors",                 // CR-2 drop (legacy embedding store)
-	}
+	// Known-debt baseline is now EMPTY. CR-2b (migration 137) dropped the 8
+	// empty/derived observation-era tables; CR-3 (migration 138) dropped
+	// observation_injections, the last pre-vNext non-keep-set table. Emptying this
+	// baseline is CR-3's provenance_lint GREEN proof — and the epic's terminal
+	// state: the guardrail is now pure regression protection. Any NEW live pre-105
+	// non-keep table will fail the test.
+	var baseline []string
 
 	require.Equal(t, baseline, violations,
 		"provenance drift changed vs known-debt baseline. If a NEW pre-vNext non-keep table appeared, "+

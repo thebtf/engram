@@ -354,22 +354,6 @@ func TestStore_Optimize(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestStore_ConceptWeightsSeedCount verifies that migration 007_concept_weights
-// seeded exactly 12 rows into concept_weights. This is a schema invariant: the
-// retrieval pipeline weights concepts from this table, and a missing or partial seed
-// silently degrades relevance scoring without triggering any runtime error.
-//
-// The INSERT uses ON CONFLICT DO NOTHING, so re-running migrations is idempotent.
-// This test guards against: (a) the seed INSERT being skipped, (b) a future migration
-// accidentally truncating the table, or (c) the seed list being edited without
-// adjusting the expected count.
-func TestStore_ConceptWeightsSeedCount(t *testing.T) {
-	store := openStoreForStoreTest(t)
-
-	var count int64
-	result := store.GetDB().Model(&ConceptWeight{}).Count(&count)
-	require.NoError(t, result.Error, "querying concept_weights row count must not error")
-	assert.Equal(t, int64(12), count,
-		"concept_weights must contain exactly 12 seed rows after migration 007_concept_weights; "+
-			"if the seed list changed, update this assertion AND document the reason in the migration")
-}
+// TestStore_ConceptWeightsSeedCount was removed in CR-2b of provenance-cleanup:
+// migration 137 drops the concept_weights table and the ConceptWeight struct was
+// deleted, so the seed-count invariant no longer applies.

@@ -22,18 +22,17 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	whitelist := map[string]string{
 		"citation_log.session_id":                   "external SDK session identifier (TEXT), not a row FK",
 		"injection_log.session_id":                  "external SDK session identifier (TEXT), not a row FK",
-		"observation_injections.session_id":         "external SDK session identifier (TEXT), not a row FK",
+		// observation_injections.session_id was removed in CR-3: migration 138 drops
+		// observation_injections, so a whitelist key for a non-existent table is dead.
 		"retrieval_stats_log.query_id":              "analytics correlation identifier, not a table FK",
 		"search_query_log.session_id":               "external SDK session identifier (TEXT), not a row FK",
 		"session_transcripts.session_id":            "external SDK session identifier (TEXT), not a row FK",
 		"session_transcripts.claude_session_id":     "external Claude session identifier (TEXT), not a row FK",
 		"sdk_sessions.claude_session_id":            "external Claude session identifier (TEXT), not a row FK",
-		// reasoning_traces.sdk_session_id + session_segments.session_id are the
-		// same external-session-string class as the entries above (TEXT, not a
-		// FK to sdk_sessions.id). reasoning_traces is additionally slated for
-		// DROP in CR-2; whitelisting the column keeps T001 focused on genuine
-		// dangling-entity drift rather than external-id false positives.
-		"reasoning_traces.sdk_session_id":           "external SDK session identifier (TEXT), not a row FK",
+		// session_segments.session_id is an external-session-string (TEXT, not a
+		// FK to sdk_sessions.id). The former reasoning_traces.sdk_session_id entry
+		// was removed in CR-2b: migration 137 drops reasoning_traces, so a whitelist
+		// key for a non-existent table is dead.
 		"session_segments.session_id":               "external SDK session identifier (TEXT), not a row FK",
 		"telemetry_snapshots.last_operation_id":     "opaque operation identifier",
 		// Self-referential version-tree pointers: a version row may reference a
@@ -76,11 +75,12 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	// entity *_id column — regression — or (b) a baseline column cleaned without
 	// shrinking this list. Each CR that removes a dangler MUST delete it here; that
 	// edit is the CR's GREEN proof. Literal all-RED proof: evidence/cr0-red-proof.txt.
-	baseline := []string{
-		"agent_observation_stats.observation_id", // CR-2/CR-3 drop table
-		"observation_injections.observation_id",  // CR-3 drop table (after CR-1 rewire)
-		"observation_versions.observation_id",    // CR-2/CR-3 drop table
-	}
+	// Known-debt baseline is now EMPTY. CR-2b (migration 137) dropped the 8
+	// empty/derived tables; CR-3 (migration 138) dropped observation_injections,
+	// removing the last dangling entity *_id. Emptying this baseline is CR-3's
+	// schema_integrity GREEN proof — the guardrail is now pure regression
+	// protection: any NEW dangling entity *_id column will fail the test.
+	var baseline []string
 	// CR-4 (migration 136, decision D7): audit_log.memory_id gained an FK to
 	// memories(id) ON DELETE SET NULL, so it is no longer a dangling entity *_id
 	// and was removed from this known-debt baseline. That removal is CR-4's

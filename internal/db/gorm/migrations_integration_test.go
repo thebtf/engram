@@ -37,24 +37,22 @@ func TestMigrationsIntegration(t *testing.T) {
 		t.Fatalf("ping postgres: %v", err)
 	}
 
-	// Use 2000 dims — the target production configuration.
-	const dims = 2000
-
 	if err := runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 	t.Logf("all migrations passed")
 
-	// Verify the embedding column has the expected dimension.
-	var actual int
-	row := db.Raw("SELECT atttypmod FROM pg_attribute WHERE attrelid = 'vectors'::regclass AND attname = 'embedding' AND atttypmod > 0").Row()
-	if err := row.Scan(&actual); err != nil {
-		t.Fatalf("read vector dimension: %v", err)
-	}
-	if actual != dims {
-		t.Fatalf("vector dimension mismatch: got %d, want %d", actual, dims)
-	}
-	t.Logf("vectors.embedding = vector(%d) — correct", actual)
+	// Regression guard: the legacy `vectors` table is dropped by migration 137
+	// (provenance-cleanup CR-2b). It must NOT survive a fresh-install chain.
+	// (Before CR-2b this test asserted vectors.embedding = vector(2000); that
+	// assertion is obsolete now that the table is gone — pgvector embeddings live
+	// in content_chunks (migration 108), not the dropped legacy `vectors` table.)
+	var vectorsCount int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name = 'vectors'
+	`).Scan(&vectorsCount).Error)
+	require.Equal(t, 0, vectorsCount, "legacy vectors table must not exist after migration 137")
 }
 
 // TestMigrationsIntegration_PatternsDropped verifies that a fresh-install migration chain

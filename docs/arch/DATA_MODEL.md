@@ -53,32 +53,23 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from `internal/db/gorm/migrations.go`.
 
-Migration count: **125**.
+Migration count: **127**.
 
-Live table count: **39**.
+Live table count: **30**.
 
 | Table | Creating migration |
 | --- | --- |
 | `sdk_sessions` | `001_core_tables` |
-| `vectors` | `006_sqlite_vec_vectors` |
-| `concept_weights` | `007_concept_weights` |
-| `observation_conflicts` | `008_observation_conflicts` |
-| `observation_relations` | `011_observation_relations` |
 | `content` | `017_content_addressable_storage` |
 | `documents` | `017_content_addressable_storage` |
 | `telemetry_snapshots` | `026_telemetry_snapshots` |
 | `projects` | `030_projects_table` |
-| `search_misses` | `033_create_search_misses` |
 | `api_tokens` | `036_api_tokens` |
 | `search_query_log` | `037_search_query_log` |
 | `retrieval_stats_log` | `038_retrieval_stats_log` |
 | `system_config` | `050_system_config` |
 | `versioned_document_comments` | `051_documents` |
 | `versioned_documents` | `051_documents` |
-| `observation_injections` | `058_observation_injections_table` |
-| `agent_observation_stats` | `060_agent_observation_stats` |
-| `observation_versions` | `061_observation_versions` |
-| `reasoning_traces` | `065_reasoning_traces` |
 | `issue_comments` | `070_agent_issues` |
 | `issues` | `070_agent_issues` |
 | `invitations` | `080_create_auth_tables` |

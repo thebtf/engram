@@ -54,92 +54,12 @@ func (s *SDKSession) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// ObservationConflict tracks conflicts between observations.
-// Conflict lifecycle: detected (unresolved=0) → reviewed → resolved (resolved=1).
-// idx_conflicts_unresolved is a composite index on (resolved, detected_at_epoch DESC)
-// for efficient "show me open conflicts newest-first" queries.
-type ObservationConflict struct {
-	ConflictType    models.ConflictType       `gorm:"type:text;check:conflict_type IN ('superseded', 'contradicts', 'outdated_pattern');not null"`
-	Resolution      models.ConflictResolution `gorm:"type:text;check:resolution IN ('prefer_newer', 'prefer_older', 'manual');not null"`
-	DetectedAt      string                    `gorm:"not null"`
-	Reason          sql.NullString            `gorm:"type:text"`
-	ResolvedAt      sql.NullString
-	ID              int64 `gorm:"primaryKey;autoIncrement"`
-	NewerObsID      int64 `gorm:"index:idx_conflicts_newer;not null"`
-	OlderObsID      int64 `gorm:"index:idx_conflicts_older;not null"`
-	DetectedAtEpoch int64 `gorm:"index:idx_conflicts_unresolved,priority:2,sort:desc;not null"`
-	Resolved        int   `gorm:"default:0;index:idx_conflicts_unresolved,priority:1"`
-}
-
-func (ObservationConflict) TableName() string { return "observation_conflicts" }
-
-// BeforeCreate hook to ensure timestamps are set.
-func (c *ObservationConflict) BeforeCreate(tx *gorm.DB) error {
-	if c.DetectedAtEpoch == 0 {
-		c.DetectedAtEpoch = time.Now().UnixMilli()
-	}
-	if c.DetectedAt == "" {
-		c.DetectedAt = time.Now().Format(time.RFC3339)
-	}
-	return nil
-}
-
-// ObservationRelation tracks relationships between observations.
-// The uniqueIndex on (source_id, target_id, relation_type) prevents duplicate
-// edges of the same type between the same pair of observations.
-// Confidence defaults to 0.5 (neutral); callers set it based on detection quality.
-type ObservationRelation struct {
-	RelationType    models.RelationType            `gorm:"type:text;check:relation_type IN ('causes', 'fixes', 'supersedes', 'depends_on', 'relates_to', 'evolves_from', 'leads_to', 'similar_to', 'contradicts', 'reinforces', 'invalidated_by', 'explains', 'shares_theme', 'parallel_context', 'summarizes', 'part_of', 'prefers_over', 'modifies', 'reads', 'follows', 'prompted_by', 'references', 'referenced_by');index:idx_relations_type;uniqueIndex:idx_relations_unique,priority:3;not null"`
-	DetectionSource models.RelationDetectionSource `gorm:"type:text;check:detection_source IN ('file_overlap', 'embedding_similarity', 'temporal_proximity', 'narrative_mention', 'concept_overlap', 'type_progression', 'creative_association');not null"`
-	CreatedAt       string                         `gorm:"not null"`
-	Reason          sql.NullString                 `gorm:"type:text"`
-	ID              int64                          `gorm:"primaryKey;autoIncrement"`
-	SourceID        int64                          `gorm:"index:idx_relations_source;index:idx_relations_both,priority:1;uniqueIndex:idx_relations_unique,priority:1;not null"`
-	TargetID        int64                          `gorm:"index:idx_relations_target;index:idx_relations_both,priority:2;uniqueIndex:idx_relations_unique,priority:2;not null"`
-	Confidence      float64                        `gorm:"type:real;default:0.5;index:idx_relations_confidence,sort:desc;not null"`
-	CreatedAtEpoch  int64                          `gorm:"not null"`
-	ValidFrom       *time.Time                     `gorm:"type:timestamptz"`
-	ValidTo         *time.Time                     `gorm:"type:timestamptz"`
-}
-
-func (ObservationRelation) TableName() string { return "observation_relations" }
-
-// BeforeCreate hook to ensure timestamps are set.
-func (r *ObservationRelation) BeforeCreate(tx *gorm.DB) error {
-	if r.CreatedAtEpoch == 0 {
-		r.CreatedAtEpoch = time.Now().UnixMilli()
-	}
-	if r.CreatedAt == "" {
-		r.CreatedAt = time.Now().Format(time.RFC3339)
-	}
-	if r.Confidence == 0 {
-		r.Confidence = 0.5
-	}
-	return nil
-}
-
-// ConceptWeight stores configurable weights for importance scoring.
-// Weights are seeded from migrations and tunable at runtime via the admin API.
-// Default weight 0.1 gives concepts a small-but-non-zero boost; callers that
-// want a concept to be ignored entirely should remove the row rather than set 0.
-type ConceptWeight struct {
-	Concept   string  `gorm:"primaryKey;type:text"`
-	UpdatedAt string  `gorm:"not null"`
-	Weight    float64 `gorm:"type:real;not null;default:0.1"`
-}
-
-func (ConceptWeight) TableName() string { return "concept_weights" }
-
-// BeforeCreate hook to ensure timestamp is set.
-func (c *ConceptWeight) BeforeCreate(tx *gorm.DB) error {
-	if c.UpdatedAt == "" {
-		c.UpdatedAt = time.Now().Format(time.RFC3339)
-	}
-	if c.Weight == 0 {
-		c.Weight = 0.1
-	}
-	return nil
-}
+// ObservationConflict, ObservationRelation, and ConceptWeight structs were
+// removed in CR-2b of provenance-cleanup. Their tables (observation_conflicts,
+// observation_relations, concept_weights) are dropped by migration 137; the
+// migrations that created them (008/011/007) were converted from gorm
+// AutoMigrate(&Struct{}) to raw SQL so the structs no longer needed to exist.
+// ReasoningTrace and ObservationVersion were similarly removed in CR-2a.
 
 // Content holds deduplicated document bodies keyed by SHA-256 hash.
 // The hash is computed by the ingestion layer; GORM does not generate it.
