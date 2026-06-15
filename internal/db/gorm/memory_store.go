@@ -622,6 +622,24 @@ func (s *MemoryStore) BatchIncrementCited(ctx context.Context, ids []int64) erro
 	).Error
 }
 
+// BatchIncrementInjected atomically increments injection_count for the given memory
+// IDs in a single SQL statement. injection_count feeds the citation-rate denominator
+// (citation_count / injection_count). Called fire-and-forget from the injection path
+// so the citation feedback loop has a denominator regardless of which response
+// strategy ran. It does NOT touch ts_beta: the Thompson "uncited" prior is managed
+// separately at session-end by BatchIncrementUncited (cited memories take ts_alpha
+// via BatchIncrementCited instead) — incrementing ts_beta here too would double-count.
+// A nil/empty id slice is a no-op.
+func (s *MemoryStore) BatchIncrementInjected(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Exec(
+		"UPDATE memories SET injection_count = injection_count + 1, updated_at = now() WHERE id = ANY(?) AND deleted_at IS NULL",
+		pq.Array(ids),
+	).Error
+}
+
 // BatchIncrementUncited atomically increments ts_beta for the given memory IDs.
 // All updates are applied in a single SQL statement.
 func (s *MemoryStore) BatchIncrementUncited(ctx context.Context, ids []int64) error {

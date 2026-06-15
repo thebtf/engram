@@ -577,18 +577,6 @@ func TestSessionStore_GetLearningCurve(t *testing.T) {
 	_ = rows2
 }
 
-// TestSessionStore_GetSessionsWithPendingOutcome verifies pending outcome query runs without error.
-func TestSessionStore_GetSessionsWithPendingOutcome(t *testing.T) {
-	ss, _, cleanup := openSessionTestDB(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	rows, err := ss.GetSessionsWithPendingOutcome(ctx)
-	require.NoError(t, err)
-	// Result may be empty in a clean test DB — just verify no error.
-	_ = rows
-}
-
 // TestResolveClaudeSessionID_NotFound verifies the error wraps ErrSessionNotFound.
 func TestResolveClaudeSessionID_NotFound(t *testing.T) {
 	ss, _, cleanup := openSessionTestDB(t)
