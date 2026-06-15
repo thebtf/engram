@@ -557,4 +557,7 @@ func truncateList(items []string, maxLen int) []string {
 // NOTE (provenance-cleanup CR-2a): RelationWithDetails and RelationGraph were
 // removed here. They were response DTOs for the graph/related HTTP handlers
 // (/api/observations/{id}/graph, /api/relations/*), all deleted in CR-2a. The
-// ObservationRelation table itself stays live until its CR-3 DROP migration.
+// observation_relations table was subsequently dropped by migration 137 in
+// CR-2b. The ObservationRelation / ObservationConflict structs that remain in
+// this package are now orphaned persistence types with no DB callers — kept
+// only to avoid an unrelated API churn; a follow-up may remove them.
