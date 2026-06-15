@@ -208,6 +208,13 @@ function isInternalHook() {
  * Codex — exactly the client this exists for. So a `"quiet"` key in the engram
  * config file is honored too, sitting alongside server_url/api_token. Accepts
  * boolean true or a truthy string ("1"/"true"/"yes"/"on").
+ *
+ * Precedence: an explicit env/option ALWAYS wins over the config file, including
+ * a FALSEY one. If any quiet env var is present (non-empty), its value decides
+ * outright (truthy → mute, falsey → active) and the config file is NOT consulted
+ * — this lets a user temporarily re-enable injection with ENGRAM_QUIET=0 without
+ * editing ~/.engram/config.json. The config file is read only when no quiet env
+ * var is set at all (the Codex ≥0.139 case).
  */
 function isTruthyFlag(value) {
   if (value === true) return true;
@@ -223,10 +230,14 @@ function isQuietMode() {
     'CLAUDE_PLUGIN_OPTION_QUIET',
     'CLAUDE_PLUGIN_OPTION_quiet'
   );
-  if (isTruthyFlag(raw)) {
-    return true;
+  // An explicit env/option present (non-empty) decides outright — even falsey,
+  // so it overrides a config-file quiet:true. configuredPluginEnv returns '' for
+  // both "absent" and "empty/placeholder", which we treat the same: fall through.
+  if (raw !== '') {
+    return isTruthyFlag(raw);
   }
-  // Fallback to the engram config file (Codex ≥0.139 hook children see no env).
+  // No quiet env var at all → consult the engram config file (Codex ≥0.139 hook
+  // children receive no env, so this is their only path).
   const cf = readEngramConfigFile(resolveConfigFilePath());
   return !!cf && isTruthyFlag(cf.quiet);
 }

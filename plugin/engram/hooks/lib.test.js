@@ -230,3 +230,25 @@ test('quiet mode is honored from the engram config file (Codex ≥0.139 path, no
   assert.strictEqual(out, '{"continue":true}',
     'quiet:true in the config file must mute hooks even with no quiet env var');
 });
+
+test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
+  // Precedence: a present-but-falsey ENGRAM_QUIET must win over a config-file
+  // quiet:true, so a user can temporarily re-enable injection without editing
+  // ~/.engram/config.json. With the server unreachable, "active" is proven by
+  // the handler running and NOT returning the bare {"continue":true}.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-prec-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} });
+  const cfgPath = path.join(dir, 'config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({
+    server_url: 'http://127.0.0.1:9/unreachable',
+    api_token: 'engram_test',
+    quiet: true,
+  }));
+
+  const out = runHookProcess('session-start.js', {
+    ENGRAM_CONFIG_FILE: cfgPath,
+    ENGRAM_QUIET: '0',
+  });
+  assert.notStrictEqual(out, '{"continue":true}',
+    'ENGRAM_QUIET=0 must override config-file quiet:true (explicit env wins, even falsey)');
+});
