@@ -63,6 +63,10 @@ type ColumnDefinition struct {
 
 var (
 	migrationIDPattern  = regexp.MustCompile(`^(\d+)_`)
+	// sqlCommentPattern strips line (--...) and block (/* ... */) SQL comments so
+	// a commented-out CREATE/DROP TABLE is not parsed as live DDL (PR #271 review,
+	// gemini). Applied to the raw SQL before table extraction.
+	sqlCommentPattern   = regexp.MustCompile(`(?m)--.*$|/\*[\s\S]*?\*/`)
 	createTablePattern  = regexp.MustCompile(`(?is)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[a-zA-Z_][\w$]*)(?:\.(?:"[^"]+"|[a-zA-Z_][\w$]*))?)`)
 	dropTablePattern    = regexp.MustCompile(`(?is)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([^;]+)`)
 	tableConstraintLead = regexp.MustCompile(`(?is)^(?:CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK|EXCLUDE)\b`)
@@ -163,10 +167,11 @@ func (s *Schema) recordSQL(migration MigrationInfo, sql string, line int) {
 		Text:               sql,
 		Line:               line,
 	})
-	for _, table := range extractCreateTables(sql) {
-		s.recordCreate(migration, table, sql, line, "CREATE TABLE")
+	cleanSQL := sqlCommentPattern.ReplaceAllString(sql, "")
+	for _, table := range extractCreateTables(cleanSQL) {
+		s.recordCreate(migration, table, cleanSQL, line, "CREATE TABLE")
 	}
-	for _, table := range extractDropTables(sql) {
+	for _, table := range extractDropTables(cleanSQL) {
 		s.recordDrop(migration, table, line)
 	}
 }
@@ -405,9 +410,25 @@ func createTableBody(sql string) (string, error) {
 	if start < 0 {
 		return "", fmt.Errorf("CREATE TABLE has no column body")
 	}
+	// Track single-quoted string literals so parentheses inside a DEFAULT value
+	// or comment string ('foo(bar)') do not corrupt the depth count (PR #271
+	// review, gemini). SQL escapes a quote by doubling it ('').
 	depth := 0
+	inQuote := false
 	for i := start; i < len(sql); i++ {
-		switch sql[i] {
+		c := sql[i]
+		if c == '\'' {
+			if i+1 < len(sql) && sql[i+1] == '\'' {
+				i++ // skip the escaped quote pair
+			} else {
+				inQuote = !inQuote
+			}
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		switch c {
 		case '(':
 			depth++
 		case ')':
@@ -424,8 +445,22 @@ func splitTopLevelComma(body string) []string {
 	var parts []string
 	start := 0
 	depth := 0
-	for i, r := range body {
-		switch r {
+	inQuote := false
+	bytes := []byte(body)
+	for i := 0; i < len(bytes); i++ {
+		c := bytes[i]
+		if c == '\'' {
+			if i+1 < len(bytes) && bytes[i+1] == '\'' {
+				i++ // escaped quote pair
+			} else {
+				inQuote = !inQuote
+			}
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		switch c {
 		case '(':
 			depth++
 		case ')':

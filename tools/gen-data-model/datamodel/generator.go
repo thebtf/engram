@@ -85,7 +85,12 @@ func SpliceGeneratedBlock(doc, block string) string {
 	}
 	end := strings.Index(normalizedDoc[begin:], EndGeneratedTables)
 	if end < 0 {
-		return strings.TrimRight(normalizedDoc, "\n") + "\n\n" + normalizedBlock
+		// Orphaned opening marker with no matching end: strip the dangling
+		// BEGIN tag before appending, otherwise the appended block (which has
+		// its own BEGIN) would duplicate the opening marker and corrupt the
+		// doc structure (PR #271 review, gemini).
+		docWithoutOrphan := normalizedDoc[:begin] + normalizedDoc[begin+len(BeginGeneratedTables):]
+		return strings.TrimRight(docWithoutOrphan, "\n") + "\n\n" + normalizedBlock
 	}
 	end += begin + len(EndGeneratedTables)
 	if end < len(normalizedDoc) && normalizedDoc[end] == '\n' {
