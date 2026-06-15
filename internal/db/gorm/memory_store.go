@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -781,6 +782,62 @@ func (s *MemoryStore) ListBySourceAgentAndTag(ctx context.Context, project, sour
 	return result, nil
 }
 
+// tokenizeFTSTerms splits an FTS query into terms for the OR-fallback while
+// preserving "double quoted phrases" as single terms and dropping any literal
+// boolean operators the user typed. A naive strings.Fields split breaks both:
+// `"mcp launcher" install` becomes `"mcp`, `launcher"`, `install` (the phrase is
+// shattered and the stray quotes corrupt the rebuilt query), and `a OR b`
+// becomes `a`, `OR`, `b` which re-joins to `a OR OR OR b`. Returned terms keep
+// their surrounding quotes so websearch_to_tsquery still parses each phrase as a
+// phrase in the OR pass.
+func tokenizeFTSTerms(query string) []string {
+	var terms []string
+	var current strings.Builder
+	inQuotes := false
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		term := current.String()
+		current.Reset()
+		// Drop literal boolean operators (case-insensitive) that the user typed —
+		// the fallback supplies its own " OR " joins, so a bare OR/AND/NOT term
+		// would produce malformed tsquery input like `a OR OR OR b`.
+		switch strings.ToUpper(term) {
+		case "OR", "AND", "NOT":
+			return
+		}
+		terms = append(terms, term)
+	}
+	for _, r := range query {
+		switch {
+		case r == '"':
+			current.WriteRune(r)
+			inQuotes = !inQuotes
+		case (r == ' ' || r == '\t' || r == '\n' || r == '\r') && !inQuotes:
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return terms
+}
+
+// hasNegationTerm reports whether any tokenized term is a websearch exclusion
+// (`-term`). Such terms make the OR-fallback semantically wrong (see SearchFTS
+// negation guard). A quoted phrase whose inner text starts with `-` is NOT an
+// exclusion (the leading quote is the first rune), so the check looks past a
+// leading quote only for the bare-term case.
+func hasNegationTerm(terms []string) bool {
+	for _, t := range terms {
+		if strings.HasPrefix(t, "-") && len(t) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // SearchFTS performs a full-text search against the memories table using the
 // search_vector GENERATED ALWAYS column (migration 088). The query string is
 // parsed with websearch_to_tsquery (supports quoted phrases, + for AND, - for NOT).
@@ -809,8 +866,7 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 	// inserted rows (see ListWithOffset comment for full rationale).
 	// NULLIF comparison uses ''::tsquery cast — PostgreSQL has no implicit
 	// tsquery ↔ unknown conversion and raises "operator does not exist" otherwise.
-	var rows []Memory
-	err := s.db.WithContext(ctx).Raw(`
+	const ftsQuerySQL = `
 		WITH parsed AS (
 			SELECT websearch_to_tsquery('english', ?) AS wsq,
 			       plainto_tsquery('english', ?)      AS ptq
@@ -826,10 +882,53 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 		ORDER BY ts_rank_cd(m.search_vector,
 		             COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)) DESC
 		LIMIT ?
-	`, query, query, project, limit).Scan(&rows).Error
+	`
+
+	// Precision-first pass: websearch_to_tsquery / plainto_tsquery both AND all
+	// terms together, so a multi-word query matches only memories whose content
+	// contains EVERY term. That is the precise result and is preferred when it
+	// returns anything.
+	var rows []Memory
+	err := s.db.WithContext(ctx).Raw(ftsQuerySQL, query, query, project, limit).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("SearchFTS project=%q: %w", project, err)
 	}
+
+	// OR-fallback (issue #281): when the AND pass returns nothing AND the query
+	// has 2+ terms, retry with the terms OR-combined. Root cause of the empty-
+	// result bug: an over-specified multi-word query (e.g. "updated_deferred
+	// mcp-launcher install aimux") requires all terms in one memory's content;
+	// no single memory has them all, so the AND pass yields zero even when
+	// strongly-related memories exist. The OR pass surfaces partial matches,
+	// ranked by ts_rank_cd so the most-relevant (most terms matched) sort first.
+	// websearch_to_tsquery("a OR b OR c") parses to the OR tsquery `a | b | c`
+	// and never errors on bad syntax, so the OR string is injection-safe.
+	if len(rows) == 0 {
+		// tokenizeFTSTerms preserves "double quoted phrases" as single terms so
+		// the AND pass's phrase support is not silently broken by the fallback,
+		// and drops any literal OR the user already typed (PR #270 review: naive
+		// strings.Fields turns `"mcp launcher" install` into `"mcp`/`launcher"`
+		// and `a OR b` into `a OR OR OR b`).
+		terms := tokenizeFTSTerms(query)
+		// Negation guard (PR #270 review, codex+coderabbit): if any term is a
+		// websearch exclusion (`-term`), the OR-fallback is semantically invalid.
+		// `postgres -sqlite` would rewrite to `postgres OR -sqlite`, which
+		// websearch_to_tsquery parses as `'postgres' | !'sqlite'`; because AND
+		// binds tighter than OR, that matches every memory lacking "sqlite" —
+		// the exact inverse of the user's exclude intent. When the user typed an
+		// exclusion, the precise (possibly empty) result respects intent better
+		// than a loosened OR pass, so skip the fallback entirely for such queries.
+		if len(terms) >= 2 && !hasNegationTerm(terms) {
+			orQuery := strings.Join(terms, " OR ")
+			var orRows []Memory
+			orErr := s.db.WithContext(ctx).Raw(ftsQuerySQL, orQuery, orQuery, project, limit).Scan(&orRows).Error
+			if orErr != nil {
+				return nil, fmt.Errorf("SearchFTS project=%q (OR fallback): %w", project, orErr)
+			}
+			rows = orRows
+		}
+	}
+
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
 		result[i] = memoryRowToModel(&rows[i])
