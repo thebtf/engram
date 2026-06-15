@@ -182,6 +182,25 @@ function isInternalHook() {
 }
 
 /**
+ * Quiet mode — global injection kill-switch.
+ *
+ * When ENGRAM_QUIET (or ENGRAM_QUIET_HOOKS) is truthy, every hook routed
+ * through RunHook returns an empty `{continue:true}` response and skips its
+ * handler entirely: no context injection, no behavioral-rule / memory / issue
+ * blocks, and no per-hook server calls. This is the "zero beats noise" escape
+ * hatch — useful while a server-side rule set is stale or mis-scoped, or during
+ * focused development where injected context is more distracting than helpful.
+ *
+ * Truthy values: "1", "true", "yes", "on" (case-insensitive). Anything else
+ * (including unset/empty) leaves hooks fully active. Honored for both Claude
+ * Code and Codex because both consume these same hooks.
+ */
+function isQuietMode() {
+  const raw = configuredPluginEnv('ENGRAM_QUIET', 'ENGRAM_QUIET_HOOKS');
+  return /^(1|true|yes|on)$/i.test(raw);
+}
+
+/**
  * getGitRemoteID attempts to compute a stable, cross-platform project ID
  * from the git remote origin URL and the relative path within the repo.
  * Returns an object with projectID, gitRemote, and relativePath on success.
@@ -403,6 +422,13 @@ async function request(method, endpoint, body, timeoutMs = 10000) {
 
 async function RunHook(hookName, handler) {
   if (isInternalHook()) {
+    writeResponse(hookName);
+    return;
+  }
+
+  // Quiet mode: emit an empty pass-through response and skip the handler.
+  // No context injection, no server calls. See isQuietMode() for rationale.
+  if (isQuietMode()) {
     writeResponse(hookName);
     return;
   }

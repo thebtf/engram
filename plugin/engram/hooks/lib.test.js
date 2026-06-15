@@ -163,3 +163,50 @@ test('JS git ID algorithm matches Go ResolveProjectSlug for canonical test vecto
   assert.strictEqual(jsID, expected, 'JS ID must equal independently computed SHA-256 slice');
   assert.match(jsID, /^[0-9a-f]{8}$/, 'canonical vector must produce 8 hex chars');
 });
+
+// Quiet mode (ENGRAM_QUIET) — global injection kill-switch through RunHook.
+// Driven via a child process because the guard lives in RunHook before the
+// handler, ahead of any stdin parsing or server call.
+const { execFileSync } = require('node:child_process');
+
+function runHookProcess(scriptName, env) {
+  const out = execFileSync('node', [path.join(__dirname, scriptName)], {
+    input: JSON.stringify({ session_id: 'quiet-test', cwd: __dirname }),
+    env: { ...process.env, ...env },
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  return out.trim();
+}
+
+test('quiet mode emits empty pass-through and injects nothing (ENGRAM_QUIET=1)', () => {
+  const out = runHookProcess('session-start.js', {
+    ENGRAM_QUIET: '1',
+    ENGRAM_URL: 'http://127.0.0.1:9/unreachable',
+    ENGRAM_TOKEN: 'engram_test',
+  });
+  assert.strictEqual(out, '{"continue":true}',
+    'quiet mode must return exactly {"continue":true} with no hookSpecificOutput');
+});
+
+test('quiet mode accepts truthy aliases and ignores falsey values', () => {
+  for (const v of ['true', 'YES', 'on']) {
+    const out = runHookProcess('session-start.js', {
+      ENGRAM_QUIET: v,
+      ENGRAM_URL: 'http://127.0.0.1:9/unreachable',
+      ENGRAM_TOKEN: 'engram_test',
+    });
+    assert.strictEqual(out, '{"continue":true}', `value ${v} must enable quiet mode`);
+  }
+  // A falsey value must NOT short-circuit: with an unreachable server the hook
+  // still runs its handler and falls through to the no-cache banner (proof the
+  // handler executed rather than being skipped by quiet mode).
+  const active = runHookProcess('session-start.js', {
+    ENGRAM_QUIET: '0',
+    ENGRAM_URL: 'http://127.0.0.1:9/unreachable',
+    ENGRAM_TOKEN: 'engram_test',
+    ENGRAM_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-off-')),
+  });
+  assert.notStrictEqual(active, '{"continue":true}',
+    'ENGRAM_QUIET=0 must leave the hook active (handler runs)');
+});

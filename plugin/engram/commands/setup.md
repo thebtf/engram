@@ -167,3 +167,17 @@ Tool: check_system_health()
 - **Firewall**: Port 37777 must be reachable from this machine to the server.
 - **Docker networking**: If the server runs in Docker, use the host
   machine's IP (not `localhost` unless same machine).
+
+### Quiet mode (mute all hook injection)
+
+Set `ENGRAM_QUIET=1` (alias `ENGRAM_QUIET_HOOKS=1`) in the same env where you
+put `ENGRAM_URL`/`ENGRAM_TOKEN` to make every engram hook a no-op: no
+session-start behavioral rules / memories / issues, no pre-tool-use or
+pre-compact context, and no per-hook server calls. The MCP tools still work —
+only the automatic hook injection is silenced.
+
+Use it when injected context is more noise than signal: a stale or mis-scoped
+server-side rule set, focused development, or any session where "zero hints"
+beats "wrong hints". Truthy values: `1`, `true`, `yes`, `on` (case-insensitive);
+unset or anything else leaves hooks fully active. Honored identically by Claude
+Code and Codex (shared hooks). Reversible — unset the variable to restore.
