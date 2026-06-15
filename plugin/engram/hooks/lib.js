@@ -391,6 +391,26 @@ function readAllStdin() {
   });
 }
 
+// drainStdin consumes and discards the hook's stdin without parsing it.
+// The host writes the hook JSON into the child's stdin pipe; for hooks carrying
+// large payloads (e.g. PostToolUse after a verbose Bash/Agent call) the writer
+// may still be mid-write when an early-return path exits. Returning before the
+// pipe is drained can give the writer EPIPE, surfacing a no-op path (quiet mode,
+// internal hook) as a hook FAILURE. Draining first keeps the early exit silent.
+// No parsing, no server calls — just empty the pipe. Never rejects.
+function drainStdin() {
+  return new Promise((resolve) => {
+    try {
+      process.stdin.on('data', () => {});
+      process.stdin.on('end', resolve);
+      process.stdin.on('error', resolve);
+      process.stdin.resume();
+    } catch {
+      resolve();
+    }
+  });
+}
+
 // Claude Code validates hookSpecificOutput as a discriminated union by hookEventName.
 // Only PreToolUse, UserPromptSubmit, PostToolUse have defined schemas with hookEventName.
 // Other hooks (PostCompact, SessionStart, etc.) must omit hookEventName entirely
@@ -464,13 +484,20 @@ async function request(method, endpoint, body, timeoutMs = 10000) {
 
 async function RunHook(hookName, handler) {
   if (isInternalHook()) {
+    // Drain stdin before the early exit so a large hook payload mid-write does
+    // not give the host EPIPE (see drainStdin).
+    await drainStdin();
     writeResponse(hookName);
     return;
   }
 
   // Quiet mode: emit an empty pass-through response and skip the handler.
   // No context injection, no server calls. See isQuietMode() for rationale.
+  // Drain stdin first: a no-op must stay silent even when the host is streaming
+  // a large payload (e.g. PostToolUse after a verbose Bash/Agent call), or the
+  // writer hits EPIPE and quiet mode surfaces as a hook failure.
   if (isQuietMode()) {
+    await drainStdin();
     writeResponse(hookName);
     return;
   }

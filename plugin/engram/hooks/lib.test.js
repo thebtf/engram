@@ -182,11 +182,14 @@ const QUIET_ENV_ALIASES = [
   'CLAUDE_PLUGIN_OPTION_quiet',
 ];
 
-function runHookProcess(scriptName, env) {
+function runHookProcess(scriptName, env, input) {
   const baseEnv = { ...process.env };
   for (const k of QUIET_ENV_ALIASES) delete baseEnv[k];
+  const stdinPayload = input === undefined
+    ? JSON.stringify({ session_id: 'quiet-test', cwd: __dirname })
+    : input;
   const out = execFileSync('node', [path.join(__dirname, scriptName)], {
-    input: JSON.stringify({ session_id: 'quiet-test', cwd: __dirname }),
+    input: stdinPayload,
     env: { ...baseEnv, ...env },
     encoding: 'utf8',
     stdio: ['pipe', 'pipe', 'ignore'],
@@ -266,4 +269,16 @@ test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
   });
   assert.notStrictEqual(out, '{"continue":true}',
     'ENGRAM_QUIET=0 must override config-file quiet:true (explicit env wins, even falsey)');
+});
+
+test('quiet mode drains a large stdin payload without EPIPE', () => {
+  // A no-op must stay a no-op even when the host streams a large hook payload
+  // (e.g. PostToolUse after a verbose Bash/Agent call). If the child exited
+  // before draining stdin, execFileSync's writer would hit EPIPE and throw —
+  // surfacing quiet mode as a hook failure. ~2 MiB exercises the pipe buffer.
+  const bigField = 'x'.repeat(2 * 1024 * 1024);
+  const payload = JSON.stringify({ session_id: 'quiet-big', cwd: __dirname, tool_output: bigField });
+  const out = runHookProcess('session-start.js', { ENGRAM_QUIET: '1' }, payload);
+  assert.strictEqual(out, '{"continue":true}',
+    'quiet mode must drain large stdin and return a clean no-op (no EPIPE)');
 });
