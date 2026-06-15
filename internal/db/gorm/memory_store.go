@@ -824,6 +824,20 @@ func tokenizeFTSTerms(query string) []string {
 	return terms
 }
 
+// hasNegationTerm reports whether any tokenized term is a websearch exclusion
+// (`-term`). Such terms make the OR-fallback semantically wrong (see SearchFTS
+// negation guard). A quoted phrase whose inner text starts with `-` is NOT an
+// exclusion (the leading quote is the first rune), so the check looks past a
+// leading quote only for the bare-term case.
+func hasNegationTerm(terms []string) bool {
+	for _, t := range terms {
+		if strings.HasPrefix(t, "-") && len(t) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // SearchFTS performs a full-text search against the memories table using the
 // search_vector GENERATED ALWAYS column (migration 088). The query string is
 // parsed with websearch_to_tsquery (supports quoted phrases, + for AND, - for NOT).
@@ -896,7 +910,15 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 		// strings.Fields turns `"mcp launcher" install` into `"mcp`/`launcher"`
 		// and `a OR b` into `a OR OR OR b`).
 		terms := tokenizeFTSTerms(query)
-		if len(terms) >= 2 {
+		// Negation guard (PR #270 review, codex+coderabbit): if any term is a
+		// websearch exclusion (`-term`), the OR-fallback is semantically invalid.
+		// `postgres -sqlite` would rewrite to `postgres OR -sqlite`, which
+		// websearch_to_tsquery parses as `'postgres' | !'sqlite'`; because AND
+		// binds tighter than OR, that matches every memory lacking "sqlite" —
+		// the exact inverse of the user's exclude intent. When the user typed an
+		// exclusion, the precise (possibly empty) result respects intent better
+		// than a loosened OR pass, so skip the fallback entirely for such queries.
+		if len(terms) >= 2 && !hasNegationTerm(terms) {
 			orQuery := strings.Join(terms, " OR ")
 			var orRows []Memory
 			orErr := s.db.WithContext(ctx).Raw(ftsQuerySQL, orQuery, orQuery, project, limit).Scan(&orRows).Error

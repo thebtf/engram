@@ -254,3 +254,25 @@ func TestTokenizeFTSTerms(t *testing.T) {
 		})
 	}
 }
+
+// TestHasNegationTerm locks the negation guard (PR #270 review): a query bearing
+// a `-term` exclusion must disable the OR-fallback, because OR-rewriting inverts
+// websearch NOT semantics (`postgres -sqlite` -> `'postgres' | !'sqlite'`).
+func TestHasNegationTerm(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{"plain multi-word", "postgres sqlite", false},
+		{"explicit exclusion", "postgres -sqlite", true},
+		{"exclusion first", "-sqlite postgres", true},
+		{"lone dash not exclusion", "a - b", false},
+		{"quoted phrase not exclusion", `"mcp launcher" deferred`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, hasNegationTerm(tokenizeFTSTerms(tc.query)))
+		})
+	}
+}
