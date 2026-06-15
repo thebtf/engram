@@ -12,8 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-
-	"github.com/thebtf/engram/pkg/models"
 )
 
 // openIntegrationTestDB opens a PostgreSQL connection for integration tests.
@@ -190,52 +188,6 @@ func TestIntegration_SessionStoreConcurrentPromptCounter(t *testing.T) {
 	assert.Equal(t, numGoroutines, counter)
 }
 
-// TestIntegration_RelationStoreIdempotency verifies that duplicate (src,tgt,type) is handled via ON CONFLICT.
-// CODE_PATH_COVERED: StoreRelation idempotency (RowsAffected==0) path.
-func TestIntegration_RelationStoreIdempotency(t *testing.T) {
-	store, cleanup := openIntegrationTestDB(t)
-	defer cleanup()
-
-	rs := NewRelationStore(store)
-	ctx := context.Background()
-
-	defer store.DB.Exec("DELETE FROM observation_relations WHERE source_id = 9000001 AND target_id = 9000002")
-
-	rel := newTestRelation(9000001, 9000002)
-
-	id1, err := rs.StoreRelation(ctx, rel)
-	require.NoError(t, err)
-	assert.Greater(t, id1, int64(0))
-
-	id2, err := rs.StoreRelation(ctx, rel)
-	require.NoError(t, err)
-	assert.Equal(t, id1, id2)
-}
-
-// TestIntegration_RelationStoreGetRelationsByObservationID verifies bidirectional lookup.
-// CODE_PATH_COVERED: GetRelationsByObservationID returns both outgoing and incoming edges.
-func TestIntegration_RelationStoreGetRelationsByObservationID(t *testing.T) {
-	store, cleanup := openIntegrationTestDB(t)
-	defer cleanup()
-
-	rs := NewRelationStore(store)
-	ctx := context.Background()
-
-	defer store.DB.Exec("DELETE FROM observation_relations WHERE source_id IN (9100001, 9100002) OR target_id IN (9100002, 9100003)")
-
-	rel1 := newTestRelation(9100001, 9100002)
-	rel2 := newTestRelation(9100002, 9100003)
-
-	_, err := rs.StoreRelation(ctx, rel1)
-	require.NoError(t, err)
-	_, err = rs.StoreRelation(ctx, rel2)
-	require.NoError(t, err)
-
-	results, err := rs.GetRelationsByObservationID(ctx, 9100002)
-	require.NoError(t, err)
-	assert.Len(t, results, 2)
-}
-
 // TestIntegration_PoolMetrics_WindowBehavior verifies P95 is computed after ≥20 samples.
 // CODE_PATH_COVERED: PoolMetrics.RecordLatency, GetMetricsSummary, P95 branch.
 func TestIntegration_PoolMetrics_WindowBehavior(t *testing.T) {
@@ -326,16 +278,3 @@ func TestIntegration_ResolveMaxConns(t *testing.T) {
 // shared helpers
 // ============================================================
 
-// newTestRelation returns a minimal *models.ObservationRelation for use in tests.
-func newTestRelation(sourceID, targetID int64) *models.ObservationRelation {
-	now := time.Now()
-	return &models.ObservationRelation{
-		SourceID:        sourceID,
-		TargetID:        targetID,
-		RelationType:    models.RelationCauses,
-		Confidence:      0.75,
-		DetectionSource: models.DetectionSourceFileOverlap,
-		CreatedAt:       now.Format(time.RFC3339),
-		CreatedAtEpoch:  now.UnixMilli(),
-	}
-}

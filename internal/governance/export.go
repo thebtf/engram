@@ -61,7 +61,7 @@ type ExportableMemory struct {
 	EmbeddingBytes []byte    `json:"-"` // omitted from JSON; included in .bin when IncludeEmbeddings=true
 }
 
-// ExportableEdge wraps an edge (knowledge_edges row or ObservationRelation) for export.
+// ExportableEdge wraps a knowledge_edges row for export.
 type ExportableEdge struct {
 	SourceID     int64  `json:"source_id"`
 	TargetID     int64  `json:"target_id"`

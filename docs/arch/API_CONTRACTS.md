@@ -16,7 +16,7 @@ that routes to the appropriate operation.
 
 | Tool | Actions | Description |
 |------|---------|-------------|
-| `recall` | search, by_file, related, reasoning | Search and retrieve memories |
+| `recall` | search, by_file | Search and retrieve memories |
 | `store` | create, edit, merge, import | Store, modify, or merge memories |
 | `feedback` | rate, suppress, outcome | Rate memories, suppress, record session outcomes |
 | `vault` | store, get, list, delete, status | Manage encrypted credentials |
@@ -24,13 +24,13 @@ that routes to the appropriate operation.
 | `admin` | stats, search_analytics, backfill_status | Administrative operations |
 | `issues` | create, list, get, update, comment, reopen, close | Cross-project issue tracker |
 
-### Compatibility Tools (32)
+### Compatibility Tools (31)
 
 Legacy aliases from before tool consolidation. Each maps to a primary tool action.
 
 **Memory:**
 `store_memory`, `recall_memory`, `rate_memory`, `suppress_memory`,
-`find_by_file`, `find_related_observations`, `find_similar_observations`,
+`find_by_file`, `find_similar_observations`,
 `get_memory_stats`, `set_session_outcome`, `import_instincts`, `backfill_status`
 
 **Sessions:**

@@ -772,8 +772,6 @@ func TestCallTool_ParameterValidation_Table(t *testing.T) {
 		args        string
 		errContains string
 	}{
-		{"find_related_observations", `{invalid`, "invalid"},
-		{"find_related_observations", `{}`, "id is required"},
 		{"find_similar_observations", `{invalid`, "invalid"},
 		{"find_similar_observations", `{}`, "query is required"},
 		{"analyze_search_patterns", `{invalid`, "invalid"},
@@ -819,22 +817,8 @@ func TestHandleCheckSystemHealth_NilStores_StructuredResponse(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleFindRelatedObservations / handleFindSimilarObservations
+// handleFindSimilarObservations
 // ---------------------------------------------------------------------------
-
-func TestHandleFindRelatedObservations_Validation(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	_, err := s.handleFindRelatedObservations(ctx, json.RawMessage(`{}`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "id is required")
-
-	_, err = s.handleFindRelatedObservations(ctx, json.RawMessage(`{invalid`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid arguments")
-}
 
 func TestHandleFindSimilarObservations_Validation(t *testing.T) {
 	t.Parallel()

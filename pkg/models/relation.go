@@ -554,19 +554,7 @@ func truncateList(items []string, maxLen int) []string {
 	return append(items[:maxLen], "...")
 }
 
-// RelationWithDetails pairs a stored relation edge with human-readable observation titles
-// and types — used by the API layer to build graph responses without extra DB lookups.
-type RelationWithDetails struct {
-	Relation    *ObservationRelation `json:"relation"`
-	SourceTitle string               `json:"source_title"`
-	TargetTitle string               `json:"target_title"`
-	SourceType  ObservationType      `json:"source_type"`
-	TargetType  ObservationType      `json:"target_type"`
-}
-
-// RelationGraph is the complete subgraph centered on a single observation,
-// returned by the graph API endpoint.
-type RelationGraph struct {
-	Relations []*RelationWithDetails `json:"relations"`
-	CenterID  int64                  `json:"center_id"`
-}
+// NOTE (provenance-cleanup CR-2a): RelationWithDetails and RelationGraph were
+// removed here. They were response DTOs for the graph/related HTTP handlers
+// (/api/observations/{id}/graph, /api/relations/*), all deleted in CR-2a. The
+// ObservationRelation table itself stays live until its CR-3 DROP migration.

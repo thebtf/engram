@@ -90,6 +90,16 @@ func (s *Service) handleBackfillStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
+// BackfillSessionResponse is the response body for POST /api/backfill/session.
+// In v5 the backfill observation/session-summary persistence path was removed, so
+// the stored/skipped/errors counts are always zero and Deprecated explains why.
+type BackfillSessionResponse struct {
+	Deprecated string `json:"deprecated"`
+	Stored     int    `json:"stored"`
+	Skipped    int    `json:"skipped"`
+	Errors     int    `json:"errors"`
+}
+
 // BackfillSessionRequest is the request body for POST /api/backfill/session.
 // The server parses the raw JSONL content, extracts observations via LLM, and stores them.
 type BackfillSessionRequest struct {
@@ -178,11 +188,11 @@ func (s *Service) handleBackfillSession(w http.ResponseWriter, r *http.Request) 
 	runInfo := s.backfillTracker.getOrCreate(req.RunID)
 	runInfo.Sessions++
 
-	writeJSON(w, map[string]any{
-		"stored":     0,
-		"skipped":    0,
-		"errors":     0,
-		"deprecated": "backfill observation/session-summary persistence removed in v5",
+	writeJSON(w, BackfillSessionResponse{
+		Stored:     0,
+		Skipped:    0,
+		Errors:     0,
+		Deprecated: "backfill observation/session-summary persistence removed in v5",
 	})
 }
 

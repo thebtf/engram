@@ -22,7 +22,6 @@ type PurgeReceipt struct {
 	CitationCount  int64     `json:"citation_count"`
 	ChunkCount     int64     `json:"chunk_count"`
 	PromotionCount int64     `json:"promotion_count"`
-	TraceCount     int64     `json:"trace_count"`
 }
 
 // PurgeStore handles project-scoped hard deletion.
@@ -66,8 +65,7 @@ func NewPurgeStore(store *Store) *PurgeStore {
 //     `credentials` table and are explicitly excluded (vault concern).
 //  9. behavioral_rules WHERE project = ? (project column is *string / NULLable;
 //     NULL = global rule — those are never touched).
-// 10. reasoning_traces WHERE project = ? — System-2 memory (reasoning chains)
-//     scoped to this project; purged to prevent sensitive data leaks.
+//     (Former step 10 — reasoning_traces — removed in CR-2a; store + writers gone.)
 //
 // All child-table deletes use SQL subqueries (DELETE … WHERE … IN (SELECT id
 // FROM memories WHERE project = ?)) rather than a Go-side ID slice, which
@@ -185,14 +183,18 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		receipt.RuleCount = r.RowsAffected
 
 		// --- Step 10: reasoning_traces for this project ---
-		// System-2 memory (reasoning chains) is project-scoped and contains
-		// sensitive code, file paths, and proprietary logic. Purge to prevent
-		// data leaks after project deletion.
+		// CR-2a removed the reasoning_traces store and all Go readers/writers, but
+		// migration 065 still CREATEs the table on every install (DROP is deferred
+		// to CR-3). Upgraded deployments may carry legacy rows written by pre-v5
+		// versions. PurgeProject is the project-level privacy hard-delete contract,
+		// so we must still clear those rows via raw SQL even though no store remains.
+		// COUPLING: remove this DELETE in CR-3, in the same change that drops the
+		// reasoning_traces table — afterwards the table will not exist and this
+		// statement would error.
 		r = tx.Exec("DELETE FROM reasoning_traces WHERE project = ?", project)
 		if r.Error != nil {
 			return fmt.Errorf("delete reasoning_traces: %w", r.Error)
 		}
-		receipt.TraceCount = r.RowsAffected
 
 		// --- Step 11: write the purge audit row inside the transaction ---
 		// memory_id is nullable (*int64); pass nil to indicate project-level event.
