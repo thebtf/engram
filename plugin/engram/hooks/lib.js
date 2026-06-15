@@ -46,9 +46,10 @@ function resolveConfigFilePath() {
 
 /**
  * Read and parse the engram config file.
- * Returns { server_url, api_token } on success (values trimmed, may be empty strings).
- * Returns null on missing or malformed file — callers must treat null as "not configured here".
- * Never throws.
+ * Returns { server_url, api_token, quiet } on success (server_url/api_token
+ * trimmed strings, may be empty; quiet is the raw value — boolean or string —
+ * or undefined when absent). Returns null on missing or malformed file —
+ * callers must treat null as "not configured here". Never throws.
  */
 function readEngramConfigFile(configFilePath) {
   try {
@@ -63,6 +64,7 @@ function readEngramConfigFile(configFilePath) {
     return {
       server_url: typeof parsed.server_url === 'string' ? parsed.server_url.trim() : '',
       api_token: typeof parsed.api_token === 'string' ? parsed.api_token.trim() : '',
+      quiet: parsed.quiet,
     };
   } catch {
     // Missing file, permission error, or malformed JSON — skip silently.
@@ -179,6 +181,73 @@ function getServerURL() {
 
 function isInternalHook() {
   return process.env.ENGRAM_INTERNAL === '1';
+}
+
+/**
+ * Quiet mode — global injection kill-switch.
+ *
+ * When ENGRAM_QUIET (or ENGRAM_QUIET_HOOKS) is truthy, every hook routed
+ * through RunHook returns an empty `{continue:true}` response and skips its
+ * handler entirely: no context injection, no behavioral-rule / memory / issue
+ * blocks, and no per-hook server calls. This is the "zero beats noise" escape
+ * hatch — useful while a server-side rule set is stale or mis-scoped, or during
+ * focused development where injected context is more distracting than helpful.
+ *
+ * SCOPE: this gates hook CONTEXT INJECTION only (the prompt noise). It does NOT
+ * disable the MCP daemon — the store/recall/vault/issues tools must keep working
+ * in quiet mode, so the SessionStart binary bootstrap (scripts/ensure-binary.js,
+ * which downloads/updates the daemon binary only when missing or version-stale)
+ * intentionally runs regardless of this flag. That bootstrap injects no context;
+ * it is the prerequisite for the tools quiet mode preserves. To stop all MCP
+ * activity, disable the plugin instead of using quiet mode.
+ *
+ * Truthy values: "1", "true", "yes", "on" (case-insensitive). Anything else
+ * (including unset/empty) leaves hooks fully active. Honored for both Claude
+ * Code and Codex because both consume these same hooks.
+ *
+ * Claude Code forwards plugin userConfig options to subprocesses as
+ * CLAUDE_PLUGIN_OPTION_<KEY> (case follows the manifest), so those aliases are
+ * checked too — letting the switch be flipped via the plugin config UI, not
+ * only a raw env var. Explicit ENGRAM_* env always wins (checked first).
+ *
+ * Config-file fallback: Codex ≥0.139 no longer forwards env vars to plugin hook
+ * children (openai/codex#24401 — the same reason credentials moved to
+ * ~/.engram/config.json), so an env-only switch would silently fail to mute
+ * Codex — exactly the client this exists for. So a `"quiet"` key in the engram
+ * config file is honored too, sitting alongside server_url/api_token. Accepts
+ * boolean true or a truthy string ("1"/"true"/"yes"/"on").
+ *
+ * Precedence: an explicit env/option ALWAYS wins over the config file, including
+ * a FALSEY one. If any quiet env var is present (non-empty), its value decides
+ * outright (truthy → mute, falsey → active) and the config file is NOT consulted
+ * — this lets a user temporarily re-enable injection with ENGRAM_QUIET=0 without
+ * editing ~/.engram/config.json. The config file is read only when no quiet env
+ * var is set at all (the Codex ≥0.139 case).
+ */
+function isTruthyFlag(value) {
+  if (value === true) return true;
+  return typeof value === 'string' && /^(1|true|yes|on)$/i.test(value.trim());
+}
+
+function isQuietMode() {
+  const raw = configuredPluginEnv(
+    'ENGRAM_QUIET',
+    'ENGRAM_QUIET_HOOKS',
+    'CLAUDE_PLUGIN_OPTION_ENGRAM_QUIET',
+    'CLAUDE_PLUGIN_OPTION_engram_quiet',
+    'CLAUDE_PLUGIN_OPTION_QUIET',
+    'CLAUDE_PLUGIN_OPTION_quiet'
+  );
+  // An explicit env/option present (non-empty) decides outright — even falsey,
+  // so it overrides a config-file quiet:true. configuredPluginEnv returns '' for
+  // both "absent" and "empty/placeholder", which we treat the same: fall through.
+  if (raw !== '') {
+    return isTruthyFlag(raw);
+  }
+  // No quiet env var at all → consult the engram config file (Codex ≥0.139 hook
+  // children receive no env, so this is their only path).
+  const cf = readEngramConfigFile(resolveConfigFilePath());
+  return !!cf && isTruthyFlag(cf.quiet);
 }
 
 /**
@@ -330,6 +399,48 @@ function readAllStdin() {
   });
 }
 
+// drainStdin consumes and discards the hook's stdin without parsing it.
+// The host writes the hook JSON into the child's stdin pipe; for hooks carrying
+// large payloads (e.g. PostToolUse after a verbose Bash/Agent call) the writer
+// may still be mid-write when an early-return path exits. Returning before the
+// pipe is drained can give the writer EPIPE, surfacing a no-op path (quiet mode,
+// internal hook) as a hook FAILURE. Draining first keeps the early exit silent.
+// No parsing, no server calls — just empty the pipe. Never rejects.
+function drainStdin() {
+  return new Promise((resolve) => {
+    try {
+      process.stdin.on('data', () => {});
+      process.stdin.on('end', resolve);
+      process.stdin.on('error', resolve);
+      process.stdin.resume();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+// clearReinjectionFile removes <cwd>/.engram/reinjection.md if present.
+// pre-compact.js writes that file (the agent reads it via @.engram/reinjection.md
+// on the next turn) and is the only path that deletes it when stale. Under quiet
+// mode the PreCompact handler is skipped, so a previously-written file would keep
+// replaying old hints — defeating the "zero hints" promise. The quiet path clears
+// it directly. Best-effort: never throws, no server calls. `rawInput` is the hook
+// JSON already read from stdin (so the pipe is drained); cwd is parsed from it.
+function clearReinjectionFile(rawInput) {
+  try {
+    if (!rawInput || !rawInput.trim()) return;
+    const parsed = JSON.parse(rawInput);
+    const cwd = typeof parsed.cwd === 'string' ? parsed.cwd : '';
+    if (!cwd) return;
+    const reinjectionFile = path.join(cwd, '.engram', 'reinjection.md');
+    if (fs.existsSync(reinjectionFile)) {
+      fs.unlinkSync(reinjectionFile);
+    }
+  } catch {
+    // Malformed JSON, missing cwd, permission error — non-fatal.
+  }
+}
+
 // Claude Code validates hookSpecificOutput as a discriminated union by hookEventName.
 // Only PreToolUse, UserPromptSubmit, PostToolUse have defined schemas with hookEventName.
 // Other hooks (PostCompact, SessionStart, etc.) must omit hookEventName entirely
@@ -403,6 +514,23 @@ async function request(method, endpoint, body, timeoutMs = 10000) {
 
 async function RunHook(hookName, handler) {
   if (isInternalHook()) {
+    // Drain stdin before the early exit so a large hook payload mid-write does
+    // not give the host EPIPE (see drainStdin).
+    await drainStdin();
+    writeResponse(hookName);
+    return;
+  }
+
+  // Quiet mode: emit an empty pass-through response and skip the handler.
+  // No context injection, no server calls. See isQuietMode() for rationale.
+  // readAllStdin() fully drains the pipe (so a large payload mid-write does not
+  // give the host EPIPE) AND yields the payload, from which we clear any stale
+  // .engram/reinjection.md — the one hint channel the agent reads directly
+  // (@-import), out of band from hooks, so skipping PreCompact alone would leave
+  // it replaying. Clearing it keeps the "zero hints" promise. Best-effort.
+  if (isQuietMode()) {
+    const rawInput = await readAllStdin();
+    clearReinjectionFile(rawInput);
     writeResponse(hookName);
     return;
   }

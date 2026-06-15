@@ -163,3 +163,141 @@ test('JS git ID algorithm matches Go ResolveProjectSlug for canonical test vecto
   assert.strictEqual(jsID, expected, 'JS ID must equal independently computed SHA-256 slice');
   assert.match(jsID, /^[0-9a-f]{8}$/, 'canonical vector must produce 8 hex chars');
 });
+
+// Quiet mode (ENGRAM_QUIET) — global injection kill-switch through RunHook.
+// Driven via a child process because the guard lives in RunHook before the
+// handler, ahead of any stdin parsing or server call.
+const { execFileSync } = require('node:child_process');
+
+// Quiet-mode aliases that must NOT leak from the dev/CI environment into the
+// child, or they would override the per-test values (e.g. an inherited
+// ENGRAM_QUIET=0 would defeat the config-file quiet:true test). Stripped before
+// merging the test-specific env.
+const QUIET_ENV_ALIASES = [
+  'ENGRAM_QUIET',
+  'ENGRAM_QUIET_HOOKS',
+  'CLAUDE_PLUGIN_OPTION_ENGRAM_QUIET',
+  'CLAUDE_PLUGIN_OPTION_engram_quiet',
+  'CLAUDE_PLUGIN_OPTION_QUIET',
+  'CLAUDE_PLUGIN_OPTION_quiet',
+];
+
+function runHookProcess(scriptName, env, input) {
+  const baseEnv = { ...process.env };
+  for (const k of QUIET_ENV_ALIASES) delete baseEnv[k];
+  const stdinPayload = input === undefined
+    ? JSON.stringify({ session_id: 'quiet-test', cwd: __dirname })
+    : input;
+  const out = execFileSync('node', [path.join(__dirname, scriptName)], {
+    input: stdinPayload,
+    env: { ...baseEnv, ...env },
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  return out.trim();
+}
+
+test('quiet mode emits empty pass-through and injects nothing (ENGRAM_QUIET=1)', () => {
+  const out = runHookProcess('session-start.js', {
+    ENGRAM_QUIET: '1',
+    ENGRAM_URL: 'http://127.0.0.1:9/unreachable',
+    ENGRAM_TOKEN: 'engram_test',
+  });
+  assert.strictEqual(out, '{"continue":true}',
+    'quiet mode must return exactly {"continue":true} with no hookSpecificOutput');
+});
+
+test('quiet mode accepts truthy aliases and ignores falsey values', (t) => {
+  for (const v of ['true', 'YES', 'on']) {
+    const out = runHookProcess('session-start.js', {
+      ENGRAM_QUIET: v,
+      ENGRAM_URL: 'http://127.0.0.1:9/unreachable',
+      ENGRAM_TOKEN: 'engram_test',
+    });
+    assert.strictEqual(out, '{"continue":true}', `value ${v} must enable quiet mode`);
+  }
+  // A falsey value must NOT short-circuit: with an unreachable server the hook
+  // still runs its handler and falls through to the no-cache banner (proof the
+  // handler executed rather than being skipped by quiet mode).
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-off-'));
+  t.after(() => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {} });
+  const active = runHookProcess('session-start.js', {
+    ENGRAM_QUIET: '0',
+    ENGRAM_URL: 'http://127.0.0.1:9/unreachable',
+    ENGRAM_TOKEN: 'engram_test',
+    ENGRAM_DATA_DIR: dataDir,
+  });
+  assert.notStrictEqual(active, '{"continue":true}',
+    'ENGRAM_QUIET=0 must leave the hook active (handler runs)');
+});
+
+test('quiet mode is honored from the engram config file (Codex ≥0.139 path, no env)', (t) => {
+  // Codex ≥0.139 does not forward env vars to plugin hook children, so the
+  // switch must also be readable from ~/.engram/config.json (here pointed at a
+  // temp file via ENGRAM_CONFIG_FILE). No ENGRAM_QUIET env is set.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-cfg-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} });
+  const cfgPath = path.join(dir, 'config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({
+    server_url: 'http://127.0.0.1:9/unreachable',
+    api_token: 'engram_test',
+    quiet: true,
+  }));
+
+  const out = runHookProcess('session-start.js', { ENGRAM_CONFIG_FILE: cfgPath });
+  assert.strictEqual(out, '{"continue":true}',
+    'quiet:true in the config file must mute hooks even with no quiet env var');
+});
+
+test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
+  // Precedence: a present-but-falsey ENGRAM_QUIET must win over a config-file
+  // quiet:true, so a user can temporarily re-enable injection without editing
+  // ~/.engram/config.json. With the server unreachable, "active" is proven by
+  // the handler running and NOT returning the bare {"continue":true}.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-prec-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} });
+  const cfgPath = path.join(dir, 'config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({
+    server_url: 'http://127.0.0.1:9/unreachable',
+    api_token: 'engram_test',
+    quiet: true,
+  }));
+
+  const out = runHookProcess('session-start.js', {
+    ENGRAM_CONFIG_FILE: cfgPath,
+    ENGRAM_QUIET: '0',
+  });
+  assert.notStrictEqual(out, '{"continue":true}',
+    'ENGRAM_QUIET=0 must override config-file quiet:true (explicit env wins, even falsey)');
+});
+
+test('quiet mode drains a large stdin payload without EPIPE', () => {
+  // A no-op must stay a no-op even when the host streams a large hook payload
+  // (e.g. PostToolUse after a verbose Bash/Agent call). If the child exited
+  // before draining stdin, execFileSync's writer would hit EPIPE and throw —
+  // surfacing quiet mode as a hook failure. ~2 MiB exercises the pipe buffer.
+  const bigField = 'x'.repeat(2 * 1024 * 1024);
+  const payload = JSON.stringify({ session_id: 'quiet-big', cwd: __dirname, tool_output: bigField });
+  const out = runHookProcess('session-start.js', { ENGRAM_QUIET: '1' }, payload);
+  assert.strictEqual(out, '{"continue":true}',
+    'quiet mode must drain large stdin and return a clean no-op (no EPIPE)');
+});
+
+test('quiet mode clears a stale .engram/reinjection.md', (t) => {
+  // .engram/reinjection.md is written by pre-compact.js and read directly by the
+  // agent (@-import), out of band from hooks. Quiet mode skips PreCompact (the
+  // only path that deletes it when stale), so the quiet path must clear it or it
+  // keeps replaying old hints — breaking "zero hints".
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-reinj-'));
+  t.after(() => { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch (_) {} });
+  const engramDir = path.join(cwd, '.engram');
+  fs.mkdirSync(engramDir, { recursive: true });
+  const reinjFile = path.join(engramDir, 'reinjection.md');
+  fs.writeFileSync(reinjFile, '# stale hints\n- old memory\n');
+
+  const payload = JSON.stringify({ session_id: 'quiet-reinj', cwd });
+  const out = runHookProcess('session-start.js', { ENGRAM_QUIET: '1' }, payload);
+  assert.strictEqual(out, '{"continue":true}', 'quiet mode returns a clean no-op');
+  assert.strictEqual(fs.existsSync(reinjFile), false,
+    'quiet mode must delete the stale .engram/reinjection.md');
+});

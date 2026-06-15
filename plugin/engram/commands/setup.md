@@ -167,3 +167,42 @@ Tool: check_system_health()
 - **Firewall**: Port 37777 must be reachable from this machine to the server.
 - **Docker networking**: If the server runs in Docker, use the host
   machine's IP (not `localhost` unless same machine).
+
+### Quiet mode (mute all hook injection)
+
+Quiet mode makes every engram hook a no-op: no session-start behavioral rules /
+memories / issues, no pre-tool-use or pre-compact context, and no per-hook
+server calls. Use it when injected context is more noise than signal: a stale or
+mis-scoped server-side rule set, focused development, or any session where
+"zero hints" beats "wrong hints".
+
+**Scope — what quiet mode does and does NOT silence.** Quiet mode silences hook
+*context injection* (the prompt noise). It deliberately does NOT disable the MCP
+daemon: the `store`/`recall`/`vault`/`issues`/... tools keep working, so the
+SessionStart binary bootstrap (`ensure-binary.js`, which downloads/updates the
+daemon binary only when it is missing or version-stale) still runs. That is by
+design — muting injection must not break the tools. The bootstrap is rare (only
+on first install or a version bump), best-effort, and non-fatal; it makes no
+context injection. If you want zero MCP activity too, disable the engram plugin
+rather than using quiet mode.
+
+Set it the same way you set credentials for your harness:
+
+- **Claude Code** — env var `ENGRAM_QUIET=1` (alias `ENGRAM_QUIET_HOOKS=1`) in
+  `~/.claude/settings.json` `env`, next to `ENGRAM_URL`/`ENGRAM_TOKEN`. The
+  plugin-config option `engram_quiet` also works (`CLAUDE_PLUGIN_OPTION_*`).
+- **Codex ≥0.139** — env vars are NOT forwarded to plugin hook children
+  (openai/codex#24401), so the env var will NOT work. Add `"quiet": true` to
+  `~/.engram/config.json` instead, alongside `server_url`/`api_token`:
+
+  ```json
+  {
+    "server_url": "http://your-server:37777",
+    "api_token": "engram_<keycard>",
+    "quiet": true
+  }
+  ```
+
+Truthy values: `true` (boolean) or the strings `1`/`true`/`yes`/`on`
+(case-insensitive); unset or anything else leaves hooks fully active. Reversible
+— remove the var/key to restore. Explicit env always wins over the config file.

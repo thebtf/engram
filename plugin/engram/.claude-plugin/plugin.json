@@ -22,6 +22,13 @@
       "type": "string",
       "required": true,
       "sensitive": true
+    },
+    "engram_quiet": {
+      "title": "Quiet mode (mute hook injection)",
+      "description": "When enabled, every engram hook becomes a no-op: no session-start behavioral rules / memories / issues, no pre-tool-use or pre-compact context, and no per-hook server calls. MCP tools are unaffected. Use when injected context is more noise than signal. (Codex ≥0.139 does not forward this to hook children — set \"quiet\": true in ~/.engram/config.json there instead.)",
+      "type": "boolean",
+      "required": false,
+      "sensitive": false
     }
   },
   "mcpServers": "./claude/.mcp.json"
