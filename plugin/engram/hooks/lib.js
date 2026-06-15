@@ -194,9 +194,21 @@ function isInternalHook() {
  * Truthy values: "1", "true", "yes", "on" (case-insensitive). Anything else
  * (including unset/empty) leaves hooks fully active. Honored for both Claude
  * Code and Codex because both consume these same hooks.
+ *
+ * Claude Code forwards plugin userConfig options to subprocesses as
+ * CLAUDE_PLUGIN_OPTION_<KEY> (case follows the manifest), so those aliases are
+ * checked too — letting the switch be flipped via the plugin config UI, not
+ * only a raw env var. Explicit ENGRAM_* env always wins (checked first).
  */
 function isQuietMode() {
-  const raw = configuredPluginEnv('ENGRAM_QUIET', 'ENGRAM_QUIET_HOOKS');
+  const raw = configuredPluginEnv(
+    'ENGRAM_QUIET',
+    'ENGRAM_QUIET_HOOKS',
+    'CLAUDE_PLUGIN_OPTION_ENGRAM_QUIET',
+    'CLAUDE_PLUGIN_OPTION_engram_quiet',
+    'CLAUDE_PLUGIN_OPTION_QUIET',
+    'CLAUDE_PLUGIN_OPTION_quiet'
+  );
   return /^(1|true|yes|on)$/i.test(raw);
 }
 

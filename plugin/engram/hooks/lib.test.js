@@ -189,7 +189,7 @@ test('quiet mode emits empty pass-through and injects nothing (ENGRAM_QUIET=1)',
     'quiet mode must return exactly {"continue":true} with no hookSpecificOutput');
 });
 
-test('quiet mode accepts truthy aliases and ignores falsey values', () => {
+test('quiet mode accepts truthy aliases and ignores falsey values', (t) => {
   for (const v of ['true', 'YES', 'on']) {
     const out = runHookProcess('session-start.js', {
       ENGRAM_QUIET: v,
@@ -201,11 +201,13 @@ test('quiet mode accepts truthy aliases and ignores falsey values', () => {
   // A falsey value must NOT short-circuit: with an unreachable server the hook
   // still runs its handler and falls through to the no-cache banner (proof the
   // handler executed rather than being skipped by quiet mode).
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-off-'));
+  t.after(() => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {} });
   const active = runHookProcess('session-start.js', {
     ENGRAM_QUIET: '0',
     ENGRAM_URL: 'http://127.0.0.1:9/unreachable',
     ENGRAM_TOKEN: 'engram_test',
-    ENGRAM_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-off-')),
+    ENGRAM_DATA_DIR: dataDir,
   });
   assert.notStrictEqual(active, '{"continue":true}',
     'ENGRAM_QUIET=0 must leave the hook active (handler runs)');
