@@ -4341,96 +4341,58 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS fk_audit_log_memory`).Error
 			},
 		},
-		// Migration 137 — provenance-cleanup CR-2b: drop the 8 empty/derived
-		// observation-era tables. Every table here has zero live Go readers/writers
-		// (CR-2a removed the stores; CR-2b removes the last dead store + purge coupling
-		// in the same change) and is flagged by the provenance_lint / schema_integrity
-		// guardrails. The parent `observations` table was already dropped at migration
-		// 099, so the dangling observation_id columns have no enforced FK — DROP order
-		// among these eight is unconstrained.
+		// Migration 137 — provenance-cleanup CR-2b: drop the 8 observation-era tables.
+		// Every table here has zero live Go readers/writers (CR-2a removed the stores;
+		// CR-2b removed the last dead store + purge coupling) and is flagged by the
+		// provenance_lint / schema_integrity guardrails. The parent `observations`
+		// table was dropped at migration 099, so the dangling observation_id columns
+		// have no enforced FK and these rows are orphaned derived/telemetry data —
+		// DROP order among the eight is unconstrained.
 		//
-		// PARKED on operator prod verify-empty (Hard Stop #1). The PR is held until
-		// the operator confirms each table is empty (concept_weights ≤ 12 seed rows)
-		// on production — but the gate is ALSO enforced in code below: each table's
-		// row count is checked before its DROP, and the migration aborts rather than
-		// CASCADE-dropping live data if the count exceeds the table's allowance. The
-		// verify-empty SQL lives in
-		// .agent/specs/provenance-cleanup/evidence/cr2b-verify-empty.sql.
+		// UNCONDITIONAL DROP (operator-authorized 2026-06-16). An earlier revision
+		// guarded each DROP behind a row-count check (allowance 0, 12 for
+		// concept_weights) intended to enforce a "verify-empty" gate in code. On the
+		// production DB those tables were NOT empty (observation_conflicts held ~35.7k
+		// orphaned rows), so the guard aborted the whole migration chain and the
+		// server crash-looped on startup. The operator's standing intent is that all
+		// nine observation-era tables are demolition debt to be removed regardless of
+		// row count (keep-set is {issues, memories, vault/credentials, api_tokens} —
+		// none of which appear here), so the guard was wrong: it blocked the very
+		// operation it was meant to protect, on data the operator wants gone. The drop
+		// is now unconditional, matching migration 138.
 		//
-		// Atomicity: the probe/guard/DROP sequence runs inside an explicit
-		// tx.Transaction (gormigrate's DefaultOptions set UseTransaction=false).
-		// PostgreSQL DDL is transactional, so a mid-sequence failure rolls back every
-		// DROP — no partial-drop window.
-		//
-		// Rollback is intentionally a no-op: these tables held only derived/telemetry
-		// data with no upstream source to reconstruct from. A faithful recreate would
-		// produce an empty table of the old shape with no rows, which is indistinguishable
-		// from "not rolled back" for every consumer (all readers are already gone). The
-		// CREATE bodies remain in migrations 006/007/008/011/033/060/061/065 for fresh-
-		// install replay up to this point; 137 then removes them.
+		// Each DROP is a full string literal so the static migration parser
+		// (internal/db/gorm/migrationmeta) + DATA_MODEL.md generator see every dropped
+		// table (a concatenated `"DROP TABLE "+var` carries no table name in the
+		// literal and would be invisible to the parser). Wrapped in tx.Transaction
+		// (gormigrate DefaultOptions set UseTransaction=false); PostgreSQL DDL is
+		// transactional, so a mid-sequence failure rolls back every DROP. Rollback is
+		// a no-op (orphaned derived data, no upstream source to reconstruct).
 		{
 			ID: "137_drop_observation_era_tables",
 			Migrate: func(tx *gorm.DB) error {
-				// Each step carries the FULL `DROP TABLE IF EXISTS <name> CASCADE`
-				// as a string literal (the dropSQL field) — NOT built by
-				// concatenation. The static migration parser
-				// (internal/db/gorm/migrationmeta) walks string-literal AST nodes and
-				// runs its DROP regex on each; a concatenated `"DROP TABLE "+table`
-				// would carry no table name in the literal and the drop would be
-				// invisible to the parser (leaving these tables counted as live in
-				// DATA_MODEL.md + the provenance_lint baseline). Holding the literal in
-				// a struct field keeps it visible while still allowing the row-count
-				// guard to loop. `max` is the allowed row count: concept_weights is
-				// seeded with 12 rows by migration 007 on every install, so its
-				// allowance is 12; every other table is dead/derived and must be empty.
-				steps := []struct {
-					table   string
-					max     int64
-					dropSQL string
-				}{
-					{"observation_conflicts", 0, `DROP TABLE IF EXISTS observation_conflicts CASCADE`},
-					{"observation_relations", 0, `DROP TABLE IF EXISTS observation_relations CASCADE`},
-					{"agent_observation_stats", 0, `DROP TABLE IF EXISTS agent_observation_stats CASCADE`},
-					{"observation_versions", 0, `DROP TABLE IF EXISTS observation_versions CASCADE`},
-					{"reasoning_traces", 0, `DROP TABLE IF EXISTS reasoning_traces CASCADE`},
-					{"concept_weights", 12, `DROP TABLE IF EXISTS concept_weights CASCADE`},
-					{"vectors", 0, `DROP TABLE IF EXISTS vectors CASCADE`},
-					{"search_misses", 0, `DROP TABLE IF EXISTS search_misses CASCADE`},
-				}
 				return tx.Transaction(func(txx *gorm.DB) error {
-					for _, s := range steps {
-						// to_regclass returns NULL for a non-existent relation, so an
-						// already-dropped table (idempotent re-run after a failure, or a
-						// DBA pre-drop) is skipped rather than erroring on count.
-						var exists bool
-						if err := txx.Raw(`SELECT to_regclass(?) IS NOT NULL`, s.table).Scan(&exists).Error; err != nil {
-							return fmt.Errorf("migration 137: probe %s: %w", s.table, err)
-						}
-						if !exists {
-							continue
-						}
-						var count int64
-						// s.table is a fixed internal identifier from the steps slice
-						// above (never user input), so the interpolation is safe.
-						if err := txx.Raw(`SELECT count(*) FROM ` + s.table).Scan(&count).Error; err != nil {
-							return fmt.Errorf("migration 137: count %s: %w", s.table, err)
-						}
-						if count > s.max {
-							return fmt.Errorf("migration 137: refusing to drop %s — it holds %d rows "+
-								"(allowance %d). Hard Stop #1: run the operator prod verify-empty step "+
-								"(.agent/specs/provenance-cleanup/evidence/cr2b-verify-empty.sql) and confirm "+
-								"the table is within allowance before this migration may run", s.table, count, s.max)
-						}
-						if err := txx.Exec(s.dropSQL).Error; err != nil {
-							return fmt.Errorf("migration 137: drop %s: %w", s.table, err)
+					stmts := []string{
+						`DROP TABLE IF EXISTS observation_conflicts CASCADE`,
+						`DROP TABLE IF EXISTS observation_relations CASCADE`,
+						`DROP TABLE IF EXISTS agent_observation_stats CASCADE`,
+						`DROP TABLE IF EXISTS observation_versions CASCADE`,
+						`DROP TABLE IF EXISTS reasoning_traces CASCADE`,
+						`DROP TABLE IF EXISTS concept_weights CASCADE`,
+						`DROP TABLE IF EXISTS vectors CASCADE`,
+						`DROP TABLE IF EXISTS search_misses CASCADE`,
+					}
+					for _, s := range stmts {
+						if err := txx.Exec(s).Error; err != nil {
+							return fmt.Errorf("migration 137: %w", err)
 						}
 					}
 					return nil
 				})
 			},
 			Rollback: func(tx *gorm.DB) error {
-				// Intentionally irreversible: dropped tables held only derived data
-				// with no source to reconstruct. See migration comment above.
+				// Intentionally irreversible: dropped tables held only orphaned derived
+				// data with no source to reconstruct. See migration comment above.
 				return nil
 			},
 		},

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.7.1] - 2026-06-16
+
+### Fixed
+
+- **provenance-cleanup migration 137 crash-loop on non-empty prod tables.** v6.7.0
+  shipped migration 137 with a per-table row-count guard that aborted the migration
+  (and thus the whole startup migration chain) if any of the 8 observation-era
+  tables exceeded a hardcoded allowance (0, or 12 for concept_weights). On the
+  production database those tables were not empty (observation_conflicts held ~35.7k
+  orphaned rows from before the CR-1 rewire), so the guard aborted and the server
+  crash-looped on init ("refusing to drop observation_conflicts — it holds 35763
+  rows"). The 9 observation-era tables are demolition debt outside the keep-set
+  ({issues, memories, vault/credentials, api_tokens}) and are removed regardless of
+  row count, so the guard blocked the very operation it guarded. Migration 137 now
+  drops unconditionally (matching 138), inside a transaction. No keep-set data is
+  touched. (NVMD-ENG-1)
+
 ## [6.7.0] - 2026-06-15
 
 ### Added
