@@ -53,9 +53,9 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from `internal/db/gorm/migrations.go`.
 
-Migration count: **126**.
+Migration count: **127**.
 
-Live table count: **31**.
+Live table count: **30**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -70,7 +70,6 @@ Live table count: **31**.
 | `system_config` | `050_system_config` |
 | `versioned_document_comments` | `051_documents` |
 | `versioned_documents` | `051_documents` |
-| `observation_injections` | `058_observation_injections_table` |
 | `issue_comments` | `070_agent_issues` |
 | `issues` | `070_agent_issues` |
 | `invitations` | `080_create_auth_tables` |

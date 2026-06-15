@@ -4434,6 +4434,39 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		// Migration 138 — provenance-cleanup CR-3: drop observation_injections, the
+		// last observation-era table. CR-1 rewired the citation/injection sink onto
+		// injection_log (migration 106) and removed every live Go reader/writer of
+		// observation_injections, so the table is dead on the default path.
+		//
+		// Unlike CR-2b's migration 137, there is NO row-count guard here: per the
+		// epic plan (architecture.md §4, plan.md:42) observation_injections is
+		// "informational; drop-OK regardless" because injection_log is the single
+		// source of truth and carries the same per-session injected-memory events.
+		// Dropping it cannot lose data that injection_log does not already hold, so a
+		// non-zero count is not a Hard Stop here. The PR still parks as a draft so the
+		// operator acknowledges the drop, but the drop itself is unconditional.
+		//
+		// Wrapped in tx.Transaction (gormigrate DefaultOptions UseTransaction=false);
+		// PostgreSQL DDL is transactional. Each DROP is a full string literal so the
+		// static migration parser + DATA_MODEL.md generator see the dropped table.
+		// Rollback is a no-op (derived data; injection_log retains the SSOT copy).
+		{
+			ID: "138_drop_observation_injections",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Transaction(func(txx *gorm.DB) error {
+					if err := txx.Exec(`DROP TABLE IF EXISTS observation_injections CASCADE`).Error; err != nil {
+						return fmt.Errorf("migration 138: drop observation_injections: %w", err)
+					}
+					return nil
+				})
+			},
+			Rollback: func(tx *gorm.DB) error {
+				// Intentionally irreversible: observation_injections held only derived
+				// telemetry; injection_log (migration 106) carries the SSOT copy.
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

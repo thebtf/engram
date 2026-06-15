@@ -22,7 +22,8 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	whitelist := map[string]string{
 		"citation_log.session_id":                   "external SDK session identifier (TEXT), not a row FK",
 		"injection_log.session_id":                  "external SDK session identifier (TEXT), not a row FK",
-		"observation_injections.session_id":         "external SDK session identifier (TEXT), not a row FK",
+		// observation_injections.session_id was removed in CR-3: migration 138 drops
+		// observation_injections, so a whitelist key for a non-existent table is dead.
 		"retrieval_stats_log.query_id":              "analytics correlation identifier, not a table FK",
 		"search_query_log.session_id":               "external SDK session identifier (TEXT), not a row FK",
 		"session_transcripts.session_id":            "external SDK session identifier (TEXT), not a row FK",
@@ -74,14 +75,12 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	// entity *_id column — regression — or (b) a baseline column cleaned without
 	// shrinking this list. Each CR that removes a dangler MUST delete it here; that
 	// edit is the CR's GREEN proof. Literal all-RED proof: evidence/cr0-red-proof.txt.
-	baseline := []string{
-		// CR-2b (migration 137) dropped agent_observation_stats and
-		// observation_versions; their dangling observation_id entries were removed
-		// from this baseline as CR-2b's schema_integrity GREEN proof. Only
-		// observation_injections.observation_id remains — its table is dropped by
-		// CR-3 (after the CR-1 citation rewire), which empties this baseline.
-		"observation_injections.observation_id", // CR-3 drop table (after CR-1 rewire)
-	}
+	// Known-debt baseline is now EMPTY. CR-2b (migration 137) dropped the 8
+	// empty/derived tables; CR-3 (migration 138) dropped observation_injections,
+	// removing the last dangling entity *_id. Emptying this baseline is CR-3's
+	// schema_integrity GREEN proof — the guardrail is now pure regression
+	// protection: any NEW dangling entity *_id column will fail the test.
+	var baseline []string
 	// CR-4 (migration 136, decision D7): audit_log.memory_id gained an FK to
 	// memories(id) ON DELETE SET NULL, so it is no longer a dangling entity *_id
 	// and was removed from this known-debt baseline. That removal is CR-4's
