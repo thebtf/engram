@@ -182,9 +182,19 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.RuleCount = r.RowsAffected
 
-		// (Former step 10 — DELETE FROM reasoning_traces — removed in CR-2a of
-		// provenance-cleanup: the reasoning_traces store and all writers are gone,
-		// the table is unpopulated, and it is scheduled for DROP in CR-3.)
+		// --- Step 10: reasoning_traces for this project ---
+		// CR-2a removed the reasoning_traces store and all Go readers/writers, but
+		// migration 065 still CREATEs the table on every install (DROP is deferred
+		// to CR-3). Upgraded deployments may carry legacy rows written by pre-v5
+		// versions. PurgeProject is the project-level privacy hard-delete contract,
+		// so we must still clear those rows via raw SQL even though no store remains.
+		// COUPLING: remove this DELETE in CR-3, in the same change that drops the
+		// reasoning_traces table — afterwards the table will not exist and this
+		// statement would error.
+		r = tx.Exec("DELETE FROM reasoning_traces WHERE project = ?", project)
+		if r.Error != nil {
+			return fmt.Errorf("delete reasoning_traces: %w", r.Error)
+		}
 
 		// --- Step 11: write the purge audit row inside the transaction ---
 		// memory_id is nullable (*int64); pass nil to indicate project-level event.

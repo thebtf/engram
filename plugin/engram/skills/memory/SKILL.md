@@ -75,7 +75,7 @@ Tool: vault_status()
 
 **Key source priority:** `ENGRAM_ENCRYPTION_KEY` env var > `ENGRAM_ENCRYPTION_KEY_FILE` > auto-generated `vault.key`. Auto-generated keys are saved to `DataDir()/vault.key` — back up this file to avoid losing access to stored credentials.
 
-## Top 12 Tools (90% of Value)
+## Top 11 Tools (90% of Value)
 
 ### 1. `store_memory` — Explicitly remember something
 
@@ -149,18 +149,7 @@ Use: "How does the consolidation scheduler work?"
 Tool: how_it_works(query="consolidation scheduler")
 ```
 
-### 9. `find_related_observations` — Relation-based retrieval
-
-Follow knowledge graph relations (causes, fixes, explains, contradicts).
-
-```
-Use: "What's connected to this bug fix?"
-Tool: find_related_observations(id=42)
-```
-
-For deeper graph traversal with configurable depth, use `get_observation_relationships(id=42, max_depth=2)`.
-
-### 10. `get_recent_context` — Latest project observations
+### 9. `get_recent_context` — Latest project observations
 
 Quick dump of the most recent observations for a project.
 
@@ -169,7 +158,7 @@ Use: "Catch me up on what happened recently"
 Tool: get_recent_context(project="my-project", limit=20)
 ```
 
-### 11. `get_patterns` — Detected recurring patterns
+### 10. `get_patterns` — Detected recurring patterns
 
 Surfaces patterns the system has identified across observations.
 
@@ -178,7 +167,7 @@ Use: "Are there recurring issues or patterns?"
 Tool: get_patterns(project="my-project")
 ```
 
-### 12. `search_sessions` — Full-text search across session logs
+### 11. `search_sessions` — Full-text search across session logs
 
 Search through indexed Claude Code session transcripts.
 
@@ -200,7 +189,6 @@ Tool: search_sessions(query="migration plan", limit=5)
 
 - Before modifying unfamiliar code: `find_by_file` + `how_it_works`
 - When encountering a concept: `find_by_concept`
-- When debugging: `find_related_observations` to trace cause chains
 - When stuck: `search` with different query angles
 
 ### Maintaining Memory Quality
@@ -241,7 +229,6 @@ These tools cover specialized use cases beyond the top 10:
 | `tag_observation` | Add/remove concept tags |
 | `get_observations_by_tag` | List observations with a specific tag |
 | `get_observation_quality` | Quality score for one observation |
-| `get_observation_relationships` | Graph traversal with configurable depth |
 | `get_observation_scoring_breakdown` | Debug scoring formula |
 | `batch_tag_by_pattern` | Auto-tag observations matching a pattern |
 | `bulk_delete_observations` | Batch delete |
