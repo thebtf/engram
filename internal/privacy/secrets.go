@@ -135,47 +135,140 @@ func ContainsSecrets(text string) bool {
 	return false
 }
 
+// redactMatch formats a single matched secret string into its redaction label.
+// For key=value / key:value patterns the key name is preserved; for standalone
+// token patterns (sk-xxx, ghp_xxx …) the first four characters are kept as a
+// hint.  The format is byte-identical to the original sequential implementation
+// for any span that is not subsumed by a longer overlapping match.
+func redactMatch(match string) string {
+	hashPrefix := deriveHashPrefix(match)
+	redacted := "[REDACTED:" + hashPrefix + "]"
+
+	// Preserve the key name by cutting at the earliest key/value separator.
+	// Checking "=" before ":" is wrong when the value itself contains "=" (e.g.
+	// password: "a=b"), which would expose part of the secret. Instead, pick the
+	// separator that appears first in the string.
+	idxEq := strings.Index(match, "=")
+	idxColon := strings.Index(match, ":")
+	var sepIdx int
+	switch {
+	case idxEq == -1:
+		sepIdx = idxColon
+	case idxColon == -1:
+		sepIdx = idxEq
+	case idxEq < idxColon:
+		sepIdx = idxEq
+	default:
+		sepIdx = idxColon
+	}
+	if sepIdx != -1 {
+		return match[:sepIdx+1] + redacted
+	}
+	// For standalone secrets (like sk-xxx, ghp_xxx), show prefix + hash.
+	if len(match) > 8 {
+		return match[:4] + "..." + redacted
+	}
+	return redacted
+}
+
+// span records a single secret match on the original input together with the
+// replacement string that should be written in its place.
+type span struct {
+	start       int
+	end         int
+	replacement string
+}
+
 // RedactSecrets replaces detected secrets with a redaction marker that includes
 // a SHA-256 hash prefix for cross-referencing with ExtractSecrets output.
 // The hash allows correlating redacted values with their vault entries without
 // exposing the secret itself.
+//
+// Implementation uses a two-pass approach to avoid the sequential-replacement
+// bug (issue #263): first collect ALL match spans on the immutable original
+// input across ALL patterns, resolve overlaps by keeping the wider span, then
+// apply replacements right-to-left so earlier replacements do not shift offsets
+// for later ones.  Output for non-overlapping secrets is byte-identical to the
+// previous implementation.
 func RedactSecrets(text string) string {
 	if text == "" {
 		return text
 	}
 
-	result := text
+	// Pass 1: collect every match span across all patterns on the original text.
+	var spans []span
 	for _, pattern := range secretPatterns {
-		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
-			hashPrefix := deriveHashPrefix(match)
-			redacted := "[REDACTED:" + hashPrefix + "]"
+		locs := pattern.FindAllStringIndex(text, -1)
+		for _, loc := range locs {
+			match := text[loc[0]:loc[1]]
+			spans = append(spans, span{
+				start:       loc[0],
+				end:         loc[1],
+				replacement: redactMatch(match),
+			})
+		}
+	}
 
-			// Preserve the key name by cutting at the earliest key/value separator.
-			// Checking "=" before ":" is wrong when the value itself contains "=" (e.g.
-			// password: "a=b"), which would expose part of the secret. Instead, pick the
-			// separator that appears first in the string.
-			idxEq := strings.Index(match, "=")
-			idxColon := strings.Index(match, ":")
-			var sepIdx int
-			switch {
-			case idxEq == -1:
-				sepIdx = idxColon
-			case idxColon == -1:
-				sepIdx = idxEq
-			case idxEq < idxColon:
-				sepIdx = idxEq
-			default:
-				sepIdx = idxColon
+	if len(spans) == 0 {
+		return text
+	}
+
+	// Pass 2: resolve overlaps.
+	// Sort by start position; ties broken by longest span first (widest wins).
+	sortSpans(spans)
+
+	// Merge/drop: walk spans left-to-right; when two overlap, keep the one
+	// that ends later (wider coverage).  The header-only PEM span [s,e1] and
+	// the full-block PEM span [s,e2] share the same start; after sorting, the
+	// full-block span (larger end) comes first, so the header-only span is
+	// dropped automatically by the "end <= current.end" check.
+	resolved := spans[:0]
+	for _, s := range spans {
+		if len(resolved) == 0 {
+			resolved = append(resolved, s)
+			continue
+		}
+		last := &resolved[len(resolved)-1]
+		if s.start < last.end {
+			// Overlap: keep whichever ends later.
+			// INVARIANT: the current secret patterns produce only same-start
+			// overlaps (PEM header vs full-block) or fully-nested spans, so the
+			// later-ending span always subsumes the earlier one. A *partial*
+			// overlap with a strictly-greater start (last.start < s.start < last.end
+			// < s.end) would drop coverage of [last.start, s.start) here. If a
+			// future pattern can produce that shape, replace this with a span-union.
+			if s.end > last.end {
+				*last = s
 			}
-			if sepIdx != -1 {
-				return match[:sepIdx+1] + redacted
-			}
-			// For standalone secrets (like sk-xxx, ghp_xxx), show prefix + hash
-			if len(match) > 8 {
-				return match[:4] + "..." + redacted
-			}
-			return redacted
-		})
+			// else: current span is fully subsumed — drop it.
+			continue
+		}
+		resolved = append(resolved, s)
+	}
+
+	// Pass 3: apply replacements right-to-left so byte offsets remain valid.
+	var buf strings.Builder
+	buf.Grow(len(text))
+	buf.WriteString(text)
+	result := buf.String()
+	for i := len(resolved) - 1; i >= 0; i-- {
+		s := resolved[i]
+		result = result[:s.start] + s.replacement + result[s.end:]
 	}
 	return result
+}
+
+// sortSpans sorts spans by start ascending; ties by end descending (widest first).
+func sortSpans(spans []span) {
+	// Simple insertion sort — the number of matches is small in practice.
+	for i := 1; i < len(spans); i++ {
+		for j := i; j > 0; j-- {
+			a, b := &spans[j-1], &spans[j]
+			if a.start > b.start || (a.start == b.start && a.end < b.end) {
+				spans[j-1], spans[j] = spans[j], spans[j-1]
+			} else {
+				break
+			}
+		}
+	}
 }
