@@ -15,7 +15,8 @@ func TestDeclaredTypeRe(t *testing.T) {
 		{"vector(1536)", "1536", true},
 		{"vector(4096)", "4096", true},
 		{"halfvec(1536)", "1536", true},
-		{"vector", "", false},       // unparameterized — must not match
+		{"extensions.vector(1536)", "1536", true}, // schema-qualified (managed PG)
+		{"vector", "", false},        // unparameterized — must not match
 		{"vector(1536) ", "", false}, // trailing space — anchored, must not match
 		{"text", "", false},
 		{"numeric(10,2)", "", false},
