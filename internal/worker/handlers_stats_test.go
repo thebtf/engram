@@ -78,13 +78,89 @@ func TestHandleStatsVnext_ResponseShape(t *testing.T) {
 }
 
 // TestHandleStatsVnext_EmbeddingFieldCompiles is a zero-cost compile-time
-// assertion that Service holds an embeddingStore field of the correct type
-// and that it is protected by initMu.  The body reads the field to force
-// the compiler to type-check it.
+// assertion that Service holds an embeddingStore and embeddingRecorder fields
+// of the correct types and that they are protected by initMu.
 func TestHandleStatsVnext_EmbeddingFieldCompiles(t *testing.T) {
 	svc := &Service{}
 	svc.initMu = sync.RWMutex{}
 	svc.initMu.RLock()
-	var _ *embedding.Store = svc.embeddingStore // compile-time type assertion
+	var _ *embedding.Store = svc.embeddingStore           // compile-time type assertion
+	var _ *embedding.BackfillRecorder = svc.embeddingRecorder // compile-time type assertion
 	svc.initMu.RUnlock()
+}
+
+// TestEmbeddingTelemetry_JSONShape asserts that embeddingTelemetry marshals all
+// expected fields and that last_embed_error is omitted when nil.
+func TestEmbeddingTelemetry_JSONShape(t *testing.T) {
+	tel := embeddingTelemetry{
+		CoverageStats: embedding.CoverageStats{
+			EmbeddingStats: embedding.EmbeddingStats{
+				ChunkCount:         42,
+				MemoriesWithChunks: 10,
+				Model:              "text-embedding-3-small",
+				Dimension:          1536,
+			},
+			ActiveMemoryCount: 20,
+			EmbeddingCoverage: 0.5,
+		},
+		EmbedSuccessCount: 100,
+		EmbedFailureCount: 2,
+		LastEmbedError:    nil, // no error — must be omitted
+	}
+
+	b, err := json.Marshal(tel)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	required := []string{
+		"chunk_count", "memories_with_chunks", "model", "dimension",
+		"active_memory_count", "embedding_coverage",
+		"embed_success_count", "embed_failure_count",
+	}
+	for _, key := range required {
+		if _, ok := m[key]; !ok {
+			t.Errorf("required field %q missing from embeddingTelemetry JSON", key)
+		}
+	}
+	if _, ok := m["last_embed_error"]; ok {
+		t.Error("last_embed_error must be omitted when nil")
+	}
+}
+
+// TestEmbeddingTelemetry_LastEmbedErrorPresent asserts that last_embed_error
+// is included in the JSON output when set.
+func TestEmbeddingTelemetry_LastEmbedErrorPresent(t *testing.T) {
+	ts := time.Now().UTC()
+	tel := embeddingTelemetry{
+		EmbedFailureCount: 1,
+		LastEmbedError: &embedding.EmbedError{
+			At:         ts,
+			StatusCode: 429,
+			Message:    "rate limited",
+		},
+	}
+
+	b, err := json.Marshal(tel)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	errObj, ok := m["last_embed_error"].(map[string]any)
+	if !ok {
+		t.Fatal("last_embed_error must be present and an object")
+	}
+	if errObj["message"] != "rate limited" {
+		t.Errorf("message = %v, want 'rate limited'", errObj["message"])
+	}
+	if errObj["status_code"].(float64) != 429 {
+		t.Errorf("status_code = %v, want 429", errObj["status_code"])
+	}
 }

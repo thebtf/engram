@@ -9,20 +9,30 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 )
 
+// embeddingTelemetry is the JSON sub-object surfaced under the "embedding" key
+// in the /api/stats/vnext response. It extends the DB-derived CoverageStats with
+// process-lifetime backfill counters sourced from BackfillRecorder.
+type embeddingTelemetry struct {
+	embedding.CoverageStats
+	EmbedSuccessCount int64                   `json:"embed_success_count"`
+	EmbedFailureCount int64                   `json:"embed_failure_count"`
+	LastEmbedError    *embedding.EmbedError   `json:"last_embed_error,omitempty"`
+}
+
 // vnextStatsResponse is the JSON shape returned by GET /api/stats/vnext.
 type vnextStatsResponse struct {
-	InjectionCount int64                      `json:"injection_count"`
-	CitationCount  int64                      `json:"citation_count"`
-	UncitedCount   int64                      `json:"uncited_count"`
-	NoiseRatio     float64                    `json:"noise_ratio"`
-	WriteGateStats map[string]int64           `json:"write_gate_stats"`
-	GeneratedAt    time.Time                  `json:"generated_at"`
-	Embedding      *embedding.EmbeddingStats  `json:"embedding,omitempty"`
+	InjectionCount int64                `json:"injection_count"`
+	CitationCount  int64                `json:"citation_count"`
+	UncitedCount   int64                `json:"uncited_count"`
+	NoiseRatio     float64              `json:"noise_ratio"`
+	WriteGateStats map[string]int64     `json:"write_gate_stats"`
+	GeneratedAt    time.Time            `json:"generated_at"`
+	Embedding      *embeddingTelemetry  `json:"embedding,omitempty"`
 }
 
 // handleStatsVnext godoc
 // @Summary vNext pipeline metrics
-// @Description Returns injection/citation counts, noise ratio, and write-gate memory stats.
+// @Description Returns injection/citation counts, noise ratio, write-gate memory stats, and embedding telemetry.
 // @Tags Analytics
 // @Produce json
 // @Security ApiKeyAuth
@@ -92,16 +102,31 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Populate embedding telemetry when the embedding store is available.
+	// StatsWithCoverage is used instead of Stats so that embedding_coverage and
+	// active_memory_count are included without a second DB query.
+	// Process-lifetime backfill counters are read from the recorder (nil-safe).
 	// Errors are non-fatal: log and leave the field nil so the stats response
 	// always succeeds even when the embedding subsystem is unhealthy.
 	s.initMu.RLock()
 	embStore := s.embeddingStore
+	embRec := s.embeddingRecorder
 	s.initMu.RUnlock()
 	if embStore != nil {
-		if embStats, err := embStore.Stats(ctx); err != nil {
+		if covStats, err := embStore.StatsWithCoverage(ctx); err != nil {
 			log.Debug().Err(err).Msg("stats/vnext: embedding stats unavailable")
 		} else {
-			resp.Embedding = &embStats
+			tel := &embeddingTelemetry{
+				CoverageStats: covStats,
+			}
+			if embRec != nil {
+				succ, fail, lastErr := embRec.Snapshot()
+				tel.EmbedSuccessCount = succ
+				tel.EmbedFailureCount = fail
+				if !lastErr.At.IsZero() {
+					tel.LastEmbedError = &lastErr
+				}
+			}
+			resp.Embedding = tel
 		}
 	}
 

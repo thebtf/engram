@@ -73,6 +73,48 @@ func (s *Store) Stats(ctx context.Context) (EmbeddingStats, error) {
 	return stats, nil
 }
 
+// CoverageStats extends EmbeddingStats with a coverage ratio derived by
+// comparing memories_with_chunks against the total count of active (non-deleted,
+// status='active') memories. It is computed by a single query that touches both
+// tables rather than a second Stats() call.
+type CoverageStats struct {
+	EmbeddingStats
+	ActiveMemoryCount  int64   `json:"active_memory_count"`
+	EmbeddingCoverage  float64 `json:"embedding_coverage"` // fraction 0..1; 0 when no active memories
+}
+
+// StatsWithCoverage returns EmbeddingStats plus the embedding coverage ratio.
+// Coverage = memories_with_chunks / active_memory_count.
+// Active memories are those where deleted_at IS NULL AND status = 'active'.
+// Returns a zero-value CoverageStats (no error) when tables are empty.
+func (s *Store) StatsWithCoverage(ctx context.Context) (CoverageStats, error) {
+	base, err := s.Stats(ctx)
+	if err != nil {
+		return CoverageStats{}, err
+	}
+
+	var activeCount int64
+	if err := s.db.WithContext(ctx).
+		Raw(`SELECT count(*) FROM memories WHERE deleted_at IS NULL AND status = 'active'`).
+		Scan(&activeCount).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return CoverageStats{}, fmt.Errorf("embedding coverage: active memory count: %w", err)
+	}
+
+	var coverage float64
+	if activeCount > 0 {
+		coverage = float64(base.MemoriesWithChunks) / float64(activeCount)
+		if coverage > 1.0 {
+			coverage = 1.0 // guard: chunks may exist for archived/deleted rows
+		}
+	}
+
+	return CoverageStats{
+		EmbeddingStats:    base,
+		ActiveMemoryCount: activeCount,
+		EmbeddingCoverage: coverage,
+	}, nil
+}
+
 // Chunk represents a row in the content_chunks table.
 type Chunk struct {
 	ID        int64           `gorm:"primaryKey;autoIncrement"`
