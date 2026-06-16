@@ -42,7 +42,6 @@ import (
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/sessions"
-	"github.com/thebtf/engram/pkg/models"
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
@@ -52,6 +51,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/internal/writelint"
+	"github.com/thebtf/engram/pkg/models"
 	googlegrpc "google.golang.org/grpc"
 )
 
@@ -144,41 +144,41 @@ type Service struct {
 	// tests assert the real handler path (redact → Create) without a live DB.
 	// Production code never sets this field.
 	transcriptCreatorOverride transcriptCreator
-	retrievalHooks         *retrievalHooks
-	authHandlers           *AuthHandlers
-	version                string
-	recentQueriesBuf       [maxRecentQueries]RecentSearchQuery
-	wg                     sync.WaitGroup
-	recentQueriesLen       int
-	recentQueriesHead      int
-	statsCacheTTL          time.Duration
-	initMu                 sync.RWMutex
-	retrievalStatsMu       sync.RWMutex
-	recentQueriesMu        sync.RWMutex
-	cachedObsCountsMu      sync.RWMutex
-	staleQueueOnce         sync.Once
-	ready                  atomic.Bool
-	vault                  *crypto.Vault
-	issueStore             *gorm.IssueStore
-	credentialStore        *gorm.CredentialStore
-	memoryStore            *gorm.MemoryStore
-	memoryStoreSeam        memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
-	behavioralRulesStore   *gorm.BehavioralRulesStore
-	auditStore             *gorm.AuditStore
-	purgeStore             *gorm.PurgeStore
-	testAuditRetainer      auditRetainer // test-only override for retention unit tests
-	feedbackUpdater        *feedback.Updater
-	segmentStore           *gorm.SegmentStore
-	embeddingClient        *embedding.Client
-	embeddingStore         *embedding.Store
-	embeddingRecorder      *embedding.BackfillRecorder
-	promotionStore         *gorm.PromotionStore
-	graphStore             *graph.Store
-	vaultOnce              sync.Once
-	vaultErr               error
-	promptCache            sync.Map // map[int64]promptCacheEntry — last user prompt per session
-	eventBus               *projectevents.Bus
-	projectReaper          *reaper.Reaper
+	retrievalHooks            *retrievalHooks
+	authHandlers              *AuthHandlers
+	version                   string
+	recentQueriesBuf          [maxRecentQueries]RecentSearchQuery
+	wg                        sync.WaitGroup
+	recentQueriesLen          int
+	recentQueriesHead         int
+	statsCacheTTL             time.Duration
+	initMu                    sync.RWMutex
+	retrievalStatsMu          sync.RWMutex
+	recentQueriesMu           sync.RWMutex
+	cachedObsCountsMu         sync.RWMutex
+	staleQueueOnce            sync.Once
+	ready                     atomic.Bool
+	vault                     *crypto.Vault
+	issueStore                *gorm.IssueStore
+	credentialStore           *gorm.CredentialStore
+	memoryStore               *gorm.MemoryStore
+	memoryStoreSeam           memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
+	behavioralRulesStore      *gorm.BehavioralRulesStore
+	auditStore                *gorm.AuditStore
+	purgeStore                *gorm.PurgeStore
+	testAuditRetainer         auditRetainer // test-only override for retention unit tests
+	feedbackUpdater           *feedback.Updater
+	segmentStore              *gorm.SegmentStore
+	embeddingClient           *embedding.Client
+	embeddingStore            *embedding.Store
+	embeddingRecorder         *embedding.BackfillRecorder
+	promotionStore            *gorm.PromotionStore
+	graphStore                *graph.Store
+	vaultOnce                 sync.Once
+	vaultErr                  error
+	promptCache               sync.Map // map[int64]promptCacheEntry — last user prompt per session
+	eventBus                  *projectevents.Bus
+	projectReaper             *reaper.Reaper
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
 	// requestActivityMiddleware on every request.
@@ -575,7 +575,6 @@ func (s *Service) initializeAsync() {
 	// Create issue store for cross-project agent issues
 	issueStore := gorm.NewIssueStore(store.GetDB())
 
-
 	// Create memory + behavioral rules + credential stores for US3 observations split.
 	// All three stores are wired here (Commit E — T021).
 	memoryStore := gorm.NewMemoryStore(store)
@@ -826,6 +825,21 @@ func (s *Service) initializeAsync() {
 		go func() {
 			if bfErr := embedding.Backfill(s.ctx, store.GetDB(), embClient, embStore, 50, embRec); bfErr != nil {
 				log.Warn().Err(bfErr).Msg("embedding backfill: stopped")
+			}
+		}()
+		// CR-004: code chunk embedding backfill — mirrors the memory backfill above.
+		// Reuses the same embClient and embRec. Telemetry trade-off: /api/stats/vnext
+		// surfaces exactly one BackfillRecorder (s.embeddingRecorder), so the code
+		// and memory pipelines DELIBERATELY share it — their success/failure counts
+		// and last_error aggregate. A separate code recorder would currently be
+		// unsurfaced (invisible counters), which is worse than aggregation; splitting
+		// them is a follow-up that must also add a labeled stats field (out of
+		// CR-004's embed-pipeline scope).
+		// Gated by this else-branch so it is a no-op when ENGRAM_EMBEDDING_URL is unset (flag-dark).
+		go func() {
+			cbStore := gorm.NewCodeChunkStore(store.GetDB())
+			if cbErr := embedding.CodeBackfill(s.ctx, cbStore, embClient, 50, embRec); cbErr != nil {
+				log.Warn().Err(cbErr).Msg("code embedding backfill: stopped")
 			}
 		}()
 
