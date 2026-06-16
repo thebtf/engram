@@ -28,6 +28,21 @@ import (
 // logged warning.
 const expectedDim = 1536
 
+// codeChunkSource is the minimal CodeChunkStore surface the backfill loop needs.
+// *db_gorm.CodeChunkStore satisfies it; tests supply a fake so the loop logic
+// (batching, dim guard, hot-loop backoff) is exercisable without a real DB.
+type codeChunkSource interface {
+	ListUnembedded(ctx context.Context, limit int) ([]*db_gorm.CodeChunk, error)
+	UpdateEmbedding(ctx context.Context, id int64, vec pgvector.Vector) error
+}
+
+// embedder is the minimal embed surface the backfill loop needs. *Client
+// satisfies it; tests supply a fake returning canned (or wrong-dim, or empty)
+// vectors to drive the guard paths.
+type embedder interface {
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+}
+
 // CodeBackfill processes existing code_chunks rows whose embedding IS NULL,
 // embedding them in batches and persisting the resulting vectors via
 // CodeChunkStore.UpdateEmbedding. The loop is interruptible via ctx cancellation.
@@ -41,6 +56,10 @@ const expectedDim = 1536
 //
 // batchSize <= 0 defaults to 50. Returns nil when all rows have been embedded,
 // ctx.Err() on cancellation, or a fatal store error.
+//
+// CodeBackfill is the production entrypoint: it nil-checks the concrete
+// dependencies and delegates to runCodeBackfill, which is written against
+// interfaces so the loop is unit-testable with fakes.
 func CodeBackfill(ctx context.Context, store *db_gorm.CodeChunkStore, client *Client, batchSize int, rec *BackfillRecorder) error {
 	if store == nil {
 		return nil
@@ -48,6 +67,13 @@ func CodeBackfill(ctx context.Context, store *db_gorm.CodeChunkStore, client *Cl
 	if client == nil {
 		return nil
 	}
+	return runCodeBackfill(ctx, store, client, batchSize, rec)
+}
+
+// runCodeBackfill is the interface-driven loop body. See CodeBackfill for the
+// behavioural contract; this split exists only so tests can drive the loop with
+// a fake source and embedder.
+func runCodeBackfill(ctx context.Context, store codeChunkSource, client embedder, batchSize int, rec *BackfillRecorder) error {
 	if batchSize <= 0 {
 		batchSize = 50
 	}
@@ -103,7 +129,20 @@ func CodeBackfill(ctx context.Context, store *db_gorm.CodeChunkStore, client *Cl
 			continue
 		}
 		if len(vectors) == 0 {
-			log.Warn().Int("batch_size", len(texts)).Msg("code backfill: embed returned zero vectors, skipping batch")
+			// Zero vectors from a 200-OK embed response (empty data array) makes
+			// zero progress and is reached BEFORE the per-row persist loop, so it
+			// bypasses the batchSuccess==0 backoff below. Back off here too —
+			// otherwise this requeries the same NULL rows and hammers the embed
+			// API at full loop speed (one ListUnembedded+Embed per iteration).
+			log.Warn().Int("batch_size", len(texts)).Msg("code backfill: embed returned zero vectors, backing off")
+			if rec != nil {
+				rec.RecordFailure(0, "embed API returned zero vectors")
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
 			continue
 		}
 
