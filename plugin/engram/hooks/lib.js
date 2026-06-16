@@ -184,22 +184,30 @@ function isInternalHook() {
 }
 
 /**
- * Quiet mode — global injection kill-switch.
+ * Quiet mode — automatic-injection kill-switch (tacit, not mute).
  *
- * When ENGRAM_QUIET (or ENGRAM_QUIET_HOOKS) is truthy, every hook routed
- * through RunHook returns an empty `{continue:true}` response and skips its
- * handler entirely: no context injection, no behavioral-rule / memory / issue
- * blocks, and no per-hook server calls. This is the "zero beats noise" escape
+ * When ENGRAM_QUIET (or ENGRAM_QUIET_HOOKS) is truthy, the hooks that PUSH
+ * context into the prompt return an empty `{continue:true}` response and skip
+ * their handler entirely: no context injection, no behavioral-rule / memory /
+ * issue blocks, no per-hook server calls. This is the "zero beats noise" escape
  * hatch — useful while a server-side rule set is stale or mis-scoped, or during
  * focused development where injected context is more distracting than helpful.
  *
- * SCOPE: this gates hook CONTEXT INJECTION only (the prompt noise). It does NOT
- * disable the MCP daemon — the store/recall/vault/issues tools must keep working
- * in quiet mode, so the SessionStart binary bootstrap (scripts/ensure-binary.js,
- * which downloads/updates the daemon binary only when missing or version-stale)
- * intentionally runs regardless of this flag. That bootstrap injects no context;
- * it is the prerequisite for the tools quiet mode preserves. To stop all MCP
- * activity, disable the plugin instead of using quiet mode.
+ * SCOPE — quiet silences AUTOMATIC INJECTION only, not the whole plugin. Two
+ * things keep working so the memory stays a learning loop while the prompt is
+ * quiet:
+ *   1. The MCP daemon and its tools (store/recall/vault/issues) are untouched —
+ *      quiet never gated those; the SessionStart binary bootstrap
+ *      (scripts/ensure-binary.js, which downloads/updates the daemon only when
+ *      missing or version-stale) runs regardless. It injects no context.
+ *   2. The CAPTURE / LEARNING hooks (UserPromptSubmit, PostToolUse, Stop,
+ *      SessionEnd, SubagentStop) still run their handlers under quiet. They emit
+ *      no prompt context (writeResponse only renders injection for a non-empty
+ *      handler result, and these return ''), but they DO record correction /
+ *      segment signals, crystallize lessons from the transcript, and propagate
+ *      session outcomes. So engram keeps learning; it just stops talking.
+ * Only the INJECTION_HOOKS set below is gated. To stop ALL MCP activity, disable
+ * the plugin instead of using quiet mode.
  *
  * Truthy values: "1", "true", "yes", "on" (case-insensitive). Anything else
  * (including unset/empty) leaves hooks fully active. Honored for both Claude
@@ -248,6 +256,19 @@ function isQuietMode() {
   // children receive no env, so this is their only path).
   const cf = readEngramConfigFile(resolveConfigFilePath());
   return !!cf && isTruthyFlag(cf.quiet);
+}
+
+// Hooks that PUSH context into the prompt — the only ones quiet mode gates.
+// SessionStart renders <user-behavior-rules>/<engram-static-memories>;
+// PreToolUse injects per-file warnings + context observations; PreCompact writes
+// .engram/reinjection.md (read by the agent via @-import on the next turn).
+// Every other hook (UserPromptSubmit, PostToolUse, Stop, SessionEnd,
+// SubagentStop) is capture/learning: it records signals and crystallizes
+// lessons but returns no prompt context, so it stays active under quiet.
+const INJECTION_HOOKS = new Set(['SessionStart', 'PreToolUse', 'PreCompact']);
+
+function isInjectionHook(hookName) {
+  return INJECTION_HOOKS.has(hookName);
 }
 
 /**
@@ -521,14 +542,17 @@ async function RunHook(hookName, handler) {
     return;
   }
 
-  // Quiet mode: emit an empty pass-through response and skip the handler.
-  // No context injection, no server calls. See isQuietMode() for rationale.
+  // Quiet mode: silence AUTOMATIC INJECTION only. An injection hook (SessionStart
+  // / PreToolUse / PreCompact) emits an empty pass-through response and skips its
+  // handler — no context injection, no server calls. Capture/learning hooks fall
+  // through and run normally, so engram keeps recording signals and crystallizing
+  // lessons while the prompt stays quiet (see isQuietMode() + INJECTION_HOOKS).
   // readAllStdin() fully drains the pipe (so a large payload mid-write does not
   // give the host EPIPE) AND yields the payload, from which we clear any stale
   // .engram/reinjection.md — the one hint channel the agent reads directly
   // (@-import), out of band from hooks, so skipping PreCompact alone would leave
   // it replaying. Clearing it keeps the "zero hints" promise. Best-effort.
-  if (isQuietMode()) {
+  if (isInjectionHook(hookName) && isQuietMode()) {
     const rawInput = await readAllStdin();
     clearReinjectionFile(rawInput);
     writeResponse(hookName);
@@ -827,6 +851,7 @@ module.exports = {
   requestPost,
   RunHook,
   RunStatuslineHook,
+  isInjectionHook,
   writeResponse,
   incrementSessionSignals,
   appendSessionFile,

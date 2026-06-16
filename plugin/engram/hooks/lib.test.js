@@ -301,3 +301,24 @@ test('quiet mode clears a stale .engram/reinjection.md', (t) => {
   assert.strictEqual(fs.existsSync(reinjFile), false,
     'quiet mode must delete the stale .engram/reinjection.md');
 });
+
+// Quiet is tacit-not-mute: it gates only the hooks that PUSH context into the
+// prompt. The process tests above prove the injection side (SessionStart) still
+// short-circuits under quiet. This unit test pins the classification that decides
+// which hooks are gated, so a future rename/addition can't silently start muting
+// a capture/learning hook (Stop crystallization, SessionEnd outcomes, etc.) and
+// turn the memory write-only again.
+test('isInjectionHook gates only the push-context hooks, never capture/learning', () => {
+  for (const h of ['SessionStart', 'PreToolUse', 'PreCompact']) {
+    assert.strictEqual(lib.isInjectionHook(h), true,
+      `${h} pushes prompt context — quiet must gate it`);
+  }
+  for (const h of ['UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd', 'SubagentStop']) {
+    assert.strictEqual(lib.isInjectionHook(h), false,
+      `${h} is capture/learning — it must keep running under quiet so engram still learns`);
+  }
+  // Unknown hook names default to NOT gated — fail open toward "keep running"
+  // rather than silently muting something new.
+  assert.strictEqual(lib.isInjectionHook('SomeFutureHook'), false,
+    'unknown hooks must not be gated by quiet');
+});
