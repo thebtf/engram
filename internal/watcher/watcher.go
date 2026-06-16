@@ -181,6 +181,17 @@ func (w *Watcher) watchLoop() {
 // Called from a time.AfterFunc goroutine (one per debounce window) — not from the
 // main event loop, so it must not block the watch loop.
 func (w *Watcher) handleDeletion() {
+	// Guard: if Stop() has already been called, do nothing. The debounce timer
+	// can fire after Stop() sets running=false, cancel()s the context, and
+	// closes the fsnotify watcher — proceeding here would invoke onDelete and
+	// call watcher.Add on a closed watcher (use-after-close race).
+	w.mu.Lock()
+	running := w.running
+	w.mu.Unlock()
+	if !running {
+		return
+	}
+
 	log.Info().Str("path", w.targetPath).Msg("Triggering deletion callback")
 
 	if w.onDelete != nil {
@@ -191,6 +202,23 @@ func (w *Watcher) handleDeletion() {
 	// then attempt to re-register so subsequent events are still caught.
 	go func() {
 		time.Sleep(500 * time.Millisecond)
+
+		// Re-check running after the sleep: Stop() may have been called during
+		// the 500 ms window. Re-establishing a watch on a closed watcher would
+		// panic or silently corrupt state.
+		w.mu.Lock()
+		running := w.running
+		w.mu.Unlock()
+		if !running {
+			return
+		}
+
+		// Residual TOCTOU: Stop() could still fire between the running re-check
+		// above and this addWatch. That is benign — fsnotify's Add on a closed
+		// watcher returns an error (it does not panic), which is logged below and
+		// has no further effect since running is permanently false after Stop().
+		// Holding w.mu across addWatch is deliberately avoided to not risk a
+		// deadlock with fsnotify's internal goroutine.
 		if err := w.addWatch(); err != nil {
 			log.Warn().Err(err).Str("path", w.parentPath).Msg("Failed to re-establish watch after deletion")
 		} else {

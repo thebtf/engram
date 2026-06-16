@@ -349,3 +349,156 @@ func BenchmarkContainsSecrets_WithSecret(b *testing.B) {
 	}
 }
 
+// =============================================================================
+// Regression tests — issue #263 (plaintext private-key persistence)
+//
+// These tests MUST fail on the old sequential-replacement implementation and
+// PASS after the two-pass span-collection fix.
+// =============================================================================
+
+// TestRedactSecrets_FullPEMBlockCompletelyRedacted is the primary regression
+// test for issue #263.  A complete multi-line RSA private-key block must be
+// fully redacted: the output must contain neither the BEGIN marker, nor the
+// END marker, nor any of the base64 body lines.
+func TestRedactSecrets_FullPEMBlockCompletelyRedacted(t *testing.T) {
+	// Construct a synthetic but structurally correct PEM block.
+	block := strings.Join([]string{
+		"-----BEGIN RSA PRIVATE KEY-----",
+		"MIIEpAIBAAKCAQEA0Z3VS5JJcds3xHn/ygWep4PAtVsMbPDFWFgOCBcHwpWJKBP5",
+		"MqToNXLFNhUGNsxCTJ8DPYqk0sMGEBPeKMtKLPt3g5vGTVXxEt8mNiTsqnfHPCKS",
+		"-----END RSA PRIVATE KEY-----",
+	}, "\n")
+
+	got := RedactSecrets(block)
+
+	if strings.Contains(got, "KEY-----") {
+		t.Errorf("RedactSecrets left PEM delimiter in output; got:\n%s", got)
+	}
+	if strings.Contains(got, "-----END") {
+		t.Errorf("RedactSecrets left END marker in output; got:\n%s", got)
+	}
+	// Body lines must not survive.
+	bodyLine := "MIIEpAIBAAKCAQEA0Z3VS5JJcds3xHn/ygWep4PAtVsMbPDFWFgOCBcHwpWJKBP5"
+	if strings.Contains(got, bodyLine) {
+		t.Errorf("RedactSecrets left key body in output; got:\n%s", got)
+	}
+	if !strings.Contains(got, "[REDACTED:") {
+		t.Errorf("RedactSecrets produced no REDACTED marker; got:\n%s", got)
+	}
+}
+
+// TestRedactSecrets_FullPEMBlock_ECDSA verifies that the EC variant of a full
+// PEM block is also fully redacted (not just the RSA type).
+func TestRedactSecrets_FullPEMBlock_ECDSA(t *testing.T) {
+	block := strings.Join([]string{
+		"-----BEGIN EC PRIVATE KEY-----",
+		"MHQCAQEEIOaLsYjGNIwBFBbEFqBhE1EiW8FLKPUZ9mwgFakeKeyBody==",
+		"-----END EC PRIVATE KEY-----",
+	}, "\n")
+
+	got := RedactSecrets(block)
+
+	if strings.Contains(got, "-----END EC PRIVATE KEY-----") {
+		t.Errorf("RedactSecrets left END marker in output for EC key; got:\n%s", got)
+	}
+	if strings.Contains(got, "MHQCAQEEIOaLsYjGNIwBFBbEFqBhE1EiW8FLKPUZ9mwgFakeKeyBody==") {
+		t.Errorf("RedactSecrets left EC key body in output; got:\n%s", got)
+	}
+}
+
+// TestRedactSecrets_PEMBlockInLargerText ensures a PEM block embedded inside
+// surrounding text is fully redacted while the surrounding text is preserved.
+func TestRedactSecrets_PEMBlockInLargerText(t *testing.T) {
+	body := strings.Join([]string{
+		"-----BEGIN RSA PRIVATE KEY-----",
+		"MIIFAKEBASE64BODYLINEHERE==",
+		"-----END RSA PRIVATE KEY-----",
+	}, "\n")
+	input := "prefix text\n" + body + "\nsuffix text"
+
+	got := RedactSecrets(input)
+
+	if !strings.Contains(got, "prefix text") {
+		t.Error("RedactSecrets should preserve text before the PEM block")
+	}
+	if !strings.Contains(got, "suffix text") {
+		t.Error("RedactSecrets should preserve text after the PEM block")
+	}
+	if strings.Contains(got, "MIIFAKEBASE64BODYLINEHERE==") {
+		t.Errorf("RedactSecrets left key body in output; got:\n%s", got)
+	}
+	if strings.Contains(got, "-----END RSA PRIVATE KEY-----") {
+		t.Errorf("RedactSecrets left END marker in output; got:\n%s", got)
+	}
+}
+
+// TestRedactSecrets_TwoAdjacentSecrets verifies that two non-overlapping secrets
+// in the same string are both correctly redacted and that the reverse-offset
+// application does not corrupt output.
+func TestRedactSecrets_TwoAdjacentSecrets(t *testing.T) {
+	key1 := "sk-abc123def456ghi789jkl012mno345pqr678"
+	key2 := "ghp_1234567890abcdefghijklmnopqrstuvwxyz"
+	input := key1 + " and " + key2
+
+	got := RedactSecrets(input)
+
+	if strings.Contains(got, key1) {
+		t.Errorf("first secret not redacted; got: %s", got)
+	}
+	if strings.Contains(got, key2) {
+		t.Errorf("second secret not redacted; got: %s", got)
+	}
+	// Both REDACTED markers must appear.
+	count := strings.Count(got, "[REDACTED:")
+	if count < 2 {
+		t.Errorf("expected at least 2 REDACTED markers, got %d; output: %s", count, got)
+	}
+	// Surrounding literal must be preserved.
+	if !strings.Contains(got, " and ") {
+		t.Errorf("literal \" and \" between secrets was corrupted; got: %s", got)
+	}
+}
+
+// TestRedactSecrets_OverlappingSpansLongerWins verifies that when the header-only
+// PEM pattern and the full-block PEM pattern both match, the full-block span
+// wins and only one REDACTED marker appears (not two).
+func TestRedactSecrets_OverlappingSpansLongerWins(t *testing.T) {
+	block := strings.Join([]string{
+		"-----BEGIN PRIVATE KEY-----",
+		"MIIFakeBody==",
+		"-----END PRIVATE KEY-----",
+	}, "\n")
+
+	got := RedactSecrets(block)
+
+	count := strings.Count(got, "[REDACTED:")
+	if count != 1 {
+		t.Errorf("expected exactly 1 REDACTED marker for overlapping PEM spans, got %d; output: %s", count, got)
+	}
+}
+
+// TestRedactSecrets_NonPEMOutputUnchanged guards against label drift: the
+// redaction output for non-PEM secrets must be byte-identical to the previous
+// implementation (hash labels must not change).
+func TestRedactSecrets_NonPEMOutputUnchanged(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{
+			input: "api_key=abc123def456ghi789jkl012mno345pqr678",
+			want:  "api_key=[REDACTED:586f23e7]",
+		},
+		{
+			input: "The key is sk-abc123def456ghi789jkl012mno345pqr678",
+			want:  "The key is sk-a...[REDACTED:c99e03e4]",
+		},
+	}
+	for _, tc := range cases {
+		got := RedactSecrets(tc.input)
+		if got != tc.want {
+			t.Errorf("RedactSecrets(%q)\n  got:  %q\n  want: %q", tc.input, got, tc.want)
+		}
+	}
+}
+
