@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.13.1] - 2026-06-16
+
+### Fixed
+
+- **Codex plugin load failure: stray `description` key in `hooks/hooks.json`.** The shared
+  hook manifest carried a top-level `description` field, which Claude Code accepts as optional
+  but Codex's stricter manifest parser rejects (`unknown field 'description', expected 'hooks'`),
+  so Codex failed to load any engram hooks. Removed the cosmetic field — the manifest is now
+  `{ "hooks": {...} }`, satisfying both harnesses. The same metadata already lives in both
+  `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`, so nothing is lost.
+
 ## [6.13.0] - 2026-06-16
 
 ### Added
