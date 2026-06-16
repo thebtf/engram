@@ -11,6 +11,7 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
+	"google.golang.org/grpc"
 )
 
 // CodeIndexResult summarises the outcome of a full index-negotiate-upload cycle.
@@ -52,19 +53,49 @@ func (m *Module) IndexCodebase(ctx context.Context, p muxcore.ProjectContext, ro
 	}
 	client := pb.NewEngramServiceClient(conn)
 
-	// Generate a unique session id for this index run.
-	sessionID := newSessionID()
-
 	// Walk the repository and build the manifest + full chunk slice.
 	manifest, chunks, err := codeindex.BuildManifest(root, codeindex.DefaultOptions())
 	if err != nil {
 		return nil, fmt.Errorf("build manifest: %w", err)
 	}
 
-	// Map manifest entries to proto metas for the negotiate RPC.
+	// Delegate the negotiate→filter→stream→receipt exchange to a transport-
+	// agnostic helper. Splitting the dial (above) from the exchange (below)
+	// keeps the orchestration logic — which carries the delete-only sentinel
+	// invariant and the need-set filtering — testable against a fake client
+	// without standing up a live gRPC server.
+	return runIndexExchange(ctx, client, slug, newSessionID(), manifest, chunks)
+}
+
+// codeIndexRPC is the minimal client surface runIndexExchange needs: the two
+// code-index RPCs. *pb.engramServiceClient satisfies it; tests supply a fake.
+type codeIndexRPC interface {
+	CodeIndexNegotiate(ctx context.Context, in *pb.CodeIndexNegotiateRequest, opts ...grpc.CallOption) (*pb.CodeIndexNegotiateResponse, error)
+	CodeIndexUpload(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[pb.CodeChunkUpload, pb.CodeIndexUploadReceipt], error)
+}
+
+// runIndexExchange performs the negotiate + delta-upload exchange against an
+// already-resolved client. It is transport-agnostic (driven through the
+// codeIndexRPC interface) so the orchestration logic can be unit-tested with a
+// fake client. The sequence and its invariants:
+//
+//  1. Map the manifest to proto metas and CodeIndexNegotiate to learn need_chunks.
+//  2. Open the upload stream and ALWAYS send a leading identity-only sentinel
+//     (Meta == nil) so the server learns project/session and runs the stale-sweep
+//     at EOF even when the delta is empty (delete-only re-index). Without it the
+//     server would receive zero messages, never learn the project, and skip the
+//     sweep — leaking deleted files' chunks as phantom search results.
+//  3. Stream only the chunks whose ChunkID is in need_chunks.
+//  4. CloseAndRecv and assemble the CodeIndexResult from the receipt.
+func runIndexExchange(
+	ctx context.Context,
+	client codeIndexRPC,
+	slug, sessionID string,
+	manifest codeindex.Manifest,
+	chunks []codeindex.Chunk,
+) (*CodeIndexResult, error) {
 	metas := manifestToProto(manifest)
 
-	// Negotiate: tell the server what we have; learn what it needs.
 	negResp, err := client.CodeIndexNegotiate(ctx, &pb.CodeIndexNegotiateRequest{
 		ProjectId:      slug,
 		IndexSessionId: sessionID,
@@ -74,24 +105,17 @@ func (m *Module) IndexCodebase(ctx context.Context, p muxcore.ProjectContext, ro
 		return nil, fmt.Errorf("CodeIndexNegotiate: %w", err)
 	}
 
-	// Build a set of chunk_ids the server wants.
 	needSet := make(map[string]struct{}, len(negResp.GetNeedChunks()))
 	for _, id := range negResp.GetNeedChunks() {
 		needSet[id] = struct{}{}
 	}
 
-	// Open the upload stream and send only the needed chunks.
 	stream, err := client.CodeIndexUpload(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("CodeIndexUpload open: %w", err)
 	}
 
-	// Always send a leading identity-only sentinel so the server learns the
-	// project/session and runs the stale-sweep at EOF even when the delta is
-	// empty. This covers the delete-only re-index case (files removed, nothing
-	// new to upload): without the sentinel the server would receive zero
-	// messages, never learn the project, and skip the sweep — leaking the
-	// deleted files' chunks as phantom search results.
+	// Leading identity-only sentinel (see contract note above).
 	if err := stream.Send(&pb.CodeChunkUpload{
 		ProjectId:      slug,
 		IndexSessionId: sessionID,

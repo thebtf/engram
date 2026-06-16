@@ -1,9 +1,12 @@
 package engramcore
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	"github.com/thebtf/engram/internal/codeindex"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -186,4 +189,151 @@ func TestCodeIndexResultFields(t *testing.T) {
 	require.Equal(t, 7, result.Uploaded)
 	require.Len(t, result.Errors, 1)
 	require.Equal(t, "chunk x: db error", result.Errors[0])
+}
+
+// ----------------------------------------------------------------------------
+// runIndexExchange tests — drive the negotiate→sentinel→delta→receipt logic
+// through a fake codeIndexRPC so the orchestration is covered without a live
+// gRPC server.
+// ----------------------------------------------------------------------------
+
+// fakeUploadClientStream captures everything runIndexExchange sends and replays
+// a canned receipt on CloseAndRecv. Satisfies the client-streaming interface.
+type fakeUploadClientStream struct {
+	grpc.ClientStream
+	sent    []*pb.CodeChunkUpload
+	receipt *pb.CodeIndexUploadReceipt
+	recvErr error
+}
+
+func (f *fakeUploadClientStream) Send(m *pb.CodeChunkUpload) error {
+	f.sent = append(f.sent, m)
+	return nil
+}
+
+func (f *fakeUploadClientStream) CloseAndRecv() (*pb.CodeIndexUploadReceipt, error) {
+	if f.recvErr != nil {
+		return nil, f.recvErr
+	}
+	return f.receipt, nil
+}
+
+// fakeCodeIndexRPC is a fake codeIndexRPC for runIndexExchange tests.
+type fakeCodeIndexRPC struct {
+	negResp   *pb.CodeIndexNegotiateResponse
+	negErr    error
+	negReq    *pb.CodeIndexNegotiateRequest
+	stream    *fakeUploadClientStream
+	uploadErr error
+}
+
+func (f *fakeCodeIndexRPC) CodeIndexNegotiate(_ context.Context, in *pb.CodeIndexNegotiateRequest, _ ...grpc.CallOption) (*pb.CodeIndexNegotiateResponse, error) {
+	f.negReq = in
+	if f.negErr != nil {
+		return nil, f.negErr
+	}
+	return f.negResp, nil
+}
+
+func (f *fakeCodeIndexRPC) CodeIndexUpload(_ context.Context, _ ...grpc.CallOption) (grpc.ClientStreamingClient[pb.CodeChunkUpload, pb.CodeIndexUploadReceipt], error) {
+	if f.uploadErr != nil {
+		return nil, f.uploadErr
+	}
+	return f.stream, nil
+}
+
+// Compile-time assurance the fake satisfies the interface runIndexExchange uses.
+var _ codeIndexRPC = (*fakeCodeIndexRPC)(nil)
+
+// TestRunIndexExchange_UploadsOnlyNeededChunks drives the happy path: the
+// server needs 2 of 3 chunks; the client sends the leading sentinel plus the
+// two needed chunks and reports the receipt counts.
+func TestRunIndexExchange_UploadsOnlyNeededChunks(t *testing.T) {
+	t.Parallel()
+
+	chunks := []codeindex.Chunk{
+		{FilePath: "a.go", ByteStart: 0, ByteEnd: 100, Content: "func A(){}", ContentSHA256: "sha-a", Language: "go", ChunkType: codeindex.ChunkTypeLineBlock},
+		{FilePath: "b.go", ByteStart: 0, ByteEnd: 100, Content: "func B(){}", ContentSHA256: "sha-b", Language: "go", ChunkType: codeindex.ChunkTypeLineBlock},
+		{FilePath: "c.go", ByteStart: 0, ByteEnd: 100, Content: "func C(){}", ContentSHA256: "sha-c", Language: "go", ChunkType: codeindex.ChunkTypeLineBlock},
+	}
+	manifest := codeindex.BuildManifestFromChunks(chunks)
+
+	stream := &fakeUploadClientStream{receipt: &pb.CodeIndexUploadReceipt{Embedded: 2, Deleted: 1}}
+	rpc := &fakeCodeIndexRPC{
+		negResp: &pb.CodeIndexNegotiateResponse{NeedChunks: []string{chunks[0].ChunkID(), chunks[2].ChunkID()}},
+		stream:  stream,
+	}
+
+	res, err := runIndexExchange(context.Background(), rpc, "proj-slug", "sess-1", manifest, chunks)
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Embedded)
+	require.Equal(t, 1, res.Deleted)
+	require.Equal(t, 2, res.Uploaded, "only the two needed chunks are uploaded")
+
+	// The negotiate request carries the full manifest + identity.
+	require.Equal(t, "proj-slug", rpc.negReq.GetProjectId())
+	require.Equal(t, "sess-1", rpc.negReq.GetIndexSessionId())
+	require.Len(t, rpc.negReq.GetManifest(), 3)
+
+	// Stream: 1 leading sentinel (nil meta) + 2 content chunks.
+	require.Len(t, stream.sent, 3)
+	require.Nil(t, stream.sent[0].GetMeta(), "first message is the identity-only sentinel")
+	require.Equal(t, "proj-slug", stream.sent[0].GetProjectId())
+	require.Equal(t, "sess-1", stream.sent[0].GetIndexSessionId())
+	require.Equal(t, "a.go", stream.sent[1].GetMeta().GetFilePath())
+	require.Equal(t, "c.go", stream.sent[2].GetMeta().GetFilePath())
+}
+
+// TestRunIndexExchange_DeleteOnlySendsSentinelOnly is the delete-only re-index:
+// the server needs nothing, so only the leading sentinel is sent — but it IS
+// sent, so the server can run its EOF sweep.
+func TestRunIndexExchange_DeleteOnlySendsSentinelOnly(t *testing.T) {
+	t.Parallel()
+
+	chunks := []codeindex.Chunk{
+		{FilePath: "keep.go", ByteStart: 0, ByteEnd: 100, Content: "func Keep(){}", ContentSHA256: "sha-k", Language: "go", ChunkType: codeindex.ChunkTypeLineBlock},
+	}
+	manifest := codeindex.BuildManifestFromChunks(chunks)
+
+	stream := &fakeUploadClientStream{receipt: &pb.CodeIndexUploadReceipt{Embedded: 0, Deleted: 3}}
+	rpc := &fakeCodeIndexRPC{
+		negResp: &pb.CodeIndexNegotiateResponse{NeedChunks: nil}, // server has everything
+		stream:  stream,
+	}
+
+	res, err := runIndexExchange(context.Background(), rpc, "proj-slug", "sess-2", manifest, chunks)
+	require.NoError(t, err)
+	require.Equal(t, 0, res.Uploaded, "no content chunks uploaded")
+	require.Equal(t, 3, res.Deleted, "server swept 3 stale chunks via the sentinel-carried session")
+
+	require.Len(t, stream.sent, 1, "only the leading sentinel is sent")
+	require.Nil(t, stream.sent[0].GetMeta(), "the single message is the identity-only sentinel")
+}
+
+// TestRunIndexExchange_NegotiateErrorPropagates verifies a negotiate failure is
+// wrapped and returned without opening the upload stream.
+func TestRunIndexExchange_NegotiateErrorPropagates(t *testing.T) {
+	t.Parallel()
+
+	rpc := &fakeCodeIndexRPC{negErr: errors.New("boom")}
+	res, err := runIndexExchange(context.Background(), rpc, "p", "s", codeindex.Manifest{}, nil)
+	require.Error(t, err)
+	require.Nil(t, res)
+	require.Contains(t, err.Error(), "CodeIndexNegotiate")
+}
+
+// TestRunIndexExchange_CloseRecvErrorPropagates verifies a CloseAndRecv failure
+// is wrapped and returned.
+func TestRunIndexExchange_CloseRecvErrorPropagates(t *testing.T) {
+	t.Parallel()
+
+	stream := &fakeUploadClientStream{recvErr: errors.New("eof boom")}
+	rpc := &fakeCodeIndexRPC{
+		negResp: &pb.CodeIndexNegotiateResponse{},
+		stream:  stream,
+	}
+	res, err := runIndexExchange(context.Background(), rpc, "p", "s", codeindex.Manifest{}, nil)
+	require.Error(t, err)
+	require.Nil(t, res)
+	require.Contains(t, err.Error(), "CodeIndexUpload close")
 }
