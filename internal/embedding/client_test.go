@@ -103,14 +103,18 @@ func TestEmbed_OmitsDimensionsWhenZero(t *testing.T) {
 	}
 }
 
-// TestEmbed_HonorsDimensionsOverride asserts an explicit override is sent verbatim.
-func TestEmbed_HonorsDimensionsOverride(t *testing.T) {
+// TestEmbed_ClampsIncompatibleDimensionsOverride asserts the safety contract
+// (Codex P1): a non-zero override that is not EmbeddingDim — e.g. a stale
+// ENGRAM_EMBEDDING_DIMENSIONS=4096 in a deploy template — must NOT be requested,
+// because the vector(EmbeddingDim) columns cannot store it (every INSERT would
+// fail and recall would silently degrade). It is clamped to EmbeddingDim.
+func TestEmbed_ClampsIncompatibleDimensionsOverride(t *testing.T) {
 	bodyChan := make(chan map[string]any, 1)
 	srv := bodyCaptureServer(t, bodyChan)
 	defer srv.Close()
 
 	t.Setenv("ENGRAM_EMBEDDING_URL", srv.URL)
-	t.Setenv("ENGRAM_EMBEDDING_DIMENSIONS", "768")
+	t.Setenv("ENGRAM_EMBEDDING_DIMENSIONS", "4096") // stale/incompatible value
 
 	c, err := NewClient()
 	if err != nil {
@@ -121,8 +125,11 @@ func TestEmbed_HonorsDimensionsOverride(t *testing.T) {
 	}
 	body := <-bodyChan
 	got, ok := body["dimensions"]
-	if !ok || int(got.(float64)) != 768 {
-		t.Fatalf("dimensions = %v (present=%v), want 768", got, ok)
+	if !ok {
+		t.Fatalf("dimensions absent; want clamped to %d", EmbeddingDim)
+	}
+	if int(got.(float64)) != EmbeddingDim {
+		t.Fatalf("dimensions = %v, want clamped to %d (not the incompatible override)", got, EmbeddingDim)
 	}
 }
 

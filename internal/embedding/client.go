@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ErrEmbeddingDisabled is returned when no embedding URL is configured.
@@ -73,14 +75,30 @@ func NewClient() (*Client, error) {
 		model = "text-embedding"
 	}
 	// dimensions sent as the OpenAI-compatible `dimensions` request param so an
-	// MRL-capable model (Qwen3-Embedding) returns a truncated vector at the unified
-	// EmbeddingDim. Defaults to EmbeddingDim; ENGRAM_EMBEDDING_DIMENSIONS overrides.
-	// Set the override to 0 to OMIT the param entirely — required for endpoints that
-	// reject `dimensions` (a non-MRL model, or a proxy that 400s on the unknown field).
+	// MRL-capable model (Qwen3-Embedding) returns a vector at the unified EmbeddingDim.
+	//
+	// Only two values are coherent with the fixed vector(EmbeddingDim) columns:
+	//   - EmbeddingDim (default): request the unified dimension.
+	//   - 0: OMIT the param entirely — for endpoints that reject `dimensions`
+	//        (a non-MRL model, or a proxy that 400s on the unknown field). The
+	//        model must then natively return EmbeddingDim, or the startup assert /
+	//        backfill dim guard will catch the mismatch.
+	// Any OTHER value (e.g. a stale ENGRAM_EMBEDDING_DIMENSIONS=4096 left in a deploy
+	// template) would make the client request a size the columns cannot store — every
+	// INSERT would fail and recall would silently degrade to FTS forever. So a
+	// non-zero, non-EmbeddingDim override is rejected: clamp to EmbeddingDim and warn
+	// loudly rather than honor a column-incompatible dimension.
 	dimensions := EmbeddingDim
 	if raw := os.Getenv("ENGRAM_EMBEDDING_DIMENSIONS"); raw != "" {
-		if d, err := strconv.Atoi(raw); err == nil {
+		if d, err := strconv.Atoi(raw); err != nil {
+			log.Warn().Str("value", raw).Int("using", EmbeddingDim).
+				Msg("embedding: ENGRAM_EMBEDDING_DIMENSIONS is not an integer, using EmbeddingDim")
+		} else if d == 0 || d == EmbeddingDim {
 			dimensions = d
+		} else {
+			log.Warn().Int("requested", d).Int("using", EmbeddingDim).
+				Msg("embedding: ENGRAM_EMBEDDING_DIMENSIONS must be 0 (omit) or EmbeddingDim; " +
+					"a different value cannot be stored in the vector(EmbeddingDim) columns — clamping to EmbeddingDim")
 		}
 	}
 	return &Client{
