@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "6.7.1",
+  "version": "6.7.2",
   "description": "Persistent memory for Claude Code. v6 BREAKING: per-workstation API tokens replace the shared admin token. Issue a keycard via the dashboard /tokens page after upgrade and paste it via /engram:setup. The operator key (ENGRAM_AUTH_ADMIN_TOKEN) lives ONLY on the server host and MUST NOT be pasted into a workstation.",
   "author": {
     "name": "thebtf"
@@ -24,8 +24,8 @@
       "sensitive": true
     },
     "engram_quiet": {
-      "title": "Quiet mode (mute hook injection)",
-      "description": "When enabled, every engram hook becomes a no-op: no session-start behavioral rules / memories / issues, no pre-tool-use or pre-compact context, and no per-hook server calls. MCP tools are unaffected. Use when injected context is more noise than signal. (Codex ≥0.139 does not forward this to hook children — set \"quiet\": true in ~/.engram/config.json there instead.)",
+      "title": "Quiet mode (mute automatic hook injection)",
+      "description": "When enabled, engram stops PUSHING context into the prompt: no session-start behavioral rules / memories / issues, no pre-tool-use or pre-compact context. Capture/learning hooks still run (the memory keeps crystallizing lessons and recording outcomes), and MCP tools are unaffected — quiet stops engram talking, not learning. Use when injected context is more noise than signal. (Codex ≥0.139 does not forward this to hook children — set \"quiet\": true in ~/.engram/config.json there instead.)",
       "type": "boolean",
       "required": false,
       "sensitive": false

@@ -168,13 +168,15 @@ Tool: check_system_health()
 - **Docker networking**: If the server runs in Docker, use the host
   machine's IP (not `localhost` unless same machine).
 
-### Quiet mode (mute all hook injection)
+### Quiet mode (mute automatic hook injection)
 
-Quiet mode makes every engram hook a no-op: no session-start behavioral rules /
-memories / issues, no pre-tool-use or pre-compact context, and no per-hook
-server calls. Use it when injected context is more noise than signal: a stale or
-mis-scoped server-side rule set, focused development, or any session where
-"zero hints" beats "wrong hints".
+Quiet mode stops engram PUSHING context into the prompt: no session-start
+behavioral rules / memories / issues, no pre-tool-use or pre-compact context.
+The capture/learning hooks still run — engram keeps crystallizing lessons and
+recording session outcomes — so quiet stops engram *talking*, not *learning*.
+Use it when injected context is more noise than signal: a stale or mis-scoped
+server-side rule set, focused development, or any session where "zero hints"
+beats "wrong hints".
 
 **Scope — what quiet mode does and does NOT silence.** Quiet mode silences hook
 *context injection* (the prompt noise). It deliberately does NOT disable the MCP

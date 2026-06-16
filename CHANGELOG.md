@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.7.2] - 2026-06-16
+
+### Changed
+
+- **Quiet mode is now "tacit, not mute" — `ENGRAM_QUIET` silences only automatic
+  injection, not the whole plugin (#280).** Previously quiet short-circuited every
+  hook routed through `RunHook`, including the capture/learning hooks. That made
+  the memory write-only while quiet: no session-start noise, but also no
+  crystallization (`Stop`), no outcome propagation (`SessionEnd`), and no
+  correction/segment signal capture (`UserPromptSubmit`). On a prod with vNext
+  active, `get_memory_stats.vnext` showed `injection_count:0 / citation_count:0` —
+  the learning loop had nothing to record because quiet had silenced the capture
+  side too. The quiet gate now keys on hook role: only the hooks that PUSH context
+  into the prompt — `SessionStart`, `PreToolUse`, `PreCompact` — are silenced. The
+  capture/learning hooks run under quiet and emit no prompt context (each returns
+  an empty result), so the prompt stays exactly as quiet as before while engram
+  keeps recording signals and crystallizing lessons. Quiet now stops engram
+  talking, not learning. Plugin/setup descriptions of quiet mode updated to match.
+  (Note: the citation signal inherently needs injection to measure "did the agent
+  use what was injected", so `citation_count` stays 0 under quiet — full
+  closed-loop-while-quiet needs prompt-driven recall, tracked as #257.)
+
 ## [6.7.1] - 2026-06-16
 
 ### Fixed
