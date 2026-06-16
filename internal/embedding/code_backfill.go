@@ -148,7 +148,12 @@ func runCodeBackfill(ctx context.Context, store codeChunkSource, client embedder
 
 		// Persist each vector. Per-row dimension guard: a wrong-dim vector would
 		// corrupt the pgvector column or fail at DB level — skip and record.
+		// dimMismatch counts rows rejected specifically for a wrong dimension —
+		// a DETERMINISTIC, model-level config error (vs transient embed/DB
+		// failures). When a whole batch fails for this reason the loop disables
+		// itself below rather than retrying the same rows forever.
 		batchSuccess := 0
+		dimMismatch := 0
 		for i, chunk := range chunks {
 			if i >= len(vectors) {
 				// Embed returned fewer vectors than texts; remaining rows stay
@@ -179,6 +184,7 @@ func runCodeBackfill(ctx context.Context, store codeChunkSource, client embedder
 				if rec != nil {
 					rec.RecordFailure(0, "dimension mismatch: expected 1536, got "+strconv.Itoa(len(vec)))
 				}
+				dimMismatch++
 				continue
 			}
 			if err := store.UpdateEmbedding(ctx, chunk.ID, pgvector.NewVector(vec)); err != nil {
@@ -196,14 +202,34 @@ func runCodeBackfill(ctx context.Context, store codeChunkSource, client embedder
 		}
 		processed += batchSuccess
 
-		// Hot-loop guard: a non-empty batch that persisted ZERO embeddings means
-		// every row was rejected by the dimension/empty-vector/UpdateEmbedding
-		// guards above. Those rows stay embedding IS NULL, so the next
-		// ListUnembedded returns the SAME rows — without a backoff this spins at
-		// full CPU and hammers the external embed API. The classic trigger is an
-		// operator embed-model whose output dimension != 1536 (the pending OQ-5
-		// model choice): every vector fails the dim guard forever. Sleep so the
-		// retry is rate-limited; a transient cause still recovers on the next pass.
+		// Deterministic-config guard: if EVERY row this batch was rejected for a
+		// dimension mismatch, the configured embed model's output dimension is not
+		// 1536 and never will be — retrying cannot help. This is the realistic OQ-5
+		// misconfiguration where an operator points ENGRAM_EMBEDDING_URL at their
+		// existing memory model (content_chunks is vector(4096) vs code_chunks
+		// vector(1536)). DISABLE code backfill with a fatal-config log rather than
+		// resending the same chunks to the external API forever and inflating
+		// failure telemetry. Memory backfill (separate goroutine) is unaffected.
+		// Returning nil (not an error) keeps the goroutine wrapper quiet — this is
+		// a deliberate, logged stop, not a crash.
+		if batchSuccess == 0 && dimMismatch == len(chunks) {
+			log.Error().
+				Int("batch_size", len(chunks)).
+				Int("expected_dim", expectedDim).
+				Msg("code backfill: every chunk rejected for dimension mismatch — embed model output dim != 1536; " +
+					"disabling code backfill (check ENGRAM_EMBEDDING_MODEL — code_chunks requires a 1536-dim model)")
+			if rec != nil {
+				rec.RecordFailure(0, "code backfill disabled: embed model dimension != 1536")
+			}
+			return nil
+		}
+
+		// Hot-loop guard: a non-empty batch that persisted ZERO embeddings (for
+		// reasons OTHER than a uniform dim mismatch — transient embed errors, a
+		// flaky DB, a mix of failures) leaves those rows embedding IS NULL, so the
+		// next ListUnembedded returns the SAME rows. Without a backoff this spins
+		// at full CPU and hammers the embed API. Sleep so the retry is rate-limited;
+		// a transient cause still recovers on the next pass.
 		if batchSuccess == 0 {
 			log.Warn().Int("batch_size", len(chunks)).
 				Msg("code backfill: batch persisted zero embeddings (all rows guard-rejected); backing off")

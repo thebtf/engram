@@ -185,13 +185,46 @@ func TestRunCodeBackfill_ZeroVectorsBacksOff(t *testing.T) {
 	}
 }
 
-// TestRunCodeBackfill_DimMismatchBacksOff drives the dimension guard: every
-// returned vector has the wrong length, so batchSuccess stays 0 and the loop
-// must back off (not spin). Cancel during the backoff and expect ctx.Canceled.
-func TestRunCodeBackfill_DimMismatchBacksOff(t *testing.T) {
+// TestRunCodeBackfill_UniformDimMismatchDisables is the regression test for the
+// OQ-5 misconfiguration (operator points ENGRAM_EMBEDDING_URL at a non-1536
+// model, e.g. the existing 4096-dim memory model). When EVERY row in a batch is
+// rejected for a dimension mismatch, the loop must DISABLE itself (return nil
+// promptly) rather than retry the same rows forever and resend to the API.
+// Crucially: no ctx cancel — the loop must stop on its own.
+func TestRunCodeBackfill_UniformDimMismatchDisables(t *testing.T) {
 	t.Parallel()
-	src := newFakeCodeSource([]*db_gorm.CodeChunk{{ID: 1, Content: "x"}})
-	emb := &fakeEmbedder{vecLen: 8} // wrong dim (not 1536)
+	src := newFakeCodeSource([]*db_gorm.CodeChunk{
+		{ID: 1, Content: "a"},
+		{ID: 2, Content: "b"},
+	})
+	emb := &fakeEmbedder{vecLen: 4096} // wrong dim for every row (the realistic case)
+	rec := &BackfillRecorder{}
+
+	// No cancel: the deterministic-disable guard must return nil by itself.
+	err := runWithDeadline(t, 3*time.Second, context.Background(), src, emb, rec)
+	if err != nil {
+		t.Fatalf("runCodeBackfill = %v, want nil (uniform dim mismatch must disable, not error)", err)
+	}
+	if got := atomic.LoadInt32(&src.updateCalls); got != 0 {
+		t.Errorf("UpdateEmbedding calls = %d, want 0 (wrong-dim vectors must not persist)", got)
+	}
+	// Exactly one embed call: the loop disables after the first all-mismatch batch
+	// instead of retrying. (>1 would mean it looped.)
+	if got := atomic.LoadInt32(&emb.calls); got != 1 {
+		t.Errorf("embed calls = %d, want 1 (disable after first uniform-mismatch batch, no retry)", got)
+	}
+}
+
+// TestRunCodeBackfill_PartialMismatchBacksOff verifies the MIXED case: some rows
+// fail the dim guard, some fail for another reason — this is NOT a uniform
+// deterministic mismatch, so the loop must back off (retry path) rather than
+// disable. We model it as a batch where one vector is wrong-dim and one is
+// empty; batchSuccess==0 but dimMismatch != len(chunks), so it backs off and we
+// cancel during the sleep.
+func TestRunCodeBackfill_PartialMismatchBacksOff(t *testing.T) {
+	t.Parallel()
+	src := newFakeCodeSource([]*db_gorm.CodeChunk{{ID: 1, Content: "x"}, {ID: 2, Content: "y"}})
+	emb := &mixedFailEmbedder{} // row 0: wrong dim, row 1: empty vector
 	rec := &BackfillRecorder{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -204,9 +237,26 @@ func TestRunCodeBackfill_DimMismatchBacksOff(t *testing.T) {
 
 	err := runWithDeadline(t, 3*time.Second, ctx, src, emb, rec)
 	if err != context.Canceled {
-		t.Fatalf("runCodeBackfill = %v, want context.Canceled (dim-mismatch must back off, not spin)", err)
+		t.Fatalf("runCodeBackfill = %v, want context.Canceled (mixed failure must back off, not disable)", err)
 	}
 	if got := atomic.LoadInt32(&src.updateCalls); got != 0 {
-		t.Errorf("UpdateEmbedding calls = %d, want 0 (wrong-dim vectors must not persist)", got)
+		t.Errorf("UpdateEmbedding calls = %d, want 0", got)
 	}
+}
+
+// mixedFailEmbedder returns a wrong-dim vector for the first text and an empty
+// vector for the rest, so a 2-row batch has dimMismatch=1 != len(chunks)=2.
+type mixedFailEmbedder struct{ calls int32 }
+
+func (e *mixedFailEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	atomic.AddInt32(&e.calls, 1)
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		if i == 0 {
+			out[i] = make([]float32, 8) // wrong dim
+		} else {
+			out[i] = []float32{} // empty
+		}
+	}
+	return out, nil
 }
