@@ -4563,46 +4563,59 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			// HNSW limit, so the engram vector index no longer depends on pgvectorscale.
 			// (pgvectorscale itself stays installed for other server workloads.) Mirrors
 			// the code_chunks partial-HNSW shape from migration 141.
+			//
+			// Wrapped in tx.Transaction because gormigrate DefaultOptions set
+			// UseTransaction=false (see migrations 137/138). PostgreSQL DDL is
+			// transactional, so wrapping makes the DELETE + ALTER + CREATE INDEX
+			// sequence atomic: if the HNSW CREATE INDEX (the likely failure point)
+			// errors, the DELETE and ALTER roll back too, leaving the prior 4096-dim
+			// table + DiskANN index intact for the previous build instead of a
+			// half-migrated, unrecorded state.
 			ID: "142_content_chunks_dim_1536",
 			Migrate: func(tx *gorm.DB) error {
-				stmts := []string{
-					// Empty the table first: 4096→1536 is not a valid in-place cast, and
-					// removing the rows is what makes the absence-keyed backfill re-run.
-					`DELETE FROM content_chunks`,
-					`DROP INDEX IF EXISTS idx_chunks_embedding`,
-					`ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(1536)`,
-					`CREATE INDEX IF NOT EXISTS idx_chunks_embedding
-					 ON content_chunks USING hnsw (embedding vector_cosine_ops)
-					 WHERE embedding IS NOT NULL`,
-				}
-				for _, stmt := range stmts {
-					if err := tx.Exec(stmt).Error; err != nil {
-						return fmt.Errorf("142_content_chunks_dim_1536: %w", err)
+				return tx.Transaction(func(txx *gorm.DB) error {
+					stmts := []string{
+						// Empty the table first: 4096→1536 is not a valid in-place cast, and
+						// removing the rows is what makes the absence-keyed backfill re-run.
+						`DELETE FROM content_chunks`,
+						`DROP INDEX IF EXISTS idx_chunks_embedding`,
+						`ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(1536)`,
+						`CREATE INDEX IF NOT EXISTS idx_chunks_embedding
+						 ON content_chunks USING hnsw (embedding vector_cosine_ops)
+						 WHERE embedding IS NOT NULL`,
 					}
-				}
-				return nil
+					for _, stmt := range stmts {
+						if err := txx.Exec(stmt).Error; err != nil {
+							return fmt.Errorf("142_content_chunks_dim_1536: %w", err)
+						}
+					}
+					return nil
+				})
 			},
 			Rollback: func(tx *gorm.DB) error {
 				// Best-effort revert of the schema shape. Rows are NOT restored — the
 				// 4096 vectors were deleted on migrate; a re-backfill at the prior
-				// dimension would be needed to repopulate.
-				stmts := []string{
-					`DELETE FROM content_chunks`,
-					`DROP INDEX IF EXISTS idx_chunks_embedding`,
-					`ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(4096)`,
-				}
-				for _, stmt := range stmts {
-					if err := tx.Exec(stmt).Error; err != nil {
-						return err
+				// dimension would be needed to repopulate. Wrapped in tx.Transaction
+				// for the same reason as Migrate (UseTransaction=false).
+				return tx.Transaction(func(txx *gorm.DB) error {
+					stmts := []string{
+						`DELETE FROM content_chunks`,
+						`DROP INDEX IF EXISTS idx_chunks_embedding`,
+						`ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(4096)`,
 					}
-				}
-				// Restore the DiskANN index when pgvectorscale is available; fall back
-				// silently otherwise (mirrors migration 109's graceful skip).
-				if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE").Error; err != nil {
-					log.Warn().Err(err).Msg("142 rollback: vectorscale unavailable, skipping DiskANN index restore")
-					return nil
-				}
-				return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING diskann (embedding vector_cosine_ops)`).Error
+					for _, stmt := range stmts {
+						if err := txx.Exec(stmt).Error; err != nil {
+							return err
+						}
+					}
+					// Restore the DiskANN index when pgvectorscale is available; fall back
+					// silently otherwise (mirrors migration 109's graceful skip).
+					if err := txx.Exec("CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE").Error; err != nil {
+						log.Warn().Err(err).Msg("142 rollback: vectorscale unavailable, skipping DiskANN index restore")
+						return nil
+					}
+					return txx.Exec(`CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING diskann (embedding vector_cosine_ops)`).Error
+				})
 			},
 		},
 	})
