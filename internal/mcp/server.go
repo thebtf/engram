@@ -50,11 +50,12 @@ type Server struct {
 	nodesStore             nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
 	auditStore             *gorm.AuditStore
 	purgeStore             *gorm.PurgeStore
-	candidateStore         *gorm.CandidateStore  // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	snapshotStore          *gorm.SnapshotStore   // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	bulkFacade             *bulkops.Facade       // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
-	testAuditWriter        auditWriter  // set only in tests via setTestAuditWriter
-	testMemoryEditor       memoryEditor // set only in tests via setTestMemoryEditor
+	candidateStore         *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	snapshotStore          *gorm.SnapshotStore  // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	codeChunkStore         *gorm.CodeChunkStore // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
+	bulkFacade             *bulkops.Facade      // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
+	testAuditWriter        auditWriter          // set only in tests via setTestAuditWriter
+	testMemoryEditor       memoryEditor         // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -568,13 +569,13 @@ If you need the full expanded tool list (50+ individual tools), call ` + "`tools
 //     when ENGRAM_VNEXT_F_ENABLED=true (T044 FR-F6.b — write-lint phase fields).
 func storeMemoryTool() Tool {
 	props := map[string]any{
-		"content":       map[string]any{"type": "string", "description": "The content/knowledge to remember"},
-		"title":         map[string]any{"type": "string", "description": "Short title for the memory"},
-		"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
-		"rejected":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
-		"type":          map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
-		"importance":    map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
-		"scope":         map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
+		"content":    map[string]any{"type": "string", "description": "The content/knowledge to remember"},
+		"title":      map[string]any{"type": "string", "description": "Short title for the memory"},
+		"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
+		"rejected":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
+		"type":       map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
+		"importance": map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
+		"scope":      map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
 		// privacy_scope and session_id are unconditional in schema (clients discover them at all
 		// times); the runtime handler ignores them when ENGRAM_VNEXT_F_ENABLED=false (RI-F1).
 		"privacy_scope": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
@@ -588,10 +589,10 @@ func storeMemoryTool() Tool {
 	// dry_run and write-lint phase fields are only advertised when the flag is on.
 	// Advertising them unconditionally would imply they work on flag-off servers.
 	if vnextFEnabled() {
-		props["dry_run"]          = map[string]any{"type": "boolean", "description": "T044 FR-F6.b: when true, returns a preview of what would be stored (after redaction) without writing to DB. write_lint field in response indicates whether Phase1 would run on a live call."}
-		props["force"]            = map[string]any{"type": "boolean", "description": "T035: when true, bypasses write-lint Phase1/Phase2 and writes directly (legacy path). Logged as legacy_force_write in audit. Honored only when ENGRAM_VNEXT_F_ENABLED=true."}
+		props["dry_run"] = map[string]any{"type": "boolean", "description": "T044 FR-F6.b: when true, returns a preview of what would be stored (after redaction) without writing to DB. write_lint field in response indicates whether Phase1 would run on a live call."}
+		props["force"] = map[string]any{"type": "boolean", "description": "T035: when true, bypasses write-lint Phase1/Phase2 and writes directly (legacy path). Logged as legacy_force_write in audit. Honored only when ENGRAM_VNEXT_F_ENABLED=true."}
 		props["resolution_token"] = map[string]any{"type": "string", "description": "T035 Phase2: resolution token minted by a prior Phase1 response. When set, commits the write using the chosen option. Cannot combine with force=true."}
-		props["option"]           = map[string]any{"type": "string", "description": "T035 Phase2: resolution option chosen by the caller (e.g. merge_with, supersede, link_contradiction, ignore_signals). Required when resolution_token is set."}
+		props["option"] = map[string]any{"type": "string", "description": "T035 Phase2: resolution option chosen by the caller (e.g. merge_with, supersede, link_contradiction, ignore_signals). Required when resolution_token is set."}
 		props["target_memory_id"] = map[string]any{"type": "integer", "description": "T035 Phase2: target memory ID for merge_with / supersede options. Required for those options."}
 	}
 	return Tool{
@@ -1055,6 +1056,22 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, bulkOpsTools()...)
 	}
 
+	// Code intelligence tools (CR-006) — advertise only when ENGRAM_CODE_INTEL_ENABLED=true
+	// AND the code chunk store is wired. Flag-off path is byte-identical to pre-CR-006.
+	//
+	// Only codebase_search is advertised as a server-side tool. codebase_status is
+	// deliberately NOT advertised here: it is the daemon-side static tool's name
+	// (internal/handlers/codeintel), and the daemon merges its in-memory run state
+	// with the server's chunk counts by calling THIS server's codebase_status
+	// handler over the engramcore proxy. Advertising it on both the daemon (static)
+	// and the server (proxied) would surface a DUPLICATE codebase_status entry in
+	// the daemon's tools/list (the dispatcher appends proxy tools without dedup).
+	// The handler + callTool case stay registered so the daemon's proxy call still
+	// resolves; only the external advertisement is suppressed.
+	if codeIntelEnabled() && s.codeChunkStore != nil {
+		tools = append(tools, codebaseSearchTool())
+	}
+
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
 	if config.GetDatabaseDSN() != "" && crypto.VaultExists(config.Get()) {
 		tools = append(tools,
@@ -1151,17 +1168,28 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				"type":     "object",
 				"required": []string{"action"},
 				"properties": map[string]any{
-					"action":         map[string]any{"type": "string", "description": "Action: add_edge, remove_edge, get_edges, traverse, find_path, synonyms" + func() string { if vnextFEnabled() { return ", add_node" }; return "" }(), "enum": func() []string { base := []string{"add_edge", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}; if vnextFEnabled() { base = append(base, "add_node") }; return base }()},
-					"source_id":      map[string]any{"type": "integer", "description": "Source memory ID (for add_edge memory→memory, find_path)"},
-					"target_id":      map[string]any{"type": "integer", "description": "Target memory ID (for add_edge memory→memory, find_path)"},
-					"memory_id":      map[string]any{"type": "integer", "description": "Memory ID (for get_edges, traverse, synonyms)"},
-					"edge_id":        map[string]any{"type": "integer", "description": "Edge ID (for remove_edge)"},
-					"edge_type":      map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, contradicts, synonym_of)"},
-					"weight":         map[string]any{"type": "number", "description": "Edge confidence 0.0-1.0 (default 1.0)"},
-					"reasoning":      map[string]any{"type": "string", "description": "Why this edge exists"},
-					"direction":      map[string]any{"type": "string", "description": "Edge direction for get_edges: outgoing, incoming, both"},
-					"depth":          map[string]any{"type": "integer", "description": "Traversal depth (1-3, default 1)"},
-					"max_depth":      map[string]any{"type": "integer", "description": "Max path depth for find_path (1-3)"},
+					"action": map[string]any{"type": "string", "description": "Action: add_edge, remove_edge, get_edges, traverse, find_path, synonyms" + func() string {
+						if vnextFEnabled() {
+							return ", add_node"
+						}
+						return ""
+					}(), "enum": func() []string {
+						base := []string{"add_edge", "remove_edge", "get_edges", "traverse", "find_path", "synonyms"}
+						if vnextFEnabled() {
+							base = append(base, "add_node")
+						}
+						return base
+					}()},
+					"source_id": map[string]any{"type": "integer", "description": "Source memory ID (for add_edge memory→memory, find_path)"},
+					"target_id": map[string]any{"type": "integer", "description": "Target memory ID (for add_edge memory→memory, find_path)"},
+					"memory_id": map[string]any{"type": "integer", "description": "Memory ID (for get_edges, traverse, synonyms)"},
+					"edge_id":   map[string]any{"type": "integer", "description": "Edge ID (for remove_edge)"},
+					"edge_type": map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, contradicts, synonym_of)"},
+					"weight":    map[string]any{"type": "number", "description": "Edge confidence 0.0-1.0 (default 1.0)"},
+					"reasoning": map[string]any{"type": "string", "description": "Why this edge exists"},
+					"direction": map[string]any{"type": "string", "description": "Edge direction for get_edges: outgoing, incoming, both"},
+					"depth":     map[string]any{"type": "integer", "description": "Traversal depth (1-3, default 1)"},
+					"max_depth": map[string]any{"type": "integer", "description": "Max path depth for find_path (1-3)"},
 					// T014: Milestone F TG2 params (default to 'memory' for v6.2.x backward compat).
 					"source_type":    map[string]any{"type": "string", "description": "Source endpoint type: 'memory' (default) or 'node'. Requires ENGRAM_VNEXT_F_ENABLED=true for 'node' value.", "enum": []string{"memory", "node"}},
 					"target_type":    map[string]any{"type": "string", "description": "Target endpoint type: 'memory' (default) or 'node'. Requires ENGRAM_VNEXT_F_ENABLED=true for 'node' value.", "enum": []string{"memory", "node"}},
@@ -1599,6 +1627,11 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleBulkDelete(ctx, args)
 	case "bulk_supersede":
 		return s.handleBulkSupersede(ctx, args)
+	// Code intelligence tools (CR-006).
+	case "codebase_search":
+		return s.handleCodebaseSearch(ctx, args)
+	case "codebase_status":
+		return s.handleCodebaseStatus(ctx, args)
 	}
 
 	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/

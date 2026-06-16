@@ -501,3 +501,73 @@ func TestCodeChunkStore_ListUnembedded_OrderByIDAsc(t *testing.T) {
 			"rows must be returned in ascending id order")
 	}
 }
+
+// TestCodeChunkStore_CountEmbeddedByProject verifies that CountEmbeddedByProject
+// returns only chunks where embedding IS NOT NULL.
+func TestCodeChunkStore_CountEmbeddedByProject(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	proj := fmt.Sprintf("proj-count-emb-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM code_chunks WHERE project_id = ?", proj).Error
+	})
+
+	// Insert one chunk without embedding.
+	require.NoError(t, store.Upsert(ctx, testChunk(proj, "a.go", "emb-1")))
+
+	// Insert one chunk WITH embedding.
+	c2 := testChunk(proj, "b.go", "emb-2")
+	vec := pgvector.NewVector(make([]float32, 1536))
+	c2.Embedding = &vec
+	require.NoError(t, store.Upsert(ctx, c2))
+
+	total, err := store.CountByProject(ctx, proj)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), total, "total must be 2")
+
+	embedded, err := store.CountEmbeddedByProject(ctx, proj)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), embedded, "only 1 chunk has an embedding")
+}
+
+// TestCodeChunkStore_CountEmbeddedByProject_EmptyProject verifies the zero case:
+// a project with no chunks returns 0 (not an error).
+func TestCodeChunkStore_CountEmbeddedByProject_EmptyProject(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	proj := fmt.Sprintf("proj-emb-empty-%d", time.Now().UnixNano())
+	// No chunks inserted.
+
+	count, err := store.CountEmbeddedByProject(ctx, proj)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), count)
+}
+
+// TestCodeChunkStore_MaxUpdatedAtByProject verifies that MaxUpdatedAtByProject
+// returns a valid timestamp when rows exist and (false, nil) when none exist.
+func TestCodeChunkStore_MaxUpdatedAtByProject(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	// Empty project — expect false.
+	proj := fmt.Sprintf("proj-maxat-%d", time.Now().UnixNano())
+	_, ok, err := store.MaxUpdatedAtByProject(ctx, proj)
+	require.NoError(t, err)
+	require.False(t, ok, "empty project must return ok=false")
+
+	// Insert a chunk.
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM code_chunks WHERE project_id = ?", proj).Error
+	})
+	require.NoError(t, store.Upsert(ctx, testChunk(proj, "a.go", "maxat-1")))
+
+	ts, ok2, err2 := store.MaxUpdatedAtByProject(ctx, proj)
+	require.NoError(t, err2)
+	require.True(t, ok2, "non-empty project must return ok=true")
+	require.False(t, ts.IsZero(), "returned timestamp must not be zero")
+}

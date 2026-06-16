@@ -583,6 +583,46 @@ func (s *CodeChunkStore) FindSimilarCode(ctx context.Context, projectID string, 
 	return out, nil
 }
 
+// CountEmbeddedByProject returns the number of code chunks for the given project
+// whose embedding is NOT NULL (i.e. the embedding pipeline has processed them).
+// Used by codebase_status to report how many chunks have vector coverage.
+// Returns 0 (no error) when the project has no embedded chunks.
+func (s *CodeChunkStore) CountEmbeddedByProject(ctx context.Context, projectID string) (int64, error) {
+	if projectID == "" {
+		return 0, fmt.Errorf("code_chunk_store count_embedded_by_project: projectID must not be empty")
+	}
+	var count int64
+	if err := s.db.WithContext(ctx).
+		Model(&CodeChunk{}).
+		Where("project_id = ? AND embedding IS NOT NULL", projectID).
+		Count(&count).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, fmt.Errorf("code_chunk_store count_embedded_by_project %q: %w", projectID, err)
+	}
+	return count, nil
+}
+
+// MaxUpdatedAtByProject returns the maximum updated_at timestamp across all code
+// chunks for the given project. The second return value reports whether any row
+// exists (false means the project has never been indexed). Used by codebase_status
+// to report when the index was last updated.
+func (s *CodeChunkStore) MaxUpdatedAtByProject(ctx context.Context, projectID string) (time.Time, bool, error) {
+	if projectID == "" {
+		return time.Time{}, false, fmt.Errorf("code_chunk_store max_updated_at_by_project: projectID must not be empty")
+	}
+	var result struct {
+		MaxAt *time.Time `gorm:"column:max_at"`
+	}
+	if err := s.db.WithContext(ctx).
+		Raw("SELECT MAX(updated_at) AS max_at FROM code_chunks WHERE project_id = ?", projectID).
+		Scan(&result).Error; err != nil {
+		return time.Time{}, false, fmt.Errorf("code_chunk_store max_updated_at_by_project %q: %w", projectID, err)
+	}
+	if result.MaxAt == nil {
+		return time.Time{}, false, nil
+	}
+	return *result.MaxAt, true, nil
+}
+
 // DeleteSession removes the authorization record for (projectID, sessionID)
 // after a completed upload cycle so code_index_sessions does not accumulate
 // rows unboundedly. Best-effort: callers may ignore the error (the row is
