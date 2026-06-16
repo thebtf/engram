@@ -855,6 +855,14 @@ func (s *Service) initializeAsync() {
 	s.segmentStore = segmentStore
 	s.initMu.Unlock()
 
+	// Wire code intelligence store into MCP server (CR-006).
+	// Gated on ENGRAM_CODE_INTEL_ENABLED=true; flag-off leaves codeChunkStore nil
+	// so tools/list is byte-identical to pre-CR-006 when the flag is off.
+	if os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true" {
+		codeChunkStore := gorm.NewCodeChunkStore(store.GetDB())
+		mcpServer.SetCodeChunkStore(codeChunkStore)
+	}
+
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
 	// initMu protects s.grpcServer — the cmux goroutine polls for it.
 	//

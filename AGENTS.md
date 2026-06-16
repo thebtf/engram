@@ -48,6 +48,23 @@ internal/crypto/     — AES-256-GCM vault for credential encryption
 plugin/hooks/        — JS hooks (session-start, user-prompt, post-tool-use, stop)
 ```
 
+## CODE INTELLIGENCE (SocratiCode replacement, v6.13.0+)
+
+Set `ENGRAM_CODE_INTEL_ENABLED=true` to activate three drop-in SocratiCode replacement tools:
+
+| Tool | Side | Description |
+|------|------|-------------|
+| `codebase_index` | daemon | Triggers async code index for the current project root. Returns `{status:"started",run_id}` immediately. |
+| `codebase_status` | daemon+server | Reports index liveness, chunk counts, and last-indexed timestamp. |
+| `codebase_search` | server | Hybrid FTS+vector search over indexed code chunks. V1: FTS-only (no embedding required). |
+
+Flag-off: all three tools are absent from `tools/list` (byte-identical to pre-v6.13.0 surface).
+
+Key directories:
+- `internal/handlers/codeintel/` — daemon-side module (codebase_index, codebase_status liveness)
+- `internal/mcp/tools_code_intel.go` — server-side codebase_search + codebase_status counts
+- `internal/db/gorm/code_chunk_store.go` — CountEmbeddedByProject, MaxUpdatedAtByProject
+
 ## INSTRUCTION HIERARCHY
 
 ```

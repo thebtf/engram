@@ -7,7 +7,9 @@ package main
 
 import (
 	"fmt"
+	"os"
 
+	"github.com/thebtf/engram/internal/handlers/codeintel"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
 	"github.com/thebtf/engram/internal/module/registry"
@@ -16,21 +18,35 @@ import (
 // registerModules creates and registers every module that ships with the
 // engram daemon. Called from main() BEFORE Freeze and lifecycle.Pipeline.Start.
 //
-// In v4.3.0 the only module is engramcore (the ProxyToolProvider wrapping the
-// legacy engramHandler). Future phases add modules here:
+// engramcore is constructed ONCE and shared with the codeintel module so the
+// codeintel module can call IndexCodebase and proxy codebase_status to the
+// server via the same gRPC connection pool.
 //
-//	Phase B (loom integration):          loom.NewModule()
-//	Phase D1 (vectorindex):              vectorindex.NewModule(cfg)
-//	Phase D2 (semantic-refactor):        semrefactor.NewModule(cfg)
+// When ENGRAM_CODE_INTEL_ENABLED=true, the codeintel module is registered after
+// engramcore. The single-ProxyToolProvider rule (FR-11a) is preserved: engramcore
+// remains the only ProxyToolProvider. codeintel implements ToolProvider only
+// (static tool list — codebase_index and codebase_status).
 //
-// Keep this function small and explicit — no reflection, no config-driven
-// registration lists. One line per module, per design.md §2.3.
+// Flag-OFF: codeintel is NOT registered; the daemon tool surface is byte-identical
+// to pre-CR-006.
 func registerModules(reg *registry.Registry) error {
-	if err := reg.Register(engramcore.NewModule()); err != nil {
+	// Construct engramcore once — shared with codeintel below.
+	coreModule := engramcore.NewModule()
+	if err := reg.Register(coreModule); err != nil {
 		return fmt.Errorf("register engramcore: %w", err)
 	}
 	if err := reg.Register(loomhandler.NewModule()); err != nil {
 		return fmt.Errorf("register loom: %w", err)
 	}
+
+	// Register codeintel only when ENGRAM_CODE_INTEL_ENABLED=true.
+	// The flag is checked here so the registry/dispatcher path is unchanged
+	// when the flag is off — no tool conflict checks, no extra allocations.
+	if os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true" {
+		if err := reg.Register(codeintel.NewModule(coreModule)); err != nil {
+			return fmt.Errorf("register codeintel: %w", err)
+		}
+	}
+
 	return nil
 }
