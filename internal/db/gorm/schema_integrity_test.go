@@ -20,21 +20,21 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	// ALTER TABLE ADD CONSTRAINT statements. Session identifiers here are
 	// external Claude/SDK session IDs, not dashboard sessions.id references.
 	whitelist := map[string]string{
-		"citation_log.session_id":                   "external SDK session identifier (TEXT), not a row FK",
-		"injection_log.session_id":                  "external SDK session identifier (TEXT), not a row FK",
+		"citation_log.session_id":  "external SDK session identifier (TEXT), not a row FK",
+		"injection_log.session_id": "external SDK session identifier (TEXT), not a row FK",
 		// observation_injections.session_id was removed in CR-3: migration 138 drops
 		// observation_injections, so a whitelist key for a non-existent table is dead.
-		"retrieval_stats_log.query_id":              "analytics correlation identifier, not a table FK",
-		"search_query_log.session_id":               "external SDK session identifier (TEXT), not a row FK",
-		"session_transcripts.session_id":            "external SDK session identifier (TEXT), not a row FK",
-		"session_transcripts.claude_session_id":     "external Claude session identifier (TEXT), not a row FK",
-		"sdk_sessions.claude_session_id":            "external Claude session identifier (TEXT), not a row FK",
+		"retrieval_stats_log.query_id":          "analytics correlation identifier, not a table FK",
+		"search_query_log.session_id":           "external SDK session identifier (TEXT), not a row FK",
+		"session_transcripts.session_id":        "external SDK session identifier (TEXT), not a row FK",
+		"session_transcripts.claude_session_id": "external Claude session identifier (TEXT), not a row FK",
+		"sdk_sessions.claude_session_id":        "external Claude session identifier (TEXT), not a row FK",
 		// session_segments.session_id is an external-session-string (TEXT, not a
 		// FK to sdk_sessions.id). The former reasoning_traces.sdk_session_id entry
 		// was removed in CR-2b: migration 137 drops reasoning_traces, so a whitelist
 		// key for a non-existent table is dead.
-		"session_segments.session_id":               "external SDK session identifier (TEXT), not a row FK",
-		"telemetry_snapshots.last_operation_id":     "opaque operation identifier",
+		"session_segments.session_id":           "external SDK session identifier (TEXT), not a row FK",
+		"telemetry_snapshots.last_operation_id": "opaque operation identifier",
 		// Self-referential version-tree pointers: a version row may reference a
 		// parent/superseded version that has been pruned, so a hard FK with no
 		// ON DELETE would block legitimate version cleanup. Intentionally FK-less.
@@ -47,6 +47,10 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 		// couple code indexing to project registration. Intentionally FK-free.
 		// See ADR-001 §3.3 (engram-absorption/adr/ADR-001-ci-a-topology.md).
 		"code_chunks.project_id": "git-remote-derived TEXT slug (ResolveProjectSlug), not a row FK — see ADR-001 §3.3",
+		// code_index_sessions.project_id is the same git-slug as code_chunks
+		// (CR-003 sweep-authorization record), not a row FK to projects. FK-free
+		// for the same identity reason — see ADR-001 §6.
+		"code_index_sessions.project_id": "git-remote-derived TEXT slug (ResolveProjectSlug), not a row FK — see ADR-001 §6",
 	}
 
 	domainEntities := domainEntityNames(schema)

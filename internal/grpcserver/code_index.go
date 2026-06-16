@@ -47,6 +47,14 @@ func (s *Server) CodeIndexNegotiate(ctx context.Context, req *pb.CodeIndexNegoti
 
 	store := dbgorm.NewCodeChunkStore(s.db)
 
+	// Register this negotiate cycle as an authorization record BEFORE computing
+	// the delta. Its existence — not chunk presence — authorizes the EOF sweep
+	// in CodeIndexUpload, so a delete-all re-index (empty manifest → zero
+	// surviving chunks) still sweeps while a stray un-negotiated upload does not.
+	if err := store.RegisterSession(ctx, req.GetProjectId(), req.GetIndexSessionId()); err != nil {
+		return nil, status.Errorf(codes.Internal, "register session: %v", err)
+	}
+
 	// Load server's stored identity keys for this project.
 	serverIdentities, err := store.ListIdentityKeysByProject(ctx, req.GetProjectId())
 	if err != nil {
@@ -194,8 +202,17 @@ func (s *Server) CodeIndexUpload(stream pb.EngramService_CodeIndexUploadServer) 
 	// aborted stream. Skip the sweep to avoid operating on an empty projectID.
 	var deleted int32
 	if projectID != "" {
-		n, _ := store.DeleteBySessionMismatch(stream.Context(), projectID, sessionID)
+		n, sweepErr := store.DeleteBySessionMismatch(stream.Context(), projectID, sessionID)
 		deleted = int32(n)
+		if sweepErr != nil {
+			// Non-fatal: surface the sweep failure in the receipt so the caller
+			// can distinguish a failed sweep from a genuinely empty one (stale
+			// rows would otherwise linger silently as phantom chunks).
+			errors = append(errors, fmt.Sprintf("sweep: %v", sweepErr))
+		}
+		// Best-effort cleanup of the authorization record now that the cycle is
+		// complete; a lingering row is harmless and overwritten on next negotiate.
+		_, _ = store.DeleteSession(stream.Context(), projectID, sessionID)
 	}
 
 	return stream.SendAndClose(&pb.CodeIndexUploadReceipt{

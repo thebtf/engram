@@ -4477,6 +4477,34 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec("DROP TABLE IF EXISTS code_chunks").Error
 			},
 		},
+		{
+			// CR-003: authorization record for a code-index negotiate cycle.
+			// Its existence (not chunk presence) authorizes the stale-sweep at
+			// CodeIndexUpload EOF, so a delete-all re-index (zero surviving
+			// chunks) still sweeps while a stray upload with no prior negotiate
+			// does not. See code_chunk_store.go RegisterSession.
+			ID: "140_code_index_sessions",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS code_index_sessions (
+						project_id       TEXT        NOT NULL,
+						index_session_id TEXT        NOT NULL,
+						created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+						PRIMARY KEY (project_id, index_session_id)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_code_index_sessions_project ON code_index_sessions (project_id)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("140_code_index_sessions: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS code_index_sessions").Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

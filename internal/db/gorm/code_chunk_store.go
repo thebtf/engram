@@ -286,17 +286,51 @@ func (s *CodeChunkStore) TouchSession(ctx context.Context, projectID, sessionID 
 	return result.RowsAffected, nil
 }
 
+// RegisterSession records that a CodeIndexNegotiate cycle ran for
+// (projectID, sessionID) by inserting a row into code_index_sessions. This
+// authorization record — not the presence of stamped chunks — is what
+// DeleteBySessionMismatch consults to decide whether the stale-sweep may run.
+//
+// Why a separate table rather than counting chunks: a delete-all re-index
+// (the client dropped every file) legitimately marks zero surviving chunks
+// with the new session id, so a "count chunks carrying this session" guard
+// cannot tell that case apart from a stray upload that never negotiated. The
+// negotiate cycle ALWAYS writes this row, so the sweep authorization is
+// independent of how many chunks survived.
+//
+// ON CONFLICT DO NOTHING makes a repeated negotiate for the same session a
+// no-op. Returns nil on success.
+func (s *CodeChunkStore) RegisterSession(ctx context.Context, projectID, sessionID string) error {
+	if projectID == "" {
+		return fmt.Errorf("code_chunk_store register_session: projectID must not be empty")
+	}
+	if sessionID == "" {
+		return fmt.Errorf("code_chunk_store register_session: sessionID must not be empty")
+	}
+	result := s.db.WithContext(ctx).Exec(`
+		INSERT INTO code_index_sessions (project_id, index_session_id, created_at)
+		VALUES (?, ?, now())
+		ON CONFLICT (project_id, index_session_id) DO NOTHING
+	`, projectID, sessionID)
+	if result.Error != nil {
+		return fmt.Errorf("code_chunk_store register_session %q %q: %w", projectID, sessionID, result.Error)
+	}
+	return nil
+}
+
 // DeleteBySessionMismatch removes every chunk for projectID whose
 // index_session_id differs from sessionID. This is the stale-sweep step
 // called at CodeIndexUpload EOF: after the upload stream closes, any chunk
 // that was NOT uploaded in this session (i.e. still carries an old session id)
 // is no longer part of the current codebase and should be removed.
 //
-// SAFETY GUARD: before deleting, we count how many rows in project already
-// carry sessionID. If that count is 0 (nothing was marked or uploaded for
-// this session — e.g. a stray Upload call without a prior Negotiate), the
-// delete is skipped and (0, nil) is returned. This prevents a mis-routed or
-// un-negotiated upload from wiping a project's entire existing index.
+// SAFETY GUARD: before deleting, we verify a code_index_sessions row exists for
+// (projectID, sessionID) — i.e. CodeIndexNegotiate ran and called
+// RegisterSession for this exact session. If no such row exists (a stray Upload
+// without a prior Negotiate), the delete is skipped and (0, nil) is returned.
+// This authorization is independent of chunk presence, so it correctly permits
+// a delete-all re-index (zero surviving chunks) to sweep while still rejecting
+// an un-negotiated upload — closing the hole a chunk-count guard left open.
 //
 // Returns the number of rows deleted.
 func (s *CodeChunkStore) DeleteBySessionMismatch(ctx context.Context, projectID, sessionID string) (int64, error) {
@@ -307,17 +341,19 @@ func (s *CodeChunkStore) DeleteBySessionMismatch(ctx context.Context, projectID,
 		return 0, fmt.Errorf("code_chunk_store delete_by_session_mismatch: sessionID must not be empty")
 	}
 
-	// Safety guard: count rows that DO match the session. If none exist, skip
-	// the delete — a zero-session delete would wipe the entire project index
-	// without any valid upload having occurred.
-	var sessionCount int64
+	// Safety guard: the sweep is authorized only when CodeIndexNegotiate
+	// registered this session. A registered session means the client completed
+	// a real negotiate cycle, so its absence-of-surviving-chunks is meaningful
+	// (delete-all) rather than accidental (stray upload).
+	var registered int64
 	if err := s.db.WithContext(ctx).
-		Raw("SELECT COUNT(*) FROM code_chunks WHERE project_id = ? AND index_session_id = ?", projectID, sessionID).
-		Scan(&sessionCount).Error; err != nil {
-		return 0, fmt.Errorf("code_chunk_store delete_by_session_mismatch count %q %q: %w", projectID, sessionID, err)
+		Raw("SELECT COUNT(*) FROM code_index_sessions WHERE project_id = ? AND index_session_id = ?", projectID, sessionID).
+		Scan(&registered).Error; err != nil {
+		return 0, fmt.Errorf("code_chunk_store delete_by_session_mismatch authcheck %q %q: %w", projectID, sessionID, err)
 	}
-	if sessionCount == 0 {
-		// Nothing was marked with this session; skip sweep to protect the existing index.
+	if registered == 0 {
+		// No negotiate cycle registered this session; skip sweep to protect the
+		// existing index against a mis-routed or un-negotiated upload.
 		return 0, nil
 	}
 
@@ -325,6 +361,26 @@ func (s *CodeChunkStore) DeleteBySessionMismatch(ctx context.Context, projectID,
 		Exec("DELETE FROM code_chunks WHERE project_id = ? AND index_session_id <> ?", projectID, sessionID)
 	if result.Error != nil {
 		return 0, fmt.Errorf("code_chunk_store delete_by_session_mismatch %q %q: %w", projectID, sessionID, result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// DeleteSession removes the authorization record for (projectID, sessionID)
+// after a completed upload cycle so code_index_sessions does not accumulate
+// rows unboundedly. Best-effort: callers may ignore the error (the row is
+// harmless if it lingers and is overwritten on the next negotiate). Returns
+// the number of rows deleted.
+func (s *CodeChunkStore) DeleteSession(ctx context.Context, projectID, sessionID string) (int64, error) {
+	if projectID == "" {
+		return 0, fmt.Errorf("code_chunk_store delete_session: projectID must not be empty")
+	}
+	if sessionID == "" {
+		return 0, fmt.Errorf("code_chunk_store delete_session: sessionID must not be empty")
+	}
+	result := s.db.WithContext(ctx).
+		Exec("DELETE FROM code_index_sessions WHERE project_id = ? AND index_session_id = ?", projectID, sessionID)
+	if result.Error != nil {
+		return 0, fmt.Errorf("code_chunk_store delete_session %q %q: %w", projectID, sessionID, result.Error)
 	}
 	return result.RowsAffected, nil
 }
