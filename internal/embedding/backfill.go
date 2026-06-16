@@ -12,7 +12,9 @@ import (
 
 // Backfill processes existing memories that don't have embedding chunks yet.
 // Runs in batches, interruptible via context cancellation.
-func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, batchSize int) error {
+// rec may be nil; when non-nil it receives per-batch success and failure counts
+// for process-lifetime telemetry surfaced by /api/stats/vnext.
+func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, batchSize int, rec *BackfillRecorder) error {
 	if db == nil {
 		return fmt.Errorf("backfill: db required")
 	}
@@ -69,6 +71,9 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 		vectors, err := client.Embed(ctx, texts)
 		if err != nil {
 			log.Error().Err(err).Msg("backfill: embed batch failed")
+			if rec != nil {
+				rec.RecordFailure(0, err.Error())
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -100,6 +105,9 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 		}
 		if err := store.StoreChunks(ctx, chunks); err != nil {
 			log.Error().Err(err).Msg("backfill: store chunks failed")
+			if rec != nil {
+				rec.RecordFailure(0, err.Error())
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -108,6 +116,9 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 			continue
 		}
 
+		if rec != nil {
+			rec.RecordSuccess(len(chunks))
+		}
 		processed += len(chunks)
 		if processed%100 == 0 || len(memoryIDs) < batchSize {
 			log.Info().Int("processed", processed).Msg("backfill: progress")

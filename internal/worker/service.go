@@ -171,6 +171,7 @@ type Service struct {
 	segmentStore           *gorm.SegmentStore
 	embeddingClient        *embedding.Client
 	embeddingStore         *embedding.Store
+	embeddingRecorder      *embedding.BackfillRecorder
 	promotionStore         *gorm.PromotionStore
 	graphStore             *graph.Store
 	vaultOnce              sync.Once
@@ -820,9 +821,10 @@ func (s *Service) initializeAsync() {
 		}
 	} else {
 		embStore := embedding.NewStore(store.GetDB())
+		embRec := &embedding.BackfillRecorder{}
 		mcpServer.SetEmbeddingStores(embClient, embStore)
 		go func() {
-			if bfErr := embedding.Backfill(s.ctx, store.GetDB(), embClient, embStore, 50); bfErr != nil {
+			if bfErr := embedding.Backfill(s.ctx, store.GetDB(), embClient, embStore, 50, embRec); bfErr != nil {
 				log.Warn().Err(bfErr).Msg("embedding backfill: stopped")
 			}
 		}()
@@ -830,6 +832,7 @@ func (s *Service) initializeAsync() {
 		s.initMu.Lock()
 		s.embeddingClient = embClient
 		s.embeddingStore = embStore
+		s.embeddingRecorder = embRec
 		s.initMu.Unlock()
 	}
 
