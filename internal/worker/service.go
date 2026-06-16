@@ -828,6 +828,15 @@ func (s *Service) initializeAsync() {
 				log.Warn().Err(bfErr).Msg("embedding backfill: stopped")
 			}
 		}()
+		// CR-004: code chunk embedding backfill — mirrors the memory backfill above.
+		// Reuses the same embClient and embRec so telemetry counters aggregate.
+		// Gated by this else-branch so it is a no-op when ENGRAM_EMBEDDING_URL is unset (flag-dark).
+		go func() {
+			cbStore := gorm.NewCodeChunkStore(store.GetDB())
+			if cbErr := embedding.CodeBackfill(s.ctx, cbStore, embClient, 50, embRec); cbErr != nil {
+				log.Warn().Err(cbErr).Msg("code embedding backfill: stopped")
+			}
+		}()
 
 		s.initMu.Lock()
 		s.embeddingClient = embClient

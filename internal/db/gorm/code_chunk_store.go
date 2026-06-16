@@ -207,6 +207,54 @@ func (s *CodeChunkStore) CountByProject(ctx context.Context, projectID string) (
 	return count, nil
 }
 
+// UpdateEmbedding sets the embedding vector for the code chunk identified by id.
+// This is the ONLY correct way to persist an embedding on an existing code_chunk
+// row: Upsert uses ON CONFLICT DO NOTHING, so re-Upserting to set an embedding
+// is a silent no-op.
+//
+// id <= 0 is rejected as a guard against zero-valued struct fields.
+// RowsAffected == 0 is not treated as an error: the row may have been swept
+// concurrently (e.g. by DeleteStaleForProject or DeleteBySessionMismatch).
+func (s *CodeChunkStore) UpdateEmbedding(ctx context.Context, id int64, vec pgvector.Vector) error {
+	if id <= 0 {
+		return fmt.Errorf("code_chunk_store update_embedding: id must be > 0, got %d", id)
+	}
+	result := s.db.WithContext(ctx).
+		Exec("UPDATE code_chunks SET embedding = ?, updated_at = now() WHERE id = ?", vec, id)
+	if result.Error != nil {
+		return fmt.Errorf("code_chunk_store update_embedding id=%d: %w", id, result.Error)
+	}
+	return nil
+}
+
+// ListUnembedded returns up to limit code chunks whose embedding IS NULL,
+// ordered by id ASC for deterministic batching. This is the work-query for the
+// code backfill loop (CR-004): it finds rows that were inserted before the
+// embedding pipeline was active (or when ENGRAM_EMBEDDING_URL was unset) and
+// have never received a vector.
+//
+// limit <= 0 defaults to 50. Returns an empty (non-nil) slice when no unembedded
+// rows exist — the caller treats an empty result as "backfill complete".
+func (s *CodeChunkStore) ListUnembedded(ctx context.Context, limit int) ([]*CodeChunk, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var rows []CodeChunk
+	if err := s.db.WithContext(ctx).
+		Where("embedding IS NULL").
+		Order("id ASC").
+		Limit(limit).
+		Find(&rows).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("code_chunk_store list_unembedded: %w", err)
+	}
+	out := make([]*CodeChunk, len(rows))
+	for i := range rows {
+		cp := rows[i]
+		out[i] = &cp
+	}
+	return out, nil
+}
+
 // StaleKey constructs the composite key string used by DeleteStaleForProject,
 // ListIdentityKeysByProject, TouchSession, and DeleteBySessionMismatch.
 // Format: "filePath\x00byteStart\x00sha256" — matches the DB-side expression.

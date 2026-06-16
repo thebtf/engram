@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -309,4 +310,194 @@ func TestMigration139_CodeChunksTable(t *testing.T) {
 		WHERE tablename = 'code_chunks' AND indexname = 'idx_code_chunks_hnsw'
 	`).Scan(&hnswCount).Error)
 	require.Equal(t, 1, hnswCount, "idx_code_chunks_hnsw HNSW index must exist")
+}
+
+// TestCodeChunkStore_UpdateEmbedding_SetsVector verifies that UpdateEmbedding
+// persists a vector on an existing NULL-embedding row and that the row is no
+// longer returned by ListUnembedded after the update.
+func TestCodeChunkStore_UpdateEmbedding_SetsVector(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	proj := fmt.Sprintf("proj-updemb-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM code_chunks WHERE project_id = ?", proj).Error
+	})
+
+	chunk := testChunk(proj, "embed_me.go", "emb-001")
+	require.NoError(t, store.Upsert(ctx, chunk), "upsert chunk without embedding")
+
+	// Row must appear in ListUnembedded before the embedding is set.
+	unembedded, err := store.ListUnembedded(ctx, 10)
+	require.NoError(t, err)
+	var found bool
+	var targetID int64
+	for _, c := range unembedded {
+		if c.ProjectID == proj {
+			found = true
+			targetID = c.ID
+		}
+	}
+	require.True(t, found, "newly-inserted chunk must appear in ListUnembedded")
+	require.NotZero(t, targetID, "chunk ID must be non-zero after upsert")
+
+	// UpdateEmbedding must not error.
+	vec := pgvector.NewVector(make([]float32, 1536))
+	require.NoError(t, store.UpdateEmbedding(ctx, targetID, vec), "UpdateEmbedding must succeed")
+
+	// After the update the row must have a non-NULL embedding in the DB.
+	var embeddingNullCount int
+	require.NoError(t, db.Raw(
+		"SELECT COUNT(*) FROM code_chunks WHERE id = ? AND embedding IS NULL", targetID,
+	).Scan(&embeddingNullCount).Error)
+	require.Equal(t, 0, embeddingNullCount, "embedding must not be NULL after UpdateEmbedding")
+
+	// The row must no longer appear in ListUnembedded.
+	unembedded2, err := store.ListUnembedded(ctx, 10)
+	require.NoError(t, err)
+	for _, c := range unembedded2 {
+		if c.ID == targetID {
+			t.Fatalf("chunk id=%d still appears in ListUnembedded after UpdateEmbedding", targetID)
+		}
+	}
+}
+
+// TestCodeChunkStore_UpdateEmbedding_InvalidID asserts that id <= 0 is rejected.
+func TestCodeChunkStore_UpdateEmbedding_InvalidID(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	vec := pgvector.NewVector(make([]float32, 1536))
+	err := store.UpdateEmbedding(ctx, 0, vec)
+	require.Error(t, err, "UpdateEmbedding with id=0 must return an error")
+
+	err = store.UpdateEmbedding(ctx, -1, vec)
+	require.Error(t, err, "UpdateEmbedding with id=-1 must return an error")
+}
+
+// TestCodeChunkStore_UpdateEmbedding_MissingRow_IsNotError asserts that
+// UpdateEmbedding for a non-existent row (RowsAffected == 0) does not return an
+// error — the row may have been swept concurrently.
+func TestCodeChunkStore_UpdateEmbedding_MissingRow_IsNotError(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	// Use an ID that is extremely unlikely to exist.
+	const ghostID = int64(999999999)
+	vec := pgvector.NewVector(make([]float32, 1536))
+	require.NoError(t, store.UpdateEmbedding(ctx, ghostID, vec),
+		"UpdateEmbedding on a non-existent row must return nil (concurrent sweep case)")
+}
+
+// TestCodeChunkStore_ListUnembedded_ReturnsOnlyNullEmbedding verifies that
+// ListUnembedded returns only rows with NULL embedding and respects the limit.
+func TestCodeChunkStore_ListUnembedded_ReturnsOnlyNullEmbedding(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	proj := fmt.Sprintf("proj-listunb-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM code_chunks WHERE project_id = ?", proj).Error
+	})
+
+	// Insert three chunks without embeddings.
+	for i := 0; i < 3; i++ {
+		require.NoError(t, store.Upsert(ctx, testChunk(proj, fmt.Sprintf("f%d.go", i), fmt.Sprintf("s%d", i))))
+	}
+
+	// All three must appear in ListUnembedded with a generous limit.
+	all, err := store.ListUnembedded(ctx, 100)
+	require.NoError(t, err)
+	var projRows []*CodeChunk
+	for _, c := range all {
+		if c.ProjectID == proj {
+			projRows = append(projRows, c)
+		}
+	}
+	require.Len(t, projRows, 3, "all three unembedded rows must be returned")
+
+	// Embed the first row.
+	vec := pgvector.NewVector(make([]float32, 1536))
+	require.NoError(t, store.UpdateEmbedding(ctx, projRows[0].ID, vec))
+
+	// Now only two rows for this project should be unembedded.
+	remaining, err := store.ListUnembedded(ctx, 100)
+	require.NoError(t, err)
+	var remainingProj []*CodeChunk
+	for _, c := range remaining {
+		if c.ProjectID == proj {
+			remainingProj = append(remainingProj, c)
+		}
+	}
+	require.Len(t, remainingProj, 2, "two unembedded rows must remain after one is embedded")
+}
+
+// TestCodeChunkStore_ListUnembedded_LimitRespected verifies that the limit
+// parameter restricts the number of returned rows.
+func TestCodeChunkStore_ListUnembedded_LimitRespected(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	proj := fmt.Sprintf("proj-listlimit-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM code_chunks WHERE project_id = ?", proj).Error
+	})
+
+	// Insert five chunks.
+	for i := 0; i < 5; i++ {
+		require.NoError(t, store.Upsert(ctx, testChunk(proj, fmt.Sprintf("lim%d.go", i), fmt.Sprintf("l%d", i))))
+	}
+
+	// Request only 2.
+	rows, err := store.ListUnembedded(ctx, 2)
+	require.NoError(t, err)
+
+	// Count rows belonging to this project (other tests' rows may also be unembedded).
+	var projCount int
+	for _, c := range rows {
+		if c.ProjectID == proj {
+			projCount++
+		}
+	}
+	// We can only assert total returned <= limit, since other unembedded rows may exist.
+	require.LessOrEqual(t, len(rows), 2, "ListUnembedded must not exceed the requested limit")
+	_ = projCount
+}
+
+// TestCodeChunkStore_ListUnembedded_OrderByIDAsc verifies that rows are returned
+// in ascending id order (deterministic batching).
+func TestCodeChunkStore_ListUnembedded_OrderByIDAsc(t *testing.T) {
+	db := openCodeChunkTestDB(t)
+	store := NewCodeChunkStore(db)
+	ctx := context.Background()
+
+	proj := fmt.Sprintf("proj-listord-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM code_chunks WHERE project_id = ?", proj).Error
+	})
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, store.Upsert(ctx, testChunk(proj, fmt.Sprintf("ord%d.go", i), fmt.Sprintf("o%d", i))))
+	}
+
+	rows, err := store.ListUnembedded(ctx, 100)
+	require.NoError(t, err)
+
+	// Extract rows for this project in returned order.
+	var projRows []*CodeChunk
+	for _, c := range rows {
+		if c.ProjectID == proj {
+			projRows = append(projRows, c)
+		}
+	}
+	require.Len(t, projRows, 3)
+	for i := 1; i < len(projRows); i++ {
+		require.Less(t, projRows[i-1].ID, projRows[i].ID,
+			"rows must be returned in ascending id order")
+	}
 }
