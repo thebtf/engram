@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.13.0] - 2026-06-16
+
+### Added
+
+- **Code intelligence — engram replaces SocratiCode (CI-A absorption track, #286–#291).**
+  A complete client-smart / server-thin code-search subsystem, shipped across six CRs and
+  gated behind `ENGRAM_CODE_INTEL_ENABLED` (flag-OFF is byte-identical to before — no new
+  MCP tools advertised). When enabled, engram exposes three MCP tools that make it a drop-in
+  SocratiCode replacement:
+  - `codebase_index` (daemon-side) — walks the local project tree, chunks it, and streams the
+    delta to the server over gRPC; returns immediately with a `run_id` (async background run,
+    per-project single-flight guard).
+  - `codebase_search` (server-side) — hybrid FTS + dense-vector search over the indexed code
+    with Reciprocal Rank Fusion; FTS-only in V1 until a code-embedding model is configured.
+  - `codebase_status` — daemon-side run liveness merged with server-side chunk counts.
+
+  Building blocks landed by the chain:
+  - **CR-001 (#286):** `code_chunks` table (migration 139) — `project_id` git-slug scoping,
+    `vector(1536)` embedding (native pgvector HNSW), generated `content_tsv` for BM25 — plus
+    the GORM model and `CodeChunkStore`.
+  - **CR-002a (#287):** pure-Go (CGo-free) line-fallback chunker + manifest builder
+    (`internal/codeindex`) with minified-file and binary guards.
+  - **CR-003 (#288):** gRPC `CodeIndexNegotiate` (delta) + `CodeIndexUpload` (client stream),
+    with a `code_index_sessions` authorization table (migration 140) so the stale-chunk sweep
+    is correct across the two-RPC split, including the delete-only re-index case.
+  - **CR-004 (#289):** server-side embedding backfill (`internal/embedding/code_backfill.go`)
+    that fills `code_chunks.embedding` from an external embed API; disables itself on a
+    persistent embedding-dimension mismatch rather than hot-looping.
+  - **CR-005 (#290):** hybrid code search (`SearchCodeFTS` + `FindSimilarCode` + RRF reuse in
+    `internal/retrieval/code_hybrid.go`) with a benchmark gate and a dense-only fallback;
+    the `code_chunks` HNSW index is partial on `embedding IS NOT NULL` (migration 141).
+  - **CR-006 (#291):** the three MCP tools above + the `ENGRAM_CODE_INTEL_ENABLED` flag wiring
+    across the daemon module (`internal/handlers/codeintel`) and the server.
+
+  Code intelligence stays inert until `ENGRAM_CODE_INTEL_ENABLED=true` AND a 1536-dim embed
+  endpoint is configured; `code_chunks` rows are created with a NULL embedding and search
+  degrades to BM25/FTS-only until the embeddings exist.
+
 ## [6.9.0] - 2026-06-16
 
 ### Added
