@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.8.0] - 2026-06-16
+
+### Added
+
+- **Embedding/retrieval telemetry as a first-class server surface (#275).** `/api/stats/vnext`
+  now carries an `embedding` sub-object: `chunk_count`, `memories_with_chunks`, `last_chunk_at`,
+  `model`, `dimension`, `embedding_coverage` (% of active memories with ≥1 chunk, divide-by-zero
+  guarded), `active_memory_count`, `embed_success_count` / `embed_failure_count` since process
+  start, and `last_embed_error {at, status_code, message}`. A 404/401/dimension-mismatch is now
+  one `GET` away instead of a psql session or a log-dive. Backed by a new mutex-guarded
+  `BackfillRecorder` that surfaces the backfill loop's counters. The block is omitted when the
+  embedding store is not wired (flag off / `ENGRAM_EMBEDDING_URL` unset).
+- **muxcore daemon-registry opt-in (#290).** Bumped `muxcore` v0.25.0 → v0.26.1 and opted the
+  engram engine into cross-engine discovery (`engine.Config.Registry`, `ListOwners` only). The
+  shared mcp-mux operator point can now discover the engram daemon via `mux_engines` /
+  `mux_list(engine_name:"engram")`. Read-only — no cross-engine stop/restart/update is advertised.
+
+### Fixed
+
+- **Security: PEM private-key bodies left in plaintext by `RedactSecrets` (#263).** Patterns were
+  applied sequentially against an evolving string, so the header-only PEM pattern rewrote the
+  `BEGIN` line first and the full-block pattern then failed to match — leaving the key body + END
+  footer unredacted. Redaction is now a two-pass span-collection over the immutable original
+  (overlaps resolved so the full-block span subsumes the header-only one; replacements applied
+  right-to-left). Non-overlapping secrets redact byte-identically to before.
+- **Race between watcher `handleDeletion` / re-watch goroutine and `Stop()` (#262).** Added a
+  `w.running` guard under the mutex at `handleDeletion` entry and inside the 500ms re-watch
+  goroutine after its sleep, so a debounce timer or delayed goroutine can no longer call `Add`
+  on a closed fsnotify watcher. Covered by `-race` tests with concurrent `Stop()`.
+- **Stale "vectors permanently removed in v5" health message (#273).** `check_system_health` now
+  reports the pgvector subsystem with flag-aware active/dormant status (`Removed:false`) instead
+  of the stale v5 strip-down message.
+
+### Changed
+
+- **Provenance-cleanup FR-4 contract-honesty tail — epic NVMD-ENG-1 closed (#281).** Removed the
+  `by_file` dead-enum from the `recall` tool (the standalone `find_by_file` alias stays as an
+  accurate US3 tombstone); deleted the orphaned `ObservationRelation` / `ObservationConflict`
+  structs (0 callers); reworded a stale "in v5" user-facing string; fixed a session-start render
+  duplication (#287, `narrative === title` guard); and rewrote the plugin memory `SKILL.md` from
+  the pre-v5 ~50-tool taxonomy to the current v5 8-tool surface.
+
 ## [6.7.2] - 2026-06-16
 
 ### Changed
