@@ -59,11 +59,13 @@ func openTestTx(t *testing.T, db *gorm.DB) (*gorm.DB, func()) {
 	return tx, rollback
 }
 
-// build4096Vec returns a pgvector.Vector with 4096 dimensions.
-// All entries are zero except index 0 (0.1) and index 1 (0.2), which ensures
-// vector_dims returns 4096 and the vector is non-trivial for sanity.
-func build4096Vec() pgvector.Vector {
-	f := make([]float32, 4096)
+// buildEmbeddingVec returns a pgvector.Vector at the unified EmbeddingDim.
+// Sourced from the SSOT constant so this test cannot drift from the live
+// content_chunks column dimension (migration 142: vector(1536)). All entries are
+// zero except index 0 (0.1) and index 1 (0.2): non-trivial, and vector_dims
+// returns EmbeddingDim.
+func buildEmbeddingVec() pgvector.Vector {
+	f := make([]float32, EmbeddingDim)
 	f[0] = 0.1
 	f[1] = 0.2
 	return pgvector.NewVector(f)
@@ -92,9 +94,9 @@ func TestStoreStats_Empty(t *testing.T) {
 	if stats.MemoriesWithChunks < 0 {
 		t.Errorf("MemoriesWithChunks = %d, want >= 0", stats.MemoriesWithChunks)
 	}
-	// Dimension is 0 when the table is empty or 4096 when rows exist; both valid.
-	if stats.Dimension != 0 && stats.Dimension != 4096 {
-		t.Errorf("Dimension = %d, want 0 or 4096", stats.Dimension)
+	// Dimension is 0 when the table is empty or EmbeddingDim when rows exist; both valid.
+	if stats.Dimension != 0 && stats.Dimension != EmbeddingDim {
+		t.Errorf("Dimension = %d, want 0 or %d", stats.Dimension, EmbeddingDim)
 	}
 }
 
@@ -107,8 +109,8 @@ func TestStoreStats_Empty(t *testing.T) {
 //     zero persistent mutation of the real DB.
 //   - The parent memory row satisfies the memories(id) FK on content_chunks
 //     without requiring any pre-existing data.
-//   - The vector dimension is 4096 to match the production column type
-//     (migration 108: vector(4096)).
+//   - The vector dimension is EmbeddingDim to match the production column type
+//     (migration 142: vector(1536)).
 func TestStoreStats_Populated(t *testing.T) {
 	db, closeDB := openEmbeddingTestDB(t)
 	defer closeDB()
@@ -126,8 +128,8 @@ func TestStoreStats_Populated(t *testing.T) {
 		t.Fatalf("insert parent memory returning id: %v", err)
 	}
 
-	// Insert 2 chunks with a 4096-dim vector matching the production schema.
-	vec := build4096Vec()
+	// Insert 2 chunks with an EmbeddingDim-vector matching the production schema.
+	vec := buildEmbeddingVec()
 	if err := tx.Exec(`
 		INSERT INTO content_chunks (memory_id, seq, text, embedding, model) VALUES
 		(?, 0, 'chunk-a', ?::vector, 'test-model'),
@@ -151,8 +153,8 @@ func TestStoreStats_Populated(t *testing.T) {
 	if stats.LastChunkAt == nil {
 		t.Error("LastChunkAt is nil, want non-nil")
 	}
-	if stats.Dimension != 4096 {
-		t.Errorf("Dimension = %d, want 4096", stats.Dimension)
+	if stats.Dimension != EmbeddingDim {
+		t.Errorf("Dimension = %d, want %d", stats.Dimension, EmbeddingDim)
 	}
 	if stats.Model == "" {
 		t.Error("Model is empty, want non-empty")
@@ -178,7 +180,7 @@ func TestStatsWithCoverage_ActiveMemories(t *testing.T) {
 	).Scan(&mem1ID).Error; err != nil {
 		t.Fatalf("insert memory 1 returning id: %v", err)
 	}
-	vec := build4096Vec()
+	vec := buildEmbeddingVec()
 	if err := tx.Exec(`
 		INSERT INTO content_chunks (memory_id, seq, text, embedding, model)
 		VALUES (?, 0, 'chunk text', ?::vector, 'test-model')

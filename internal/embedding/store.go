@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pgvector/pgvector-go"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -121,7 +122,12 @@ type Chunk struct {
 	MemoryID  int64           `gorm:"not null"`
 	Seq       int             `gorm:"not null"`
 	Text      string          `gorm:"type:text;not null;default:''"`
-	Embedding pgvector.Vector `gorm:"type:vector(4096)"`
+	// Dimension is the SSOT EmbeddingDim (1536). The GORM tag must be a compile-time
+	// literal so it cannot reference the constant directly; the startup assert in
+	// AssertEmbeddingDimensions reconciles this tag, the DDL, and EmbeddingDim against
+	// the live column. The raw-SQL DDL was a demolition-phase rollback and AutoMigrate
+	// may return, so this tag is load-bearing, not decorative — keep it == EmbeddingDim.
+	Embedding pgvector.Vector `gorm:"type:vector(1536)"`
 	Model     string          `gorm:"type:text;not null"`
 	CreatedAt time.Time       `gorm:"type:timestamptz;not null;default:now()"`
 }
@@ -139,11 +145,35 @@ func NewStore(db *gorm.DB) *Store {
 }
 
 // StoreChunks inserts embedding chunks for a memory.
+//
+// It rejects any chunk whose embedding dimension != EmbeddingDim. This is the
+// single chokepoint for writes to content_chunks (both the backfill loop and the
+// memory-create path in tools_memory.go reach pgvector through here), so guarding
+// length once covers every caller. Without it, an endpoint that returned a
+// wrong-sized vector — e.g. one that ignored/rejected the dimensions param and
+// natively emits 4096 — would make Postgres reject the whole vector(EmbeddingDim)
+// batch, and a backfill would retry the same batch forever. Mismatched chunks are
+// dropped with a logged warning rather than failing the whole batch.
 func (s *Store) StoreChunks(ctx context.Context, chunks []Chunk) error {
 	if len(chunks) == 0 {
 		return nil
 	}
-	return s.db.WithContext(ctx).Create(&chunks).Error
+	valid := make([]Chunk, 0, len(chunks))
+	for _, c := range chunks {
+		if got := len(c.Embedding.Slice()); got != EmbeddingDim {
+			log.Error().
+				Int64("memory_id", c.MemoryID).
+				Int("got_dim", got).
+				Int("expected_dim", EmbeddingDim).
+				Msg("store chunks: embedding dimension mismatch, dropping chunk (content_chunks requires EmbeddingDim — check ENGRAM_EMBEDDING_MODEL/dimensions)")
+			continue
+		}
+		valid = append(valid, c)
+	}
+	if len(valid) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Create(&valid).Error
 }
 
 // SimilarResult holds a memory ID and its cosine similarity score.
@@ -170,12 +200,17 @@ func (s *Store) FindSimilar(ctx context.Context, queryVec []float32, limit int, 
 
 	vec := pgvector.NewVector(queryVec)
 	var results []SimilarResult
+	// The `cc.embedding IS NOT NULL` predicate is required for the partial HNSW
+	// index (migration 142, WHERE embedding IS NOT NULL) to be usable: PostgreSQL
+	// only chooses a partial index when the query predicate implies the index
+	// predicate. Without it this vector recall would fall back to a sequential scan.
 	err := s.db.WithContext(ctx).Raw(`
         SELECT cc.memory_id,
                1 - (cc.embedding <=> ?::vector) as similarity,
                cc.text
         FROM content_chunks cc
-        WHERE 1 - (cc.embedding <=> ?::vector) >= ?
+        WHERE cc.embedding IS NOT NULL
+          AND 1 - (cc.embedding <=> ?::vector) >= ?
         ORDER BY cc.embedding <=> ?::vector
         LIMIT ?
     `, vec, vec, threshold, vec, limit).Scan(&results).Error
@@ -216,7 +251,8 @@ func (s *Store) FindSimilarForProject(ctx context.Context, project string, query
                cc.text
         FROM content_chunks cc
         JOIN memories m ON m.id = cc.memory_id
-        WHERE m.project    = ?
+        WHERE cc.embedding IS NOT NULL
+          AND m.project    = ?
           AND m.status     = 'active'
           AND m.deleted_at IS NULL
           AND (m.valid_from  IS NULL OR m.valid_from  <= NOW())

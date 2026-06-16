@@ -818,6 +818,13 @@ func (s *Service) initializeAsync() {
 		} else {
 			log.Warn().Err(embErr).Msg("embedding: failed to initialize client")
 		}
+	} else if dimErr := embedding.AssertEmbeddingDimensions(s.ctx, store.GetDB()); dimErr != nil {
+		// Synchrony-by-construction: a live vector column whose dimension disagrees
+		// with the EmbeddingDim SSOT means schema/constant drift. Persisting vectors
+		// would corrupt search or fail at INSERT, so DISABLE the embedding path with a
+		// fatal-config log rather than start it on a mismatched schema. The rest of the
+		// server still runs (embedding is optional); recall degrades to FTS-only.
+		log.Error().Err(dimErr).Msg("embedding: dimension assert failed — embedding path DISABLED (fix schema or EmbeddingDim)")
 	} else {
 		embStore := embedding.NewStore(store.GetDB())
 		embRec := &embedding.BackfillRecorder{}

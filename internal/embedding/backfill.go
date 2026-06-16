@@ -86,7 +86,9 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 			continue
 		}
 
-		// Store chunks
+		// Build chunks. The vector-dimension guard lives in StoreChunks (the single
+		// write chokepoint to content_chunks), so a wrong-sized vector is dropped there
+		// with a logged warning rather than failing the whole vector(EmbeddingDim) batch.
 		chunks := make([]Chunk, 0, len(rows))
 		for i, r := range rows {
 			if i < len(vectors) && len(vectors[i]) > 0 {

@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ErrEmbeddingDisabled is returned when no embedding URL is configured.
@@ -50,6 +53,7 @@ type Client struct {
 	baseURL    string
 	model      string
 	apiKey     string
+	dimensions int
 	httpClient *http.Client
 }
 
@@ -70,10 +74,38 @@ func NewClient() (*Client, error) {
 	if model == "" {
 		model = "text-embedding"
 	}
+	// dimensions sent as the OpenAI-compatible `dimensions` request param so an
+	// MRL-capable model (Qwen3-Embedding) returns a vector at the unified EmbeddingDim.
+	//
+	// Only two values are coherent with the fixed vector(EmbeddingDim) columns:
+	//   - EmbeddingDim (default): request the unified dimension.
+	//   - 0: OMIT the param entirely — for endpoints that reject `dimensions`
+	//        (a non-MRL model, or a proxy that 400s on the unknown field). The
+	//        model must then natively return EmbeddingDim, or the startup assert /
+	//        backfill dim guard will catch the mismatch.
+	// Any OTHER value (e.g. a stale ENGRAM_EMBEDDING_DIMENSIONS=4096 left in a deploy
+	// template) would make the client request a size the columns cannot store — every
+	// INSERT would fail and recall would silently degrade to FTS forever. So a
+	// non-zero, non-EmbeddingDim override is rejected: clamp to EmbeddingDim and warn
+	// loudly rather than honor a column-incompatible dimension.
+	dimensions := EmbeddingDim
+	if raw := os.Getenv("ENGRAM_EMBEDDING_DIMENSIONS"); raw != "" {
+		if d, err := strconv.Atoi(raw); err != nil {
+			log.Warn().Str("value", raw).Int("using", EmbeddingDim).
+				Msg("embedding: ENGRAM_EMBEDDING_DIMENSIONS is not an integer, using EmbeddingDim")
+		} else if d == 0 || d == EmbeddingDim {
+			dimensions = d
+		} else {
+			log.Warn().Int("requested", d).Int("using", EmbeddingDim).
+				Msg("embedding: ENGRAM_EMBEDDING_DIMENSIONS must be 0 (omit) or EmbeddingDim; " +
+					"a different value cannot be stored in the vector(EmbeddingDim) columns — clamping to EmbeddingDim")
+		}
+	}
 	return &Client{
-		baseURL: baseURL,
-		model:   model,
-		apiKey:  os.Getenv("ENGRAM_EMBEDDING_API_KEY"),
+		baseURL:    baseURL,
+		model:      model,
+		apiKey:     os.Getenv("ENGRAM_EMBEDDING_API_KEY"),
+		dimensions: dimensions,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -81,9 +113,12 @@ func NewClient() (*Client, error) {
 }
 
 // embeddingRequest is the OpenAI-compatible request body.
+// Dimensions is omitted (omitempty) when zero so endpoints that do not support
+// the MRL `dimensions` param receive a byte-identical request to the pre-1536 era.
 type embeddingRequest struct {
-	Input []string `json:"input"`
-	Model string   `json:"model"`
+	Input      []string `json:"input"`
+	Model      string   `json:"model"`
+	Dimensions int      `json:"dimensions,omitempty"`
 }
 
 // embeddingResponse is the OpenAI-compatible response.
@@ -106,10 +141,14 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 		return nil, nil
 	}
 
-	body, err := json.Marshal(embeddingRequest{
+	reqBody := embeddingRequest{
 		Input: texts,
 		Model: c.model,
-	})
+	}
+	if c.dimensions > 0 {
+		reqBody.Dimensions = c.dimensions
+	}
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("embedding: marshal request: %w", err)
 	}
