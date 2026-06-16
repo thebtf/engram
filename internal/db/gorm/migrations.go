@@ -288,10 +288,10 @@ func runMigrations(db *gorm.DB) error {
 		{
 			ID: "008_observation_conflicts",
 			// Raw-SQL CREATE. Originally gorm AutoMigrate(&ObservationConflict{}).
-			// Converted in CR-2b of provenance-cleanup so the ObservationConflict
-			// struct can be deleted (observation_conflicts is dropped by migration
-			// 137). gormigrate skips applied IDs, so this only affects fresh installs;
-			// DDL transcribed verbatim from the gorm-generated schema (pg_dump-verified).
+			// Converted in CR-2b of provenance-cleanup; ObservationConflict was
+			// removed from pkg/models in FR-4 (observation_conflicts is dropped by
+			// migration 137). gormigrate skips applied IDs, so this only affects fresh
+			// installs; DDL transcribed verbatim from the gorm-generated schema (pg_dump-verified).
 			Migrate: func(tx *gorm.DB) error {
 				stmts := []string{
 					`CREATE TABLE IF NOT EXISTS observation_conflicts (
@@ -392,9 +392,9 @@ func runMigrations(db *gorm.DB) error {
 		{
 			ID: "011_observation_relations",
 			// Raw-SQL CREATE. Originally gorm AutoMigrate(&ObservationRelation{}).
-			// Converted in CR-2b of provenance-cleanup so the ObservationRelation
-			// struct can be deleted (observation_relations is dropped by migration
-			// 137). gormigrate skips applied IDs, so this only affects fresh installs.
+			// Converted in CR-2b of provenance-cleanup; ObservationRelation was
+			// removed from pkg/models in FR-4 (observation_relations is dropped by
+			// migration 137). gormigrate skips applied IDs, so this only affects fresh installs.
 			//
 			// This DDL reflects the CURRENT-struct schema (a pg_dump of a freshly
 			// migrated DB at the time of conversion), NOT what AutoMigrate produced

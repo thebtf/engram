@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Use when you want to explicitly store or recall knowledge across sessions. Prefer engram store_memory/recall_memory over file-based memory for decisions, patterns, insights, and cross-project knowledge. Also use when searching observations from previous coding sessions.
+description: Use when you want to explicitly store or recall knowledge across sessions. Prefer engram store/recall over file-based memory for decisions, patterns, insights, and cross-project knowledge. Also use when searching memories from previous coding sessions.
 ---
 
 # Engram Memory
@@ -9,18 +9,18 @@ description: Use when you want to explicitly store or recall knowledge across se
 
 Engram is persistent shared memory for Claude Code. Hooks automatically capture observations from your coding sessions. Your job is to **use** that knowledge — search it, build on it, and keep it clean.
 
-**Core principle:** Hooks handle automatic capture. You handle retrieval, explicit storage, and curation. The 50+ MCP tools exist so you can retrieve, connect, store, and maintain knowledge.
+**Core principle:** Hooks handle automatic capture. You handle retrieval, explicit storage, and curation.
 
 ## Connection Check
 
-**Do NOT check environment variables.** The MCP server may be configured in different ways (user settings, plugin config, manual). The only reliable test is calling a tool:
+**Do NOT check environment variables.** The MCP server may be configured in different ways. The only reliable test is calling a tool:
 
 ```
 Tool: check_system_health()
 ```
 
 - **Success** → Engram is connected. Use the tools below.
-- **Failure / tool not found** → Engram MCP is not available in this session. Hooks still collect data, but retrieval tools are unavailable.
+- **Failure / tool not found** → Engram MCP is not available in this session.
 
 ## What Hooks Do Automatically
 
@@ -29,229 +29,83 @@ Tool: check_system_health()
 | **SessionStart** | Conversation begins | Injects relevant project memories into context |
 | **UserPromptSubmit** | User sends a message | Searches for relevant memories and injects them as `<relevant-memory>` context |
 | **PostToolUse** | Any tool completes | Captures tool usage patterns and outcomes |
-| **SubagentStop** | Subagent finishes | Notifies system of subagent completion, triggers observation processing |
+| **SubagentStop** | Subagent finishes | Notifies system of subagent completion |
 | **Stop** | Session ends | Generates session summary, stores key observations |
 
-Hooks handle automatic capture. Use `store_memory` when you want to explicitly remember something — decisions, patterns, preferences, or insights. Focus on retrieval, explicit storage, and curation.
+## Mandatory Workflow
 
-## When to Use Engram Tools
+**BEFORE every task:**
+1. `recall(query="...")` — check what is already known about this topic.
+2. `recall(query="file:path/to/file")` — before modifying any file.
+3. `recall(query="prior decisions about ...")` — before architectural decisions.
 
-```
-Session starts → context already injected (automatic)
-  │
-  ├─ Want to remember something? → store_memory
-  ├─ Need to recall knowledge?   → recall_memory / search
-  ├─ Need past decisions?        → decisions
-  ├─ Need recent context?        → get_recent_context / timeline
-  ├─ Working on a file?          → find_by_file
-  ├─ Exploring a concept?        → find_by_concept / how_it_works
-  ├─ Found duplicate memories?   → suggest_consolidations / merge
-  ├─ Memory quality declining?   → get_data_quality_report / trigger_maintenance
-  └─ Session ending?             → (automatic via Stop hook)
-```
+**AFTER every task:**
+4. `store(content="...", title="...", tags="...")` — save decisions, discoveries, patterns, lessons learned.
+5. `feedback(action="rate", id=N, rating="useful")` — rate memories you used.
+6. `feedback(action="outcome", session_id="<claude-session-id>", outcome="success")` — record session outcome.
+
+**Steps 4-6 are NOT optional.** Every completed task produces knowledge. Store it or it is lost.
+
+## 8 Tools
+
+| Tool | Purpose | Key Actions |
+|------|---------|-------------|
+| `recall` | **Search & retrieve** memories | search (default) |
+| `store` | **Save** memories, edit, merge, import | create (default), edit, merge, import |
+| `feedback` | **Rate** quality, suppress, record outcomes | rate, suppress, outcome |
+| `issues` | **Cross-project issue tracking** between agents | create, list, get, update, comment, reopen, close |
+| `vault` | **Credentials** — encrypted AES-256-GCM | store, get, list, delete, status |
+| `docs` | **Documents** — versioned docs & collections | create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs |
+| `admin` | **Bulk ops**, analytics | bulk_delete, bulk_supersede, tag, stats, trends, quality, export, ... |
+| `check_system_health` | **Health** check of all subsystems | (no params) |
 
 ## Credential Management
 
 Engram provides encrypted credential storage via AES-256-GCM vault. Credentials are stored per-project or globally, encrypted at rest, and never appear in search results or context injection.
 
-| Tool | Purpose |
-|------|---------|
-| `store_credential` | Encrypt and store an API key, password, or token |
-| `get_credential` | Retrieve and decrypt a credential by name |
-| `list_credentials` | List credential names and metadata (no values) |
-| `delete_credential` | Delete a credential by name (scope-aware) |
-| `vault_status` | Check encryption status, key source, fingerprint, credential count |
-
 ```
 Use: "Store my OpenAI API key"
-Tool: store_credential(name="openai_api_key", value="sk-...", scope="global")
+Tool: vault(action="store", name="openai_api_key", value="sk-...", scope="global")
 
 Use: "Get my OpenAI key"
-Tool: get_credential(name="openai_api_key")
+Tool: vault(action="get", name="openai_api_key")
 
 Use: "Check vault status"
-Tool: vault_status()
+Tool: vault(action="status")
 ```
 
-**Key source priority:** `ENGRAM_ENCRYPTION_KEY` env var > `ENGRAM_ENCRYPTION_KEY_FILE` > auto-generated `vault.key`. Auto-generated keys are saved to `DataDir()/vault.key` — back up this file to avoid losing access to stored credentials.
+**Key source priority:** `ENGRAM_ENCRYPTION_KEY` env var > `ENGRAM_ENCRYPTION_KEY_FILE` > auto-generated `vault.key`.
 
-## Top 11 Tools (90% of Value)
+## Recall Tool
 
-### 1. `store_memory` — Explicitly remember something
-
-Create a memory on demand — decisions, patterns, preferences, insights. Supports hierarchical tags, scope control, and automatic dedup.
-
-```
-Use: "Remember that we chose Redis over Memcached for caching"
-Tool: store_memory(content="Chose Redis over Memcached for caching layer due to persistence and pub/sub support", title="Redis caching decision", type="decision", tags=["caching", "infrastructure"])
-```
-
-### 2. `recall_memory` — Retrieve stored knowledge
-
-Semantic search across all memories with flexible output formats.
+The `recall` tool searches memories using SQL filtering. The `search` action (default) filters by project and optionally applies a substring match on content.
 
 ```
 Use: "What do we know about our caching choices?"
-Tool: recall_memory(query="caching strategy decisions", format="text")
+Tool: recall(query="caching strategy", project="my-project")
+
+Use: "What authentication decisions were made?"
+Tool: recall(query="authentication decisions", project="my-project", limit=10)
 ```
 
-### 3. `search` — Hybrid semantic + full-text search
+**Note:** `find_by_file` (the legacy file-scoped lookup) was removed in v5. Use `recall(query="file:path/to/file")` to find file-related memories by including the file path in your query.
 
-The primary retrieval tool. Combines vector similarity, full-text search, and BM25 scoring.
+## Store Tool
 
-```
-Use: "What do we know about authentication in this project?"
-Tool: search(query="authentication implementation decisions")
-```
-
-### 4. `decisions` — Find architecture and design decisions
-
-Filters for decision-type observations. Use before making architectural choices.
+The `store` tool creates and manages memories.
 
 ```
-Use: "What was decided about the caching strategy?"
-Tool: decisions(query="caching strategy")
+Use: "Remember that we chose Redis over Memcached for caching"
+Tool: store(content="Chose Redis over Memcached for caching layer due to persistence and pub/sub support", title="Redis caching decision", type="decision", tags="caching,infrastructure")
+
+Use: "Edit a memory"
+Tool: store(action="edit", id=42, content="Updated content", narrative="Why this changed")
+
+Use: "Import from file"
+Tool: store(action="import", path="/path/to/observations.json")
 ```
 
-### 5. `timeline` — Browse observations anchored in time
-
-Navigate observations around a specific point or filter by project, type, and concepts.
-
-```
-Use: "What happened recently in this project?"
-Tool: timeline(query="recent changes", project="my-project")
-```
-
-### 6. `find_by_file` — Observations related to a specific file
-
-Before modifying a file, check what's known about it.
-
-```
-Use: "What's been noted about server.go?"
-Tool: find_by_file(files="internal/mcp/server.go")
-```
-
-### 7. `find_by_concept` — Search by concept tags
-
-Observations are auto-tagged with concepts. Search by tag for focused results.
-
-```
-Use: "Everything related to 'vector-search'"
-Tool: find_by_concept(concepts="vector-search")
-```
-
-### 8. `how_it_works` — System understanding queries
-
-Retrieves explanatory observations about how systems work.
-
-```
-Use: "How does the consolidation scheduler work?"
-Tool: how_it_works(query="consolidation scheduler")
-```
-
-### 9. `get_recent_context` — Latest project observations
-
-Quick dump of the most recent observations for a project.
-
-```
-Use: "Catch me up on what happened recently"
-Tool: get_recent_context(project="my-project", limit=20)
-```
-
-### 10. `get_patterns` — Detected recurring patterns
-
-Surfaces patterns the system has identified across observations.
-
-```
-Use: "Are there recurring issues or patterns?"
-Tool: get_patterns(project="my-project")
-```
-
-### 11. `search_sessions` — Full-text search across session logs
-
-Search through indexed Claude Code session transcripts.
-
-```
-Use: "When did we discuss the migration plan?"
-Tool: search_sessions(query="migration plan", limit=5)
-```
-
-## Workflow by Phase
-
-### Starting Work
-
-1. Context is auto-injected by SessionStart hook
-2. If you need more: `recall_memory`, `search`, or `get_recent_context`
-3. Before architectural decisions: `decisions` to check prior choices
-4. To explicitly store knowledge: `store_memory` with title, tags, and scope
-
-### During Active Coding
-
-- Before modifying unfamiliar code: `find_by_file` + `how_it_works`
-- When encountering a concept: `find_by_concept`
-- When stuck: `search` with different query angles
-
-### Maintaining Memory Quality
-
-Use these periodically or when memory feels noisy:
-
-| Tool | Purpose |
-|------|---------|
-| `suggest_consolidations` | Find observations that should be merged |
-| `merge_observations` | Combine duplicates into one |
-| `bulk_mark_superseded` | Mark outdated observations |
-| `get_data_quality_report` | Overall quality metrics |
-| `trigger_maintenance` | Run cleanup tasks |
-| `run_consolidation` | Trigger full consolidation cycle (decay + associations) |
-
-### Analytics (When Needed)
-
-| Tool | Purpose |
-|------|---------|
-| `get_memory_stats` | System overview: counts, storage, health |
-| `get_temporal_trends` | Activity patterns over time |
-| `analyze_observation_importance` | Which observations matter most |
-| `check_system_health` | Is the system performing well |
-
-## Other Tools (Quick Reference)
-
-These tools cover specialized use cases beyond the top 10:
-
-| Tool | Purpose |
-|------|---------|
-| `changes` | Find code modification observations |
-| `find_by_type` | Filter by observation type (decision, bugfix, feature, etc.) |
-| `find_similar_observations` | Pure vector similarity search |
-| `get_context_timeline` | Context organized by time periods |
-| `get_timeline_by_query` | Query-filtered timeline view |
-| `get_observation` | Fetch a single observation by ID |
-| `edit_observation` | Modify observation fields |
-| `tag_observation` | Add/remove concept tags |
-| `get_observations_by_tag` | List observations with a specific tag |
-| `get_observation_quality` | Quality score for one observation |
-| `get_observation_scoring_breakdown` | Debug scoring formula |
-| `batch_tag_by_pattern` | Auto-tag observations matching a pattern |
-| `bulk_delete_observations` | Batch delete |
-| `bulk_boost_observations` | Boost importance scores in bulk |
-| `explain_search_ranking` | Debug why search ranked results a certain way |
-| `analyze_search_patterns` | Search usage analytics |
-| `export_observations` | Export observations as JSON |
-| `get_maintenance_stats` | Maintenance cycle statistics |
-| `list_sessions` | List indexed sessions with filtering |
-
-## Engram vs Claude Code File Memory
-
-Claude Code has a built-in file-based memory system (`~/.claude/projects/.../memory/`). Engram is different:
-
-| | Engram (`store_memory`) | Claude Code (file memory) |
-|---|---|---|
-| **Storage** | PostgreSQL + pgvector (server) | Markdown files (local) |
-| **Search** | Semantic + full-text + BM25 hybrid | Loaded into context at session start |
-| **Cross-project** | Yes — global scope observations visible everywhere | No — per-project only |
-| **Cross-machine** | Yes — shared server | No — local files |
-| **Best for** | Decisions, patterns, insights, anything you'd want to find via search | User preferences, project config, behavioral instructions |
-
-**Rule of thumb:** If you'd search for it later → `store_memory`. If it's a static instruction → file memory.
+**Types:** decision, bugfix, feature, refactor, discovery, change, guidance, credential, entity, wiki, pitfall, operational, timeline.
 
 ## Issues — Cross-Project Agent Coordination
 
@@ -261,29 +115,62 @@ The `issues` tool tracks bugs, feature requests, and tasks between agents across
 | Action | Usage |
 |--------|-------|
 | **Create** | `issues(action="create", title="...", body="...", priority="high", target_project="other-project")` |
-| **List** | `issues(action="list", project="<your-project>", status="open,acknowledged,reopened")` for active target work, or `issues(action="list", target_project="...", status="open,acknowledged,reopened")` for another project |
+| **List** | `issues(action="list", project="<your-project>", status="open,acknowledged,reopened")` |
 | **Comment** | `issues(action="comment", id=N, body="...")` |
 | **Resolve** | `issues(action="update", id=N, status="resolved", body="Fixed in commit abc123")` |
 | **Reopen** | `issues(action="reopen", id=N, body="Still broken after fix")` |
 
-Issues are automatically injected into sessions for agents working on the target project.
-Lifecycle: open → acknowledged (auto on injection) → resolved (explicit) → closed, with reopened returning the issue to active work.
-For the TARGET project, `acknowledged` and `reopened` are active backlog states — this is your team's inbox, not a done state.
-For the SOURCE project, `resolved` issues are a follow-up inbox — you must read the other team's report, verify the result, and then close or reopen with evidence.
-
 **When to use issues vs store:**
 - Bug in the CURRENT project → `store(type="discovery")` — it's knowledge about a fix
 - Bug/task for ANOTHER project → `issues(action="create")` — it's an actionable work item
-- Feature request for another team → `issues(action="create", labels=["feature"])` — not store
+
+## Compatibility Tools (Legacy Aliases)
+
+31 legacy aliases remain registered for backward compatibility. Each maps to a primary tool action. Prefer the 8 primary tools for new code.
+
+**Memory:** `store_memory`, `recall_memory`, `rate_memory`, `suppress_memory`, `find_by_file` (tombstone — returns error), `find_similar_observations`, `get_memory_stats`, `set_session_outcome`, `import_instincts`, `backfill_status`
+
+**Sessions:** `search_sessions`, `list_sessions`
+
+**Credentials:** `store_credential`, `get_credential`, `list_credentials`, `delete_credential`, `vault_status`
+
+**Documents:** `list_collections`, `list_documents`, `get_document`, `remove_document`, `ingest_document`, `search_collection`
+
+**Versioned Documents:** `doc_create`, `doc_read`, `doc_list`, `doc_history`, `doc_comment`
+
+**Rules:** `store_rule`, `list_rules` (conditional)
+
+**System:** `check_system_health` (also a primary tool)
+
+## Workflow Patterns
+
+**Starting work:** Context is auto-injected by hooks. Use `recall(query="...")` for deeper search.
+**Before modifying code:** `recall(query="file:path/to/file")` to find file-related memories.
+**After completing a feature:** `store(content="...", title="...", type="decision")` — capture what was built and why.
+**After fixing a bug:** `store(content="...", title="...", type="discovery")` — capture root cause and fix.
+**After research:** `store(content="...", title="...", type="discovery")` — capture findings.
+**Found a bug in another project:** `issues(action="create", title="...", target_project="...", priority="high")` — NOT store.
+**Secrets:** `vault(action="store")` for API keys. Never store secrets in observations.
+
+## Engram vs Claude Code File Memory
+
+| | Engram (`store`) | Claude Code (file memory) |
+|---|---|---|
+| **Storage** | PostgreSQL (server) | Markdown files (local) |
+| **Search** | SQL + substring filter | Loaded into context at session start |
+| **Cross-project** | Yes — global scope visible everywhere | No — per-project only |
+| **Cross-machine** | Yes — shared server | No — local files |
+| **Best for** | Decisions, patterns, insights, anything searchable | User preferences, project config, behavioral instructions |
+
+**Rule of thumb:** If you'd search for it later → `store`. If it's a static instruction → file memory.
 
 ## Common Mistakes
 
 | Mistake | Fix |
 |---------|-----|
-| Checking ENGRAM_URL / ENGRAM_AUTH_ADMIN_TOKEN env vars | Do NOT check env vars. Call `check_system_health()` — if it works, Engram is connected regardless of config method |
-| Not using `store_memory` for important insights | Use `store_memory` for decisions, patterns, and preferences you want to persist. Hooks capture automatically, but explicit memories are higher quality |
-| Ignoring injected context | Read `<engram-context>` (session start) and `<relevant-memory>` (per prompt) blocks — they contain prior knowledge |
-| Not searching before re-exploring code | `search` first — someone (maybe past you) already documented it |
-| Never running maintenance | Periodically use `trigger_maintenance` or `run_consolidation` |
-| Using only `search` for everything | Use specialized tools: `decisions` for architecture, `find_by_file` for code, `timeline` for history |
-| Using `store` for cross-project bugs/tasks | Use `issues(action="create")` — it has lifecycle, priority, comments, and auto-injection into target sessions |
+| Checking ENGRAM_URL / env vars | Call `check_system_health()` instead |
+| Not storing important insights | Use `store` for decisions, patterns, and preferences |
+| Ignoring injected context | Read `<engram-context>` and `<relevant-memory>` blocks |
+| Not searching before re-exploring | `recall(query="...")` first |
+| Using `recall(action="by_file", ...)` | That action was removed in v5; use `recall(query="file:...")` |
+| Using `store` for cross-project bugs | Use `issues(action="create")` — it has lifecycle and auto-injection |

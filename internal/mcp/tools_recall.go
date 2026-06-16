@@ -40,9 +40,6 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 		// Dropped in v5 (US9): preset (decisions/changes/how_it_works) used search.Manager.
 		return "", fmt.Errorf("recall: action %q not supported in v5 (search.Manager removed — use recall(action=\"search\") instead)", action)
 
-	case "by_file":
-		return s.callTool(ctx, "find_by_file", args)
-
 	case "by_concept":
 		// Dropped in v5 (US9): concept index backed by search.Manager.
 		return "", fmt.Errorf("recall: action %q not supported in v5 (concept search removed — use recall(action=\"search\") instead)", action)
@@ -113,7 +110,7 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 
 	default:
 		return "", fmt.Errorf(
-			"unknown recall action: %q (valid: search, by_file)",
+			"unknown recall action: %q (valid: search)",
 			action,
 		)
 	}
@@ -184,7 +181,7 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	if project == "" {
 		// No project scope: return a helpful message rather than silently
 		// returning zero rows (the project param is required by List).
-		return `{"memories":[],"count":0,"note":"project parameter required for memory search in v5"}`, nil
+		return `{"memories":[],"count":0,"note":"project parameter is required for memory search"}`, nil
 	}
 
 	query = strings.TrimSpace(query)

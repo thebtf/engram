@@ -16,7 +16,7 @@ that routes to the appropriate operation.
 
 | Tool | Actions | Description |
 |------|---------|-------------|
-| `recall` | search, by_file | Search and retrieve memories |
+| `recall` | search | Search and retrieve memories |
 | `store` | create, edit, merge, import | Store, modify, or merge memories |
 | `feedback` | rate, suppress, outcome | Rate memories, suppress, record session outcomes |
 | `vault` | store, get, list, delete, status | Manage encrypted credentials |

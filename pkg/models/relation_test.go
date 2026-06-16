@@ -94,30 +94,6 @@ func TestAllRelationTypes_Completeness(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NewObservationRelation constructor
-// ---------------------------------------------------------------------------
-
-func TestNewObservationRelation_Fields(t *testing.T) {
-	t.Parallel()
-	rel := NewObservationRelation(3, 7, RelationFixes, 0.85, DetectionSourceFileOverlap, "bugfix on feature file")
-
-	assert.Equal(t, int64(3), rel.SourceID)
-	assert.Equal(t, int64(7), rel.TargetID)
-	assert.Equal(t, RelationFixes, rel.RelationType)
-	assert.InDelta(t, 0.85, rel.Confidence, 0.001)
-	assert.Equal(t, DetectionSourceFileOverlap, rel.DetectionSource)
-	assert.Equal(t, "bugfix on feature file", rel.Reason)
-	assert.NotEmpty(t, rel.CreatedAt)
-	assert.Greater(t, rel.CreatedAtEpoch, int64(0))
-}
-
-func TestNewObservationRelation_ZeroConfidence(t *testing.T) {
-	t.Parallel()
-	rel := NewObservationRelation(1, 2, RelationRelatesTo, 0.0, DetectionSourceConceptOverlap, "")
-	assert.Equal(t, float64(0), rel.Confidence)
-}
-
-// ---------------------------------------------------------------------------
 // DetectFileOverlapRelation
 // ---------------------------------------------------------------------------
 

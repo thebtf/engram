@@ -44,35 +44,6 @@ func TestResolutionTypeValues(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NewObservationConflict constructor
-// ---------------------------------------------------------------------------
-
-func TestNewObservationConflict_PopulatesFields(t *testing.T) {
-	t.Parallel()
-	c := NewObservationConflict(10, 5, ConflictContradicts, ResolutionPreferNewer, "diverged")
-
-	assert.Equal(t, int64(10), c.NewerObsID)
-	assert.Equal(t, int64(5), c.OlderObsID)
-	assert.Equal(t, ConflictContradicts, c.ConflictType)
-	assert.Equal(t, ResolutionPreferNewer, c.Resolution)
-	assert.Equal(t, "diverged", c.Reason)
-	assert.False(t, c.Resolved)
-	assert.NotEmpty(t, c.DetectedAt)
-	assert.Greater(t, c.DetectedAtEpoch, int64(0))
-}
-
-func TestNewObservationConflict_SupersededVariant(t *testing.T) {
-	t.Parallel()
-	c := NewObservationConflict(7, 3, ConflictSuperseded, ResolutionPreferOlder, "rollback required")
-
-	assert.Equal(t, int64(7), c.NewerObsID)
-	assert.Equal(t, int64(3), c.OlderObsID)
-	assert.Equal(t, ConflictSuperseded, c.ConflictType)
-	assert.Equal(t, ResolutionPreferOlder, c.Resolution)
-	assert.False(t, c.Resolved)
-}
-
-// ---------------------------------------------------------------------------
 // CorrectionPatterns — TG5 dependency: all 14 patterns must be present & compile
 // ---------------------------------------------------------------------------
 
@@ -416,29 +387,3 @@ func TestDetectConflictsWithExisting_GlobalScopeCrossProject(t *testing.T) {
 	assert.GreaterOrEqual(t, len(results), 1, "global-scope observations can conflict across projects")
 }
 
-// ---------------------------------------------------------------------------
-// ObservationConflict struct field access
-// ---------------------------------------------------------------------------
-
-func TestObservationConflict_FieldsRoundTrip(t *testing.T) {
-	t.Parallel()
-	oc := &ObservationConflict{
-		ID:              99,
-		NewerObsID:      50,
-		OlderObsID:      10,
-		ConflictType:    ConflictOutdatedPattern,
-		Resolution:      ResolutionManual,
-		Reason:          "manual review required",
-		DetectedAt:      "2026-01-01T00:00:00Z",
-		DetectedAtEpoch: 1767225600000,
-		Resolved:        false,
-	}
-
-	assert.Equal(t, int64(99), oc.ID)
-	assert.Equal(t, int64(50), oc.NewerObsID)
-	assert.Equal(t, int64(10), oc.OlderObsID)
-	assert.Equal(t, ConflictOutdatedPattern, oc.ConflictType)
-	assert.Equal(t, ResolutionManual, oc.Resolution)
-	assert.Equal(t, "manual review required", oc.Reason)
-	assert.False(t, oc.Resolved)
-}
