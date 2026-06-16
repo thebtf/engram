@@ -1366,6 +1366,356 @@ func (x *PingResponse) GetStatus() string {
 	return ""
 }
 
+// CodeChunkMeta carries the lightweight metadata for a single code chunk.
+// chunk_type is a free-form string; the only value produced by CR-002a is
+// "line-block". AST-derived types are added in CR-002b.
+type CodeChunkMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChunkId       string                 `protobuf:"bytes,1,opt,name=chunk_id,json=chunkId,proto3" json:"chunk_id,omitempty"`
+	FilePath      string                 `protobuf:"bytes,2,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
+	ByteStart     int32                  `protobuf:"varint,3,opt,name=byte_start,json=byteStart,proto3" json:"byte_start,omitempty"`
+	ByteEnd       int32                  `protobuf:"varint,4,opt,name=byte_end,json=byteEnd,proto3" json:"byte_end,omitempty"`
+	Language      string                 `protobuf:"bytes,5,opt,name=language,proto3" json:"language,omitempty"`
+	ChunkType     string                 `protobuf:"bytes,6,opt,name=chunk_type,json=chunkType,proto3" json:"chunk_type,omitempty"`
+	ContentSha256 string                 `protobuf:"bytes,7,opt,name=content_sha256,json=contentSha256,proto3" json:"content_sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CodeChunkMeta) Reset() {
+	*x = CodeChunkMeta{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodeChunkMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodeChunkMeta) ProtoMessage() {}
+
+func (x *CodeChunkMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodeChunkMeta.ProtoReflect.Descriptor instead.
+func (*CodeChunkMeta) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *CodeChunkMeta) GetChunkId() string {
+	if x != nil {
+		return x.ChunkId
+	}
+	return ""
+}
+
+func (x *CodeChunkMeta) GetFilePath() string {
+	if x != nil {
+		return x.FilePath
+	}
+	return ""
+}
+
+func (x *CodeChunkMeta) GetByteStart() int32 {
+	if x != nil {
+		return x.ByteStart
+	}
+	return 0
+}
+
+func (x *CodeChunkMeta) GetByteEnd() int32 {
+	if x != nil {
+		return x.ByteEnd
+	}
+	return 0
+}
+
+func (x *CodeChunkMeta) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
+}
+
+func (x *CodeChunkMeta) GetChunkType() string {
+	if x != nil {
+		return x.ChunkType
+	}
+	return ""
+}
+
+func (x *CodeChunkMeta) GetContentSha256() string {
+	if x != nil {
+		return x.ContentSha256
+	}
+	return ""
+}
+
+// CodeIndexNegotiateRequest carries the client's full chunk manifest for a
+// project. The server diffs this against its stored identity keys and returns
+// the delta (need_chunks / stale_chunks).
+type CodeIndexNegotiateRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId      string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	IndexSessionId string                 `protobuf:"bytes,2,opt,name=index_session_id,json=indexSessionId,proto3" json:"index_session_id,omitempty"`
+	Manifest       []*CodeChunkMeta       `protobuf:"bytes,3,rep,name=manifest,proto3" json:"manifest,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CodeIndexNegotiateRequest) Reset() {
+	*x = CodeIndexNegotiateRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodeIndexNegotiateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodeIndexNegotiateRequest) ProtoMessage() {}
+
+func (x *CodeIndexNegotiateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodeIndexNegotiateRequest.ProtoReflect.Descriptor instead.
+func (*CodeIndexNegotiateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *CodeIndexNegotiateRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *CodeIndexNegotiateRequest) GetIndexSessionId() string {
+	if x != nil {
+		return x.IndexSessionId
+	}
+	return ""
+}
+
+func (x *CodeIndexNegotiateRequest) GetManifest() []*CodeChunkMeta {
+	if x != nil {
+		return x.Manifest
+	}
+	return nil
+}
+
+// CodeIndexNegotiateResponse tells the client which chunks to upload and
+// which server-side chunks are now stale.
+//
+//	need_chunks  — chunk_ids the server does not have (must be uploaded).
+//	stale_chunks — chunk_ids present on the server but absent from the
+//	               client manifest (will be swept at CodeIndexUpload EOF).
+type CodeIndexNegotiateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NeedChunks    []string               `protobuf:"bytes,1,rep,name=need_chunks,json=needChunks,proto3" json:"need_chunks,omitempty"`
+	StaleChunks   []string               `protobuf:"bytes,2,rep,name=stale_chunks,json=staleChunks,proto3" json:"stale_chunks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CodeIndexNegotiateResponse) Reset() {
+	*x = CodeIndexNegotiateResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodeIndexNegotiateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodeIndexNegotiateResponse) ProtoMessage() {}
+
+func (x *CodeIndexNegotiateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodeIndexNegotiateResponse.ProtoReflect.Descriptor instead.
+func (*CodeIndexNegotiateResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *CodeIndexNegotiateResponse) GetNeedChunks() []string {
+	if x != nil {
+		return x.NeedChunks
+	}
+	return nil
+}
+
+func (x *CodeIndexNegotiateResponse) GetStaleChunks() []string {
+	if x != nil {
+		return x.StaleChunks
+	}
+	return nil
+}
+
+// CodeChunkUpload carries a single chunk payload in the CodeIndexUpload stream.
+type CodeChunkUpload struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId      string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	IndexSessionId string                 `protobuf:"bytes,2,opt,name=index_session_id,json=indexSessionId,proto3" json:"index_session_id,omitempty"`
+	Meta           *CodeChunkMeta         `protobuf:"bytes,3,opt,name=meta,proto3" json:"meta,omitempty"`
+	Content        []byte                 `protobuf:"bytes,4,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CodeChunkUpload) Reset() {
+	*x = CodeChunkUpload{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodeChunkUpload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodeChunkUpload) ProtoMessage() {}
+
+func (x *CodeChunkUpload) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodeChunkUpload.ProtoReflect.Descriptor instead.
+func (*CodeChunkUpload) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *CodeChunkUpload) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *CodeChunkUpload) GetIndexSessionId() string {
+	if x != nil {
+		return x.IndexSessionId
+	}
+	return ""
+}
+
+func (x *CodeChunkUpload) GetMeta() *CodeChunkMeta {
+	if x != nil {
+		return x.Meta
+	}
+	return nil
+}
+
+func (x *CodeChunkUpload) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+// CodeIndexUploadReceipt is returned when the CodeIndexUpload stream closes.
+//
+//	embedded — number of chunks successfully upserted.
+//	deleted  — number of stale rows swept after stream close.
+//	errors   — per-chunk error strings (non-fatal; successful chunks still count).
+type CodeIndexUploadReceipt struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Embedded      int32                  `protobuf:"varint,1,opt,name=embedded,proto3" json:"embedded,omitempty"`
+	Deleted       int32                  `protobuf:"varint,2,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	Errors        []string               `protobuf:"bytes,3,rep,name=errors,proto3" json:"errors,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CodeIndexUploadReceipt) Reset() {
+	*x = CodeIndexUploadReceipt{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodeIndexUploadReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodeIndexUploadReceipt) ProtoMessage() {}
+
+func (x *CodeIndexUploadReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodeIndexUploadReceipt.ProtoReflect.Descriptor instead.
+func (*CodeIndexUploadReceipt) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *CodeIndexUploadReceipt) GetEmbedded() int32 {
+	if x != nil {
+		return x.Embedded
+	}
+	return 0
+}
+
+func (x *CodeIndexUploadReceipt) GetDeleted() int32 {
+	if x != nil {
+		return x.Deleted
+	}
+	return 0
+}
+
+func (x *CodeIndexUploadReceipt) GetErrors() []string {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
 var File_proto_engram_v1_engram_proto protoreflect.FileDescriptor
 
 const file_proto_engram_v1_engram_proto_rawDesc = "" +
@@ -1481,12 +1831,41 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x11input_schema_json\x18\x03 \x01(\fR\x0finputSchemaJson\"\r\n" +
 	"\vPingRequest\"&\n" +
 	"\fPingResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status*\x96\x01\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\"\xe3\x01\n" +
+	"\rCodeChunkMeta\x12\x19\n" +
+	"\bchunk_id\x18\x01 \x01(\tR\achunkId\x12\x1b\n" +
+	"\tfile_path\x18\x02 \x01(\tR\bfilePath\x12\x1d\n" +
+	"\n" +
+	"byte_start\x18\x03 \x01(\x05R\tbyteStart\x12\x19\n" +
+	"\bbyte_end\x18\x04 \x01(\x05R\abyteEnd\x12\x1a\n" +
+	"\blanguage\x18\x05 \x01(\tR\blanguage\x12\x1d\n" +
+	"\n" +
+	"chunk_type\x18\x06 \x01(\tR\tchunkType\x12%\n" +
+	"\x0econtent_sha256\x18\a \x01(\tR\rcontentSha256\"\x9a\x01\n" +
+	"\x19CodeIndexNegotiateRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12(\n" +
+	"\x10index_session_id\x18\x02 \x01(\tR\x0eindexSessionId\x124\n" +
+	"\bmanifest\x18\x03 \x03(\v2\x18.engram.v1.CodeChunkMetaR\bmanifest\"`\n" +
+	"\x1aCodeIndexNegotiateResponse\x12\x1f\n" +
+	"\vneed_chunks\x18\x01 \x03(\tR\n" +
+	"needChunks\x12!\n" +
+	"\fstale_chunks\x18\x02 \x03(\tR\vstaleChunks\"\xa2\x01\n" +
+	"\x0fCodeChunkUpload\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12(\n" +
+	"\x10index_session_id\x18\x02 \x01(\tR\x0eindexSessionId\x12,\n" +
+	"\x04meta\x18\x03 \x01(\v2\x18.engram.v1.CodeChunkMetaR\x04meta\x12\x18\n" +
+	"\acontent\x18\x04 \x01(\fR\acontent\"f\n" +
+	"\x16CodeIndexUploadReceipt\x12\x1a\n" +
+	"\bembedded\x18\x01 \x01(\x05R\bembedded\x12\x18\n" +
+	"\adeleted\x18\x02 \x01(\x05R\adeleted\x12\x16\n" +
+	"\x06errors\x18\x03 \x03(\tR\x06errors*\x96\x01\n" +
 	"\x10ProjectEventType\x12\"\n" +
 	"\x1ePROJECT_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aPROJECT_EVENT_TYPE_REMOVED\x10\x01\x12\x1e\n" +
 	"\x1aPROJECT_EVENT_TYPE_CREATED\x10\x02\x12\x1e\n" +
-	"\x1aPROJECT_EVENT_TYPE_RENAMED\x10\x032\xce\x04\n" +
+	"\x1aPROJECT_EVENT_TYPE_RENAMED\x10\x032\x85\x06\n" +
 	"\rEngramService\x12C\n" +
 	"\bCallTool\x12\x1a.engram.v1.CallToolRequest\x1a\x1b.engram.v1.CallToolResponse\x12I\n" +
 	"\n" +
@@ -1495,7 +1874,9 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x10SyncProjectState\x12\".engram.v1.SyncProjectStateRequest\x1a#.engram.v1.SyncProjectStateResponse\x12K\n" +
 	"\rProjectEvents\x12\x1f.engram.v1.ProjectEventsRequest\x1a\x17.engram.v1.ProjectEvent0\x01\x12m\n" +
 	"\x16GetSessionStartContext\x12(.engram.v1.GetSessionStartContextRequest\x1a).engram.v1.GetSessionStartContextResponse\x12[\n" +
-	"\x10NegotiateVersion\x12\".engram.v1.NegotiateVersionRequest\x1a#.engram.v1.NegotiateVersionResponseB3Z1github.com/thebtf/engram/proto/engram/v1;engramv1b\x06proto3"
+	"\x10NegotiateVersion\x12\".engram.v1.NegotiateVersionRequest\x1a#.engram.v1.NegotiateVersionResponse\x12a\n" +
+	"\x12CodeIndexNegotiate\x12$.engram.v1.CodeIndexNegotiateRequest\x1a%.engram.v1.CodeIndexNegotiateResponse\x12R\n" +
+	"\x0fCodeIndexUpload\x12\x1a.engram.v1.CodeChunkUpload\x1a!.engram.v1.CodeIndexUploadReceipt(\x01B3Z1github.com/thebtf/engram/proto/engram/v1;engramv1b\x06proto3"
 
 var (
 	file_proto_engram_v1_engram_proto_rawDescOnce sync.Once
@@ -1510,7 +1891,7 @@ func file_proto_engram_v1_engram_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(ProjectEventType)(0),                  // 0: engram.v1.ProjectEventType
 	(*SyncProjectStateRequest)(nil),        // 1: engram.v1.SyncProjectStateRequest
@@ -1531,46 +1912,57 @@ var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(*ToolDefinition)(nil),                 // 16: engram.v1.ToolDefinition
 	(*PingRequest)(nil),                    // 17: engram.v1.PingRequest
 	(*PingResponse)(nil),                   // 18: engram.v1.PingResponse
-	nil,                                    // 19: engram.v1.ProjectEvent.MetadataEntry
-	(*timestamppb.Timestamp)(nil),          // 20: google.protobuf.Timestamp
+	(*CodeChunkMeta)(nil),                  // 19: engram.v1.CodeChunkMeta
+	(*CodeIndexNegotiateRequest)(nil),      // 20: engram.v1.CodeIndexNegotiateRequest
+	(*CodeIndexNegotiateResponse)(nil),     // 21: engram.v1.CodeIndexNegotiateResponse
+	(*CodeChunkUpload)(nil),                // 22: engram.v1.CodeChunkUpload
+	(*CodeIndexUploadReceipt)(nil),         // 23: engram.v1.CodeIndexUploadReceipt
+	nil,                                    // 24: engram.v1.ProjectEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil),          // 25: google.protobuf.Timestamp
 }
 var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	0,  // 0: engram.v1.ProjectEvent.event_type:type_name -> engram.v1.ProjectEventType
-	19, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
+	24, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
 	7,  // 2: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
 	8,  // 3: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
 	9,  // 4: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
-	20, // 5: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
-	20, // 6: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
-	20, // 7: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
-	20, // 8: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
-	20, // 9: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
-	20, // 10: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
-	20, // 11: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
-	20, // 12: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
-	20, // 13: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
-	20, // 14: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
-	20, // 15: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
+	25, // 5: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
+	25, // 6: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
+	25, // 7: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
+	25, // 8: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
+	25, // 9: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
+	25, // 10: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
+	25, // 11: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
+	25, // 12: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
+	25, // 13: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
+	25, // 14: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
+	25, // 15: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
 	16, // 16: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
-	12, // 17: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
-	14, // 18: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
-	17, // 19: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
-	1,  // 20: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
-	3,  // 21: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
-	5,  // 22: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
-	10, // 23: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
-	13, // 24: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
-	15, // 25: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
-	18, // 26: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
-	2,  // 27: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
-	4,  // 28: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
-	6,  // 29: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
-	11, // 30: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
-	24, // [24:31] is the sub-list for method output_type
-	17, // [17:24] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	19, // 17: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
+	19, // 18: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
+	12, // 19: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
+	14, // 20: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
+	17, // 21: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
+	1,  // 22: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
+	3,  // 23: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
+	5,  // 24: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
+	10, // 25: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
+	20, // 26: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
+	22, // 27: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
+	13, // 28: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
+	15, // 29: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
+	18, // 30: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
+	2,  // 31: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
+	4,  // 32: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
+	6,  // 33: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
+	11, // 34: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
+	21, // 35: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
+	23, // 36: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
+	28, // [28:37] is the sub-list for method output_type
+	19, // [19:28] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_proto_engram_v1_engram_proto_init() }
@@ -1584,7 +1976,7 @@ func file_proto_engram_v1_engram_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_engram_v1_engram_proto_rawDesc), len(file_proto_engram_v1_engram_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   19,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -31,21 +31,21 @@ import (
 // CLEAN-ROOM: no AGPL source referenced during implementation.
 // ADR: .agent/specs/engram-absorption/adr/ADR-001-ci-a-topology.md §4.
 type CodeChunk struct {
-	CreatedAt       time.Time        `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
-	UpdatedAt       time.Time        `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
-	ProjectID       string           `gorm:"column:project_id;type:text;not null" json:"project_id"`
-	FilePath        string           `gorm:"column:file_path;type:text;not null" json:"file_path"`
-	Language        string           `gorm:"type:text;not null" json:"language"`
-	ChunkType       string           `gorm:"column:chunk_type;type:text;not null" json:"chunk_type"`
-	Content         string           `gorm:"type:text;not null" json:"content"`
-	ContentSHA256   string           `gorm:"column:content_sha256;type:text;not null" json:"content_sha256"`
-	IndexSessionID  string           `gorm:"column:index_session_id;type:text;not null" json:"index_session_id"`
+	CreatedAt      time.Time `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
+	ProjectID      string    `gorm:"column:project_id;type:text;not null" json:"project_id"`
+	FilePath       string    `gorm:"column:file_path;type:text;not null" json:"file_path"`
+	Language       string    `gorm:"type:text;not null" json:"language"`
+	ChunkType      string    `gorm:"column:chunk_type;type:text;not null" json:"chunk_type"`
+	Content        string    `gorm:"type:text;not null" json:"content"`
+	ContentSHA256  string    `gorm:"column:content_sha256;type:text;not null" json:"content_sha256"`
+	IndexSessionID string    `gorm:"column:index_session_id;type:text;not null" json:"index_session_id"`
 	// ContentTsv is a GENERATED ALWAYS AS STORED column; never written by application code.
-	ContentTsv      string           `gorm:"column:content_tsv;->"  json:"-"`
-	Embedding       *pgvector.Vector `gorm:"type:vector(1536)" json:"embedding,omitempty"`
-	ID              int64            `gorm:"primaryKey;autoIncrement" json:"id"`
-	ByteStart       int              `gorm:"column:byte_start;not null" json:"byte_start"`
-	ByteEnd         int              `gorm:"column:byte_end;not null" json:"byte_end"`
+	ContentTsv string           `gorm:"column:content_tsv;->"  json:"-"`
+	Embedding  *pgvector.Vector `gorm:"type:vector(1536)" json:"embedding,omitempty"`
+	ID         int64            `gorm:"primaryKey;autoIncrement" json:"id"`
+	ByteStart  int              `gorm:"column:byte_start;not null" json:"byte_start"`
+	ByteEnd    int              `gorm:"column:byte_end;not null" json:"byte_end"`
 }
 
 // TableName returns the PostgreSQL table name for CodeChunk.
@@ -207,8 +207,124 @@ func (s *CodeChunkStore) CountByProject(ctx context.Context, projectID string) (
 	return count, nil
 }
 
-// StaleKey constructs the composite key string used by DeleteStaleForProject.
+// StaleKey constructs the composite key string used by DeleteStaleForProject,
+// ListIdentityKeysByProject, TouchSession, and DeleteBySessionMismatch.
 // Format: "filePath\x00byteStart\x00sha256" — matches the DB-side expression.
 func StaleKey(filePath string, byteStart int, contentSHA256 string) string {
 	return fmt.Sprintf("%s\x00%d\x00%s", filePath, byteStart, contentSHA256)
+}
+
+// ChunkIdentity carries the three fields that form the chunk's identity key.
+// Used by CodeIndexNegotiate (CR-003) to diff the server's stored chunks
+// against the client's manifest without loading content or embeddings.
+type ChunkIdentity struct {
+	FilePath      string
+	ByteStart     int
+	ContentSHA256 string
+}
+
+// ListIdentityKeysByProject returns the (file_path, byte_start, content_sha256)
+// triples for every chunk belonging to projectID. Content and embeddings are
+// intentionally excluded — this is the lightweight diff source for
+// CodeIndexNegotiate (CR-003).
+func (s *CodeChunkStore) ListIdentityKeysByProject(ctx context.Context, projectID string) ([]ChunkIdentity, error) {
+	if projectID == "" {
+		return nil, fmt.Errorf("code_chunk_store list_identity_keys: projectID must not be empty")
+	}
+	type row struct {
+		FilePath      string `gorm:"column:file_path"`
+		ByteStart     int    `gorm:"column:byte_start"`
+		ContentSHA256 string `gorm:"column:content_sha256"`
+	}
+	var rows []row
+	if err := s.db.WithContext(ctx).
+		Raw("SELECT file_path, byte_start, content_sha256 FROM code_chunks WHERE project_id = ?", projectID).
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("code_chunk_store list_identity_keys %q: %w", projectID, err)
+	}
+	out := make([]ChunkIdentity, len(rows))
+	for i, r := range rows {
+		out[i] = ChunkIdentity{
+			FilePath:      r.FilePath,
+			ByteStart:     r.ByteStart,
+			ContentSHA256: r.ContentSHA256,
+		}
+	}
+	return out, nil
+}
+
+// TouchSession sets index_session_id = sessionID and updated_at = now() for
+// every chunk in keepKeys (StaleKey format). This marks the chunks that the
+// client still has as belonging to the current index session so that
+// DeleteBySessionMismatch can sweep any rows left on an old session id.
+//
+// keepKeys must be formatted as "filePath\x00byteStart\x00sha256" using
+// StaleKey. Empty keepKeys is a no-op — returns (0, nil) safely.
+// Returns the number of rows updated.
+func (s *CodeChunkStore) TouchSession(ctx context.Context, projectID, sessionID string, keepKeys []string) (int64, error) {
+	if projectID == "" {
+		return 0, fmt.Errorf("code_chunk_store touch_session: projectID must not be empty")
+	}
+	if sessionID == "" {
+		return 0, fmt.Errorf("code_chunk_store touch_session: sessionID must not be empty")
+	}
+	if len(keepKeys) == 0 {
+		return 0, nil
+	}
+	result := s.db.WithContext(ctx).
+		Exec(`
+			UPDATE code_chunks
+			SET index_session_id = ?,
+			    updated_at       = now()
+			WHERE project_id = ?
+			  AND (file_path || chr(0) || byte_start::text || chr(0) || content_sha256)
+			      IN (SELECT unnest(?::text[]))
+		`, sessionID, projectID, pq.Array(keepKeys))
+	if result.Error != nil {
+		return 0, fmt.Errorf("code_chunk_store touch_session %q %q: %w", projectID, sessionID, result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// DeleteBySessionMismatch removes every chunk for projectID whose
+// index_session_id differs from sessionID. This is the stale-sweep step
+// called at CodeIndexUpload EOF: after the upload stream closes, any chunk
+// that was NOT uploaded in this session (i.e. still carries an old session id)
+// is no longer part of the current codebase and should be removed.
+//
+// SAFETY GUARD: before deleting, we count how many rows in project already
+// carry sessionID. If that count is 0 (nothing was marked or uploaded for
+// this session — e.g. a stray Upload call without a prior Negotiate), the
+// delete is skipped and (0, nil) is returned. This prevents a mis-routed or
+// un-negotiated upload from wiping a project's entire existing index.
+//
+// Returns the number of rows deleted.
+func (s *CodeChunkStore) DeleteBySessionMismatch(ctx context.Context, projectID, sessionID string) (int64, error) {
+	if projectID == "" {
+		return 0, fmt.Errorf("code_chunk_store delete_by_session_mismatch: projectID must not be empty")
+	}
+	if sessionID == "" {
+		return 0, fmt.Errorf("code_chunk_store delete_by_session_mismatch: sessionID must not be empty")
+	}
+
+	// Safety guard: count rows that DO match the session. If none exist, skip
+	// the delete — a zero-session delete would wipe the entire project index
+	// without any valid upload having occurred.
+	var sessionCount int64
+	if err := s.db.WithContext(ctx).
+		Raw("SELECT COUNT(*) FROM code_chunks WHERE project_id = ? AND index_session_id = ?", projectID, sessionID).
+		Scan(&sessionCount).Error; err != nil {
+		return 0, fmt.Errorf("code_chunk_store delete_by_session_mismatch count %q %q: %w", projectID, sessionID, err)
+	}
+	if sessionCount == 0 {
+		// Nothing was marked with this session; skip sweep to protect the existing index.
+		return 0, nil
+	}
+
+	result := s.db.WithContext(ctx).
+		Exec("DELETE FROM code_chunks WHERE project_id = ? AND index_session_id <> ?", projectID, sessionID)
+	if result.Error != nil {
+		return 0, fmt.Errorf("code_chunk_store delete_by_session_mismatch %q %q: %w", projectID, sessionID, result.Error)
+	}
+	return result.RowsAffected, nil
 }

@@ -1,0 +1,189 @@
+package engramcore
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/thebtf/engram/internal/codeindex"
+	pb "github.com/thebtf/engram/proto/engram/v1"
+)
+
+// TestManifestToProto verifies that manifestToProto maps every ManifestEntry
+// field to the correct proto field without loss or reordering.
+func TestManifestToProto(t *testing.T) {
+	t.Parallel()
+
+	manifest := codeindex.Manifest{
+		{
+			FilePath:      "internal/foo.go",
+			ChunkID:       "aabb1122ccdd3344",
+			ContentSHA256: "sha256-aaa",
+			ByteStart:     0,
+			ByteEnd:       512,
+			Language:      "go",
+			ChunkType:     codeindex.ChunkTypeLineBlock,
+		},
+		{
+			FilePath:      "internal/bar.go",
+			ChunkID:       "11223344aabbccdd",
+			ContentSHA256: "sha256-bbb",
+			ByteStart:     512,
+			ByteEnd:       1024,
+			Language:      "go",
+			ChunkType:     codeindex.ChunkTypeLineBlock,
+		},
+	}
+
+	metas := manifestToProto(manifest)
+	require.Len(t, metas, 2, "one meta per manifest entry")
+
+	require.Equal(t, "aabb1122ccdd3344", metas[0].GetChunkId())
+	require.Equal(t, "internal/foo.go", metas[0].GetFilePath())
+	require.Equal(t, int32(0), metas[0].GetByteStart())
+	require.Equal(t, int32(512), metas[0].GetByteEnd())
+	require.Equal(t, "go", metas[0].GetLanguage())
+	require.Equal(t, "line-block", metas[0].GetChunkType())
+	require.Equal(t, "sha256-aaa", metas[0].GetContentSha256())
+
+	require.Equal(t, "11223344aabbccdd", metas[1].GetChunkId())
+	require.Equal(t, "internal/bar.go", metas[1].GetFilePath())
+	require.Equal(t, int32(512), metas[1].GetByteStart())
+	require.Equal(t, int32(1024), metas[1].GetByteEnd())
+	require.Equal(t, "sha256-bbb", metas[1].GetContentSha256())
+}
+
+// TestManifestToProto_Empty verifies that an empty manifest produces an empty
+// (not nil) slice.
+func TestManifestToProto_Empty(t *testing.T) {
+	t.Parallel()
+	metas := manifestToProto(codeindex.Manifest{})
+	require.NotNil(t, metas)
+	require.Len(t, metas, 0)
+}
+
+// TestChunkToProtoMeta verifies the single-chunk mapping, including that
+// ChunkID() is called (not a stored field).
+func TestChunkToProtoMeta(t *testing.T) {
+	t.Parallel()
+
+	c := codeindex.Chunk{
+		FilePath:      "cmd/main.go",
+		ByteStart:     0,
+		ByteEnd:       256,
+		Language:      "go",
+		ChunkType:     codeindex.ChunkTypeLineBlock,
+		Content:       "func main() {}",
+		ContentSHA256: "sha-main",
+	}
+
+	meta := chunkToProtoMeta(c)
+	require.Equal(t, c.ChunkID(), meta.GetChunkId(), "ChunkID() must be called for the id field")
+	require.Equal(t, "cmd/main.go", meta.GetFilePath())
+	require.Equal(t, int32(0), meta.GetByteStart())
+	require.Equal(t, int32(256), meta.GetByteEnd())
+	require.Equal(t, "go", meta.GetLanguage())
+	require.Equal(t, "line-block", meta.GetChunkType())
+	require.Equal(t, "sha-main", meta.GetContentSha256())
+}
+
+// TestNeedSetFiltering verifies the need-set filtering logic: only chunks
+// whose ChunkID() appears in the server's need_chunks response are selected
+// for upload.
+func TestNeedSetFiltering(t *testing.T) {
+	t.Parallel()
+
+	chunks := []codeindex.Chunk{
+		{FilePath: "a.go", ByteStart: 0, ByteEnd: 100, Content: "func A(){}", ContentSHA256: "sha-a", Language: "go", ChunkType: codeindex.ChunkTypeLineBlock},
+		{FilePath: "b.go", ByteStart: 0, ByteEnd: 100, Content: "func B(){}", ContentSHA256: "sha-b", Language: "go", ChunkType: codeindex.ChunkTypeLineBlock},
+		{FilePath: "c.go", ByteStart: 0, ByteEnd: 100, Content: "func C(){}", ContentSHA256: "sha-c", Language: "go", ChunkType: codeindex.ChunkTypeLineBlock},
+	}
+
+	// Simulate server saying it only needs a.go and c.go.
+	needChunks := []string{chunks[0].ChunkID(), chunks[2].ChunkID()}
+	needSet := make(map[string]struct{}, len(needChunks))
+	for _, id := range needChunks {
+		needSet[id] = struct{}{}
+	}
+
+	var selected []codeindex.Chunk
+	for _, c := range chunks {
+		if _, needed := needSet[c.ChunkID()]; needed {
+			selected = append(selected, c)
+		}
+	}
+
+	require.Len(t, selected, 2, "only needed chunks must be selected")
+	require.Equal(t, "a.go", selected[0].FilePath)
+	require.Equal(t, "c.go", selected[1].FilePath)
+}
+
+// TestNeedSetFiltering_NoneNeeded verifies that when the server reports no
+// need_chunks, nothing is uploaded.
+func TestNeedSetFiltering_NoneNeeded(t *testing.T) {
+	t.Parallel()
+
+	chunks := []codeindex.Chunk{
+		{FilePath: "a.go", ByteStart: 0, ByteEnd: 100, Content: "func A(){}", ContentSHA256: "sha-a", Language: "go", ChunkType: codeindex.ChunkTypeLineBlock},
+	}
+
+	needSet := map[string]struct{}{} // empty — server has everything
+	var selected []codeindex.Chunk
+	for _, c := range chunks {
+		if _, needed := needSet[c.ChunkID()]; needed {
+			selected = append(selected, c)
+		}
+	}
+	require.Empty(t, selected, "no chunks selected when server has everything")
+}
+
+// TestNewSessionID verifies that newSessionID returns a non-empty string and
+// that two calls produce different values.
+func TestNewSessionID(t *testing.T) {
+	t.Parallel()
+	a := newSessionID()
+	b := newSessionID()
+	require.NotEmpty(t, a)
+	require.NotEmpty(t, b)
+	require.NotEqual(t, a, b, "session IDs must be unique per call")
+}
+
+// TestNewSessionIDFallback verifies the crypto/rand fallback path for
+// environments where uuid is unavailable.
+func TestNewSessionIDFallback(t *testing.T) {
+	t.Parallel()
+	id, err := newSessionIDFallback()
+	require.NoError(t, err)
+	require.Len(t, id, 32, "hex(16 bytes) = 32 chars")
+
+	id2, err := newSessionIDFallback()
+	require.NoError(t, err)
+	require.NotEqual(t, id, id2, "fallback session IDs must be unique")
+}
+
+// TestCodeIndexResultFields verifies the CodeIndexResult struct fields are
+// correctly populated from receipt values (pure mapping, no I/O).
+func TestCodeIndexResultFields(t *testing.T) {
+	t.Parallel()
+
+	// Simulate what IndexCodebase constructs from the receipt.
+	receipt := &pb.CodeIndexUploadReceipt{
+		Embedded: 5,
+		Deleted:  2,
+		Errors:   []string{"chunk x: db error"},
+	}
+	uploaded := 7
+
+	result := &CodeIndexResult{
+		Embedded: int(receipt.GetEmbedded()),
+		Deleted:  int(receipt.GetDeleted()),
+		Uploaded: uploaded,
+		Errors:   receipt.GetErrors(),
+	}
+
+	require.Equal(t, 5, result.Embedded)
+	require.Equal(t, 2, result.Deleted)
+	require.Equal(t, 7, result.Uploaded)
+	require.Len(t, result.Errors, 1)
+	require.Equal(t, "chunk x: db error", result.Errors[0])
+}

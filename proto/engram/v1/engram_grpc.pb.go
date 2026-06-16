@@ -26,6 +26,8 @@ const (
 	EngramService_ProjectEvents_FullMethodName          = "/engram.v1.EngramService/ProjectEvents"
 	EngramService_GetSessionStartContext_FullMethodName = "/engram.v1.EngramService/GetSessionStartContext"
 	EngramService_NegotiateVersion_FullMethodName       = "/engram.v1.EngramService/NegotiateVersion"
+	EngramService_CodeIndexNegotiate_FullMethodName     = "/engram.v1.EngramService/CodeIndexNegotiate"
+	EngramService_CodeIndexUpload_FullMethodName        = "/engram.v1.EngramService/CodeIndexUpload"
 )
 
 // EngramServiceClient is the client API for EngramService service.
@@ -57,6 +59,18 @@ type EngramServiceClient interface {
 	GetSessionStartContext(ctx context.Context, in *GetSessionStartContextRequest, opts ...grpc.CallOption) (*GetSessionStartContextResponse, error)
 	// NegotiateVersion validates MAJOR-version compatibility between client and server.
 	NegotiateVersion(ctx context.Context, in *NegotiateVersionRequest, opts ...grpc.CallOption) (*NegotiateVersionResponse, error)
+	// CodeIndexNegotiate performs a delta negotiation: the client sends its full
+	// manifest of chunk metadata; the server returns which chunks it needs
+	// (client must upload) and which existing server-side chunks are now stale
+	// (client has dropped them). Stale rows are swept automatically at the end
+	// of the subsequent CodeIndexUpload stream.
+	CodeIndexNegotiate(ctx context.Context, in *CodeIndexNegotiateRequest, opts ...grpc.CallOption) (*CodeIndexNegotiateResponse, error)
+	// CodeIndexUpload is a client-streaming RPC. The client streams the chunk
+	// payloads identified as needed by CodeIndexNegotiate, then closes the
+	// stream. On close the server deletes stale chunks (those whose
+	// index_session_id does not match the negotiated session) and returns a
+	// receipt with counts of embedded and deleted rows.
+	CodeIndexUpload(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CodeChunkUpload, CodeIndexUploadReceipt], error)
 }
 
 type engramServiceClient struct {
@@ -146,6 +160,29 @@ func (c *engramServiceClient) NegotiateVersion(ctx context.Context, in *Negotiat
 	return out, nil
 }
 
+func (c *engramServiceClient) CodeIndexNegotiate(ctx context.Context, in *CodeIndexNegotiateRequest, opts ...grpc.CallOption) (*CodeIndexNegotiateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CodeIndexNegotiateResponse)
+	err := c.cc.Invoke(ctx, EngramService_CodeIndexNegotiate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) CodeIndexUpload(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CodeChunkUpload, CodeIndexUploadReceipt], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EngramService_ServiceDesc.Streams[1], EngramService_CodeIndexUpload_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CodeChunkUpload, CodeIndexUploadReceipt]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngramService_CodeIndexUploadClient = grpc.ClientStreamingClient[CodeChunkUpload, CodeIndexUploadReceipt]
+
 // EngramServiceServer is the server API for EngramService service.
 // All implementations must embed UnimplementedEngramServiceServer
 // for forward compatibility.
@@ -175,6 +212,18 @@ type EngramServiceServer interface {
 	GetSessionStartContext(context.Context, *GetSessionStartContextRequest) (*GetSessionStartContextResponse, error)
 	// NegotiateVersion validates MAJOR-version compatibility between client and server.
 	NegotiateVersion(context.Context, *NegotiateVersionRequest) (*NegotiateVersionResponse, error)
+	// CodeIndexNegotiate performs a delta negotiation: the client sends its full
+	// manifest of chunk metadata; the server returns which chunks it needs
+	// (client must upload) and which existing server-side chunks are now stale
+	// (client has dropped them). Stale rows are swept automatically at the end
+	// of the subsequent CodeIndexUpload stream.
+	CodeIndexNegotiate(context.Context, *CodeIndexNegotiateRequest) (*CodeIndexNegotiateResponse, error)
+	// CodeIndexUpload is a client-streaming RPC. The client streams the chunk
+	// payloads identified as needed by CodeIndexNegotiate, then closes the
+	// stream. On close the server deletes stale chunks (those whose
+	// index_session_id does not match the negotiated session) and returns a
+	// receipt with counts of embedded and deleted rows.
+	CodeIndexUpload(grpc.ClientStreamingServer[CodeChunkUpload, CodeIndexUploadReceipt]) error
 	mustEmbedUnimplementedEngramServiceServer()
 }
 
@@ -205,6 +254,12 @@ func (UnimplementedEngramServiceServer) GetSessionStartContext(context.Context, 
 }
 func (UnimplementedEngramServiceServer) NegotiateVersion(context.Context, *NegotiateVersionRequest) (*NegotiateVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NegotiateVersion not implemented")
+}
+func (UnimplementedEngramServiceServer) CodeIndexNegotiate(context.Context, *CodeIndexNegotiateRequest) (*CodeIndexNegotiateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CodeIndexNegotiate not implemented")
+}
+func (UnimplementedEngramServiceServer) CodeIndexUpload(grpc.ClientStreamingServer[CodeChunkUpload, CodeIndexUploadReceipt]) error {
+	return status.Error(codes.Unimplemented, "method CodeIndexUpload not implemented")
 }
 func (UnimplementedEngramServiceServer) mustEmbedUnimplementedEngramServiceServer() {}
 func (UnimplementedEngramServiceServer) testEmbeddedByValue()                       {}
@@ -346,6 +401,31 @@ func _EngramService_NegotiateVersion_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngramService_CodeIndexNegotiate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CodeIndexNegotiateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).CodeIndexNegotiate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_CodeIndexNegotiate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).CodeIndexNegotiate(ctx, req.(*CodeIndexNegotiateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_CodeIndexUpload_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EngramServiceServer).CodeIndexUpload(&grpc.GenericServerStream[CodeChunkUpload, CodeIndexUploadReceipt]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngramService_CodeIndexUploadServer = grpc.ClientStreamingServer[CodeChunkUpload, CodeIndexUploadReceipt]
+
 // EngramService_ServiceDesc is the grpc.ServiceDesc for EngramService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -377,12 +457,21 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "NegotiateVersion",
 			Handler:    _EngramService_NegotiateVersion_Handler,
 		},
+		{
+			MethodName: "CodeIndexNegotiate",
+			Handler:    _EngramService_CodeIndexNegotiate_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ProjectEvents",
 			Handler:       _EngramService_ProjectEvents_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "CodeIndexUpload",
+			Handler:       _EngramService_CodeIndexUpload_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "proto/engram/v1/engram.proto",

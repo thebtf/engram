@@ -39,6 +39,22 @@ service EngramService {
 
   // NegotiateVersion validates MAJOR-version compatibility between client and server.
   rpc NegotiateVersion(NegotiateVersionRequest) returns (NegotiateVersionResponse);
+
+  // ---- CI-A Phase B: code index transport (CR-003) -----------------------
+
+  // CodeIndexNegotiate performs a delta negotiation: the client sends its full
+  // manifest of chunk metadata; the server returns which chunks it needs
+  // (client must upload) and which existing server-side chunks are now stale
+  // (client has dropped them). Stale rows are swept automatically at the end
+  // of the subsequent CodeIndexUpload stream.
+  rpc CodeIndexNegotiate(CodeIndexNegotiateRequest) returns (CodeIndexNegotiateResponse);
+
+  // CodeIndexUpload is a client-streaming RPC. The client streams the chunk
+  // payloads identified as needed by CodeIndexNegotiate, then closes the
+  // stream. On close the server deletes stale chunks (those whose
+  // index_session_id does not match the negotiated session) and returns a
+  // receipt with counts of embedded and deleted rows.
+  rpc CodeIndexUpload(stream CodeChunkUpload) returns (CodeIndexUploadReceipt);
 }
 
 // ---- SyncProjectState messages ----------------------------------------
@@ -244,4 +260,58 @@ message PingRequest {}
 
 message PingResponse {
   string status = 1;
+}
+
+// ---- CI-A CR-003: code index transport messages --------------------------
+
+// CodeChunkMeta carries the lightweight metadata for a single code chunk.
+// chunk_type is a free-form string; the only value produced by CR-002a is
+// "line-block". AST-derived types are added in CR-002b.
+message CodeChunkMeta {
+  string chunk_id      = 1;
+  string file_path     = 2;
+  int32  byte_start    = 3;
+  int32  byte_end      = 4;
+  string language      = 5;
+  string chunk_type    = 6;
+  string content_sha256 = 7;
+}
+
+// CodeIndexNegotiateRequest carries the client's full chunk manifest for a
+// project. The server diffs this against its stored identity keys and returns
+// the delta (need_chunks / stale_chunks).
+message CodeIndexNegotiateRequest {
+  string project_id       = 1;
+  string index_session_id = 2;
+  repeated CodeChunkMeta manifest = 3;
+}
+
+// CodeIndexNegotiateResponse tells the client which chunks to upload and
+// which server-side chunks are now stale.
+//
+//   need_chunks  — chunk_ids the server does not have (must be uploaded).
+//   stale_chunks — chunk_ids present on the server but absent from the
+//                  client manifest (will be swept at CodeIndexUpload EOF).
+message CodeIndexNegotiateResponse {
+  repeated string need_chunks   = 1;
+  repeated string stale_chunks  = 2;
+}
+
+// CodeChunkUpload carries a single chunk payload in the CodeIndexUpload stream.
+message CodeChunkUpload {
+  string        project_id       = 1;
+  string        index_session_id = 2;
+  CodeChunkMeta meta             = 3;
+  bytes         content          = 4;
+}
+
+// CodeIndexUploadReceipt is returned when the CodeIndexUpload stream closes.
+//
+//   embedded — number of chunks successfully upserted.
+//   deleted  — number of stale rows swept after stream close.
+//   errors   — per-chunk error strings (non-fatal; successful chunks still count).
+message CodeIndexUploadReceipt {
+  int32           embedded = 1;
+  int32           deleted  = 2;
+  repeated string errors   = 3;
 }
