@@ -40,6 +40,13 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 		// ON DELETE would block legitimate version cleanup. Intentionally FK-less.
 		"versioned_documents.parent_version_id":     "self-referential version-tree pointer; parent may be pruned, no enforced FK",
 		"versioned_documents.supersedes_version_id": "self-referential version-tree pointer; superseded row may be pruned, no enforced FK",
+		// code_chunks.project_id is a git-remote-derived TEXT slug from
+		// proxy.ResolveProjectSlug, NOT a row reference to the projects table.
+		// Two worktrees of the same repo share one code index via the same slug.
+		// A hard FK to projects(id) would break that identity contract and would
+		// couple code indexing to project registration. Intentionally FK-free.
+		// See ADR-001 §3.3 (engram-absorption/adr/ADR-001-ci-a-topology.md).
+		"code_chunks.project_id": "git-remote-derived TEXT slug (ResolveProjectSlug), not a row FK — see ADR-001 §3.3",
 	}
 
 	domainEntities := domainEntityNames(schema)
