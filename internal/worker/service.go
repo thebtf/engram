@@ -1318,6 +1318,9 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/memories", s.handleListMemories)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
+		// Behavioral rules management
+		r.Delete("/api/rules/{id}", s.handleDeleteBehavioralRule)
+
 		// Token stats
 		r.Get("/api/auth/tokens/{id}/stats", s.handleGetTokenStats)
 
