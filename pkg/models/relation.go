@@ -3,7 +3,6 @@ package models
 
 import (
 	"strings"
-	"time"
 )
 
 // RelationType labels the directed relationship between two observations.
@@ -63,7 +62,6 @@ const (
 // AllRelationTypes is the single source of truth for the complete set of valid relation types.
 // Keep in sync with:
 //   - migration 077 CHECK constraint in internal/db/gorm/migrations.go
-//   - GORM struct tag in internal/db/gorm/models.go (ObservationRelation.RelationType)
 //
 // The relation_test.go AllRelationTypes completeness test pins the count at 23 constants.
 var AllRelationTypes = []RelationType{
@@ -114,37 +112,10 @@ const (
 	DetectionSourceCreativeAssociation RelationDetectionSource = "creative_association"
 )
 
-// ObservationRelation is the persisted directed edge between two observations.
-// ValidFrom/ValidTo are used by time-bounded knowledge (e.g., temporary workarounds).
-type ObservationRelation struct {
-	RelationType    RelationType            `db:"relation_type" json:"relation_type"`
-	DetectionSource RelationDetectionSource `db:"detection_source" json:"detection_source"`
-	Reason          string                  `db:"reason" json:"reason,omitempty"`
-	CreatedAt       string                  `db:"created_at" json:"created_at"`
-	ID              int64                   `db:"id" json:"id"`
-	SourceID        int64                   `db:"source_id" json:"source_id"`
-	TargetID        int64                   `db:"target_id" json:"target_id"`
-	Confidence      float64                 `db:"confidence" json:"confidence"`
-	CreatedAtEpoch  int64                   `db:"created_at_epoch" json:"created_at_epoch"`
-	ValidFrom       *time.Time              `db:"valid_from" json:"valid_from,omitempty"`
-	ValidTo         *time.Time              `db:"valid_to" json:"valid_to,omitempty"`
-}
-
-// NewObservationRelation constructs a relation record ready for persistence.
-// Timestamp is captured at construction time for audit purposes.
-func NewObservationRelation(sourceID, targetID int64, relType RelationType, confidence float64, source RelationDetectionSource, reason string) *ObservationRelation {
-	now := time.Now()
-	return &ObservationRelation{
-		SourceID:        sourceID,
-		TargetID:        targetID,
-		RelationType:    relType,
-		Confidence:      confidence,
-		DetectionSource: source,
-		Reason:          reason,
-		CreatedAt:       now.Format(time.RFC3339),
-		CreatedAtEpoch:  now.UnixMilli(),
-	}
-}
+// ObservationRelation and NewObservationRelation were removed in provenance-cleanup FR-4
+// (contract honesty): the observation_relations table was dropped in CR-2b (migration 137)
+// and these structs had no production callers. Use RelationDetectionResult for in-memory
+// detection results.
 
 // RelationDetectionResult is the in-memory result of a single relation detection pass.
 // Callers accumulate these, deduplicate by target, and persist only the highest-confidence winner.
@@ -554,10 +525,9 @@ func truncateList(items []string, maxLen int) []string {
 	return append(items[:maxLen], "...")
 }
 
-// NOTE (provenance-cleanup CR-2a): RelationWithDetails and RelationGraph were
-// removed here. They were response DTOs for the graph/related HTTP handlers
-// (/api/observations/{id}/graph, /api/relations/*), all deleted in CR-2a. The
-// observation_relations table was subsequently dropped by migration 137 in
-// CR-2b. The ObservationRelation / ObservationConflict structs that remain in
-// this package are now orphaned persistence types with no DB callers — kept
-// only to avoid an unrelated API churn; a follow-up may remove them.
+// NOTE (provenance-cleanup CR-2a / FR-4): RelationWithDetails and RelationGraph were
+// removed in CR-2a. They were response DTOs for the graph/related HTTP handlers
+// (/api/observations/{id}/graph, /api/relations/*). The observation_relations table
+// was dropped by migration 137 in CR-2b. ObservationRelation and ObservationConflict
+// (formerly orphaned persistence types in this package) were removed in FR-4
+// (contract honesty) as part of the provenance-cleanup epic.

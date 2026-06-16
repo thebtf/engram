@@ -55,10 +55,11 @@ func (s *SDKSession) BeforeCreate(tx *gorm.DB) error {
 }
 
 // ObservationConflict, ObservationRelation, and ConceptWeight structs were
-// removed in CR-2b of provenance-cleanup. Their tables (observation_conflicts,
-// observation_relations, concept_weights) are dropped by migration 137; the
-// migrations that created them (008/011/007) were converted from gorm
-// AutoMigrate(&Struct{}) to raw SQL so the structs no longer needed to exist.
+// removed from this package in CR-2b of provenance-cleanup; their tables
+// (observation_conflicts, observation_relations, concept_weights) are dropped
+// by migration 137. The pkg/models counterparts (ObservationConflict,
+// ObservationRelation) were subsequently removed in FR-4 (contract honesty)
+// as orphaned structs with no production callers.
 // ReasoningTrace and ObservationVersion were similarly removed in CR-2a.
 
 // Content holds deduplicated document bodies keyed by SHA-256 hash.

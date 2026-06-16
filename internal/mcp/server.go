@@ -441,7 +441,7 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 
 **BEFORE every task:**
 1. ` + "`recall(query=\"...\")`" + ` — check what is already known about this topic.
-2. ` + "`recall(action=\"by_file\", files=\"path/to/file\")`" + ` — before modifying any file.
+2. ` + "`recall(query=\"file:path/to/file\")`" + ` — before modifying any file.
 3. ` + "`recall(query=\"prior decisions about ...\")`" + ` — before architectural decisions.
 
 **AFTER every task:**
@@ -455,7 +455,7 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 
 | Tool | Purpose | Key Actions |
 |------|---------|-------------|
-| ` + "`recall`" + ` | **Search & retrieve** memories | search (default), by_file |
+| ` + "`recall`" + ` | **Search & retrieve** memories | search (default) |
 | ` + "`store`" + ` | **Save** memories, edit, merge, import | create (default), edit, merge, import |
 | ` + "`feedback`" + ` | **Rate** quality, suppress, record outcomes | rate, suppress, outcome |
 | ` + "`issues`" + ` | **Cross-project issue tracking** between agents | create, list, get, update, comment, reopen |
@@ -529,7 +529,7 @@ Use ` + "`store(action=\"import\", path=\"...\")`" + ` to bulk import pre-author
 ## Workflow Patterns
 
 **Starting work:** Context is auto-injected by hooks. Use ` + "`recall(query=\"...\")`" + ` for deeper search.
-**Before modifying code:** ` + "`recall(action=\"by_file\")`" + ` to find file-related memories.
+**Before modifying code:** ` + "`recall(query=\"file:path/to/file\")`" + ` to find file-related memories.
 **After completing a feature:** ` + "`store(content=\"...\", title=\"...\", type=\"decision\")`" + ` — capture what was built and why.
 **After fixing a bug:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture root cause and fix.
 **After research:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture findings. (Do NOT use memory_type values like ` + "`insight`" + ` in the observation ` + "`type`" + ` field.)
@@ -699,14 +699,13 @@ func (s *Server) primaryTools() []Tool {
 	return []Tool{
 		{
 			Name:        "recall",
-			Description: "Search and retrieve memories. Actions: search (default, trivial SQL filter over memories), by_file.",
+			Description: "Search and retrieve memories. Actions: search (default, trivial SQL filter over memories).",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":  map[string]any{"type": "string", "enum": []string{"search", "by_file"}, "default": "search", "description": "Action to perform"},
+					"action":  map[string]any{"type": "string", "enum": []string{"search"}, "default": "search", "description": "Action to perform"},
 					"query":   map[string]any{"type": "string", "description": "Search query / substring filter (for search)"},
-					"files":   map[string]any{"type": "string", "description": "File paths (for action=by_file)"},
 					"project": map[string]any{"type": "string", "description": "Project name filter"},
 					"limit":   map[string]any{"type": "number", "description": "Max results"},
 				},
@@ -1394,7 +1393,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	})
 
 	// include_all=true or cursor=all: return primary + all expanded secondary tools.
-	// Default: return only primary tools (9 consolidated). Legacy aliases are
+	// Default: return only primary tools (8 consolidated: 7 primary + check_system_health). Legacy aliases are
 	// handled by callTool dispatch — they appear in tools/list only with include_all.
 	if listParams.IncludeAll || listParams.Cursor == "all" {
 		// Deduplicate: secondary tools list may contain names already in primary.
@@ -1604,10 +1603,12 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 
 	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/
 	// find_by_type tools removed — internal/search package dropped.
-	// find_by_file uses observationStore directly.
+	// find_by_file (US3) also removed — observation store dropped in v5.
 	switch name {
 	case "find_by_file":
-		return s.handleFindByFileObservations(ctx, args)
+		// find_by_file was backed by the observation store, not internal/search —
+		// keep its removal cause accurate (US3).
+		return "", fmt.Errorf("tool %q removed in v5 (US3, observation store dropped) — use recall(query=\"file:...\") instead", name)
 	case "search", "timeline", "decisions", "changes", "how_it_works",
 		"find_by_concept", "find_by_type", "get_recent_context",
 		"get_context_timeline", "get_timeline_by_query":
@@ -1615,12 +1616,6 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
-}
-
-// handleFindByFileObservations is a tombstone for the removed v5 find_by_file tool.
-// The observation store was dropped in v5 (US3).
-func (s *Server) handleFindByFileObservations(_ context.Context, _ json.RawMessage) (string, error) {
-	return "", fmt.Errorf("find_by_file removed in v5 (US3) — file-scoped observation lookup no longer exists; use recall(action=\"search\") with the file path or a related term in the query")
 }
 
 // sendResponse serialises resp to JSON and writes it as a single line to stdout.

@@ -4,7 +4,6 @@ package models
 import (
 	"regexp"
 	"strings"
-	"time"
 )
 
 // ConflictType classifies the nature of a conflict between two observations.
@@ -32,21 +31,10 @@ const (
 	ResolutionManual ConflictResolution = "manual"
 )
 
-// ObservationConflict is the persisted record of a detected conflict between two observations.
-// It is written by the write-lint path (TG5) and read by the retrieval layer to suppress
-// superseded observations from injection.
-type ObservationConflict struct {
-	ResolvedAt      *string            `db:"resolved_at" json:"resolved_at,omitempty"`
-	ConflictType    ConflictType       `db:"conflict_type" json:"conflict_type"`
-	Resolution      ConflictResolution `db:"resolution" json:"resolution"`
-	Reason          string             `db:"reason" json:"reason"`
-	DetectedAt      string             `db:"detected_at" json:"detected_at"`
-	ID              int64              `db:"id" json:"id"`
-	NewerObsID      int64              `db:"newer_obs_id" json:"newer_obs_id"`
-	OlderObsID      int64              `db:"older_obs_id" json:"older_obs_id"`
-	DetectedAtEpoch int64              `db:"detected_at_epoch" json:"detected_at_epoch"`
-	Resolved        bool               `db:"resolved" json:"resolved"`
-}
+// ObservationConflict and NewObservationConflict were removed in provenance-cleanup FR-4
+// (contract honesty): the observation_conflicts table was dropped in CR-2b (migration 137)
+// and these structs had no production callers. Use ConflictDetectionResult for in-memory
+// detection results.
 
 // ConflictDetectionResult is the in-memory result of running conflict detection.
 // Callers accumulate these before deciding which records to persist.
@@ -56,22 +44,6 @@ type ConflictDetectionResult struct {
 	Reason      string
 	OlderObsIDs []int64
 	HasConflict bool
-}
-
-// NewObservationConflict constructs a conflict record ready for persistence.
-// The timestamp is captured at construction time so the record is self-describing.
-func NewObservationConflict(newerID, olderID int64, conflictType ConflictType, resolution ConflictResolution, reason string) *ObservationConflict {
-	now := time.Now()
-	return &ObservationConflict{
-		NewerObsID:      newerID,
-		OlderObsID:      olderID,
-		ConflictType:    conflictType,
-		Resolution:      resolution,
-		Reason:          reason,
-		DetectedAt:      now.Format(time.RFC3339),
-		DetectedAtEpoch: now.UnixMilli(),
-		Resolved:        false,
-	}
 }
 
 // CorrectionPatterns holds the compiled regexes that signal an explicit correction

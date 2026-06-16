@@ -41,7 +41,7 @@ function formatBehaviorRulesBlock(rules) {
     if (title !== '') {
       block += `## ${title}\n`;
     }
-    if (narrative !== '') {
+    if (narrative !== '' && narrative !== title) {
       block += `${narrative}\n`;
     }
     block += formatFactsLine(rule.facts);
