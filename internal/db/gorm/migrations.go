@@ -4505,6 +4505,47 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec("DROP TABLE IF EXISTS code_index_sessions").Error
 			},
 		},
+		{
+			// CR-005: make the code_chunks HNSW index PARTIAL on
+			// (embedding IS NOT NULL). CR-004 inserts rows with a NULL embedding
+			// and fills them later, and every vector query already filters
+			// `embedding IS NOT NULL` (FindSimilarCode). A non-partial HNSW index
+			// carries no NULL rows functionally (pgvector skips NULLs at build),
+			// but a partial index documents the intent and stays smaller as the
+			// un-embedded backlog grows. Doing this now is free — the table is
+			// empty until CR-006 enables code indexing — and avoids a later
+			// CONCURRENTLY rebuild on a populated table. An index predicate
+			// cannot be ALTERed, so drop+recreate.
+			ID: "141_code_chunks_hnsw_partial",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`DROP INDEX IF EXISTS idx_code_chunks_hnsw`,
+					`CREATE INDEX IF NOT EXISTS idx_code_chunks_hnsw
+					 ON code_chunks USING hnsw (embedding vector_cosine_ops)
+					 WHERE embedding IS NOT NULL`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("141_code_chunks_hnsw_partial: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				// Revert to the original non-partial index.
+				stmts := []string{
+					`DROP INDEX IF EXISTS idx_code_chunks_hnsw`,
+					`CREATE INDEX IF NOT EXISTS idx_code_chunks_hnsw
+					 ON code_chunks USING hnsw (embedding vector_cosine_ops)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

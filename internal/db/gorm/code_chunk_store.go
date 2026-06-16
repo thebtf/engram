@@ -413,6 +413,176 @@ func (s *CodeChunkStore) DeleteBySessionMismatch(ctx context.Context, projectID,
 	return result.RowsAffected, nil
 }
 
+// CodeSearchResult holds a single code chunk match returned by SearchCodeFTS
+// or FindSimilarCode. Score is ts_rank_cd for FTS results and cosine similarity
+// (1 - distance) for vector results. It is used for explain/debug output and
+// for building the CodeHit map in the hybrid orchestrator; RRF itself only
+// uses the ID ordering.
+type CodeSearchResult struct {
+	ID        int64
+	FilePath  string
+	ByteStart int
+	ByteEnd   int
+	Language  string
+	Content   string
+	Score     float64
+}
+
+// SearchCodeFTS runs a full-text search against the code_chunks table for the
+// given projectID and query string. It uses the 'simple' text-search
+// configuration on BOTH the query side and the stored content_tsv column
+// (which is generated with to_tsvector('simple', content)). Using 'english'
+// here would silently return zero rows because the configs would not match.
+//
+// The CTE parses the query with websearch_to_tsquery first (supports quoted
+// phrases, AND/OR/- operators) and falls back to plainto_tsquery when
+// websearch_to_tsquery produces an empty tsquery (e.g. input with only
+// stop-words or special characters that websearch fails to parse).
+//
+// limit <= 0 defaults to 20; capped at 200. Returns an empty (non-nil) slice
+// when the query matches no rows — that is not an error.
+func (s *CodeChunkStore) SearchCodeFTS(ctx context.Context, projectID, query string, limit int) ([]CodeSearchResult, error) {
+	if projectID == "" {
+		return nil, fmt.Errorf("code_chunk_store search_code_fts: projectID must not be empty")
+	}
+	if query == "" {
+		return nil, fmt.Errorf("code_chunk_store search_code_fts: query must not be empty")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	// The CTE builds a parsed tsquery once and reuses it across SELECT and WHERE.
+	// COALESCE(NULLIF(wsq,''::tsquery), ptq) falls back to plainto_tsquery when
+	// websearch_to_tsquery returns an empty result for the given input.
+	const sql = `
+		WITH parsed AS (
+			SELECT websearch_to_tsquery('simple', ?) wsq,
+			       plainto_tsquery('simple', ?)       ptq
+		)
+		SELECT id,
+		       file_path,
+		       byte_start,
+		       byte_end,
+		       language,
+		       content,
+		       ts_rank_cd(content_tsv, COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)) AS score
+		FROM code_chunks, parsed
+		WHERE project_id = ?
+		  AND content_tsv @@ COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)
+		ORDER BY score DESC
+		LIMIT ?
+	`
+
+	type row struct {
+		ID        int64   `gorm:"column:id"`
+		FilePath  string  `gorm:"column:file_path"`
+		ByteStart int     `gorm:"column:byte_start"`
+		ByteEnd   int     `gorm:"column:byte_end"`
+		Language  string  `gorm:"column:language"`
+		Content   string  `gorm:"column:content"`
+		Score     float64 `gorm:"column:score"`
+	}
+	var rows []row
+	if err := s.db.WithContext(ctx).
+		Raw(sql, query, query, projectID, limit).
+		Scan(&rows).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("code_chunk_store search_code_fts %q: %w", projectID, err)
+	}
+
+	out := make([]CodeSearchResult, len(rows))
+	for i, r := range rows {
+		out[i] = CodeSearchResult{
+			ID:        r.ID,
+			FilePath:  r.FilePath,
+			ByteStart: r.ByteStart,
+			ByteEnd:   r.ByteEnd,
+			Language:  r.Language,
+			Content:   r.Content,
+			Score:     r.Score,
+		}
+	}
+	return out, nil
+}
+
+// FindSimilarCode queries the code_chunks table for rows whose embedding is
+// closest (cosine similarity) to queryVec, scoped to projectID.
+//
+// The WHERE clause requires embedding IS NOT NULL because CR-004 inserts rows
+// before computing the vector; a NULL embedding produces a NULL distance which
+// breaks ORDER BY and silently poisons the result set.
+//
+// limit <= 0 defaults to 10. threshold <= 0 defaults to 0.7.
+// Returns an empty (non-nil) slice when no rows meet the threshold.
+func (s *CodeChunkStore) FindSimilarCode(ctx context.Context, projectID string, queryVec []float32, limit int, threshold float64) ([]CodeSearchResult, error) {
+	if projectID == "" {
+		return nil, fmt.Errorf("code_chunk_store find_similar_code: projectID must not be empty")
+	}
+	if len(queryVec) == 0 {
+		return nil, fmt.Errorf("code_chunk_store find_similar_code: queryVec must not be empty")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if threshold <= 0 {
+		threshold = 0.7
+	}
+
+	vec := pgvector.NewVector(queryVec)
+
+	// The cosine operator <=> returns distance (0 = identical, 2 = opposite).
+	// Similarity = 1 - distance. We filter on the similarity expression and order
+	// by raw distance so the index (HNSW idx_code_chunks_hnsw) is usable.
+	const sql = `
+		SELECT id,
+		       file_path,
+		       byte_start,
+		       byte_end,
+		       language,
+		       content,
+		       1 - (embedding <=> ?::vector) AS score
+		FROM code_chunks
+		WHERE project_id = ?
+		  AND embedding IS NOT NULL
+		  AND 1 - (embedding <=> ?::vector) >= ?
+		ORDER BY embedding <=> ?::vector
+		LIMIT ?
+	`
+
+	type row struct {
+		ID        int64   `gorm:"column:id"`
+		FilePath  string  `gorm:"column:file_path"`
+		ByteStart int     `gorm:"column:byte_start"`
+		ByteEnd   int     `gorm:"column:byte_end"`
+		Language  string  `gorm:"column:language"`
+		Content   string  `gorm:"column:content"`
+		Score     float64 `gorm:"column:score"`
+	}
+	var rows []row
+	if err := s.db.WithContext(ctx).
+		Raw(sql, vec, projectID, vec, threshold, vec, limit).
+		Scan(&rows).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("code_chunk_store find_similar_code %q: %w", projectID, err)
+	}
+
+	out := make([]CodeSearchResult, len(rows))
+	for i, r := range rows {
+		out[i] = CodeSearchResult{
+			ID:        r.ID,
+			FilePath:  r.FilePath,
+			ByteStart: r.ByteStart,
+			ByteEnd:   r.ByteEnd,
+			Language:  r.Language,
+			Content:   r.Content,
+			Score:     r.Score,
+		}
+	}
+	return out, nil
+}
+
 // DeleteSession removes the authorization record for (projectID, sessionID)
 // after a completed upload cycle so code_index_sessions does not accumulate
 // rows unboundedly. Best-effort: callers may ignore the error (the row is
