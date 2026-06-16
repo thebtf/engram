@@ -1058,8 +1058,18 @@ func (s *Server) handleToolsList(req *Request) *Response {
 
 	// Code intelligence tools (CR-006) — advertise only when ENGRAM_CODE_INTEL_ENABLED=true
 	// AND the code chunk store is wired. Flag-off path is byte-identical to pre-CR-006.
+	//
+	// Only codebase_search is advertised as a server-side tool. codebase_status is
+	// deliberately NOT advertised here: it is the daemon-side static tool's name
+	// (internal/handlers/codeintel), and the daemon merges its in-memory run state
+	// with the server's chunk counts by calling THIS server's codebase_status
+	// handler over the engramcore proxy. Advertising it on both the daemon (static)
+	// and the server (proxied) would surface a DUPLICATE codebase_status entry in
+	// the daemon's tools/list (the dispatcher appends proxy tools without dedup).
+	// The handler + callTool case stay registered so the daemon's proxy call still
+	// resolves; only the external advertisement is suppressed.
 	if codeIntelEnabled() && s.codeChunkStore != nil {
-		tools = append(tools, codebaseSearchTool(), codebaseStatusTool())
+		tools = append(tools, codebaseSearchTool())
 	}
 
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 )
 
@@ -84,6 +85,29 @@ func TestCodeIntelFlag_On_StoreNil_ToolsAbsentFromList(t *testing.T) {
 		assert.NotEqual(t, "codebase_search", tool.Name, "codebase_search must not appear when store is nil")
 		assert.NotEqual(t, "codebase_status", tool.Name, "codebase_status must not appear when store is nil")
 	}
+}
+
+// TestCodeIntelFlag_On_ServerAdvertisesSearchNotStatus verifies that when the
+// flag is on AND the store is wired, the SERVER's tools/list advertises
+// codebase_search but NOT codebase_status. codebase_status is the daemon-side
+// static tool's name; the daemon reaches the server's codebase_status HANDLER via
+// the engramcore proxy, but the server must not ADVERTISE it — otherwise the
+// daemon's tools/list (static codeintel + proxied server list) would contain a
+// duplicate codebase_status entry. The handler stays callable (see the FlagOff
+// error test, which exercises the callTool path).
+func TestCodeIntelFlag_On_ServerAdvertisesSearchNotStatus(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+
+	srv := mcp.NewServer(mcp.ServerOptions{Version: "test"})
+	// Wire a non-nil store so the gate (codeIntelEnabled() && store != nil) opens.
+	// handleToolsList only checks the pointer is non-nil; it never queries during
+	// listing, so a store over a nil *gorm.DB is sufficient for this surface test.
+	srv.SetCodeChunkStore(gorm.NewCodeChunkStore(nil))
+
+	names := buildCodeIntelToolNames(srv)
+	assert.True(t, names["codebase_search"], "codebase_search must be advertised on the server when flag+store are on")
+	assert.False(t, names["codebase_status"], "codebase_status must NOT be advertised on the server (daemon-side static tool; avoids a duplicate in the daemon tools/list)")
+	assert.False(t, names["codebase_index"], "codebase_index is daemon-only; never on the server list")
 }
 
 // TestCodebaseSearch_FlagOff_ReturnsError verifies that codebase_search returns
