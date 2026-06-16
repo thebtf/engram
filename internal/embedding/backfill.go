@@ -86,18 +86,32 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 			continue
 		}
 
-		// Store chunks
+		// Store chunks. Guard the vector dimension against EmbeddingDim before
+		// building the chunk: the content_chunks.embedding column is vector(EmbeddingDim),
+		// so a wrong-sized vector (e.g. an endpoint that ignored the dimensions param,
+		// or a model swap) would make Postgres reject the whole batch INSERT and the
+		// backfill would retry forever. Skip mismatched vectors with a logged warning —
+		// mirrors the code_backfill dimension guard so both embed paths behave the same.
 		chunks := make([]Chunk, 0, len(rows))
 		for i, r := range rows {
-			if i < len(vectors) && len(vectors[i]) > 0 {
-				chunks = append(chunks, Chunk{
-					MemoryID:  r.ID,
-					Seq:       0,
-					Text:      r.Content,
-					Embedding: pgvector.NewVector(vectors[i]),
-					Model:     client.Model(),
-				})
+			if i >= len(vectors) || len(vectors[i]) == 0 {
+				continue
 			}
+			if len(vectors[i]) != EmbeddingDim {
+				log.Error().
+					Int64("memory_id", r.ID).
+					Int("got_dim", len(vectors[i])).
+					Int("expected_dim", EmbeddingDim).
+					Msg("backfill: embedding dimension mismatch, skipping chunk (check ENGRAM_EMBEDDING_MODEL/dimensions — content_chunks requires EmbeddingDim)")
+				continue
+			}
+			chunks = append(chunks, Chunk{
+				MemoryID:  r.ID,
+				Seq:       0,
+				Text:      r.Content,
+				Embedding: pgvector.NewVector(vectors[i]),
+				Model:     client.Model(),
+			})
 		}
 		if len(chunks) == 0 {
 			log.Warn().Int("batch_size", len(texts)).Msg("backfill: no valid chunks produced, skipping batch")
