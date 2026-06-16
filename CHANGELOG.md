@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.14.0] - 2026-06-16
+
+### Changed
+
+- **Unified embedding dimension on 1536 across memory and code (resolves OQ-5, #293).**
+  Both `content_chunks` (memory) and `code_chunks` now use `vector(1536)`, served by a
+  single embedding model (Qwen3-Embedding-8B via LiteLLM, server-side MRL `dimensions=1536`).
+  Chosen over the model's native 4096 because 1536 ≤ pgvector's 2000-dim HNSW limit (native
+  HNSW, no DiskANN/pgvectorscale dependency for the engram vector index), ~2.7× less storage
+  and compute, and a 12-triplet EN/RU/code/cross-lingual probe showed 0 ranking inversions
+  and 96.1% mean margin retention vs 4096.
+  - New `EmbeddingDim` constant is the single source of truth, feeding the embedding client
+    request, the backfill dimension guard, and a startup assert.
+  - The embedding client now sends the OpenAI `dimensions` param (default `EmbeddingDim`;
+    `ENGRAM_EMBEDDING_DIMENSIONS` override accepts only `EmbeddingDim` or `0`=omit; any other
+    value is clamped with a warning so it can never request a column-incompatible size).
+  - Startup `AssertEmbeddingDimensions` reads the live column type via `format_type` and
+    disables the embedding path on drift between the DDL, the GORM tag, and `EmbeddingDim`.
+  - `StoreChunks` guards vector length at the single write chokepoint; memory recall queries
+    carry `embedding IS NOT NULL` so the partial HNSW index is usable.
+
+### Migration
+
+- **Migration 142** moves `content_chunks.embedding` 4096→1536: DELETEs existing chunk rows,
+  ALTERs the column, and replaces the DiskANN index with a native partial HNSW index, wrapped
+  in a transaction for atomicity. **Operator action required after deploy:** the memory corpus
+  re-embeds automatically via the backfill (recall degrades to FTS-only until it completes);
+  verify `dimension=1536` via `get_memory_stats`. Drop the stale `ENGRAM_EMBEDDING_DIMENSIONS=4096`
+  from the deploy template (leave 1536 or unset). See the re-embed runbook for details.
+
 ## [6.13.1] - 2026-06-16
 
 ### Fixed
