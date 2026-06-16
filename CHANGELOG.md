@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.9.0] - 2026-06-16
+
+### Added
+
+- **`DELETE /api/rules/{id}` — delete a behavioral rule via the API (#257).** No external route
+  existed to retire a behavioral rule; the operator had to use SQL or the dashboard. The new
+  endpoint soft-deletes a rule by id (reusing the existing `BehavioralRulesStore.Delete`):
+  `400` on a non-numeric/≤0 id, `404` when no active rule has that id, `{"deleted": id}` on
+  success. It sits behind the same `tokenAuth` middleware as `DELETE /api/memories|issues` —
+  no new authorization surface. This is the operator-chosen "legitimate path" for retiring noisy
+  always-inject rules (e.g. the global rule id=50 NO-MANUAL-DRIFT noise flagged in #257/#287).
+
 ## [6.8.0] - 2026-06-16
 
 ### Added
