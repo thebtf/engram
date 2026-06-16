@@ -21,12 +21,13 @@ import (
 	db_gorm "github.com/thebtf/engram/internal/db/gorm"
 )
 
-// expectedDim is the vector dimension required by the code_chunks table
-// (vector(1536) as defined in migration 139 and the CodeChunk model).
-// Persisting a wrong-dimension vector would corrupt the pgvector column or fail
-// at INSERT time, so vectors that do not match this constant are skipped with a
+// expectedDim is the vector dimension required by the code_chunks table.
+// It is an alias for the package-wide SSOT EmbeddingDim (see dim.go) — both
+// content_chunks and code_chunks share one dimension because one embedding model
+// serves both. Persisting a wrong-dimension vector would corrupt the pgvector
+// column or fail at INSERT time, so vectors that do not match are skipped with a
 // logged warning.
-const expectedDim = 1536
+const expectedDim = EmbeddingDim
 
 // codeChunkSource is the minimal CodeChunkStore surface the backfill loop needs.
 // *db_gorm.CodeChunkStore satisfies it; tests supply a fake so the loop logic

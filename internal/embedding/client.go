@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,6 +51,7 @@ type Client struct {
 	baseURL    string
 	model      string
 	apiKey     string
+	dimensions int
 	httpClient *http.Client
 }
 
@@ -70,10 +72,22 @@ func NewClient() (*Client, error) {
 	if model == "" {
 		model = "text-embedding"
 	}
+	// dimensions sent as the OpenAI-compatible `dimensions` request param so an
+	// MRL-capable model (Qwen3-Embedding) returns a truncated vector at the unified
+	// EmbeddingDim. Defaults to EmbeddingDim; ENGRAM_EMBEDDING_DIMENSIONS overrides.
+	// Set the override to 0 to OMIT the param entirely — required for endpoints that
+	// reject `dimensions` (a non-MRL model, or a proxy that 400s on the unknown field).
+	dimensions := EmbeddingDim
+	if raw := os.Getenv("ENGRAM_EMBEDDING_DIMENSIONS"); raw != "" {
+		if d, err := strconv.Atoi(raw); err == nil {
+			dimensions = d
+		}
+	}
 	return &Client{
-		baseURL: baseURL,
-		model:   model,
-		apiKey:  os.Getenv("ENGRAM_EMBEDDING_API_KEY"),
+		baseURL:    baseURL,
+		model:      model,
+		apiKey:     os.Getenv("ENGRAM_EMBEDDING_API_KEY"),
+		dimensions: dimensions,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -81,9 +95,12 @@ func NewClient() (*Client, error) {
 }
 
 // embeddingRequest is the OpenAI-compatible request body.
+// Dimensions is omitted (omitempty) when zero so endpoints that do not support
+// the MRL `dimensions` param receive a byte-identical request to the pre-1536 era.
 type embeddingRequest struct {
-	Input []string `json:"input"`
-	Model string   `json:"model"`
+	Input      []string `json:"input"`
+	Model      string   `json:"model"`
+	Dimensions int      `json:"dimensions,omitempty"`
 }
 
 // embeddingResponse is the OpenAI-compatible response.
@@ -106,10 +123,14 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 		return nil, nil
 	}
 
-	body, err := json.Marshal(embeddingRequest{
+	reqBody := embeddingRequest{
 		Input: texts,
 		Model: c.model,
-	})
+	}
+	if c.dimensions > 0 {
+		reqBody.Dimensions = c.dimensions
+	}
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("embedding: marshal request: %w", err)
 	}

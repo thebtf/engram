@@ -4546,6 +4546,65 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		{
+			// unify-embedding-dimension (OQ-5): move content_chunks from vector(4096)
+			// to vector(1536) so memory and code share ONE embedding dimension served
+			// by one model (Qwen3-Embedding-8B via LiteLLM, dimensions=1536 MRL).
+			//
+			// Existing 4096-dim vectors cannot be cast to 1536, and the memory backfill
+			// finds work by chunk-row ABSENCE (LEFT JOIN content_chunks ... WHERE c.id IS
+			// NULL — see internal/embedding/backfill.go), NOT by NULL embedding. So we
+			// DELETE the rows (not null the column): the backfill then re-embeds every
+			// memory at 1536 on the next maintenance run. The column is nullable
+			// (migration 108, no NOT NULL) so the ALTER TYPE on the emptied table is safe.
+			//
+			// Index: drop the DiskANN index (migration 109, needs pgvectorscale for >2000
+			// dims) and create a native partial HNSW index — 1536 ≤ pgvector's 2000-dim
+			// HNSW limit, so the engram vector index no longer depends on pgvectorscale.
+			// (pgvectorscale itself stays installed for other server workloads.) Mirrors
+			// the code_chunks partial-HNSW shape from migration 141.
+			ID: "142_content_chunks_dim_1536",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					// Empty the table first: 4096→1536 is not a valid in-place cast, and
+					// removing the rows is what makes the absence-keyed backfill re-run.
+					`DELETE FROM content_chunks`,
+					`DROP INDEX IF EXISTS idx_chunks_embedding`,
+					`ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(1536)`,
+					`CREATE INDEX IF NOT EXISTS idx_chunks_embedding
+					 ON content_chunks USING hnsw (embedding vector_cosine_ops)
+					 WHERE embedding IS NOT NULL`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("142_content_chunks_dim_1536: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				// Best-effort revert of the schema shape. Rows are NOT restored — the
+				// 4096 vectors were deleted on migrate; a re-backfill at the prior
+				// dimension would be needed to repopulate.
+				stmts := []string{
+					`DELETE FROM content_chunks`,
+					`DROP INDEX IF EXISTS idx_chunks_embedding`,
+					`ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(4096)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				// Restore the DiskANN index when pgvectorscale is available; fall back
+				// silently otherwise (mirrors migration 109's graceful skip).
+				if err := tx.Exec("CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE").Error; err != nil {
+					log.Warn().Err(err).Msg("142 rollback: vectorscale unavailable, skipping DiskANN index restore")
+					return nil
+				}
+				return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING diskann (embedding vector_cosine_ops)`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

@@ -121,7 +121,12 @@ type Chunk struct {
 	MemoryID  int64           `gorm:"not null"`
 	Seq       int             `gorm:"not null"`
 	Text      string          `gorm:"type:text;not null;default:''"`
-	Embedding pgvector.Vector `gorm:"type:vector(4096)"`
+	// Dimension is the SSOT EmbeddingDim (1536). The GORM tag must be a compile-time
+	// literal so it cannot reference the constant directly; the startup assert in
+	// AssertEmbeddingDimensions reconciles this tag, the DDL, and EmbeddingDim against
+	// the live column. The raw-SQL DDL was a demolition-phase rollback and AutoMigrate
+	// may return, so this tag is load-bearing, not decorative — keep it == EmbeddingDim.
+	Embedding pgvector.Vector `gorm:"type:vector(1536)"`
 	Model     string          `gorm:"type:text;not null"`
 	CreatedAt time.Time       `gorm:"type:timestamptz;not null;default:now()"`
 }
