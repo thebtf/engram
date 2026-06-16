@@ -4429,6 +4429,54 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+
+		// Migration 139: code_chunks table for CI-A code intelligence.
+		// Stores AST-chunked source code with embeddings for hybrid dense+BM25 search.
+		// Dimension 1536: within native pgvector HNSW limit (~2000), no vectorscale needed.
+		// project_id is a TEXT slug from proxy.ResolveProjectSlug — intentionally FK-free
+		// (it is a git-remote-derived identity string, not a row reference to projects).
+		// embedding is nullable: a chunk row may be inserted before its embedding is computed
+		// by the server-side pipeline (CR-004), matching content_chunks' nullable convention.
+		// content_tsv is a GENERATED ALWAYS AS STORED column — application code never writes it.
+		// ADR: .agent/specs/engram-absorption/adr/ADR-001-ci-a-topology.md §4.
+		// CLEAN-ROOM: no AGPL source referenced during implementation.
+		{
+			ID: "139_code_chunks",
+			Migrate: func(tx *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS code_chunks (
+						id               BIGSERIAL    PRIMARY KEY,
+						project_id       TEXT         NOT NULL,
+						file_path        TEXT         NOT NULL,
+						byte_start       INTEGER      NOT NULL,
+						byte_end         INTEGER      NOT NULL,
+						language         TEXT         NOT NULL,
+						chunk_type       TEXT         NOT NULL,
+						content          TEXT         NOT NULL,
+						content_sha256   TEXT         NOT NULL,
+						embedding        vector(1536),
+						content_tsv      tsvector     GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
+						index_session_id TEXT         NOT NULL,
+						created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+						updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+						UNIQUE (project_id, file_path, byte_start, content_sha256)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_code_chunks_project      ON code_chunks (project_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_code_chunks_project_file ON code_chunks (project_id, file_path)`,
+					`CREATE INDEX IF NOT EXISTS idx_code_chunks_tsv          ON code_chunks USING GIN (content_tsv)`,
+					`CREATE INDEX IF NOT EXISTS idx_code_chunks_hnsw         ON code_chunks USING hnsw (embedding vector_cosine_ops)`,
+				}
+				for _, stmt := range stmts {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("139_code_chunks: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec("DROP TABLE IF EXISTS code_chunks").Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
