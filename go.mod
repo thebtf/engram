@@ -17,10 +17,12 @@ require (
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.6
 	github.com/thebtf/aimux/loom v0.1.0
-	github.com/thebtf/mcp-mux/muxcore v0.25.0
+	github.com/thebtf/mcp-mux/muxcore v0.26.1
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/metric v1.43.0
+	go.uber.org/goleak v1.3.0
 	golang.org/x/crypto v0.48.0
+	golang.org/x/sync v0.19.0
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -57,10 +59,8 @@ require (
 	github.com/thejerf/suture/v4 v4.0.6 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
-	go.uber.org/goleak v1.3.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect

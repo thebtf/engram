@@ -36,6 +36,7 @@ import (
 	"github.com/thebtf/engram/internal/version"
 	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
+	muxregistry "github.com/thebtf/mcp-mux/muxcore/registry"
 	"github.com/thebtf/mcp-mux/muxcore/serverid"
 	"github.com/thebtf/mcp-mux/muxcore/upgrade"
 )
@@ -335,6 +336,16 @@ func main() {
 		SessionHandler: disp,
 		DaemonFlag:     muxcoreDaemonFlag,
 		SkipSnapshot:   true,
+		// Opt in to muxcore's daemon registry (v0.26+) so the shared mcp-mux
+		// operator point can discover the engram engine via mux_engines /
+		// mux_list(engine_name:"engram"). Read-only: ListOwners only; no
+		// cross-engine stop/restart/update is advertised. Nil would be the
+		// opt-out zero value that preserves pre-registry behavior.
+		Registry: &muxregistry.Config{
+			ProductName:    "engram",
+			MuxcoreVersion: "v0.26.1",
+			Capabilities:   muxregistry.Capabilities{ListOwners: true},
+		},
 	})
 	if err != nil {
 		logger.Error("engine.New failed", "error", err)
