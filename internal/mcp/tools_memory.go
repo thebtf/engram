@@ -20,6 +20,7 @@ import (
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/redaction"
+	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writegate"
@@ -391,13 +392,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			// legacy store_memory response (NFR-F1): id, storage, scope, privacy_scope,
 			// quality_signals. Phase1 returns MemoryID when Stored=true.
 			out, marshalErr := json.MarshalIndent(map[string]any{
-				"stored":         true,
-				"id":             p1resp.MemoryID,
-				"storage":        "memories",
-				"scope":          params.Scope,
-				"privacy_scope":  params.PrivacyScope,
+				"stored":          true,
+				"id":              p1resp.MemoryID,
+				"storage":         "memories",
+				"scope":           params.Scope,
+				"privacy_scope":   params.PrivacyScope,
 				"quality_signals": []any{},
-				"message":        "Memory stored successfully via write-lint (no conflicts detected)",
+				"message":         "Memory stored successfully via write-lint (no conflicts detected)",
 			}, "", "  ")
 			if marshalErr != nil {
 				return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
@@ -1435,6 +1436,26 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 // It accepts the vnext-gated parameters (expand_graph, min_confidence,
 // tier_filter, explain) in addition to the base recall_memory params.
 //
+// rerankAdapter bridges the concrete reranking.Client to the retrieval.CrossEncoder
+// interface, keeping internal/retrieval free of the reranking package import (the
+// same package-boundary discipline used for the store interfaces). It adapts the
+// returned []reranking.PassageScore into []retrieval.RerankResult.
+type rerankAdapter struct {
+	client *reranking.Client
+}
+
+func (a rerankAdapter) Rank(ctx context.Context, query string, passages []string) ([]retrieval.RerankResult, error) {
+	scores, err := a.client.Rank(ctx, query, passages)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]retrieval.RerankResult, len(scores))
+	for i, s := range scores {
+		out[i] = retrieval.RerankResult{Index: s.Index, RelevanceScore: s.RelevanceScore}
+	}
+	return out, nil
+}
+
 // caller, scopeEnabled, and includeScopes are forwarded from handleRecallMemory
 // so that privacy_scope visibility (scope.Resolve) is enforced on hybrid results.
 // This is required by the integration contract established in d9eea82: the hybrid
@@ -1509,6 +1530,14 @@ func (s *Server) handleRecallMemoryHybrid(
 	var embStore retrieval.EmbeddingStoreInterface
 	if s.embeddingStore != nil {
 		embStore = s.embeddingStore
+	}
+
+	// Rank-4: thread the cross-encoder reranker when configured. nil-guarded exactly
+	// like embStore above — when ENGRAM_RERANK_URL is unset s.rerankClient is nil and
+	// opts.Reranker stays nil (recall keeps the fusion order). The adapter bridges the
+	// reranking.Client to the retrieval.CrossEncoder interface (package-boundary clean).
+	if s.rerankClient != nil {
+		opts.Reranker = rerankAdapter{client: s.rerankClient}
 	}
 
 	// When type/tag filters are active, request a wider candidate pool so that
@@ -1776,16 +1805,16 @@ func (s *Server) handleRecallMemoryHybrid(
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(items) > 0 {
 		// Snapshot item IDs before the goroutine runs to avoid data races.
 		type reconItem struct {
-			id            int64
-			stability     float64
+			id             int64
+			stability      float64
 			retrievability float64
 		}
 		toRecon := make([]reconItem, 0, len(items))
 		for _, item := range items {
 			if sm, ok := scoredByID[item.ID]; ok {
 				toRecon = append(toRecon, reconItem{
-					id:            sm.Memory.ID,
-					stability:     sm.Memory.Stability,
+					id:             sm.Memory.ID,
+					stability:      sm.Memory.Stability,
 					retrievability: sm.Memory.Retrievability,
 				})
 			}

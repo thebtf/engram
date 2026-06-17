@@ -15,6 +15,13 @@ type ScoredMemory struct {
 	Relevance  float64        `json:"relevance"`
 	Recency    float64        `json:"recency"`
 	Importance float64        `json:"importance"`
+	// RerankScore is the cross-encoder relevance score [0,1] when a reranker ran
+	// (rank-4), or the sentinel -1 when it did not (no reranker configured, or it
+	// errored and the fusion order was kept). Observability only — it does NOT feed
+	// the composite Score() formula above; the reranker REPLACES the result ORDER,
+	// it does not blend into the fused score. Lets callers distinguish CE-ordered
+	// results from fusion-ordered fallback.
+	RerankScore float64 `json:"rerank_score"`
 }
 
 const (
@@ -52,10 +59,11 @@ func Score(m *models.Memory, relevance float64, now time.Time) ScoredMemory {
 	composite := WeightRelevance*relevance + WeightRecency*recency + WeightImportance*importance
 
 	return ScoredMemory{
-		Memory:     m,
-		Score:      composite,
-		Relevance:  relevance,
-		Recency:    recency,
-		Importance: importance,
+		Memory:      m,
+		Score:       composite,
+		Relevance:   relevance,
+		Recency:     recency,
+		Importance:  importance,
+		RerankScore: -1, // sentinel: no cross-encoder ran (rank-4); set by the rerank stage when it does
 	}
 }

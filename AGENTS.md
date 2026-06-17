@@ -23,6 +23,20 @@ stdio daemon + gRPC model); REST API + gRPC on port 37777 (cmux multiplexed).
 | **Reasoning first** | Document WHY before implementing |
 | **No silent patching** | Report every discrepancy found |
 | **No time estimates** | Prioritize by value/risk/dependencies, not phantom duration |
+| **No resurrecting demolished code** | A symbol/field/env-var/doc EXISTING ≠ it is wired or correct. Classify before building on it (see V5 DEMOLITION GUARD). |
+
+## V5 DEMOLITION GUARD (anti-resurrection — read before extending any existing scaffold)
+
+engram underwent a **v5 demolition**: graph stage, cross-encoder rerank, `internal/search` scoring passes (ApplyCompositeScoring/LaneWeights/DiversityPenalty/SessionBoost), SDK observation extraction, and server-side MCP HTTP transports were all **removed**. Leftover references survive in docs, Swagger `@Description` strings, `.gitattributes` LFS rules, CHANGELOG, model fields, and env-var templates. **"I found something that looks like it implements X" ≠ "X is designed, wired, and works."** Building on a stale remnant restores demolished (incorrect) behavior.
+
+Before building on ANY existing scaffold, classify it against the CURRENT code (not memory, not docs, not its mere existence):
+
+- **live** — runs on prod today. Verify: trace the call path AND the flag state (e.g. `ENGRAM_VNEXT_ENABLED`).
+- **pre-demolition-stale** — leftover remnant. IGNORE or cleanly delete; never extend, never use as a build target.
+- **dormant-flag-gated** — exists but only active behind an unset flag (e.g. `ENGRAM_LIFECYCLE_ENABLED`). A serve-time feature built on it yields empty/null output in prod.
+- **must-build** — absent; build new.
+
+**Tombstone tells** (signals a thing is stale, not a contract): a model field the write-path never populates (grep the write handler, not the struct); an env var with **zero `os.Getenv` reads** in `.go` (grep the reads, not the template/docs); a doc-comment whose handler body returns 501 or is FTS-only; a comment literally saying "removed in v5". When in doubt, grep the write-path and the actual `os.Getenv`/call sites — never trust the declaration alone.
 
 ## CONVENTIONS
 

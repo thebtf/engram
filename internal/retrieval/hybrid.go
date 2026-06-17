@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/thebtf/engram/internal/embedding"
@@ -89,6 +90,31 @@ type GraphStoreInterface interface {
 	Traverse(ctx context.Context, startID int64, maxDepth int, edgeTypes []string) ([]graph.TraversalResult, error)
 }
 
+// CrossEncoder is the minimal interface HybridSearch needs to rerank the fused
+// candidate pool with a cross-encoder (rank-4, 2026-06-17). It is threaded as an
+// optional field on HybridOptions and is nil-guarded: when absent the fusion order
+// is kept unchanged. The concrete implementation (internal/reranking.Client) targets
+// a LiteLLM /rerank endpoint over HTTP — this is a NEW build, not the v5-demolished
+// ONNX reranker (see AGENTS.md "V5 DEMOLITION GUARD").
+//
+// Rank returns the passages reordered most-relevant-first as Index/RelevanceScore
+// pairs, where Index points back into the input passages slice. A returned error
+// MUST be treated by the caller as "keep fusion order" — the reranker can never
+// block or fail recall.
+type CrossEncoder interface {
+	Rank(ctx context.Context, query string, passages []string) ([]RerankResult, error)
+}
+
+// RerankResult mirrors reranking.PassageScore without importing that package
+// (keeps internal/retrieval free of the concrete rerank client, same discipline as
+// the store interfaces above). Exported so a wiring-layer adapter in another package
+// can name it when implementing CrossEncoder. The concrete []reranking.PassageScore
+// is adapted to []RerankResult at the call site.
+type RerankResult struct {
+	Index          int
+	RelevanceScore float64
+}
+
 // HybridOptions configures an individual HybridSearch call.
 type HybridOptions struct {
 	// QueryVec is the embedding of the query string. When nil and no embedding
@@ -122,7 +148,22 @@ type HybridOptions struct {
 	// MCP-layer predicates into HybridSearch preserves the layer boundary: the
 	// retrieval package stays filter-agnostic.
 	SkipTier0 bool
+	// Reranker, when non-nil, reorders the fused+scored candidate pool with a
+	// cross-encoder before the final sort (rank-4). It runs on the full pool
+	// (up to limit*5 candidates) while it is still un-truncated, so it can promote
+	// a conceptually-relevant candidate that fusion ranked low. When nil, the fusion
+	// order is kept unchanged (the pre-rank-4 behavior, byte-identical). A reranker
+	// error never propagates — the pool keeps its fusion order. The pool handed to
+	// the cross-encoder is capped at RerankMaxCandidates to bound HTTP latency.
+	Reranker CrossEncoder
 }
+
+// RerankMaxCandidates caps how many fused candidates are sent to the cross-encoder
+// in one /rerank call, bounding recall latency. With the default recall limit of 10
+// the fused pool is limit*5 = 50, which sits at this cap; a larger caller limit or a
+// filter-widened pool is trimmed to the top RerankMaxCandidates by fusion score
+// before reranking.
+const RerankMaxCandidates = 50
 
 // HybridSearch runs the tiered retrieval pipeline (FR-C4) for a project and query.
 //
@@ -418,6 +459,19 @@ func HybridSearch(
 		}
 	}
 
+	// Rank-4 cross-encoder rerank (2026-06-17). When a reranker is configured,
+	// reorder the full fused+scored candidate pool by cross-encoder relevance BEFORE
+	// the final sort + truncation below, so a conceptually-relevant candidate fusion
+	// ranked low can still reach the caller's top-k. This REPLACES the order (it does
+	// not blend into Score): on success we overwrite each candidate's Score with a
+	// descending rank key derived from the reranker's returned order, and record the
+	// raw relevance in RerankScore for observability. The reranker is nil-guarded and
+	// failure-silent — any error keeps the fusion order (a missing/broken reranker
+	// must NEVER block or fail recall). Mirrors the embedding-client degrade pattern.
+	if opts.Reranker != nil && len(scored) > 1 {
+		rerankApplyCrossEncoder(ctx, opts.Reranker, query, scored)
+	}
+
 	// Final sort: score desc → ID asc (deterministic tie-breaker).
 	sort.Slice(scored, func(i, j int) bool {
 		if scored[i].Score != scored[j].Score {
@@ -448,6 +502,70 @@ func HybridSearch(
 func contentHash(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// rerankApplyCrossEncoder reorders scored in place by cross-encoder relevance
+// (rank-4). It sends the top RerankMaxCandidates (by current fused Score, so the
+// strongest fusion candidates are the ones reranked) to the cross-encoder, then
+// rewrites each reranked candidate's Score with a strictly-descending key so the
+// caller's existing final sort.Slice reproduces the reranker's order exactly — the
+// truncation contract (scored[:limit]) is untouched. RerankScore records the raw
+// relevance [0,1] for observability.
+//
+// Failure-silent by contract: a nil/empty reranker result or any error leaves scored
+// unchanged (fusion order, RerankScore stays at the -1 sentinel). The reranker can
+// never block or fail recall — that is the explicit anti-pattern this avoids.
+func rerankApplyCrossEncoder(ctx context.Context, ce CrossEncoder, query string, scored []ScoredMemory) {
+	// Cap the pool sent to the HTTP cross-encoder to bound latency. scored is not yet
+	// sorted here, so select the top-N by current fused Score rather than slice head.
+	n := len(scored)
+	if n > RerankMaxCandidates {
+		// Partial selection: move the RerankMaxCandidates highest-Score candidates to
+		// the front so indices [0,RerankMaxCandidates) are the rerank pool. A full sort
+		// is acceptable (n is bounded by limit*5) and keeps the mapping simple.
+		sort.Slice(scored, func(i, j int) bool {
+			if scored[i].Score != scored[j].Score {
+				return scored[i].Score > scored[j].Score
+			}
+			return scored[i].Memory.ID < scored[j].Memory.ID
+		})
+		n = RerankMaxCandidates
+	}
+
+	passages := make([]string, n)
+	for i := 0; i < n; i++ {
+		passages[i] = scored[i].Memory.Content
+	}
+
+	results, err := ce.Rank(ctx, query, passages)
+	if err != nil || len(results) == 0 {
+		if err != nil {
+			log.Debug().Err(err).Msg("rerank: cross-encoder failed; keeping fusion order")
+		}
+		return // failure-silent: fusion order preserved, RerankScore stays -1
+	}
+
+	// Find the max fused Score among the reranked pool so the rerank keys sit strictly
+	// ABOVE every un-reranked tail candidate (indices [n,len)) — reranked results must
+	// always outrank the tail that the cross-encoder never saw.
+	maxFused := 0.0
+	for i := 0; i < n; i++ {
+		if scored[i].Score > maxFused {
+			maxFused = scored[i].Score
+		}
+	}
+	base := maxFused + float64(len(results)) + 1
+
+	// Assign strictly-descending keys in the reranker's returned order. results[0] is
+	// most-relevant → highest key. Out-of-range indices are skipped (client already
+	// guards, belt-and-suspenders here).
+	for rank, r := range results {
+		if r.Index < 0 || r.Index >= n {
+			continue
+		}
+		scored[r.Index].Score = base - float64(rank)
+		scored[r.Index].RerankScore = r.RelevanceScore
+	}
 }
 
 // buildTierSet returns a fast membership test function for the requested tiers.
