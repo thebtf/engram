@@ -143,9 +143,15 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 		log.Debug().Err(err).Msg("stats/vnext: project citation rates unavailable")
 	} else {
 		for _, rr := range rateRows {
-			rate := float64(rr.TotalCitations) / float64(rr.TotalInjections)
-			if rate > 1.0 {
-				rate = 1.0
+			// Guard division-by-zero defensively: the HAVING clause already excludes
+			// zero-injection projects, but a future query edit shouldn't be able to produce
+			// NaN/+Inf here (json.Marshal rejects those with "unsupported value").
+			var rate float64
+			if rr.TotalInjections > 0 {
+				rate = float64(rr.TotalCitations) / float64(rr.TotalInjections)
+				if rate > 1.0 {
+					rate = 1.0
+				}
 			}
 			projectRates = append(projectRates, projectCitationRate{
 				Project:         rr.Project,
@@ -165,17 +171,25 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 		Count   int64
 	}
 	var outcomeRows []outcomeRow
+	// GROUP BY the raw outcome column (not a COALESCE/NULLIF expression) so any index on
+	// outcome stays usable as sdk_sessions grows; map NULL and '' to "(unrecorded)" in Go.
+	// Postgres scans a NULL outcome into the zero-value "" here, so NULL and '' both arrive as
+	// the empty string and are merged with += into the single "(unrecorded)" bucket.
 	if err := store.DB.WithContext(ctx).Raw(`
-		SELECT COALESCE(NULLIF(outcome, ''), '(unrecorded)') AS outcome, COUNT(*) AS count
+		SELECT outcome, COUNT(*) AS count
 		FROM sdk_sessions
-		GROUP BY COALESCE(NULLIF(outcome, ''), '(unrecorded)')`).Scan(&outcomeRows).Error; err != nil {
+		GROUP BY outcome`).Scan(&outcomeRows).Error; err != nil {
 		log.Debug().Err(err).Msg("stats/vnext: outcome telemetry unavailable")
 	} else {
 		ot := &outcomeTelemetry{ByOutcome: make(map[string]int64)}
 		for _, orow := range outcomeRows {
-			ot.ByOutcome[orow.Outcome] = orow.Count
+			key := orow.Outcome
+			if key == "" {
+				key = "(unrecorded)"
+			}
+			ot.ByOutcome[key] += orow.Count
 			ot.TotalSessions += orow.Count
-			if orow.Outcome == "(unrecorded)" {
+			if key == "(unrecorded)" {
 				ot.UnrecordedSessions += orow.Count
 			}
 		}
