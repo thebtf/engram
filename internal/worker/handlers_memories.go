@@ -350,3 +350,81 @@ func (s *Service) handleDeleteMemoryByID(w http.ResponseWriter, r *http.Request)
 
 	writeJSON(w, map[string]string{"status": "ok"})
 }
+
+// handleGetMemoryByID godoc
+// @Summary Get a single memory note by ID
+// @Description Returns the full memory row for the given numeric ID. Under
+// @Description ENGRAM_VNEXT_F_ENABLED the caller's privacy-scope visibility is
+// @Description enforced via scope.Resolve: a memory the caller cannot see returns
+// @Description 404 (not 403) so the endpoint never leaks the existence of a private
+// @Description memory — mirroring the edit_memory cross-project deny contract and
+// @Description the listVisibleMemoriesREST visibility model.
+// @Tags Memories
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Memory ID"
+// @Success 200 {object} models.Memory
+// @Failure 400 {string} string "invalid id"
+// @Failure 404 {string} string "not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal error"
+// @Router /api/memories/{id} [get]
+func (s *Service) handleGetMemoryByID(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+
+	mem, err := s.memoryStore.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("get memory failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Scope visibility: under ENGRAM_VNEXT_F_ENABLED a caller may only read a
+	// memory their keycard can see. An invisible memory returns 404 — never 403 —
+	// so the endpoint does not reveal that a private memory exists. This is the
+	// single-row counterpart to listVisibleMemoriesREST and the edit_memory
+	// existence-leak guard; without it, GET /api/memories/{id} would be a new
+	// cross-surface symmetry break re-exposing private rows by ID.
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" && !memoryVisibleToCaller(r.Context(), mem) {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, mem)
+}
+
+// memoryVisibleToCaller reports whether the request's keycard identity may see
+// the given memory under the privacy-scope model. Mirrors the per-row predicate
+// in listVisibleMemoriesREST so all read surfaces share identical semantics.
+func memoryVisibleToCaller(ctx context.Context, mem *models.Memory) bool {
+	if mem == nil {
+		return false
+	}
+	var caller scope.KeycardContext
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+	}
+	memScope := mem.PrivacyScope
+	if memScope == "" {
+		memScope = "project"
+	}
+	meta := scope.SourceMeta{
+		WorkstationID: mem.SourceWorkstationID,
+		Sessions:      mem.SourceSessions,
+	}
+	return scope.Resolve(caller, memScope, meta)
+}

@@ -1383,9 +1383,11 @@ func (s *Service) setupRoutes() {
 		// Memory routes (US3 Commit E — explicit user memories stored in memories table)
 		r.Post("/api/memories", s.handleStoreMemoryExplicit)
 		r.Get("/api/memories", s.handleListMemories)
+		r.Get("/api/memories/{id}", s.handleGetMemoryByID)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Behavioral rules management
+		r.Patch("/api/rules/{id}", s.handleUpdateBehavioralRule)
 		r.Delete("/api/rules/{id}", s.handleDeleteBehavioralRule)
 
 		// Token stats
