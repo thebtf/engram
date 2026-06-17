@@ -826,6 +826,12 @@ func (s *Service) initializeAsync() {
 	settingsRes := newSettingsResolver(settingsStore, s.getVault)
 	mcpServer.SetSettingsStore(settingsStore)
 
+	// CR-4 (#259): one-time idempotent backfill of legacy model-config env vars into the
+	// settings-store. Seeds a store key only when the env var is set AND the key is absent —
+	// never clobbers an operator-set value. Lets an operator migrate off env vars at leisure.
+	// Runs before the clients init below so a freshly-seeded value is available this boot.
+	migrateEnvToSettingsStore(s.ctx, settingsStore, s.getVault)
+
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	embClient, embErr := embedding.NewClientWithSettings(s.ctx, settingsRes)
 	if embErr != nil {
