@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.19.0] - 2026-06-17
+
+### Changed
+
+- **Thompson reinforcement on the recall path (rank-5, #298).** The session-end feedback loop
+  maintains per-memory Thompson priors `ts_alpha`/`ts_beta` (cited → α, uncited-injection /
+  violation → β, outcome-weighted), and the injection scorer already used them to prefer
+  proven-useful memories at session start — but `retrieval.Score()` (what `recall_memory` ranks
+  by) never read them. A memory cited many times had a high `ts_alpha` that was invisible on the
+  explicit-recall path.
+  - `Score()` now blends the Thompson posterior mean `ts_alpha/(ts_alpha+ts_beta)` into the
+    importance signal at the same 0.3 weight the raw `citation_count/injection_count` rate used.
+    The posterior is strictly more signal: Bayesian-smoothed (a single citation yields ~0.75, not
+    a maxed 1.0), outcome-weighted, and violation-aware (a violated memory ranks below neutral).
+  - Gated by an evidence threshold (`ts_alpha+ts_beta > 2.0`): both priors default to 1.0, so a
+    no-feedback memory sits at posterior 0.5 and is left untouched rather than dragged to the prior.
+  - Raw-rate fallback retained for memories whose `citation_count` predates the ts columns
+    (migration 105), so no pre-ts memory loses a boost it previously had.
+  - Builds on rank-2 (v6.18.0): ts increments now reflect genuine citations only, so the
+    reinforcement amplifies a clean signal rather than self-citation noise. No migration, no flag.
+
 ## [6.18.0] - 2026-06-17
 
 ### Fixed
