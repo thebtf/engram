@@ -142,6 +142,91 @@ func TestHandleUpdateBehavioralRule_Success(t *testing.T) {
 	assert.Equal(t, 7, got.Priority)
 }
 
+// TestHandleUpdateBehavioralRule_PartialPriorityOnly is the regression test for
+// the PATCH data-loss bug (gemini HIGH on PR #308): a priority-only update must
+// NOT wipe the rule's content. priority is the injection order, so a reorder
+// that silently blanked content would poison every future session.
+func TestHandleUpdateBehavioralRule_PartialPriorityOnly(t *testing.T) {
+	project := "test-rules-handler-update-partial-priority"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: keep this content",
+		Priority: 1,
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	// Only priority is sent — content and edited_by are omitted (nil).
+	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, `{"priority":9}`)
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	got, err := brs.Get(context.Background(), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 9, got.Priority, "priority must update")
+	assert.Equal(t, "handler test: keep this content", got.Content,
+		"content must be preserved when only priority is sent (no data loss)")
+}
+
+// TestHandleUpdateBehavioralRule_PartialContentOnly verifies a content-only edit
+// preserves the existing priority (the mirror of the priority-only case).
+func TestHandleUpdateBehavioralRule_PartialContentOnly(t *testing.T) {
+	project := "test-rules-handler-update-partial-content"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: original",
+		Priority: 5,
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, `{"content":"handler test: new text"}`)
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	got, err := brs.Get(context.Background(), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "handler test: new text", got.Content, "content must update")
+	assert.Equal(t, 5, got.Priority, "priority must be preserved when only content is sent")
+}
+
+// TestHandleUpdateBehavioralRule_ExplicitEmptyContent verifies that explicitly
+// sending content:"" is rejected with 400 (distinct from omitting content).
+func TestHandleUpdateBehavioralRule_ExplicitEmptyContent(t *testing.T) {
+	project := "test-rules-handler-update-explicit-empty"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: must survive",
+		Priority: 2,
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, `{"content":""}`)
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "explicit empty content must be rejected")
+
+	// Original content untouched.
+	got, err := brs.Get(context.Background(), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "handler test: must survive", got.Content)
+}
+
 // TestHandleUpdateBehavioralRule_NotFound verifies a PATCH to a non-existent rule
 // returns 404.
 func TestHandleUpdateBehavioralRule_NotFound(t *testing.T) {
@@ -156,19 +241,9 @@ func TestHandleUpdateBehavioralRule_NotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// TestHandleUpdateBehavioralRule_EmptyContent verifies that an empty content body
-// is rejected with 400 before any store call.
-func TestHandleUpdateBehavioralRule_EmptyContent(t *testing.T) {
-	project := "test-rules-handler-update-empty"
-	svc, _ := newRulesTestService(t, project)
-
-	body := `{"content":"","priority":3}`
-	req := newCHIRequestBody(http.MethodPatch, "/api/rules/1", "id", "1", body)
-	w := httptest.NewRecorder()
-	svc.handleUpdateBehavioralRule(w, req)
-
-	require.Equal(t, http.StatusBadRequest, w.Code)
-}
+// (explicit-empty-content rejection is covered by
+// TestHandleUpdateBehavioralRule_ExplicitEmptyContent, which seeds a real rule
+// so the empty-content 400 is reached after the existence fetch.)
 
 // TestHandleUpdateBehavioralRule_InvalidID verifies non-numeric/zero IDs return
 // 400 (with a non-nil store) or 503 (nil store), mirroring the delete handler.

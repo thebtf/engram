@@ -9,8 +9,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
-
-	"github.com/thebtf/engram/pkg/models"
 )
 
 // handleDeleteBehavioralRule godoc
@@ -54,13 +52,17 @@ func (s *Service) handleDeleteBehavioralRule(w http.ResponseWriter, r *http.Requ
 }
 
 // updateBehavioralRuleRequest is the JSON body for PATCH /api/rules/{id}.
-// content is required; priority defaults to 0 when omitted. project is NOT
-// editable — changing a rule's scope is a design-time concern (the store's
-// Update deliberately excludes it), so the field is absent here.
+// All fields are pointers so the handler can perform a true partial update:
+// an omitted field (nil) is left untouched, distinct from an explicit zero
+// value. This matters because priority IS the rule's injection order — a
+// content-only edit must not silently reset priority to 0, and a priority-only
+// reorder must not wipe content. project is NOT editable — changing a rule's
+// scope is a design-time concern (the store's Update deliberately excludes it),
+// so the field is absent here.
 type updateBehavioralRuleRequest struct {
-	Content  string `json:"content"`
-	EditedBy string `json:"edited_by"`
-	Priority int    `json:"priority"`
+	Content  *string `json:"content,omitempty"`
+	EditedBy *string `json:"edited_by,omitempty"`
+	Priority *int    `json:"priority,omitempty"`
 }
 
 // handleUpdateBehavioralRule godoc
@@ -101,17 +103,39 @@ func (s *Service) handleUpdateBehavioralRule(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Content == "" {
-		http.Error(w, "content is required and must not be empty", http.StatusBadRequest)
+
+	// Partial-update semantics: fetch the current row, then apply only the fields
+	// the caller explicitly provided. Without the fetch-merge step, the store's
+	// Update (which writes content/priority/edited_by unconditionally) would
+	// overwrite any omitted field with its zero value — silently wiping a rule's
+	// content on a priority-only reorder, or resetting injection priority to 0 on
+	// a content-only edit.
+	existing, err := s.behavioralRulesStore.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "rule not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("get behavioral rule for update failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	updated, err := s.behavioralRulesStore.Update(r.Context(), &models.BehavioralRule{
-		ID:       id,
-		Content:  req.Content,
-		Priority: req.Priority,
-		EditedBy: req.EditedBy,
-	})
+	if req.Content != nil {
+		if *req.Content == "" {
+			http.Error(w, "content must not be empty", http.StatusBadRequest)
+			return
+		}
+		existing.Content = *req.Content
+	}
+	if req.Priority != nil {
+		existing.Priority = *req.Priority
+	}
+	if req.EditedBy != nil {
+		existing.EditedBy = *req.EditedBy
+	}
+
+	updated, err := s.behavioralRulesStore.Update(r.Context(), existing)
 	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "rule not found", http.StatusNotFound)
