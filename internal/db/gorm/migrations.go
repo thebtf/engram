@@ -4618,6 +4618,37 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				})
 			},
 		},
+		{
+			// 143: model_settings — server-global key/value store for swappable model
+			// config (reranker/embedder URLs, model names, API keys). The #259 settings-store
+			// foundation (rank-8). A NEW table (not the stale system_config tombstone from
+			// migration 050, which has no Go layer): clean semantics, zero resurrection risk.
+			// Secret values live in encrypted_value (AES-256-GCM via Vault); plain config in value.
+			ID: "143_model_settings",
+			Migrate: func(tx *gorm.DB) error {
+				return tx.Exec(`
+					CREATE TABLE IF NOT EXISTS model_settings (
+						id                          BIGSERIAL PRIMARY KEY,
+						key                         TEXT NOT NULL,
+						value                       TEXT,
+						encrypted_value             BYTEA,
+						encrypted                   BOOLEAN NOT NULL DEFAULT false,
+						encryption_key_fingerprint  TEXT,
+						description                 TEXT,
+						edited_by                   TEXT,
+						version                     INTEGER NOT NULL DEFAULT 1,
+						created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+						deleted_at                  TIMESTAMPTZ
+					);
+					CREATE UNIQUE INDEX IF NOT EXISTS idx_model_settings_key
+						ON model_settings (key) WHERE deleted_at IS NULL;
+				`).Error
+			},
+			Rollback: func(tx *gorm.DB) error {
+				return tx.Exec(`DROP TABLE IF EXISTS model_settings`).Error
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

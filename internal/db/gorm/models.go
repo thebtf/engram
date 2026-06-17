@@ -217,6 +217,35 @@ type Credential struct {
 
 func (Credential) TableName() string { return "credentials" }
 
+// ModelSetting is the GORM row struct for the model_settings table (migration 143).
+// It is a server-global key/value store for swappable model configuration (reranker /
+// embedder URLs, model names, and API keys) — the #259 settings-store foundation.
+//
+// Deliberate differences from Credential (the mirrored pattern):
+//   - No `project` column: model config is server-global, not per-project. The unique key
+//     is `key` alone.
+//   - `value` is plain text for non-secret config (URLs, model names); secret values
+//     (API keys) are stored in `encrypted_value` (AES-256-GCM via the existing Vault) with
+//     a non-empty `encryption_key_fingerprint`. Exactly one of value / encrypted_value is set,
+//     indicated by the `encrypted` flag. This keeps non-secret config readable without the
+//     vault key while protecting secrets with the same crypto as credentials.
+type ModelSetting struct {
+	Key                      string     `gorm:"type:text;not null;uniqueIndex:idx_model_settings_key,where:deleted_at IS NULL" json:"key"`
+	Value                    string     `gorm:"type:text" json:"value,omitempty"`
+	EncryptedValue           []byte     `gorm:"type:bytea" json:"encrypted_value,omitempty"`
+	Encrypted                bool       `gorm:"not null;default:false" json:"encrypted"`
+	EncryptionKeyFingerprint string     `gorm:"type:text" json:"encryption_key_fingerprint,omitempty"`
+	Description              string     `gorm:"type:text" json:"description,omitempty"`
+	EditedBy                 string     `gorm:"type:text" json:"edited_by,omitempty"`
+	CreatedAt                time.Time  `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
+	UpdatedAt                time.Time  `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
+	DeletedAt                *time.Time `gorm:"type:timestamptz" json:"deleted_at,omitempty"`
+	ID                       int64      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Version                  int        `gorm:"not null;default:1" json:"version"`
+}
+
+func (ModelSetting) TableName() string { return "model_settings" }
+
 // Memory is the GORM row struct for the memories table (migration 088 + 105 lifecycle).
 // Tags are stored as JSONB using models.JSONStringArray.
 // search_vector is a GENERATED ALWAYS AS STORED column — it must NOT appear in INSERT/UPDATE
