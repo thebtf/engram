@@ -682,16 +682,25 @@ func (s *MemoryStore) GetProjectCitationRate(ctx context.Context, project string
 // BatchIncrementCitedN increments ts_alpha by a damped amount for the given memory IDs.
 // The actual boost is: n / (1 + consecutive_citation_count * damping_factor).
 // Also increments consecutive_citation_count for diminishing returns tracking.
-func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n float64) error {
+// importanceFactor (rank-6) scales the outcome-sensitivity of the importance_base citation
+// bump. The unscaled target growth is importance_base * ln(2 + citation_count); this scales the
+// growth ABOVE the current base by importanceFactor, so a successful session promotes a cited
+// memory harder for future injection (importance_base feeds ListForInjection ordering) than a
+// failed one. importanceFactor == 1.0 reduces the expression to the historical formula exactly
+// (base + (base*ln - base)*1 = base*ln), so existing/default-outcome behavior is unchanged; 0.0
+// leaves importance_base at its current value. GREATEST keeps the result monotonic-up (no
+// decrement), so this adds outcome sensitivity without permanent negative reinforcement.
+func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n, importanceFactor float64) error {
 	return s.db.WithContext(ctx).Exec(
 		`UPDATE memories SET
 			ts_alpha = ts_alpha + ? / (1.0 + consecutive_citation_count * 0.1),
 			citation_count = citation_count + 1,
 			consecutive_citation_count = consecutive_citation_count + 1,
-			importance_base = LEAST(1.0, GREATEST(importance_base, importance_base * ln(2.0 + citation_count))),
+			importance_base = LEAST(1.0, GREATEST(importance_base,
+				importance_base + (importance_base * ln(2.0 + citation_count) - importance_base) * ?)),
 			updated_at = now()
 		WHERE id = ANY(?)`,
-		n, pq.Array(ids),
+		n, importanceFactor, pq.Array(ids),
 	).Error
 }
 
