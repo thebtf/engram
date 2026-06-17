@@ -177,10 +177,18 @@ func (s *Service) processCitationsAsync(
 	}
 
 	// Step 3: Detect which memories appear in the agent output.
-	results := feedback.DetectCitations(agentOutput, memories)
+	// Rank-2 anti-poisoning: strip engram's OWN injected context blocks first, so an agent
+	// that echoes an injected <engram-static-memories>/<engram-reinjection>/<user-behavior-rules>/
+	// <open-issues> block verbatim cannot self-cite and falsely inflate citation_count. Only the
+	// agent's own references (outside the injected wrappers) count toward the feedback signal.
+	cleanedOutput := feedback.StripInjectedBlocks(agentOutput)
+	results := feedback.DetectCitations(cleanedOutput, memories)
 
 	// Step 3.5: Detect violations for guidance-type memories.
-	results = feedback.DetectViolations(agentOutput, results, memories)
+	// Uses the same injection-stripped output as Step 3: an echoed <user-behavior-rules> block
+	// would otherwise false-flag a violation (the prohibited token from a "never X" rule appears
+	// inside engram's own injected rule text, not in the agent's independent prose).
+	results = feedback.DetectViolations(cleanedOutput, results, memories)
 
 	// Step 4: Write citation results to citation_log.
 	var records []gormdb.CitationRecord
