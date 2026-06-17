@@ -65,12 +65,40 @@ type Client struct {
 // header is sent — supporting key-less endpoints such as a LAN LiteLLM or
 // Ollama proxy on a trusted network.
 func NewClient() (*Client, error) {
-	rawURL := os.Getenv("ENGRAM_EMBEDDING_URL")
+	return NewClientWithSettings(context.Background(), nil)
+}
+
+// SettingsResolver is the minimal settings-store read surface the embedder needs (#259).
+// Defined here (not imported from the db layer) to keep this low-level package
+// storage-agnostic; service.go wires a concrete resolver. Secret values (API keys) are NOT
+// served through this in CR-2 — they need vault decryption (CR-3); the API key stays on env.
+type SettingsResolver interface {
+	Get(ctx context.Context, key string) (string, bool)
+}
+
+// Settings keys read by the embedder (non-secret config only). The embedding DIMENSION is
+// deliberately NOT a settings key: it is pinned to EmbeddingDim and the vector(EmbeddingDim)
+// columns, so changing it needs a schema migration + full re-embed, never a runtime setting.
+const (
+	SettingKeyEmbedURL   = "embedder.url"
+	SettingKeyEmbedModel = "embedder.model"
+)
+
+// NewClientWithSettings creates an embedding Client with ENV-FIRST precedence: env vars win
+// over the settings-store (existing deployments unchanged, operator can override); when an env
+// var is empty the value is read from the settings-store (resolver) if provided. Returns
+// ErrEmbeddingDisabled when neither source yields a URL.
+//
+//   - URL:   ENGRAM_EMBEDDING_URL   → else settings "embedder.url"   (required to enable)
+//   - model: ENGRAM_EMBEDDING_MODEL → else settings "embedder.model" → else "text-embedding"
+//   - API key + dimensions: env only (api_key is a secret → CR-3; dimensions is schema-bound)
+func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Client, error) {
+	rawURL := resolveSetting(ctx, resolver, "ENGRAM_EMBEDDING_URL", SettingKeyEmbedURL)
 	if rawURL == "" {
 		return nil, ErrEmbeddingDisabled
 	}
 	baseURL := normalizeEmbeddingBaseURL(rawURL)
-	model := os.Getenv("ENGRAM_EMBEDDING_MODEL")
+	model := resolveSetting(ctx, resolver, "ENGRAM_EMBEDDING_MODEL", SettingKeyEmbedModel)
 	if model == "" {
 		model = "text-embedding"
 	}
@@ -110,6 +138,20 @@ func NewClient() (*Client, error) {
 			Timeout: 30 * time.Second,
 		},
 	}, nil
+}
+
+// resolveSetting applies env-first precedence: a non-empty env var wins; otherwise the
+// settings-store value (if a resolver is wired and the key exists); otherwise "".
+func resolveSetting(ctx context.Context, resolver SettingsResolver, envKey, settingKey string) string {
+	if v := os.Getenv(envKey); v != "" {
+		return v
+	}
+	if resolver != nil {
+		if v, ok := resolver.Get(ctx, settingKey); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // embeddingRequest is the OpenAI-compatible request body.

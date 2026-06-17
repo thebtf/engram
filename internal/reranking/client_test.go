@@ -42,6 +42,91 @@ func TestNewClient_DefaultsModelAndEnables(t *testing.T) {
 	}
 }
 
+// fakeResolver is an in-memory SettingsResolver for precedence tests (no DB).
+type fakeResolver map[string]string
+
+func (f fakeResolver) Get(_ context.Context, key string) (string, bool) {
+	v, ok := f[key]
+	return v, ok
+}
+
+// TestNewClientWithSettings_EnvFirstPrecedence pins the CR-2 (#259) read-path contract:
+// env wins over the settings-store; the store fills in when env is empty; the built-in
+// default applies only when both are empty.
+func TestNewClientWithSettings_EnvFirstPrecedence(t *testing.T) {
+	// Start from a clean slate so ambient env never leaks into the cases.
+	os.Unsetenv("ENGRAM_RERANK_URL")
+	os.Unsetenv("ENGRAM_RERANK_MODEL")
+
+	t.Run("env wins over settings", func(t *testing.T) {
+		t.Setenv("ENGRAM_RERANK_URL", "https://env.example.test/v1/rerank")
+		t.Setenv("ENGRAM_RERANK_MODEL", "env-model")
+		res := fakeResolver{
+			SettingKeyRerankURL:   "https://store.example.test/v1/rerank",
+			SettingKeyRerankModel: "store-model",
+		}
+		c, err := NewClientWithSettings(context.Background(), res)
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if c.baseURL != "https://env.example.test" {
+			t.Errorf("baseURL = %q, want env value to win", c.baseURL)
+		}
+		if c.Model() != "env-model" {
+			t.Errorf("model = %q, want env value to win", c.Model())
+		}
+	})
+
+	t.Run("settings fill in when env empty", func(t *testing.T) {
+		os.Unsetenv("ENGRAM_RERANK_URL")
+		os.Unsetenv("ENGRAM_RERANK_MODEL")
+		res := fakeResolver{
+			SettingKeyRerankURL:   "https://store.example.test/v1/rerank",
+			SettingKeyRerankModel: "store-model",
+		}
+		c, err := NewClientWithSettings(context.Background(), res)
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if c.baseURL != "https://store.example.test" {
+			t.Errorf("baseURL = %q, want store value when env unset", c.baseURL)
+		}
+		if c.Model() != "store-model" {
+			t.Errorf("model = %q, want store value when env unset", c.Model())
+		}
+	})
+
+	t.Run("model default when both empty", func(t *testing.T) {
+		os.Unsetenv("ENGRAM_RERANK_MODEL")
+		// URL comes from the store so the client enables; model is absent everywhere.
+		res := fakeResolver{SettingKeyRerankURL: "https://store.example.test"}
+		c, err := NewClientWithSettings(context.Background(), res)
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if c.Model() != "bge-reranker" {
+			t.Errorf("model = %q, want built-in default when env+store empty", c.Model())
+		}
+	})
+
+	t.Run("disabled when URL absent everywhere", func(t *testing.T) {
+		os.Unsetenv("ENGRAM_RERANK_URL")
+		// Empty resolver: no URL in env or store.
+		_, err := NewClientWithSettings(context.Background(), fakeResolver{})
+		if !errors.Is(err, ErrRerankDisabled) {
+			t.Fatalf("err = %v, want ErrRerankDisabled when URL absent in env+store", err)
+		}
+	})
+
+	t.Run("nil resolver is env-only", func(t *testing.T) {
+		os.Unsetenv("ENGRAM_RERANK_URL")
+		_, err := NewClientWithSettings(context.Background(), nil)
+		if !errors.Is(err, ErrRerankDisabled) {
+			t.Fatalf("err = %v, want ErrRerankDisabled with nil resolver and no env", err)
+		}
+	})
+}
+
 func TestNormalizeRerankBaseURL(t *testing.T) {
 	cases := map[string]string{
 		"https://host":               "https://host",
