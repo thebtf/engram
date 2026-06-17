@@ -27,6 +27,11 @@ import (
 // reranker MUST NEVER block or fail recall.
 var ErrRerankDisabled = fmt.Errorf("reranking: disabled (ENGRAM_RERANK_URL not set)")
 
+// rerankCallBudget caps the wall-clock time the whole Rank() sequence (all attempts
+// plus backoff) may consume, so a slow/degraded endpoint cannot stall the synchronous
+// recall path. On expiry the caller falls back to fusion order.
+const rerankCallBudget = 9 * time.Second
+
 // PassageScore is one reranked passage: the original index into the input slice plus
 // the relevance score the cross-encoder assigned. Cohere/LiteLLM normalizes
 // relevance_score to [0,1] server-side, so no client-side sigmoid is applied.
@@ -93,9 +98,12 @@ func NewClient() (*Client, error) {
 		model:   model,
 		apiKey:  os.Getenv("ENGRAM_RERANK_API_KEY"),
 		httpClient: &http.Client{
-			// Recall is latency-sensitive; keep the rerank call bounded. On timeout the
-			// caller falls back to fusion order, so this is a soft ceiling not a hard dep.
-			Timeout: 10 * time.Second,
+			// Recall is latency-sensitive and synchronous (the agent blocks on it). The
+			// reranker is a SOFT enhancement whose fallback (fusion order) is already good,
+			// so the call must fail FAST, not retry hard. Per-attempt 4s; the whole Rank()
+			// sequence is additionally bounded by rerankCallBudget below so the worst case
+			// is single-digit seconds, never the ~36s a 3×10s+backoff loop would cost.
+			Timeout: 4 * time.Second,
 		},
 	}, nil
 }
@@ -152,15 +160,24 @@ func (c *Client) Rank(ctx context.Context, query string, passages []string) ([]P
 
 	endpoint := c.baseURL + "/v1/rerank"
 
+	// Bound the ENTIRE Rank() sequence (all attempts + backoff) so a degraded endpoint
+	// can never block the synchronous recall path beyond a few seconds — the caller
+	// falls back to fusion order on any error. Worst case: 2 attempts × 4s + 0.5s
+	// backoff ≈ 8.5s, hard-capped by this budget. (A 3×10s+exp-backoff loop would have
+	// cost ~36s on the recall path — rejected in code review.)
+	ctx, cancel := context.WithTimeout(ctx, rerankCallBudget)
+	defer cancel()
+
 	// Retry only transient failures (connection errors, 5xx). A 4xx is a config error
 	// (wrong model/auth) — fail fast so the caller falls back without burning retries.
+	// 2 attempts total (1 retry): the reranker is a soft enhancement, not worth a long tail.
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			case <-time.After(500 * time.Millisecond):
 			}
 		}
 
@@ -212,5 +229,5 @@ func (c *Client) Rank(ctx context.Context, query string, passages []string) ([]P
 		lastErr = fmt.Errorf("reranking: HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	log.Debug().Err(lastErr).Msg("reranking: all attempts failed; caller will fall back to fusion order")
-	return nil, fmt.Errorf("reranking: after 3 attempts: %w", lastErr)
+	return nil, fmt.Errorf("reranking: after 2 attempts: %w", lastErr)
 }
