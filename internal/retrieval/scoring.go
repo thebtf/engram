@@ -22,6 +22,13 @@ type ScoredMemory struct {
 	// it does not blend into the fused score. Lets callers distinguish CE-ordered
 	// results from fusion-ordered fallback.
 	RerankScore float64 `json:"rerank_score"`
+	// orderKey is the value the final sort orders by (desc). It equals the composite
+	// Score for every candidate UNTIL a cross-encoder reranks the pool, at which point
+	// the rerank stage rewrites orderKey (NOT Score) with a synthetic descending key.
+	// This keeps the public Score field an honest composite in [0,1] — callers that
+	// display, compare, or threshold `score` see the documented value even when a
+	// reranker reordered the results. Unexported → never serialized.
+	orderKey float64
 }
 
 const (
@@ -64,6 +71,7 @@ func Score(m *models.Memory, relevance float64, now time.Time) ScoredMemory {
 		Relevance:   relevance,
 		Recency:     recency,
 		Importance:  importance,
-		RerankScore: -1, // sentinel: no cross-encoder ran (rank-4); set by the rerank stage when it does
+		RerankScore: -1,        // sentinel: no cross-encoder ran (rank-4); set by the rerank stage when it does
+		orderKey:    composite, // sort key starts equal to the composite; the rerank stage rewrites it
 	}
 }

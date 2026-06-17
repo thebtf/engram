@@ -440,6 +440,7 @@ func HybridSearch(
 					// Graph penalty: 0.85 multiplier on the composite score.
 					sm := Score(m, 0.5, now)
 					sm.Score *= 0.85
+					sm.orderKey = sm.Score // keep the sort key aligned with the penalized composite
 					if opts.MinConfidence > 0 && sm.Score < opts.MinConfidence {
 						continue
 					}
@@ -472,10 +473,13 @@ func HybridSearch(
 		rerankApplyCrossEncoder(ctx, opts.Reranker, query, scored)
 	}
 
-	// Final sort: score desc → ID asc (deterministic tie-breaker).
+	// Final sort: orderKey desc → ID asc (deterministic tie-breaker). orderKey equals
+	// the composite Score for every candidate unless a cross-encoder reranked the pool,
+	// in which case the reranked candidates carry synthetic descending keys above the
+	// tail. Sorting by orderKey (not Score) lets the public Score stay an honest [0,1].
 	sort.Slice(scored, func(i, j int) bool {
-		if scored[i].Score != scored[j].Score {
-			return scored[i].Score > scored[j].Score
+		if scored[i].orderKey != scored[j].orderKey {
+			return scored[i].orderKey > scored[j].orderKey
 		}
 		return scored[i].Memory.ID < scored[j].Memory.ID
 	})
@@ -520,12 +524,13 @@ func rerankApplyCrossEncoder(ctx context.Context, ce CrossEncoder, query string,
 	// sorted here, so select the top-N by current fused Score rather than slice head.
 	n := len(scored)
 	if n > RerankMaxCandidates {
-		// Partial selection: move the RerankMaxCandidates highest-Score candidates to
-		// the front so indices [0,RerankMaxCandidates) are the rerank pool. A full sort
-		// is acceptable (n is bounded by limit*5) and keeps the mapping simple.
+		// Partial selection: move the RerankMaxCandidates highest-ranked candidates to
+		// the front so indices [0,RerankMaxCandidates) are the rerank pool. Sort by
+		// orderKey (== composite Score pre-rerank) — A full sort is acceptable (n is
+		// bounded by limit*5) and keeps the mapping simple.
 		sort.Slice(scored, func(i, j int) bool {
-			if scored[i].Score != scored[j].Score {
-				return scored[i].Score > scored[j].Score
+			if scored[i].orderKey != scored[j].orderKey {
+				return scored[i].orderKey > scored[j].orderKey
 			}
 			return scored[i].Memory.ID < scored[j].Memory.ID
 		})
@@ -545,28 +550,31 @@ func rerankApplyCrossEncoder(ctx context.Context, ce CrossEncoder, query string,
 		return // failure-silent: fusion order preserved, RerankScore stays -1
 	}
 
-	// Find the max fused Score among the reranked pool so the rerank keys sit strictly
+	// Find the max orderKey among the reranked pool so the rerank keys sit strictly
 	// ABOVE every un-reranked tail candidate (indices [n,len)) — reranked results must
 	// always outrank the tail that the cross-encoder never saw. Seed from scored[0]
 	// (not 0.0) so the invariant holds even if Score() ever emits negatives — the
 	// pool was sorted desc above when n<len, and for n==len every candidate is in the
 	// pool, so this max is the true global max regardless of sign.
-	maxFused := scored[0].Score
+	maxFused := scored[0].orderKey
 	for i := 1; i < n; i++ {
-		if scored[i].Score > maxFused {
-			maxFused = scored[i].Score
+		if scored[i].orderKey > maxFused {
+			maxFused = scored[i].orderKey
 		}
 	}
 	base := maxFused + float64(len(results)) + 1
 
 	// Assign strictly-descending keys in the reranker's returned order. results[0] is
-	// most-relevant → highest key. Out-of-range indices are skipped (client already
-	// guards, belt-and-suspenders here).
+	// most-relevant → highest key. We rewrite orderKey (the sort key), NOT Score — the
+	// public Score field stays the honest composite in [0,1] so callers that display
+	// or threshold `score` see the documented value even after a rerank reorder. The
+	// raw relevance lands in RerankScore for observability. Out-of-range indices are
+	// skipped (client already guards, belt-and-suspenders here).
 	for rank, r := range results {
 		if r.Index < 0 || r.Index >= n {
 			continue
 		}
-		scored[r.Index].Score = base - float64(rank)
+		scored[r.Index].orderKey = base - float64(rank)
 		scored[r.Index].RerankScore = r.RelevanceScore
 	}
 }

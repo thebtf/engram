@@ -43,9 +43,11 @@ func (s *stubCrossEncoder) Rank(_ context.Context, _ string, passages []string) 
 func makeScored(ids ...int64) []ScoredMemory {
 	out := make([]ScoredMemory, len(ids))
 	for i, id := range ids {
+		s := float64(id) / 100.0
 		out[i] = ScoredMemory{
 			Memory:      &models.Memory{ID: id, Content: fmt.Sprintf("content-%d", id), CreatedAt: time.Now()},
-			Score:       float64(id) / 100.0,
+			Score:       s,
+			orderKey:    s, // mirror Score() constructor: sort key starts equal to composite
 			RerankScore: -1,
 		}
 	}
@@ -56,8 +58,8 @@ func makeScored(ids ...int64) []ScoredMemory {
 // returns the resulting id order — the order the caller actually sees.
 func finalOrder(scored []ScoredMemory) []int64 {
 	sort.Slice(scored, func(i, j int) bool {
-		if scored[i].Score != scored[j].Score {
-			return scored[i].Score > scored[j].Score
+		if scored[i].orderKey != scored[j].orderKey {
+			return scored[i].orderKey > scored[j].orderKey
 		}
 		return scored[i].Memory.ID < scored[j].Memory.ID
 	})
@@ -88,6 +90,11 @@ func TestRerankApplyCrossEncoder_ReordersByCrossEncoder(t *testing.T) {
 	for _, sm := range scored {
 		if sm.RerankScore < 0 {
 			t.Errorf("memory %d: RerankScore = %v, want >= 0 after rerank", sm.Memory.ID, sm.RerankScore)
+		}
+		// Codex review: the public Score field must remain the honest composite in
+		// [0,1] after rerank — only the unexported orderKey carries the synthetic key.
+		if sm.Score < 0 || sm.Score > 1 {
+			t.Errorf("memory %d: Score = %v after rerank, want composite in [0,1] (rerank must not clobber the public score)", sm.Memory.ID, sm.Score)
 		}
 	}
 }
