@@ -7,14 +7,26 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+// newCHIRequestBody is newCHIRequest with a JSON request body, for PATCH/POST
+// handlers that decode r.Body. Mirrors the body-less helper in handlers_projects_test.go.
+func newCHIRequestBody(method, target, paramName, paramValue, body string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(paramName, paramValue)
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+}
 
 // newRulesTestService constructs a Service wired with a real BehavioralRulesStore
 // backed by the DATABASE_DSN integration database. Skips when DATABASE_DSN is unset.
@@ -90,6 +102,100 @@ func TestHandleDeleteBehavioralRule_NotFound(t *testing.T) {
 	svc.handleDeleteBehavioralRule(w, req)
 
 	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandleUpdateBehavioralRule_Success verifies that a valid PATCH updates the
+// rule's content and priority, bumps its version, and returns the updated row.
+func TestHandleUpdateBehavioralRule_Success(t *testing.T) {
+	project := "test-rules-handler-update-success"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: original content",
+		Priority: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, created.Version)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	body := `{"content":"handler test: edited content","priority":7,"edited_by":"operator"}`
+	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, body)
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var updated models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, created.ID, updated.ID)
+	assert.Equal(t, "handler test: edited content", updated.Content)
+	assert.Equal(t, 7, updated.Priority)
+	assert.Equal(t, "operator", updated.EditedBy)
+	assert.Equal(t, 2, updated.Version, "version must bump on update")
+
+	// Verify persisted.
+	got, err := brs.Get(context.Background(), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "handler test: edited content", got.Content)
+	assert.Equal(t, 7, got.Priority)
+}
+
+// TestHandleUpdateBehavioralRule_NotFound verifies a PATCH to a non-existent rule
+// returns 404.
+func TestHandleUpdateBehavioralRule_NotFound(t *testing.T) {
+	project := "test-rules-handler-update-notfound"
+	svc, _ := newRulesTestService(t, project)
+
+	body := `{"content":"x","priority":0}`
+	req := newCHIRequestBody(http.MethodPatch, "/api/rules/999999999", "id", "999999999", body)
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandleUpdateBehavioralRule_EmptyContent verifies that an empty content body
+// is rejected with 400 before any store call.
+func TestHandleUpdateBehavioralRule_EmptyContent(t *testing.T) {
+	project := "test-rules-handler-update-empty"
+	svc, _ := newRulesTestService(t, project)
+
+	body := `{"content":"","priority":3}`
+	req := newCHIRequestBody(http.MethodPatch, "/api/rules/1", "id", "1", body)
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestHandleUpdateBehavioralRule_InvalidID verifies non-numeric/zero IDs return
+// 400 (with a non-nil store) or 503 (nil store), mirroring the delete handler.
+func TestHandleUpdateBehavioralRule_InvalidID(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		svcNilStore := &Service{}
+		req := newCHIRequestBody(http.MethodPatch, "/api/rules/abc", "id", "abc", `{"content":"x"}`)
+		w := httptest.NewRecorder()
+		svcNilStore.handleUpdateBehavioralRule(w, req)
+		require.Equal(t, http.StatusServiceUnavailable, w.Code)
+		return
+	}
+
+	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	svcWithStore := &Service{behavioralRulesStore: dbgorm.NewBehavioralRulesStore(store)}
+
+	for _, badID := range []string{"abc", "0", "-1", "1.5", ""} {
+		t.Run("id="+badID, func(t *testing.T) {
+			req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+badID, "id", badID, `{"content":"x"}`)
+			w := httptest.NewRecorder()
+			svcWithStore.handleUpdateBehavioralRule(w, req)
+			require.Equal(t, http.StatusBadRequest, w.Code, "expected 400 for id=%q", badID)
+		})
+	}
 }
 
 // TestHandleDeleteBehavioralRule_InvalidID verifies that a non-numeric path
