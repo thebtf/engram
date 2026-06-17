@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.22.0] - 2026-06-17
+
+### Added
+
+- **Opt-in write-time auto-supersede for near-identical memories (rank-9, #301).** write-lint
+  Phase1 already detected near-duplicates (Jaccard ≥ `DupThreshold` 0.85) and offered
+  `merge_with`/`supersede`, but always suspended for a Phase2 decision — so an ignored signal
+  still stored a duplicate. When `ENGRAM_AUTO_SUPERSEDE_THRESHOLD` is set above `DupThreshold`
+  (e.g. 0.97), a write matching a prior at/above that threshold now stores the new memory and
+  marks the best prior superseded **inline** — no token, no Phase2 round-trip — returning
+  `action_taken="auto_superseded"`.
+  - **Default 0.0 = DISABLED**; ships completely inert until an operator sets the env var.
+    Auto-supersede is destructive (the prior is marked superseded), so it is opt-in by design.
+  - Honored only strictly above `DupThreshold`, so the 0.85..threshold band stays signal-only
+    (human-in-the-loop). Out-of-range/malformed env clamps to the safe default.
+  - A failed `MarkSuperseded` is non-fatal (new memory already stored; leaves the old one active
+    = a harmless duplicate, never data loss) and is audit-logged. Jaccard word-set match only;
+    no embedding dependency, no migration.
+
 ## [6.21.0] - 2026-06-17
 
 ### Added
