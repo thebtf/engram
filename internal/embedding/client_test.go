@@ -133,6 +133,86 @@ func TestEmbed_ClampsIncompatibleDimensionsOverride(t *testing.T) {
 	}
 }
 
+// fakeResolver is an in-memory SettingsResolver for precedence tests (no DB).
+type fakeResolver map[string]string
+
+func (f fakeResolver) Get(_ context.Context, key string) (string, bool) {
+	v, ok := f[key]
+	return v, ok
+}
+
+// TestNewClientWithSettings_EnvFirstPrecedence pins the CR-2 (#259) read-path contract for
+// the embedder: env wins over the settings-store; the store fills in when env is empty; the
+// built-in default model applies only when both are empty; URL absence everywhere disables.
+func TestNewClientWithSettings_EnvFirstPrecedence(t *testing.T) {
+	t.Run("env wins over settings", func(t *testing.T) {
+		t.Setenv("ENGRAM_EMBEDDING_URL", "https://env.example.test/v1")
+		t.Setenv("ENGRAM_EMBEDDING_MODEL", "env-model")
+		res := fakeResolver{
+			SettingKeyEmbedURL:   "https://store.example.test/v1",
+			SettingKeyEmbedModel: "store-model",
+		}
+		c, err := NewClientWithSettings(context.Background(), res)
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if c.baseURL != "https://env.example.test" {
+			t.Errorf("baseURL = %q, want env value to win", c.baseURL)
+		}
+		if c.model != "env-model" {
+			t.Errorf("model = %q, want env value to win", c.model)
+		}
+	})
+
+	t.Run("settings fill in when env empty", func(t *testing.T) {
+		t.Setenv("ENGRAM_EMBEDDING_URL", "")
+		t.Setenv("ENGRAM_EMBEDDING_MODEL", "")
+		res := fakeResolver{
+			SettingKeyEmbedURL:   "https://store.example.test/v1",
+			SettingKeyEmbedModel: "store-model",
+		}
+		c, err := NewClientWithSettings(context.Background(), res)
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if c.baseURL != "https://store.example.test" {
+			t.Errorf("baseURL = %q, want store value when env unset", c.baseURL)
+		}
+		if c.model != "store-model" {
+			t.Errorf("model = %q, want store value when env unset", c.model)
+		}
+	})
+
+	t.Run("model default when both empty", func(t *testing.T) {
+		t.Setenv("ENGRAM_EMBEDDING_URL", "")
+		t.Setenv("ENGRAM_EMBEDDING_MODEL", "")
+		res := fakeResolver{SettingKeyEmbedURL: "https://store.example.test"}
+		c, err := NewClientWithSettings(context.Background(), res)
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if c.model != "text-embedding" {
+			t.Errorf("model = %q, want built-in default when env+store empty", c.model)
+		}
+	})
+
+	t.Run("disabled when URL absent everywhere", func(t *testing.T) {
+		t.Setenv("ENGRAM_EMBEDDING_URL", "")
+		_, err := NewClientWithSettings(context.Background(), fakeResolver{})
+		if err != ErrEmbeddingDisabled {
+			t.Fatalf("err = %v, want ErrEmbeddingDisabled when URL absent in env+store", err)
+		}
+	})
+
+	t.Run("nil resolver is env-only", func(t *testing.T) {
+		t.Setenv("ENGRAM_EMBEDDING_URL", "")
+		_, err := NewClientWithSettings(context.Background(), nil)
+		if err != ErrEmbeddingDisabled {
+			t.Fatalf("err = %v, want ErrEmbeddingDisabled with nil resolver and no env", err)
+		}
+	})
+}
+
 // TestNewClient_DisabledWithoutURL asserts the documented contract: an empty
 // ENGRAM_EMBEDDING_URL yields ErrEmbeddingDisabled.
 func TestNewClient_DisabledWithoutURL(t *testing.T) {

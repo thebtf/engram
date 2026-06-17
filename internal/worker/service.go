@@ -812,8 +812,14 @@ func (s *Service) initializeAsync() {
 		mcpServer.SetBulkFacade(bulkFacade)
 	}
 
+	// CR-2 (#259): the embedder and reranker resolve their non-secret config (URL, model)
+	// with env-first precedence backed by the settings-store. Env wins when set; otherwise
+	// the store value; otherwise the client's default. Secret values (API keys) stay env-only
+	// until CR-3 wires vault decryption.
+	settingsRes := newSettingsResolver(gorm.NewSettingsStore(store))
+
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
-	embClient, embErr := embedding.NewClient()
+	embClient, embErr := embedding.NewClientWithSettings(s.ctx, settingsRes)
 	if embErr != nil {
 		if errors.Is(embErr, embedding.ErrEmbeddingDisabled) {
 			log.Info().Msg("embedding: disabled (ENGRAM_EMBEDDING_URL not set)")
@@ -863,7 +869,7 @@ func (s *Service) initializeAsync() {
 	// ENGRAM_RERANK_URL unset). Independent of embedding: the reranker reorders the
 	// fused candidate pool on the recall path and works whether or not the vector leg
 	// is enabled. When disabled, recall keeps the fusion order (failure-silent).
-	rerankClient, rerankErr := reranking.NewClient()
+	rerankClient, rerankErr := reranking.NewClientWithSettings(s.ctx, settingsRes)
 	if rerankErr != nil {
 		if errors.Is(rerankErr, reranking.ErrRerankDisabled) {
 			log.Info().Msg("reranking: disabled (ENGRAM_RERANK_URL not set)")

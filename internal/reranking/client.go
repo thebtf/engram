@@ -82,20 +82,45 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient creates a rerank Client from environment variables.
-// Returns ErrRerankDisabled if ENGRAM_RERANK_URL is empty (the no-reranker default).
-//
-// Env (all NEW names — the phantom ENGRAM_RERANKING_* vars from the v5 era have zero
-// code reads and are deliberately NOT reused):
-//   - ENGRAM_RERANK_URL    — base URL of the LiteLLM rerank endpoint (required to enable)
-//   - ENGRAM_RERANK_MODEL  — model/deployment alias (default "bge-reranker")
-//   - ENGRAM_RERANK_API_KEY — optional Bearer token; omitted when empty (key-less LAN proxy)
+// SettingsResolver is the minimal read surface the reranker needs from the settings-store
+// (#259). It is defined here, not imported from the db layer, so this low-level package stays
+// storage-agnostic (no import cycle): service.go wires a concrete resolver backed by
+// SettingsStore. Get returns (value, true) when a non-secret setting exists, ("", false)
+// otherwise. Secret values (API keys) are NOT served through this interface in CR-2 — they
+// need vault decryption and are handled in CR-3; the API key still comes from env here.
+type SettingsResolver interface {
+	Get(ctx context.Context, key string) (string, bool)
+}
+
+// Settings keys read by the reranker (non-secret config only).
+const (
+	SettingKeyRerankURL   = "reranker.url"
+	SettingKeyRerankModel = "reranker.model"
+)
+
+// NewClient creates a rerank Client from environment variables only (no settings-store).
+// Equivalent to NewClientWithSettings(ctx, nil). Retained for callers/tests that have no
+// settings backing.
 func NewClient() (*Client, error) {
-	rawURL := os.Getenv("ENGRAM_RERANK_URL")
+	return NewClientWithSettings(context.Background(), nil)
+}
+
+// NewClientWithSettings creates a rerank Client, reading config with ENV-FIRST precedence:
+// an environment variable, when set, wins over the settings-store (so existing deployments are
+// unchanged and an operator can always override via env). When the env var is empty, the value
+// is read from the settings-store (resolver) if one is provided. Returns ErrRerankDisabled when
+// neither source yields a URL (the no-reranker default — recall keeps fusion order).
+//
+// Config sources (NEW env names — phantom ENGRAM_RERANKING_* vars are deliberately NOT reused):
+//   - URL:   ENGRAM_RERANK_URL   → else settings "reranker.url"   (required to enable)
+//   - model: ENGRAM_RERANK_MODEL → else settings "reranker.model" → else "bge-reranker"
+//   - API key: ENGRAM_RERANK_API_KEY only (secret; settings path lands in CR-3)
+func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Client, error) {
+	rawURL := resolveSetting(ctx, resolver, "ENGRAM_RERANK_URL", SettingKeyRerankURL)
 	if rawURL == "" {
 		return nil, ErrRerankDisabled
 	}
-	model := os.Getenv("ENGRAM_RERANK_MODEL")
+	model := resolveSetting(ctx, resolver, "ENGRAM_RERANK_MODEL", SettingKeyRerankModel)
 	if model == "" {
 		model = "bge-reranker"
 	}
@@ -112,6 +137,20 @@ func NewClient() (*Client, error) {
 			Timeout: 4 * time.Second,
 		},
 	}, nil
+}
+
+// resolveSetting applies env-first precedence: a non-empty env var wins; otherwise the
+// settings-store value (if a resolver is wired and the key exists); otherwise "".
+func resolveSetting(ctx context.Context, resolver SettingsResolver, envKey, settingKey string) string {
+	if v := os.Getenv(envKey); v != "" {
+		return v
+	}
+	if resolver != nil {
+		if v, ok := resolver.Get(ctx, settingKey); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // Model returns the configured rerank model name.
