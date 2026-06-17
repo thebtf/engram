@@ -9,7 +9,7 @@ import (
 // RankingRationale carries the per-result explanation emitted when a caller
 // passes include_rationale=true to recall_memory or recall(action=search).
 //
-// All 6 fields are sourced from existing Memory struct fields that were shipped
+// All 7 fields are sourced from existing Memory struct fields that were shipped
 // in Milestones A and B. There is NO vector cosine, NO graph_distance, NO LLM
 // rerank — those depend on infrastructure removed in v5 and are out of
 // Milestone F scope per spec §FR-F3 REVISE 2026-05-25.
@@ -26,6 +26,12 @@ type RankingRationale struct {
 	// CitationCount is the cumulative citation count (shipped Milestone A,
 	// migration 105). Integer ≥ 0.
 	CitationCount int `json:"citation_count"`
+	// InjectionCount is the cumulative number of times this memory was injected
+	// into a session-start context (shipped Milestone A, migration 105; written by
+	// BatchIncrementInjected). Integer ≥ 0. It is the DENOMINATOR for citation rate:
+	// the caller reads citation_count/injection_count to judge whether an injected
+	// memory was actually used, not a bare cited count. (CR-001: revive feedback loop.)
+	InjectionCount int `json:"injection_count"`
 	// Tier is the memory's lifecycle tier (shipped Milestone B, migration 110).
 	// One of working/episodic/semantic/procedural; empty string when not set.
 	Tier string `json:"tier,omitempty"`
@@ -74,6 +80,7 @@ func AssembleRationale(memory *models.Memory, queryText string, matched bool, fi
 		RecencyDays:    recencyDays,
 		Confidence:     memory.Confidence,
 		CitationCount:  memory.CitationCount,
+		InjectionCount: memory.InjectionCount,
 		Tier:           memory.Tier,
 		SubstringMatch: queryText != "" && matched,
 		FiltersApplied: appliedFilters,

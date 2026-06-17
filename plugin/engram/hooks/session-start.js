@@ -120,8 +120,11 @@ function formatNoCacheBanner() {
   return '<engram-session-start-unavailable>\nWARNING: Engram session-start context is unavailable and no cache is present. Continuing without injected static context.\n</engram-session-start-unavailable>\n';
 }
 
-async function fetchSessionStartPayload(project) {
-  return lib.requestGet(`/api/context/session-start?project=${encodeURIComponent(project)}`, 5000);
+async function fetchSessionStartPayload(project, sessionID) {
+  // POST with session_id so the server records this primary injection event to
+  // injection_log + increments injection_count (CR-001: revive feedback loop).
+  // The response shape is identical to the legacy GET, so rendering is unchanged.
+  return lib.requestPost('/api/context/session-start', { project, session_id: sessionID || '' }, 5000);
 }
 
 function buildCachedSessionStartPayload(overrides = {}) {
@@ -177,7 +180,7 @@ async function handleSessionStart(ctx, input) {
   const { cachePath, payload: cachedPayload } = getSessionStartCachePayload(project);
 
   try {
-    const payload = await fetchSessionStartPayload(project);
+    const payload = await fetchSessionStartPayload(project, sessionID);
     cacheSessionStartPayload(project, payload);
 
     const rules = Array.isArray(payload && payload.rules) ? payload.rules : [];
