@@ -340,10 +340,14 @@ func (s *IssueStore) CloseIssue(ctx context.Context, id int64, sourceProject str
 		// same present-day canonical id. Resolution is idempotent for already-
 		// canonical values, so this is safe for the common case too.
 		isOperator := sourceProject == "dashboard"
-		storedSource := ResolveProjectID(ctx, tx, issue.SourceProject)
-		callerSource := ResolveProjectID(ctx, tx, sourceProject)
-		if !isOperator && storedSource != "" && storedSource != callerSource {
-			return fmt.Errorf("only source project %q can close this issue", issue.SourceProject)
+		if !isOperator && issue.SourceProject != "" {
+			// Resolve only when authorization actually needs checking (avoids two DB
+			// round-trips for the operator-bypass and empty-source paths).
+			storedSource := ResolveProjectID(ctx, tx, issue.SourceProject)
+			callerSource := ResolveProjectID(ctx, tx, sourceProject)
+			if storedSource != callerSource {
+				return fmt.Errorf("only source project %q can close this issue", issue.SourceProject)
+			}
 		}
 
 		// State validation:
