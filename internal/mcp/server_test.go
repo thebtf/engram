@@ -404,8 +404,8 @@ func TestHandleToolsList_DefaultCountMatchesPrimary(t *testing.T) {
 	resp := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
 	result := resp.Result.(map[string]any)
 	tools := result["tools"].([]Tool)
-	// primary tools only: recall, store, feedback, vault, docs, admin, issues, check_system_health
-	assert.Equal(t, 8, len(tools))
+	// primary tools only: recall, store, feedback, vault, settings, docs, admin, issues, check_system_health
+	assert.Equal(t, 9, len(tools))
 }
 
 func TestHandleToolsList_IncludeAllReturnsMore(t *testing.T) {

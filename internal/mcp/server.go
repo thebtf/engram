@@ -55,6 +55,7 @@ type Server struct {
 	candidateStore         *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	snapshotStore          *gorm.SnapshotStore  // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	codeChunkStore         *gorm.CodeChunkStore // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
+	settingsStoreWired     *gorm.SettingsStore  // #259 CR-3: wired from the worker's open store so the settings tool reuses one pool (no per-call NewStore)
 	bulkFacade             *bulkops.Facade      // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
 	testAuditWriter        auditWriter          // set only in tests via setTestAuditWriter
 	testMemoryEditor       memoryEditor         // set only in tests via setTestMemoryEditor
@@ -704,7 +705,9 @@ func recallMemoryTool() Tool {
 	}
 }
 
-// primaryTools returns the 7 consolidated primary tools shown by default.
+// primaryTools returns the consolidated primary tools shown by default (without
+// include_all): recall, store, feedback, vault, settings, docs, admin, issues,
+// check_system_health. TestHandleToolsList_DefaultCountMatchesPrimary pins the count.
 func (s *Server) primaryTools() []Tool {
 	return []Tool{
 		{
@@ -774,6 +777,25 @@ func (s *Server) primaryTools() []Tool {
 					"value":   map[string]any{"type": "string", "description": "Credential value (for store)"},
 					"scope":   map[string]any{"type": "string", "description": "Scope: project/global (for store)"},
 					"project": map[string]any{"type": "string", "description": "Project name (for store)"},
+				},
+			},
+		},
+		{
+			Name: "settings",
+			Description: "Manage server-global model settings (reranker/embedder URL, model, API key) read by the " +
+				"server on the recall path (#259). Env vars still override stored settings. Actions: set, get, list, " +
+				"delete. set/delete require admin (operator) auth — they change behavior for every consumer. Secret " +
+				"keys (ending .api_key) are vault-encrypted and never returned in plaintext by get/list. Action required.",
+			tier: tierUseful,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]any{
+					"action":      map[string]any{"type": "string", "enum": []string{"set", "get", "list", "delete"}, "description": "Action to perform (required)"},
+					"key":         map[string]any{"type": "string", "description": "Setting key, e.g. reranker.url, reranker.model, reranker.api_key, embedder.url, embedder.model, embedder.api_key (for set, get, delete)"},
+					"value":       map[string]any{"type": "string", "description": "Setting value (for set)"},
+					"encrypt":     map[string]any{"type": "boolean", "description": "Force vault encryption even if the key name does not end in .api_key (for set). Keys ending .api_key are always encrypted."},
+					"description": map[string]any{"type": "string", "description": "Optional human description of the setting (for set)"},
 				},
 			},
 		},
@@ -1505,6 +1527,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleFeedbackConsolidated(ctx, args)
 	case "vault":
 		return s.handleVaultConsolidated(ctx, args)
+	case "settings":
+		return s.handleSettingsConsolidated(ctx, args)
 	case "docs":
 		return s.handleDocsConsolidated(ctx, args)
 	case "admin":

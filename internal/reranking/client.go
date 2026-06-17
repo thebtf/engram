@@ -92,10 +92,13 @@ type SettingsResolver interface {
 	Get(ctx context.Context, key string) (string, bool)
 }
 
-// Settings keys read by the reranker (non-secret config only).
+// Settings keys read by the reranker. URL and model are plaintext config; api_key is a
+// secret resolved through the same env-first path but backed by an encrypted settings row
+// that the resolver decrypts in-process (CR-3).
 const (
-	SettingKeyRerankURL   = "reranker.url"
-	SettingKeyRerankModel = "reranker.model"
+	SettingKeyRerankURL    = "reranker.url"
+	SettingKeyRerankModel  = "reranker.model"
+	SettingKeyRerankAPIKey = "reranker.api_key"
 )
 
 // NewClient creates a rerank Client from environment variables only (no settings-store).
@@ -112,9 +115,10 @@ func NewClient() (*Client, error) {
 // neither source yields a URL (the no-reranker default — recall keeps fusion order).
 //
 // Config sources (NEW env names — phantom ENGRAM_RERANKING_* vars are deliberately NOT reused):
-//   - URL:   ENGRAM_RERANK_URL   → else settings "reranker.url"   (required to enable)
-//   - model: ENGRAM_RERANK_MODEL → else settings "reranker.model" → else "bge-reranker"
-//   - API key: ENGRAM_RERANK_API_KEY only (secret; settings path lands in CR-3)
+//   - URL:     ENGRAM_RERANK_URL     → else settings "reranker.url"     (required to enable)
+//   - model:   ENGRAM_RERANK_MODEL   → else settings "reranker.model"   → else "bge-reranker"
+//   - API key: ENGRAM_RERANK_API_KEY → else settings "reranker.api_key" (secret; the resolver
+//     decrypts the encrypted settings row in-process — CR-3). Empty → no Authorization header.
 func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Client, error) {
 	rawURL := resolveSetting(ctx, resolver, "ENGRAM_RERANK_URL", SettingKeyRerankURL)
 	if rawURL == "" {
@@ -127,7 +131,7 @@ func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Cli
 	return &Client{
 		baseURL: normalizeRerankBaseURL(rawURL),
 		model:   model,
-		apiKey:  os.Getenv("ENGRAM_RERANK_API_KEY"),
+		apiKey:  resolveSetting(ctx, resolver, "ENGRAM_RERANK_API_KEY", SettingKeyRerankAPIKey),
 		httpClient: &http.Client{
 			// Recall is latency-sensitive and synchronous (the agent blocks on it). The
 			// reranker is a SOFT enhancement whose fallback (fusion order) is already good,
