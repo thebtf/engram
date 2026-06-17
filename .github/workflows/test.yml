@@ -7,6 +7,54 @@ on:
     branches: [main]
 
 jobs:
+  # Migration gate — runs the FULL migration chain against a clean PostgreSQL+pgvector
+  # database on every push. The matrix `test` job below skips all DATABASE_DSN-gated tests
+  # (no DB service), so without this job a broken migration reaches prod unverified — which
+  # is exactly how migration 143 shipped a multi-statement Exec that pgx rejects with
+  # SQLSTATE 42601, breaking server init on v6.23.0–v6.25.0. This job is the clean-DB
+  # first-run gate that catches that class of failure before merge.
+  migrations:
+    name: migrations / clean-db chain
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: engram
+          POSTGRES_PASSWORD: engram
+          POSTGRES_DB: engram
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U engram"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Runs the clean-DB full-chain gate: TestMigrationsIntegration calls runMigrations on
+      # a fresh database, so the entire chain (including the newest migration) must apply
+      # cleanly from zero — the first-run path the local borrowed DB never exercises, and the
+      # exact path that broke when migration 143 shipped a multi-statement Exec.
+      #
+      # The pattern is ANCHORED (TestMigrationsIntegration$) to this one gate. The sibling
+      # TestMigrationsIntegration_* tests are NOT clean-DB-safe on the base pgvector image —
+      # they drop/re-run individual migrations and assume an already-migrated schema, so an
+      # unanchored -run pulls them in and they fail on a from-zero DB. Those siblings stay as
+      # operator-run-against-a-real-DB tests; this gate owns the clean first-run contract.
+      - name: Run migration chain on clean DB
+        env:
+          DATABASE_DSN: postgres://engram:engram@localhost:5432/engram?sslmode=disable
+        run: go test ./internal/db/gorm/ -run 'TestMigrationsIntegration$' -count=1 -v
+
   test:
     name: test / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
