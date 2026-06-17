@@ -36,6 +36,21 @@ const (
 	WeightRecency    = 0.3
 	WeightImportance = 0.3
 	RecencyDecay     = 0.995
+
+	// tsEvidenceThreshold gates the rank-5 reinforcement term. ts_alpha and ts_beta both
+	// default to 1.0, so a memory with no accumulated citation feedback has ts_alpha+ts_beta
+	// == 2.0 and a posterior mean of exactly 0.5. Blending that 0.5 into importance would
+	// drag a no-evidence memory toward the prior (up OR down, depending on its base) for no
+	// real reason, so the reinforcement term applies only when the sum EXCEEDS this threshold —
+	// i.e. at least one real feedback event (citation, uncited-injection, or violation) has
+	// moved a prior off 1.0.
+	tsEvidenceThreshold = 2.0
+
+	// feedbackBlend is the share of the importance signal contributed by the citation/
+	// reinforcement term; (1 - feedbackBlend) is retained from the base+confidence importance.
+	// Unchanged from the raw-citation-rate term it replaces — rank-5 improves the QUALITY of
+	// this term (smoothed, outcome-weighted, violation-aware posterior), not its weight.
+	feedbackBlend = 0.3
 )
 
 // Score computes the 3-signal composite score for a memory.
@@ -55,9 +70,23 @@ func Score(m *models.Memory, relevance float64, now time.Time) ScoredMemory {
 	if m.Confidence > 0 {
 		importance = (importance + m.Confidence) / 2
 	}
-	if m.CitationCount > 0 && m.InjectionCount > 0 {
+	// Reinforcement (rank-5): blend the Thompson posterior mean of the citation-outcome priors
+	// into importance, so memories that have proven useful on repeat injection surface higher on
+	// the recall path. ts_alpha/ts_beta are maintained by the session-end feedback loop
+	// (BatchIncrementCited/Uncited/Violated) — outcome-weighted and violation-aware, and
+	// Bayesian-smoothed for small samples — so the posterior is strictly more signal than the raw
+	// citation_count/injection_count rate it replaces. As of rank-2, those increments reflect
+	// genuine citations only (echoed injections are stripped before detection), so the signal is
+	// trustworthy. The raw-rate branch is retained as a fallback for memories whose counts predate
+	// the ts priors (cited before migration 105 added the columns): their ts sum sits at the 2.0
+	// prior, so without the fallback they would silently lose a boost they previously had.
+	switch {
+	case m.TsAlpha+m.TsBeta > tsEvidenceThreshold:
+		tsPosterior := m.TsAlpha / (m.TsAlpha + m.TsBeta)
+		importance = importance*(1-feedbackBlend) + tsPosterior*feedbackBlend
+	case m.CitationCount > 0 && m.InjectionCount > 0:
 		citationRate := float64(m.CitationCount) / float64(m.InjectionCount)
-		importance = importance*0.7 + citationRate*0.3
+		importance = importance*(1-feedbackBlend) + citationRate*feedbackBlend
 	}
 	if importance > 1 {
 		importance = 1
