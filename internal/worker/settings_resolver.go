@@ -56,8 +56,10 @@ func (r *settingsResolver) Get(ctx context.Context, key string) (string, bool) {
 		}
 		return "", false
 	}
-	if row.Encrypted {
-		// Secret rows carry ciphertext only; not served on the CR-2 plaintext read path.
+	if row == nil || row.Encrypted {
+		// A nil row (a settingsReader returning (nil, nil) — defensive against custom or
+		// test implementations) or a secret row (ciphertext only, not served on the CR-2
+		// plaintext read path) both resolve to absent, so the caller uses env/default.
 		return "", false
 	}
 	return row.Value, true

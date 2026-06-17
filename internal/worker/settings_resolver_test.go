@@ -78,4 +78,16 @@ func TestSettingsResolver_Get(t *testing.T) {
 			t.Fatalf("Get(nil reader) = (%q, %v), want (\"\", false)", got, ok)
 		}
 	})
+
+	t.Run("nil row with nil error does not panic (gemini #304)", func(t *testing.T) {
+		// A settingsReader returning (nil, nil) — possible with a custom or future
+		// implementation — must resolve to absent, never panic on row.Encrypted.
+		r := &settingsResolver{reader: fakeSettingsReader{rows: map[string]*models.ModelSetting{
+			"reranker.url": nil, // present key, nil row, nil error
+		}}}
+		got, ok := r.Get(ctx, "reranker.url")
+		if ok || got != "" {
+			t.Fatalf("Get(nil row) = (%q, %v), want (\"\", false)", got, ok)
+		}
+	})
 }
