@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -44,6 +45,10 @@ func (s *SettingsStore) Set(ctx context.Context, in *models.ModelSetting) (*mode
 		return nil, fmt.Errorf("setting.Key must not be empty")
 	}
 	if in.Encrypted {
+		// Exactly-one-payload invariant: a secret row carries ciphertext, not plaintext.
+		if in.Value != "" {
+			return nil, fmt.Errorf("setting %q: Value must be empty when Encrypted=true (secret rows carry ciphertext only)", in.Key)
+		}
 		if len(in.EncryptedValue) == 0 {
 			return nil, fmt.Errorf("setting %q: Encrypted=true requires a non-empty EncryptedValue", in.Key)
 		}
@@ -60,52 +65,58 @@ func (s *SettingsStore) Set(ctx context.Context, in *models.ModelSetting) (*mode
 		encrypted = append([]byte(nil), in.EncryptedValue...)
 	}
 
-	// Load any existing active row for this key to decide insert vs update.
-	var existing ModelSetting
-	err := s.db.WithContext(ctx).
-		Where("key = ? AND deleted_at IS NULL", in.Key).
-		First(&existing).Error
-	switch {
-	case err == gorm.ErrRecordNotFound:
-		row := &ModelSetting{
-			Key:                      in.Key,
-			Value:                    in.Value,
-			EncryptedValue:           encrypted,
-			Encrypted:                in.Encrypted,
-			EncryptionKeyFingerprint: in.EncryptionKeyFingerprint,
-			Description:              in.Description,
-			EditedBy:                 in.EditedBy,
-			Version:                  1,
-			CreatedAt:                now,
-			UpdatedAt:                now,
+	// The check-then-insert-or-update is wrapped in a transaction with a row lock so two
+	// concurrent Set calls for the same key cannot both take the "not found" branch and
+	// race on the partial unique index. SELECT ... FOR UPDATE serializes them: the second
+	// waiter sees the first's committed row and takes the update branch.
+	var stored ModelSetting
+	txErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing ModelSetting
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("key = ? AND deleted_at IS NULL", in.Key).
+			First(&existing).Error
+		switch {
+		case err == gorm.ErrRecordNotFound:
+			row := &ModelSetting{
+				Key:                      in.Key,
+				Value:                    in.Value,
+				EncryptedValue:           encrypted,
+				Encrypted:                in.Encrypted,
+				EncryptionKeyFingerprint: in.EncryptionKeyFingerprint,
+				Description:              in.Description,
+				EditedBy:                 in.EditedBy,
+				Version:                  1,
+				CreatedAt:                now,
+				UpdatedAt:                now,
+			}
+			if err := tx.Create(row).Error; err != nil {
+				return err
+			}
+			stored = *row
+			return nil
+		case err != nil:
+			return err
+		default:
+			updates := map[string]any{
+				"value":                      in.Value,
+				"encrypted_value":            encrypted,
+				"encrypted":                  in.Encrypted,
+				"encryption_key_fingerprint": in.EncryptionKeyFingerprint,
+				"description":                in.Description,
+				"edited_by":                  in.EditedBy,
+				"version":                    existing.Version + 1,
+				"updated_at":                 now,
+			}
+			if err := tx.Model(&ModelSetting{}).Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+			return tx.First(&stored, existing.ID).Error
 		}
-		if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
-			return nil, fmt.Errorf("create setting %q: %w", in.Key, err)
-		}
-		return modelSettingRowToModel(row), nil
-	case err != nil:
-		return nil, fmt.Errorf("load setting %q: %w", in.Key, err)
-	default:
-		updates := map[string]any{
-			"value":                      in.Value,
-			"encrypted_value":            encrypted,
-			"encrypted":                  in.Encrypted,
-			"encryption_key_fingerprint": in.EncryptionKeyFingerprint,
-			"description":                in.Description,
-			"edited_by":                  in.EditedBy,
-			"version":                    existing.Version + 1,
-			"updated_at":                 now,
-		}
-		if err := s.db.WithContext(ctx).Model(&ModelSetting{}).
-			Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
-			return nil, fmt.Errorf("update setting %q: %w", in.Key, err)
-		}
-		var updated ModelSetting
-		if err := s.db.WithContext(ctx).First(&updated, existing.ID).Error; err != nil {
-			return nil, fmt.Errorf("reload setting %q: %w", in.Key, err)
-		}
-		return modelSettingRowToModel(&updated), nil
+	})
+	if txErr != nil {
+		return nil, fmt.Errorf("set setting %q: %w", in.Key, txErr)
 	}
+	return modelSettingRowToModel(&stored), nil
 }
 
 // Get returns the active setting for the given key, or a wrapped gorm.ErrRecordNotFound.
@@ -150,9 +161,17 @@ func (s *SettingsStore) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("key: must not be empty")
 	}
 	now := time.Now().UTC()
+	// Soft-delete: stamp deleted_at + updated_at, and clear both payload columns. A
+	// soft-deleted secret must not leave its ciphertext resident in the row (defense in
+	// depth — the value is gone the moment it's deleted, not just hidden by the filter).
 	result := s.db.WithContext(ctx).Model(&ModelSetting{}).
 		Where("key = ? AND deleted_at IS NULL", key).
-		Update("deleted_at", now)
+		Updates(map[string]any{
+			"deleted_at":      now,
+			"updated_at":      now,
+			"value":           "",
+			"encrypted_value": nil,
+		})
 	if result.Error != nil {
 		return fmt.Errorf("delete setting %q: %w", key, result.Error)
 	}

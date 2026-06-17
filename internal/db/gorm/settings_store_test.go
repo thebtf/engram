@@ -121,4 +121,37 @@ func TestSettingsStore_Validation(t *testing.T) {
 	// EncryptedValue present but Encrypted=false (ambiguous).
 	_, err = store.Set(ctx, &models.ModelSetting{Key: uniqueSettingKey(t, "bad2"), EncryptedValue: []byte{0x01}})
 	require.Error(t, err, "EncryptedValue without Encrypted=true must be rejected")
+
+	// Encrypted=true AND plaintext Value set violates exactly-one-payload (PR #303 review).
+	_, err = store.Set(ctx, &models.ModelSetting{
+		Key: uniqueSettingKey(t, "bad3"), Encrypted: true,
+		EncryptedValue: []byte{0x01}, EncryptionKeyFingerprint: "fp", Value: "leak",
+	})
+	require.Error(t, err, "Value must be empty when Encrypted=true")
+}
+
+// TestSettingsStore_DeleteClearsPayload confirms soft-delete wipes the payload columns
+// (a deleted secret must not leave ciphertext resident) — PR #303 review.
+func TestSettingsStore_DeleteClearsPayload(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	store := NewSettingsStore(&Store{DB: db})
+
+	key := uniqueSettingKey(t, "secret.to.delete")
+	defer db.Exec(`DELETE FROM model_settings WHERE key = ?`, key)
+
+	_, err := store.Set(ctx, &models.ModelSetting{
+		Key: key, Encrypted: true, EncryptedValue: []byte{0xDE, 0xAD, 0xBE, 0xEF}, EncryptionKeyFingerprint: "fp",
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.Delete(ctx, key))
+
+	// Read the soft-deleted row directly (bypassing the deleted_at filter) and confirm
+	// the ciphertext is gone.
+	var row ModelSetting
+	require.NoError(t, db.WithContext(ctx).Where("key = ?", key).First(&row).Error)
+	require.NotNil(t, row.DeletedAt, "row must be soft-deleted")
+	require.Empty(t, row.EncryptedValue, "soft-deleted secret must not retain ciphertext")
+	require.Empty(t, row.Value, "soft-deleted setting must not retain value")
 }
