@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.21.0] - 2026-06-17
+
+### Added
+
+- **Observability: per-project citation rate + outcome-recording health on `/api/stats/vnext`
+  (rank-7, #300).** Two query-only additions to the existing live stats endpoint — no migration,
+  no flag, no new endpoint.
+  - `project_citation_rates`: per-project `sum(citation_count)/sum(injection_count)` over live
+    memories (flagged excluded; zero-injection projects omitted). This is the "is recall actually
+    improving for this project?" signal — previously computable but never surfaced.
+  - `outcomes`: session-outcome recording health (`total_sessions`, `unrecorded_sessions`,
+    `unrecorded_fraction`, `by_outcome`). Makes outcome-signal starvation visible as a number —
+    the outcome-modulated feedback (ranks 5/6) runs neutral whenever a session's outcome is
+    unrecorded, and the automatic outcome path is currently inert (outcome is set only via the
+    opt-in `set_session_outcome` tool). A high `unrecorded_fraction` is the at-a-glance signal.
+  - Both queries degrade non-fatally; `GROUP BY` uses the raw `outcome` column (index-friendly),
+    mapping NULL/'' to "(unrecorded)" in Go.
+
 ## [6.20.0] - 2026-06-17
 
 ### Changed
