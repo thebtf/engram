@@ -140,6 +140,35 @@ func TestCollectSessionStartMemoryIDs(t *testing.T) {
 	})
 }
 
+// TestDetachedContext_NilServiceCtxFallsBackToBackground proves the CR-001 review
+// fix (gemini): a fire-and-forget recorder must never panic when s.ctx is nil (a
+// half-initialized Service, common in tests / early init). context.WithTimeout(nil,…)
+// panics; detachedContext must fall back to context.Background() instead.
+func TestDetachedContext_NilServiceCtxFallsBackToBackground(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{} // s.ctx is nil
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	require.NotPanics(t, func() {
+		ctx, cancel = svc.detachedContext(30 * time.Second)
+	})
+	defer cancel()
+	require.NotNil(t, ctx)
+	_, hasDeadline := ctx.Deadline()
+	assert.True(t, hasDeadline, "detachedContext must apply the timeout deadline")
+	assert.NoError(t, ctx.Err(), "fresh context must not be already cancelled")
+
+	// With a real parent ctx, the deadline is still applied and not panicking.
+	svc2 := &Service{ctx: context.Background()}
+	ctx2, cancel2 := svc2.detachedContext(30 * time.Second)
+	defer cancel2()
+	_, hasDeadline2 := ctx2.Deadline()
+	assert.True(t, hasDeadline2)
+}
+
 // TestHandleSessionStartContextStatic_POSTSessionIDNoStorePanic asserts that the
 // recording branch is safe when stores are not wired (nil injectionLogStore): a POST
 // carrying session_id must still deliver content and must NOT panic. This guards the

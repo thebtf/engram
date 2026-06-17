@@ -662,7 +662,7 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 				s.wg.Add(1)
 				go func() {
 					defer s.wg.Done()
-					recCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+					recCtx, cancel := s.detachedContext(30 * time.Second)
 					defer cancel()
 					if err := injLogStore.Record(recCtx, capturedSessionID, capturedProject, ids); err != nil {
 						log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_log: session-start record failed")
@@ -683,6 +683,20 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 		Memories:    sessionStartMemoriesToMaps(resp.GetMemories()),
 		GeneratedAt: generatedAt,
 	})
+}
+
+// detachedContext returns a timeout context for fire-and-forget background work
+// spawned from a request handler (injection recording, citation tracking). It falls
+// back to context.Background() when s.ctx is nil — a half-initialized Service shape
+// that occurs in unit tests and early init — so a detached goroutine can never panic
+// in context.WithTimeout and crash the process. All in-file recorders route through
+// this single chokepoint (CR-001 review: gemini flagged the unguarded s.ctx pattern).
+func (s *Service) detachedContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	parent := s.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 // collectSessionStartMemoryIDs extracts the deduplicated, non-zero memory IDs from
@@ -1136,7 +1150,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				s.wg.Add(1)
 				go func() {
 					defer s.wg.Done()
-					trkCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+					trkCtx, cancel := s.detachedContext(30 * time.Second)
 					defer cancel()
 					tracker.Track(trkCtx, capturedSID, capturedProj, capturedScored)
 					if capturedMemStore != nil && len(capturedSelected) > 0 {
@@ -1205,7 +1219,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			recCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+			recCtx, cancel := s.detachedContext(30 * time.Second)
 			defer cancel()
 			seen := make(map[int64]struct{})
 			var ids []int64
