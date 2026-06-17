@@ -64,21 +64,36 @@ func DetectRelativeTime(content string) []string {
 }
 
 // IsStaleCandidate reports whether a memory should be flagged as a stale candidate:
-// its content carries relative-time language AND it is older than window. Both inputs
-// are live, always-populated fields. window <= 0 falls back to DefaultFreshnessWindow.
+// its content carries relative-time language AND it has not changed within window.
+// lastChanged must be the memory's most-recent content change — the LATER of created_at
+// and updated_at (use EffectiveLastChanged). Measuring from created_at alone would mark
+// a just-edited old memory stale even though its content was rewritten today, telling the
+// agent to distrust a freshly-corrected fact (Codex review). window <= 0 falls back to
+// DefaultFreshnessWindow.
 //
 // This is a HEURISTIC HINT, never a hard signal — it tells the consuming agent
 // "re-verify before trusting", it does not hide, drop, or down-rank the memory.
-func IsStaleCandidate(content string, createdAt, now time.Time, window time.Duration) bool {
+func IsStaleCandidate(content string, lastChanged, now time.Time, window time.Duration) bool {
 	if window <= 0 {
 		window = DefaultFreshnessWindow
 	}
 	// Age check first: it is a single subtraction, whereas DetectRelativeTime runs a
 	// regex and allocates. Short-circuiting on fresh memories skips the scan entirely.
-	if now.Sub(createdAt) <= window {
+	if now.Sub(lastChanged) <= window {
 		return false
 	}
 	return len(DetectRelativeTime(content)) > 0
+}
+
+// EffectiveLastChanged returns the later of createdAt and updatedAt — the moment the
+// memory's content most recently changed. A zero updatedAt (never updated) falls back
+// to createdAt. This is the timestamp the staleness window should measure from, so an
+// old memory edited today is treated as fresh.
+func EffectiveLastChanged(createdAt, updatedAt time.Time) time.Time {
+	if updatedAt.After(createdAt) {
+		return updatedAt
+	}
+	return createdAt
 }
 
 // normalizeWhitespaceLower lowercases and collapses internal whitespace runs to a

@@ -192,4 +192,12 @@ func TestAssembleRationale_StalenessHint(t *testing.T) {
 		r := AssembleRationale(mem, "", false, nil)
 		assert.False(t, r.Stale, "absolute-anchored content must not be flagged stale")
 	})
+
+	t.Run("old created but edited today → not stale", func(t *testing.T) {
+		// Codex review: measure the window from the later of created_at/updated_at so a
+		// just-corrected old memory is trusted, not flagged stale.
+		mem := &models.Memory{Content: "the default is currently 1536", CreatedAt: old, UpdatedAt: now.Add(-1 * time.Hour)}
+		r := AssembleRationale(mem, "", false, nil)
+		assert.False(t, r.Stale, "an old memory edited today must not be flagged stale")
+	})
 }

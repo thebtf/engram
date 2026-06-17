@@ -392,7 +392,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			// finding 6 fix: no-signal stored=true carries the same fields as the
 			// legacy store_memory response (NFR-F1): id, storage, scope, privacy_scope,
 			// quality_signals. Phase1 returns MemoryID when Stored=true.
-			out, marshalErr := json.MarshalIndent(map[string]any{
+			wlResult := map[string]any{
 				"stored":          true,
 				"id":              p1resp.MemoryID,
 				"storage":         "memories",
@@ -400,7 +400,15 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				"privacy_scope":   params.PrivacyScope,
 				"quality_signals": []any{},
 				"message":         "Memory stored successfully via write-lint (no conflicts detected)",
-			}, "", "  ")
+			}
+			// Rank-3 staleness advisory must also fire on the write-lint success path —
+			// this is the primary store path when ENGRAM_VNEXT_F_ENABLED=true, the same
+			// config that activates the serve-time hint, so the advisory cannot be
+			// legacy-path-only (Codex review). Keyed on params.Content (post-redaction).
+			if terms := staleness.DetectRelativeTime(params.Content); len(terms) > 0 {
+				wlResult["staleness_advisory"] = staleAdvisory(terms)
+			}
+			out, marshalErr := json.MarshalIndent(wlResult, "", "  ")
 			if marshalErr != nil {
 				return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
 			}
@@ -800,10 +808,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// read months later looks like a current fact — this is the silent-staleness
 	// friction caught at the source. Advisory only; the memory is already stored.
 	if terms := staleness.DetectRelativeTime(created.Content); len(terms) > 0 {
-		result["staleness_advisory"] = map[string]any{
-			"relative_time_terms": terms,
-			"note":                "content uses relative-time language; prefer an absolute date or version anchor (e.g. 'as of 2026-06-17' / 'in v6.16.0') so the fact stays interpretable when recalled later",
-		}
+		result["staleness_advisory"] = staleAdvisory(terms)
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -1447,6 +1452,16 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 // It accepts the vnext-gated parameters (expand_graph, min_confidence,
 // tier_filter, explain) in addition to the base recall_memory params.
 //
+// staleAdvisory builds the non-blocking rank-3 write-time staleness advisory shared
+// by both store paths (legacy create and write-lint no-signal success), so the
+// advisory shape cannot drift between them.
+func staleAdvisory(terms []string) map[string]any {
+	return map[string]any{
+		"relative_time_terms": terms,
+		"note":                "content uses relative-time language; prefer an absolute date or version anchor (e.g. 'as of 2026-06-17' / 'in v6.16.0') so the fact stays interpretable when recalled later",
+	}
+}
+
 // rerankAdapter bridges the concrete reranking.Client to the retrieval.CrossEncoder
 // interface, keeping internal/retrieval free of the reranking package import (the
 // same package-boundary discipline used for the store interfaces). It adapts the

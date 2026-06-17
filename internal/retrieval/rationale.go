@@ -87,12 +87,15 @@ func AssembleRationale(memory *models.Memory, queryText string, matched bool, fi
 	}
 
 	// Rank-3 staleness hint: flag a result whose content uses relative-time language
-	// AND is older than the freshness window, so the agent re-verifies before trusting.
-	// Age-gate first (cheap), then a SINGLE regex scan whose terms are reused for both
-	// the flag and StaleTerms — no double scan. Well within the ≤5ms NFR-F3 budget.
+	// AND has not changed within the freshness window, so the agent re-verifies before
+	// trusting. Measure from the LATER of created_at/updated_at so an old memory edited
+	// today is treated as fresh (Codex review). Age-gate first (cheap), then a SINGLE
+	// regex scan whose terms are reused for both flag and StaleTerms — no double scan.
+	// Well within the ≤5ms NFR-F3 budget.
 	var stale bool
 	var staleTerms []string
-	if time.Since(memory.CreatedAt) > staleness.DefaultFreshnessWindow {
+	lastChanged := staleness.EffectiveLastChanged(memory.CreatedAt, memory.UpdatedAt)
+	if time.Since(lastChanged) > staleness.DefaultFreshnessWindow {
 		if terms := staleness.DetectRelativeTime(memory.Content); len(terms) > 0 {
 			stale = true
 			staleTerms = terms
