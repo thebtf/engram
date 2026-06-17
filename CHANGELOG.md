@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.18.0] - 2026-06-17
+
+### Fixed
+
+- **Anti-poisoning of the citation feedback signal (rank-2, #297).** The stop hook captures
+  only assistant-role text, but when the agent echoes an injected engram block verbatim in its
+  own turn, citation detection matched the memory against engram's OWN injection and falsely
+  marked it cited (or violated) — inflating `citation_count` with self-citation and corrupting
+  the rank-1 injection→citation feedback signal (and the rank-5/6 reinforcement built on it).
+  - New `feedback.StripInjectedBlocks` removes engram-owned context from agent output before
+    both `DetectCitations` and `DetectViolations`. It strips XML wrappers
+    (`<engram-*>`, `<user-behavior-rules>`, `<open-issues>` — the `engram-*` arm covers any
+    future tag without a code edit) and the live pre-compact markdown reinjection sentinel
+    (`# Engram Re-Injection` + Topic/bullet block written to `.engram/reinjection.md`).
+  - XML blocks are stripped by pairing each opening tag to its OWN matching closing tag by
+    name: an unclosed/truncated echo is kept literal (cannot swallow following genuine prose),
+    and a foreign closing tag inside a block is not treated as the boundary. This avoids
+    false-negative citations from RE2's lack of backreferences.
+  - Only the agent's own references outside the injected wrappers now count toward the feedback
+    signal; a genuine reference outside an echoed block is preserved.
+
 ## [6.14.0] - 2026-06-16
 
 ### Changed
