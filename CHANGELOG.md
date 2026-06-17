@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.22.1] - 2026-06-17
+
+### Fixed
+
+- **Issue close wrongly rejected the true owner across slug forms (#302).** `CloseIssue` compared
+  the stored `source_project` (raw, as written at creation) against the caller's `source_project`
+  (already canonicalized via `ResolveProjectID`). When a project's slug/legacy-id registration
+  differed between the creating and closing sessions (e.g. two sessions deriving `aimux` vs
+  `aimux_<hash>` for the same git remote), the raw-vs-resolved comparison rejected the true owner
+  with `only source project %q can close this issue` — even though the dashboard showed
+  `aimux → aimux`. Fix: canonicalize BOTH sides through `ResolveProjectID` before comparison
+  (only when authorization actually needs checking — operator-bypass and empty-source paths skip
+  the lookup). Adds the first `CloseIssue` regression tests.
+
 ## [6.22.0] - 2026-06-17
 
 ### Added
