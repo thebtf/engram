@@ -40,41 +40,19 @@ func TestDetectRelativeTime(t *testing.T) {
 	}
 }
 
-func TestEffectiveLastChanged(t *testing.T) {
-	t.Parallel()
-	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	updated := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-
-	// updated_at later → use it (an old memory edited recently is fresh).
-	if got := EffectiveLastChanged(created, updated); !got.Equal(updated) {
-		t.Errorf("EffectiveLastChanged(created, later-updated) = %v, want %v", got, updated)
-	}
-	// zero updated_at (never edited) → fall back to created_at.
-	if got := EffectiveLastChanged(created, time.Time{}); !got.Equal(created) {
-		t.Errorf("EffectiveLastChanged(created, zero) = %v, want %v", got, created)
-	}
-	// updated_at earlier than created (shouldn't happen, but be safe) → created.
-	if got := EffectiveLastChanged(updated, created); !got.Equal(updated) {
-		t.Errorf("EffectiveLastChanged(updated, earlier-created) = %v, want %v", got, updated)
-	}
-}
-
-// TestIsStaleCandidate_EditedMemoryIsFresh locks the Codex-review fix: an OLD memory
-// edited TODAY (created_at old, but lastChanged = updated_at recent) must NOT be flagged
-// stale — measuring from the effective last-change keeps a just-corrected fact trusted.
-func TestIsStaleCandidate_EditedMemoryIsFresh(t *testing.T) {
+// TestIsStaleCandidate_MeasuresFromCreatedAt locks the resolved Codex-review decision:
+// staleness is measured from created_at (immutable), NOT updated_at (a row-mutation
+// timestamp bumped by injection/citation). An old "currently…" memory must stay flagged
+// even though, in production, its updated_at would be freshly bumped by the feedback loop
+// on every injection. This test guards against a future flip back to updated_at.
+func TestIsStaleCandidate_MeasuresFromCreatedAt(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
 	created := now.Add(-200 * 24 * time.Hour) // created 200 days ago
-	editedToday := now.Add(-1 * time.Hour)    // but content rewritten an hour ago
 
-	lastChanged := EffectiveLastChanged(created, editedToday)
-	if IsStaleCandidate("the value is currently 1536", lastChanged, now, 0) {
-		t.Error("an old memory edited today must NOT be stale (measure from updated_at, not created_at)")
-	}
-	// Same memory measured from created_at alone WOULD be stale — proving the fix matters.
 	if !IsStaleCandidate("the value is currently 1536", created, now, 0) {
-		t.Error("control: measured from created_at the same content is stale (the bug being fixed)")
+		t.Error("an old relative-time memory must be flagged stale by created_at age, " +
+			"regardless of any updated_at bump from injection/citation")
 	}
 }
 

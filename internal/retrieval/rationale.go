@@ -87,15 +87,25 @@ func AssembleRationale(memory *models.Memory, queryText string, matched bool, fi
 	}
 
 	// Rank-3 staleness hint: flag a result whose content uses relative-time language
-	// AND has not changed within the freshness window, so the agent re-verifies before
-	// trusting. Measure from the LATER of created_at/updated_at so an old memory edited
-	// today is treated as fresh (Codex review). Age-gate first (cheap), then a SINGLE
-	// regex scan whose terms are reused for both flag and StaleTerms — no double scan.
-	// Well within the ≤5ms NFR-F3 budget.
+	// AND is older than the freshness window, so the agent re-verifies before trusting.
+	//
+	// Measured from created_at, NOT updated_at — deliberately, and do not "fix" this to
+	// updated_at: updated_at is a row-mutation timestamp, not a content-change timestamp.
+	// BatchIncrementInjected, BatchIncrementCited, and UpdateLifecycleFields all bump
+	// updated_at=now() without touching content (memory_store.go), and the v6.15.0
+	// feedback loop bumps it on EVERY session-start injection. So an always-inject
+	// "currently…" memory would have a perpetually-fresh updated_at and NEVER flag —
+	// defeating the hint for exactly the highest-stakes memories. created_at is immutable:
+	// its worst case is over-warning an in-place-edited memory (safe for a re-verify hint),
+	// vs updated_at's worst case of silently under-warning a stale injected one (unsafe).
+	// The precise fix (a dedicated content_updated_at column) is future work; created_at
+	// is the correct safe approximation for a heuristic hint. (Codex review, both rounds.)
+	//
+	// Age-gate first (cheap), then a SINGLE regex scan whose terms are reused for both
+	// the flag and StaleTerms — no double scan. Well within the ≤5ms NFR-F3 budget.
 	var stale bool
 	var staleTerms []string
-	lastChanged := staleness.EffectiveLastChanged(memory.CreatedAt, memory.UpdatedAt)
-	if time.Since(lastChanged) > staleness.DefaultFreshnessWindow {
+	if time.Since(memory.CreatedAt) > staleness.DefaultFreshnessWindow {
 		if terms := staleness.DetectRelativeTime(memory.Content); len(terms) > 0 {
 			stale = true
 			staleTerms = terms
