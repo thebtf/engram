@@ -3,6 +3,7 @@ package retrieval
 import (
 	"time"
 
+	"github.com/thebtf/engram/internal/staleness"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -43,6 +44,15 @@ type RankingRationale struct {
 	// "key=value", e.g. ["project=engram","confidence_min=0.6"]. Empty slice
 	// when no non-default filters were in effect.
 	FiltersApplied []string `json:"filters_applied"`
+	// Stale flags this result as a stale candidate (rank-3): its content carries
+	// relative-time language ("currently", "recently", "last week", …) AND it is
+	// older than the freshness window, so the fact it asserts may have drifted. This
+	// is a HINT to re-verify before trusting, never a hide/drop signal. Derived from
+	// live fields only (content + created_at) — NOT the dormant lifecycle columns.
+	Stale bool `json:"stale,omitempty"`
+	// StaleTerms lists the relative-time phrases that triggered Stale (lower-cased,
+	// first-seen order). Empty/omitted when Stale is false.
+	StaleTerms []string `json:"stale_terms,omitempty"`
 }
 
 // AssembleRationale builds a RankingRationale from the fields available on
@@ -76,6 +86,17 @@ func AssembleRationale(memory *models.Memory, queryText string, matched bool, fi
 		appliedFilters = []string{}
 	}
 
+	// Rank-3 staleness hint: flag a result whose content uses relative-time language
+	// AND is older than the freshness window, so the agent re-verifies before trusting.
+	// One regex scan over content — well within the ≤5ms NFR-F3 budget. Live fields only.
+	now := time.Now()
+	var stale bool
+	var staleTerms []string
+	if staleness.IsStaleCandidate(memory.Content, memory.CreatedAt, now, 0) {
+		stale = true
+		staleTerms = staleness.DetectRelativeTime(memory.Content)
+	}
+
 	return RankingRationale{
 		RecencyDays:    recencyDays,
 		Confidence:     memory.Confidence,
@@ -84,5 +105,7 @@ func AssembleRationale(memory *models.Memory, queryText string, matched bool, fi
 		Tier:           memory.Tier,
 		SubstringMatch: queryText != "" && matched,
 		FiltersApplied: appliedFilters,
+		Stale:          stale,
+		StaleTerms:     staleTerms,
 	}
 }

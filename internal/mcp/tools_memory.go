@@ -23,6 +23,7 @@ import (
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
+	"github.com/thebtf/engram/internal/staleness"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
@@ -793,6 +794,16 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	if len(params.Rejected) > 0 {
 		result["rejected_note"] = "rejected alternatives are not stored in v5 memories schema"
+	}
+	// Rank-3 staleness advisory (non-blocking): if the content uses relative-time
+	// language, nudge the author toward an absolute date/version anchor. "currently X"
+	// read months later looks like a current fact — this is the silent-staleness
+	// friction caught at the source. Advisory only; the memory is already stored.
+	if terms := staleness.DetectRelativeTime(created.Content); len(terms) > 0 {
+		result["staleness_advisory"] = map[string]any{
+			"relative_time_terms": terms,
+			"note":                "content uses relative-time language; prefer an absolute date or version anchor (e.g. 'as of 2026-06-17' / 'in v6.16.0') so the fact stays interpretable when recalled later",
+		}
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {

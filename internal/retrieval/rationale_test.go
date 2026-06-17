@@ -164,3 +164,32 @@ func BenchmarkAssembleRationale(b *testing.B) {
 		_ = AssembleRationale(mem, "postgres", true, filters)
 	}
 }
+
+// TestAssembleRationale_StalenessHint covers the rank-3 staleness fields: a memory
+// whose content uses relative-time language AND is older than the freshness window
+// is flagged Stale with the triggering terms; fresh or absolute-dated memories are not.
+func TestAssembleRationale_StalenessHint(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-40 * 24 * time.Hour)
+	fresh := now.Add(-2 * 24 * time.Hour)
+
+	t.Run("relative + old → stale with terms", func(t *testing.T) {
+		mem := &models.Memory{Content: "The default is currently 1536", CreatedAt: old}
+		r := AssembleRationale(mem, "", false, nil)
+		assert.True(t, r.Stale, "old memory with relative-time language must be flagged stale")
+		assert.Contains(t, r.StaleTerms, "currently")
+	})
+
+	t.Run("relative + fresh → not stale", func(t *testing.T) {
+		mem := &models.Memory{Content: "The default is currently 1536", CreatedAt: fresh}
+		r := AssembleRationale(mem, "", false, nil)
+		assert.False(t, r.Stale, "fresh memory must not be flagged stale even with relative-time language")
+		assert.Empty(t, r.StaleTerms)
+	})
+
+	t.Run("absolute date + old → not stale", func(t *testing.T) {
+		mem := &models.Memory{Content: "dim unified on 1536 in migration 142", CreatedAt: old}
+		r := AssembleRationale(mem, "", false, nil)
+		assert.False(t, r.Stale, "absolute-anchored content must not be flagged stale")
+	})
+}
