@@ -63,6 +63,12 @@ func normalizeRerankBaseURL(raw string) string {
 		}
 	}
 	parsed.Path = path
+	// Clear RawPath/RawQuery/Fragment: url.String() prefers a non-empty RawPath over
+	// Path (so an escaped-char input would ignore the suffix strip above), and any
+	// query/fragment would corrupt the canonical "/v1/rerank" we re-append. (gemini review)
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
 	return strings.TrimRight(parsed.String(), "/")
 }
 
@@ -174,10 +180,14 @@ func (c *Client) Rank(ctx context.Context, query string, passages []string) ([]P
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
+			// time.NewTimer + Stop (not time.After) so the backoff timer is released
+			// immediately on context cancellation rather than lingering until it fires. (gemini review)
+			timer := time.NewTimer(500 * time.Millisecond)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return nil, ctx.Err()
-			case <-time.After(500 * time.Millisecond):
+			case <-timer.C:
 			}
 		}
 
@@ -208,11 +218,20 @@ func (c *Client) Rank(ctx context.Context, query string, passages []string) ([]P
 			if uErr := json.Unmarshal(respBody, &result); uErr != nil {
 				return nil, fmt.Errorf("reranking: decode response: %w", uErr)
 			}
+			// The endpoint response is untrusted: defend against out-of-range AND
+			// duplicate indices (a repeated index would otherwise silently consume a
+			// rank slot and demote a legitimately-ranked passage downstream). Keep the
+			// first occurrence, which preserves the endpoint's most-relevant-first order.
 			scores := make([]PassageScore, 0, len(result.Results))
+			seen := make(map[int]struct{}, len(result.Results))
 			for _, r := range result.Results {
 				if r.Index < 0 || r.Index >= len(passages) {
-					continue // defend against an out-of-range index from the endpoint
+					continue // out-of-range index from the endpoint
 				}
+				if _, dup := seen[r.Index]; dup {
+					continue // duplicate index from the endpoint
+				}
+				seen[r.Index] = struct{}{}
 				scores = append(scores, PassageScore{Index: r.Index, RelevanceScore: r.RelevanceScore})
 			}
 			if len(scores) == 0 {

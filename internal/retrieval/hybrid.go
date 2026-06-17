@@ -547,9 +547,12 @@ func rerankApplyCrossEncoder(ctx context.Context, ce CrossEncoder, query string,
 
 	// Find the max fused Score among the reranked pool so the rerank keys sit strictly
 	// ABOVE every un-reranked tail candidate (indices [n,len)) — reranked results must
-	// always outrank the tail that the cross-encoder never saw.
-	maxFused := 0.0
-	for i := 0; i < n; i++ {
+	// always outrank the tail that the cross-encoder never saw. Seed from scored[0]
+	// (not 0.0) so the invariant holds even if Score() ever emits negatives — the
+	// pool was sorted desc above when n<len, and for n==len every candidate is in the
+	// pool, so this max is the true global max regardless of sign.
+	maxFused := scored[0].Score
+	for i := 1; i < n; i++ {
 		if scored[i].Score > maxFused {
 			maxFused = scored[i].Score
 		}

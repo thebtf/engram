@@ -1445,6 +1445,12 @@ type rerankAdapter struct {
 }
 
 func (a rerankAdapter) Rank(ctx context.Context, query string, passages []string) ([]retrieval.RerankResult, error) {
+	// Defensive: the adapter is only constructed under an s.rerankClient != nil guard,
+	// so this is unreachable in the live path — but a nil client returns no results
+	// (not an error), keeping the caller on fusion order per the failure-silent contract.
+	if a.client == nil {
+		return nil, nil
+	}
 	scores, err := a.client.Rank(ctx, query, passages)
 	if err != nil {
 		return nil, err
