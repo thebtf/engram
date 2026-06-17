@@ -26,21 +26,36 @@ func (u *Updater) Update(ctx context.Context, results []CitationResult) {
 	u.UpdateWithOutcome(ctx, results, "")
 }
 
-// outcomeMultipliers defines how session outcome modulates Thompson Sampling
-// updates. Keys: outcome string. Values: alpha increment for cited, beta
-// increment for uncited, beta increment for violated.
+// outcomeMultipliers defines how session outcome modulates the session-end memory
+// updates. citedAlpha/uncitedBeta/violatedBeta scale the Thompson Sampling prior
+// increments (which feed retrieval ranking via the rank-5 posterior blend).
+//
+// importanceFactor (rank-6) scales the importance_base citation bump, which is a
+// SEPARATE surface from the Thompson priors: importance_base drives ListForInjection
+// ordering (ORDER BY importance_base DESC), i.e. WHICH memories get injected at session
+// start — whereas ts_alpha/ts_beta drive how injected memories are scored. Before rank-6
+// the importance_base bump ran at a fixed magnitude regardless of outcome, so a memory
+// cited in a failed session was promoted for future injection exactly as much as one cited
+// in a successful session. importanceFactor=1.0 reproduces that prior magnitude exactly
+// (backward-compatible for the "" / partial defaults); >1.0 promotes harder on success,
+// <1.0 promotes less on failure, 0.0 leaves importance_base untouched. The bump remains
+// monotonic-up (the store clamps it to never fall below the current value), so this adds
+// outcome SENSITIVITY without a permanent decrement — true negative reinforcement on
+// importance_base is deliberately deferred as a product decision (it needs a human call on
+// whether "cited in a failed session" should be read as "this memory caused the failure").
 type outcomeMultipliers struct {
-	citedAlpha   float64
-	uncitedBeta  float64
-	violatedBeta float64
+	citedAlpha       float64
+	uncitedBeta      float64
+	violatedBeta     float64
+	importanceFactor float64
 }
 
 var multiplierTable = map[string]outcomeMultipliers{
-	"success":   {citedAlpha: 2.0, uncitedBeta: 0.0, violatedBeta: 3.0},
-	"partial":   {citedAlpha: 1.0, uncitedBeta: 1.0, violatedBeta: 3.0},
-	"failure":   {citedAlpha: 0.5, uncitedBeta: 2.0, violatedBeta: 5.0},
-	"abandoned": {citedAlpha: 0.0, uncitedBeta: 0.0, violatedBeta: 0.0},
-	"":          {citedAlpha: 1.0, uncitedBeta: 1.0, violatedBeta: 3.0},
+	"success":   {citedAlpha: 2.0, uncitedBeta: 0.0, violatedBeta: 3.0, importanceFactor: 1.5},
+	"partial":   {citedAlpha: 1.0, uncitedBeta: 1.0, violatedBeta: 3.0, importanceFactor: 1.0},
+	"failure":   {citedAlpha: 0.5, uncitedBeta: 2.0, violatedBeta: 5.0, importanceFactor: 0.25},
+	"abandoned": {citedAlpha: 0.0, uncitedBeta: 0.0, violatedBeta: 0.0, importanceFactor: 0.0},
+	"":          {citedAlpha: 1.0, uncitedBeta: 1.0, violatedBeta: 3.0, importanceFactor: 1.0},
 }
 
 // UpdateWithOutcome processes citation results with outcome-dependent modulation.
@@ -66,7 +81,7 @@ func (u *Updater) UpdateWithOutcome(ctx context.Context, results []CitationResul
 	}
 
 	if len(citedIDs) > 0 && mult.citedAlpha > 0 {
-		if err := u.memoryStore.BatchIncrementCitedN(ctx, citedIDs, mult.citedAlpha); err != nil {
+		if err := u.memoryStore.BatchIncrementCitedN(ctx, citedIDs, mult.citedAlpha, mult.importanceFactor); err != nil {
 			log.Error().Err(err).Msg("feedback: batch increment cited failed")
 		}
 	}
@@ -108,4 +123,3 @@ func calculateImportance(currentBase float64, citationCount int) float64 {
 	}
 	return scaled
 }
-
