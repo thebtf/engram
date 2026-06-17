@@ -812,11 +812,13 @@ func (s *Service) initializeAsync() {
 		mcpServer.SetBulkFacade(bulkFacade)
 	}
 
-	// CR-2 (#259): the embedder and reranker resolve their non-secret config (URL, model)
-	// with env-first precedence backed by the settings-store. Env wins when set; otherwise
-	// the store value; otherwise the client's default. Secret values (API keys) stay env-only
-	// until CR-3 wires vault decryption.
-	settingsRes := newSettingsResolver(gorm.NewSettingsStore(store))
+	// CR-2/CR-3 (#259): the embedder and reranker resolve their config with env-first
+	// precedence backed by the settings-store. Env wins when set; otherwise the store value;
+	// otherwise the client's default. Non-secret config (URL, model) is read as plaintext;
+	// secret config (API keys) is stored encrypted and decrypted in-process via the vault
+	// (CR-3). The vault provider is lazy (s.getVault) so a deployment with no secret settings
+	// never forces vault-key initialization. Decryption is fail-soft → env/default.
+	settingsRes := newSettingsResolver(gorm.NewSettingsStore(store), s.getVault)
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	embClient, embErr := embedding.NewClientWithSettings(s.ctx, settingsRes)

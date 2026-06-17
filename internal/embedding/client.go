@@ -76,12 +76,15 @@ type SettingsResolver interface {
 	Get(ctx context.Context, key string) (string, bool)
 }
 
-// Settings keys read by the embedder (non-secret config only). The embedding DIMENSION is
-// deliberately NOT a settings key: it is pinned to EmbeddingDim and the vector(EmbeddingDim)
-// columns, so changing it needs a schema migration + full re-embed, never a runtime setting.
+// Settings keys read by the embedder. URL and model are plaintext config; api_key is a
+// secret resolved through the same env-first path but backed by an encrypted settings row
+// that the resolver decrypts in-process (CR-3). The embedding DIMENSION is deliberately NOT
+// a settings key: it is pinned to EmbeddingDim and the vector(EmbeddingDim) columns, so
+// changing it needs a schema migration + full re-embed, never a runtime setting.
 const (
-	SettingKeyEmbedURL   = "embedder.url"
-	SettingKeyEmbedModel = "embedder.model"
+	SettingKeyEmbedURL    = "embedder.url"
+	SettingKeyEmbedModel  = "embedder.model"
+	SettingKeyEmbedAPIKey = "embedder.api_key"
 )
 
 // NewClientWithSettings creates an embedding Client with ENV-FIRST precedence: env vars win
@@ -89,9 +92,11 @@ const (
 // var is empty the value is read from the settings-store (resolver) if provided. Returns
 // ErrEmbeddingDisabled when neither source yields a URL.
 //
-//   - URL:   ENGRAM_EMBEDDING_URL   → else settings "embedder.url"   (required to enable)
-//   - model: ENGRAM_EMBEDDING_MODEL → else settings "embedder.model" → else "text-embedding"
-//   - API key + dimensions: env only (api_key is a secret → CR-3; dimensions is schema-bound)
+//   - URL:     ENGRAM_EMBEDDING_URL     → else settings "embedder.url"     (required to enable)
+//   - model:   ENGRAM_EMBEDDING_MODEL   → else settings "embedder.model"   → else "text-embedding"
+//   - API key: ENGRAM_EMBEDDING_API_KEY → else settings "embedder.api_key" (secret; the resolver
+//     decrypts the encrypted settings row in-process — CR-3). Empty → no Authorization header.
+//   - dimensions: env only (schema-bound to vector(EmbeddingDim))
 func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Client, error) {
 	rawURL := resolveSetting(ctx, resolver, "ENGRAM_EMBEDDING_URL", SettingKeyEmbedURL)
 	if rawURL == "" {
@@ -132,7 +137,7 @@ func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Cli
 	return &Client{
 		baseURL:    baseURL,
 		model:      model,
-		apiKey:     os.Getenv("ENGRAM_EMBEDDING_API_KEY"),
+		apiKey:     resolveSetting(ctx, resolver, "ENGRAM_EMBEDDING_API_KEY", SettingKeyEmbedAPIKey),
 		dimensions: dimensions,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
