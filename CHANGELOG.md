@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.23.0] - 2026-06-17
+
+### Added
+
+- **Settings-store foundation for swappable model config (#259, CR-1 #303 + CR-2 #304).** New
+  `model_settings` table (migration 143) is a server-global key→value store with optional
+  AES-256-GCM encryption for secrets, mirroring the credentials+vault contract: plain config in
+  `value`, secret ciphertext in `encrypted_value`, soft-delete clears the payload, writes are
+  idempotent upserts that bump a version. The reranking and embedding clients now resolve their
+  non-secret config (endpoint URL, model name) with **env-first precedence**: a set environment
+  variable wins (so existing deployments are byte-for-byte unchanged and an operator can always
+  override), otherwise the value comes from the settings-store, otherwise the built-in default.
+  Each low-level client package declares its own minimal resolver interface so it stays
+  storage-agnostic (no import cycle); the worker wires a `*SettingsStore`-backed adapter that
+  serves non-secret rows only. Secret values (API keys) and the embedding dimension remain
+  env-only for now — API-key resolution needs vault decryption (a follow-up CR) and the dimension
+  is schema-bound to the `vector` columns. This release ships the table and the read path; nothing
+  changes on a deployment until an operator writes a setting, and env always wins when set.
+
 ## [6.22.1] - 2026-06-17
 
 ### Fixed
