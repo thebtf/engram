@@ -24,34 +24,41 @@ test('handleSessionStart caches live static payload and renders issues, rules, a
   const postCalls = [];
   lib.requestGet = async (endpoint) => {
     getCalls.push(endpoint);
-    return buildCachedSessionStartPayload({
-      issues: [
-        {
-          id: 11,
-          title: 'Investigate failing startup path',
-          status: 'open',
-          priority: 'high',
-          type: 'bug',
-          source_project: 'orchestrator',
-          target_project: 'engram',
-          source_agent: 'agent-x',
-          labels: ['bug'],
-          comment_count: 0,
-          created_at: '2026-04-22T12:00:00Z',
-          updated_at: '2026-04-22T12:00:00Z',
-        },
-      ],
-      rules: [
-        { id: 21, content: 'Always validate API responses before use.', project: 'engram' },
-      ],
-      memories: [
-        { id: 31, content: 'Session-start payload is static-only in v5.' },
-      ],
-      generated_at: '2026-04-22T12:34:56Z',
-    });
+    return {};
   };
+  // CR-001: the session-start payload now arrives via POST {project, session_id}
+  // to /api/context/session-start (so the server records the injection event).
+  // Other POSTs (timeline /api/store, /api/issues/acknowledge) flow through here too,
+  // so branch on endpoint.
   lib.requestPost = async (endpoint, body) => {
     postCalls.push({ endpoint, body });
+    if (endpoint === '/api/context/session-start') {
+      return buildCachedSessionStartPayload({
+        issues: [
+          {
+            id: 11,
+            title: 'Investigate failing startup path',
+            status: 'open',
+            priority: 'high',
+            type: 'bug',
+            source_project: 'orchestrator',
+            target_project: 'engram',
+            source_agent: 'agent-x',
+            labels: ['bug'],
+            comment_count: 0,
+            created_at: '2026-04-22T12:00:00Z',
+            updated_at: '2026-04-22T12:00:00Z',
+          },
+        ],
+        rules: [
+          { id: 21, content: 'Always validate API responses before use.', project: 'engram' },
+        ],
+        memories: [
+          { id: 31, content: 'Session-start payload is static-only in v5.' },
+        ],
+        generated_at: '2026-04-22T12:34:56Z',
+      });
+    }
     return {};
   };
 
@@ -63,7 +70,12 @@ test('handleSessionStart caches live static payload and renders issues, rules, a
     assert.match(result, /Always validate API responses before use\./);
     assert.match(result, /<engram-static-memories>/);
     assert.match(result, /Session-start payload is static-only in v5\./);
-    assert.ok(getCalls.some((endpoint) => endpoint.includes('/api/context/session-start?project=engram')));
+    // The primary injection event must be a POST carrying project + session_id,
+    // so the server can record injection_log / increment injection_count.
+    const ssPost = postCalls.find((call) => call.endpoint === '/api/context/session-start');
+    assert.ok(ssPost, 'expected a POST to /api/context/session-start');
+    assert.equal(ssPost.body.project, 'engram');
+    assert.equal(ssPost.body.session_id, 'sess-live');
     assert.ok(postCalls.some((call) => call.endpoint === '/api/issues/acknowledge'));
 
     const cachePath = lib.getSessionStartCachePath('engram');
@@ -125,10 +137,15 @@ test('handleSessionStart falls back to cached payload with stale banner on trans
     generated_at: '2026-04-22T11:59:59Z',
   }), null, 2), 'utf8');
 
-  lib.requestGet = async () => {
-    throw new Error('connect ETIMEDOUT');
+  lib.requestGet = async () => ({});
+  // CR-001: payload now arrives via POST; fail that endpoint to exercise the
+  // stale-cache fallback. Other POSTs (timeline) stay harmless.
+  lib.requestPost = async (endpoint) => {
+    if (endpoint === '/api/context/session-start') {
+      throw new Error('connect ETIMEDOUT');
+    }
+    return {};
   };
-  lib.requestPost = async () => ({});
 
   try {
     const result = await handleSessionStart({ Project: 'engram', SessionID: 'sess-cache' }, {});
@@ -164,10 +181,14 @@ test('handleSessionStart returns no-cache banner when live fetch fails and cache
   process.env.ENGRAM_DATA_DIR = tmpDir;
   process.env.ENGRAM_URL = 'http://example.test/mcp';
 
-  lib.requestGet = async () => {
-    throw new Error('network down');
+  lib.requestGet = async () => ({});
+  // CR-001: payload now arrives via POST; fail that endpoint with no cache present.
+  lib.requestPost = async (endpoint) => {
+    if (endpoint === '/api/context/session-start') {
+      throw new Error('network down');
+    }
+    return {};
   };
-  lib.requestPost = async () => ({});
 
   try {
     const result = await handleSessionStart({ Project: 'engram', SessionID: 'sess-empty' }, {});

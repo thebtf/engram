@@ -12,15 +12,15 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"google.golang.org/grpc/codes"
-	grpcstatus "google.golang.org/grpc/status"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/scope"
-	pb "github.com/thebtf/engram/proto/engram/v1"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
+	pb "github.com/thebtf/engram/proto/engram/v1"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type sessionStartContextProvider interface {
@@ -116,11 +116,11 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	var obsTypeFilter string
 	if r.Method == http.MethodPost && r.Body != nil {
 		var body struct {
-			Project         string `json:"project"`
-			Query           string `json:"query"`
-			Cwd             string `json:"cwd"`
-			AgentID         string `json:"agent_id"`
-			ObsType         string `json:"obs_type"`
+			Project          string   `json:"project"`
+			Query            string   `json:"query"`
+			Cwd              string   `json:"cwd"`
+			AgentID          string   `json:"agent_id"`
+			ObsType          string   `json:"obs_type"`
 			FilesBeingEdited []string `json:"files_being_edited"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
@@ -459,7 +459,6 @@ func compactObservationsWithLimit(observations []*models.Observation, fullCount 
 	return result
 }
 
-
 type sessionStartCompatibilityResponse struct {
 	Issues      []map[string]any `json:"issues"`
 	Rules       []map[string]any `json:"rules"`
@@ -516,15 +515,15 @@ func sessionStartRulesToMaps(rules []*pb.SessionStartRule) []map[string]any {
 			continue
 		}
 		entry := map[string]any{
-			"id":         rule.GetId(),
-			"project":    rule.GetProject(),
-			"content":    rule.GetContent(),
-			"edited_by":  rule.GetEditedBy(),
-			"priority":   rule.GetPriority(),
-			"version":    rule.GetVersion(),
-			"narrative":  rule.GetContent(),
-			"title":      rule.GetContent(),
-			"facts":      []string{},
+			"id":        rule.GetId(),
+			"project":   rule.GetProject(),
+			"content":   rule.GetContent(),
+			"edited_by": rule.GetEditedBy(),
+			"priority":  rule.GetPriority(),
+			"version":   rule.GetVersion(),
+			"narrative": rule.GetContent(),
+			"title":     rule.GetContent(),
+			"facts":     []string{},
 		}
 		if ts := rule.GetCreatedAt(); ts != nil {
 			entry["created_at"] = ts.AsTime().UTC().Format(time.RFC3339)
@@ -578,12 +577,17 @@ func sessionStartMemoriesToMaps(memories []*pb.SessionStartMemory) []map[string]
 // @Router /api/context/session-start [get]
 func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http.Request) {
 	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	// session_id enables injection-event recording on this primary injection path
+	// (CR-001: revive feedback loop). GET query value is the fallback; a POST body
+	// value wins. Empty session_id => recording is skipped (delivery is unaffected).
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
 	memoriesLimit := int32(0)
 	issuesLimit := int32(0)
 
 	if r.Method == http.MethodPost && r.Body != nil {
 		var body struct {
 			Project       string `json:"project"`
+			SessionID     string `json:"session_id"`
 			MemoriesLimit int32  `json:"memories_limit"`
 			IssuesLimit   int32  `json:"issues_limit"`
 		}
@@ -593,6 +597,9 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 		}
 		if strings.TrimSpace(body.Project) != "" {
 			project = strings.TrimSpace(body.Project)
+		}
+		if strings.TrimSpace(body.SessionID) != "" {
+			sessionID = strings.TrimSpace(body.SessionID)
 		}
 		memoriesLimit = body.MemoriesLimit
 		issuesLimit = body.IssuesLimit
@@ -635,12 +642,76 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 		generatedAt = ts.AsTime().UTC().Format(time.RFC3339)
 	}
 
+	// CR-001 (revive feedback loop): this is the PRIMARY live injection event for
+	// Claude Code. Record the injected memory IDs to injection_log and increment
+	// memories.injection_count so session-end citation detection has rows to match
+	// against. Without this, injection_log stays empty, processCitationsAsync
+	// early-returns ("no injection records found"), and injection_count/citation_count
+	// are 0 forever. Fire-and-forget, mirroring handleContextInject's legacy-path
+	// recorder. Memory IDs ONLY (not rule IDs) to keep injection_count semantics clean.
+	if sessionID != "" {
+		s.initMu.RLock()
+		injLogStore := s.injectionLogStore
+		memStore := s.memoryStore
+		s.initMu.RUnlock()
+		if injLogStore != nil {
+			ids := collectSessionStartMemoryIDs(resp.GetMemories())
+			if len(ids) > 0 {
+				capturedSessionID := sessionID
+				capturedProject := project
+				s.wg.Add(1)
+				go func() {
+					defer s.wg.Done()
+					recCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+					defer cancel()
+					if err := injLogStore.Record(recCtx, capturedSessionID, capturedProject, ids); err != nil {
+						log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_log: session-start record failed")
+					}
+					if memStore != nil {
+						if err := memStore.BatchIncrementInjected(recCtx, ids); err != nil {
+							log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_count: session-start increment failed")
+						}
+					}
+				}()
+			}
+		}
+	}
+
 	writeJSON(w, sessionStartCompatibilityResponse{
 		Issues:      sessionStartIssuesToMaps(resp.GetIssues()),
 		Rules:       sessionStartRulesToMaps(resp.GetRules()),
 		Memories:    sessionStartMemoriesToMaps(resp.GetMemories()),
 		GeneratedAt: generatedAt,
 	})
+}
+
+// collectSessionStartMemoryIDs extracts the deduplicated, non-zero memory IDs from
+// a session-start gRPC response, for recording the injection event to injection_log
+// (CR-001: revive feedback loop). It is pure (no I/O) so the ID-selection logic —
+// the part that must be correct for injection_count semantics — is unit-testable
+// without a database. Rule IDs are intentionally NOT collected here: only memory
+// IDs feed injection_count, matching handleContextInject.
+func collectSessionStartMemoryIDs(memories []*pb.SessionStartMemory) []int64 {
+	if len(memories) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(memories))
+	seen := make(map[int64]struct{}, len(memories))
+	for _, m := range memories {
+		if m == nil {
+			continue
+		}
+		id := m.GetId()
+		if id == 0 {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // grpcCodeToHTTP maps gRPC status codes to HTTP status codes for error forwarding.
@@ -1084,9 +1155,9 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			vnextObs := memoriesToObservations(selectedMems)
 
 			injectionMetadata := map[string]any{
-				"strategy":         "thompson_sampling",
-				"injected_count":   len(selectedMems),
-				"candidate_pool":   len(vnextMems),
+				"strategy":          "thompson_sampling",
+				"injected_count":    len(selectedMems),
+				"candidate_pool":    len(vnextMems),
 				"exploration_ratio": explorationRatio,
 			}
 
@@ -1099,20 +1170,20 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				Msg("vnext Thompson Sampling injection")
 
 			writeJSON(w, map[string]any{
-				"strategy":            "thompson_sampling",
-				"project":             project,
-				"observations":        vnextObs,
-				"recent":              compactObservations(recentFresh),
-				"relevant":            compactObservations(relevantObservations),
-				"guidance":            compactObservations(guidanceObservations),
-				"always_inject":       compactObservations(alwaysInjectObservations),
-				"project_briefing":    projectBriefingNarrative(false, projectBriefing),
-				"full_count":          fullCount,
-				"stale_excluded":      staleCount,
-				"duplicates_removed":  duplicatesRemoved,
-				"token_estimate":      tokenEstimate,
-				"budget_trimmed":      budgetTrimmed,
-				"injection_metadata":  injectionMetadata,
+				"strategy":           "thompson_sampling",
+				"project":            project,
+				"observations":       vnextObs,
+				"recent":             compactObservations(recentFresh),
+				"relevant":           compactObservations(relevantObservations),
+				"guidance":           compactObservations(guidanceObservations),
+				"always_inject":      compactObservations(alwaysInjectObservations),
+				"project_briefing":   projectBriefingNarrative(false, projectBriefing),
+				"full_count":         fullCount,
+				"stale_excluded":     staleCount,
+				"duplicates_removed": duplicatesRemoved,
+				"token_estimate":     tokenEstimate,
+				"budget_trimmed":     budgetTrimmed,
+				"injection_metadata": injectionMetadata,
 			})
 			return
 		}
