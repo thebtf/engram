@@ -110,6 +110,14 @@ func (s *Service) handleUpdateBehavioralRule(w http.ResponseWriter, r *http.Requ
 	// overwrite any omitted field with its zero value — silently wiping a rule's
 	// content on a priority-only reorder, or resetting injection priority to 0 on
 	// a content-only edit.
+	// No-op guard: an empty body ({}) or one with no recognized fields would
+	// otherwise fetch + Update, bumping version and updated_at with no real
+	// change. Return 400 so the caller knows nothing was applied.
+	if req.Content == nil && req.Priority == nil && req.EditedBy == nil {
+		http.Error(w, "no updatable fields provided (content, priority, or edited_by)", http.StatusBadRequest)
+		return
+	}
+
 	existing, err := s.behavioralRulesStore.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {

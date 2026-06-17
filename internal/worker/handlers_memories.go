@@ -411,6 +411,9 @@ func (s *Service) handleGetMemoryByID(w http.ResponseWriter, r *http.Request) {
 // the given memory under the privacy-scope model. Mirrors the per-row predicate
 // in listVisibleMemoriesREST so all read surfaces share identical semantics.
 func memoryVisibleToCaller(ctx context.Context, mem *models.Memory) bool {
+	if mem == nil {
+		return false
+	}
 	var caller scope.KeycardContext
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		caller.WorkstationID = id.WorkstationID()

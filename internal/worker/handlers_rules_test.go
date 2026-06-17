@@ -241,6 +241,36 @@ func TestHandleUpdateBehavioralRule_NotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// TestHandleUpdateBehavioralRule_NoFields verifies that a PATCH with no updatable
+// fields ({}) is rejected with 400 and does NOT bump the rule's version (no
+// spurious DB write). Codex/Gemini review on PR #308.
+func TestHandleUpdateBehavioralRule_NoFields(t *testing.T) {
+	project := "test-rules-handler-update-nofields"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: untouched",
+		Priority: 4,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, created.Version)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, `{}`)
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	got, err := brs.Get(context.Background(), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.Version, "version must NOT bump on a no-op PATCH")
+	assert.Equal(t, "handler test: untouched", got.Content)
+	assert.Equal(t, 4, got.Priority)
+}
+
 // (explicit-empty-content rejection is covered by
 // TestHandleUpdateBehavioralRule_ExplicitEmptyContent, which seeds a real rule
 // so the empty-content 400 is reached after the existence fetch.)
