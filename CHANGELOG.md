@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.20.0] - 2026-06-17
+
+### Changed
+
+- **Outcome-scaled importance_base bump (rank-6 Gap 2, #299).** Session outcome already
+  modulated the Thompson priors `ts_alpha`/`ts_beta`, but the `importance_base` citation bump in
+  `BatchIncrementCitedN` ran at a fixed magnitude regardless of outcome. `importance_base` drives
+  `ListForInjection` ordering (which memories get injected at session start) — a separate surface
+  from the ts priors that rank-5 wired into retrieval. So a memory cited in a failed session was
+  promoted for future injection exactly as hard as one cited in a successful session.
+  - `outcomeMultipliers` gains `importanceFactor` (success 1.5, partial/neutral 1.0, failure 0.25,
+    abandoned 0.0), threaded through `UpdateWithOutcome` into `BatchIncrementCitedN`.
+  - The SQL scales the growth above base by the factor, monotonic-up clamped; `factor=1.0`
+    reproduces the historical `base*ln(2+citation_count)` formula exactly, so default/partial
+    behavior is unchanged. Adds outcome sensitivity without a permanent decrement.
+  - No migration, no flag. True negative reinforcement and the demolition-dead automatic outcome
+    path (outcome is recorded only via the opt-in `set_session_outcome` tool) are tracked
+    separately as rank-6 Gap 1 (a product decision).
+
 ## [6.19.0] - 2026-06-17
 
 ### Changed
