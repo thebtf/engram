@@ -136,3 +136,98 @@ func TestStripThenDetect_GenuineReferenceSurvives(t *testing.T) {
 		t.Errorf("genuine reference outside the wrapper was lost after strip; cleaned=%q", cleaned)
 	}
 }
+
+// --- PR #297 review: Gemini — mismatched / unclosed tags must NOT strip genuine prose ---
+
+// An UNCLOSED opening tag followed later by a DIFFERENT block's closing tag must not cause
+// the matcher to swallow the genuine agent prose between them (RE2-no-backreference hazard).
+func TestStripInjectedBlocks_UnclosedTagPreservesProse(t *testing.T) {
+	genuine := "this is my own important analysis that must survive"
+	// <engram-static-memories> is never closed; a stray </user-behavior-rules> appears later.
+	out := "<engram-static-memories>\n" + genuine + "\n</user-behavior-rules>\ntail prose"
+	got := StripInjectedBlocks(out)
+	if !strings.Contains(got, genuine) {
+		t.Errorf("unclosed tag swallowed genuine prose: %q", got)
+	}
+	if !strings.Contains(got, "tail prose") {
+		t.Errorf("tail prose lost: %q", got)
+	}
+}
+
+// A genuine citation sitting between an unclosed engram tag and a foreign closing tag must
+// still be detectable — the anti-poisoning strip must not cause a false NEGATIVE.
+func TestStripThenDetect_UnclosedTagDoesNotHideGenuineCitation(t *testing.T) {
+	memContent := "Always run migrations inside a transaction\nWrap DDL in BEGIN/COMMIT."
+	mem := makeMemWithContent(1, memContent)
+	// Truncated/unclosed wrapper, then the agent's OWN verbatim reference, then a foreign close.
+	out := "<engram-static-memories>\nI followed the rule: Always run migrations inside a transaction here.\n</user-behavior-rules>"
+	cleaned := StripInjectedBlocks(out)
+	results := DetectCitations(cleaned, []*models.Memory{mem})
+	if !results[0].Cited {
+		t.Errorf("genuine citation hidden by over-strip of unclosed tag; cleaned=%q", cleaned)
+	}
+}
+
+// A well-formed block whose body happens to contain a DIFFERENT block's closing tag must be
+// stripped from its open to its OWN matching close (the foreign close inside is not the boundary).
+func TestStripInjectedBlocks_NestedForeignCloseInsideBlock(t *testing.T) {
+	out := "before <open-issues count=\"1\">\nissue text </user-behavior-rules> still issue text\n</open-issues> after"
+	got := StripInjectedBlocks(out)
+	if strings.Contains(got, "issue text") {
+		t.Errorf("block with embedded foreign close not fully stripped: %q", got)
+	}
+	if !strings.Contains(got, "before") || !strings.Contains(got, "after") {
+		t.Errorf("surrounding prose removed: %q", got)
+	}
+}
+
+// --- PR #297 review: Codex P2 — live markdown reinjection sentinel must be stripped ---
+
+func TestStripInjectedBlocks_ReinjectionMarkdownStripped(t *testing.T) {
+	memLine := "embedding dim unified on 1536 across both stores"
+	out := "# Engram Re-Injection\n\nTopic: embeddings\n\n- " + memLine + " [reference]\n- another injected memory"
+	got := StripInjectedBlocks(out)
+	if strings.Contains(got, memLine) {
+		t.Errorf("reinjection markdown bullet survived strip: %q", got)
+	}
+	if strings.Contains(got, "another injected memory") {
+		t.Errorf("reinjection markdown bullet survived strip: %q", got)
+	}
+}
+
+// Prose AFTER the reinjection block (a non-bullet line) ends the sentinel region and is kept.
+func TestStripInjectedBlocks_ReinjectionMarkdownPreservesTrailingProse(t *testing.T) {
+	out := "# Engram Re-Injection\n\nTopic: x\n\n- injected memory line\n\nNow here is my own analysis paragraph."
+	got := StripInjectedBlocks(out)
+	if strings.Contains(got, "injected memory line") {
+		t.Errorf("injected bullet survived: %q", got)
+	}
+	if !strings.Contains(got, "Now here is my own analysis paragraph.") {
+		t.Errorf("trailing agent prose was lost: %q", got)
+	}
+}
+
+// End-to-end: an agent that quotes the reinjection markdown file verbatim must not self-cite.
+func TestStripThenDetect_ReinjectionMarkdownDoesNotSelfCite(t *testing.T) {
+	memContent := "Worktree precommit marker must be removed before a worktree commit"
+	mem := makeMemWithContent(7, memContent)
+	echoed := "# Engram Re-Injection\n\nTopic: worktree\n\n- " + memContent
+
+	rawResults := DetectCitations(echoed, []*models.Memory{mem})
+	if !rawResults[0].Cited {
+		t.Fatalf("precondition: raw echoed reinjection markdown should self-cite")
+	}
+	cleaned := StripInjectedBlocks(echoed)
+	if got := DetectCitations(cleaned, []*models.Memory{mem}); got[0].Cited {
+		t.Errorf("reinjection markdown still self-cites after strip; cleaned=%q", cleaned)
+	}
+}
+
+// The agent's OWN bullet list (no engram sentinel header) must be left untouched.
+func TestStripInjectedBlocks_PlainBulletsNotStripped(t *testing.T) {
+	out := "Here are my steps:\n- first I built the binary\n- then I ran the tests"
+	got := StripInjectedBlocks(out)
+	if got != out {
+		t.Errorf("plain agent bullet list was mutated:\n in:  %q\n out: %q", out, got)
+	}
+}

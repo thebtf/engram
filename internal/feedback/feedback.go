@@ -12,44 +12,141 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// injectedBlockRe matches engram's OWN injected context blocks — the memory- and
-// issue-bearing wrappers the session-start and pre-compact hooks emit — together with
-// their inner text. Verified against current hook source (2026-06-17):
+// openInjectedTagRe matches the OPENING of an engram-owned wrapper. Tag set verified against
+// current hook source (2026-06-17):
 //   - <engram-static-memories>   session-start.js:60   (memory text)
-//   - <engram-reinjection>       pre-compact.js:51      (memory text re-injected at compaction)
 //   - <user-behavior-rules>      session-start.js:33    (behavioral-rule text)
 //   - <open-issues ...>          lib.js:778             (issue text)
-// Plus any FUTURE <engram-*> block, so a newly-added memory-bearing tag is covered without
-// editing this regex (the demolition/staleness trap: a hard-coded tag list silently goes
-// stale). Non-engram-prefixed wrappers (user-behavior-rules, open-issues) are named
-// explicitly because they carry no prefix.
-//
-// (?s) so '.' spans newlines; non-greedy so adjacent blocks close at the first matching tag.
-// RE2 has no backreferences, so open/close tags are not forced to be the same name; the only
-// resulting imprecision is over-matching between two mismatched engram tags, which is benign —
-// it can only ever remove engram's own injected text, never arbitrary agent prose.
-var injectedBlockRe = regexp.MustCompile(`(?s)<(engram-[a-z-]+|user-behavior-rules|open-issues)\b[^>]*>.*?</\s*(engram-[a-z-]+|user-behavior-rules|open-issues)\s*>`)
+// The `engram-[a-z-]+` arm also covers any FUTURE <engram-*> wrapper without a regex edit (the
+// demolition/staleness trap: a hard-coded tag list silently goes stale). It additionally covers
+// the latent <engram-reinjection> XML form produced by pre-compact.js formatReinjectionBlock —
+// exported for future CC versions but NOT on the live path today (the live pre-compact path
+// writes markdown, handled by stripReinjectionMarkdown below). Non-engram-prefixed wrappers
+// (user-behavior-rules, open-issues) are named explicitly because they carry no prefix.
+var openInjectedTagRe = regexp.MustCompile(`<(engram-[a-z-]+|user-behavior-rules|open-issues)\b[^>]*>`)
 
-// StripInjectedBlocks removes engram's own injected context blocks from agent output
-// BEFORE citation detection (rank-2 anti-poisoning). The stop hook (stop.js) extracts ONLY
-// assistant-role text into agent_output_text, so injected wrappers reach this path only when
-// the agent echoes or quotes an injected block verbatim in its own turn. When it does,
-// DetectCitations would match the memory against engram's OWN injection and falsely mark it
-// "cited" — inflating citation_count with self-citation rather than genuine usage, and
-// corrupting the rank-1 feedback signal (and the rank-5/6 reinforcement built on it).
-// Stripping the wrappers first ensures only the agent's OWN references to a memory count.
+// closeInjectedTagRe matches the CLOSING of any engram-owned wrapper. RE2 has no backreferences,
+// so a single open/close regex cannot force the two tags to share a name; instead
+// stripInjectedXMLBlocks pairs each opening tag to its OWN closing tag by name comparison. This
+// prevents the false-negative Gemini flagged on PR #297: an unclosed <engram-static-memories>
+// followed later by a </user-behavior-rules> must NOT make a greedy/non-greedy match swallow the
+// genuine agent prose between them.
+var closeInjectedTagRe = regexp.MustCompile(`</\s*(engram-[a-z-]+|user-behavior-rules|open-issues)\s*>`)
+
+// reinjectionMarkdownHeader is the sentinel the pre-compact hook writes at the top of
+// .engram/reinjection.md (pre-compact.js:127). That file is the live re-injection surface; its
+// body is this header, a "Topic:" line, then a run of "- <memory content>" bullets. If the agent
+// quotes the file verbatim in its turn, those bullets would self-cite memories already recorded
+// as injected at session-start. stripReinjectionMarkdown removes the sentinel and its contiguous
+// Topic/bullet block. (The XML <engram-reinjection> form is exported but unused on the live path.)
+const reinjectionMarkdownHeader = "# Engram Re-Injection"
+
+// StripInjectedBlocks removes engram's own injected context from agent output BEFORE citation
+// detection (rank-2 anti-poisoning). The stop hook (stop.js) extracts ONLY assistant-role text
+// into agent_output_text, so injected context reaches this path only when the agent echoes or
+// quotes an injected block verbatim in its own turn. When it does, DetectCitations/DetectViolations
+// would match the memory against engram's OWN injection and falsely mark it cited (or violated) —
+// inflating citation_count with self-citation rather than genuine usage, and corrupting the rank-1
+// feedback signal (and the rank-5/6 reinforcement built on it). Stripping engram's own context
+// first ensures only the agent's OWN references to a memory count.
 //
-// Defensive and lossless for the matcher: it removes only engram-owned tag blocks; if no
-// such block is present (the common case — the agent rarely re-emits injected XML) the
-// output is returned unchanged.
+// Two surfaces are stripped: XML wrappers (session-start / issues injection) and the markdown
+// reinjection sentinel (pre-compact). If neither is present (the common case — the agent rarely
+// re-emits injected context) the output is returned unchanged.
 func StripInjectedBlocks(agentOutput string) string {
-	if agentOutput == "" || (!strings.Contains(agentOutput, "<engram-") &&
-		!strings.Contains(agentOutput, "<user-behavior-rules") &&
-		!strings.Contains(agentOutput, "<open-issues")) {
-		// Fast path: no engram wrapper tag present at all — nothing to strip.
+	if agentOutput == "" {
 		return agentOutput
 	}
-	return injectedBlockRe.ReplaceAllString(agentOutput, " ")
+	out := stripInjectedXMLBlocks(agentOutput)
+	out = stripReinjectionMarkdown(out)
+	return out
+}
+
+// stripInjectedXMLBlocks removes each engram-owned XML wrapper block by pairing an opening tag to
+// the first FOLLOWING closing tag of the SAME name. Prose before an opening tag is preserved; an
+// opening tag with no same-name close (truncated/unclosed echo) is kept literal so it cannot
+// swallow subsequent genuine prose.
+func stripInjectedXMLBlocks(s string) string {
+	// Fast path: no engram wrapper opening substring present at all.
+	if !strings.Contains(s, "<engram-") &&
+		!strings.Contains(s, "<user-behavior-rules") &&
+		!strings.Contains(s, "<open-issues") {
+		return s
+	}
+
+	var buf strings.Builder
+	buf.Grow(len(s))
+	rem := s
+	for {
+		open := openInjectedTagRe.FindStringSubmatchIndex(rem)
+		if open == nil {
+			buf.WriteString(rem)
+			break
+		}
+		name := rem[open[2]:open[3]]
+		buf.WriteString(rem[:open[0]]) // prose before the opening tag is preserved
+		after := rem[open[1]:]
+
+		closeStart, closeEnd := findMatchingClose(after, name)
+		if closeStart < 0 {
+			// Unclosed/mismatched: keep the opening tag literal and continue past it, so a
+			// truncated echo cannot make the matcher consume the genuine prose that follows.
+			buf.WriteString(rem[open[0]:open[1]])
+			rem = after
+			continue
+		}
+		buf.WriteByte(' ') // collapse the whole injected block to a single space
+		rem = after[closeEnd:]
+	}
+	return buf.String()
+}
+
+// findMatchingClose returns the [start,end) byte offsets within s of the first closing
+// engram-wrapper tag whose name equals tagName (case-insensitive). A closing tag of a DIFFERENT
+// engram wrapper is skipped, not treated as the boundary, so mismatched tags never bound a block.
+// Returns (-1,-1) when no same-name close exists.
+func findMatchingClose(s, tagName string) (int, int) {
+	base := 0
+	for {
+		loc := closeInjectedTagRe.FindStringSubmatchIndex(s[base:])
+		if loc == nil {
+			return -1, -1
+		}
+		name := s[base+loc[2] : base+loc[3]]
+		if strings.EqualFold(name, tagName) {
+			return base + loc[0], base + loc[1]
+		}
+		base += loc[1] // skip this non-matching close and keep searching
+	}
+}
+
+// stripReinjectionMarkdown removes the pre-compact reinjection sentinel block from s. It deletes a
+// line equal to reinjectionMarkdownHeader and the contiguous run of blank, "Topic:", and "- "
+// bullet lines that follow it (the exact shape pre-compact.js writes). The first line that is none
+// of those ends the block, so genuine agent prose after a quoted block is preserved. Whitespace
+// changes here are immaterial: the output only feeds DetectCitations, which normalises whitespace.
+func stripReinjectionMarkdown(s string) string {
+	if !strings.Contains(s, reinjectionMarkdownHeader) {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	kept := lines[:0] // in-place filter: len(kept) <= read index, so aliasing is safe
+	skipping := false
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == reinjectionMarkdownHeader {
+			skipping = true
+			continue
+		}
+		if skipping {
+			if t == "" || strings.HasPrefix(t, "Topic:") || strings.HasPrefix(t, "- ") {
+				continue // still inside the sentinel block
+			}
+			skipping = false // first non-block line ends the sentinel region
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // CitationResult records whether a single injected memory was cited in the
