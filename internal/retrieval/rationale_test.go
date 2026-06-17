@@ -164,3 +164,42 @@ func BenchmarkAssembleRationale(b *testing.B) {
 		_ = AssembleRationale(mem, "postgres", true, filters)
 	}
 }
+
+// TestAssembleRationale_StalenessHint covers the rank-3 staleness fields: a memory
+// whose content uses relative-time language AND is older than the freshness window
+// is flagged Stale with the triggering terms; fresh or absolute-dated memories are not.
+func TestAssembleRationale_StalenessHint(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-40 * 24 * time.Hour)
+	fresh := now.Add(-2 * 24 * time.Hour)
+
+	t.Run("relative + old → stale with terms", func(t *testing.T) {
+		mem := &models.Memory{Content: "The default is currently 1536", CreatedAt: old}
+		r := AssembleRationale(mem, "", false, nil)
+		assert.True(t, r.Stale, "old memory with relative-time language must be flagged stale")
+		assert.Contains(t, r.StaleTerms, "currently")
+	})
+
+	t.Run("relative + fresh → not stale", func(t *testing.T) {
+		mem := &models.Memory{Content: "The default is currently 1536", CreatedAt: fresh}
+		r := AssembleRationale(mem, "", false, nil)
+		assert.False(t, r.Stale, "fresh memory must not be flagged stale even with relative-time language")
+		assert.Empty(t, r.StaleTerms)
+	})
+
+	t.Run("absolute date + old → not stale", func(t *testing.T) {
+		mem := &models.Memory{Content: "dim unified on 1536 in migration 142", CreatedAt: old}
+		r := AssembleRationale(mem, "", false, nil)
+		assert.False(t, r.Stale, "absolute-anchored content must not be flagged stale")
+	})
+
+	t.Run("old created with fresh updated_at → still stale (measure from created_at)", func(t *testing.T) {
+		// Resolved Codex review: updated_at is a row-mutation timestamp (the v6.15.0
+		// feedback loop bumps it on every injection), so staleness measures from the
+		// immutable created_at. An old "currently…" memory whose updated_at was just
+		// bumped must STILL flag — else injected stale memories would never warn.
+		mem := &models.Memory{Content: "the default is currently 1536", CreatedAt: old, UpdatedAt: now.Add(-1 * time.Hour)}
+		r := AssembleRationale(mem, "", false, nil)
+		assert.True(t, r.Stale, "a fresh updated_at must NOT suppress the stale hint on an old memory")
+	})
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
+	"github.com/thebtf/engram/internal/staleness"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
@@ -368,6 +369,18 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				if p2err != nil {
 					return "", fmt.Errorf("write_lint_phase2: %w", p2err)
 				}
+				// Phase2 also COMMITS the content (ignore_signals / supersede /
+				// merge_with / link_contradiction), so the rank-3 staleness advisory must
+				// fire here too — otherwise relative-time content that required conflict
+				// resolution commits without the nudge (Codex review). p2resp is a typed
+				// struct; round-trip it to a map to attach the advisory key when relevant.
+				if terms := staleness.DetectRelativeTime(params.Content); len(terms) > 0 {
+					out, marshalErr := marshalWithStaleAdvisory(p2resp, terms)
+					if marshalErr != nil {
+						return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
+					}
+					return out, nil
+				}
 				out, marshalErr := json.MarshalIndent(p2resp, "", "  ")
 				if marshalErr != nil {
 					return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
@@ -391,7 +404,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			// finding 6 fix: no-signal stored=true carries the same fields as the
 			// legacy store_memory response (NFR-F1): id, storage, scope, privacy_scope,
 			// quality_signals. Phase1 returns MemoryID when Stored=true.
-			out, marshalErr := json.MarshalIndent(map[string]any{
+			wlResult := map[string]any{
 				"stored":          true,
 				"id":              p1resp.MemoryID,
 				"storage":         "memories",
@@ -399,7 +412,15 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				"privacy_scope":   params.PrivacyScope,
 				"quality_signals": []any{},
 				"message":         "Memory stored successfully via write-lint (no conflicts detected)",
-			}, "", "  ")
+			}
+			// Rank-3 staleness advisory must also fire on the write-lint success path —
+			// this is the primary store path when ENGRAM_VNEXT_F_ENABLED=true, the same
+			// config that activates the serve-time hint, so the advisory cannot be
+			// legacy-path-only (Codex review). Keyed on params.Content (post-redaction).
+			if terms := staleness.DetectRelativeTime(params.Content); len(terms) > 0 {
+				wlResult["staleness_advisory"] = staleAdvisory(terms)
+			}
+			out, marshalErr := json.MarshalIndent(wlResult, "", "  ")
 			if marshalErr != nil {
 				return "", fmt.Errorf("write_lint_phase1: marshal: %w", marshalErr)
 			}
@@ -793,6 +814,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	if len(params.Rejected) > 0 {
 		result["rejected_note"] = "rejected alternatives are not stored in v5 memories schema"
+	}
+	// Rank-3 staleness advisory (non-blocking): if the content uses relative-time
+	// language, nudge the author toward an absolute date/version anchor. "currently X"
+	// read months later looks like a current fact — this is the silent-staleness
+	// friction caught at the source. Advisory only; the memory is already stored.
+	if terms := staleness.DetectRelativeTime(created.Content); len(terms) > 0 {
+		result["staleness_advisory"] = staleAdvisory(terms)
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -1436,6 +1464,38 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 // It accepts the vnext-gated parameters (expand_graph, min_confidence,
 // tier_filter, explain) in addition to the base recall_memory params.
 //
+// staleAdvisory builds the non-blocking rank-3 write-time staleness advisory shared
+// by every store path (legacy create, write-lint no-signal success, write-lint
+// Phase2 commit), so the advisory shape cannot drift between them.
+func staleAdvisory(terms []string) map[string]any {
+	return map[string]any{
+		"relative_time_terms": terms,
+		"note":                "content uses relative-time language; prefer an absolute date or version anchor (e.g. 'as of 2026-06-17' / 'in v6.16.0') so the fact stays interpretable when recalled later",
+	}
+}
+
+// marshalWithStaleAdvisory marshals a typed Phase2 response with the staleness
+// advisory attached. The response is a struct, so it is round-tripped through a
+// generic map to add the advisory key without coupling to the orchestrator's type.
+func marshalWithStaleAdvisory(resp any, terms []string) (string, error) {
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		return "", err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		// Response was not a JSON object (unexpected); fall back to the plain form
+		// rather than dropping the commit result.
+		return string(raw), nil
+	}
+	m["staleness_advisory"] = staleAdvisory(terms)
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 // rerankAdapter bridges the concrete reranking.Client to the retrieval.CrossEncoder
 // interface, keeping internal/retrieval free of the reranking package import (the
 // same package-boundary discipline used for the store interfaces). It adapts the

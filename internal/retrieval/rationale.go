@@ -3,6 +3,7 @@ package retrieval
 import (
 	"time"
 
+	"github.com/thebtf/engram/internal/staleness"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -43,6 +44,15 @@ type RankingRationale struct {
 	// "key=value", e.g. ["project=engram","confidence_min=0.6"]. Empty slice
 	// when no non-default filters were in effect.
 	FiltersApplied []string `json:"filters_applied"`
+	// Stale flags this result as a stale candidate (rank-3): its content carries
+	// relative-time language ("currently", "recently", "last week", …) AND it is
+	// older than the freshness window, so the fact it asserts may have drifted. This
+	// is a HINT to re-verify before trusting, never a hide/drop signal. Derived from
+	// live fields only (content + created_at) — NOT the dormant lifecycle columns.
+	Stale bool `json:"stale,omitempty"`
+	// StaleTerms lists the relative-time phrases that triggered Stale (lower-cased,
+	// first-seen order). Empty/omitted when Stale is false.
+	StaleTerms []string `json:"stale_terms,omitempty"`
 }
 
 // AssembleRationale builds a RankingRationale from the fields available on
@@ -76,6 +86,32 @@ func AssembleRationale(memory *models.Memory, queryText string, matched bool, fi
 		appliedFilters = []string{}
 	}
 
+	// Rank-3 staleness hint: flag a result whose content uses relative-time language
+	// AND is older than the freshness window, so the agent re-verifies before trusting.
+	//
+	// Measured from created_at, NOT updated_at — deliberately, and do not "fix" this to
+	// updated_at: updated_at is a row-mutation timestamp, not a content-change timestamp.
+	// BatchIncrementInjected, BatchIncrementCited, and UpdateLifecycleFields all bump
+	// updated_at=now() without touching content (memory_store.go), and the v6.15.0
+	// feedback loop bumps it on EVERY session-start injection. So an always-inject
+	// "currently…" memory would have a perpetually-fresh updated_at and NEVER flag —
+	// defeating the hint for exactly the highest-stakes memories. created_at is immutable:
+	// its worst case is over-warning an in-place-edited memory (safe for a re-verify hint),
+	// vs updated_at's worst case of silently under-warning a stale injected one (unsafe).
+	// The precise fix (a dedicated content_updated_at column) is future work; created_at
+	// is the correct safe approximation for a heuristic hint. (Codex review, both rounds.)
+	//
+	// Age-gate first (cheap), then a SINGLE regex scan whose terms are reused for both
+	// the flag and StaleTerms — no double scan. Well within the ≤5ms NFR-F3 budget.
+	var stale bool
+	var staleTerms []string
+	if time.Since(memory.CreatedAt) > staleness.DefaultFreshnessWindow {
+		if terms := staleness.DetectRelativeTime(memory.Content); len(terms) > 0 {
+			stale = true
+			staleTerms = terms
+		}
+	}
+
 	return RankingRationale{
 		RecencyDays:    recencyDays,
 		Confidence:     memory.Confidence,
@@ -84,5 +120,7 @@ func AssembleRationale(memory *models.Memory, queryText string, matched bool, fi
 		Tier:           memory.Tier,
 		SubstringMatch: queryText != "" && matched,
 		FiltersApplied: appliedFilters,
+		Stale:          stale,
+		StaleTerms:     staleTerms,
 	}
 }
