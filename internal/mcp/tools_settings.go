@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/thebtf/engram/internal/auth"
-	"github.com/thebtf/engram/internal/config"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	gogorm "gorm.io/gorm"
@@ -45,18 +44,21 @@ func (s *Server) handleSettingsConsolidated(ctx context.Context, args json.RawMe
 	}
 }
 
-// settingsStore derives a SettingsStore from the configured database DSN, mirroring
-// credentialStore(). Uses only public constructors.
+// SetSettingsStore wires the SettingsStore built from the worker's already-open *gorm.Store
+// (#259 CR-3). This reuses the single process-wide connection pool instead of opening a new
+// one per tool call — NewStore opens a pool, runs migrations, and warms connections, so
+// calling it per-invocation would leak pools and exhaust file descriptors under load.
+func (s *Server) SetSettingsStore(store *gormstore.SettingsStore) {
+	s.settingsStoreWired = store
+}
+
+// settingsStore returns the wired SettingsStore. It is wired once at server init from the
+// worker's open store (SetSettingsStore); the settings tool never opens its own pool.
 func (s *Server) settingsStore() (*gormstore.SettingsStore, error) {
-	dsn := config.GetDatabaseDSN()
-	if dsn == "" {
-		return nil, fmt.Errorf("settings store not available: database DSN not configured")
+	if s.settingsStoreWired == nil {
+		return nil, fmt.Errorf("settings store not available: not wired (server started without a database)")
 	}
-	store, err := gormstore.NewStore(gormstore.Config{DSN: dsn})
-	if err != nil {
-		return nil, fmt.Errorf("settings store not available: %w", err)
-	}
-	return gormstore.NewSettingsStore(store), nil
+	return s.settingsStoreWired, nil
 }
 
 // isSecretSettingKey reports whether a key holds a secret that must be stored encrypted.

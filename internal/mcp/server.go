@@ -55,6 +55,7 @@ type Server struct {
 	candidateStore         *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	snapshotStore          *gorm.SnapshotStore  // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	codeChunkStore         *gorm.CodeChunkStore // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
+	settingsStoreWired     *gorm.SettingsStore  // #259 CR-3: wired from the worker's open store so the settings tool reuses one pool (no per-call NewStore)
 	bulkFacade             *bulkops.Facade      // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
 	testAuditWriter        auditWriter          // set only in tests via setTestAuditWriter
 	testMemoryEditor       memoryEditor         // set only in tests via setTestMemoryEditor

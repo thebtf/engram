@@ -818,7 +818,13 @@ func (s *Service) initializeAsync() {
 	// secret config (API keys) is stored encrypted and decrypted in-process via the vault
 	// (CR-3). The vault provider is lazy (s.getVault) so a deployment with no secret settings
 	// never forces vault-key initialization. Decryption is fail-soft → env/default.
-	settingsRes := newSettingsResolver(gorm.NewSettingsStore(store), s.getVault)
+	//
+	// The SettingsStore wraps the already-open *gorm.Store (cheap wrapper, no new pool). The
+	// same instance is shared with the MCP settings tool below so neither path opens its own
+	// connection pool.
+	settingsStore := gorm.NewSettingsStore(store)
+	settingsRes := newSettingsResolver(settingsStore, s.getVault)
+	mcpServer.SetSettingsStore(settingsStore)
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	embClient, embErr := embedding.NewClientWithSettings(s.ctx, settingsRes)
