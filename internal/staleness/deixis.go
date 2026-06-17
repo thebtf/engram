@@ -73,10 +73,12 @@ func IsStaleCandidate(content string, createdAt, now time.Time, window time.Dura
 	if window <= 0 {
 		window = DefaultFreshnessWindow
 	}
-	if len(DetectRelativeTime(content)) == 0 {
+	// Age check first: it is a single subtraction, whereas DetectRelativeTime runs a
+	// regex and allocates. Short-circuiting on fresh memories skips the scan entirely.
+	if now.Sub(createdAt) <= window {
 		return false
 	}
-	return now.Sub(createdAt) > window
+	return len(DetectRelativeTime(content)) > 0
 }
 
 // normalizeWhitespaceLower lowercases and collapses internal whitespace runs to a
