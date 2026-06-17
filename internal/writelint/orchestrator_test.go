@@ -532,3 +532,141 @@ func TestOrchestrator_TokenExpiry_T034(t *testing.T) {
 		t.Fatal("Phase2 expired token: expected error, got nil")
 	}
 }
+
+// --- Rank-9: opt-in auto-supersede for near-identical writes ---
+
+// buildAutoSupersedeOrchestrator builds an orchestrator with AutoSupersedeThreshold set.
+func buildAutoSupersedeOrchestrator(memories []*models.Memory, autoThreshold float64) (*writelint.Orchestrator, *stubMemoryLister, *stubAuditLogger, func()) {
+	lister := &stubMemoryLister{memories: memories}
+	audit := &stubAuditLogger{}
+	ts := writelint.NewTokenStore(writelint.TokenStoreConfig{
+		TTL:             10 * time.Second,
+		JanitorInterval: 60 * time.Second,
+	})
+	orc := writelint.NewOrchestrator(writelint.OrchestratorConfig{
+		MemoryStore:            lister,
+		AuditLogger:            audit,
+		TokenStore:             ts,
+		DupThreshold:           0.85,
+		AutoSupersedeThreshold: autoThreshold,
+	})
+	return orc, lister, audit, ts.Close
+}
+
+// Identical content (Jaccard 1.0) at/above the auto threshold must auto-supersede the prior:
+// store the new memory, mark the old superseded, return Stored=true with action_taken, NO token.
+func TestOrchestrator_AutoSupersede_IdenticalContent_Rank9(t *testing.T) {
+	prior := makeDupMemory() // ID 42, active
+	orc, lister, audit, closer := buildAutoSupersedeOrchestrator([]*models.Memory{prior}, 0.97)
+	defer closer()
+	ctx := context.Background()
+
+	// Identical to prior.Content → Jaccard 1.0 >= 0.97.
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: prior.Content, Project: "test"}, "system")
+	if err != nil {
+		t.Fatalf("Phase1 auto-supersede: error: %v", err)
+	}
+	if !resp.Stored {
+		t.Fatalf("auto-supersede: expected Stored=true, got false (signals: %v)", resp.LintSignals)
+	}
+	if resp.ResolutionToken != "" {
+		t.Errorf("auto-supersede: expected no token, got %q", resp.ResolutionToken)
+	}
+	if resp.ActionTaken != "auto_superseded" {
+		t.Errorf("auto-supersede: ActionTaken = %q, want auto_superseded", resp.ActionTaken)
+	}
+	if resp.AutoSupersededID != 42 {
+		t.Errorf("auto-supersede: AutoSupersededID = %d, want 42", resp.AutoSupersededID)
+	}
+	if resp.MemoryID == 0 {
+		t.Error("auto-supersede: expected a new MemoryID for the stored memory")
+	}
+	// The prior memory must actually be marked superseded by the store.
+	if prior.Status != "superseded" {
+		t.Errorf("auto-supersede: prior memory status = %q, want superseded", prior.Status)
+	}
+	if prior.SupersededBy == nil || *prior.SupersededBy != resp.MemoryID {
+		t.Errorf("auto-supersede: prior.SupersededBy not set to new id %d", resp.MemoryID)
+	}
+	_ = lister
+	// Audit must record the auto_superseded action.
+	sawAuto := false
+	for _, e := range audit.entries {
+		if e.action == "auto_superseded" {
+			sawAuto = true
+		}
+	}
+	if !sawAuto {
+		t.Error("auto-supersede: expected an 'auto_superseded' audit entry")
+	}
+}
+
+// A match in the 0.85..threshold band must NOT auto-supersede — it stays signal-only (token path),
+// preserving human-in-the-loop for genuinely-similar-but-distinct memories.
+func TestOrchestrator_AutoSupersede_MidBandStaysSignalOnly_Rank9(t *testing.T) {
+	prior := makeDupMemory() // content shares 11/12 tokens with dupContent → Jaccard ~0.917
+	orc, _, _, closer := buildAutoSupersedeOrchestrator([]*models.Memory{prior}, 0.97)
+	defer closer()
+	ctx := context.Background()
+
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "system")
+	if err != nil {
+		t.Fatalf("Phase1 mid-band: error: %v", err)
+	}
+	if resp.Stored {
+		t.Fatalf("mid-band (~0.917 < 0.97): expected signal/token path, got Stored=true action=%q", resp.ActionTaken)
+	}
+	if resp.ActionTaken != "" {
+		t.Errorf("mid-band: ActionTaken = %q, want empty (no auto action)", resp.ActionTaken)
+	}
+	if resp.ResolutionToken == "" {
+		t.Error("mid-band: expected a resolution token (signal path)")
+	}
+	if prior.Status == "superseded" {
+		t.Error("mid-band: prior memory must NOT be auto-superseded")
+	}
+}
+
+// With AutoSupersedeThreshold==0 (default, disabled), even identical content takes the normal
+// signal path — backward-compatible behavior is preserved.
+func TestOrchestrator_AutoSupersede_DisabledByDefault_Rank9(t *testing.T) {
+	prior := makeDupMemory()
+	orc, _, _, closer := buildAutoSupersedeOrchestrator([]*models.Memory{prior}, 0) // disabled
+	defer closer()
+	ctx := context.Background()
+
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: prior.Content, Project: "test"}, "system")
+	if err != nil {
+		t.Fatalf("Phase1 disabled: error: %v", err)
+	}
+	if resp.Stored {
+		t.Fatalf("disabled: identical content should still take the signal path, got Stored=true")
+	}
+	if resp.ResolutionToken == "" {
+		t.Error("disabled: expected a resolution token (signal path)")
+	}
+	if resp.ActionTaken != "" {
+		t.Errorf("disabled: ActionTaken = %q, want empty", resp.ActionTaken)
+	}
+}
+
+// An AutoSupersedeThreshold at or below DupThreshold must be ignored (it would otherwise collapse
+// the human-in-the-loop band). Identical content with threshold 0.80 (< DupThreshold 0.85) must
+// still take the signal path, not auto-supersede.
+func TestOrchestrator_AutoSupersede_ThresholdBelowDupIgnored_Rank9(t *testing.T) {
+	prior := makeDupMemory()
+	orc, _, _, closer := buildAutoSupersedeOrchestrator([]*models.Memory{prior}, 0.80)
+	defer closer()
+	ctx := context.Background()
+
+	resp, err := orc.Phase1(ctx, &models.Memory{Content: prior.Content, Project: "test"}, "system")
+	if err != nil {
+		t.Fatalf("Phase1 below-dup: error: %v", err)
+	}
+	if resp.Stored {
+		t.Fatalf("threshold<=DupThreshold must be ignored: expected signal path, got Stored=true action=%q", resp.ActionTaken)
+	}
+	if resp.ActionTaken != "" {
+		t.Errorf("below-dup: ActionTaken = %q, want empty", resp.ActionTaken)
+	}
+}

@@ -85,6 +85,15 @@ type WriteResolutionPhase1Response struct {
 	// ResolutionToken is the opaque token bound to this dry-run state.
 	// 10-minute default TTL per ADR-F-002. Empty when Stored=true.
 	ResolutionToken string `json:"resolution_token,omitempty"`
+	// ActionTaken names an automatic disposition performed by Phase1 without a
+	// Phase2 round-trip. Currently the only value is "auto_superseded" (rank-9):
+	// a near-identical write (Jaccard >= AutoSupersedeThreshold) was stored and the
+	// matched prior memory was marked superseded automatically. Empty on the normal
+	// no-signal commit and on the token (signal) path.
+	ActionTaken string `json:"action_taken,omitempty"`
+	// AutoSupersededID is the prior memory marked superseded when ActionTaken==
+	// "auto_superseded". Zero otherwise.
+	AutoSupersededID int64 `json:"auto_superseded_id,omitempty"`
 }
 
 // WriteResolutionPhase2Request carries the caller-chosen resolution for Phase 2.

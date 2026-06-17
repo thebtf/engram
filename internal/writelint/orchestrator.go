@@ -92,6 +92,16 @@ type OrchestratorConfig struct {
 	// DupThreshold is the Jaccard similarity threshold above which a memory
 	// is flagged as a possible_duplicate. Default 0.85 per spec §FR-F5.
 	DupThreshold float64
+	// AutoSupersedeThreshold (rank-9) is the Jaccard similarity at or above which
+	// Phase1 AUTOMATICALLY supersedes the matched prior memory with the incoming
+	// write, instead of suspending for a Phase2 decision. Default 0.0 disables the
+	// behavior entirely (every duplicate still routes through the signal/token path).
+	// Because auto-supersede is destructive (the prior memory is marked superseded),
+	// this is opt-in and should be set high enough that the two texts are effectively
+	// identical word-sets (e.g. 0.97) — the 0.85..threshold band stays signal-only so
+	// genuinely-distinct-but-similar memories are never silently merged. When set at or
+	// below DupThreshold the value is ignored (would collapse the human-in-the-loop band).
+	AutoSupersedeThreshold float64
 	// TokenTTL overrides the token TTL used when minting. 0 → uses TokenStore default.
 	TokenTTL time.Duration
 	// MemoryListLimit caps how many existing memories Phase1 loads for
@@ -199,6 +209,14 @@ func (o *Orchestrator) Phase1(ctx context.Context, mem *models.Memory, actor str
 	var signals []models.LintSignal
 	var dupOptions []models.ResolutionOption
 
+	// autoThreshold is honored only when it sits strictly above DupThreshold; otherwise
+	// enabling it would swallow the human-in-the-loop 0.85..threshold band. 0.0 (default)
+	// disables auto-supersede entirely.
+	autoThreshold := o.cfg.AutoSupersedeThreshold
+	autoEnabled := autoThreshold > 0 && autoThreshold > o.cfg.DupThreshold
+	var bestAutoID int64
+	var bestAutoSim float64
+
 	// --- detect_similar: Jaccard >= DupThreshold ---
 	for _, ex := range existing {
 		if ex.Status == "superseded" || ex.Status == "deleted" {
@@ -206,6 +224,12 @@ func (o *Orchestrator) Phase1(ctx context.Context, mem *models.Memory, actor str
 		}
 		sim := writegate.Jaccard(content, ex.Content)
 		if sim >= o.cfg.DupThreshold {
+			// rank-9: track the single highest-similarity prior at/above the auto-supersede
+			// threshold. We act on the BEST match only (one supersede target), after the loop.
+			if autoEnabled && sim >= autoThreshold && sim > bestAutoSim {
+				bestAutoSim = sim
+				bestAutoID = ex.ID
+			}
 			id := ex.ID
 			signals = append(signals, models.LintSignal{
 				Type:             models.LintSignalPossibleDuplicate,
@@ -219,6 +243,36 @@ func (o *Orchestrator) Phase1(ctx context.Context, mem *models.Memory, actor str
 				Result:   fmt.Sprintf("update memory %d with merged content", ex.ID),
 			})
 		}
+	}
+
+	// rank-9: automatic disposition for a near-identical write. When a prior memory matches
+	// at/above AutoSupersedeThreshold, store the incoming memory and mark that prior superseded
+	// inline — no Phase2 round-trip, no token. This runs BEFORE conflict/supersession detection
+	// because a near-identical duplicate is the dominant signal: the agent's intent is clearly to
+	// record the same fact, so we converge the corpus instead of accumulating a duplicate. Only
+	// the single best (highest-Jaccard) match is superseded.
+	if autoEnabled && bestAutoID != 0 {
+		created, err := o.cfg.MemoryStore.Create(ctx, mem)
+		if err != nil {
+			return nil, fmt.Errorf("writelint Phase1 auto-supersede create: %w", err)
+		}
+		if err := o.cfg.MemoryStore.MarkSuperseded(ctx, bestAutoID, created.ID); err != nil {
+			// The new memory is already stored; a failed supersede just leaves the old one
+			// active (a duplicate), which is non-destructive. Log via audit, don't fail the write.
+			_ = o.cfg.AuditLogger.LogAudit(ctx, created.ID, "auto_supersede_mark_failed", actor)
+		} else {
+			_ = o.cfg.AuditLogger.LogAudit(ctx, created.ID, "auto_superseded", actor)
+		}
+		if err := o.cfg.AuditLogger.LogAudit(ctx, created.ID, "create", actor); err != nil {
+			_ = err
+		}
+		return &Phase1Response{
+			Stored:           true,
+			MemoryID:         created.ID,
+			StorageID:        created.ID,
+			ActionTaken:      "auto_superseded",
+			AutoSupersededID: bestAutoID,
+		}, nil
 	}
 
 	// Derive concept tags from mem.Tags for conflict/supersession detection.

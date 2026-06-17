@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1942,6 +1943,11 @@ func wireVnextF(
 		TokenStore:     ts,
 		GraphStore:     newGraphStoreAdapter(gs),
 		CandidateStore: newCandidateStoreAdapter(cs),
+		// rank-9: opt-in auto-supersede for near-identical writes. Default 0 (disabled);
+		// operators set e.g. 0.97 to converge effectively-identical duplicates at write time.
+		// Out-of-range values are ignored (NewOrchestrator/Phase1 only honor 0 < t <= 1 above
+		// DupThreshold), so a fat-fingered env can't turn on aggressive merging.
+		AutoSupersedeThreshold: parseFloatEnv(os.Getenv("ENGRAM_AUTO_SUPERSEDE_THRESHOLD"), 0),
 	}
 	orch := writelint.NewOrchestrator(orchCfg)
 	mcpServer.SetWriteLintOrchestrator(orch)
@@ -1959,6 +1965,21 @@ func parseInt64Env(s string, defaultVal int64) int64 {
 		return defaultVal
 	}
 	return n
+}
+
+// parseFloatEnv parses a float in [0,1]; returns defaultVal on parse error or
+// out-of-range input. Clamping out-of-range to the default (rather than to 0/1)
+// means a malformed ENGRAM_AUTO_SUPERSEDE_THRESHOLD can never silently enable an
+// aggressive auto-merge — it falls back to the safe default instead.
+func parseFloatEnv(s string, defaultVal float64) float64 {
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || v < 0 || v > 1 {
+		return defaultVal
+	}
+	return v
 }
 
 // newGraphStoreAdapter wraps *graph.Store to satisfy writelint.GraphStoreInterface.
