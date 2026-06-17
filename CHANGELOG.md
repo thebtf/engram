@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.25.1] - 2026-06-17
+
+### Fixed
+
+- **Server init broken since v6.23.0 — migration 143 used a multi-statement Exec (#307).** Migration
+  143 (`model_settings`, shipped v6.23.0) ran `CREATE TABLE` and `CREATE INDEX` in a single
+  `tx.Exec`. pgx's extended protocol rejects multiple commands in one prepared statement
+  (`SQLSTATE 42601`), so `runMigrations` failed and the server never completed async init on
+  v6.23.0–v6.25.0 — `/api/stats` and every DB-backed endpoint returned 500. Split into a
+  per-statement slice (the idiom the other multi-statement migrations already use). Forward-only;
+  `IF NOT EXISTS` keeps it idempotent. Verified by running the full migration chain on a clean
+  PostgreSQL+pgvector database from zero.
+- **CI now runs migrations against a clean database (#307).** CI had no PostgreSQL service, so every
+  `DATABASE_DSN`-gated test — including the full-chain `TestMigrationsIntegration` — was silently
+  skipped, which is how the migration-143 break reached production. A new `migrations` CI job spins
+  up a `pgvector/pgvector:pg17` service and runs the clean-DB migration chain on every push, gating
+  the entire class of first-run migration failure before merge.
+
 ## [6.25.0] - 2026-06-17
 
 ### Added
