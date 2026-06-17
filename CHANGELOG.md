@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.25.0] - 2026-06-17
+
+### Added
+
+- **One-time env→settings backfill on boot (#259, CR-4 #306).** At startup the server seeds the
+  `model_settings` store from the six legacy model-config env vars (`ENGRAM_RERANK_URL` / `_MODEL` /
+  `_API_KEY`, `ENGRAM_EMBEDDING_URL` / `_MODEL` / `_API_KEY`) so an operator can migrate off env vars
+  without manually re-entering values they already have. For each: if the env var is set AND the
+  settings key is absent, the value is written to the store (secrets vault-encrypted) and a one-time
+  deprecation is logged. It never overwrites an operator-set value, so the backfill is idempotent and
+  safe to run every boot. It is a boot-time data backfill, not a schema migration. Fail-soft per key —
+  a store error, or a missing/failed vault for a secret, logs a warning and skips that one key without
+  blocking startup (the env var still works at runtime via env-first precedence). After this ships, an
+  operator can let the boot backfill seed the store, verify, then remove the env vars when ready.
+
 ## [6.24.0] - 2026-06-17
 
 ### Added
