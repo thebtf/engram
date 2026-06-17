@@ -4626,8 +4626,12 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			// Secret values live in encrypted_value (AES-256-GCM via Vault); plain config in value.
 			ID: "143_model_settings",
 			Migrate: func(tx *gorm.DB) error {
-				return tx.Exec(`
-					CREATE TABLE IF NOT EXISTS model_settings (
+				// Each statement runs as its own Exec: pgx's extended protocol rejects
+				// multiple commands in a single prepared statement (SQLSTATE 42601), so a
+				// combined "CREATE TABLE; CREATE INDEX" string fails. Mirror the slice idiom
+				// used by the other multi-statement migrations (e.g. 034).
+				sqls := []string{
+					`CREATE TABLE IF NOT EXISTS model_settings (
 						id                          BIGSERIAL PRIMARY KEY,
 						key                         TEXT NOT NULL,
 						value                       TEXT,
@@ -4640,10 +4644,16 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
 						updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
 						deleted_at                  TIMESTAMPTZ
-					);
-					CREATE UNIQUE INDEX IF NOT EXISTS idx_model_settings_key
-						ON model_settings (key) WHERE deleted_at IS NULL;
-				`).Error
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_model_settings_key
+						ON model_settings (key) WHERE deleted_at IS NULL`,
+				}
+				for _, s := range sqls {
+					if err := tx.Exec(s).Error; err != nil {
+						return fmt.Errorf("migration 143: %w", err)
+					}
+				}
+				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
 				return tx.Exec(`DROP TABLE IF EXISTS model_settings`).Error
