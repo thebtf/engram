@@ -369,6 +369,18 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				if p2err != nil {
 					return "", fmt.Errorf("write_lint_phase2: %w", p2err)
 				}
+				// Phase2 also COMMITS the content (ignore_signals / supersede /
+				// merge_with / link_contradiction), so the rank-3 staleness advisory must
+				// fire here too — otherwise relative-time content that required conflict
+				// resolution commits without the nudge (Codex review). p2resp is a typed
+				// struct; round-trip it to a map to attach the advisory key when relevant.
+				if terms := staleness.DetectRelativeTime(params.Content); len(terms) > 0 {
+					out, marshalErr := marshalWithStaleAdvisory(p2resp, terms)
+					if marshalErr != nil {
+						return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
+					}
+					return out, nil
+				}
 				out, marshalErr := json.MarshalIndent(p2resp, "", "  ")
 				if marshalErr != nil {
 					return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
@@ -1453,13 +1465,35 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 // tier_filter, explain) in addition to the base recall_memory params.
 //
 // staleAdvisory builds the non-blocking rank-3 write-time staleness advisory shared
-// by both store paths (legacy create and write-lint no-signal success), so the
-// advisory shape cannot drift between them.
+// by every store path (legacy create, write-lint no-signal success, write-lint
+// Phase2 commit), so the advisory shape cannot drift between them.
 func staleAdvisory(terms []string) map[string]any {
 	return map[string]any{
 		"relative_time_terms": terms,
 		"note":                "content uses relative-time language; prefer an absolute date or version anchor (e.g. 'as of 2026-06-17' / 'in v6.16.0') so the fact stays interpretable when recalled later",
 	}
+}
+
+// marshalWithStaleAdvisory marshals a typed Phase2 response with the staleness
+// advisory attached. The response is a struct, so it is round-tripped through a
+// generic map to add the advisory key without coupling to the orchestrator's type.
+func marshalWithStaleAdvisory(resp any, terms []string) (string, error) {
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		return "", err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		// Response was not a JSON object (unexpected); fall back to the plain form
+		// rather than dropping the commit result.
+		return string(raw), nil
+	}
+	m["staleness_advisory"] = staleAdvisory(terms)
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // rerankAdapter bridges the concrete reranking.Client to the retrieval.CrossEncoder
