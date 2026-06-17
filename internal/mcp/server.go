@@ -24,6 +24,7 @@ import (
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/redaction"
+	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/writelint"
 	gormlib "gorm.io/gorm"
@@ -43,6 +44,7 @@ type Server struct {
 	issueStore             *gorm.IssueStore
 	embeddingClient        *embedding.Client
 	embeddingStore         *embedding.Store
+	rerankClient           *reranking.Client
 	memoryStore            *gorm.MemoryStore
 	behavioralRulesStore   *gorm.BehavioralRulesStore
 	promotionStore         *gorm.PromotionStore
@@ -191,6 +193,13 @@ func (s *Server) SetRedactionRules(rules []redaction.CompiledRule) {
 func (s *Server) SetEmbeddingStores(client *embedding.Client, store *embedding.Store) {
 	s.embeddingClient = client
 	s.embeddingStore = store
+}
+
+// SetRerankClient wires the cross-encoder rerank client for the recall path (rank-4).
+// A nil client (the default when ENGRAM_RERANK_URL is unset) leaves recall on the
+// fusion order — the reranker is strictly additive and failure-silent.
+func (s *Server) SetRerankClient(client *reranking.Client) {
+	s.rerankClient = client
 }
 
 // SetStatsDB wires the raw gorm.DB handle used by handleGetMemoryStats for

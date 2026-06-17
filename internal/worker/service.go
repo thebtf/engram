@@ -41,6 +41,7 @@ import (
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/redaction"
+	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/update"
@@ -855,6 +856,22 @@ func (s *Service) initializeAsync() {
 		s.embeddingStore = embStore
 		s.embeddingRecorder = embRec
 		s.initMu.Unlock()
+	}
+
+	// Rank-4: initialize the cross-encoder rerank client (optional — disabled if
+	// ENGRAM_RERANK_URL unset). Independent of embedding: the reranker reorders the
+	// fused candidate pool on the recall path and works whether or not the vector leg
+	// is enabled. When disabled, recall keeps the fusion order (failure-silent).
+	rerankClient, rerankErr := reranking.NewClient()
+	if rerankErr != nil {
+		if errors.Is(rerankErr, reranking.ErrRerankDisabled) {
+			log.Info().Msg("reranking: disabled (ENGRAM_RERANK_URL not set)")
+		} else {
+			log.Warn().Err(rerankErr).Msg("reranking: failed to initialize client")
+		}
+	} else {
+		mcpServer.SetRerankClient(rerankClient)
+		log.Info().Str("model", rerankClient.Model()).Msg("reranking: cross-encoder rerank enabled on recall path")
 	}
 
 	segmentStore := gorm.NewSegmentStore(store)
@@ -1776,13 +1793,13 @@ func (s *Service) processAllSessions() {
 // Shutdown performs an ordered graceful stop of all service components.
 // The phased sequence is:
 //
-//	1. Cancel root context  — signals all goroutines to stop accepting new work
-//	2. HTTP + gRPC servers  — stop accepting new connections (in-flight requests drain)
-//	3. Config watcher       — avoid spurious hot-reload during teardown
-//	4. Background workers   — cognitive queue, write-lint janitor
-//	5. Session manager      — flush pending observation/summary messages
-//	6. WaitGroup drain      — wait up to the caller-supplied context deadline
-//	7. Database             — closed last because components above may still read it
+//  1. Cancel root context  — signals all goroutines to stop accepting new work
+//  2. HTTP + gRPC servers  — stop accepting new connections (in-flight requests drain)
+//  3. Config watcher       — avoid spurious hot-reload during teardown
+//  4. Background workers   — cognitive queue, write-lint janitor
+//  5. Session manager      — flush pending observation/summary messages
+//  6. WaitGroup drain      — wait up to the caller-supplied context deadline
+//  7. Database             — closed last because components above may still read it
 //
 // The caller supplies the deadline via ctx. If the deadline fires before the
 // WaitGroup drains, teardown continues and a warning is logged. The first
