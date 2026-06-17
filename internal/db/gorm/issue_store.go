@@ -329,9 +329,25 @@ func (s *IssueStore) CloseIssue(ctx context.Context, id int64, sourceProject str
 		// - Dashboard operator can always close (bypass check)
 		// - If issue has a source_project, caller must match
 		// - If issue source_project is empty, anyone can close (backward compat)
+		//
+		// Both sides are canonicalized through ResolveProjectID before comparison.
+		// The incoming sourceProject is resolved by the handler, but the STORED
+		// issue.SourceProject is the canonical form as of *creation time*; if the
+		// project's slug/legacy-id registration changed between create and close
+		// (e.g. two sessions deriving different slugs for the same git remote, like
+		// "aimux" vs "aimux_<hash>"), a raw string compare wrongly rejects the true
+		// owner. Resolving both against the current projects table maps each to the
+		// same present-day canonical id. Resolution is idempotent for already-
+		// canonical values, so this is safe for the common case too.
 		isOperator := sourceProject == "dashboard"
-		if !isOperator && issue.SourceProject != "" && issue.SourceProject != sourceProject {
-			return fmt.Errorf("only source project %q can close this issue", issue.SourceProject)
+		if !isOperator && issue.SourceProject != "" {
+			// Resolve only when authorization actually needs checking (avoids two DB
+			// round-trips for the operator-bypass and empty-source paths).
+			storedSource := ResolveProjectID(ctx, tx, issue.SourceProject)
+			callerSource := ResolveProjectID(ctx, tx, sourceProject)
+			if storedSource != callerSource {
+				return fmt.Errorf("only source project %q can close this issue", issue.SourceProject)
+			}
 		}
 
 		// State validation:
