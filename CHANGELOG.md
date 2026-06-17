@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.24.0] - 2026-06-17
+
+### Added
+
+- **`settings` MCP tool — manage swappable model config, including encrypted secrets (#259, CR-3 #305).**
+  A new server-global `settings` tool (actions set / get / list / delete) manages the model_settings
+  store from CR-1, completing the settings-store as a usable secret-config surface. An operator can now
+  set the reranker/embedder endpoint, model, and API key without a redeploy, and the server picks them up
+  on the recall/init path (env still wins when set — env-first precedence). Security properties: set and
+  delete require admin (operator) authentication and fail closed when auth is disabled, because settings
+  are server-global and change behavior for every consumer; a key whose name ends in `.api_key` (or an
+  explicit `encrypt: true`) is stored AES-256-GCM-encrypted via the existing vault; get and list never
+  return secret plaintext (a secret reads back as `{encrypted: true, value_set}` only). The reranker and
+  embedder now decrypt a stored API key in-process via the vault — decryption is fail-soft, so a missing
+  vault, a key-fingerprint mismatch, or a decrypt error falls through to the env var or default and never
+  breaks client startup. Storing a secret requires the vault key (`ENGRAM_ENCRYPTION_KEY` /
+  `ENGRAM_ENCRYPTION_KEY_FILE`) to be configured on the server.
+
 ## [6.23.0] - 2026-06-17
 
 ### Added
