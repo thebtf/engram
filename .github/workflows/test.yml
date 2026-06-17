@@ -40,14 +40,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Runs TestMigrationsIntegration + every other DATABASE_DSN-gated test in the gorm
-      # package against the clean service DB. TestMigrationsIntegration calls runMigrations
-      # on a fresh database, so the entire chain (including the newest migration) must apply
-      # cleanly from zero — the first-run path the local borrowed DB never exercises.
+      # Runs the clean-DB full-chain gate: TestMigrationsIntegration calls runMigrations on
+      # a fresh database, so the entire chain (including the newest migration) must apply
+      # cleanly from zero — the first-run path the local borrowed DB never exercises, and the
+      # exact path that broke when migration 143 shipped a multi-statement Exec.
+      #
+      # The pattern is ANCHORED (TestMigrationsIntegration$) to this one gate. The sibling
+      # TestMigrationsIntegration_* tests are NOT clean-DB-safe on the base pgvector image —
+      # they drop/re-run individual migrations and assume an already-migrated schema, so an
+      # unanchored -run pulls them in and they fail on a from-zero DB. Those siblings stay as
+      # operator-run-against-a-real-DB tests; this gate owns the clean first-run contract.
       - name: Run migration chain on clean DB
         env:
           DATABASE_DSN: postgres://engram:engram@localhost:5432/engram?sslmode=disable
-        run: go test ./internal/db/gorm/ -run TestMigrationsIntegration -count=1 -v
+        run: go test ./internal/db/gorm/ -run 'TestMigrationsIntegration$' -count=1 -v
 
   test:
     name: test / ${{ matrix.os }}
