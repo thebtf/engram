@@ -5,11 +5,52 @@
 package feedback
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 
 	"github.com/thebtf/engram/pkg/models"
 )
+
+// injectedBlockRe matches engram's OWN injected context blocks — the memory- and
+// issue-bearing wrappers the session-start and pre-compact hooks emit — together with
+// their inner text. Verified against current hook source (2026-06-17):
+//   - <engram-static-memories>   session-start.js:60   (memory text)
+//   - <engram-reinjection>       pre-compact.js:51      (memory text re-injected at compaction)
+//   - <user-behavior-rules>      session-start.js:33    (behavioral-rule text)
+//   - <open-issues ...>          lib.js:778             (issue text)
+// Plus any FUTURE <engram-*> block, so a newly-added memory-bearing tag is covered without
+// editing this regex (the demolition/staleness trap: a hard-coded tag list silently goes
+// stale). Non-engram-prefixed wrappers (user-behavior-rules, open-issues) are named
+// explicitly because they carry no prefix.
+//
+// (?s) so '.' spans newlines; non-greedy so adjacent blocks close at the first matching tag.
+// RE2 has no backreferences, so open/close tags are not forced to be the same name; the only
+// resulting imprecision is over-matching between two mismatched engram tags, which is benign —
+// it can only ever remove engram's own injected text, never arbitrary agent prose.
+var injectedBlockRe = regexp.MustCompile(`(?s)<(engram-[a-z-]+|user-behavior-rules|open-issues)\b[^>]*>.*?</\s*(engram-[a-z-]+|user-behavior-rules|open-issues)\s*>`)
+
+// StripInjectedBlocks removes engram's own injected context blocks from agent output
+// BEFORE citation detection (rank-2 anti-poisoning). The stop hook (stop.js) extracts ONLY
+// assistant-role text into agent_output_text, so injected wrappers reach this path only when
+// the agent echoes or quotes an injected block verbatim in its own turn. When it does,
+// DetectCitations would match the memory against engram's OWN injection and falsely mark it
+// "cited" — inflating citation_count with self-citation rather than genuine usage, and
+// corrupting the rank-1 feedback signal (and the rank-5/6 reinforcement built on it).
+// Stripping the wrappers first ensures only the agent's OWN references to a memory count.
+//
+// Defensive and lossless for the matcher: it removes only engram-owned tag blocks; if no
+// such block is present (the common case — the agent rarely re-emits injected XML) the
+// output is returned unchanged.
+func StripInjectedBlocks(agentOutput string) string {
+	if agentOutput == "" || (!strings.Contains(agentOutput, "<engram-") &&
+		!strings.Contains(agentOutput, "<user-behavior-rules") &&
+		!strings.Contains(agentOutput, "<open-issues")) {
+		// Fast path: no engram wrapper tag present at all — nothing to strip.
+		return agentOutput
+	}
+	return injectedBlockRe.ReplaceAllString(agentOutput, " ")
+}
 
 // CitationResult records whether a single injected memory was cited in the
 // agent's output text.
