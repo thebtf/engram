@@ -68,12 +68,72 @@ func TestHandleStatsVnext_ResponseShape(t *testing.T) {
 	if _, ok := m["embedding"]; ok {
 		t.Error("embedding field present in JSON when nil, want omitted (omitempty)")
 	}
-	// Required fields must be present.
+	// outcomes is omitempty and must be absent when nil.
+	if _, ok := m["outcomes"]; ok {
+		t.Error("outcomes field present in JSON when nil, want omitted (omitempty)")
+	}
+	// Required fields must be present, including the rank-7 project_citation_rates
+	// (NOT omitempty — an empty slice still serialises as [] so consumers can distinguish
+	// "queried, none qualified" from "field absent / old server").
 	for _, key := range []string{"injection_count", "citation_count", "uncited_count",
-		"noise_ratio", "write_gate_stats", "generated_at"} {
+		"noise_ratio", "write_gate_stats", "project_citation_rates", "generated_at"} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("required field %q missing from JSON output", key)
 		}
+	}
+}
+
+// TestProjectCitationRate_JSONShape pins the per-project rate row fields (rank-7).
+func TestProjectCitationRate_JSONShape(t *testing.T) {
+	pcr := projectCitationRate{
+		Project:         "engram",
+		CitationRate:    0.42,
+		TotalCitations:  21,
+		TotalInjections: 50,
+		MemoryCount:     7,
+	}
+	b, err := json.Marshal(pcr)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	for _, key := range []string{"project", "citation_rate", "total_citations", "total_injections", "memory_count"} {
+		if _, ok := m[key]; !ok {
+			t.Errorf("projectCitationRate JSON missing %q", key)
+		}
+	}
+	if m["citation_rate"].(float64) != 0.42 {
+		t.Errorf("citation_rate = %v, want 0.42", m["citation_rate"])
+	}
+}
+
+// TestOutcomeTelemetry_JSONShape pins the outcome-starvation telemetry fields and the
+// unrecorded-fraction math (rank-7).
+func TestOutcomeTelemetry_JSONShape(t *testing.T) {
+	ot := outcomeTelemetry{
+		TotalSessions:      10,
+		UnrecordedSessions: 7,
+		UnrecordedFraction: 0.7,
+		ByOutcome:          map[string]int64{"(unrecorded)": 7, "success": 2, "failure": 1},
+	}
+	b, err := json.Marshal(ot)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	for _, key := range []string{"total_sessions", "unrecorded_sessions", "unrecorded_fraction", "by_outcome"} {
+		if _, ok := m[key]; !ok {
+			t.Errorf("outcomeTelemetry JSON missing %q", key)
+		}
+	}
+	if m["unrecorded_fraction"].(float64) != 0.7 {
+		t.Errorf("unrecorded_fraction = %v, want 0.7", m["unrecorded_fraction"])
 	}
 }
 
