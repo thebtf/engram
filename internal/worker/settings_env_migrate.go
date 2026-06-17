@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -15,21 +14,24 @@ import (
 )
 
 // envSettingPair maps a legacy environment variable to its settings-store key (#259 CR-4).
+// isSecret is explicit (not re-derived from the key name at the write site) so secret handling
+// is unambiguous and decoupled from the .api_key naming convention.
 type envSettingPair struct {
 	envVar     string
 	settingKey string
+	isSecret   bool
 }
 
 // envSettingMigrations is the set of model-config env vars that migrate into the settings-store.
-// Keys ending ".api_key" are secrets (vault-encrypted on write); the rest are plaintext config.
+// Secret pairs (isSecret) are vault-encrypted on write; the rest are plaintext config.
 // The embedding DIMENSION is deliberately absent — it is schema-bound, never a runtime setting.
 var envSettingMigrations = []envSettingPair{
-	{"ENGRAM_RERANK_URL", "reranker.url"},
-	{"ENGRAM_RERANK_MODEL", "reranker.model"},
-	{"ENGRAM_RERANK_API_KEY", "reranker.api_key"},
-	{"ENGRAM_EMBEDDING_URL", "embedder.url"},
-	{"ENGRAM_EMBEDDING_MODEL", "embedder.model"},
-	{"ENGRAM_EMBEDDING_API_KEY", "embedder.api_key"},
+	{envVar: "ENGRAM_RERANK_URL", settingKey: "reranker.url"},
+	{envVar: "ENGRAM_RERANK_MODEL", settingKey: "reranker.model"},
+	{envVar: "ENGRAM_RERANK_API_KEY", settingKey: "reranker.api_key", isSecret: true},
+	{envVar: "ENGRAM_EMBEDDING_URL", settingKey: "embedder.url"},
+	{envVar: "ENGRAM_EMBEDDING_MODEL", settingKey: "embedder.model"},
+	{envVar: "ENGRAM_EMBEDDING_API_KEY", settingKey: "embedder.api_key", isSecret: true},
 }
 
 // settingsWriter is the minimal write seam migrateEnvToSettings needs from the settings-store
@@ -56,6 +58,11 @@ func migrateEnvToSettings(ctx context.Context, store settingsWriter, vaultProvid
 	}
 	migrated := 0
 	for _, p := range envSettingMigrations {
+		if ctx.Err() != nil {
+			// Service shutting down (ctx cancelled) — abort the backfill rather than issue
+			// more DB queries/writes and noisy warnings against a closing store.
+			return
+		}
 		envVal := os.Getenv(p.envVar)
 		if envVal == "" {
 			continue // env not set → nothing to migrate for this key
@@ -78,7 +85,7 @@ func migrateEnvToSettings(ctx context.Context, store settingsWriter, vaultProvid
 			EditedBy:    "env-migrate",
 		}
 
-		if strings.HasSuffix(p.settingKey, ".api_key") {
+		if p.isSecret {
 			// Secret: encrypt via vault. A vault failure skips this one key (fail-soft) — the
 			// env var still works at runtime, so nothing breaks; the operator just can't drop it yet.
 			if vaultProvider == nil {

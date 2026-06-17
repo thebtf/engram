@@ -168,3 +168,22 @@ func TestMigrateEnvToSettings_ReadErrorSkips(t *testing.T) {
 func TestMigrateEnvToSettings_NilStoreNoop(t *testing.T) {
 	migrateEnvToSettings(context.Background(), nil, nil)
 }
+
+// TestMigrateEnvToSettings_CancelledContextAborts confirms a cancelled context (service
+// shutdown) aborts the backfill before any write — no Set calls, no panic (gemini #306).
+func TestMigrateEnvToSettings_CancelledContextAborts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the loop runs
+
+	w := newRecordingWriter()
+	t.Setenv("ENGRAM_RERANK_MODEL", "env-model") // would otherwise be written
+	for _, e := range []string{"ENGRAM_RERANK_URL", "ENGRAM_RERANK_API_KEY", "ENGRAM_EMBEDDING_URL", "ENGRAM_EMBEDDING_MODEL", "ENGRAM_EMBEDDING_API_KEY"} {
+		t.Setenv(e, "")
+	}
+
+	migrateEnvToSettings(ctx, w, nil)
+
+	if len(w.setCalls) != 0 {
+		t.Errorf("got %d Set calls, want 0 — cancelled context must abort before writing", len(w.setCalls))
+	}
+}
