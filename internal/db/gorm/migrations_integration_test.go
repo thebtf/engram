@@ -114,14 +114,7 @@ func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
 	const dims = 2000
 	require.NoError(t, runMigrations(db))
 
-	var obsExists bool
-	require.NoError(t, db.Raw(`
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.tables
-			WHERE table_schema = 'public' AND table_name = 'observations'
-		)
-	`).Scan(&obsExists).Error)
-	if !obsExists {
+	if !db.Migrator().HasTable("observations") {
 		t.Skip("observations table not present after v5 cleanup; migration 074 is historical-only")
 	}
 
