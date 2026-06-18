@@ -45,6 +45,20 @@ func TestRuleVersionTransitionValidation(t *testing.T) {
 	}
 }
 
+func TestRuleVersionTransitionRequiresNonBlankEvidence(t *testing.T) {
+	req := RuleTransitionRequest{
+		Actor:           "agent-test",
+		ActorKind:       RuleActorAgent,
+		Reason:          "blank evidence should fail",
+		EvidenceHandles: []string{"   "},
+	}
+
+	err := ValidateRuleVersionTransition(RuleStateDraft, RuleStateShadow, req)
+	if !errors.Is(err, ErrRuleRequiredFieldMissing) {
+		t.Fatalf("blank evidence handle must return ErrRuleRequiredFieldMissing, got %v", err)
+	}
+}
+
 func TestRuleAuthorityRejectsBackgroundLLMAndSystemGlobalKernel(t *testing.T) {
 	for _, actorKind := range []RuleActorKind{RuleActorBackground, RuleActorLLM, RuleActorSystem} {
 		req := RuleTransitionRequest{

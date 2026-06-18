@@ -226,7 +226,7 @@ func validateRuleTransitionRequest(req RuleTransitionRequest, requireSnapshot bo
 	if strings.TrimSpace(req.Actor) == "" ||
 		strings.TrimSpace(string(req.ActorKind)) == "" ||
 		strings.TrimSpace(req.Reason) == "" ||
-		len(req.EvidenceHandles) == 0 {
+		!hasNonBlankRuleEvidence(req.EvidenceHandles) {
 		return ErrRuleRequiredFieldMissing
 	}
 	if !req.ActorKind.IsValid() {
@@ -236,6 +236,15 @@ func validateRuleTransitionRequest(req RuleTransitionRequest, requireSnapshot bo
 		return ErrRuleSnapshotRequired
 	}
 	return nil
+}
+
+func hasNonBlankRuleEvidence(handles []string) bool {
+	for _, handle := range handles {
+		if strings.TrimSpace(handle) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func isRuleActiveState(state RuleVersionState) bool {

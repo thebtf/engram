@@ -2,7 +2,7 @@
 'use strict';
 
 const lib = require('./lib');
-const { safePromptScalar, quotedPromptScalar } = lib;
+const { safePromptScalar, quotedPromptPayload, quotedPromptScalar } = lib;
 
 function getString(value) {
   return typeof value === 'string' ? value : '';
@@ -14,7 +14,7 @@ function formatFactsLine(items) {
   let out = 'Key facts:\n';
   for (const fact of items) {
     if (typeof fact === 'string' && fact !== '') {
-      out += `- ${quotedPromptScalar(fact)}\n`;
+      out += `- ${quotedPromptPayload(fact)}\n`;
     }
   }
 
@@ -38,7 +38,7 @@ function formatBehaviorRulesBlock(rules) {
       block += `title: ${quotedPromptScalar(title)}\n`;
     }
     if (narrative !== '' && narrative !== title) {
-      block += `content: ${quotedPromptScalar(narrative)}\n`;
+      block += `content: ${quotedPromptPayload(narrative)}\n`;
     }
     block += formatFactsLine(rule.facts);
     block += '\n';
@@ -61,7 +61,7 @@ function formatMemoriesBlock(memories) {
     if (!memory || typeof memory !== 'object') continue;
     const content = getString(memory.content);
     if (content === '') continue;
-    block += `- content: ${quotedPromptScalar(content)}\n`;
+    block += `- content: ${quotedPromptPayload(content)}\n`;
   }
 
   block += '</engram-static-memories>\n';

@@ -2,7 +2,7 @@
 'use strict';
 
 const lib = require('./lib');
-const { quotedPromptScalar } = lib;
+const { quotedPromptPayload, quotedPromptScalar } = lib;
 
 function getString(value) {
   return typeof value === 'string' ? value : '';
@@ -68,9 +68,9 @@ function renderEntries(entries, kindLabel, filePath, mapper) {
   for (const entry of entries) {
     const mapped = mapper(entry, filePath);
     out += `entry: type=${quotedPromptScalar(mapped.type)} title=${quotedPromptScalar(mapped.title)}\n`;
-    if (mapped.narrative) out += `content: ${quotedPromptScalar(mapped.narrative)}\n`;
+    if (mapped.narrative) out += `content: ${quotedPromptPayload(mapped.narrative)}\n`;
     for (const fact of mapped.facts) {
-      if (typeof fact === 'string' && fact !== '') out += `- ${quotedPromptScalar(fact)}\n`;
+      if (typeof fact === 'string' && fact !== '') out += `- ${quotedPromptPayload(fact)}\n`;
     }
     out += '\n';
   }

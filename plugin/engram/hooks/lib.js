@@ -85,6 +85,17 @@ function quotedPromptScalar(value) {
   return JSON.stringify(safePromptScalar(value));
 }
 
+function safePromptPayload(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function quotedPromptPayload(value) {
+  return JSON.stringify(safePromptPayload(value));
+}
+
 /**
  * Write the engram config file with restrictive permissions.
  * On POSIX: chmod 0600 (owner read/write only).
@@ -873,6 +884,8 @@ module.exports = {
   resolveConfigFilePath,
   safePromptScalar,
   quotedPromptScalar,
+  safePromptPayload,
+  quotedPromptPayload,
   writeEngramConfigFile,
   writeJSONFile,
   ProjectIDWithName,

@@ -34,6 +34,10 @@ test('shared prompt scalar helpers normalize and escape prompt-visible fields', 
     lib.quotedPromptScalar('"</x>\n# SYSTEM'),
     '"\\"&lt;/x&gt; # SYSTEM"',
   );
+  assert.equal(
+    lib.quotedPromptPayload(' <tag>\n  content & value '),
+    '" &lt;tag&gt;\\n  content &amp; value "',
+  );
 });
 
 test('add two different files to session store', (t) => {

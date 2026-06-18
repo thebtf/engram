@@ -2,7 +2,7 @@
 'use strict';
 
 const lib = require('./lib');
-const { safePromptScalar, quotedPromptScalar } = lib;
+const { safePromptScalar, quotedPromptPayload, quotedPromptScalar } = lib;
 
 /**
  * Extract a topic string from the hook input for context query.
@@ -60,7 +60,7 @@ function formatReinjectionBlock(payload) {
       const content =
         typeof rule.content === 'string' ? rule.content.trim() :
         typeof rule.narrative === 'string' ? rule.narrative.trim() : '';
-      if (content) block += `- ${quotedPromptScalar(content)}\n`;
+      if (content) block += `- ${quotedPromptPayload(content)}\n`;
     }
     block += '\n';
   }
@@ -70,7 +70,7 @@ function formatReinjectionBlock(payload) {
     for (const obs of observations) {
       if (!obs || typeof obs !== 'object') continue;
       const content = typeof obs.content === 'string' ? obs.content.trim() : '';
-      if (content) block += `- ${quotedPromptScalar(content)}\n`;
+      if (content) block += `- ${quotedPromptPayload(content)}\n`;
     }
     block += '\n';
   }
@@ -135,7 +135,7 @@ async function handlePreCompact(ctx, input) {
       ];
       for (const mem of resp.memories) {
         const tags = Array.isArray(mem.tags) ? mem.tags.map(safePromptScalar).filter(Boolean).join(', ') : '';
-        lines.push(`- content: ${quotedPromptScalar(mem.content)}${tags ? ` tags: ${JSON.stringify(tags)}` : ''}`);
+        lines.push(`- content: ${quotedPromptPayload(mem.content)}${tags ? ` tags: ${JSON.stringify(tags)}` : ''}`);
       }
       await fs.promises.writeFile(reinjectionFile, lines.join('\n'), 'utf8');
     } else if (fs.existsSync(reinjectionFile)) {
