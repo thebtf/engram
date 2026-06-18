@@ -15,18 +15,78 @@ import (
 
 func TestMigration144_RuleGovernanceTables(t *testing.T) {
 	db := openCandidateTestDB(t)
+	requireRuleGovernanceTableState(t, db, true)
+}
 
-	for _, table := range []string{
-		"rule_candidates",
-		"rule_families",
-		"rule_versions",
-		"rule_transition_log",
-		"rule_governance_snapshots",
-	} {
-		var exists bool
-		require.NoError(t, db.Raw(`SELECT to_regclass(?) IS NOT NULL`, table).Scan(&exists).Error)
-		require.True(t, exists, "expected table %s to exist", table)
-	}
+func TestMigration144_RuleGovernanceRollbackAndReapply(t *testing.T) {
+	db := openCandidateTestDB(t)
+	migration := ruleGovernanceMigration144()
+	t.Cleanup(func() {
+		_ = migration.Migrate(db)
+	})
+
+	requireRuleGovernanceTableState(t, db, true)
+	require.NoError(t, migration.Rollback(db))
+	requireRuleGovernanceTableState(t, db, false)
+	require.NoError(t, migration.Migrate(db))
+	requireRuleGovernanceTableState(t, db, true)
+}
+
+func TestMigration144_RuleGovernanceEscapeConstraints(t *testing.T) {
+	db := openCandidateTestDB(t)
+	migration := ruleGovernanceMigration144()
+	t.Cleanup(func() {
+		_ = migration.Migrate(db)
+	})
+
+	require.NoError(t, migration.Rollback(db))
+	require.NoError(t, migration.Migrate(db))
+
+	err := db.Exec(`INSERT INTO rule_candidates (
+		source_signal_type,
+		source_actor,
+		proposed_content,
+		proposed_scope,
+		proposed_audience,
+		anti_capture_status,
+		conflict_status,
+		decay_policy,
+		fingerprint
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"explicit_agent_proposal",
+		"codex",
+		"malformed escape should be rejected",
+		"project",
+		"developer",
+		"HYPOTHESIS",
+		"none",
+		"NO DATA",
+		fmt.Sprintf("rg0-bad-escape-%d", time.Now().UnixNano()),
+	).Error
+	require.Error(t, err, "malformed legal escape must be rejected at the DB boundary")
+
+	err = db.Exec(`INSERT INTO rule_candidates (
+		source_signal_type,
+		source_actor,
+		proposed_content,
+		proposed_scope,
+		proposed_audience,
+		anti_capture_status,
+		conflict_status,
+		decay_policy,
+		fingerprint
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"explicit_agent_proposal",
+		"codex",
+		"valid escape should be accepted",
+		"project",
+		"developer",
+		"HYPOTHESIS: accepted with evidence",
+		"none",
+		"NO DATA",
+		fmt.Sprintf("rg0-good-escape-%d", time.Now().UnixNano()),
+	).Error
+	require.NoError(t, err)
 }
 
 func TestRuleGovernanceStore_CandidateIdempotencyAndNoBehavioralRuleProjection(t *testing.T) {
@@ -304,4 +364,17 @@ func getRuleVersionState(t *testing.T, db *gorm.DB, versionID int64) models.Rule
 	var state string
 	require.NoError(t, db.Raw(`SELECT state FROM rule_versions WHERE id = ?`, versionID).Scan(&state).Error)
 	return models.RuleVersionState(state)
+}
+
+func requireRuleGovernanceTableState(t *testing.T, db *gorm.DB, exists bool) {
+	t.Helper()
+	for _, table := range []string{
+		"rule_candidates",
+		"rule_families",
+		"rule_versions",
+		"rule_transition_log",
+		"rule_governance_snapshots",
+	} {
+		require.Equal(t, exists, db.Migrator().HasTable(table), "table state mismatch for %s", table)
+	}
 }

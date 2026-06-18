@@ -826,7 +826,7 @@ function formatIssuesBlock(issues, project) {
     } else if (issue.comment_count > 0 && issue.updated_at) {
       const ago = _timeAgo(new Date(issue.updated_at));
       const commentCount = escapeInjectedScalar(issue.comment_count);
-      block += `  └─ ${commentCount} comment(s), updated ${ago}\n`;
+      block += `  └─ ${commentCount} comment(s), updated ${escapeInjectedScalar(ago)}\n`;
     }
   }
   block += '</open-issues>';
