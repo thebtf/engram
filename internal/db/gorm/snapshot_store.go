@@ -3,6 +3,7 @@ package gorm
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -35,7 +36,7 @@ func (snapshotRow) TableName() string { return "bulk_op_snapshots" }
 // Int64Array is a []int64 that stores/retrieves a PostgreSQL BIGINT[] column.
 type Int64Array []int64
 
-func (a Int64Array) Value() (interface{}, error) {
+func (a Int64Array) Value() (driver.Value, error) {
 	if len(a) == 0 {
 		return "{}", nil
 	}
@@ -241,8 +242,8 @@ func (s *SnapshotStore) MarkRolledBack(ctx context.Context, snapshotID string) e
 		Model(&snapshotRow{}).
 		Where("snapshot_id = ? AND status = 'committed'", snapshotID).
 		Updates(map[string]any{
-			"status":          string(models.SnapshotStatusRolledBack),
-			"rolled_back_at":  now,
+			"status":         string(models.SnapshotStatusRolledBack),
+			"rolled_back_at": now,
 		})
 	if res.Error != nil {
 		return fmt.Errorf("snapshot_store mark_rolled_back %q: %w", snapshotID, res.Error)

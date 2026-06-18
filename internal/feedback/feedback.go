@@ -17,13 +17,14 @@ import (
 //   - <engram-static-memories>   session-start.js:60   (memory text)
 //   - <user-behavior-rules>      session-start.js:33    (behavioral-rule text)
 //   - <open-issues ...>          lib.js:778             (issue text)
+//   - <file-context>             pre-tool-use.js:92     (file/trigger context)
 // The `engram-[a-z-]+` arm also covers any FUTURE <engram-*> wrapper without a regex edit (the
 // demolition/staleness trap: a hard-coded tag list silently goes stale). It additionally covers
 // the latent <engram-reinjection> XML form produced by pre-compact.js formatReinjectionBlock —
 // exported for future CC versions but NOT on the live path today (the live pre-compact path
 // writes markdown, handled by stripReinjectionMarkdown below). Non-engram-prefixed wrappers
-// (user-behavior-rules, open-issues) are named explicitly because they carry no prefix.
-var openInjectedTagRe = regexp.MustCompile(`<(engram-[a-z-]+|user-behavior-rules|open-issues)\b[^>]*>`)
+// (user-behavior-rules, open-issues, file-context) are named explicitly because they carry no prefix.
+var openInjectedTagRe = regexp.MustCompile(`<(engram-[a-z-]+|user-behavior-rules|open-issues|file-context)\b[^>]*>`)
 
 // closeInjectedTagRe matches the CLOSING of any engram-owned wrapper. RE2 has no backreferences,
 // so a single open/close regex cannot force the two tags to share a name; instead
@@ -31,11 +32,12 @@ var openInjectedTagRe = regexp.MustCompile(`<(engram-[a-z-]+|user-behavior-rules
 // prevents the false-negative Gemini flagged on PR #297: an unclosed <engram-static-memories>
 // followed later by a </user-behavior-rules> must NOT make a greedy/non-greedy match swallow the
 // genuine agent prose between them.
-var closeInjectedTagRe = regexp.MustCompile(`</\s*(engram-[a-z-]+|user-behavior-rules|open-issues)\s*>`)
+var closeInjectedTagRe = regexp.MustCompile(`</\s*(engram-[a-z-]+|user-behavior-rules|open-issues|file-context)\s*>`)
 
 // reinjectionMarkdownHeader is the sentinel the pre-compact hook writes at the top of
 // .engram/reinjection.md (pre-compact.js:127). That file is the live re-injection surface; its
-// body is this header, a "Topic:" line, then a run of "- <memory content>" bullets. If the agent
+// body is this header, an optional data-only warning line, a "Topic:" line, then a run of
+// "- content: <memory content>" bullets. If the agent
 // quotes the file verbatim in its turn, those bullets would self-cite memories already recorded
 // as injected at session-start. stripReinjectionMarkdown removes the sentinel and its contiguous
 // Topic/bullet block. (The XML <engram-reinjection> form is exported but unused on the live path.)
@@ -70,7 +72,8 @@ func stripInjectedXMLBlocks(s string) string {
 	// Fast path: no engram wrapper opening substring present at all.
 	if !strings.Contains(s, "<engram-") &&
 		!strings.Contains(s, "<user-behavior-rules") &&
-		!strings.Contains(s, "<open-issues") {
+		!strings.Contains(s, "<open-issues") &&
+		!strings.Contains(s, "<file-context") {
 		return s
 	}
 
@@ -121,8 +124,8 @@ func findMatchingClose(s, tagName string) (int, int) {
 }
 
 // stripReinjectionMarkdown removes the pre-compact reinjection sentinel block from s. It deletes a
-// line equal to reinjectionMarkdownHeader and the contiguous run of blank, "Topic:", and "- "
-// bullet lines that follow it (the exact shape pre-compact.js writes). The first line that is none
+// line equal to reinjectionMarkdownHeader and the contiguous run of blank, data-only warning,
+// "Topic:", and "- " bullet lines that follow it (the exact shape pre-compact.js writes). The first line that is none
 // of those ends the block, so genuine agent prose after a quoted block is preserved. Whitespace
 // changes here are immaterial: the output only feeds DetectCitations, which normalises whitespace.
 func stripReinjectionMarkdown(s string) string {
@@ -139,7 +142,10 @@ func stripReinjectionMarkdown(s string) string {
 			continue
 		}
 		if skipping {
-			if t == "" || strings.HasPrefix(t, "Topic:") || strings.HasPrefix(t, "- ") {
+			if t == "" ||
+				strings.HasPrefix(t, "Engram memory records.") ||
+				strings.HasPrefix(t, "Topic:") ||
+				strings.HasPrefix(t, "- ") {
 				continue // still inside the sentinel block
 			}
 			skipping = false // first non-block line ends the sentinel region

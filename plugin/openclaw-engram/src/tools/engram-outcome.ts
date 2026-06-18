@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
+import { quotedPromptScalar } from '../context/formatter.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const OutcomeParamsSchema = z.object({
@@ -60,7 +61,7 @@ export function createEngramOutcomeTool(
       );
 
       return success
-        ? `Session outcome recorded: ${parsed.data.outcome}${parsed.data.reason ? ` (${parsed.data.reason})` : ''}`
+        ? `Session outcome recorded: ${quotedPromptScalar(parsed.data.outcome)}${parsed.data.reason ? ` reason=${quotedPromptScalar(parsed.data.reason)}` : ''}`
         : 'Failed to record session outcome';
     },
   };

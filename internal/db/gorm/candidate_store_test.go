@@ -89,7 +89,7 @@ func TestCandidateStore_StateMachine_AllTransitionsFromPending(t *testing.T) {
 	ctx := context.Background()
 
 	for _, tc := range []struct {
-		name      string
+		name       string
 		transition func(id int64) error
 		wantStatus models.CandidateStatus
 	}{
@@ -271,8 +271,9 @@ func TestCandidateStore_AuditLogWrittenOnTransition(t *testing.T) {
 	_, err = cs.TransitionToDecayed(ctx, created.ID)
 	require.NoError(t, err)
 
-	afterCount := countAuditRows(t, db, "decay_candidate")
-	require.Greater(t, afterCount, beforeCount, "audit_log must have a new decay_candidate entry")
+	require.Eventually(t, func() bool {
+		return countAuditRows(t, db, "decay_candidate") > beforeCount
+	}, 2*time.Second, 25*time.Millisecond, "audit_log must have a new decay_candidate entry")
 }
 
 func countAuditRows(t *testing.T, db *gorm.DB, action string) int {

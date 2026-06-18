@@ -114,6 +114,17 @@ func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
 	const dims = 2000
 	require.NoError(t, runMigrations(db))
 
+	var obsExists bool
+	require.NoError(t, db.Raw(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'observations'
+		)
+	`).Scan(&obsExists).Error)
+	if !obsExists {
+		t.Skip("observations table not present after v5 cleanup; migration 074 is historical-only")
+	}
+
 	require.NoError(t, db.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS commands_run`).Error)
 	require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, "074_observations_commands_run").Error)
 	require.NoError(t, runMigrations(db))
@@ -648,7 +659,7 @@ func TestMigration132_CrystallizationCandidates(t *testing.T) {
 
 	// Assert required columns exist with correct types/nullability.
 	type colInfo struct {
-		DataType  string
+		DataType   string
 		IsNullable string
 	}
 	cols := map[string]colInfo{}

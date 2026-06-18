@@ -3,6 +3,7 @@ package gorm
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,23 +22,23 @@ var ErrInvalidTransition = errors.New("invalid_transition")
 // candidateRow is the GORM model for the crystallization_candidates table.
 // It mirrors the schema created by migration 132.
 type candidateRow struct {
-	CreatedAt               time.Time  `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt               time.Time  `gorm:"column:updated_at;autoUpdateTime"`
-	ReviewAfter             *time.Time `gorm:"column:review_after"`
-	SourceSessionID         string     `gorm:"column:source_session_id;not null;default:''"`
-	ProposedContent         string     `gorm:"column:proposed_content;not null"`
-	ProposedTier            string     `gorm:"column:proposed_tier;not null;default:'episodic'"`
-	ProposedEpistemicType   string     `gorm:"column:proposed_epistemic_type;not null;default:'observation'"`
-	ProposedPromotionTarget string     `gorm:"column:proposed_promotion_target;not null;default:'none'"`
-	EvidenceHandles         JSONRaw    `gorm:"column:evidence_handles;type:jsonb;not null;default:'[]'"`
-	PrivacyScope            string     `gorm:"column:privacy_scope;not null;default:'project'"`
-	Status                  string     `gorm:"column:status;not null;default:'pending'"`
-	Fingerprint             string     `gorm:"column:fingerprint;not null;default:''"`
+	CreatedAt               time.Time      `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt               time.Time      `gorm:"column:updated_at;autoUpdateTime"`
+	ReviewAfter             *time.Time     `gorm:"column:review_after"`
+	SourceSessionID         string         `gorm:"column:source_session_id;not null;default:''"`
+	ProposedContent         string         `gorm:"column:proposed_content;not null"`
+	ProposedTier            string         `gorm:"column:proposed_tier;not null;default:'episodic'"`
+	ProposedEpistemicType   string         `gorm:"column:proposed_epistemic_type;not null;default:'observation'"`
+	ProposedPromotionTarget string         `gorm:"column:proposed_promotion_target;not null;default:'none'"`
+	EvidenceHandles         JSONRaw        `gorm:"column:evidence_handles;type:jsonb;not null;default:'[]'"`
+	PrivacyScope            string         `gorm:"column:privacy_scope;not null;default:'project'"`
+	Status                  string         `gorm:"column:status;not null;default:'pending'"`
+	Fingerprint             string         `gorm:"column:fingerprint;not null;default:''"`
 	AffectedProjects        pq.StringArray `gorm:"column:affected_projects;type:text[]"`
-	PromotedMemoryID        *int64     `gorm:"column:promoted_memory_id"`
-	ID                      int64      `gorm:"primaryKey;autoIncrement"`
-	Confidence              float32    `gorm:"column:confidence;not null;default:0.5"`
-	RecurrenceCount         int        `gorm:"column:recurrence_count;not null;default:1"`
+	PromotedMemoryID        *int64         `gorm:"column:promoted_memory_id"`
+	ID                      int64          `gorm:"primaryKey;autoIncrement"`
+	Confidence              float32        `gorm:"column:confidence;not null;default:0.5"`
+	RecurrenceCount         int            `gorm:"column:recurrence_count;not null;default:1"`
 }
 
 func (candidateRow) TableName() string { return "crystallization_candidates" }
@@ -45,7 +46,7 @@ func (candidateRow) TableName() string { return "crystallization_candidates" }
 // JSONRaw is a []byte type that stores/retrieves raw JSON from GORM.
 type JSONRaw []byte
 
-func (j JSONRaw) Value() (interface{}, error) {
+func (j JSONRaw) Value() (driver.Value, error) {
 	if len(j) == 0 {
 		return "[]", nil
 	}
@@ -96,7 +97,15 @@ func toDomainCandidate(r *candidateRow) *models.CrystallizationCandidate {
 
 // fromDomainCandidate converts a models.CrystallizationCandidate to a candidateRow.
 func fromDomainCandidate(c *models.CrystallizationCandidate) *candidateRow {
-	evidenceJSON, _ := json.Marshal(c.EvidenceHandles)
+	evidenceHandles := c.EvidenceHandles
+	if evidenceHandles == nil {
+		evidenceHandles = []string{}
+	}
+	affectedProjects := c.AffectedProjects
+	if affectedProjects == nil {
+		affectedProjects = []string{}
+	}
+	evidenceJSON, _ := json.Marshal(evidenceHandles)
 	r := &candidateRow{
 		SourceSessionID:         c.SourceSessionID,
 		ProposedContent:         c.ProposedContent,
@@ -111,7 +120,7 @@ func fromDomainCandidate(c *models.CrystallizationCandidate) *candidateRow {
 		Confidence:              c.Confidence,
 		RecurrenceCount:         c.RecurrenceCount,
 		ReviewAfter:             c.ReviewAfter,
-		AffectedProjects:        pq.StringArray(c.AffectedProjects),
+		AffectedProjects:        pq.StringArray(affectedProjects),
 	}
 	if r.Status == "" {
 		r.Status = "pending"

@@ -755,6 +755,17 @@ function getStaleMarkers(maxAgeMs = 2 * 60 * 60 * 1000) {
 
 const PRIORITY_ORDER = { critical: 1, high: 2, medium: 3, low: 4 };
 
+function escapeInjectedScalar(value) {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /**
  * Format issues into an <open-issues> XML block for context injection.
  * @param {Array} issues - Array of issue objects from /api/issues
@@ -774,19 +785,20 @@ function formatIssuesBlock(issues, project) {
 
   const staleDays = parseInt(process.env.ENGRAM_ISSUE_STALE_DAYS || '3', 10);
   const nowMs = Date.now();
+  const projectText = escapeInjectedScalar(project);
 
-  let block = `<open-issues count="${sorted.length}" project="${project}" action-required="true">\n`;
+  let block = `<open-issues count="${sorted.length}" project="${projectText}" action-required="true">\n`;
   block += `ACTION REQUIRED: ${sorted.length} active issue(s) assigned to this project (statuses: open, acknowledged, reopened).\n`;
   block += `Before starting new work, you MUST triage these. Run /engram:issue for the full workflow, or at minimum:\n`;
-  block += `  1. Read each with issues(action="get", id=N, project="${project}")\n`;
+  block += `  1. Read each with issues(action="get", id=N, project="${projectText}")\n`;
   block += `  2. Treat them as YOUR project's inbox and direct work orders — study, investigate, test, implement, comment, resolve, or reject with evidence\n`;
   block += `  3. acknowledged means delivered and accepted into YOUR active backlog, not done\n`;
   block += `  4. Do NOT close — only the source agent closes after verifying your fix\n`;
   block += `Ignoring this block means real work from another agent is blocked on you.\n\n`;
 
   for (const issue of sorted) {
-    const prio = (issue.priority || 'medium').toUpperCase();
-    const from = issue.source_project || 'unknown';
+    const prio = escapeInjectedScalar(issue.priority || 'medium').toUpperCase();
+    const from = escapeInjectedScalar(issue.source_project || 'unknown');
     const prefix = issue.status === 'reopened' ? `reopened by: ${from}` : `from: ${from}`;
 
     // Staleness calculation
@@ -804,14 +816,17 @@ function formatIssuesBlock(issues, project) {
       }
     }
 
-    const type = ((issue.type || '').trim().toUpperCase()) || 'TASK';
-    block += `#${issue.id} [${type}] [${prio}] [${prefix}]${staleTag} ${issue.title}\n`;
+    const type = escapeInjectedScalar(((issue.type || '').trim().toUpperCase()) || 'TASK');
+    const title = escapeInjectedScalar(issue.title || '');
+    const issueID = escapeInjectedScalar(issue.id ?? '');
+    block += `#${issueID} [${type}] [${prio}] [${prefix}]${staleTag} title="${title}"\n`;
 
     if (actionDirective) {
       block += actionDirective;
     } else if (issue.comment_count > 0 && issue.updated_at) {
       const ago = _timeAgo(new Date(issue.updated_at));
-      block += `  └─ ${issue.comment_count} comment(s), updated ${ago}\n`;
+      const commentCount = escapeInjectedScalar(issue.comment_count);
+      block += `  └─ ${commentCount} comment(s), updated ${ago}\n`;
     }
   }
   block += '</open-issues>';
