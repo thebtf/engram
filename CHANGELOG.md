@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.26.0] - 2026-06-18
+
+### Added
+
+- **Rule governance domain substrate (#309).** Added the durable RG-0 foundation for governed
+  rule lifecycle work: rule candidates, families, versions, transition logs, and rollback snapshots,
+  with migration constraints for legal escapes, typed Go domain models, GORM store operations,
+  idempotent candidate/draft flows, authority checks, snapshot requirements for active-state
+  transitions, and regression coverage for nullable import/admin-tool rows.
+- **Payload-preserving prompt quoting for rule and memory surfaces (#309).** Split display scalars
+  from data payloads across Codex hooks and OpenClaw tools so Markdown, YAML, command output,
+  secrets, issue bodies, decision narratives, and content-only rule bodies keep meaningful
+  whitespace while still escaping prompt delimiters.
+
+### Fixed
+
+- **OpenClaw local memory file containment now resolves symlinks (#309).** `memory_get` validates
+  real paths before reading workspace files, closing the symlink escape case while keeping Markdown
+  local file reads available.
+- **Rule governance store handles PostgreSQL driver edge cases (#309).** Duplicate fingerprint
+  idempotency now recognizes pgx, pq, and translated GORM unique-violation errors; transition
+  evidence must contain at least one non-blank handle.
+
 ## [6.25.1] - 2026-06-17
 
 ### Fixed
