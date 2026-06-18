@@ -147,6 +147,41 @@ func TestRuleGovernanceStore_CandidateIdempotencyAndNoBehavioralRuleProjection(t
 	require.Zero(t, behavioralRuleCount, "rule candidates must not create active behavioral_rules")
 }
 
+func TestRuleGovernanceStore_GetCandidateHandlesNullableOptionalStrings(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+
+	var id int64
+	require.NoError(t, db.Raw(`INSERT INTO rule_candidates (
+		source_signal_type,
+		source_actor,
+		proposed_content,
+		proposed_scope,
+		proposed_audience,
+		anti_capture_status,
+		conflict_status,
+		decay_policy,
+		fingerprint
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		"explicit_agent_proposal",
+		"codex",
+		"nullable optional strings are legal",
+		"project",
+		"developer",
+		"passed",
+		"none",
+		"NO DATA",
+		fmt.Sprintf("rg0-nullable-candidate-%d", time.Now().UnixNano()),
+	).Scan(&id).Error)
+
+	candidate, err := store.GetRuleCandidate(ctx, id)
+	require.NoError(t, err)
+	require.Empty(t, candidate.SourceSessionID)
+	require.Empty(t, candidate.SourceProject)
+	require.Empty(t, candidate.AntiCaptureReason)
+}
+
 func TestRuleGovernanceStore_CreateCandidateRejectsNonPendingStatus(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)

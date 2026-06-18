@@ -3,6 +3,7 @@ package gorm
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,31 +36,42 @@ type SnapshotRequest struct {
 }
 
 type ruleCandidateRow struct {
-	CreatedAt           time.Time  `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt           time.Time  `gorm:"column:updated_at;autoUpdateTime"`
-	ReviewAfter         *time.Time `gorm:"column:review_after"`
-	LastEvaluatedAt     *time.Time `gorm:"column:last_evaluated_at"`
-	SourceSignalType    string     `gorm:"column:source_signal_type;not null"`
-	SourceSessionID     string     `gorm:"column:source_session_id"`
-	SourceProject       string     `gorm:"column:source_project"`
-	SourceActor         string     `gorm:"column:source_actor;not null"`
-	ProposedContent     string     `gorm:"column:proposed_content;not null"`
-	ProposedScope       string     `gorm:"column:proposed_scope;not null"`
-	ProposedAudience    string     `gorm:"column:proposed_audience;not null"`
-	ActivationPredicate JSONRaw    `gorm:"column:activation_predicate_json;type:jsonb;not null;default:'{}'"`
-	EvidenceHandles     JSONRaw    `gorm:"column:evidence_handles_json;type:jsonb;not null;default:'[]'"`
-	AntiCaptureStatus   string     `gorm:"column:anti_capture_status;not null"`
-	AntiCaptureReason   string     `gorm:"column:anti_capture_reason"`
-	ConflictStatus      string     `gorm:"column:conflict_status;not null"`
-	Status              string     `gorm:"column:status;not null;default:'pending'"`
-	Fingerprint         string     `gorm:"column:fingerprint;not null;default:''"`
-	DecayPolicy         string     `gorm:"column:decay_policy;not null"`
-	ID                  int64      `gorm:"primaryKey;autoIncrement"`
-	Confidence          float64    `gorm:"column:confidence;not null;default:0"`
-	RecurrenceCount     int        `gorm:"column:recurrence_count;not null;default:0"`
+	CreatedAt           time.Time      `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt           time.Time      `gorm:"column:updated_at;autoUpdateTime"`
+	ReviewAfter         *time.Time     `gorm:"column:review_after"`
+	LastEvaluatedAt     *time.Time     `gorm:"column:last_evaluated_at"`
+	SourceSignalType    string         `gorm:"column:source_signal_type;not null"`
+	SourceSessionID     sql.NullString `gorm:"column:source_session_id"`
+	SourceProject       sql.NullString `gorm:"column:source_project"`
+	SourceActor         string         `gorm:"column:source_actor;not null"`
+	ProposedContent     string         `gorm:"column:proposed_content;not null"`
+	ProposedScope       string         `gorm:"column:proposed_scope;not null"`
+	ProposedAudience    string         `gorm:"column:proposed_audience;not null"`
+	ActivationPredicate JSONRaw        `gorm:"column:activation_predicate_json;type:jsonb;not null;default:'{}'"`
+	EvidenceHandles     JSONRaw        `gorm:"column:evidence_handles_json;type:jsonb;not null;default:'[]'"`
+	AntiCaptureStatus   string         `gorm:"column:anti_capture_status;not null"`
+	AntiCaptureReason   sql.NullString `gorm:"column:anti_capture_reason"`
+	ConflictStatus      string         `gorm:"column:conflict_status;not null"`
+	Status              string         `gorm:"column:status;not null;default:'pending'"`
+	Fingerprint         string         `gorm:"column:fingerprint;not null;default:''"`
+	DecayPolicy         string         `gorm:"column:decay_policy;not null"`
+	ID                  int64          `gorm:"primaryKey;autoIncrement"`
+	Confidence          float64        `gorm:"column:confidence;not null;default:0"`
+	RecurrenceCount     int            `gorm:"column:recurrence_count;not null;default:0"`
 }
 
 func (ruleCandidateRow) TableName() string { return "rule_candidates" }
+
+func nullableString(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: value != ""}
+}
+
+func stringFromNull(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
+}
 
 type ruleFamilyRow struct {
 	CreatedAt              time.Time `gorm:"column:created_at;autoCreateTime"`
@@ -420,8 +432,8 @@ func fromRuleCandidate(c *models.RuleCandidate) *ruleCandidateRow {
 	row := &ruleCandidateRow{
 		ReviewAfter:         c.ReviewAfter,
 		SourceSignalType:    c.SourceSignalType,
-		SourceSessionID:     c.SourceSessionID,
-		SourceProject:       c.SourceProject,
+		SourceSessionID:     nullableString(c.SourceSessionID),
+		SourceProject:       nullableString(c.SourceProject),
 		SourceActor:         c.SourceActor,
 		ProposedContent:     c.ProposedContent,
 		ProposedScope:       c.ProposedScope,
@@ -431,7 +443,7 @@ func fromRuleCandidate(c *models.RuleCandidate) *ruleCandidateRow {
 		Confidence:          c.Confidence,
 		RecurrenceCount:     c.RecurrenceCount,
 		AntiCaptureStatus:   c.AntiCaptureStatus,
-		AntiCaptureReason:   c.AntiCaptureReason,
+		AntiCaptureReason:   nullableString(c.AntiCaptureReason),
 		ConflictStatus:      c.ConflictStatus,
 		Status:              string(c.Status),
 		Fingerprint:         c.Fingerprint,
@@ -453,8 +465,8 @@ func toRuleCandidate(row *ruleCandidateRow) *models.RuleCandidate {
 		UpdatedAt:           row.UpdatedAt,
 		ReviewAfter:         row.ReviewAfter,
 		SourceSignalType:    row.SourceSignalType,
-		SourceSessionID:     row.SourceSessionID,
-		SourceProject:       row.SourceProject,
+		SourceSessionID:     stringFromNull(row.SourceSessionID),
+		SourceProject:       stringFromNull(row.SourceProject),
 		SourceActor:         row.SourceActor,
 		ProposedContent:     row.ProposedContent,
 		ProposedScope:       row.ProposedScope,
@@ -464,7 +476,7 @@ func toRuleCandidate(row *ruleCandidateRow) *models.RuleCandidate {
 		Confidence:          row.Confidence,
 		RecurrenceCount:     row.RecurrenceCount,
 		AntiCaptureStatus:   row.AntiCaptureStatus,
-		AntiCaptureReason:   row.AntiCaptureReason,
+		AntiCaptureReason:   stringFromNull(row.AntiCaptureReason),
 		ConflictStatus:      row.ConflictStatus,
 		Status:              models.RuleCandidateStatus(row.Status),
 		Fingerprint:         row.Fingerprint,
