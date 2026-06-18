@@ -369,10 +369,7 @@ func (s *IssueStore) CloseIssueFromAnySource(ctx context.Context, id int64, sour
 				continue
 			}
 			seen[sourceProject] = struct{}{}
-			candidates = append(candidates, closeIssueCandidate{
-				raw:      sourceProject,
-				resolved: ResolveProjectID(ctx, tx, sourceProject),
-			})
+			candidates = append(candidates, closeIssueCandidate{raw: sourceProject})
 		}
 
 		if !isOperator && issue.SourceProject != "" {
@@ -380,7 +377,9 @@ func (s *IssueStore) CloseIssueFromAnySource(ctx context.Context, id int64, sour
 			// round-trips for the operator-bypass and empty-source paths).
 			storedSource := ResolveProjectID(ctx, tx, issue.SourceProject)
 			authorized := false
-			for _, candidate := range candidates {
+			for i := range candidates {
+				candidates[i].resolved = ResolveProjectID(ctx, tx, candidates[i].raw)
+				candidate := candidates[i]
 				if candidate.raw == issue.SourceProject || candidate.resolved == storedSource {
 					authorized = true
 					break
