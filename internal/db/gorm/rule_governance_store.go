@@ -84,32 +84,32 @@ type ruleFamilyRow struct {
 func (ruleFamilyRow) TableName() string { return "rule_families" }
 
 type ruleVersionRow struct {
-	CreatedAt              time.Time  `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt              time.Time  `gorm:"column:updated_at;autoUpdateTime"`
-	LastEvaluatedAt        *time.Time `gorm:"column:last_evaluated_at"`
-	EffectiveFrom          *time.Time `gorm:"column:effective_from"`
-	EffectiveUntil         *time.Time `gorm:"column:effective_until"`
-	ArchivedAt             *time.Time `gorm:"column:archived_at"`
-	FamilyID               int64      `gorm:"column:family_id;not null"`
-	SourceCandidateID      *int64     `gorm:"column:source_candidate_id"`
-	ActiveBehavioralRuleID *int64     `gorm:"column:active_behavioral_rule_id"`
-	Content                string     `gorm:"column:content;not null"`
-	Summary                string     `gorm:"column:summary"`
-	Scope                  string     `gorm:"column:scope;not null"`
-	Owner                  string     `gorm:"column:owner;not null"`
-	Audience               string     `gorm:"column:audience;not null"`
-	ActivationPredicate    JSONRaw    `gorm:"column:activation_predicate_json;type:jsonb;not null;default:'{}'"`
-	EvidenceHandles        JSONRaw    `gorm:"column:evidence_handles_json;type:jsonb;not null;default:'[]'"`
-	State                  string     `gorm:"column:state;not null"`
-	BudgetClass            string     `gorm:"column:budget_class;not null;default:'contextual'"`
-	AntiCaptureStatus      string     `gorm:"column:anti_capture_status;not null"`
-	ConflictStatus         string     `gorm:"column:conflict_status;not null"`
-	DecayPolicy            string     `gorm:"column:decay_policy;not null"`
-	SupersedesVersionID    *int64     `gorm:"column:supersedes_version_id"`
-	ID                     int64      `gorm:"primaryKey;autoIncrement"`
-	Priority               int        `gorm:"column:priority;not null;default:0"`
-	Protected              bool       `gorm:"column:protected;not null;default:false"`
-	Pinned                 bool       `gorm:"column:pinned;not null;default:false"`
+	CreatedAt              time.Time      `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt              time.Time      `gorm:"column:updated_at;autoUpdateTime"`
+	LastEvaluatedAt        *time.Time     `gorm:"column:last_evaluated_at"`
+	EffectiveFrom          *time.Time     `gorm:"column:effective_from"`
+	EffectiveUntil         *time.Time     `gorm:"column:effective_until"`
+	ArchivedAt             *time.Time     `gorm:"column:archived_at"`
+	FamilyID               int64          `gorm:"column:family_id;not null"`
+	SourceCandidateID      *int64         `gorm:"column:source_candidate_id"`
+	ActiveBehavioralRuleID *int64         `gorm:"column:active_behavioral_rule_id"`
+	Content                string         `gorm:"column:content;not null"`
+	Summary                sql.NullString `gorm:"column:summary"`
+	Scope                  string         `gorm:"column:scope;not null"`
+	Owner                  string         `gorm:"column:owner;not null"`
+	Audience               string         `gorm:"column:audience;not null"`
+	ActivationPredicate    JSONRaw        `gorm:"column:activation_predicate_json;type:jsonb;not null;default:'{}'"`
+	EvidenceHandles        JSONRaw        `gorm:"column:evidence_handles_json;type:jsonb;not null;default:'[]'"`
+	State                  string         `gorm:"column:state;not null"`
+	BudgetClass            string         `gorm:"column:budget_class;not null;default:'contextual'"`
+	AntiCaptureStatus      string         `gorm:"column:anti_capture_status;not null"`
+	ConflictStatus         string         `gorm:"column:conflict_status;not null"`
+	DecayPolicy            string         `gorm:"column:decay_policy;not null"`
+	SupersedesVersionID    *int64         `gorm:"column:supersedes_version_id"`
+	ID                     int64          `gorm:"primaryKey;autoIncrement"`
+	Priority               int            `gorm:"column:priority;not null;default:0"`
+	Protected              bool           `gorm:"column:protected;not null;default:false"`
+	Pinned                 bool           `gorm:"column:pinned;not null;default:false"`
 }
 
 func (ruleVersionRow) TableName() string { return "rule_versions" }
@@ -495,7 +495,7 @@ func toRuleVersion(row *ruleVersionRow) *models.RuleVersion {
 		SourceCandidateID:      row.SourceCandidateID,
 		ActiveBehavioralRuleID: row.ActiveBehavioralRuleID,
 		Content:                row.Content,
-		Summary:                row.Summary,
+		Summary:                stringFromNull(row.Summary),
 		Scope:                  row.Scope,
 		Owner:                  row.Owner,
 		Audience:               row.Audience,

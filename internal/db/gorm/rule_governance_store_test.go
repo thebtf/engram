@@ -182,6 +182,47 @@ func TestRuleGovernanceStore_GetCandidateHandlesNullableOptionalStrings(t *testi
 	require.Empty(t, candidate.AntiCaptureReason)
 }
 
+func TestRuleGovernanceStore_TransitionVersionHandlesNullableSummary(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+
+	var familyID int64
+	require.NoError(t, db.Raw(`INSERT INTO rule_families (family_key) VALUES (?) RETURNING id`,
+		fmt.Sprintf("rg0-null-summary-family-%d", time.Now().UnixNano()),
+	).Scan(&familyID).Error)
+
+	var versionID int64
+	require.NoError(t, db.Raw(`INSERT INTO rule_versions (
+		family_id,
+		content,
+		scope,
+		owner,
+		audience,
+		activation_predicate_json,
+		evidence_handles_json,
+		state,
+		anti_capture_status,
+		conflict_status,
+		decay_policy
+	) VALUES (?, ?, ?, ?, ?, '{}'::jsonb, '[]'::jsonb, ?, ?, ?, ?) RETURNING id`,
+		familyID,
+		"nullable summary is legal",
+		"project",
+		"codex",
+		"developer",
+		string(models.RuleStateDraft),
+		"passed",
+		"none",
+		"NO DATA",
+	).Scan(&versionID).Error)
+
+	version, err := store.TransitionRuleVersion(ctx, versionID, models.RuleStateShadow, transitionReq("nullable summary transition", ""))
+	require.NoError(t, err)
+	require.Equal(t, models.RuleStateShadow, version.State)
+	require.Empty(t, version.Summary)
+}
+
 func TestRuleGovernanceStore_CreateCandidateRejectsNonPendingStatus(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)

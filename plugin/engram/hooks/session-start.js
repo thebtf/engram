@@ -32,7 +32,7 @@ function formatBehaviorRulesBlock(rules) {
 
   for (const rule of rules) {
     if (!rule || typeof rule !== 'object') continue;
-    const title = getString(rule.title) || getString(rule.content);
+    const title = getString(rule.title);
     const narrative = getString(rule.narrative) || getString(rule.content);
     if (title !== '') {
       block += `title: ${quotedPromptScalar(title)}\n`;
