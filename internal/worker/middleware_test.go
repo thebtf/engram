@@ -46,7 +46,7 @@ func TestSecurityHeaders_CSPValue(t *testing.T) {
 	if csp == "" {
 		t.Fatal("Content-Security-Policy header must be present")
 	}
-	wantCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
+	wantCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self' data:; frame-ancestors 'none'"
 	if csp != wantCSP {
 		t.Errorf("CSP = %q\nwant %q", csp, wantCSP)
 	}

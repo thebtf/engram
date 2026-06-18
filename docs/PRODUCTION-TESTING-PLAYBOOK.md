@@ -27,7 +27,7 @@ flow (covered separately by `docs/DEPLOYMENT.md`), backup/restore.
 
 - Go 1.25+ (`go version`)
 - Docker (for postgres dependency in scenario S2)
-- Node 20+ (for ui dev server in scenario S3)
+- Node 20+ (for building embedded dashboard assets in scenarios S1/S3)
 - A running engram server (local or `unleashed.lan:37777`) for scenarios S2/S3/S4
 - Claude Code CLI installed (for scenario S4)
 
@@ -38,11 +38,18 @@ flow (covered separately by `docs/DEPLOYMENT.md`), backup/restore.
 **As a user, I clone the repo and run `go build` to produce binaries.**
 
 Steps:
-1. From repo root run `go build -o /tmp/engram-server.exe ./cmd/engram-server`
-2. From repo root run `go build -o /tmp/engram.exe ./cmd/engram`
-3. Run each binary with `--help` (or no args) and observe usage output
+1. From repo root run `npm ci` and `npm run build` in `ui/`
+2. Copy the fresh `ui/dist/*` bundle into `internal/worker/static/`
+3. From repo root run `go build -o /tmp/engram-server.exe ./cmd/engram-server`
+4. From repo root run `go build -o /tmp/engram.exe ./cmd/engram`
+5. Run each binary with `--help` (or no args) and observe usage output
 
 Expected:
+- Dashboard assets are embedded in the server binary; a plain server build
+  without a fresh copied bundle is not a release-candidate smoke.
+- The copied dashboard bundle is a build input in the working tree, not a
+  tracked source artifact; `internal/worker/static/placeholder.html` remains
+  the tracked placeholder for empty-source builds.
 - Both `go build` invocations exit 0 with no compiler errors
 - Both binaries print usage / startup banner without crashing
 
@@ -58,7 +65,7 @@ Failure signals:
 Steps:
 1. Set `ENGRAM_AUTH_ADMIN_TOKEN=test-operator-key`
 2. Set `DATABASE_DSN=...` (the canonical name read by `internal/config/config.go`;
-   omit to fall back to the default sqlite store)
+   the production-candidate path requires PostgreSQL)
 3. Run `engram-server.exe`
 4. Observe startup logs
 
@@ -68,29 +75,36 @@ Expected:
 - HTTP `GET /api/health` returns 200
 
 Failure signals:
-- Server exits during startup citing missing env var → FR-4 violated
+- Server exits during startup citing missing env var -> FR-4 violated
+- Server exits because `DATABASE_DSN` is omitted -> the release smoke is not
+  configured for the current PostgreSQL-backed runtime path
 - Logs warn about a deprecated env var rename (the v6 surface is
   `ENGRAM_AUTH_ADMIN_TOKEN` server-host-only; on workstations the
   pre-v6 `ENGRAM_AUTH_ADMIN_TOKEN` was renamed to `ENGRAM_TOKEN`)
 - gRPC bind fails
 
-### S3 — Dashboard loads and `/tokens` page is reachable
+### S3 — Dashboard loads and `/#/tokens` page is reachable
 
-**As an operator, I open the dashboard, log in, and visit /tokens.**
+**As an operator, I open the dashboard, complete first-run setup, log in, and visit the token page.**
 
 Steps:
 1. With server running, open `http://localhost:37777/`
-2. Sign in via the operator admin cookie path documented in `README.md`
-3. Navigate to `/tokens`
-4. Observe the keycard issuance UI
+2. If this is a fresh database, call the first-run setup flow and create the
+   first admin account
+3. Log in with that admin account; setup does not create an authenticated
+   browser session by itself
+4. Navigate to `http://localhost:37777/#/tokens`
+5. Observe the token issuance UI
 
 Expected:
 - Dashboard SPA loads
-- `/tokens` page renders without console errors
-- "Create keycard" button is visible to session-admin only
+- `/#/tokens` page renders without severe console errors
+- "Create Token" button is visible to session-admin only
+- `GET /api/auth/tokens` returns 200 for the logged-in session-admin caller
+- Unauthenticated `GET /api/auth/me` 401 responses before login are expected
 
 Failure signals:
-- 404 on `/tokens` route
+- 404 on `/#/tokens` route
 - 403 on `/api/auth/tokens` from a session-admin caller (regression of FR-6)
 - Bearer-only callers receive 200 on `/api/auth/tokens` (privilege escalation)
 
@@ -98,18 +112,27 @@ Failure signals:
 
 **As a Claude Code user, I install the engram plugin and use it.**
 
+Real Claude Code plugin installation mutates the operator's consumer home. In
+automated release emulation, prefer an isolated disposable home with the plugin
+wrapper pointed at the release-candidate `cmd/engram` binary. Run the real
+consumer-home path only when the operator explicitly authorizes that mutation.
+
 Steps:
-1. In Claude Code: `/plugin marketplace add thebtf/engram-marketplace`
-2. Install the engram plugin
-3. Configure user settings:
+1. Start an engram server with PostgreSQL and create a keycard via S3
+2. In an isolated disposable consumer home, install or symlink the release
+   plugin wrapper
+3. Configure plugin/user settings:
    - `server_url=http://unleashed.lan:37777` (or local)
    - `api_token=<keycard issued via S3>`
-4. Restart Claude Code (so MCP servers reload)
-5. In a new chat, ask "what engram tools do I have?"
+4. Start the MCP client/proxy through the same wrapper path a consumer uses
+5. Verify `tools/list` and run at least one harmless health/read tool
+6. If explicitly authorized for a real Claude Code smoke, install via
+   `/plugin marketplace add thebtf/engram-marketplace`, restart Claude Code,
+   and ask "what engram tools do I have?"
 
 Expected:
-- Plugin installs without errors
-- After restart, the assistant lists tools beyond `loom_*` —
+- Isolated plugin smoke starts without errors
+- The assistant or `tools/list` surface lists tools beyond `loom_*` —
   e.g., `mcp__engram__store_memory`, `mcp__engram__list_issues`,
   `mcp__engram__credential_*`, etc.
 - The token field maps to the `ENGRAM_TOKEN` env var (FR-3)

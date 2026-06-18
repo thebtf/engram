@@ -73,7 +73,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 		// Content Security Policy — granular per-source directives.
 		// TODO: Remove 'unsafe-inline' from style-src and migrate inline styles to nonce/hash-based CSP.
-		hdr.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'")
+		hdr.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self' data:; frame-ancestors 'none'")
 
 		// Permissions Policy — deny access to hardware APIs.
 		hdr.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
