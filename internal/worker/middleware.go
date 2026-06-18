@@ -208,7 +208,8 @@ type TokenAuth struct {
 }
 
 // NewTokenAuth creates a new TokenAuth using a provided token.
-// If token is empty and ENGRAM_AUTH_DISABLED is set, authentication is skipped.
+// If ENGRAM_AUTH_DISABLED is set, authentication is replaced by a synthetic
+// admin session identity for dashboard/operator flows.
 // Otherwise, authentication will be enforced at startup (see Service.Start).
 func NewTokenAuth(token string) (*TokenAuth, error) {
 	authDisabled := authDisabledFromEnv()
