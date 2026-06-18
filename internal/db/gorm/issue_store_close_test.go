@@ -32,8 +32,8 @@ func TestCloseIssue_SlugAsymmetry(t *testing.T) {
 	ctx := context.Background()
 	store := NewIssueStore(db)
 
-	canonical := uniqueProjectID(t, "aimux")     // present-day canonical id
-	legacySlug := canonical + "_a1777ae2"          // older session's derived slug
+	canonical := uniqueProjectID(t, "aimux") // present-day canonical id
+	legacySlug := canonical + "_a1777ae2"    // older session's derived slug
 	defer db.Exec(`DELETE FROM projects WHERE id = ?`, canonical)
 
 	// Register the project so legacySlug resolves to the canonical id.
@@ -95,8 +95,11 @@ func TestCloseIssue_RejectsForeignProject(t *testing.T) {
 
 	require.NoError(t, store.UpdateIssueStatus(ctx, id, "resolved"))
 
-	require.Error(t, store.CloseIssue(ctx, id, foreign),
-		"a foreign project must not be able to close another project's issue")
+	err = store.CloseIssue(ctx, id, foreign)
+	require.Error(t, err, "a foreign project must not be able to close another project's issue")
+	require.ErrorContains(t, err, "close rejected")
+	require.ErrorContains(t, err, owner)
+	require.ErrorContains(t, err, foreign)
 
 	// Dashboard operator bypass still works.
 	require.NoError(t, store.CloseIssue(ctx, id, "dashboard"),

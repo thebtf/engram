@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/config"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
 // issuesToolSchema returns the flat JSON Schema for the issues tool.
@@ -199,7 +199,7 @@ func (s *Server) resolveSourceProject(ctx context.Context, m map[string]any) str
 	if raw == "" {
 		return ""
 	}
-	return s.issueStore.ResolveProject(ctx,raw)
+	return s.issueStore.ResolveProject(ctx, raw)
 }
 
 func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (string, error) {
@@ -213,7 +213,7 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	issueType := coerceString(m["type"], "task")
 	targetProject := coerceString(m["target_project"], "")
 	if targetProject != "" {
-		targetProject = s.issueStore.ResolveProject(ctx,targetProject)
+		targetProject = s.issueStore.ResolveProject(ctx, targetProject)
 	}
 	labels := coerceStringSlice(m["labels"])
 
@@ -250,11 +250,11 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string, error) {
 	project := coerceString(m["project"], "")
 	if project != "" {
-		project = s.issueStore.ResolveProject(ctx,project)
+		project = s.issueStore.ResolveProject(ctx, project)
 	}
 	sourceProject := coerceString(m["source_project"], "")
 	if sourceProject != "" {
-		sourceProject = s.issueStore.ResolveProject(ctx,sourceProject)
+		sourceProject = s.issueStore.ResolveProject(ctx, sourceProject)
 	}
 	statusParam := coerceString(m["status"], "open,reopened")
 	limit := coerceInt(m["limit"], 20)
@@ -429,8 +429,12 @@ func (s *Server) handleIssueClose(ctx context.Context, m map[string]any) (string
 	}
 
 	sourceProject := s.resolveSourceProject(ctx, m)
+	sourceProjects := []string{sourceProject}
+	if explicitProject := strings.TrimSpace(coerceString(m["project"], "")); explicitProject != "" && explicitProject != "dashboard" && explicitProject != sourceProject {
+		sourceProjects = append(sourceProjects, explicitProject)
+	}
 
-	if err := s.issueStore.CloseIssue(ctx, id, sourceProject); err != nil {
+	if err := s.issueStore.CloseIssueFromAnySource(ctx, id, sourceProjects...); err != nil {
 		return "", err
 	}
 
