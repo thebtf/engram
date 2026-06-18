@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/config"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
@@ -29,7 +30,16 @@ func uniqueIssueToolProject(t *testing.T, base string) string {
 	return fmt.Sprintf("zz-test-%s-%d", base, time.Now().UnixNano())
 }
 
+func forceIssueToolSourceProjectEnforcement(t *testing.T) {
+	t.Helper()
+	cfg := config.Get()
+	previous := cfg.EnforceSourceProject
+	cfg.EnforceSourceProject = true
+	t.Cleanup(func() { cfg.EnforceSourceProject = previous })
+}
+
 func TestHandleIssueCloseAcceptsExplicitLegacySourceProject(t *testing.T) {
+	forceIssueToolSourceProjectEnforcement(t)
 	store, issueStore := openIssueToolTestDB(t)
 	server := NewServer(ServerOptions{})
 	server.SetIssueStore(issueStore)
@@ -69,6 +79,7 @@ func TestHandleIssueCloseAcceptsExplicitLegacySourceProject(t *testing.T) {
 }
 
 func TestHandleIssueCloseDoesNotLetExplicitDashboardBypassContext(t *testing.T) {
+	forceIssueToolSourceProjectEnforcement(t)
 	store, issueStore := openIssueToolTestDB(t)
 	server := NewServer(ServerOptions{})
 	server.SetIssueStore(issueStore)
