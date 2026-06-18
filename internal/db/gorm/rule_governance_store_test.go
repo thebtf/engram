@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -42,30 +44,43 @@ func TestMigration144_RuleGovernanceEscapeConstraints(t *testing.T) {
 	require.NoError(t, migration.Rollback(db))
 	require.NoError(t, migration.Migrate(db))
 
-	err := db.Exec(`INSERT INTO rule_candidates (
-		source_signal_type,
-		source_actor,
-		proposed_content,
-		proposed_scope,
-		proposed_audience,
-		anti_capture_status,
-		conflict_status,
-		decay_policy,
-		fingerprint
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"explicit_agent_proposal",
-		"codex",
-		"malformed escape should be rejected",
-		"project",
-		"developer",
-		"HYPOTHESIS",
-		"none",
-		"NO DATA",
-		fmt.Sprintf("rg0-bad-escape-%d", time.Now().UnixNano()),
-	).Error
-	require.Error(t, err, "malformed legal escape must be rejected at the DB boundary")
+	for _, tc := range []struct {
+		name              string
+		antiCaptureStatus string
+		conflictStatus    string
+		decayPolicy       string
+	}{
+		{name: "anti_capture_status", antiCaptureStatus: "HYPOTHESIS", conflictStatus: "none", decayPolicy: "NO DATA"},
+		{name: "conflict_status", antiCaptureStatus: "passed", conflictStatus: "HYPOTHESIS", decayPolicy: "NO DATA"},
+		{name: "decay_policy", antiCaptureStatus: "passed", conflictStatus: "none", decayPolicy: "HYPOTHESIS"},
+	} {
+		t.Run("rejects malformed escape in "+tc.name, func(t *testing.T) {
+			err := db.Exec(`INSERT INTO rule_candidates (
+				source_signal_type,
+				source_actor,
+				proposed_content,
+				proposed_scope,
+				proposed_audience,
+				anti_capture_status,
+				conflict_status,
+				decay_policy,
+				fingerprint
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				"explicit_agent_proposal",
+				"codex",
+				"malformed escape should be rejected",
+				"project",
+				"developer",
+				tc.antiCaptureStatus,
+				tc.conflictStatus,
+				tc.decayPolicy,
+				fmt.Sprintf("rg0-bad-escape-%s-%d", tc.name, time.Now().UnixNano()),
+			).Error
+			require.Error(t, err, "malformed legal escape must be rejected at the DB boundary")
+		})
+	}
 
-	err = db.Exec(`INSERT INTO rule_candidates (
+	err := db.Exec(`INSERT INTO rule_candidates (
 		source_signal_type,
 		source_actor,
 		proposed_content,
@@ -87,6 +102,13 @@ func TestMigration144_RuleGovernanceEscapeConstraints(t *testing.T) {
 		fmt.Sprintf("rg0-good-escape-%d", time.Now().UnixNano()),
 	).Error
 	require.NoError(t, err)
+}
+
+func TestRuleGovernanceStore_IsUniqueViolationRecognizesPostgresDrivers(t *testing.T) {
+	require.True(t, isUniqueViolation(&pgconn.PgError{Code: "23505"}))
+	require.True(t, isUniqueViolation(&pq.Error{Code: "23505"}))
+	require.True(t, isUniqueViolation(gorm.ErrDuplicatedKey))
+	require.False(t, isUniqueViolation(&pgconn.PgError{Code: "23503"}))
 }
 
 func TestRuleGovernanceStore_CandidateIdempotencyAndNoBehavioralRuleProjection(t *testing.T) {
