@@ -2,19 +2,7 @@
 'use strict';
 
 const lib = require('./lib');
-
-function safePromptScalar(value) {
-  return String(value ?? '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function quotedPromptScalar(value) {
-  return JSON.stringify(safePromptScalar(value));
-}
+const { safePromptScalar, quotedPromptScalar } = lib;
 
 /**
  * Extract a topic string from the hook input for context query.

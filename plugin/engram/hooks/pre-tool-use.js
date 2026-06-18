@@ -2,22 +2,10 @@
 'use strict';
 
 const lib = require('./lib');
+const { quotedPromptScalar } = lib;
 
 function getString(value) {
   return typeof value === 'string' ? value : '';
-}
-
-function safePromptScalar(value) {
-  return String(value ?? '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function quotedPromptScalar(value) {
-  return JSON.stringify(safePromptScalar(value));
 }
 
 function extractToolInput(input) {

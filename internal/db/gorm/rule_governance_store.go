@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -576,7 +577,7 @@ func createRuleSnapshotTx(tx *gorm.DB, req SnapshotRequest) error {
 }
 
 func createRuleSnapshotRowTx(tx *gorm.DB, req SnapshotRequest) (*ruleGovernanceSnapshotRow, error) {
-	if req.SnapshotID == "" || req.OpType == "" || req.Actor == "" {
+	if strings.TrimSpace(req.SnapshotID) == "" || strings.TrimSpace(req.OpType) == "" || strings.TrimSpace(req.Actor) == "" {
 		return nil, models.ErrRuleRequiredFieldMissing
 	}
 	before := req.BeforeState
@@ -599,13 +600,22 @@ func createRuleSnapshotRowTx(tx *gorm.DB, req SnapshotRequest) (*ruleGovernanceS
 }
 
 func validateCandidateToDraftRequest(req RuleTransitionRequest) error {
-	if req.Actor == "" || req.ActorKind == "" || req.Reason == "" || len(req.EvidenceHandles) == 0 {
+	if strings.TrimSpace(req.Actor) == "" || strings.TrimSpace(string(req.ActorKind)) == "" || strings.TrimSpace(req.Reason) == "" || !hasNonBlankEvidenceHandle(req.EvidenceHandles) {
 		return models.ErrRuleRequiredFieldMissing
 	}
 	if !req.ActorKind.IsValid() {
 		return models.ErrRuleAuthorityDenied
 	}
 	return nil
+}
+
+func hasNonBlankEvidenceHandle(handles []string) bool {
+	for _, handle := range handles {
+		if strings.TrimSpace(handle) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRuleCandidateForCreate(c *models.RuleCandidate) error {
@@ -623,6 +633,9 @@ func validateRuleCandidateForCreate(c *models.RuleCandidate) error {
 		if err := models.ValidateRuleRequiredField(value); err != nil {
 			return err
 		}
+	}
+	if c.Status != "" && c.Status != models.RuleCandidatePending {
+		return fmt.Errorf("%w: create_candidate status %s must be pending", models.ErrInvalidRuleTransition, c.Status)
 	}
 	return nil
 }

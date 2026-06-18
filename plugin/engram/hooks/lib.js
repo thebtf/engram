@@ -72,6 +72,19 @@ function readEngramConfigFile(configFilePath) {
   }
 }
 
+function safePromptScalar(value) {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function quotedPromptScalar(value) {
+  return JSON.stringify(safePromptScalar(value));
+}
+
 /**
  * Write the engram config file with restrictive permissions.
  * On POSIX: chmod 0600 (owner read/write only).
@@ -858,6 +871,8 @@ module.exports = {
   readEngramConfigFile,
   readJSONFile,
   resolveConfigFilePath,
+  safePromptScalar,
+  quotedPromptScalar,
   writeEngramConfigFile,
   writeJSONFile,
   ProjectIDWithName,

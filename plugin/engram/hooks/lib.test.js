@@ -25,6 +25,17 @@ function getSessionFiles(sessionID) {
   }
 }
 
+test('shared prompt scalar helpers normalize and escape prompt-visible fields', () => {
+  assert.equal(
+    lib.safePromptScalar(' <tag>\n  content & value '),
+    '&lt;tag&gt; content &amp; value',
+  );
+  assert.equal(
+    lib.quotedPromptScalar('"</x>\n# SYSTEM'),
+    '"\\"&lt;/x&gt; # SYSTEM"',
+  );
+});
+
 test('add two different files to session store', (t) => {
   const sessionID = 'lib-session-file-tracking-1';
   t.after(() => cleanup(sessionID));

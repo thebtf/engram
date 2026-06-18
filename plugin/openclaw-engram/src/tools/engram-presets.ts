@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import type { EngramRestClient, Observation } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import { quotedPromptScalar } from '../context/formatter.js';
+import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
 import { resolveIdentity } from '../identity.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
@@ -67,7 +67,7 @@ function createPresetTool(
         out += `record ${i + 1}:\n`;
         out += `type: ${quotedPromptScalar(typeLabel)}\n`;
         out += `title: ${quotedPromptScalar(obs.title ?? 'Untitled')}\n`;
-        if (obs.narrative) out += `content: ${quotedPromptScalar(obs.narrative)}\n`;
+        if (obs.narrative) out += `content: ${quotedPromptPayload(obs.narrative)}\n`;
         out += '\n';
       });
       return out.trimEnd();

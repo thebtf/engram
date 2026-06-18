@@ -90,14 +90,14 @@ export function formatAlwaysInject(observations: Observation[]): string {
             out += 'Key facts:\n';
             hasFacts = true;
           }
-          out += `- ${quotedPromptScalar(fact)}\n`;
+          out += `- ${quotedPromptPayload(fact)}\n`;
         }
       }
       if (hasFacts) out += '\n';
     }
 
     const narrative = asString(obs.narrative);
-    if (narrative !== '') out += `content: ${quotedPromptScalar(narrative)}\n\n`;
+    if (narrative !== '') out += `content: ${quotedPromptPayload(narrative)}\n\n`;
   }
 
   out += '</engram-behavioral-rules>\n';
@@ -184,6 +184,17 @@ export function safePromptScalar(value: unknown): string {
 
 export function quotedPromptScalar(value: unknown): string {
   return JSON.stringify(safePromptScalar(value));
+}
+
+export function safePromptPayload(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+export function quotedPromptPayload(value: unknown): string {
+  return JSON.stringify(safePromptPayload(value));
 }
 
 /**
@@ -290,14 +301,14 @@ function renderXml(groups: GroupedObservations): string {
         for (const fact of facts) {
           if (typeof fact === 'string' && fact !== '') {
             hasFacts = true;
-            out += `- ${quotedPromptScalar(fact)}\n`;
+            out += `- ${quotedPromptPayload(fact)}\n`;
           }
         }
         if (hasFacts) out += '\n';
       }
 
       const narrative = asString(obs.narrative);
-      if (narrative !== '') out += `content: ${quotedPromptScalar(narrative)}\n\n`;
+      if (narrative !== '') out += `content: ${quotedPromptPayload(narrative)}\n\n`;
 
       idx++;
     }

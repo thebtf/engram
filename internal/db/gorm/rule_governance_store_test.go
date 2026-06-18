@@ -125,6 +125,22 @@ func TestRuleGovernanceStore_CandidateIdempotencyAndNoBehavioralRuleProjection(t
 	require.Zero(t, behavioralRuleCount, "rule candidates must not create active behavioral_rules")
 }
 
+func TestRuleGovernanceStore_CreateCandidateRejectsNonPendingStatus(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+
+	candidate := ruleGovernanceCandidate("non-pending-create")
+	candidate.Status = models.RuleCandidateDrafted
+	_, err := store.CreateRuleCandidate(ctx, candidate)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, models.ErrInvalidRuleTransition), "expected invalid transition, got %v", err)
+
+	var count int64
+	require.NoError(t, db.Table("rule_candidates").Where("fingerprint = ?", candidate.Fingerprint).Count(&count).Error)
+	require.Zero(t, count)
+}
+
 func TestRuleGovernanceStore_CreateDraftFromCandidateIsIdempotent(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
@@ -185,6 +201,55 @@ func TestRuleGovernanceStore_UnknownActorKindCannotCreateDraft(t *testing.T) {
 	require.Zero(t, versionCount)
 }
 
+func TestRuleGovernanceStore_TransitionRequestRejectsWhitespaceRequiredFields(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+
+	cases := []struct {
+		name   string
+		mutate func(*RuleTransitionRequest)
+	}{
+		{
+			name: "actor",
+			mutate: func(req *RuleTransitionRequest) {
+				req.Actor = "   "
+			},
+		},
+		{
+			name: "actor kind",
+			mutate: func(req *RuleTransitionRequest) {
+				req.ActorKind = models.RuleActorKind("   ")
+			},
+		},
+		{
+			name: "reason",
+			mutate: func(req *RuleTransitionRequest) {
+				req.Reason = "   "
+			},
+		},
+		{
+			name: "evidence handle",
+			mutate: func(req *RuleTransitionRequest) {
+				req.EvidenceHandles = []string{"   "}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			created, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("blank-transition-"+tc.name))
+			require.NoError(t, err)
+			req := transitionReq("draft", "")
+			tc.mutate(&req)
+
+			_, err = store.CreateDraftFromCandidate(ctx, created.ID, req)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, models.ErrRuleRequiredFieldMissing), "expected required field error, got %v", err)
+		})
+	}
+}
+
 func TestRuleGovernanceStore_ActiveTransitionRequiresSnapshotAndRollsBack(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
@@ -229,6 +294,53 @@ func TestRuleGovernanceStore_ActiveTransitionWritesSnapshotAndLog(t *testing.T) 
 		Where("rule_version_id = ? AND to_state = ? AND snapshot_id = ?", version.ID, string(models.RuleStateActiveProject), snapshotID).
 		Count(&logCount).Error)
 	require.Equal(t, int64(1), logCount)
+}
+
+func TestRuleGovernanceStore_CreateRuleSnapshotRejectsWhitespaceRequiredFields(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		req  SnapshotRequest
+	}{
+		{
+			name: "snapshot id",
+			req: SnapshotRequest{
+				SnapshotID:  "   ",
+				OpType:      "rule_transition",
+				Actor:       "codex",
+				BeforeState: []byte(`{}`),
+			},
+		},
+		{
+			name: "op type",
+			req: SnapshotRequest{
+				SnapshotID:  uniqueSnapshot("blank-op-type"),
+				OpType:      "   ",
+				Actor:       "codex",
+				BeforeState: []byte(`{}`),
+			},
+		},
+		{
+			name: "actor",
+			req: SnapshotRequest{
+				SnapshotID:  uniqueSnapshot("blank-actor"),
+				OpType:      "rule_transition",
+				Actor:       "   ",
+				BeforeState: []byte(`{}`),
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := store.CreateRuleSnapshot(ctx, tc.req)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, models.ErrRuleRequiredFieldMissing), "expected required field error, got %v", err)
+		})
+	}
 }
 
 func TestRuleGovernanceStore_AuthorityDenialRollsBackGlobalPromotion(t *testing.T) {
