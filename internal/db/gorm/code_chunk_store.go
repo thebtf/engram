@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const staleKeyDelimiter = "\x1f"
+
 // CodeChunk is the GORM model for the code_chunks table (migration 139).
 // Stores AST-chunked source code with optional embeddings for hybrid code search.
 //
@@ -132,7 +134,7 @@ func (s *CodeChunkStore) DeleteByProjectFile(ctx context.Context, projectID, fil
 
 // DeleteStaleForProject removes chunks for the given project whose
 // (file_path, byte_start, content_sha256) triple is NOT in the keepKeys set.
-// keepKeys elements must be formatted as "filePath\x00byteStart\x00sha256"
+// keepKeys elements must be formatted as "filePath<US>byteStart<US>sha256"
 // using the StaleKey helper. This is the delta-negotiation cleanup path:
 // after a full re-index, stale rows (chunks the client no longer reports) are
 // removed in one bulk delete per project.
@@ -155,7 +157,7 @@ func (s *CodeChunkStore) DeleteStaleForProject(ctx context.Context, projectID st
 		Exec(`
 			DELETE FROM code_chunks
 			WHERE project_id = ?
-			  AND (file_path || chr(0) || byte_start::text || chr(0) || content_sha256)
+			  AND (file_path || E'\x1f' || byte_start::text || E'\x1f' || content_sha256)
 			      NOT IN (SELECT unnest(?::text[]))
 		`, projectID, pq.Array(keepKeys))
 	if result.Error != nil {
@@ -257,9 +259,10 @@ func (s *CodeChunkStore) ListUnembedded(ctx context.Context, limit int) ([]*Code
 
 // StaleKey constructs the composite key string used by DeleteStaleForProject,
 // ListIdentityKeysByProject, TouchSession, and DeleteBySessionMismatch.
-// Format: "filePath\x00byteStart\x00sha256" — matches the DB-side expression.
+// Format: "filePath<US>byteStart<US>sha256" — matches the DB-side expression.
+// PostgreSQL text cannot contain NUL bytes, so this uses ASCII Unit Separator.
 func StaleKey(filePath string, byteStart int, contentSHA256 string) string {
-	return fmt.Sprintf("%s\x00%d\x00%s", filePath, byteStart, contentSHA256)
+	return fmt.Sprintf("%s%s%d%s%s", filePath, staleKeyDelimiter, byteStart, staleKeyDelimiter, contentSHA256)
 }
 
 // ChunkIdentity carries the three fields that form the chunk's identity key.
@@ -306,7 +309,7 @@ func (s *CodeChunkStore) ListIdentityKeysByProject(ctx context.Context, projectI
 // client still has as belonging to the current index session so that
 // DeleteBySessionMismatch can sweep any rows left on an old session id.
 //
-// keepKeys must be formatted as "filePath\x00byteStart\x00sha256" using
+// keepKeys must be formatted as "filePath<US>byteStart<US>sha256" using
 // StaleKey. Empty keepKeys is a no-op — returns (0, nil) safely.
 // Returns the number of rows updated.
 func (s *CodeChunkStore) TouchSession(ctx context.Context, projectID, sessionID string, keepKeys []string) (int64, error) {
@@ -325,9 +328,9 @@ func (s *CodeChunkStore) TouchSession(ctx context.Context, projectID, sessionID 
 			SET index_session_id = ?,
 			    updated_at       = now()
 			WHERE project_id = ?
-			  AND (file_path || chr(0) || byte_start::text || chr(0) || content_sha256)
+			  AND (file_path || E'\x1f' || byte_start::text || E'\x1f' || content_sha256)
 			      IN (SELECT unnest(?::text[]))
-		`, sessionID, projectID, pq.Array(keepKeys))
+	`, sessionID, projectID, pq.Array(keepKeys))
 	if result.Error != nil {
 		return 0, fmt.Errorf("code_chunk_store touch_session %q %q: %w", projectID, sessionID, result.Error)
 	}

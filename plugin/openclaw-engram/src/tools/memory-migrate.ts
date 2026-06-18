@@ -11,6 +11,7 @@ import { join, relative, resolve, normalize, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
+import { quotedPromptScalar } from '../context/formatter.js';
 import { resolveIdentity } from '../identity.js';
 import type {
   AnyAgentTool,
@@ -102,7 +103,7 @@ async function runMigration(
     const normalizedWs = normalize(resolve(workspaceDir));
     const rel = relative(normalizedWs, resolved);
     if (rel.startsWith('..') || isAbsolute(rel)) {
-      return `Path "${params.path}" resolves outside the workspace — access denied.`;
+      return `Path ${quotedPromptScalar(params.path)} resolves outside the workspace — access denied.`;
     }
     filePaths = [resolved];
   } else {
@@ -156,10 +157,7 @@ async function runMigration(
     lines.push('Chunks (first 5):');
     const preview = allChunks.slice(0, 5);
     for (const chunk of preview) {
-      const contentPreview = chunk.content.length > 80
-        ? chunk.content.slice(0, 77) + '...'
-        : chunk.content;
-      lines.push(`- [${chunk.type}] "${chunk.title}" (from ${chunk.sourcePath}): ${contentPreview}`);
+      lines.push(formatDryRunChunkLine(chunk));
     }
     if (allChunks.length > 5) {
       lines.push(`... and ${allChunks.length - 5} more chunk(s)`);
@@ -219,8 +217,21 @@ async function runMigration(
   if (totalSkipped > 0) lines.push(`  Skipped (duplicates): ${totalSkipped}`);
   if (skippedFiles.length > 0) lines.push(`  Skipped files (already migrated): ${skippedFiles.length}`);
   if (errors.length > 0) {
-    lines.push(`  Errors: ${errors.join(', ')}`);
+    lines.push(`  Errors: ${quotedPromptScalar(errors.join(', '))}`);
     lines.push(`  Note: marker NOT saved due to errors — re-run to retry failed chunks.`);
   }
   return lines.join('\n');
+}
+
+export function formatDryRunChunkLine(chunk: MemoryChunk): string {
+  const contentPreview = chunk.content.length > 80
+    ? chunk.content.slice(0, 77) + '...'
+    : chunk.content;
+  return [
+    '- chunk:',
+    `type=${quotedPromptScalar(chunk.type)}`,
+    `title=${quotedPromptScalar(chunk.title)}`,
+    `source=${quotedPromptScalar(chunk.sourcePath)}`,
+    `preview=${quotedPromptScalar(contentPreview)}`,
+  ].join(' ');
 }

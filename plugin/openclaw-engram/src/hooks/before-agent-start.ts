@@ -10,7 +10,7 @@
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import { formatContext } from '../context/formatter.js';
+import { formatContext, quotedPromptScalar } from '../context/formatter.js';
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartResult,
@@ -101,7 +101,7 @@ export async function handleBeforeAgentStart(
  * Build cacheable static instructions injected once per session.
  * These describe available engram capabilities to the agent.
  */
-function buildStaticInstructions(project: string): string {
+export function buildStaticInstructions(project: string): string {
   return [
     '# Engram Persistent Memory',
     '',
@@ -110,6 +110,6 @@ function buildStaticInstructions(project: string): string {
     '- `engram_remember` — store new observations for future sessions',
     '- `engram_decisions` — query architectural decisions',
     '',
-    `Memory is scoped to project "${project}". Use \`engram_remember\` to store important insights, decisions, and discoveries.`,
+    `Memory is scoped to project ${quotedPromptScalar(project)}. Use \`engram_remember\` to store important insights, decisions, and discoveries.`,
   ].join('\n');
 }

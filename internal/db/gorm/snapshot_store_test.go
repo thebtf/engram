@@ -31,12 +31,13 @@ func TestSnapshotStore_CRUD(t *testing.T) {
 
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	defer sqlDB.Close()
 	require.NoError(t, sqlDB.Ping())
 	require.NoError(t, runMigrations(db))
 
+	require.NoError(t, db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-store-%'`).Error)
 	t.Cleanup(func() {
 		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-store-%'`).Error
+		_ = sqlDB.Close()
 	})
 
 	store := NewSnapshotStore(db)

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
+import { quotedPromptScalar } from '../context/formatter.js';
 import { resolveIdentity } from '../identity.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
@@ -97,14 +98,14 @@ async function storeObservation(
   }
 
   if (response.imported > 0) {
-    return `Stored: "${title}" (type: ${type}, scope: ${scope})`;
+    return `Stored: ${quotedPromptScalar(title)} (type: ${quotedPromptScalar(type)}, scope: ${quotedPromptScalar(scope)})`;
   }
   if (response.skipped_duplicates > 0) {
-    return `Observation skipped (likely a near-duplicate): "${title}"`;
+    return `Observation skipped (likely a near-duplicate): ${quotedPromptScalar(title)}`;
   }
 
   const errMsg = response.errors?.join(', ') ?? 'unknown error';
-  return `Failed to store observation: ${errMsg}`;
+  return `Failed to store observation: ${quotedPromptScalar(errMsg)}`;
 }
 
 export function createEngramRememberTool(
