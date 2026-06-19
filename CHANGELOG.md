@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.26.2] - 2026-06-19
+
+### Fixed
+
+- **Codex marketplace hooks no longer bind to stale cache roots.** Hook registration now dispatches
+  through a root-resolving launcher modeled on `nvmd-ai-kit`, preferring the current Codex plugin
+  root and latest marketplace cache before legacy Claude plugin roots. This prevents
+  `MODULE_NOT_FOUND` failures when an old cache slot such as `6.25.1` remains incomplete after an
+  update.
+- **Release archives include Codex hook dispatchers.** GoReleaser now packages `hooks/*.cjs` files
+  alongside existing hook scripts, so archive installs and marketplace syncs carry the same
+  dispatcher runtime.
+
 ## [6.26.1] - 2026-06-19
 
 ### Fixed

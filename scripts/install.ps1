@@ -95,6 +95,9 @@ function Install-Release {
 
         # JS hooks are mandatory — stop on error so the failure is visible
         Copy-Item "$TempDir\hooks\*.js"      "$InstallDir\hooks\" -Force -ErrorAction Stop
+        if (Test-Path "$TempDir\hooks\*.cjs") {
+            Copy-Item "$TempDir\hooks\*.cjs" "$InstallDir\hooks\" -Force -ErrorAction Stop
+        }
         Copy-Item "$TempDir\hooks\hooks.json" "$InstallDir\hooks\" -Force -ErrorAction Stop
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force

@@ -173,6 +173,10 @@ download_release() {
     # JS hooks are mandatory — the plugin cannot function without them
     cp "$tmp_dir/hooks/"*.js "$INSTALL_DIR/hooks/" \
         || error "Failed to copy JS hooks from $tmp_dir/hooks/"
+    if compgen -G "$tmp_dir/hooks/*.cjs" > /dev/null; then
+        cp "$tmp_dir/hooks/"*.cjs "$INSTALL_DIR/hooks/" \
+            || error "Failed to copy CJS hooks from $tmp_dir/hooks/"
+    fi
     cp "$tmp_dir/hooks/hooks.json" "$INSTALL_DIR/hooks/" \
         || error "Failed to copy hooks.json from $tmp_dir/hooks/"
 
