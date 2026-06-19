@@ -231,7 +231,7 @@ func TestRuleGovernanceUsefulnessNoDataAndProjectGuard(t *testing.T) {
 
 	_, missingProjectErr := s.callTool(ctx, "rule_governance_usefulness", json.RawMessage(`{}`))
 	require.Error(t, missingProjectErr)
-	require.Contains(t, missingProjectErr.Error(), "project is required")
+	require.Contains(t, missingProjectErr.Error(), "project_required")
 
 	out, err := s.callTool(ctx, "rule_governance_usefulness", json.RawMessage(`{"project":"engram","rule_version_id":7}`))
 	require.NoError(t, err)

@@ -288,7 +288,10 @@ func (s *Server) handleRuleGovernanceUsefulness(ctx context.Context, args json.R
 	}
 	project := strings.TrimSpace(coerceString(m["project"], ""))
 	if project == "" {
-		return "", fmt.Errorf("rule_governance_usefulness: project is required")
+		return "", fmt.Errorf("project_required: rule_governance_usefulness requires project")
+	}
+	if err := requireRuleGovernanceProjectOrAdmin(ctx, project, "rule_governance_usefulness"); err != nil {
+		return "", err
 	}
 	since, err := parseRuleGovernanceSince(m)
 	if err != nil {
