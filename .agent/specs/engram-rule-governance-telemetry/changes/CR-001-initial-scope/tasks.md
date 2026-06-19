@@ -17,20 +17,20 @@ plan: .agent/specs/engram-rule-governance-telemetry/plan.md
 
 ## RED Tests
 
-- [ ] T005: Add store tests for lifecycle health counts by candidate status, version state, transition action, snapshot status, arbiter run status, and injection event type.
-- [ ] T006: Add queue tests for global/kernel escalation, conflict, reject-review, scope risk, canary review, rollback conflict, and stale-cache anomaly groups.
-- [ ] T007: Add telemetry aggregation tests for project/rule/event windows, including empty `NO DATA` behavior.
+- [x] T005: Add store tests for lifecycle health counts by candidate status, version state, transition action, snapshot status, arbiter run status, and injection event type.
+- [ ] T006: Add queue tests for global/kernel escalation, conflict, reject-review, scope risk, canary review, rollback conflict, and stale-cache anomaly groups. PARTIAL: global/kernel escalation, active-rule conflict, and reject-review hold covered.
+- [x] T007: Add telemetry aggregation tests for project/rule/event windows, including empty `NO DATA` behavior.
 - [ ] T008: Add transition-control tests for promote/reject/archive/restore/pin/unpin authority and required evidence.
-- [ ] T009: Add rule-governance snapshot tests for list, pin, rollback success, rollback conflict, and pinned/protected refusal.
+- [ ] T009: Add rule-governance snapshot tests for list, pin, rollback success, rollback conflict, and pinned/protected refusal. PARTIAL: list, pin, and rollback conflict covered.
 - [ ] T010: Add handler/tool auth tests for read-only health/queues and admin/operator transition controls.
 - [ ] T011: Add dogfood-report fixture test that can serialize a candidate -> shadow/canary -> active_project trace.
 
 ## Implementation
 
-- [ ] T012: Add model DTOs for health, queue items, transition requests/results, snapshot summaries, rollback results, and usefulness metrics.
-- [ ] T013: Add rule governance health aggregate queries with bounded limits/time windows.
-- [ ] T014: Add exception queue queries and legal-escape handling.
-- [ ] T015: Extend rule injection event store with project/rule/event aggregation reads.
+- [ ] T012: Add model DTOs for health, queue items, transition requests/results, snapshot summaries, rollback results, and usefulness metrics. PARTIAL: health, queue, snapshot summary, rollback conflict result, and telemetry usefulness DTOs added.
+- [x] T013: Add rule governance health aggregate queries with bounded limits/time windows.
+- [ ] T014: Add exception queue queries and legal-escape handling. PARTIAL: initial candidate-derived queue groups added; remaining RG-3 groups and explicit legal-escape shaping still pending.
+- [x] T015: Extend rule injection event store with project/rule/event aggregation reads.
 - [ ] T016: Add any required additive migration/indexes for RG-3 telemetry event types or query performance.
 - [ ] T017: Implement rule-governance transition control service methods over the existing state machine.
 - [ ] T018: Implement rule-governance snapshot list/pin/rollback/archive/restore support.

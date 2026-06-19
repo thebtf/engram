@@ -31,6 +31,70 @@ type RuleVersionRenderListParams struct {
 	Limit    int
 }
 
+type RuleGovernanceHealthParams struct {
+	Since   time.Time
+	Project string
+	Limit   int
+}
+
+type RuleGovernanceHealth struct {
+	Since                    time.Time
+	CandidateStatusCounts    map[models.RuleCandidateStatus]int
+	VersionStateCounts       map[models.RuleVersionState]int
+	ArbiterRunStatusCounts   map[models.RuleArbiterRunStatus]int
+	TransitionActionCounts   map[string]int
+	SnapshotStatusCounts     map[string]int
+	InjectionEventTypeCounts map[models.RuleInjectionEventType]int
+	EvidenceHandles          []string
+	Project                  string
+	Limit                    int
+	NoData                   bool
+}
+
+type RuleGovernanceExceptionQueueParams struct {
+	Project string
+	Limit   int
+}
+
+type RuleGovernanceExceptionQueueItem struct {
+	LastActivityAt         time.Time
+	EvidenceHandles        []string
+	RecommendedNextActions []string
+	EntityType             string
+	Project                string
+	Scope                  string
+	Reason                 string
+	EntityID               int64
+}
+
+type RuleGovernanceExceptionQueueGroup struct {
+	Items                  []RuleGovernanceExceptionQueueItem
+	RecommendedNextActions []string
+	Reason                 string
+	Count                  int
+}
+
+type RuleGovernanceSnapshotListParams struct {
+	Project string
+	Limit   int
+}
+
+type RuleGovernanceSnapshotSummary struct {
+	CreatedAt    time.Time
+	RolledBackAt *time.Time
+	SnapshotID   string
+	OpType       string
+	Actor        string
+	Status       string
+	Pinned       bool
+}
+
+type RuleGovernanceRollbackResult struct {
+	RestoredVersionIDs []int64
+	ConflictVersionIDs []int64
+	SnapshotID         string
+}
+
 type SnapshotRequest struct {
 	SnapshotID  string
 	OpType      string
@@ -767,6 +831,220 @@ func (s *RuleGovernanceStore) CreateRuleSnapshot(ctx context.Context, req Snapsh
 	return toRuleGovernanceSnapshot(row), nil
 }
 
+func (s *RuleGovernanceStore) GetLifecycleHealth(ctx context.Context, params RuleGovernanceHealthParams) (RuleGovernanceHealth, error) {
+	if s == nil || s.db == nil {
+		return RuleGovernanceHealth{}, fmt.Errorf("rule_governance health: store is not initialized")
+	}
+	params.Project = strings.TrimSpace(params.Project)
+	if params.Limit <= 0 {
+		params.Limit = 100
+	}
+	health := RuleGovernanceHealth{
+		Project:                  params.Project,
+		Since:                    params.Since,
+		Limit:                    params.Limit,
+		CandidateStatusCounts:    map[models.RuleCandidateStatus]int{},
+		VersionStateCounts:       map[models.RuleVersionState]int{},
+		ArbiterRunStatusCounts:   map[models.RuleArbiterRunStatus]int{},
+		TransitionActionCounts:   map[string]int{},
+		SnapshotStatusCounts:     map[string]int{},
+		InjectionEventTypeCounts: map[models.RuleInjectionEventType]int{},
+	}
+
+	if err := s.countCandidateStatuses(ctx, params, &health); err != nil {
+		return health, err
+	}
+	if err := s.countVersionStates(ctx, params, &health); err != nil {
+		return health, err
+	}
+	if err := s.countArbiterRunStatuses(ctx, params, &health); err != nil {
+		return health, err
+	}
+	if err := s.countTransitionActions(ctx, params, &health); err != nil {
+		return health, err
+	}
+	if err := s.countSnapshotStatuses(ctx, params, &health); err != nil {
+		return health, err
+	}
+	if err := s.countInjectionEventTypes(ctx, params, &health); err != nil {
+		return health, err
+	}
+	health.NoData = healthCountTotal(health) == 0
+	return health, nil
+}
+
+func (s *RuleGovernanceStore) ListExceptionQueueGroups(ctx context.Context, params RuleGovernanceExceptionQueueParams) ([]RuleGovernanceExceptionQueueGroup, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("rule_governance exception_queue: store is not initialized")
+	}
+	if params.Limit <= 0 {
+		params.Limit = 100
+	}
+	candidates, err := s.ListRuleCandidates(ctx, RuleCandidateListParams{
+		SourceProject: strings.TrimSpace(params.Project),
+		Limit:         params.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	groups := map[string]*RuleGovernanceExceptionQueueGroup{}
+	addItem := func(reason string, candidate *models.RuleCandidate, next []string) {
+		group := groups[reason]
+		if group == nil {
+			group = &RuleGovernanceExceptionQueueGroup{
+				Reason:                 reason,
+				RecommendedNextActions: append([]string{}, next...),
+			}
+			groups[reason] = group
+		}
+		item := RuleGovernanceExceptionQueueItem{
+			EntityID:               candidate.ID,
+			EntityType:             "rule_candidate",
+			Project:                candidate.SourceProject,
+			Scope:                  candidate.ProposedScope,
+			Reason:                 reason,
+			EvidenceHandles:        append([]string{}, candidate.EvidenceHandles...),
+			LastActivityAt:         candidate.UpdatedAt,
+			RecommendedNextActions: append([]string{}, next...),
+		}
+		group.Items = append(group.Items, item)
+		group.Count = len(group.Items)
+	}
+
+	for _, candidate := range candidates {
+		scope := strings.TrimSpace(candidate.ProposedScope)
+		if scope == "global" || scope == "kernel" {
+			addItem("global_kernel_escalation", candidate, []string{"manual_operator_review"})
+		}
+		if strings.Contains(candidate.ConflictStatus, "conflict") {
+			addItem("active_rule_conflict", candidate, []string{"compare_active_rule_family"})
+		}
+		if candidate.AntiCaptureStatus == "reject_review_hold" {
+			addItem("reject_review_hold", candidate, []string{"review_anti_capture_evidence"})
+		}
+	}
+
+	order := []string{"global_kernel_escalation", "active_rule_conflict", "reject_review_hold"}
+	out := make([]RuleGovernanceExceptionQueueGroup, 0, len(groups))
+	for _, reason := range order {
+		if group := groups[reason]; group != nil {
+			out = append(out, *group)
+		}
+	}
+	return out, nil
+}
+
+func (s *RuleGovernanceStore) ListRuleGovernanceSnapshots(ctx context.Context, params RuleGovernanceSnapshotListParams) ([]RuleGovernanceSnapshotSummary, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("rule_governance list_snapshots: store is not initialized")
+	}
+	if params.Limit <= 0 {
+		params.Limit = 50
+	}
+	q := s.db.WithContext(ctx).Order("created_at DESC, id DESC").Limit(params.Limit)
+	if strings.TrimSpace(params.Project) != "" {
+		project := strings.TrimSpace(params.Project)
+		q = q.Where("before_state_json ->> 'project' = ? OR after_state_json ->> 'project' = ?", project, project)
+	}
+	var rows []ruleGovernanceSnapshotRow
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance list_snapshots: %w", err)
+	}
+	out := make([]RuleGovernanceSnapshotSummary, 0, len(rows))
+	for i := range rows {
+		out = append(out, toRuleGovernanceSnapshotSummary(&rows[i]))
+	}
+	return out, nil
+}
+
+func (s *RuleGovernanceStore) PinRuleGovernanceSnapshot(ctx context.Context, snapshotID string, pinned bool) (RuleGovernanceSnapshotSummary, error) {
+	if s == nil || s.db == nil {
+		return RuleGovernanceSnapshotSummary{}, fmt.Errorf("rule_governance pin_snapshot: store is not initialized")
+	}
+	snapshotID = strings.TrimSpace(snapshotID)
+	if snapshotID == "" {
+		return RuleGovernanceSnapshotSummary{}, models.ErrRuleRequiredFieldMissing
+	}
+	var row ruleGovernanceSnapshotRow
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&ruleGovernanceSnapshotRow{}).
+			Where("snapshot_id = ?", snapshotID).
+			Update("pinned", pinned)
+		if result.Error != nil {
+			return fmt.Errorf("rule_governance pin_snapshot: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("rule_governance pin_snapshot %q: %w", snapshotID, gorm.ErrRecordNotFound)
+		}
+		if err := tx.Where("snapshot_id = ?", snapshotID).First(&row).Error; err != nil {
+			return fmt.Errorf("rule_governance pin_snapshot reread: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return RuleGovernanceSnapshotSummary{}, err
+	}
+	return toRuleGovernanceSnapshotSummary(&row), nil
+}
+
+func (s *RuleGovernanceStore) RollbackRuleGovernanceSnapshot(ctx context.Context, snapshotID string, req RuleTransitionRequest) (RuleGovernanceRollbackResult, error) {
+	result := RuleGovernanceRollbackResult{SnapshotID: strings.TrimSpace(snapshotID)}
+	if s == nil || s.db == nil {
+		return result, fmt.Errorf("rule_governance rollback_snapshot: store is not initialized")
+	}
+	if result.SnapshotID == "" {
+		return result, models.ErrRuleRequiredFieldMissing
+	}
+	if err := validateCandidateToDraftRequest(req); err != nil {
+		return result, err
+	}
+
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row ruleGovernanceSnapshotRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("snapshot_id = ?", result.SnapshotID).First(&row).Error; err != nil {
+			return fmt.Errorf("rule_governance rollback_snapshot lock: %w", err)
+		}
+		before := decodeRuleGovernanceSnapshotState(row.BeforeState)
+		after := decodeRuleGovernanceSnapshotStatePtr(row.AfterState)
+		expectedCurrent := after.RuleVersions
+		if len(expectedCurrent) == 0 {
+			expectedCurrent = before.RuleVersions
+		}
+		for _, expected := range expectedCurrent {
+			var version ruleVersionRow
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&version, expected.ID).Error; err != nil {
+				return fmt.Errorf("rule_governance rollback_snapshot version %d: %w", expected.ID, err)
+			}
+			if expected.State != "" && version.State != expected.State {
+				result.ConflictVersionIDs = append(result.ConflictVersionIDs, expected.ID)
+			}
+		}
+		if len(result.ConflictVersionIDs) > 0 {
+			return fmt.Errorf("%w: rollback conflicts detected", models.ErrInvalidRuleTransition)
+		}
+		for _, restore := range before.RuleVersions {
+			updates := map[string]any{
+				"state":      restore.State,
+				"updated_at": time.Now().UTC(),
+			}
+			if err := tx.Model(&ruleVersionRow{}).Where("id = ?", restore.ID).Updates(updates).Error; err != nil {
+				return fmt.Errorf("rule_governance rollback_snapshot restore %d: %w", restore.ID, err)
+			}
+			result.RestoredVersionIDs = append(result.RestoredVersionIDs, restore.ID)
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&ruleGovernanceSnapshotRow{}).Where("id = ?", row.ID).Updates(map[string]any{
+			"status":         "rolled_back",
+			"rolled_back_at": &now,
+		}).Error; err != nil {
+			return fmt.Errorf("rule_governance rollback_snapshot mark: %w", err)
+		}
+		return nil
+	})
+	return result, err
+}
+
 func fromRuleCandidate(c *models.RuleCandidate) *ruleCandidateRow {
 	row := &ruleCandidateRow{
 		ReviewAfter:         c.ReviewAfter,
@@ -935,6 +1213,193 @@ func toRuleGovernanceSnapshot(row *ruleGovernanceSnapshotRow) *models.RuleGovern
 		snap.AfterState = []byte(*row.AfterState)
 	}
 	return snap
+}
+
+func toRuleGovernanceSnapshotSummary(row *ruleGovernanceSnapshotRow) RuleGovernanceSnapshotSummary {
+	return RuleGovernanceSnapshotSummary{
+		SnapshotID:   row.SnapshotID,
+		OpType:       row.OpType,
+		Actor:        row.Actor,
+		Status:       row.Status,
+		CreatedAt:    row.CreatedAt,
+		RolledBackAt: row.RolledBackAt,
+		Pinned:       row.Pinned,
+	}
+}
+
+type ruleCountRow struct {
+	Key   string
+	Count int64
+}
+
+func (s *RuleGovernanceStore) countCandidateStatuses(ctx context.Context, params RuleGovernanceHealthParams, health *RuleGovernanceHealth) error {
+	q := s.db.WithContext(ctx).Table("rule_candidates").Select("status AS key, COUNT(*) AS count").Group("status")
+	q = applyRuleSince(q, "created_at", params.Since)
+	if params.Project != "" {
+		q = q.Where("source_project = ?", params.Project)
+	}
+	var rows []ruleCountRow
+	if err := q.Scan(&rows).Error; err != nil {
+		return fmt.Errorf("rule_governance health candidate_status: %w", err)
+	}
+	for _, row := range rows {
+		health.CandidateStatusCounts[models.RuleCandidateStatus(row.Key)] = int(row.Count)
+	}
+
+	var candidates []ruleCandidateRow
+	evidenceQ := s.db.WithContext(ctx).Order("created_at ASC").Limit(params.Limit)
+	evidenceQ = applyRuleSince(evidenceQ, "created_at", params.Since)
+	if params.Project != "" {
+		evidenceQ = evidenceQ.Where("source_project = ?", params.Project)
+	}
+	if err := evidenceQ.Find(&candidates).Error; err != nil {
+		return fmt.Errorf("rule_governance health candidate_evidence: %w", err)
+	}
+	for i := range candidates {
+		health.EvidenceHandles = append(health.EvidenceHandles, fmt.Sprintf("rule_candidate:%d", candidates[i].ID))
+	}
+	return nil
+}
+
+func (s *RuleGovernanceStore) countVersionStates(ctx context.Context, params RuleGovernanceHealthParams, health *RuleGovernanceHealth) error {
+	q := s.db.WithContext(ctx).Table("rule_versions").Select("state AS key, COUNT(*) AS count").Group("state")
+	q = applyRuleSince(q, "created_at", params.Since)
+	if params.Project != "" {
+		q = q.Where("activation_predicate_json ->> 'project' = ?", params.Project)
+	}
+	var rows []ruleCountRow
+	if err := q.Scan(&rows).Error; err != nil {
+		return fmt.Errorf("rule_governance health version_state: %w", err)
+	}
+	for _, row := range rows {
+		health.VersionStateCounts[models.RuleVersionState(row.Key)] = int(row.Count)
+	}
+	return nil
+}
+
+func (s *RuleGovernanceStore) countArbiterRunStatuses(ctx context.Context, params RuleGovernanceHealthParams, health *RuleGovernanceHealth) error {
+	q := s.db.WithContext(ctx).Table("rule_arbiter_runs").Select("status AS key, COUNT(*) AS count").Group("status")
+	q = applyRuleSince(q, "started_at", params.Since)
+	var rows []ruleCountRow
+	if err := q.Scan(&rows).Error; err != nil {
+		return fmt.Errorf("rule_governance health arbiter_run_status: %w", err)
+	}
+	for _, row := range rows {
+		health.ArbiterRunStatusCounts[models.RuleArbiterRunStatus(row.Key)] = int(row.Count)
+	}
+	return nil
+}
+
+func (s *RuleGovernanceStore) countTransitionActions(ctx context.Context, params RuleGovernanceHealthParams, health *RuleGovernanceHealth) error {
+	q := s.db.WithContext(ctx).Table("rule_transition_log AS rtl").
+		Select("rtl.action AS key, COUNT(*) AS count").
+		Joins("LEFT JOIN rule_candidates rc ON rc.id = rtl.candidate_id").
+		Joins("LEFT JOIN rule_versions rv ON rv.id = rtl.rule_version_id").
+		Group("rtl.action")
+	q = applyRuleSince(q, "rtl.created_at", params.Since)
+	if params.Project != "" {
+		q = q.Where("rc.source_project = ? OR rv.activation_predicate_json ->> 'project' = ?", params.Project, params.Project)
+	}
+	var rows []ruleCountRow
+	if err := q.Scan(&rows).Error; err != nil {
+		return fmt.Errorf("rule_governance health transition_action: %w", err)
+	}
+	for _, row := range rows {
+		health.TransitionActionCounts[row.Key] = int(row.Count)
+	}
+	return nil
+}
+
+func (s *RuleGovernanceStore) countSnapshotStatuses(ctx context.Context, params RuleGovernanceHealthParams, health *RuleGovernanceHealth) error {
+	q := s.db.WithContext(ctx).Table("rule_governance_snapshots").
+		Select("status AS key, COUNT(*) AS count").
+		Group("status")
+	q = applyRuleSince(q, "created_at", params.Since)
+	if params.Project != "" {
+		q = q.Where("before_state_json ->> 'project' = ? OR after_state_json ->> 'project' = ?", params.Project, params.Project)
+	}
+	var rows []ruleCountRow
+	if err := q.Scan(&rows).Error; err != nil {
+		return fmt.Errorf("rule_governance health snapshot_status: %w", err)
+	}
+	for _, row := range rows {
+		health.SnapshotStatusCounts[row.Key] = int(row.Count)
+	}
+	return nil
+}
+
+func (s *RuleGovernanceStore) countInjectionEventTypes(ctx context.Context, params RuleGovernanceHealthParams, health *RuleGovernanceHealth) error {
+	q := s.db.WithContext(ctx).Table("rule_injection_events").
+		Select("event_type AS key, COUNT(*) AS count").
+		Group("event_type")
+	q = applyRuleSince(q, "created_at", params.Since)
+	if params.Project != "" {
+		q = q.Where("project = ?", params.Project)
+	}
+	var rows []ruleCountRow
+	if err := q.Scan(&rows).Error; err != nil {
+		return fmt.Errorf("rule_governance health injection_event_type: %w", err)
+	}
+	for _, row := range rows {
+		health.InjectionEventTypeCounts[models.RuleInjectionEventType(row.Key)] = int(row.Count)
+	}
+	return nil
+}
+
+func applyRuleSince(q *gorm.DB, column string, since time.Time) *gorm.DB {
+	if since.IsZero() {
+		return q
+	}
+	return q.Where(column+" >= ?", since)
+}
+
+func healthCountTotal(health RuleGovernanceHealth) int {
+	total := 0
+	for _, count := range health.CandidateStatusCounts {
+		total += count
+	}
+	for _, count := range health.VersionStateCounts {
+		total += count
+	}
+	for _, count := range health.ArbiterRunStatusCounts {
+		total += count
+	}
+	for _, count := range health.TransitionActionCounts {
+		total += count
+	}
+	for _, count := range health.SnapshotStatusCounts {
+		total += count
+	}
+	for _, count := range health.InjectionEventTypeCounts {
+		total += count
+	}
+	return total
+}
+
+type ruleGovernanceSnapshotState struct {
+	Project      string                              `json:"project"`
+	RuleVersions []ruleGovernanceSnapshotRuleVersion `json:"rule_versions"`
+}
+
+type ruleGovernanceSnapshotRuleVersion struct {
+	State string `json:"state"`
+	ID    int64  `json:"id"`
+}
+
+func decodeRuleGovernanceSnapshotState(raw JSONRaw) ruleGovernanceSnapshotState {
+	var state ruleGovernanceSnapshotState
+	if len(raw) == 0 {
+		return state
+	}
+	_ = json.Unmarshal(raw, &state)
+	return state
+}
+
+func decodeRuleGovernanceSnapshotStatePtr(raw *JSONRaw) ruleGovernanceSnapshotState {
+	if raw == nil {
+		return ruleGovernanceSnapshotState{}
+	}
+	return decodeRuleGovernanceSnapshotState(*raw)
 }
 
 func getRuleVersionByCandidateTx(tx *gorm.DB, candidateID int64) (*models.RuleVersion, error) {

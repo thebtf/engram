@@ -31,6 +31,27 @@ type RuleInjectionEventStore struct {
 	db *gorm.DB
 }
 
+type RuleInjectionTelemetryParams struct {
+	Project       string
+	Since         time.Time
+	RuleVersionID int64
+	Limit         int
+}
+
+type RuleInjectionTelemetryAggregate struct {
+	Project       string
+	RuleVersionID int64
+	Buckets       []RuleInjectionTelemetryBucket
+	NoData        bool
+}
+
+type RuleInjectionTelemetryBucket struct {
+	EventType  models.RuleInjectionEventType
+	Reasons    []string
+	LastSeenAt time.Time
+	Count      int
+}
+
 func NewRuleInjectionEventStore(db *gorm.DB) *RuleInjectionEventStore {
 	return &RuleInjectionEventStore{db: db}
 }
@@ -80,6 +101,83 @@ func (s *RuleInjectionEventStore) ListBySession(ctx context.Context, sessionID s
 		out = append(out, toRuleInjectionEvent(&rows[i]))
 	}
 	return out, nil
+}
+
+func (s *RuleInjectionEventStore) AggregateByProjectRuleAndEventType(ctx context.Context, params RuleInjectionTelemetryParams) (RuleInjectionTelemetryAggregate, error) {
+	if s == nil || s.db == nil {
+		return RuleInjectionTelemetryAggregate{}, fmt.Errorf("rule_injection_events: store is not initialized")
+	}
+	project := strings.TrimSpace(params.Project)
+	if project == "" {
+		return RuleInjectionTelemetryAggregate{}, fmt.Errorf("rule_injection_events: project must not be empty")
+	}
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	aggregate := RuleInjectionTelemetryAggregate{
+		Project:       project,
+		RuleVersionID: params.RuleVersionID,
+	}
+
+	base := s.telemetryQuery(ctx, project, params.RuleVersionID, params.Since)
+	type bucketRow struct {
+		EventType  string
+		LastSeenAt time.Time
+		Count      int64
+	}
+	var rows []bucketRow
+	if err := base.
+		Select("event_type, COUNT(*) AS count, MAX(created_at) AS last_seen_at").
+		Group("event_type").
+		Order("count DESC, event_type ASC").
+		Limit(limit).
+		Scan(&rows).Error; err != nil {
+		return RuleInjectionTelemetryAggregate{}, fmt.Errorf("rule_injection_events aggregate: %w", err)
+	}
+	if len(rows) == 0 {
+		aggregate.NoData = true
+		return aggregate, nil
+	}
+
+	aggregate.Buckets = make([]RuleInjectionTelemetryBucket, 0, len(rows))
+	for _, row := range rows {
+		eventType := models.RuleInjectionEventType(row.EventType)
+		reasons, err := s.telemetryReasons(ctx, project, params.RuleVersionID, params.Since, eventType)
+		if err != nil {
+			return RuleInjectionTelemetryAggregate{}, err
+		}
+		aggregate.Buckets = append(aggregate.Buckets, RuleInjectionTelemetryBucket{
+			EventType:  eventType,
+			Count:      int(row.Count),
+			LastSeenAt: row.LastSeenAt,
+			Reasons:    reasons,
+		})
+	}
+	return aggregate, nil
+}
+
+func (s *RuleInjectionEventStore) telemetryQuery(ctx context.Context, project string, ruleVersionID int64, since time.Time) *gorm.DB {
+	query := s.db.WithContext(ctx).Model(&ruleInjectionEventRow{}).Where("project = ?", project)
+	if ruleVersionID > 0 {
+		query = query.Where("rule_version_id = ?", ruleVersionID)
+	}
+	if !since.IsZero() {
+		query = query.Where("created_at >= ?", since)
+	}
+	return query
+}
+
+func (s *RuleInjectionEventStore) telemetryReasons(ctx context.Context, project string, ruleVersionID int64, since time.Time, eventType models.RuleInjectionEventType) ([]string, error) {
+	var reasons []string
+	if err := s.telemetryQuery(ctx, project, ruleVersionID, since).
+		Where("event_type = ? AND reason <> ''", string(eventType)).
+		Distinct("reason").
+		Order("reason ASC").
+		Pluck("reason", &reasons).Error; err != nil {
+		return nil, fmt.Errorf("rule_injection_events aggregate reasons: %w", err)
+	}
+	return reasons, nil
 }
 
 func fromRuleInjectionEvent(event *models.RuleInjectionEvent) (ruleInjectionEventRow, error) {
