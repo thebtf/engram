@@ -170,7 +170,7 @@ func ruleGovernanceMigration144() *gormigrate.Migration {
 					rolled_back_at             TIMESTAMPTZ,
 					pinned                     BOOLEAN NOT NULL DEFAULT false,
 					CONSTRAINT rule_governance_snapshots_status_chk
-						CHECK (status IN ('committed','rolled_back')),
+						CHECK (status IN ('committed','rolled_back','failed','rollback_conflict')),
 					CONSTRAINT rule_governance_snapshots_before_object_chk
 						CHECK (jsonb_typeof(before_state_json) = 'object'),
 					CONSTRAINT rule_governance_snapshots_after_object_chk

@@ -1161,11 +1161,6 @@ func (s *RuleGovernanceStore) RollbackRuleGovernanceSnapshot(ctx context.Context
 			}
 		}
 		if len(result.ConflictVersionIDs) > 0 {
-			if err := tx.Model(&ruleGovernanceSnapshotRow{}).Where("id = ?", row.ID).Updates(map[string]any{
-				"status": "rollback_conflict",
-			}).Error; err != nil {
-				return fmt.Errorf("rule_governance rollback_snapshot mark_conflict: %w", err)
-			}
 			return fmt.Errorf("%w: rollback conflicts detected", models.ErrInvalidRuleTransition)
 		}
 		for _, restore := range before.RuleVersions {
@@ -1187,7 +1182,17 @@ func (s *RuleGovernanceStore) RollbackRuleGovernanceSnapshot(ctx context.Context
 		}
 		return nil
 	})
-	return result, err
+	if err != nil {
+		if errors.Is(err, models.ErrInvalidRuleTransition) && len(result.ConflictVersionIDs) > 0 {
+			if updateErr := s.db.WithContext(ctx).Model(&ruleGovernanceSnapshotRow{}).
+				Where("snapshot_id = ?", result.SnapshotID).
+				Update("status", "rollback_conflict").Error; updateErr != nil {
+				return result, fmt.Errorf("rule_governance rollback_snapshot mark_conflict: %w", updateErr)
+			}
+		}
+		return result, err
+	}
+	return result, nil
 }
 
 func fromRuleCandidate(c *models.RuleCandidate) *ruleCandidateRow {

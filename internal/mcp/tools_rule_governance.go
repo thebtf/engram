@@ -555,7 +555,12 @@ func ruleGovernanceEvidenceHandleHasSensitiveText(lower string) bool {
 
 func isCanonicalRuleGovernanceEvidenceHandle(handle string) bool {
 	prefix, value, ok := strings.Cut(handle, ":")
-	if !ok || strings.TrimSpace(value) == "" {
+	if !ok {
+		return false
+	}
+	prefix = strings.TrimSpace(prefix)
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return false
 	}
 	switch strings.ToLower(prefix) {
@@ -604,6 +609,10 @@ func parseRuleGovernanceSince(m map[string]any) (time.Time, error) {
 	hours := coerceFloat64(m["since_hours"], 0)
 	if hours <= 0 {
 		return time.Time{}, nil
+	}
+	const maxRuleGovernanceSinceHours = 24 * 365 * 10
+	if hours > maxRuleGovernanceSinceHours {
+		hours = maxRuleGovernanceSinceHours
 	}
 	return time.Now().UTC().Add(-time.Duration(hours * float64(time.Hour))), nil
 }
