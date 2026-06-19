@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.27.0] - 2026-06-19
+
+### Added
+
+- **Rule governance background arbiter (#316).** Added the RG-1 proposal-only
+  arbiter pipeline: explicit active-rule intents are captured as pending rule
+  candidates, evaluated by deterministic anti-capture checks and an optional LLM
+  evaluator, and recorded through auditable arbiter runs/evaluations without
+  activating rules directly.
+
+### Fixed
+
+- **Rule arbiter review hardening (#316).** Candidate claims are now tied to a
+  specific arbiter run before evaluation/annotation, arbiter confidence is
+  validated in parser/store/database paths, internal `error` actions are rejected
+  from LLM proposal output, disabled-LLM runs still apply deterministic
+  session-specific holds, explicitly global `store_rule` intents stay global
+  even when a git-derived project is present, and run finalization uses an
+  uncanceled cleanup context so claimed candidates are released on shutdown.
+
 ## [6.26.4] - 2026-06-19
 
 ### Fixed
