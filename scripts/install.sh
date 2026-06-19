@@ -224,13 +224,12 @@ register_plugin() {
 
     mkdir -p "$HOME/.claude/plugins"
 
-    # Remove stale cache versions so old binaries cannot shadow the new one.
-    # CACHE_DIR is the per-plugin directory (.../cache/engram/engram); search
-    # inside it (not its parent) and exclude the version being installed.
+    # Preserve stale cache versions: already-running sessions may have hook
+    # commands pointing at their versioned cache path until they restart.
+    # installed_plugins.json below points new sessions at cache_path, so old
+    # cache slots no longer shadow the new plugin.
     if [[ -d "$CACHE_DIR" ]]; then
-        info "Removing old cache versions..."
-        find "$CACHE_DIR" -mindepth 1 -maxdepth 1 -type d \
-            ! -name "${version}" -exec rm -rf {} \; 2>/dev/null || true
+        info "Preserving old cache versions for running-session hook compatibility..."
     fi
 
     cache_path="${CACHE_DIR}/${version}"

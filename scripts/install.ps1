@@ -146,13 +146,13 @@ function Register-Plugin {
 
     New-Item -ItemType Directory -Path "$env:USERPROFILE\.claude\plugins" -Force | Out-Null
 
-    # Remove stale cache versions so old binaries cannot shadow the new one
+    # Preserve stale cache versions: already-running sessions may have hook
+    # commands pointing at their versioned cache path until they restart.
+    # installed_plugins.json below points new sessions at $CachePath, so old
+    # cache slots no longer shadow the new plugin.
     $CacheBase = Split-Path $CachePath -Parent
     if (Test-Path $CacheBase) {
-        Write-Info "Removing old cache versions..."
-        Get-ChildItem -Path $CacheBase -Directory `
-            | Where-Object { $_.Name -ne $VersionClean } `
-            | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Info "Preserving old cache versions for running-session hook compatibility..."
     }
 
     New-Item -ItemType Directory -Path $CachePath -Force | Out-Null
