@@ -71,6 +71,9 @@ archives:
       - src: plugin/engram/hooks/*.js
         dst: hooks
         strip_parent: true
+      - src: plugin/engram/hooks/*.cjs
+        dst: hooks
+        strip_parent: true
       - src: plugin/engram/hooks/hooks.json
         dst: hooks
         strip_parent: true
