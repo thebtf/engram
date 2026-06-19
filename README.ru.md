@@ -21,23 +21,35 @@ AI-агенты программирования забывают всё меж�
 
 Engram решает эту проблему, оставляя только те примитивы памяти, которые реально работали в продакшене: явные issues, documents, memories, behavioral rules, credentials и API tokens. Один сервер, несколько рабочих станций, ноль потерь контекста.
 
-В v5.0.0 session-start inject упрощён до статического composite payload: открытые issues, always-inject behavioral rules и recent memories. Старый динамический relevance / graph / reranking / extraction stack больше не находится на основном продуктном пути.
+В v5.0.0 session-start inject был упрощён до статического composite payload: открытые issues, always-inject behavioral rules и recent memories. Старый динамический relevance / graph / reranking / extraction stack ушёл с основного продуктного пути.
 
-Сокращённая static-first MCP surface остаётся для surviving entity model и удерживает использование context window на разумном уровне.
+После этого ветка v6 достроила governance поверх стабильного ядра: per-workstation keycards, proposal-only rule arbiter, bounded session-start rule router и rule-governance telemetry / rollback controls. Горячий путь по-прежнему детерминированный — без LLM на session-start — но durable guidance теперь можно проверять и откатывать.
 <!-- redoc:end:intro -->
 
 ---
 
 <!-- redoc:start:whats-new -->
-## Что нового в v5.0.0
+## Что нового
 
 | Версия | Основное изменение |
 |--------|-------------------|
+| **v6.29.0** | **Rule Governance Telemetry (RG-3)** — lifecycle health, exception queues, transition controls, rollback-aware snapshots и usefulness telemetry поверх rule-governance milestones. |
 | **v5.0.0** | Cleaned Baseline — static-only storage, split observations, session-start gRPC + cache fallback |
 | **v4.4.0** | Loom tenant — background task execution и daemon-side project event bridge |
 | **v4.0.0** | Daemon architecture — muxcore engine, gRPC transport, local persistent daemon, auto-binary plugin |
 
 Полный список изменений — в разделе [Releases](https://github.com/thebtf/engram/releases).
+
+### Two-Tier Token Model (v6)
+
+Engram v6 разделяет две credential tiers, каждая жёстко привязана к своему host class:
+
+| Tier | Name | Lives in | Purpose | Issuance |
+|---|---|---|---|---|
+| **1 — Operator key** | `ENGRAM_AUTH_ADMIN_TOKEN` | Только server-host environment (Docker, compose) | Admin-grade доступ для migrations, server-internal RPC и dashboard bootstrap | Оператор задаёт на сервере |
+| **2 — Worker keycard** | `ENGRAM_TOKEN` | Workstation `~/.claude/settings.json` env | Daemon ↔ server gRPC и обычные MCP tool calls | Выпускается через `/tokens` после admin login |
+
+Operator key никогда не должен попадать на рабочую станцию. Worker keycard никогда не должен жить на серверном хосте.
 <!-- redoc:end:whats-new -->
 
 ---
@@ -163,11 +175,11 @@ curl http://your-server:37777/health
 ```bash
 # Linux/macOS: добавьте в профиль shell
 # Windows: задайте как системные переменные окружения
-ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
+ENGRAM_URL=http://your-server:37777
+ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
-Перезапустите Claude Code. Память активна.
+Сгенерируйте worker keycard на `http://your-server:37777/tokens`, затем перезапустите Claude Code. Память активна.
 <!-- redoc:end:quick-start -->
 
 ---
@@ -181,8 +193,8 @@ ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
 
 ```bash
 # Сначала задайте переменные окружения
-ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
+ENGRAM_URL=http://your-server:37777
+ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
 ```
@@ -207,6 +219,31 @@ DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
   docker compose up -d server
 ```
 
+### Binary Installation (v4+)
+
+Скачайте binary daemon из [GitHub Releases](https://github.com/thebtf/engram/releases):
+
+```bash
+# Linux (amd64)
+curl -L https://github.com/thebtf/engram/releases/latest/download/engram-linux-amd64 -o engram
+chmod +x engram && sudo mv engram /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/thebtf/engram/releases/latest/download/engram-darwin-arm64 -o engram
+chmod +x engram && sudo mv engram /usr/local/bin/
+
+# Windows (amd64) — скачайте engram-windows-amd64.exe и добавьте в PATH
+```
+
+Затем задайте:
+
+```bash
+export ENGRAM_URL=http://your-server:37777
+export ENGRAM_TOKEN=engram_your_workstation_keycard
+```
+
+Проверка: `echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | engram`
+
 ### Ручная настройка MCP
 
 Если вы не используете плагин, настройте MCP напрямую в `~/.claude/settings.json`:
@@ -220,7 +257,7 @@ DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
       "type": "url",
       "url": "http://your-server:37777/mcp",
       "headers": {
-        "Authorization": "Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"
+        "Authorization": "Bearer ${ENGRAM_TOKEN}"
       }
     }
   }
@@ -232,8 +269,10 @@ Claude Code подставляет `${VAR}` из переменных окруж
 **Команда CLI:**
 
 ```bash
-claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_AUTH_ADMIN_TOKEN":"${ENGRAM_AUTH_ADMIN_TOKEN}"}}' -s user
+claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_TOKEN":"${ENGRAM_TOKEN}"}}' -s user
 ```
+
+`ENGRAM_URL` можно задавать как origin сервера (`http://host:37777`) или как MCP path (`http://host:37777/mcp`); hooks всё равно нормализуют origin для REST вызовов. `ENGRAM_TOKEN` всегда должен быть workstation keycard, а не operator key.
 
 ### Сборка из исходников
 
@@ -249,23 +288,23 @@ make install  # устанавливает плагин + запускает dae
 ---
 
 <!-- redoc:start:upgrading -->
-## Обновление до v5.0.0
+## Обновление до v6.x
 
-v5.0.0 — это **breaking cleanup release**.
+Главный контракт обновления в v6 — разделение workstation token flow и rule-governance milestones поверх static core.
 
-Что изменилось:
-- основной runtime путь теперь static-only
-- session-start inject основан на issues + behavioral rules + memories
-- старый dynamic learning / graph / reranking / extraction stack ушёл из главного product path
-- client и server теперь явно проверяют major-version compatibility на session-start path
+Что изменилось в v6:
+- workstation auth перешёл с общего admin token на per-workstation keycards (`ENGRAM_TOKEN`)
+- session-start остался детерминированным, но delivery правил теперь проходит через candidate -> arbiter -> router -> telemetry milestones
+- rule-governance snapshots, rollback conflict handling и usefulness telemetry стали частью backend surface
+- client и server по-прежнему явно проверяют major-version compatibility на session-start path
 
 Шаги обновления:
-1. обновите plugin до версии `5.0.0`
-2. обновите daemon до версии `v5.0.0`
+1. обновите plugin и daemon до нужного `v6.x` релиза
+2. откройте `<server-url>/tokens`, выпустите workstation keycard и настройте `ENGRAM_TOKEN`
 3. перезапустите Claude Code и daemon
-4. проверьте plugin update detection и session-start cache fallback
+4. проверьте plugin update detection, session-start cache fallback и текущую версию сервера
 
-**Docker-образ:** Используйте последнюю версию из `ghcr.io/thebtf/engram:latest`. Миграции БД выполняются автоматически при старте.
+**Docker-образ:** Используйте актуальный `ghcr.io/thebtf/engram:latest`. Миграции БД запускаются автоматически при старте.
 <!-- redoc:end:upgrading -->
 
 ---
@@ -280,8 +319,7 @@ v5.0.0 — это **breaking cleanup release**.
 | `DATABASE_DSN` | — | Строка подключения к PostgreSQL **(обязательно)** |
 | `DATABASE_MAX_CONNS` | `10` | Максимум подключений к БД |
 | `ENGRAM_WORKER_PORT` | `37777` | Порт сервера |
-| `ENGRAM_API_TOKEN` | — | Bearer auth token |
-| `ENGRAM_AUTH_ADMIN_TOKEN` | — | Admin token |
+| `ENGRAM_AUTH_ADMIN_TOKEN` | — | Operator/admin token. Только для server host. |
 | `ENGRAM_VAULT_KEY` | — | Канонический vault key для шифрования credentials |
 | `ENGRAM_ENCRYPTION_KEY` | — | Legacy fallback env var для vault key |
 | `ENGRAM_DATA_DIR` | auto | Каталог данных daemon’а (включая session-start cache) |
@@ -291,8 +329,8 @@ v5.0.0 — это **breaking cleanup release**.
 | Переменная | По умолчанию | Описание |
 |-----------|-------------|----------|
 | `ENGRAM_URL` | — | Полный URL сервера / MCP для plugin и hooks |
-| `ENGRAM_AUTH_ADMIN_TOKEN` | — | API token для plugin |
-| `ENGRAM_API_TOKEN` | — | Legacy fallback token env var для hooks / plugin runtime |
+| `ENGRAM_TOKEN` | — | Workstation keycard для plugin, daemon и hooks |
+| `ENGRAM_SERVER_URL` | — | Опциональный alias для `ENGRAM_URL` в некоторых launchers |
 | `ENGRAM_DATA_DIR` | auto | Каталог cache и daemon state |
 | `ENGRAM_WORKSTATION_ID` | auto | Переопределение workstation ID (8-символьный hex) |
 <!-- redoc:end:configuration -->
@@ -410,7 +448,7 @@ vault(action="get", name="OPENAI_KEY")
 | MCP — отказ в подключении | Убедитесь, что сервер запущен: `curl http://your-server:37777/health`. Проверьте `ENGRAM_URL` в переменных окружения. |
 | Vault возвращает "encryption not configured" | Задайте `ENGRAM_ENCRYPTION_KEY` (64-символьная hex-строка = 32 байта AES-256). |
 | Dashboard не загружается | Убедитесь, что сборка выполнена через `make build` (включает dashboard). Проверьте консоль браузера на ошибки. |
-| Плагин не обнаружен после установки | Перезапустите Claude Code. Проверьте, что `ENGRAM_URL` и `ENGRAM_AUTH_ADMIN_TOKEN` заданы как переменные окружения. |
+| Плагин не обнаружен после установки | Перезапустите Claude Code. Проверьте, что заданы `ENGRAM_URL` и `ENGRAM_TOKEN`, и что token — это workstation keycard, а не operator key. |
 | Высокое потребление памяти | Уменьшите `DATABASE_MAX_CONNS`. Отключите консолидацию, если она не нужна. Проверьте `ENGRAM_EMBEDDING_DIMENSIONS`. |
 
 Логи сервера доступны по адресу `http://your-server:37777/api/logs`.

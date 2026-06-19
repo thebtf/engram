@@ -21,18 +21,19 @@ AI coding agents forget everything between sessions. Every new conversation star
 
 Engram fixes this by keeping only the memory primitives that proved reliable in production: explicit issues, documents, memories, behavioral rules, credentials, and API tokens. One server, multiple workstations, zero context loss.
 
-In v5.0.0, session-start inject is simplified to a static composite payload: open issues, always-inject behavioral rules, and recent memories. The old dynamic relevance, graph, reranking, and extraction stack is gone from the main product path.
+In v5.0.0, session-start inject was simplified to a static composite payload: open issues, always-inject behavioral rules, and recent memories. The old dynamic relevance, graph, reranking, and extraction stack left the main product path.
 
-A reduced static-first MCP surface remains for the surviving entity model, keeping context usage lean while preserving the workflows that actually worked.
+Since then, the v6 line rebuilt governance on top of that stable core: per-workstation keycards, proposal-only rule arbitration, bounded session-start rule routing, and rule-governance telemetry / rollback controls. Engram still keeps hot paths deterministic — no LLM on session-start — while making durable guidance inspectable and reversible.
 <!-- redoc:end:intro -->
 
 ---
 
 <!-- redoc:start:whats-new -->
-## What's New in v6.0.0
+## What's New
 
 | Version | Highlight |
 |---------|-----------|
+| **v6.29.0** | **Rule Governance Telemetry (RG-3)** — lifecycle health, exception queues, transition controls, rollback-aware snapshots, and usefulness telemetry landed on top of the rule-governance milestones. |
 | **v6.0.0** | **BREAKING** — Two-tier token authentication: per-workstation keycards via dashboard `/tokens`, daemon fail-fast on missing token, issuance hardened to browser session. |
 | **v5.0.0** | Cleaned Baseline — static-only storage, observations split, session-start gRPC + cache fallback |
 | **v4.4.0** | Loom tenant — background task execution and daemon-side project event bridge |
@@ -176,11 +177,11 @@ Set environment variables (read by Claude Code at runtime):
 ```bash
 # Linux/macOS: add to shell profile
 # Windows: set as System Environment Variables
-ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
+ENGRAM_URL=http://your-server:37777
+ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
-Restart Claude Code. Memory is now active.
+Generate the worker keycard from `http://your-server:37777/tokens`, then restart Claude Code. Memory is now active.
 <!-- redoc:end:quick-start -->
 
 ---
@@ -194,8 +195,8 @@ The plugin registers the MCP server, hooks, and slash commands automatically.
 
 ```bash
 # Set environment variables first
-ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
+ENGRAM_URL=http://your-server:37777
+ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
 ```
@@ -239,7 +240,7 @@ chmod +x engram && sudo mv engram /usr/local/bin/
 Set environment variables:
 ```bash
 export ENGRAM_URL=http://your-server:37777
-export ENGRAM_API_TOKEN=your-token
+export ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
 Verify: `echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | engram`
@@ -250,7 +251,7 @@ The daemon starts automatically on first use. Multiple Claude Code sessions shar
 
 If not using the plugin, configure MCP directly in `~/.claude/settings.json`:
 
-#### Stdio (v5 recommended)
+#### Stdio (recommended)
 
 ```json
 {
@@ -259,12 +260,20 @@ If not using the plugin, configure MCP directly in `~/.claude/settings.json`:
       "command": "engram",
       "env": {
         "ENGRAM_URL": "http://your-server:37777",
-        "ENGRAM_AUTH_ADMIN_TOKEN": "${ENGRAM_AUTH_ADMIN_TOKEN}"
+        "ENGRAM_TOKEN": "${ENGRAM_TOKEN}"
       }
     }
   }
 }
 ```
+
+**CLI shortcut:**
+
+```bash
+claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_TOKEN":"${ENGRAM_TOKEN}"}}' -s user
+```
+
+`ENGRAM_URL` may be set either to the server origin (`http://host:37777`) or to an MCP path such as `http://host:37777/mcp`; the client normalizes the server origin for hook REST calls. `ENGRAM_TOKEN` must always be the workstation keycard, never the operator key.
 
 ### Build from Source
 
@@ -280,21 +289,21 @@ make install  # installs plugin + starts daemon
 ---
 
 <!-- redoc:start:upgrading -->
-## Upgrading to v5.0.0
+## Upgrading to v6.x
 
-v5.0.0 is a **breaking cleanup release**.
+The important v6 upgrade contract is the workstation token split plus the rule-governance milestones layered onto the static core.
 
-What changed:
-- Engram now uses a static-only storage model for its primary runtime path
-- session-start inject is based on static issues + behavioral rules + memories
-- the old dynamic learning / graph / reranking / extraction stack was stripped in the v5 demolition phase and is being rebuilt incrementally across the vnext milestones (lifecycle, graph, retrieval, crystallization — see `internal/lifecycle`, `internal/graph`, `internal/retrieval`, `internal/crystallization` packages already landing on main)
-- client and server now negotiate major-version compatibility for the session-start path
+What changed across v6:
+- workstation auth moved from shared admin tokens to per-workstation keycards (`ENGRAM_TOKEN`)
+- session-start stayed deterministic, but rule delivery now flows through candidate -> arbiter -> router -> telemetry milestones
+- rule-governance snapshots, rollback conflict handling, and usefulness telemetry are now part of the backend surface
+- client and server still negotiate major-version compatibility on the session-start path
 
 Upgrade steps:
-1. upgrade the plugin to `5.0.0`
-2. upgrade the daemon to `v5.0.0`
+1. upgrade the plugin and daemon to the target `v6.x` release
+2. open `<server-url>/tokens`, issue a workstation keycard, and configure `ENGRAM_TOKEN`
 3. restart Claude Code and the daemon
-4. verify plugin update detection and session-start cache fallback
+4. verify plugin update detection, session-start cache fallback, and the current server version
 
 **Docker image:** Pull the latest from `ghcr.io/thebtf/engram:latest`. Database migrations run automatically on startup.
 <!-- redoc:end:upgrading -->
@@ -311,8 +320,7 @@ Upgrade steps:
 | `DATABASE_DSN` | — | PostgreSQL connection string **(required)** |
 | `DATABASE_MAX_CONNS` | `10` | Maximum database connections |
 | `ENGRAM_WORKER_PORT` | `37777` | Server port |
-| `ENGRAM_API_TOKEN` | — | Bearer auth token |
-| `ENGRAM_AUTH_ADMIN_TOKEN` | — | Admin token |
+| `ENGRAM_AUTH_ADMIN_TOKEN` | — | Operator/admin token. Server-host only. |
 | `ENGRAM_VAULT_KEY` | — | Canonical vault key for credential encryption |
 | `ENGRAM_ENCRYPTION_KEY` | — | Legacy fallback vault key env var |
 | `ENGRAM_DATA_DIR` | auto | Daemon data directory (also used for session-start cache path) |
@@ -322,8 +330,8 @@ Upgrade steps:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENGRAM_URL` | — | Full MCP/server URL for plugin and hooks |
-| `ENGRAM_AUTH_ADMIN_TOKEN` | — | API token for plugin |
-| `ENGRAM_API_TOKEN` | — | Legacy fallback token env var for hooks / plugin runtime |
+| `ENGRAM_TOKEN` | — | Workstation keycard for plugin, daemon, and hooks |
+| `ENGRAM_SERVER_URL` | — | Optional alias for `ENGRAM_URL` in some launchers |
 | `ENGRAM_DATA_DIR` | auto | Cache and daemon state directory |
 | `ENGRAM_WORKSTATION_ID` | auto | Override workstation ID (8-char hex) |
 <!-- redoc:end:configuration -->
@@ -440,7 +448,7 @@ vault(action="get", name="OPENAI_KEY")
 | MCP connection refused | Confirm server is running: `curl http://your-server:37777/health`. Check `ENGRAM_URL` in your environment. |
 | Vault returns "encryption not configured" | Set `ENGRAM_ENCRYPTION_KEY` (64-char hex string = 32 bytes AES-256). |
 | Dashboard not loading | Ensure you built with `make build` (includes dashboard). Check browser console for errors. |
-| Plugin not detected after install | Restart Claude Code. Verify `ENGRAM_URL` and `ENGRAM_AUTH_ADMIN_TOKEN` are set as environment variables. |
+| Plugin not detected after install | Restart Claude Code. Verify `ENGRAM_URL` and `ENGRAM_TOKEN` are set, and that the token is a workstation keycard rather than the operator key. |
 | High memory usage | Reduce `DATABASE_MAX_CONNS`. Disable consolidation if not needed. Check `ENGRAM_EMBEDDING_DIMENSIONS`. |
 
 Server logs are available at `http://your-server:37777/api/logs`.
