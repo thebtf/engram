@@ -707,3 +707,25 @@ func requireRuleGovernanceTableState(t *testing.T, db *gorm.DB, exists bool) {
 		require.Equal(t, exists, db.Migrator().HasTable(table), "table state mismatch for %s", table)
 	}
 }
+
+func TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates(t *testing.T) {
+	db := openCandidateTestDB(t)
+	migration := ruleGovernanceMigration144()
+	t.Cleanup(func() {
+		_ = migration.Migrate(db)
+	})
+
+	require.NoError(t, migration.Rollback(db))
+	require.NoError(t, migration.Migrate(db))
+
+	snapshotID := fmt.Sprintf("rg0-snapshot-status-%d", time.Now().UnixNano())
+	require.NoError(t, db.Exec(`
+		INSERT INTO rule_governance_snapshots (snapshot_id, op_type, actor, before_state_json)
+		VALUES (?, 'rule_transition', 'codex', '{}'::jsonb)
+	`, snapshotID).Error)
+
+	for _, status := range []string{"committed", "rolled_back", "failed", "rollback_conflict"} {
+		err := db.Exec(`UPDATE rule_governance_snapshots SET status = ? WHERE snapshot_id = ?`, status, snapshotID).Error
+		require.NoError(t, err, "status %q must be accepted by the fresh rule_governance_snapshots schema", status)
+	}
+}

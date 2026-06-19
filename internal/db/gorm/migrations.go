@@ -4712,6 +4712,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(`DROP TABLE IF EXISTS rule_injection_events`).Error
 			},
 		},
+		ruleGovernanceSnapshotStatusesMigration147(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

@@ -1,8 +1,10 @@
 package gorm
 
 import (
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
@@ -847,4 +849,37 @@ func TestMigration133_BulkOpSnapshots(t *testing.T) {
 		SELECT pinned FROM bulk_op_snapshots WHERE snapshot_id = 'test-snap-bulk_promote'
 	`).Row().Scan(&pinned))
 	require.False(t, pinned, "pinned must default to false")
+}
+
+func TestMigration147_RuleGovernanceSnapshotStatuses(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+	require.NoError(t, runMigrations(db))
+
+	snapshotID := fmt.Sprintf("test-rg-snap-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM rule_governance_snapshots WHERE snapshot_id = ?`, snapshotID).Error
+	})
+
+	require.NoError(t, db.Exec(`
+		INSERT INTO rule_governance_snapshots (snapshot_id, op_type, actor, before_state_json)
+		VALUES (?, 'rule_transition', 'test-actor', '{}'::jsonb)
+	`, snapshotID).Error)
+
+	for _, status := range []string{"committed", "rolled_back", "failed", "rollback_conflict"} {
+		err := db.Exec(`UPDATE rule_governance_snapshots SET status = ? WHERE snapshot_id = ?`, status, snapshotID).Error
+		require.NoError(t, err, "status %q must be accepted after migration 147", status)
+	}
 }

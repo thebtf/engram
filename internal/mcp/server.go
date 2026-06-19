@@ -34,45 +34,69 @@ import (
 // Server is the MCP server that exposes engram tools.
 // Field order optimized for memory alignment (fieldalignment).
 type Server struct {
-	stdin                  io.Reader
-	stdout                 io.Writer
-	sessionStore           *gorm.SessionStore
-	collectionRegistry     *collections.Registry
-	sessionIdxStore        *sessions.Store
-	documentStore          *gorm.DocumentStore
-	versionedDocumentStore *gorm.VersionedDocumentStore
-	chunkManager           *chunking.Manager
-	issueStore             *gorm.IssueStore
-	embeddingClient        *embedding.Client
-	embeddingStore         *embedding.Store
-	rerankClient           *reranking.Client
-	memoryStore            *gorm.MemoryStore
-	behavioralRulesStore   *gorm.BehavioralRulesStore
-	promotionStore         *gorm.PromotionStore
-	graphStore             *graph.Store
-	nodesStore             nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
-	auditStore             *gorm.AuditStore
-	purgeStore             *gorm.PurgeStore
-	candidateStore         *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	snapshotStore          *gorm.SnapshotStore  // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	codeChunkStore         *gorm.CodeChunkStore // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
-	ruleGovernanceStore    ruleGovernanceCandidateWriter
-	settingsStoreWired     *gorm.SettingsStore // #259 CR-3: wired from the worker's open store so the settings tool reuses one pool (no per-call NewStore)
-	bulkFacade             *bulkops.Facade     // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
-	testAuditWriter        auditWriter         // set only in tests via setTestAuditWriter
-	testMemoryEditor       memoryEditor        // set only in tests via setTestMemoryEditor
-	vault                  *crypto.Vault
-	vaultInitErr           error
-	vaultOnce              sync.Once
-	backfillStatusFunc     func() (any, error)
-	writeLint              *writelint.Orchestrator  // T035: two-phase write-lint protocol (nil → legacy path)
-	redactionRules         []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
-	statsDB                *gormlib.DB              // raw DB handle for stats raw-SQL queries; set via SetStatsDB
-	version                string
+	stdin                   io.Reader
+	stdout                  io.Writer
+	sessionStore            *gorm.SessionStore
+	collectionRegistry      *collections.Registry
+	sessionIdxStore         *sessions.Store
+	documentStore           *gorm.DocumentStore
+	versionedDocumentStore  *gorm.VersionedDocumentStore
+	chunkManager            *chunking.Manager
+	issueStore              *gorm.IssueStore
+	embeddingClient         *embedding.Client
+	embeddingStore          *embedding.Store
+	rerankClient            *reranking.Client
+	memoryStore             *gorm.MemoryStore
+	behavioralRulesStore    *gorm.BehavioralRulesStore
+	promotionStore          *gorm.PromotionStore
+	graphStore              *graph.Store
+	nodesStore              nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
+	auditStore              *gorm.AuditStore
+	purgeStore              *gorm.PurgeStore
+	candidateStore          *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	snapshotStore           *gorm.SnapshotStore  // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	codeChunkStore          *gorm.CodeChunkStore // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
+	ruleGovernanceStore     ruleGovernanceCandidateWriter
+	ruleGovernanceReadStore ruleGovernanceReadStore
+	ruleInjectionTelemetry  ruleInjectionTelemetryReader
+	settingsStoreWired      *gorm.SettingsStore // #259 CR-3: wired from the worker's open store so the settings tool reuses one pool (no per-call NewStore)
+	bulkFacade              *bulkops.Facade     // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
+	testAuditWriter         auditWriter         // set only in tests via setTestAuditWriter
+	testMemoryEditor        memoryEditor        // set only in tests via setTestMemoryEditor
+	vault                   *crypto.Vault
+	vaultInitErr            error
+	vaultOnce               sync.Once
+	backfillStatusFunc      func() (any, error)
+	writeLint               *writelint.Orchestrator  // T035: two-phase write-lint protocol (nil → legacy path)
+	redactionRules          []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
+	statsDB                 *gormlib.DB              // raw DB handle for stats raw-SQL queries; set via SetStatsDB
+	version                 string
 }
 
 type ruleGovernanceCandidateWriter interface {
 	CreateRuleCandidate(ctx context.Context, c *models.RuleCandidate) (*models.RuleCandidate, error)
+}
+
+type ruleGovernanceReadStore interface {
+	GetLifecycleHealth(ctx context.Context, params gorm.RuleGovernanceHealthParams) (gorm.RuleGovernanceHealth, error)
+	ListExceptionQueueGroups(ctx context.Context, params gorm.RuleGovernanceExceptionQueueParams) ([]gorm.RuleGovernanceExceptionQueueGroup, error)
+	ListRuleGovernanceSnapshots(ctx context.Context, params gorm.RuleGovernanceSnapshotListParams) ([]gorm.RuleGovernanceSnapshotSummary, error)
+}
+
+type ruleGovernanceWriteStore interface {
+	TransitionRuleVersion(ctx context.Context, versionID int64, to models.RuleVersionState, req gorm.RuleTransitionRequest) (*models.RuleVersion, error)
+	PinRuleGovernanceSnapshot(ctx context.Context, snapshotID string, pinned bool) (gorm.RuleGovernanceSnapshotSummary, error)
+	RollbackRuleGovernanceSnapshot(ctx context.Context, snapshotID string, req gorm.RuleTransitionRequest) (gorm.RuleGovernanceRollbackResult, error)
+}
+
+type ruleGovernanceStoreAPI interface {
+	ruleGovernanceCandidateWriter
+	ruleGovernanceReadStore
+	ruleGovernanceWriteStore
+}
+
+type ruleInjectionTelemetryReader interface {
+	AggregateByProjectRuleAndEventType(ctx context.Context, params gorm.RuleInjectionTelemetryParams) (gorm.RuleInjectionTelemetryAggregate, error)
 }
 
 // ServerOptions holds the dependencies injected into the MCP Server.
@@ -125,8 +149,13 @@ func (s *Server) SetBehavioralRulesStore(brs *gorm.BehavioralRulesStore) {
 }
 
 // SetRuleGovernanceStore wires proposal-only rule governance capture.
-func (s *Server) SetRuleGovernanceStore(store ruleGovernanceCandidateWriter) {
+func (s *Server) SetRuleGovernanceStore(store ruleGovernanceStoreAPI) {
 	s.ruleGovernanceStore = store
+	s.ruleGovernanceReadStore = store
+}
+
+func (s *Server) SetRuleInjectionTelemetryStore(store ruleInjectionTelemetryReader) {
+	s.ruleInjectionTelemetry = store
 }
 
 func (s *Server) SetPromotionStore(ps *gorm.PromotionStore) {
@@ -1091,6 +1120,10 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, governanceTools()...)
 	}
 
+	if s.ruleGovernanceReadStore != nil {
+		tools = append(tools, ruleGovernanceReadTools(s.ruleInjectionTelemetry != nil)...)
+	}
+
 	// Bulk-op tools (Milestone-F TG6 T044): bulk_promote/delete/supersede with dry-run.
 	// Admin-gated at handler level. Advertised whenever ENGRAM_VNEXT_F_ENABLED=true
 	// (facade may be nil — dry_run still works with nil facade via seam).
@@ -1664,6 +1697,20 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handlePinSnapshot(ctx, args)
 	case "redaction_rules_status":
 		return s.handleRedactionRulesStatus(ctx, args)
+	case "rule_governance_health":
+		return s.handleRuleGovernanceHealth(ctx, args)
+	case "rule_governance_queue":
+		return s.handleRuleGovernanceQueue(ctx, args)
+	case "rule_governance_snapshots":
+		return s.handleRuleGovernanceSnapshots(ctx, args)
+	case "rule_governance_usefulness":
+		return s.handleRuleGovernanceUsefulness(ctx, args)
+	case "rule_governance_transition":
+		return s.handleRuleGovernanceTransition(ctx, args)
+	case "rule_governance_pin_snapshot":
+		return s.handleRuleGovernancePinSnapshot(ctx, args)
+	case "rule_governance_rollback":
+		return s.handleRuleGovernanceRollback(ctx, args)
 	// Bulk-op tools (Milestone-F TG6 T044).
 	case "bulk_promote":
 		return s.handleBulkPromote(ctx, args)
