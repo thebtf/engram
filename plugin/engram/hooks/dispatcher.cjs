@@ -34,6 +34,18 @@ const LEGACY_COMPATIBILITY_VERSION_DIRS = [
   '6.28.0',
 ];
 const LEGACY_COMPATIBILITY_VERSION_ENV = 'ENGRAM_LEGACY_HOOK_COMPAT_VERSIONS';
+const STABLE_BRIDGE_MARKER = 'ENGRAM_STABLE_HOOK_BRIDGE';
+const STABLE_BRIDGE_RELATIVE_PATH = path.join('hooks', 'dispatcher.cjs');
+const PLUGIN_DATA_ENV_NAMES = [
+  'PLUGIN_DATA',
+  'CLAUDE_PLUGIN_DATA',
+  'CODEX_PLUGIN_DATA',
+];
+const KNOWN_CODEX_DATA_DIRS = [
+  'engram-engram-marketplace',
+  'engram-engram',
+  'engram-marketplace-engram',
+];
 
 function passThrough() {
   process.stdout.write(JSON.stringify({ continue: true }) + '\n');
@@ -106,7 +118,7 @@ function existingManifestNames(pluginRoot) {
   return names;
 }
 
-function inferCodexCacheBaseDir(pluginRoot) {
+function inferCodexCacheInfo(pluginRoot) {
   const resolved = path.resolve(pluginRoot);
   const parsed = path.parse(resolved);
   const relative = resolved.slice(parsed.root.length);
@@ -118,7 +130,7 @@ function inferCodexCacheBaseDir(pluginRoot) {
     parts[cacheIndex - 1] !== 'plugins' ||
     parts.length < cacheIndex + 4
   ) {
-    return '';
+    return null;
   }
 
   const cacheBase = path.join(parsed.root, ...parts.slice(0, cacheIndex + 3));
@@ -128,12 +140,238 @@ function inferCodexCacheBaseDir(pluginRoot) {
     (marketplace === 'engram-marketplace' && pluginName === 'engram') ||
     (marketplace === 'engram' && pluginName === 'engram')
   )) {
-    return '';
+    return null;
   }
   if (readPluginName(resolved) !== 'engram') {
+    return null;
+  }
+  return {
+    cacheBase,
+    codexHome: path.join(parsed.root, ...parts.slice(0, cacheIndex - 1)),
+    marketplace,
+    pluginName,
+  };
+}
+
+function inferCodexCacheBaseDir(pluginRoot) {
+  return inferCodexCacheInfo(pluginRoot)?.cacheBase || '';
+}
+
+function stableBridgePathForDataRoot(dataRoot) {
+  return path.join(dataRoot, STABLE_BRIDGE_RELATIVE_PATH);
+}
+
+function codexDataRootCandidates(pluginRoot) {
+  const roots = [];
+  const info = inferCodexCacheInfo(pluginRoot);
+  const inferredDataBase = info ? path.join(info.codexHome, 'plugins', 'data') : '';
+  for (const envName of PLUGIN_DATA_ENV_NAMES) {
+    const value = trimText(process.env[envName]);
+    if (value) {
+      const resolved = path.resolve(value);
+      if (!inferredDataBase || isPathInside(inferredDataBase, resolved)) {
+        roots.push(resolved);
+      }
+    }
+  }
+
+  if (info) {
+    roots.push(path.join(
+      info.codexHome,
+      'plugins',
+      'data',
+      `${info.pluginName}-${info.marketplace}`,
+    ));
+  }
+
+  return roots.filter((root, index, all) => all.indexOf(root) === index);
+}
+
+function isLikelyEngramCodexDataRoot(dataRoot) {
+  const resolved = path.resolve(dataRoot);
+  const parsed = path.parse(resolved);
+  const relative = resolved.slice(parsed.root.length);
+  const parts = relative.split(path.sep).filter(Boolean);
+  const dataIndex = parts.lastIndexOf('data');
+  if (dataIndex < 1 || parts[dataIndex - 1] !== 'plugins') {
+    return false;
+  }
+  return KNOWN_CODEX_DATA_DIRS.includes(parts[dataIndex + 1]);
+}
+
+function buildStableBridge() {
+  return `#!/usr/bin/env node
+'use strict';
+// ${STABLE_BRIDGE_MARKER}
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+
+function passThrough() {
+  process.stdout.write(JSON.stringify({ continue: true }) + '\\n');
+}
+
+function versionParts(value) {
+  return String(value).split(/[^0-9]+/).filter(Boolean).map(Number);
+}
+
+function compareVersionNames(a, b) {
+  const aa = versionParts(a);
+  const bb = versionParts(b);
+  const max = Math.max(aa.length, bb.length);
+  for (let i = 0; i < max; i++) {
+    const diff = (aa[i] || 0) - (bb[i] || 0);
+    if (diff) return diff;
+  }
+  return String(a).localeCompare(String(b));
+}
+
+function dispatcherFromRoot(root) {
+  if (!root) return null;
+  return [
+    path.join(root, 'hooks', 'dispatcher.cjs'),
+    path.join(root, 'dispatcher.cjs'),
+  ].find((file) => file && fs.existsSync(file)) || null;
+}
+
+function readPluginName(root) {
+  for (const relPath of [
+    path.join('.codex-plugin', 'plugin.json'),
+    path.join('.claude-plugin', 'plugin.json'),
+  ]) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(root, relPath), 'utf8'));
+      if (parsed && typeof parsed.name === 'string') return parsed.name;
+    } catch (_) {}
+  }
+  return '';
+}
+
+function isUsableCacheRoot(root) {
+  return readPluginName(root) === 'engram' && !!dispatcherFromRoot(root);
+}
+
+function unique(values) {
+  return values.filter((value, index, all) => value && all.indexOf(value) === index);
+}
+
+function codexHomeFromSelf() {
+  const resolved = path.resolve(__filename);
+  const parsed = path.parse(resolved);
+  const relative = resolved.slice(parsed.root.length);
+  const parts = relative.split(path.sep).filter(Boolean);
+  const dataIndex = parts.lastIndexOf('data');
+  if (dataIndex < 1 || parts[dataIndex - 1] !== 'plugins') {
     return '';
   }
-  return cacheBase;
+  return path.join(parsed.root, ...parts.slice(0, dataIndex - 1));
+}
+
+function codexHomes() {
+  const explicitHome = process.env.CODEX_HOME ? path.resolve(process.env.CODEX_HOME) : '';
+  const dataHome = codexHomeFromSelf();
+  const homes = [explicitHome, dataHome];
+  if (!explicitHome && !dataHome) {
+    homes.push(path.join(os.homedir(), '.codex'));
+  }
+  return unique(homes.map((home) => home ? path.resolve(home) : ''));
+}
+
+function cacheRoots() {
+  const bases = codexHomes().flatMap((home) => [
+    path.join(home, 'plugins', 'cache', 'engram-marketplace', 'engram'),
+    path.join(home, 'plugins', 'cache', 'engram', 'engram'),
+  ]);
+  return bases.flatMap((base) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(base, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(base, entry.name))
+      .filter(isUsableCacheRoot);
+  }).sort((a, b) => compareVersionNames(path.basename(b), path.basename(a)));
+}
+
+function main() {
+  const eventName = process.env.ENGRAM_HOOK_EVENT || process.argv[2] || '';
+  if (eventName && !process.env.ENGRAM_HOOK_EVENT) {
+    process.env.ENGRAM_HOOK_EVENT = eventName;
+  }
+  const self = path.resolve(__filename);
+  const dispatcher = cacheRoots()
+    .map(dispatcherFromRoot)
+    .find((file) => file && path.resolve(file) !== self);
+  if (!dispatcher) {
+    passThrough();
+    return;
+  }
+  try {
+    const mod = require(dispatcher);
+    if (mod && typeof mod.main === 'function') {
+      mod.main();
+      return;
+    }
+  } catch (error) {
+    try {
+      process.stderr.write('engram stable hook bridge: dispatcher failed open: ' + error.message + '\\n');
+    } catch (_) {}
+  }
+  passThrough();
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = { main };
+`;
+}
+
+function shouldWriteStableBridge(bridgePath, source) {
+  if (!fs.existsSync(bridgePath)) {
+    return true;
+  }
+  try {
+    return fs.readFileSync(bridgePath, 'utf8') !== source;
+  } catch {
+    return false;
+  }
+}
+
+function installStableCodexHookBridge(pluginRoot) {
+  const source = buildStableBridge();
+  const touched = [];
+  for (const dataRoot of codexDataRootCandidates(pluginRoot)) {
+    if (!isLikelyEngramCodexDataRoot(dataRoot)) {
+      continue;
+    }
+    const bridgePath = stableBridgePathForDataRoot(dataRoot);
+    try {
+      if (!shouldWriteStableBridge(bridgePath, source)) {
+        continue;
+      }
+      fs.mkdirSync(path.dirname(bridgePath), { recursive: true });
+      fs.writeFileSync(bridgePath, source, { encoding: 'utf8', mode: 0o755 });
+      touched.push(bridgePath);
+    } catch (error) {
+      process.stderr.write(`engram dispatcher: stable hook bridge repair skipped for ${bridgePath}: ${error.message}\n`);
+    }
+  }
+  return touched;
+}
+
+function firstStableBridgeDispatcher(pluginRoot) {
+  for (const dataRoot of codexDataRootCandidates(pluginRoot)) {
+    const bridgePath = stableBridgePathForDataRoot(dataRoot);
+    if (isLikelyEngramCodexDataRoot(dataRoot) && fs.existsSync(bridgePath)) {
+      return bridgePath;
+    }
+  }
+  return '';
 }
 
 function versionParts(value) {
@@ -274,6 +512,8 @@ function repairLegacyCodexCacheHooks(pluginRoot) {
 
   const currentRoot = path.resolve(pluginRoot);
   const currentDispatcher = path.join(currentRoot, 'hooks', 'dispatcher.cjs');
+  installStableCodexHookBridge(pluginRoot);
+  const stableDispatcher = firstStableBridgeDispatcher(pluginRoot) || currentDispatcher;
   const currentVersion = normalizeVersionDir(readPluginVersion(pluginRoot));
   const compatibilityVersions = legacyCompatibilityVersionDirs(pluginRoot);
   let realCacheBase = '';
@@ -327,10 +567,10 @@ function repairLegacyCodexCacheHooks(pluginRoot) {
       fs.mkdirSync(hooksDir, { recursive: true });
       for (const [fileName, eventName] of Object.entries(LEGACY_HOOK_ENTRYPOINTS)) {
         const hookPath = path.join(hooksDir, fileName);
-        if (!shouldWriteLegacyShim(hookPath, currentDispatcher)) {
+        if (!shouldWriteLegacyShim(hookPath, stableDispatcher)) {
           continue;
         }
-        fs.writeFileSync(hookPath, buildLegacyShim(eventName, currentDispatcher), { encoding: 'utf8', mode: 0o755 });
+        fs.writeFileSync(hookPath, buildLegacyShim(eventName, stableDispatcher), { encoding: 'utf8', mode: 0o755 });
         touched.push(hookPath);
       }
     } catch (error) {
@@ -387,6 +627,10 @@ function main() {
     process.stderr.write(`engram dispatcher: failed to read stdin: ${error.message}\n`);
   }
   const pluginRoot = path.resolve(__dirname, '..');
+  const bridgeRepaired = installStableCodexHookBridge(pluginRoot);
+  if (bridgeRepaired.length) {
+    process.stderr.write(`engram dispatcher: repaired ${bridgeRepaired.length} stable Codex hook bridge entrypoints\n`);
+  }
   const repaired = repairLegacyCodexCacheHooks(pluginRoot);
   if (repaired.length) {
     process.stderr.write(`engram dispatcher: repaired ${repaired.length} legacy Codex hook entrypoints\n`);
@@ -431,9 +675,15 @@ if (require.main === module) {
 module.exports = {
   EVENT_HOOKS,
   buildLegacyShim,
+  buildStableBridge,
+  codexDataRootCandidates,
+  firstStableBridgeDispatcher,
   inferCodexCacheBaseDir,
+  inferCodexCacheInfo,
+  installStableCodexHookBridge,
   isSemverLikeVersionDir,
   legacyCompatibilityVersionDirs,
   main,
   repairLegacyCodexCacheHooks,
+  stableBridgePathForDataRoot,
 };
