@@ -3,8 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -12,7 +15,7 @@ import (
 // Input schema: {project?: string, content: string (required), priority?: number (default 0)}
 // Returns JSON: {id, project, content, priority, created_at}
 func (s *Server) handleStoreRule(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.behavioralRulesStore == nil {
+	if s.behavioralRulesStore == nil && !(ruleGovernanceCaptureEnabled() && s.ruleGovernanceStore != nil) {
 		return "", fmt.Errorf("behavioral rules store not initialised")
 	}
 
@@ -34,6 +37,54 @@ func (s *Server) handleStoreRule(ctx context.Context, args json.RawMessage) (str
 			cp := sv
 			project = &cp
 		}
+	}
+
+	scope := string(models.ScopeGlobal)
+	projectValue := ""
+	if project != nil {
+		scope = string(models.ScopeProject)
+		projectValue = *project
+	}
+	candidateContent := content
+	if ruleGovernanceCaptureEnabled() && s.ruleGovernanceStore != nil {
+		if privacy.ContainsSecrets(candidateContent) {
+			candidateContent = privacy.RedactSecrets(candidateContent)
+		}
+		if len(s.redactionRules) > 0 {
+			scrubbed, _, scrubErr := redaction.ScrubCompiled(candidateContent, s.redactionRules)
+			if scrubErr != nil {
+				if errors.Is(scrubErr, redaction.ErrContentFullyRedacted) {
+					return "", fmt.Errorf("content_fully_redacted: all content was removed by operator redaction rules")
+				}
+				return "", fmt.Errorf("redaction: %w", scrubErr)
+			}
+			candidateContent = scrubbed
+		}
+	}
+	if candidate, err := s.captureActiveRuleIntent(ctx, ruleIntentCapture{
+		Content:     candidateContent,
+		Project:     projectValue,
+		Scope:       scope,
+		Audience:    "developer",
+		SourceTool:  "store_rule",
+		EvidenceTag: "store_rule",
+	}); err != nil {
+		return "", fmt.Errorf("store_rule candidate: %w", err)
+	} else if candidate != nil {
+		var projOut any
+		if candidate.SourceProject != "" {
+			projOut = candidate.SourceProject
+		}
+		return marshalRuleCandidateIntentResponse(candidate, map[string]any{
+			"project":  projOut,
+			"content":  candidate.ProposedContent,
+			"priority": priority,
+			"scope":    candidate.ProposedScope,
+		})
+	}
+
+	if s.behavioralRulesStore == nil {
+		return "", fmt.Errorf("behavioral rules store not initialised")
 	}
 
 	rule := &models.BehavioralRule{
@@ -147,4 +198,3 @@ func (s *Server) handleListRules(ctx context.Context, args json.RawMessage) (str
 	}
 	return string(out), nil
 }
-

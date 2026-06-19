@@ -41,6 +41,70 @@ func (s RuleCandidateStatus) IsValid() bool {
 	}
 }
 
+type RuleArbiterAction string
+
+const (
+	RuleArbiterActionPropose RuleArbiterAction = "propose"
+	RuleArbiterActionHold    RuleArbiterAction = "hold"
+	RuleArbiterActionReject  RuleArbiterAction = "reject"
+	RuleArbiterActionSkip    RuleArbiterAction = "skip"
+	RuleArbiterActionError   RuleArbiterAction = "error"
+)
+
+func (a RuleArbiterAction) IsValid() bool {
+	switch a {
+	case RuleArbiterActionPropose, RuleArbiterActionHold, RuleArbiterActionReject,
+		RuleArbiterActionSkip, RuleArbiterActionError:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a RuleArbiterAction) IsProposalDecision() bool {
+	switch a {
+	case RuleArbiterActionPropose, RuleArbiterActionHold, RuleArbiterActionReject,
+		RuleArbiterActionSkip:
+		return true
+	default:
+		return false
+	}
+}
+
+type RuleArbiterRunStatus string
+
+const (
+	RuleArbiterRunStatusStarted   RuleArbiterRunStatus = "started"
+	RuleArbiterRunStatusCompleted RuleArbiterRunStatus = "completed"
+	RuleArbiterRunStatusFailed    RuleArbiterRunStatus = "failed"
+)
+
+func (s RuleArbiterRunStatus) IsValid() bool {
+	switch s {
+	case RuleArbiterRunStatusStarted, RuleArbiterRunStatusCompleted, RuleArbiterRunStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+type RuleArbiterParseStatus string
+
+const (
+	RuleArbiterParseStatusOK            RuleArbiterParseStatus = "ok"
+	RuleArbiterParseStatusFailed        RuleArbiterParseStatus = "failed"
+	RuleArbiterParseStatusNotApplicable RuleArbiterParseStatus = "not_applicable"
+)
+
+func (s RuleArbiterParseStatus) IsValid() bool {
+	switch s {
+	case RuleArbiterParseStatusOK, RuleArbiterParseStatusFailed, RuleArbiterParseStatusNotApplicable:
+		return true
+	default:
+		return false
+	}
+}
+
 type RuleVersionState string
 
 const (
@@ -95,6 +159,8 @@ type RuleCandidate struct {
 	UpdatedAt           time.Time           `json:"updated_at"`
 	ReviewAfter         *time.Time          `json:"review_after,omitempty"`
 	LastEvaluatedAt     time.Time           `json:"last_evaluated_at,omitempty"`
+	ArbiterRunID        *int64              `json:"arbiter_run_id,omitempty"`
+	ArbiterEvaluationID *int64              `json:"arbiter_evaluation_id,omitempty"`
 	ActivationPredicate map[string]any      `json:"activation_predicate,omitempty"`
 	EvidenceHandles     []string            `json:"evidence_handles,omitempty"`
 	SourceSignalType    string              `json:"source_signal_type"`
@@ -104,6 +170,8 @@ type RuleCandidate struct {
 	ProposedContent     string              `json:"proposed_content"`
 	ProposedScope       string              `json:"proposed_scope"`
 	ProposedAudience    string              `json:"proposed_audience"`
+	ArbiterAction       RuleArbiterAction   `json:"arbiter_action,omitempty"`
+	ArbiterReason       string              `json:"arbiter_reason,omitempty"`
 	AntiCaptureStatus   string              `json:"anti_capture_status"`
 	AntiCaptureReason   string              `json:"anti_capture_reason,omitempty"`
 	ConflictStatus      string              `json:"conflict_status"`
@@ -111,8 +179,61 @@ type RuleCandidate struct {
 	Fingerprint         string              `json:"fingerprint,omitempty"`
 	DecayPolicy         string              `json:"decay_policy"`
 	ID                  int64               `json:"id"`
+	ArbiterConfidence   float64             `json:"arbiter_confidence,omitempty"`
 	Confidence          float64             `json:"confidence,omitempty"`
 	RecurrenceCount     int                 `json:"recurrence_count,omitempty"`
+}
+
+type RuleArbiterRunCounts struct {
+	CandidatesSeen      int `json:"candidates_seen"`
+	CandidatesEvaluated int `json:"candidates_evaluated"`
+	CandidatesProposed  int `json:"candidates_proposed"`
+	CandidatesHeld      int `json:"candidates_held"`
+	CandidatesRejected  int `json:"candidates_rejected"`
+	CandidatesSkipped   int `json:"candidates_skipped"`
+	Errors              int `json:"errors"`
+}
+
+type RuleArbiterRun struct {
+	StartedAt            time.Time            `json:"started_at"`
+	FinishedAt           *time.Time           `json:"finished_at,omitempty"`
+	Trigger              string               `json:"trigger"`
+	Status               RuleArbiterRunStatus `json:"status"`
+	ErrorSummary         string               `json:"error_summary,omitempty"`
+	ID                   int64                `json:"id"`
+	RuleArbiterRunCounts                      // flattened intentionally for DB count fields
+}
+
+type RuleArbiterEvaluation struct {
+	CreatedAt     time.Time              `json:"created_at"`
+	Proposal      map[string]any         `json:"proposal,omitempty"`
+	RawResponse   string                 `json:"raw_response,omitempty"`
+	ErrorSummary  string                 `json:"error_summary,omitempty"`
+	Action        RuleArbiterAction      `json:"action"`
+	Reason        string                 `json:"reason"`
+	ParseStatus   RuleArbiterParseStatus `json:"parse_status"`
+	EvaluatorKind string                 `json:"evaluator_kind"`
+	ID            int64                  `json:"id"`
+	RunID         int64                  `json:"run_id"`
+	CandidateID   int64                  `json:"candidate_id"`
+	Confidence    float64                `json:"confidence"`
+}
+
+type RuleCandidateAnnotation struct {
+	EvaluatedAt  time.Time
+	ReviewAfter  *time.Time
+	RunID        *int64
+	EvaluationID *int64
+	Action       RuleArbiterAction
+	Reason       string
+	Confidence   float64
+}
+
+type RuleArbiterDecision struct {
+	Proposal   map[string]any    `json:"proposal,omitempty"`
+	Action     RuleArbiterAction `json:"action"`
+	Reason     string            `json:"reason"`
+	Confidence float64           `json:"confidence"`
 }
 
 type RuleVersion struct {
@@ -191,8 +312,7 @@ func ValidateRuleActorAuthority(from, to RuleVersionState, req RuleTransitionReq
 	if !req.ActorKind.IsValid() {
 		return ErrRuleAuthorityDenied
 	}
-	switch to {
-	case RuleStateActiveGlobal, RuleStateKernel:
+	if isRuleActiveState(to) {
 		switch req.ActorKind {
 		case RuleActorBackground, RuleActorLLM, RuleActorSystem:
 			return ErrRuleAuthorityDenied

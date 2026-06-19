@@ -201,6 +201,43 @@ func (s *ConfigSuite) TestDefault_TranscriptRetentionDays() {
 		"TranscriptRetentionDays must default to 0 (no-prune sentinel)")
 }
 
+func (s *ConfigSuite) TestDefault_RuleArbiterDefaults() {
+	cfg := Default()
+	s.False(cfg.RuleGovernanceEnabled)
+	s.False(cfg.RuleArbiterEnabled)
+	s.Equal(20, cfg.RuleArbiterBatchLimit)
+	s.Equal(8000, cfg.RuleArbiterTimeoutMS)
+	s.Equal(300, cfg.RuleArbiterIntervalSeconds)
+}
+
+func (s *ConfigSuite) TestRuleArbiterEnvOverrides() {
+	s.T().Setenv("ENGRAM_RULE_GOVERNANCE_ENABLED", "true")
+	s.T().Setenv("ENGRAM_RULE_ARBITER_ENABLED", "1")
+	s.T().Setenv("ENGRAM_RULE_ARBITER_BATCH_LIMIT", "7")
+	s.T().Setenv("ENGRAM_RULE_ARBITER_TIMEOUT_MS", "1500")
+	s.T().Setenv("ENGRAM_RULE_ARBITER_INTERVAL_SECONDS", "42")
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.RuleGovernanceEnabled)
+	s.True(cfg.RuleArbiterEnabled)
+	s.Equal(7, cfg.RuleArbiterBatchLimit)
+	s.Equal(1500, cfg.RuleArbiterTimeoutMS)
+	s.Equal(42, cfg.RuleArbiterIntervalSeconds)
+}
+
+func (s *ConfigSuite) TestRuleArbiterInvalidNumericEnvFallsBack() {
+	s.T().Setenv("ENGRAM_RULE_ARBITER_BATCH_LIMIT", "-1")
+	s.T().Setenv("ENGRAM_RULE_ARBITER_TIMEOUT_MS", "not-a-number")
+	s.T().Setenv("ENGRAM_RULE_ARBITER_INTERVAL_SECONDS", "0")
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal(20, cfg.RuleArbiterBatchLimit)
+	s.Equal(8000, cfg.RuleArbiterTimeoutMS)
+	s.Equal(300, cfg.RuleArbiterIntervalSeconds)
+}
+
 // TestTranscriptRetentionDays_EnvParse verifies that
 // ENGRAM_TRANSCRIPT_RETENTION_DAYS is parsed to the Config int field.
 func (s *ConfigSuite) TestTranscriptRetentionDays_EnvParse() {
