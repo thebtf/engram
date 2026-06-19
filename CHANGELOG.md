@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.28.2] - 2026-06-19
+
+### Fixed
+
+- **Stable Codex hook bridge for marketplace upgrades.** Codex hook launchers
+  now prefer the stable plugin data bridge before versioned cache slots, the
+  dispatcher installs that bridge from the current cache root, and repaired
+  legacy shims target the bridge instead of a prunable cache dispatcher. This
+  keeps post-update sessions on a stable path while still failing open if the
+  active cache is incomplete.
+
 ## [6.28.1] - 2026-06-19
 
 ### Fixed
@@ -1663,7 +1674,9 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.28.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.28.2...HEAD
+[6.28.2]: https://github.com/thebtf/engram/compare/v6.28.1...v6.28.2
+[6.28.1]: https://github.com/thebtf/engram/compare/v6.28.0...v6.28.1
 [6.28.0]: https://github.com/thebtf/engram/compare/v6.27.1...v6.28.0
 [6.27.1]: https://github.com/thebtf/engram/compare/v6.27.0...v6.27.1
 [6.27.0]: https://github.com/thebtf/engram/compare/v6.26.4...v6.27.0
