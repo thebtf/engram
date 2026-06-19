@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.26.1] - 2026-06-19
+
+### Fixed
+
+- **Issue lifecycle source-side close accepts legacy source identities (#312).** `issues(action="close")`
+  now authorizes source-side closure against both the enforced context project and the explicit
+  `project` slug supplied from the issue's original source metadata, so verified legacy issues no
+  longer get stuck behind a self-contradictory "only source project X can close" error. Rejection
+  errors now include the issue source and caller candidates, and the dashboard operator bypass cannot
+  be spoofed through the explicit `project` argument.
+
 ## [6.26.0] - 2026-06-18
 
 ### Added
