@@ -6,6 +6,8 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const hooksDir = __dirname;
+const pluginRoot = path.resolve(hooksDir, '..');
+const repoRoot = path.resolve(pluginRoot, '..', '..');
 
 function runHook(scriptName, input) {
   const scriptPath = path.join(hooksDir, scriptName);
@@ -35,6 +37,10 @@ function hookCommandFor(eventName) {
   assert.equal(entries.length, 1, `${eventName} should have one hook entry`);
   assert.equal(entries[0].hooks.length, 1, `${eventName} should dispatch through one launcher`);
   return entries[0].hooks[0].command;
+}
+
+function readRepoFile(...segments) {
+  return fs.readFileSync(path.join(repoRoot, ...segments), 'utf8');
 }
 
 function runLauncher(command, input, env) {
@@ -168,4 +174,27 @@ test('launcher executes exported dispatcher main when resolved from plugin root'
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test('release archives include scripts required by hooks and MCP wrapper', () => {
+  const goreleaser = readRepoFile('.goreleaser.yaml');
+  const codexMcp = JSON.parse(readRepoFile('plugin', 'engram', '.mcp.json'));
+  const claudeMcp = JSON.parse(readRepoFile('plugin', 'engram', 'claude', '.mcp.json'));
+  const dispatcher = fs.readFileSync(path.join(hooksDir, 'dispatcher.cjs'), 'utf8');
+
+  assert.match(goreleaser, /src:\s+plugin\/engram\/scripts\/\*\.js/);
+  assert.match(goreleaser, /dst:\s+scripts/);
+  assert.deepEqual(codexMcp.mcpServers.engram.args, ['./scripts/run-engram.js']);
+  assert.deepEqual(claudeMcp.mcpServers.engram.args, ['${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js']);
+  assert.match(dispatcher, /\.\.\/scripts\/ensure-binary\.js/);
+});
+
+test('release installers copy plugin scripts from archives', () => {
+  const installSh = readRepoFile('scripts', 'install.sh');
+  const installPs1 = readRepoFile('scripts', 'install.ps1');
+
+  assert.match(installSh, /mkdir -p "\$INSTALL_DIR\/hooks" "\$INSTALL_DIR\/scripts"/);
+  assert.match(installSh, /cp "\$tmp_dir\/scripts\/"\*\.js "\$INSTALL_DIR\/scripts\/"/);
+  assert.match(installPs1, /New-Item -ItemType Directory -Path "\$InstallDir\\scripts"/);
+  assert.match(installPs1, /Copy-Item "\$TempDir\\scripts\\\*\.js" "\$InstallDir\\scripts\\"/);
 });

@@ -163,7 +163,7 @@ download_release() {
     fi
 
     info "Installing to ${INSTALL_DIR}..."
-    mkdir -p "$INSTALL_DIR/hooks" "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/commands"
+    mkdir -p "$INSTALL_DIR/hooks" "$INSTALL_DIR/scripts" "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/commands"
 
     # Server binary is only included in --full installs
     if [[ "$INSTALL_MODE" == "full" ]]; then
@@ -179,6 +179,11 @@ download_release() {
     fi
     cp "$tmp_dir/hooks/hooks.json" "$INSTALL_DIR/hooks/" \
         || error "Failed to copy hooks.json from $tmp_dir/hooks/"
+
+    [[ -d "$tmp_dir/scripts" ]] \
+        || error "Release archive is missing required scripts directory"
+    cp "$tmp_dir/scripts/"*.js "$INSTALL_DIR/scripts/" \
+        || error "Failed to copy JS scripts from $tmp_dir/scripts/"
 
     cp "$tmp_dir/.claude-plugin/"* "$INSTALL_DIR/.claude-plugin/"
 
