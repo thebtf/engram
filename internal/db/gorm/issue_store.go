@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -21,6 +22,11 @@ func projectBareName(projectID string) string {
 // IssueStore provides CRUD operations for issues and issue comments.
 type IssueStore struct {
 	db *gorm.DB
+}
+
+type closeIssueCandidate struct {
+	raw      string
+	resolved string
 }
 
 // NewIssueStore creates a new IssueStore.
@@ -312,10 +318,19 @@ func (s *IssueStore) ReopenIssue(ctx context.Context, id int64, comment, authorP
 	})
 }
 
-// CloseIssue transitions a resolved or reopened issue to closed state.
+func (s *IssueStore) CloseIssue(ctx context.Context, id int64, sourceProject string) error {
+	return s.CloseIssueFromAnySource(ctx, id, sourceProject)
+}
+
+// CloseIssueFromAnySource transitions a resolved or reopened issue to closed state.
 // Only the source project (or anyone if source_project is empty) can close.
 // Dashboard operator (source_project="dashboard") can close from any state.
-func (s *IssueStore) CloseIssue(ctx context.Context, id int64, sourceProject string) error {
+//
+// Multiple source candidates let MCP handlers preserve enforced context identity
+// while still accepting the explicit issue.source_project supplied by source-side
+// agents for legacy issues whose old slug is not yet aliased to the current
+// project id.
+func (s *IssueStore) CloseIssueFromAnySource(ctx context.Context, id int64, sourceProjects ...string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var issue Issue
 		if err := tx.First(&issue, id).Error; err != nil {
@@ -339,14 +354,44 @@ func (s *IssueStore) CloseIssue(ctx context.Context, id int64, sourceProject str
 		// owner. Resolving both against the current projects table maps each to the
 		// same present-day canonical id. Resolution is idempotent for already-
 		// canonical values, so this is safe for the common case too.
-		isOperator := sourceProject == "dashboard"
+		candidates := make([]closeIssueCandidate, 0, len(sourceProjects))
+		seen := make(map[string]struct{}, len(sourceProjects))
+		isOperator := false
+		for _, sourceProject := range sourceProjects {
+			sourceProject = strings.TrimSpace(sourceProject)
+			if sourceProject == "" {
+				continue
+			}
+			if sourceProject == "dashboard" {
+				isOperator = true
+			}
+			if _, ok := seen[sourceProject]; ok {
+				continue
+			}
+			seen[sourceProject] = struct{}{}
+			candidates = append(candidates, closeIssueCandidate{raw: sourceProject})
+		}
+
 		if !isOperator && issue.SourceProject != "" {
 			// Resolve only when authorization actually needs checking (avoids two DB
 			// round-trips for the operator-bypass and empty-source paths).
 			storedSource := ResolveProjectID(ctx, tx, issue.SourceProject)
-			callerSource := ResolveProjectID(ctx, tx, sourceProject)
-			if storedSource != callerSource {
-				return fmt.Errorf("only source project %q can close this issue", issue.SourceProject)
+			authorized := false
+			for i := range candidates {
+				candidates[i].resolved = ResolveProjectID(ctx, tx, candidates[i].raw)
+				candidate := candidates[i]
+				if candidate.raw == issue.SourceProject || candidate.resolved == storedSource {
+					authorized = true
+					break
+				}
+			}
+			if !authorized {
+				return fmt.Errorf(
+					"close rejected: issue source_project=%q resolved_source_project=%q caller_projects=%s",
+					issue.SourceProject,
+					storedSource,
+					formatCloseCallerProjects(candidates),
+				)
 			}
 		}
 
@@ -376,6 +421,21 @@ func (s *IssueStore) CloseIssue(ctx context.Context, id int64, sourceProject str
 		}
 		return nil
 	})
+}
+
+func formatCloseCallerProjects(candidates []closeIssueCandidate) string {
+	if len(candidates) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.raw == candidate.resolved {
+			parts = append(parts, fmt.Sprintf("%q", candidate.raw))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%q->%q", candidate.raw, candidate.resolved))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // RejectIssue transitions any issue to rejected state with a mandatory comment.
