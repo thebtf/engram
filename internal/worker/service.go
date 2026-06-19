@@ -765,6 +765,7 @@ func (s *Service) initializeAsync() {
 	if ruleGovernanceStore != nil {
 		mcpServer.SetRuleGovernanceStore(ruleGovernanceStore)
 	}
+	mcpServer.SetRuleInjectionTelemetryStore(ruleInjectionEventStore)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared

@@ -32,9 +32,10 @@ type RuleVersionRenderListParams struct {
 }
 
 type RuleGovernanceHealthParams struct {
-	Since   time.Time
-	Project string
-	Limit   int
+	Since                         time.Time
+	Project                       string
+	Limit                         int
+	IncludeGlobalArbiterRunCounts bool
 }
 
 type RuleGovernanceHealth struct {
@@ -775,15 +776,20 @@ func (s *RuleGovernanceStore) TransitionRuleVersion(ctx context.Context, version
 			return err
 		}
 		if models.RequiresRuleSnapshot(from, to) {
-			before, err := json.Marshal(row)
+			before, err := ruleGovernanceSnapshotStateForRuleVersion(&row, from)
 			if err != nil {
 				return fmt.Errorf("rule_governance transition_version marshal snapshot: %w", err)
+			}
+			after, err := ruleGovernanceSnapshotStateForRuleVersion(&row, to)
+			if err != nil {
+				return fmt.Errorf("rule_governance transition_version marshal after snapshot: %w", err)
 			}
 			if err := createRuleSnapshotTx(tx, SnapshotRequest{
 				SnapshotID:  req.SnapshotID,
 				OpType:      "rule_transition",
 				Actor:       req.Actor,
 				BeforeState: before,
+				AfterState:  after,
 			}); err != nil {
 				return err
 			}
@@ -880,16 +886,35 @@ func (s *RuleGovernanceStore) ListExceptionQueueGroups(ctx context.Context, para
 	if params.Limit <= 0 {
 		params.Limit = 100
 	}
-	candidates, err := s.ListRuleCandidates(ctx, RuleCandidateListParams{
-		SourceProject: strings.TrimSpace(params.Project),
-		Limit:         params.Limit,
-	})
-	if err != nil {
-		return nil, err
+	project := strings.TrimSpace(params.Project)
+	var candidateRows []ruleCandidateRow
+	candidateQ := s.db.WithContext(ctx).
+		Where("status IN ?", []string{
+			string(models.RuleCandidatePending),
+			string(models.RuleCandidateDrafted),
+		}).
+		Where(
+			"(LOWER(proposed_scope) IN ? OR (LOWER(proposed_scope) = ? AND COALESCE(source_project, '') = '') OR LOWER(conflict_status) LIKE ? OR anti_capture_status = ?)",
+			[]string{"", "global", "kernel", "private", "personal", "unknown"},
+			"project",
+			"%conflict%",
+			"reject_review_hold",
+		).
+		Order("updated_at DESC, id DESC").
+		Limit(params.Limit)
+	if project != "" {
+		candidateQ = candidateQ.Where("source_project = ?", project)
+	}
+	if err := candidateQ.Find(&candidateRows).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance exception_queue candidates: %w", err)
+	}
+	candidates := make([]*models.RuleCandidate, 0, len(candidateRows))
+	for i := range candidateRows {
+		candidates = append(candidates, toRuleCandidate(&candidateRows[i]))
 	}
 
 	groups := map[string]*RuleGovernanceExceptionQueueGroup{}
-	addItem := func(reason string, candidate *models.RuleCandidate, next []string) {
+	addQueueItem := func(reason string, item RuleGovernanceExceptionQueueItem, next []string) {
 		group := groups[reason]
 		if group == nil {
 			group = &RuleGovernanceExceptionQueueGroup{
@@ -898,6 +923,12 @@ func (s *RuleGovernanceStore) ListExceptionQueueGroups(ctx context.Context, para
 			}
 			groups[reason] = group
 		}
+		item.Reason = reason
+		item.RecommendedNextActions = append([]string{}, next...)
+		group.Items = append(group.Items, item)
+		group.Count = len(group.Items)
+	}
+	addCandidateItem := func(reason string, candidate *models.RuleCandidate, next []string) {
 		item := RuleGovernanceExceptionQueueItem{
 			EntityID:               candidate.ID,
 			EntityType:             "rule_candidate",
@@ -908,24 +939,126 @@ func (s *RuleGovernanceStore) ListExceptionQueueGroups(ctx context.Context, para
 			LastActivityAt:         candidate.UpdatedAt,
 			RecommendedNextActions: append([]string{}, next...),
 		}
-		group.Items = append(group.Items, item)
-		group.Count = len(group.Items)
+		addQueueItem(reason, item, next)
 	}
 
 	for _, candidate := range candidates {
 		scope := strings.TrimSpace(candidate.ProposedScope)
-		if scope == "global" || scope == "kernel" {
-			addItem("global_kernel_escalation", candidate, []string{"manual_operator_review"})
+		scopeLower := strings.ToLower(scope)
+		if scopeLower == "global" || scopeLower == "kernel" {
+			addCandidateItem("global_kernel_escalation", candidate, []string{"manual_operator_review"})
 		}
-		if strings.Contains(candidate.ConflictStatus, "conflict") {
-			addItem("active_rule_conflict", candidate, []string{"compare_active_rule_family"})
+		if strings.Contains(strings.ToLower(candidate.ConflictStatus), "conflict") {
+			addCandidateItem("active_rule_conflict", candidate, []string{"compare_active_rule_family"})
 		}
-		if candidate.AntiCaptureStatus == "reject_review_hold" {
-			addItem("reject_review_hold", candidate, []string{"review_anti_capture_evidence"})
+		if strings.EqualFold(candidate.AntiCaptureStatus, "reject_review_hold") {
+			addCandidateItem("reject_review_hold", candidate, []string{"review_anti_capture_evidence"})
+		}
+		if scope == "" || scopeLower == "private" || scopeLower == "personal" || scopeLower == "unknown" || (scopeLower == "project" && strings.TrimSpace(candidate.SourceProject) == "") {
+			addCandidateItem("unclear_scope_private_risk", candidate, []string{"clarify_scope_before_promotion"})
 		}
 	}
 
-	order := []string{"global_kernel_escalation", "active_rule_conflict", "reject_review_hold"}
+	var canaryRows []ruleVersionRow
+	canaryQ := s.db.WithContext(ctx).
+		Where("state = ?", string(models.RuleStateCanary)).
+		Order("updated_at DESC, id DESC").
+		Limit(params.Limit)
+	if project != "" {
+		canaryQ = canaryQ.Where("activation_predicate_json ->> 'project' = ?", project)
+	}
+	if err := canaryQ.Find(&canaryRows).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance exception_queue canary_versions: %w", err)
+	}
+	for i := range canaryRows {
+		row := &canaryRows[i]
+		itemProject := projectFromRuleVersionRow(row)
+		if itemProject == "" {
+			itemProject = project
+		}
+		addQueueItem("canary_result_review", RuleGovernanceExceptionQueueItem{
+			EntityID:        row.ID,
+			EntityType:      "rule_version",
+			Project:         itemProject,
+			Scope:           row.Scope,
+			EvidenceHandles: append([]string{fmt.Sprintf("rule_version:%d", row.ID)}, decodeStrings(row.EvidenceHandles)...),
+			LastActivityAt:  row.UpdatedAt,
+		}, []string{"review_canary_usefulness_metrics"})
+	}
+
+	var snapshotRows []ruleGovernanceSnapshotRow
+	snapshotQ := s.db.WithContext(ctx).
+		Where("status IN ?", []string{"conflict", "rollback_conflict", "restore_conflict", "archive_conflict", "failed"}).
+		Order("created_at DESC, id DESC").
+		Limit(params.Limit)
+	if project != "" {
+		snapshotQ = snapshotQ.Where("before_state_json ->> 'project' = ? OR after_state_json ->> 'project' = ?", project, project)
+	}
+	if err := snapshotQ.Find(&snapshotRows).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance exception_queue snapshot_conflicts: %w", err)
+	}
+	for i := range snapshotRows {
+		row := &snapshotRows[i]
+		addQueueItem("rollback_archive_restore_conflict", RuleGovernanceExceptionQueueItem{
+			EntityID:        row.ID,
+			EntityType:      "rule_governance_snapshot",
+			Project:         projectFromSnapshotRow(row),
+			Scope:           row.OpType,
+			EvidenceHandles: []string{"rule_governance_snapshot:" + row.SnapshotID},
+			LastActivityAt:  row.CreatedAt,
+		}, []string{"inspect_snapshot_conflict"})
+	}
+
+	var eventRows []ruleInjectionEventRow
+	eventQ := s.db.WithContext(ctx).
+		Where("event_type IN ? AND (reason ILIKE ? OR reason ILIKE ? OR reason ILIKE ? OR reason ILIKE ? OR surface ILIKE ?)",
+			[]string{
+				string(models.RuleInjectionFallbackLegacy),
+				string(models.RuleInjectionRouterError),
+				string(models.RuleInjectionSuppressedState),
+			},
+			"%stale%",
+			"%revoked%",
+			"%archived%",
+			"%superseded%",
+			"%cache%",
+		).
+		Order("created_at DESC, id DESC").
+		Limit(params.Limit)
+	if project != "" {
+		eventQ = eventQ.Where("project = ?", project)
+	}
+	if err := eventQ.Find(&eventRows).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance exception_queue stale_cache_events: %w", err)
+	}
+	for i := range eventRows {
+		row := &eventRows[i]
+		evidence := []string{fmt.Sprintf("rule_injection_event:%d", row.ID), "session:" + row.SessionID}
+		if row.RuleVersionID.Valid {
+			evidence = append(evidence, fmt.Sprintf("rule_version:%d", row.RuleVersionID.Int64))
+		}
+		if row.LegacyBehavioralRuleID.Valid {
+			evidence = append(evidence, fmt.Sprintf("legacy_behavioral_rule:%d", row.LegacyBehavioralRuleID.Int64))
+		}
+		addQueueItem("stale_cache_revocation_anomaly", RuleGovernanceExceptionQueueItem{
+			EntityID:        row.ID,
+			EntityType:      "rule_injection_event",
+			Project:         row.Project,
+			Scope:           row.Surface,
+			EvidenceHandles: evidence,
+			LastActivityAt:  row.CreatedAt,
+		}, []string{"inspect_stale_cache_or_revocation_event"})
+	}
+
+	order := []string{
+		"global_kernel_escalation",
+		"active_rule_conflict",
+		"reject_review_hold",
+		"unclear_scope_private_risk",
+		"canary_result_review",
+		"rollback_archive_restore_conflict",
+		"stale_cache_revocation_anomaly",
+	}
 	out := make([]RuleGovernanceExceptionQueueGroup, 0, len(groups))
 	for _, reason := range order {
 		if group := groups[reason]; group != nil {
@@ -1005,6 +1138,9 @@ func (s *RuleGovernanceStore) RollbackRuleGovernanceSnapshot(ctx context.Context
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("snapshot_id = ?", result.SnapshotID).First(&row).Error; err != nil {
 			return fmt.Errorf("rule_governance rollback_snapshot lock: %w", err)
 		}
+		if row.Status != "committed" {
+			return fmt.Errorf("%w: snapshot %q status %s cannot rollback", models.ErrInvalidRuleTransition, result.SnapshotID, row.Status)
+		}
 		before := decodeRuleGovernanceSnapshotState(row.BeforeState)
 		after := decodeRuleGovernanceSnapshotStatePtr(row.AfterState)
 		expectedCurrent := after.RuleVersions
@@ -1018,9 +1154,18 @@ func (s *RuleGovernanceStore) RollbackRuleGovernanceSnapshot(ctx context.Context
 			}
 			if expected.State != "" && version.State != expected.State {
 				result.ConflictVersionIDs = append(result.ConflictVersionIDs, expected.ID)
+				continue
+			}
+			if version.Protected || version.Pinned {
+				result.ConflictVersionIDs = append(result.ConflictVersionIDs, expected.ID)
 			}
 		}
 		if len(result.ConflictVersionIDs) > 0 {
+			if err := tx.Model(&ruleGovernanceSnapshotRow{}).Where("id = ?", row.ID).Updates(map[string]any{
+				"status": "rollback_conflict",
+			}).Error; err != nil {
+				return fmt.Errorf("rule_governance rollback_snapshot mark_conflict: %w", err)
+			}
 			return fmt.Errorf("%w: rollback conflicts detected", models.ErrInvalidRuleTransition)
 		}
 		for _, restore := range before.RuleVersions {
@@ -1227,6 +1372,31 @@ func toRuleGovernanceSnapshotSummary(row *ruleGovernanceSnapshotRow) RuleGoverna
 	}
 }
 
+func projectFromRuleVersionRow(row *ruleVersionRow) string {
+	if row == nil {
+		return ""
+	}
+	if value, ok := decodeObject(row.ActivationPredicate)["project"].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func projectFromSnapshotRow(row *ruleGovernanceSnapshotRow) string {
+	if row == nil {
+		return ""
+	}
+	for _, state := range []ruleGovernanceSnapshotState{
+		decodeRuleGovernanceSnapshotState(row.BeforeState),
+		decodeRuleGovernanceSnapshotStatePtr(row.AfterState),
+	} {
+		if strings.TrimSpace(state.Project) != "" {
+			return strings.TrimSpace(state.Project)
+		}
+	}
+	return ""
+}
+
 type ruleCountRow struct {
 	Key   string
 	Count int64
@@ -1278,6 +1448,9 @@ func (s *RuleGovernanceStore) countVersionStates(ctx context.Context, params Rul
 }
 
 func (s *RuleGovernanceStore) countArbiterRunStatuses(ctx context.Context, params RuleGovernanceHealthParams, health *RuleGovernanceHealth) error {
+	if params.Project != "" && !params.IncludeGlobalArbiterRunCounts {
+		return nil
+	}
 	q := s.db.WithContext(ctx).Table("rule_arbiter_runs").Select("status AS key, COUNT(*) AS count").Group("status")
 	q = applyRuleSince(q, "started_at", params.Since)
 	var rows []ruleCountRow
@@ -1384,6 +1557,21 @@ type ruleGovernanceSnapshotState struct {
 type ruleGovernanceSnapshotRuleVersion struct {
 	State string `json:"state"`
 	ID    int64  `json:"id"`
+}
+
+func ruleGovernanceSnapshotStateForRuleVersion(row *ruleVersionRow, state models.RuleVersionState) ([]byte, error) {
+	if row == nil {
+		return nil, models.ErrRuleRequiredFieldMissing
+	}
+	return json.Marshal(ruleGovernanceSnapshotState{
+		Project: projectFromRuleVersionRow(row),
+		RuleVersions: []ruleGovernanceSnapshotRuleVersion{
+			{
+				ID:    row.ID,
+				State: string(state),
+			},
+		},
+	})
 }
 
 func decodeRuleGovernanceSnapshotState(raw JSONRaw) ruleGovernanceSnapshotState {
