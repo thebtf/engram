@@ -265,6 +265,48 @@ type RuleVersion struct {
 	Pinned                 bool             `json:"pinned"`
 }
 
+type RuleInjectionEventType string
+
+const (
+	RuleInjectionEmittedKernel          RuleInjectionEventType = "emitted_kernel"
+	RuleInjectionEmittedContextual      RuleInjectionEventType = "emitted_contextual"
+	RuleInjectionDeferredBudget         RuleInjectionEventType = "deferred_budget"
+	RuleInjectionSuppressedState        RuleInjectionEventType = "suppressed_state"
+	RuleInjectionSuppressedPredicate    RuleInjectionEventType = "suppressed_predicate"
+	RuleInjectionSuppressedPromptSafety RuleInjectionEventType = "suppressed_prompt_safety"
+	RuleInjectionFallbackLegacy         RuleInjectionEventType = "fallback_legacy"
+	RuleInjectionRouterError            RuleInjectionEventType = "router_error"
+)
+
+func (t RuleInjectionEventType) IsValid() bool {
+	switch t {
+	case RuleInjectionEmittedKernel,
+		RuleInjectionEmittedContextual,
+		RuleInjectionDeferredBudget,
+		RuleInjectionSuppressedState,
+		RuleInjectionSuppressedPredicate,
+		RuleInjectionSuppressedPromptSafety,
+		RuleInjectionFallbackLegacy,
+		RuleInjectionRouterError:
+		return true
+	default:
+		return false
+	}
+}
+
+type RuleInjectionEvent struct {
+	CreatedAt              time.Time              `json:"created_at"`
+	SessionID              string                 `json:"session_id"`
+	Project                string                 `json:"project"`
+	Surface                string                 `json:"surface"`
+	EventType              RuleInjectionEventType `json:"event_type"`
+	Reason                 string                 `json:"reason,omitempty"`
+	RuleVersionID          *int64                 `json:"rule_version_id,omitempty"`
+	LegacyBehavioralRuleID *int64                 `json:"legacy_behavioral_rule_id,omitempty"`
+	ID                     int64                  `json:"id"`
+	BudgetPosition         int                    `json:"budget_position"`
+}
+
 type RuleGovernanceSnapshot struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	RolledBackAt *time.Time `json:"rolled_back_at,omitempty"`

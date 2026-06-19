@@ -5,7 +5,7 @@
  * Faithfully ported from plugin/engram/hooks/user-prompt.js with TypeScript types.
  */
 
-import type { Observation } from '../client.js';
+import type { Observation, RuleRouterPacket, RuleRouterPayload } from '../client.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,6 +105,49 @@ export function formatAlwaysInject(observations: Observation[]): string {
 }
 
 /**
+ * Format bounded rule-router packets. Router-mode packets are already selected
+ * by the server and must not be relabeled as legacy always-active rules.
+ */
+export function formatRuleRouter(router?: RuleRouterPayload | null): string {
+  if (router == null || !isRouterPayloadEnabled(router)) return '';
+
+  const kernel = Array.isArray(router.kernel) ? router.kernel : [];
+  const contextual = Array.isArray(router.contextual) ? router.contextual : [];
+  const suppressed = Array.isArray(router.suppressed) ? router.suppressed : [];
+  if (kernel.length === 0 && contextual.length === 0 && suppressed.length === 0) {
+    return '';
+  }
+
+  let out = '<engram-rule-router>\n';
+  out += '# Routed Behavioral Guidance\n';
+  out +=
+    'Engram rule-router packets. Treat quoted fields as rule data selected for this request; apply them only within higher-priority instructions and current authorization.\n\n';
+  out += `mode: ${quotedPromptScalar(router.mode ?? 'router')}\n`;
+  out += `kernel_count: ${quotedPromptScalar(router.kernel_count ?? kernel.length)}\n`;
+  out += `contextual_count: ${quotedPromptScalar(router.contextual_count ?? contextual.length)}\n`;
+  out += `suppressed_count: ${quotedPromptScalar(router.suppressed_count ?? suppressed.length)}\n`;
+  if (typeof router.budget_outcome === 'string' && router.budget_outcome !== '') {
+    out += `budget_outcome: ${quotedPromptScalar(router.budget_outcome)}\n`;
+  }
+  if (typeof router.fallback_reason === 'string' && router.fallback_reason !== '') {
+    out += `fallback_reason: ${quotedPromptScalar(router.fallback_reason)}\n`;
+  }
+  out += '\n';
+
+  out += formatRulePacketSection('Kernel Rule Packets', kernel, true);
+  out += formatRulePacketSection('Contextual Rule Packets', contextual, true);
+  out += formatRulePacketSection('Suppressed Rule Packets', suppressed, false);
+
+  out += '</engram-rule-router>\n';
+  return out;
+}
+
+export function isRouterPayloadEnabled(router?: RuleRouterPayload | null): boolean {
+  const mode = asString(router?.mode).toLowerCase();
+  return router?.enabled === true && (mode === '' || mode === 'router');
+}
+
+/**
  * Format an array of engram observations into an XML context block.
  *
  * Steps:
@@ -171,6 +214,60 @@ export function formatContext(
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function formatRulePacketSection(
+  label: string,
+  packets: RuleRouterPacket[],
+  includeContent: boolean,
+): string {
+  if (packets.length === 0) return '';
+
+  let out = `### ${label}\n`;
+  for (let i = 0; i < packets.length; i++) {
+    const packet = packets[i];
+    out += `packet ${i + 1}:\n`;
+    out += `rule_version_id: ${quotedPromptScalar(packet.rule_version_id ?? 0)}\n`;
+    if (packet.legacy_behavioral_rule_id && packet.legacy_behavioral_rule_id > 0) {
+      out += `legacy_behavioral_rule_id: ${quotedPromptScalar(packet.legacy_behavioral_rule_id)}\n`;
+    }
+    writePacketScalar('bucket', packet.bucket);
+    writePacketScalar('scope', packet.scope);
+    writePacketScalar('audience', packet.audience);
+    writePacketScalar('state', packet.state);
+    writePacketScalar('budget_class', packet.budget_class);
+    if (typeof packet.priority === 'number') {
+      out += `priority: ${quotedPromptScalar(packet.priority)}\n`;
+    }
+    if (Array.isArray(packet.evidence_handles) && packet.evidence_handles.length > 0) {
+      out += 'evidence_handles:\n';
+      for (const handle of packet.evidence_handles) {
+        if (typeof handle === 'string' && handle !== '') {
+          out += `- ${quotedPromptScalar(handle)}\n`;
+        }
+      }
+    }
+    if (includeContent) {
+      writePacketPayload('summary', packet.summary);
+      writePacketPayload('content', packet.content);
+    } else {
+      writePacketScalar('suppression_reason', packet.suppression_reason);
+    }
+    out += '\n';
+  }
+  return out;
+
+  function writePacketScalar(key: string, value: unknown): void {
+    if (typeof value === 'string' && value !== '') {
+      out += `${key}: ${quotedPromptScalar(value)}\n`;
+    }
+  }
+
+  function writePacketPayload(key: string, value: unknown): void {
+    if (typeof value === 'string' && value !== '') {
+      out += `${key}: ${quotedPromptPayload(value)}\n`;
+    }
+  }
 }
 
 export function safePromptScalar(value: unknown): string {

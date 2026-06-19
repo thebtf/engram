@@ -9,7 +9,12 @@
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import { formatContext, formatAlwaysInject } from '../context/formatter.js';
+import {
+  formatContext,
+  formatAlwaysInject,
+  formatRuleRouter,
+  isRouterPayloadEnabled,
+} from '../context/formatter.js';
 import { TurnTracker } from '../context/tiers.js';
 import type { TierResult } from '../context/tiers.js';
 import { classifyMessage } from './message-classifier.js';
@@ -69,7 +74,18 @@ export async function handleBeforePromptBuild(
       return;
     }
 
-    if (!response || !Array.isArray(response.observations) || response.observations.length === 0) {
+    if (!response) return;
+
+    const observations = Array.isArray(response.observations) ? response.observations : [];
+    const routerBlock = isRouterPayloadEnabled(response.rule_router)
+      ? formatRuleRouter(response.rule_router)
+      : '';
+    const alwaysInjectObs = Array.isArray(response.always_inject) ? response.always_inject : [];
+    const alwaysInjectBlock = !routerBlock && alwaysInjectObs.length > 0
+      ? formatAlwaysInject(alwaysInjectObs)
+      : '';
+
+    if (observations.length === 0) {
       // Track search miss for self-tuning analytics (fire-and-forget).
       // Normalize and truncate prompt to avoid sending raw PII or very long strings.
       const normalizedPrompt = event.prompt?.trim() ?? '';
@@ -77,11 +93,11 @@ export async function handleBeforePromptBuild(
         const query = normalizedPrompt.replace(/\s+/g, ' ').slice(0, 512);
         void client.trackSearchMiss({ project, query }).catch(() => {});
       }
-      return;
+      if (!routerBlock && !alwaysInjectBlock) return;
     }
 
     const { context, injectedIds, trimmedCount } = formatContext(
-      response.observations,
+      observations,
       { tokenBudget: tier.tokenBudget },
     );
 
@@ -91,19 +107,10 @@ export async function handleBeforePromptBuild(
       );
     }
 
-    // Render always_inject behavioral rules (appended before the main context block).
-    // These are observations marked always_inject=true on the server — they contain
-    // behavioral guidance that must be present in every turn regardless of query match.
-    const alwaysInjectObs = Array.isArray(response.always_inject) ? response.always_inject : [];
-    const alwaysInjectBlock = alwaysInjectObs.length > 0
-      ? formatAlwaysInject(alwaysInjectObs)
-      : '';
+    if (!context && !alwaysInjectBlock && !routerBlock) return;
 
-    if (!context && !alwaysInjectBlock) return;
-
-    const totalInjected = injectedIds.length + alwaysInjectObs.length;
     (logger ?? console).warn(
-      `[engram] before-prompt-build: injecting ${injectedIds.length} observations + ${alwaysInjectObs.length} always_inject rules for project ${project}`,
+      `[engram] before-prompt-build: injecting ${injectedIds.length} observations + ${routerBlock ? 'router packets' : `${alwaysInjectObs.length} always_inject rules`} for project ${project}`,
     );
 
     // Mark injected observations (fire-and-forget)
@@ -123,9 +130,8 @@ export async function handleBeforePromptBuild(
       }
     }
 
-    // Combine: always_inject rules first (highest priority), then query-matched context
-    const combined = [alwaysInjectBlock, context].filter(Boolean).join('\n');
-    void totalInjected; // used only in log message above
+    // Combine: router/always-inject guidance first, then query-matched context.
+    const combined = [routerBlock, alwaysInjectBlock, context].filter(Boolean).join('\n');
     return { prependContext: combined };
   } catch (err) {
     (logger ?? console).error('[engram] hook error:', err);

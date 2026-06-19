@@ -117,6 +117,26 @@ type Config struct {
 	// RuleArbiterIntervalSeconds controls the background tick interval.
 	// Env: ENGRAM_RULE_ARBITER_INTERVAL_SECONDS (default: 300)
 	RuleArbiterIntervalSeconds int `json:"rule_arbiter_interval_seconds"`
+
+	// RuleRouterEnabled switches session-start/context reads to the bounded
+	// rule injection router. Env: ENGRAM_RULE_ROUTER_ENABLED (default: false)
+	RuleRouterEnabled bool `json:"rule_router_enabled"`
+
+	// RuleRouterKernelMax caps canonical kernel rules rendered by the router.
+	// Env: ENGRAM_RULE_ROUTER_KERNEL_MAX (default: 8)
+	RuleRouterKernelMax int `json:"rule_router_kernel_max"`
+
+	// RuleRouterContextualMax caps contextual rule packets rendered by the router.
+	// Env: ENGRAM_RULE_ROUTER_CONTEXTUAL_MAX (default: 12)
+	RuleRouterContextualMax int `json:"rule_router_contextual_max"`
+
+	// RuleRouterMaxRenderedChars approximates the rendered router payload budget.
+	// Env: ENGRAM_RULE_ROUTER_MAX_RENDERED_CHARS (default: 4800)
+	RuleRouterMaxRenderedChars int `json:"rule_router_max_rendered_chars"`
+
+	// RuleRouterTelemetryBestEffort enables non-blocking rule-injection
+	// telemetry writes. Env: ENGRAM_RULE_ROUTER_TELEMETRY_BEST_EFFORT (default: true)
+	RuleRouterTelemetryBestEffort bool `json:"rule_router_telemetry_best_effort"`
 }
 
 // globalConfig is the singleton Config instance, lazily initialized by Get().
@@ -219,6 +239,10 @@ func Default() *Config {
 		RuleArbiterBatchLimit:          20,
 		RuleArbiterTimeoutMS:           8000,
 		RuleArbiterIntervalSeconds:     300,
+		RuleRouterKernelMax:            8,
+		RuleRouterContextualMax:        12,
+		RuleRouterMaxRenderedChars:     4800,
+		RuleRouterTelemetryBestEffort:  true,
 		SignalWeights: map[string]float64{
 			"git_commit":   1.0,
 			"pr_created":   2.0,
@@ -399,6 +423,31 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ARBITER_INTERVAL_SECONDS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.RuleArbiterIntervalSeconds = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ROUTER_ENABLED")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.RuleRouterEnabled = b
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ROUTER_KERNEL_MAX")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.RuleRouterKernelMax = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ROUTER_CONTEXTUAL_MAX")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.RuleRouterContextualMax = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ROUTER_MAX_RENDERED_CHARS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.RuleRouterMaxRenderedChars = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ROUTER_TELEMETRY_BEST_EFFORT")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.RuleRouterTelemetryBestEffort = b
 		}
 	}
 

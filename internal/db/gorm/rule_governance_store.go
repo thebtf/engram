@@ -26,6 +26,11 @@ type RuleCandidateListParams struct {
 	Limit         int
 }
 
+type RuleVersionRenderListParams struct {
+	Audience string
+	Limit    int
+}
+
 type SnapshotRequest struct {
 	SnapshotID  string
 	OpType      string
@@ -279,6 +284,61 @@ func (s *RuleGovernanceStore) ListRuleCandidates(ctx context.Context, params Rul
 	out := make([]*models.RuleCandidate, len(rows))
 	for i := range rows {
 		out[i] = toRuleCandidate(&rows[i])
+	}
+	return out, nil
+}
+
+func (s *RuleGovernanceStore) ListRenderableRuleVersions(ctx context.Context, params RuleVersionRenderListParams) ([]*models.RuleVersion, error) {
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	states := []string{
+		string(models.RuleStateKernel),
+		string(models.RuleStateActiveProject),
+		string(models.RuleStateActiveShared),
+		string(models.RuleStateActiveGlobal),
+	}
+	q := s.db.WithContext(ctx).
+		Where("state IN ?", states).
+		Order("priority DESC, created_at DESC").
+		Limit(limit)
+	if strings.TrimSpace(params.Audience) != "" {
+		q = q.Where("audience = ?", strings.TrimSpace(params.Audience))
+	}
+
+	var rows []ruleVersionRow
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance list_renderable_versions: %w", err)
+	}
+	out := make([]*models.RuleVersion, len(rows))
+	for i := range rows {
+		out[i] = toRuleVersion(&rows[i])
+	}
+	return out, nil
+}
+
+func (s *RuleGovernanceStore) ListLegacyBehavioralRuleFallback(ctx context.Context, project *string, limit int) ([]*models.BehavioralRule, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	q := s.db.WithContext(ctx).
+		Where("deleted_at IS NULL").
+		Order("priority DESC, created_at DESC").
+		Limit(limit)
+	if project == nil {
+		q = q.Where("project IS NULL")
+	} else {
+		q = q.Where("project = ? OR project IS NULL", *project)
+	}
+
+	var rows []BehavioralRule
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance list_legacy_behavioral_fallback: %w", err)
+	}
+	out := make([]*models.BehavioralRule, len(rows))
+	for i := range rows {
+		out[i] = behavioralRuleRowToModel(&rows[i])
 	}
 	return out, nil
 }

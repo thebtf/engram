@@ -157,6 +157,7 @@ message GetSessionStartContextResponse {
   repeated SessionStartRule rules = 2;
   repeated SessionStartMemory memories = 3;
   google.protobuf.Timestamp generated_at = 4;
+  SessionStartRuleRouter rule_router = 5;
 }
 
 message SessionStartIssue {
@@ -188,6 +189,34 @@ message SessionStartRule {
   int32 version = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+}
+
+message SessionStartRuleRouter {
+  bool enabled = 1;
+  string mode = 2;
+  int32 kernel_count = 3;
+  int32 contextual_count = 4;
+  int32 suppressed_count = 5;
+  string budget_outcome = 6;
+  repeated SessionStartRulePacket kernel = 7;
+  repeated SessionStartRulePacket contextual = 8;
+  repeated SessionStartRulePacket suppressed = 9;
+  string fallback_reason = 10;
+}
+
+message SessionStartRulePacket {
+  int64 rule_version_id = 1;
+  int64 legacy_behavioral_rule_id = 2;
+  string bucket = 3;
+  string scope = 4;
+  string audience = 5;
+  string content = 6;
+  string summary = 7;
+  repeated string evidence_handles = 8;
+  string state = 9;
+  string budget_class = 10;
+  int32 priority = 11;
+  string suppression_reason = 12;
 }
 
 message SessionStartMemory {

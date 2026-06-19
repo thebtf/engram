@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/config"
 	localgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -202,6 +204,7 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp.GeneratedAt)
+	require.Nil(t, resp.RuleRouter, "router metadata must stay absent while ENGRAM_RULE_ROUTER_ENABLED is off")
 
 	require.Len(t, resp.Memories, 1)
 	assert.Equal(t, newerMemory.ID, resp.Memories[0].Id)
@@ -221,6 +224,94 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	assert.Equal(t, "", resp.Rules[0].Project)
 	assert.Equal(t, projectRule.ID, resp.Rules[1].Id)
 	assert.Equal(t, project, resp.Rules[1].Project)
+}
+
+func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
+	db, cleanup := openSessionStartTestDB(t)
+	defer cleanup()
+
+	t.Setenv("ENGRAM_RULE_ROUTER_ENABLED", "true")
+	t.Setenv("ENGRAM_RULE_ROUTER_KERNEL_MAX", "1")
+	t.Setenv("ENGRAM_RULE_ROUTER_CONTEXTUAL_MAX", "2")
+	t.Setenv("ENGRAM_RULE_ROUTER_MAX_RENDERED_CHARS", "12000")
+
+	ctx := context.Background()
+	project := fmt.Sprintf("grpc-session-start-router-%d", time.Now().UnixNano())
+	otherProject := project + "-other"
+	defer db.Exec(`DELETE FROM behavioral_rules WHERE edited_by = ?`, project)
+	defer db.Exec(`DELETE FROM rule_versions WHERE content LIKE ?`, "RG-2 session-start router fixture "+project+"%")
+	defer db.Exec(`DELETE FROM rule_families WHERE family_key LIKE ?`, "rg2-session-start-"+project+"%")
+
+	kernelID := insertSessionStartRuleVersion(t, db, project+"-kernel", models.RuleStateKernel, "developer", 1000003, map[string]any{})
+	activeProjectID := insertSessionStartRuleVersion(t, db, project+"-active", models.RuleStateActiveProject, "developer", 1000002, map[string]any{"project": project})
+	suppressedID := insertSessionStartRuleVersion(t, db, project+"-other", models.RuleStateActiveProject, "developer", 1000001, map[string]any{"project": otherProject})
+	_ = suppressedID
+
+	ruleStore := localgorm.NewBehavioralRulesStore(&localgorm.Store{DB: db})
+	legacyRule, err := ruleStore.Create(ctx, &models.BehavioralRule{
+		Project:  &project,
+		Content:  "RG-2 session-start legacy fallback " + project,
+		Priority: 1000000,
+		EditedBy: project,
+	})
+	require.NoError(t, err)
+
+	srv := &Server{db: db}
+	resp, err := srv.GetSessionStartContext(ctx, &pb.GetSessionStartContextRequest{Project: project})
+	require.NoError(t, err)
+	require.NotNil(t, resp.RuleRouter)
+	require.True(t, resp.RuleRouter.Enabled)
+	require.Equal(t, "router", resp.RuleRouter.Mode)
+	require.Equal(t, int32(1), resp.RuleRouter.KernelCount)
+	require.Equal(t, int32(2), resp.RuleRouter.ContextualCount)
+	require.Equal(t, int32(1), resp.RuleRouter.SuppressedCount)
+	require.Equal(t, "within_budget", resp.RuleRouter.BudgetOutcome)
+
+	require.Len(t, resp.RuleRouter.Kernel, 1)
+	require.Equal(t, kernelID, resp.RuleRouter.Kernel[0].RuleVersionId)
+	require.Equal(t, "kernel", resp.RuleRouter.Kernel[0].Bucket)
+
+	contextualByVersion := map[int64]*pb.SessionStartRulePacket{}
+	contextualByLegacy := map[int64]*pb.SessionStartRulePacket{}
+	for _, packet := range resp.RuleRouter.Contextual {
+		contextualByVersion[packet.RuleVersionId] = packet
+		contextualByLegacy[packet.LegacyBehavioralRuleId] = packet
+	}
+	require.Contains(t, contextualByVersion, activeProjectID)
+	require.Contains(t, contextualByLegacy, legacyRule.ID)
+	require.Equal(t, "contextual", contextualByVersion[activeProjectID].Bucket)
+	require.Equal(t, "legacy", contextualByLegacy[legacyRule.ID].BudgetClass)
+
+	require.Len(t, resp.Rules, 3, "legacy compatibility rules should include kernel plus contextual packets")
+	ruleContents := map[string]bool{}
+	for _, rule := range resp.Rules {
+		ruleContents[rule.Content] = true
+	}
+	require.True(t, ruleContents["RG-2 session-start router fixture "+project+"-kernel"])
+	require.True(t, ruleContents["RG-2 session-start router fixture "+project+"-active"])
+	require.True(t, ruleContents[legacyRule.Content])
+}
+
+func TestRuleRouterLegacyFallbackShape(t *testing.T) {
+	cfg := configForSessionStartRouterTest()
+	project := "router-fallback-project"
+	legacyID := int64(42)
+	result := selectSessionStartRouterPackets(nil, []*models.BehavioralRule{{
+		ID:       legacyID,
+		Project:  &project,
+		Content:  "legacy fallback rule",
+		Priority: 7,
+	}}, project, cfg)
+	router := mapSessionStartRuleRouter(result)
+	router.FallbackReason = "rule_router_unavailable"
+
+	require.Len(t, result.Contextual, 1)
+	require.Equal(t, legacyID, *result.Contextual[0].LegacyBehavioralRuleID)
+	require.Empty(t, result.Kernel, "legacy fallback rows must never become kernel")
+	require.Equal(t, "rule_router_unavailable", router.FallbackReason)
+	require.Len(t, router.Contextual, 1)
+	require.Equal(t, legacyID, router.Contextual[0].LegacyBehavioralRuleId)
+	require.Equal(t, "legacy", router.Contextual[0].BudgetClass)
 }
 
 func TestGetSessionStartContext_DefaultLimits(t *testing.T) {
@@ -262,4 +353,52 @@ func TestGetSessionStartContext_DefaultLimits(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, resp.Memories, 3)
 	assert.Len(t, resp.Issues, 3)
+}
+
+func configForSessionStartRouterTest() *config.Config {
+	cfg := config.Default()
+	cfg.RuleRouterEnabled = true
+	return cfg
+}
+
+func insertSessionStartRuleVersion(t *testing.T, db *gormlib.DB, suffix string, state models.RuleVersionState, audience string, priority int, predicate map[string]any) int64 {
+	t.Helper()
+	predicateJSON, err := json.Marshal(predicate)
+	require.NoError(t, err)
+
+	var familyID int64
+	require.NoError(t, db.Raw(`INSERT INTO rule_families (family_key) VALUES (?) RETURNING id`,
+		"rg2-session-start-"+suffix,
+	).Scan(&familyID).Error)
+
+	var versionID int64
+	require.NoError(t, db.Raw(`INSERT INTO rule_versions (
+		family_id,
+		content,
+		scope,
+		owner,
+		audience,
+		activation_predicate_json,
+		evidence_handles_json,
+		state,
+		budget_class,
+		anti_capture_status,
+		conflict_status,
+		decay_policy,
+		priority
+	) VALUES (?, ?, ?, ?, ?, CAST(? AS jsonb), '[]'::jsonb, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		familyID,
+		"RG-2 session-start router fixture "+suffix,
+		"project",
+		"codex",
+		audience,
+		string(predicateJSON),
+		string(state),
+		"contextual",
+		"passed",
+		"none",
+		"NO DATA",
+		priority,
+	).Scan(&versionID).Error)
+	return versionID
 }

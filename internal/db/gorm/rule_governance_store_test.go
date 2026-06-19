@@ -223,6 +223,86 @@ func TestRuleGovernanceStore_TransitionVersionHandlesNullableSummary(t *testing.
 	require.Empty(t, version.Summary)
 }
 
+func TestRuleGovernanceStore_ListRenderableRuleVersionsFiltersStateAudienceAndOrders(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("rg2-renderable-%d", time.Now().UnixNano())
+
+	kernelID := insertRuleVersionFixture(t, db, suffix+"-kernel", models.RuleStateKernel, "developer", 1003)
+	activeProjectID := insertRuleVersionFixture(t, db, suffix+"-active-project", models.RuleStateActiveProject, "developer", 1002)
+	activeGlobalID := insertRuleVersionFixture(t, db, suffix+"-active-global", models.RuleStateActiveGlobal, "developer", 1001)
+	draftID := insertRuleVersionFixture(t, db, suffix+"-draft", models.RuleStateDraft, "developer", 2000)
+	archivedID := insertRuleVersionFixture(t, db, suffix+"-archived", models.RuleStateArchived, "developer", 2001)
+	agentAudienceID := insertRuleVersionFixture(t, db, suffix+"-agent-audience", models.RuleStateActiveGlobal, "agent", 2002)
+
+	got, err := store.ListRenderableRuleVersions(ctx, RuleVersionRenderListParams{Audience: "developer", Limit: 1000})
+	require.NoError(t, err)
+
+	positions := map[int64]int{}
+	for i, version := range got {
+		positions[version.ID] = i
+	}
+	require.Contains(t, positions, kernelID)
+	require.Contains(t, positions, activeProjectID)
+	require.Contains(t, positions, activeGlobalID)
+	require.NotContains(t, positions, draftID, "draft rule versions must not be renderable")
+	require.NotContains(t, positions, archivedID, "archived rule versions must not be renderable")
+	require.NotContains(t, positions, agentAudienceID, "audience filter must exclude mismatched active rules")
+	require.Less(t, positions[kernelID], positions[activeProjectID], "renderable rule versions must be priority ordered")
+	require.Less(t, positions[activeProjectID], positions[activeGlobalID], "renderable rule versions must be priority ordered")
+}
+
+func TestRuleGovernanceStore_ListLegacyBehavioralRuleFallbackKeepsLegacyRowsContextual(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	behavioralStore := &BehavioralRulesStore{db: db}
+	ctx := context.Background()
+	project := fmt.Sprintf("rg2-legacy-project-%d", time.Now().UnixNano())
+
+	global, err := behavioralStore.Create(ctx, &models.BehavioralRule{
+		Content:  "rg2 legacy global fallback",
+		Priority: 1002,
+		EditedBy: "rg2-test",
+	})
+	require.NoError(t, err)
+	projectScoped, err := behavioralStore.Create(ctx, &models.BehavioralRule{
+		Project:  strPtr(project),
+		Content:  "rg2 legacy project fallback",
+		Priority: 1003,
+		EditedBy: "rg2-test",
+	})
+	require.NoError(t, err)
+	deleted, err := behavioralStore.Create(ctx, &models.BehavioralRule{
+		Project:  strPtr(project),
+		Content:  "rg2 legacy deleted fallback",
+		Priority: 2000,
+		EditedBy: "rg2-test",
+	})
+	require.NoError(t, err)
+	require.NoError(t, behavioralStore.Delete(ctx, deleted.ID))
+
+	got, err := store.ListLegacyBehavioralRuleFallback(ctx, &project, 1000)
+	require.NoError(t, err)
+	ids := map[int64]int{}
+	for i, rule := range got {
+		ids[rule.ID] = i
+	}
+	require.Contains(t, ids, global.ID)
+	require.Contains(t, ids, projectScoped.ID)
+	require.NotContains(t, ids, deleted.ID)
+	require.Less(t, ids[projectScoped.ID], ids[global.ID], "legacy fallback must preserve priority ordering")
+
+	globalOnly, err := store.ListLegacyBehavioralRuleFallback(ctx, nil, 1000)
+	require.NoError(t, err)
+	globalIDs := map[int64]bool{}
+	for _, rule := range globalOnly {
+		globalIDs[rule.ID] = true
+	}
+	require.True(t, globalIDs[global.ID])
+	require.False(t, globalIDs[projectScoped.ID], "global fallback query must not include project-scoped legacy rows")
+}
+
 func TestRuleGovernanceStore_CreateCandidateRejectsNonPendingStatus(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
@@ -574,6 +654,45 @@ func getRuleVersionState(t *testing.T, db *gorm.DB, versionID int64) models.Rule
 	var state string
 	require.NoError(t, db.Raw(`SELECT state FROM rule_versions WHERE id = ?`, versionID).Scan(&state).Error)
 	return models.RuleVersionState(state)
+}
+
+func insertRuleVersionFixture(t *testing.T, db *gorm.DB, suffix string, state models.RuleVersionState, audience string, priority int) int64 {
+	t.Helper()
+	var familyID int64
+	require.NoError(t, db.Raw(`INSERT INTO rule_families (family_key) VALUES (?) RETURNING id`,
+		fmt.Sprintf("rg2-family-%s", suffix),
+	).Scan(&familyID).Error)
+
+	var versionID int64
+	require.NoError(t, db.Raw(`INSERT INTO rule_versions (
+		family_id,
+		content,
+		scope,
+		owner,
+		audience,
+		activation_predicate_json,
+		evidence_handles_json,
+		state,
+		budget_class,
+		anti_capture_status,
+		conflict_status,
+		decay_policy,
+		priority
+	) VALUES (?, ?, ?, ?, ?, CAST(? AS jsonb), '[]'::jsonb, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		familyID,
+		"RG-2 renderable fixture "+suffix,
+		"project",
+		"codex",
+		audience,
+		`{"project":"rg2-project"}`,
+		string(state),
+		"contextual",
+		"passed",
+		"none",
+		"NO DATA",
+		priority,
+	).Scan(&versionID).Error)
+	return versionID
 }
 
 func requireRuleGovernanceTableState(t *testing.T, db *gorm.DB, exists bool) {
