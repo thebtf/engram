@@ -240,9 +240,11 @@ test('dispatcher repairs missing legacy Codex cache hook entrypoints with latest
 
     const repaired = dispatcher.repairLegacyCodexCacheHooks(latestRoot);
     const legacyPreCompact = path.join(oldRoot, 'hooks', 'pre-compact.js');
+    const bogusPreCompact = path.join(bogusRoot, 'hooks', 'pre-compact.js');
 
     assert.ok(repaired.includes(legacyPreCompact));
     assert.ok(fs.existsSync(legacyPreCompact));
+    assert.equal(fs.existsSync(bogusPreCompact), false, 'newer cache slots must not be repaired as legacy');
 
     const result = spawnSync(process.execPath, [legacyPreCompact], {
       input: JSON.stringify({ session_id: 's1' }),
@@ -264,6 +266,111 @@ test('dispatcher repairs missing legacy Codex cache hook entrypoints with latest
     assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { root: 'latest', event: 'PreCompact' });
+
+    assert.deepEqual(dispatcher.repairLegacyCodexCacheHooks(latestRoot), []);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('dispatcher recreates deleted legacy Codex cache slots for running-session hooks', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-deleted-cache-'));
+  try {
+    const codexHome = path.join(tempRoot, '.codex');
+    const cacheBase = path.join(codexHome, 'plugins', 'cache', 'engram-marketplace', 'engram');
+    const deletedRoot = path.join(cacheBase, '6.27.1');
+    const latestRoot = path.join(cacheBase, '6.28.0');
+    const latestHooks = path.join(latestRoot, 'hooks');
+    const latestManifest = path.join(latestRoot, '.codex-plugin');
+
+    fs.mkdirSync(latestHooks, { recursive: true });
+    fs.mkdirSync(latestManifest, { recursive: true });
+    fs.writeFileSync(path.join(latestManifest, 'plugin.json'), JSON.stringify({
+      name: 'engram',
+      version: '6.28.0',
+    }), 'utf8');
+    fs.writeFileSync(
+      path.join(latestHooks, 'dispatcher.cjs'),
+      "module.exports.main=function(){process.stdout.write(JSON.stringify({root:'latest',event:process.env.ENGRAM_HOOK_EVENT})+'\\n')};\n",
+      'utf8',
+    );
+
+    assert.equal(fs.existsSync(deletedRoot), false, 'test setup should model a removed old cache slot');
+
+    const repaired = dispatcher.repairLegacyCodexCacheHooks(latestRoot);
+    const legacyPostToolUse = path.join(deletedRoot, 'hooks', 'post-tool-use.js');
+    const futureRoot = path.join(cacheBase, '6.28.1');
+
+    assert.ok(repaired.includes(legacyPostToolUse));
+    assert.ok(fs.existsSync(legacyPostToolUse));
+    assert.equal(fs.existsSync(futureRoot), false, 'repair must not create newer cache slots');
+
+    const result = spawnSync(process.execPath, [legacyPostToolUse], {
+      input: JSON.stringify({ session_id: 's1' }),
+      encoding: 'utf8',
+      timeout: 2000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CODEX_PLUGIN_ROOT: '',
+        CODEX_PLUGIN_DIR: '',
+        PLUGIN_ROOT: '',
+        CLAUDE_PLUGIN_ROOT: '',
+        CLAUDE_PLUGIN_DIR: '',
+      },
+    });
+
+    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { root: 'latest', event: 'PostToolUse' });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('dispatcher main repairs deleted cache slots before non-session hooks', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-nonsession-repair-'));
+  try {
+    const codexHome = path.join(tempRoot, '.codex');
+    const cacheBase = path.join(codexHome, 'plugins', 'cache', 'engram-marketplace', 'engram');
+    const deletedRoot = path.join(cacheBase, '6.27.1');
+    const latestRoot = path.join(cacheBase, '6.28.0');
+    const latestHooks = path.join(latestRoot, 'hooks');
+    const latestManifest = path.join(latestRoot, '.codex-plugin');
+    const latestDispatcher = path.join(latestHooks, 'dispatcher.cjs');
+
+    fs.mkdirSync(latestHooks, { recursive: true });
+    fs.mkdirSync(latestManifest, { recursive: true });
+    fs.writeFileSync(path.join(latestManifest, 'plugin.json'), JSON.stringify({
+      name: 'engram',
+      version: '6.28.0',
+    }), 'utf8');
+    fs.copyFileSync(path.join(hooksDir, 'dispatcher.cjs'), latestDispatcher);
+
+    const result = spawnSync(process.execPath, [latestDispatcher, 'PostToolUse'], {
+      input: JSON.stringify({ session_id: 's1' }),
+      encoding: 'utf8',
+      timeout: 2000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CODEX_PLUGIN_ROOT: '',
+        CODEX_PLUGIN_DIR: '',
+        PLUGIN_ROOT: '',
+        CLAUDE_PLUGIN_ROOT: '',
+        CLAUDE_PLUGIN_DIR: '',
+      },
+    });
+
+    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /repaired \d+ legacy Codex hook entrypoints/);
+    assert.equal(result.stdout, '{"continue":true}\n');
+    assert.ok(fs.existsSync(path.join(deletedRoot, 'hooks', 'post-tool-use.js')));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

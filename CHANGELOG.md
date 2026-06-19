@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.28.1] - 2026-06-19
+
+### Fixed
+
+- **Codex marketplace upgrade hook compatibility.** The dispatcher now
+  recreates deleted legacy Codex cache slots for recent Engram versions with
+  fail-open hook shims, so already-running sessions that still call absolute
+  `hooks/*.js` paths survive a marketplace upgrade that prunes old cache
+  directories.
+
 ## [6.28.0] - 2026-06-19
 
 ### Added

@@ -27,6 +27,13 @@ const LEGACY_HOOK_ENTRYPOINTS = {
   'session-end.js': 'SessionEnd',
 };
 const LEGACY_SHIM_MARKER = 'ENGRAM_LEGACY_HOOK_SHIM';
+const LEGACY_COMPATIBILITY_VERSION_DIRS = [
+  '6.25.1',
+  '6.26.0',
+  '6.27.1',
+  '6.28.0',
+];
+const LEGACY_COMPATIBILITY_VERSION_ENV = 'ENGRAM_LEGACY_HOOK_COMPAT_VERSIONS';
 
 function passThrough() {
   process.stdout.write(JSON.stringify({ continue: true }) + '\n');
@@ -60,6 +67,23 @@ function readPluginName(pluginRoot) {
     }
   }
   return '';
+}
+
+function readPluginVersion(pluginRoot) {
+  for (const relPath of [
+    path.join('.codex-plugin', 'plugin.json'),
+    path.join('.claude-plugin', 'plugin.json'),
+  ]) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(pluginRoot, relPath), 'utf8'));
+      if (parsed && typeof parsed.version === 'string') {
+        return parsed.version;
+      }
+    } catch {
+      // Try the next manifest shape.
+    }
+  }
+  return path.basename(path.resolve(pluginRoot));
 }
 
 function existingManifestNames(pluginRoot) {
@@ -131,6 +155,55 @@ function isSemverLikeVersionDir(name) {
   return /^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$/.test(String(name));
 }
 
+function normalizeVersionDir(name) {
+  const text = String(name || '').trim();
+  if (!isSemverLikeVersionDir(text)) {
+    return '';
+  }
+  return text.replace(/^v/, '');
+}
+
+function previousPatchVersion(name) {
+  const normalized = normalizeVersionDir(name);
+  if (!normalized) {
+    return '';
+  }
+  const match = normalized.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) {
+    return '';
+  }
+  const patch = Number(match[3]);
+  if (!Number.isInteger(patch) || patch <= 0) {
+    return '';
+  }
+  return `${match[1]}.${match[2]}.${patch - 1}`;
+}
+
+function configuredCompatibilityVersions() {
+  const raw = process.env[LEGACY_COMPATIBILITY_VERSION_ENV] || '';
+  return raw.split(/[,\s;]+/).map(normalizeVersionDir).filter(Boolean);
+}
+
+function legacyCompatibilityVersionDirs(pluginRoot) {
+  const current = normalizeVersionDir(readPluginVersion(pluginRoot));
+  if (!current) {
+    return new Set();
+  }
+
+  const candidates = new Set([
+    ...LEGACY_COMPATIBILITY_VERSION_DIRS,
+    ...configuredCompatibilityVersions(),
+  ].map(normalizeVersionDir).filter(Boolean));
+  const previousPatch = previousPatchVersion(current);
+  if (previousPatch) {
+    candidates.add(previousPatch);
+  }
+
+  return new Set(
+    [...candidates].filter((version) => compareVersionNames(version, current) < 0),
+  );
+}
+
 function isRepairableLegacyRoot(versionRoot) {
   const manifestNames = existingManifestNames(versionRoot);
   if (manifestNames.length > 0) {
@@ -170,14 +243,15 @@ process.stdout.write(JSON.stringify({continue:true})+'\\n');
   return `#!/usr/bin/env node\n${source}`;
 }
 
-function shouldWriteLegacyShim(hookPath) {
+function shouldWriteLegacyShim(hookPath, dispatcherPath) {
   if (!fs.existsSync(hookPath)) {
     return true;
   }
   try {
     const content = fs.readFileSync(hookPath, 'utf8');
+    const expectedDispatcher = dispatcherPath ? JSON.stringify(path.resolve(dispatcherPath)) : '';
     return (
-      content.includes(LEGACY_SHIM_MARKER) ||
+      (content.includes(LEGACY_SHIM_MARKER) && expectedDispatcher && !content.includes(expectedDispatcher)) ||
       content.includes('function cacheRoots(){const home=process.env.CODEX_HOME')
     );
   } catch {
@@ -200,6 +274,8 @@ function repairLegacyCodexCacheHooks(pluginRoot) {
 
   const currentRoot = path.resolve(pluginRoot);
   const currentDispatcher = path.join(currentRoot, 'hooks', 'dispatcher.cjs');
+  const currentVersion = normalizeVersionDir(readPluginVersion(pluginRoot));
+  const compatibilityVersions = legacyCompatibilityVersionDirs(pluginRoot);
   let realCacheBase = '';
   try {
     realCacheBase = fs.realpathSync.native(cacheBase);
@@ -209,11 +285,17 @@ function repairLegacyCodexCacheHooks(pluginRoot) {
   const versions = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
+    .concat([...compatibilityVersions])
+    .filter((version, index, all) => all.indexOf(version) === index)
     .sort(compareVersionNames);
   const touched = [];
 
   for (const version of versions) {
-    if (!isSemverLikeVersionDir(version)) {
+    const normalizedVersion = normalizeVersionDir(version);
+    if (!normalizedVersion) {
+      continue;
+    }
+    if (currentVersion && compareVersionNames(normalizedVersion, currentVersion) >= 0) {
       continue;
     }
     const versionRoot = path.join(cacheBase, version);
@@ -222,6 +304,12 @@ function repairLegacyCodexCacheHooks(pluginRoot) {
     }
     const hooksDir = path.join(versionRoot, 'hooks');
     try {
+      if (!fs.existsSync(versionRoot)) {
+        if (!compatibilityVersions.has(normalizeVersionDir(version))) {
+          continue;
+        }
+        fs.mkdirSync(versionRoot, { recursive: true });
+      }
       const stat = fs.lstatSync(versionRoot);
       if (stat.isSymbolicLink()) {
         continue;
@@ -239,7 +327,7 @@ function repairLegacyCodexCacheHooks(pluginRoot) {
       fs.mkdirSync(hooksDir, { recursive: true });
       for (const [fileName, eventName] of Object.entries(LEGACY_HOOK_ENTRYPOINTS)) {
         const hookPath = path.join(hooksDir, fileName);
-        if (!shouldWriteLegacyShim(hookPath)) {
+        if (!shouldWriteLegacyShim(hookPath, currentDispatcher)) {
           continue;
         }
         fs.writeFileSync(hookPath, buildLegacyShim(eventName, currentDispatcher), { encoding: 'utf8', mode: 0o755 });
@@ -299,11 +387,9 @@ function main() {
     process.stderr.write(`engram dispatcher: failed to read stdin: ${error.message}\n`);
   }
   const pluginRoot = path.resolve(__dirname, '..');
-  if (eventName === 'SessionStart') {
-    const repaired = repairLegacyCodexCacheHooks(pluginRoot);
-    if (repaired.length) {
-      process.stderr.write(`engram dispatcher: repaired ${repaired.length} legacy Codex hook entrypoints\n`);
-    }
+  const repaired = repairLegacyCodexCacheHooks(pluginRoot);
+  if (repaired.length) {
+    process.stderr.write(`engram dispatcher: repaired ${repaired.length} legacy Codex hook entrypoints\n`);
   }
   let lastStdout = '';
 
@@ -347,6 +433,7 @@ module.exports = {
   buildLegacyShim,
   inferCodexCacheBaseDir,
   isSemverLikeVersionDir,
+  legacyCompatibilityVersionDirs,
   main,
   repairLegacyCodexCacheHooks,
 };
