@@ -48,7 +48,7 @@ plan: .agent/specs/engram-rule-governance-telemetry/plan.md
 - [x] T024: Run local security review for auth, scope leakage, prompt/evidence redaction, and rollback behavior. Evidence: native review agent Sagan found evidence redaction bypass and project-scoped health arbiter-run leakage; both fixed with regression tests.
 - [x] T025: Run migration review for additive schema/index and rollback posture. Evidence: no migration files changed in this slice; rollback posture reviewed through persisted conflict status and non-committed snapshot guard tests. Query/index work remains T016.
 - [x] T026: Commit coherent implementation checkpoint.
-- [ ] T027: Open PR and invoke MCP PR review; record `Transport closed` fallback if MCP PR tooling remains unavailable.
+- [x] T027: Open PR and invoke MCP PR review; record `Transport closed` fallback if MCP PR tooling remains unavailable. Evidence: PR #324 opened; `mcp__pr.pr_invoke` returned `Transport closed`; CodeRabbit status reported SUCCESS in GitHub status rollup.
 - [ ] T028: Resolve material review findings and merge only after green CI/review closure.
 
 ## Milestone Evidence
