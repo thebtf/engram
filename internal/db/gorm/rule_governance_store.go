@@ -1591,10 +1591,18 @@ func decodeRuleGovernanceSnapshotState(raw JSONRaw) ruleGovernanceSnapshotState 
 	if len(state.RuleVersions) > 0 || strings.TrimSpace(state.Project) != "" {
 		return state
 	}
-	var legacy ruleVersionRow
+	var legacy struct {
+		ID                  int64   `json:"ID"`
+		State               string  `json:"State"`
+		ActivationPredicate JSONRaw `json:"ActivationPredicate"`
+	}
 	if err := json.Unmarshal(raw, &legacy); err == nil && legacy.ID > 0 {
+		project := ""
+		if value, ok := decodeObject(legacy.ActivationPredicate)["project"].(string); ok {
+			project = strings.TrimSpace(value)
+		}
 		return ruleGovernanceSnapshotState{
-			Project: projectFromRuleVersionRow(&legacy),
+			Project: project,
 			RuleVersions: []ruleGovernanceSnapshotRuleVersion{{
 				ID:    legacy.ID,
 				State: legacy.State,
