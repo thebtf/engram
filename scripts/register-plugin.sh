@@ -26,11 +26,12 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
 mkdir -p "$HOME/.claude/plugins"
 
-# Remove stale cache versions so old binaries cannot shadow the new one
+# Preserve stale cache versions: already-running sessions may have hook
+# commands pointing at their versioned cache path until they restart.
+# installed_plugins.json below points new sessions at CACHE_PATH, so old
+# cache slots no longer shadow the new plugin.
 if [ -d "$CACHE_BASE" ]; then
-    echo "Removing old cache versions..."
-    find "$CACHE_BASE" -mindepth 1 -maxdepth 1 -type d \
-        ! -name "$VERSION" -exec rm -rf {} \; 2>/dev/null || true
+    echo "Preserving old cache versions for running-session hook compatibility..."
 fi
 
 # Bootstrap JSON files when they do not exist yet

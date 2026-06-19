@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.27.1] - 2026-06-19
+
+### Fixed
+
+- **Codex plugin hook updates preserve running sessions.** The hook dispatcher
+  now repairs missing legacy Codex cache hook entrypoints with shims that
+  forward old absolute hook paths to the latest dispatcher, and script installers
+  preserve versioned cache slots instead of deleting paths that an already-running
+  session may still reference.
+
 ## [6.27.0] - 2026-06-19
 
 ### Added

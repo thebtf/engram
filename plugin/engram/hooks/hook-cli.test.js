@@ -8,6 +8,7 @@ const test = require('node:test');
 const hooksDir = __dirname;
 const pluginRoot = path.resolve(hooksDir, '..');
 const repoRoot = path.resolve(pluginRoot, '..', '..');
+const dispatcher = require('./dispatcher.cjs');
 
 function runHook(scriptName, input) {
   const scriptPath = path.join(hooksDir, scriptName);
@@ -203,6 +204,98 @@ test('launcher fails open when resolved Codex cache dispatcher has missing child
   }
 });
 
+test('dispatcher repairs missing legacy Codex cache hook entrypoints with latest-dispatcher shims', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-legacy-cache-'));
+  try {
+    const codexHome = path.join(tempRoot, '.codex');
+    const cacheBase = path.join(codexHome, 'plugins', 'cache', 'engram-marketplace', 'engram');
+    const oldRoot = path.join(cacheBase, '6.25.1');
+    const latestRoot = path.join(cacheBase, '6.27.1');
+    const bogusRoot = path.join(cacheBase, '999.0.0');
+    const oldHooks = path.join(oldRoot, 'hooks');
+    const latestHooks = path.join(latestRoot, 'hooks');
+    const latestManifest = path.join(latestRoot, '.codex-plugin');
+    const bogusHooks = path.join(bogusRoot, 'hooks');
+
+    fs.mkdirSync(oldHooks, { recursive: true });
+    fs.mkdirSync(latestHooks, { recursive: true });
+    fs.mkdirSync(latestManifest, { recursive: true });
+    fs.mkdirSync(bogusHooks, { recursive: true });
+    fs.writeFileSync(path.join(latestManifest, 'plugin.json'), JSON.stringify({ name: 'engram' }), 'utf8');
+    fs.writeFileSync(
+      path.join(latestHooks, 'dispatcher.cjs'),
+      "module.exports.main=function(){process.stdout.write(JSON.stringify({root:'latest',event:process.env.ENGRAM_HOOK_EVENT})+'\\n')};\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(bogusHooks, 'dispatcher.cjs'),
+      "module.exports.main=function(){process.stdout.write('bogus\\n')};\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(oldHooks, 'pre-compact.js'),
+      "function cacheRoots(){const home=process.env.CODEX_HOME;return []} process.stdout.write('old-bad\\n');\n",
+      'utf8',
+    );
+
+    const repaired = dispatcher.repairLegacyCodexCacheHooks(latestRoot);
+    const legacyPreCompact = path.join(oldRoot, 'hooks', 'pre-compact.js');
+
+    assert.ok(repaired.includes(legacyPreCompact));
+    assert.ok(fs.existsSync(legacyPreCompact));
+
+    const result = spawnSync(process.execPath, [legacyPreCompact], {
+      input: JSON.stringify({ session_id: 's1' }),
+      encoding: 'utf8',
+      timeout: 2000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CODEX_PLUGIN_ROOT: '',
+        CODEX_PLUGIN_DIR: '',
+        PLUGIN_ROOT: '',
+        CLAUDE_PLUGIN_ROOT: '',
+        CLAUDE_PLUGIN_DIR: '',
+      },
+    });
+
+    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { root: 'latest', event: 'PreCompact' });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('legacy shim fails open when its pinned dispatcher throws', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-shim-failopen-'));
+  try {
+    const badDispatcher = path.join(tempRoot, 'dispatcher.cjs');
+    const legacyHook = path.join(tempRoot, 'pre-compact.js');
+
+    fs.writeFileSync(badDispatcher, "throw new Error('broken dispatcher');\n", 'utf8');
+    fs.writeFileSync(legacyHook, dispatcher.buildLegacyShim('PreCompact', badDispatcher), 'utf8');
+
+    const result = spawnSync(process.execPath, [legacyHook], {
+      input: JSON.stringify({ session_id: 's1' }),
+      encoding: 'utf8',
+      timeout: 2000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024,
+      env: { ...process.env },
+    });
+
+    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /dispatcher failed open: broken dispatcher/);
+    assert.equal(result.stdout, '{"continue":true}\n');
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('dispatcher fails open when a child hook file is missing', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-missing-child-'));
   try {
@@ -266,6 +359,7 @@ test('release archives include scripts required by hooks and MCP wrapper', () =>
   const dispatcher = fs.readFileSync(path.join(hooksDir, 'dispatcher.cjs'), 'utf8');
 
   assert.match(goreleaser, /src:\s+plugin\/engram\/scripts\/\*\.js/);
+  assert.match(goreleaser, /src:\s+plugin\/engram\/hooks\/\*\.cjs/);
   assert.match(goreleaser, /dst:\s+scripts/);
   assert.deepEqual(codexMcp.mcpServers.engram.args, ['./scripts/run-engram.js']);
   assert.deepEqual(claudeMcp.mcpServers.engram.args, ['${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js']);
@@ -275,9 +369,18 @@ test('release archives include scripts required by hooks and MCP wrapper', () =>
 test('release installers copy plugin scripts from archives', () => {
   const installSh = readRepoFile('scripts', 'install.sh');
   const installPs1 = readRepoFile('scripts', 'install.ps1');
+  const registerPluginSh = readRepoFile('scripts', 'register-plugin.sh');
 
   assert.match(installSh, /mkdir -p "\$INSTALL_DIR\/hooks" "\$INSTALL_DIR\/scripts"/);
   assert.match(installSh, /cp "\$tmp_dir\/scripts\/"\*\.js "\$INSTALL_DIR\/scripts\/"/);
+  assert.match(installSh, /cp "\$tmp_dir\/hooks\/"\*\.cjs "\$INSTALL_DIR\/hooks\/"/);
+  assert.match(installSh, /Preserving old cache versions for running-session hook compatibility/);
+  assert.doesNotMatch(installSh, /-exec rm -rf \{\}/);
   assert.match(installPs1, /New-Item -ItemType Directory -Path "\$InstallDir\\scripts"/);
   assert.match(installPs1, /Copy-Item "\$TempDir\\scripts\\\*\.js" "\$InstallDir\\scripts\\"/);
+  assert.match(installPs1, /Copy-Item "\$TempDir\\hooks\\\*\.cjs" "\$InstallDir\\hooks\\"/);
+  assert.match(installPs1, /Preserving old cache versions for running-session hook compatibility/);
+  assert.doesNotMatch(installPs1, /Get-ChildItem -Path \$CacheBase[\s\S]*Remove-Item -Recurse -Force/);
+  assert.match(registerPluginSh, /Preserving old cache versions for running-session hook compatibility/);
+  assert.doesNotMatch(registerPluginSh, /-exec rm -rf \{\}/);
 });
