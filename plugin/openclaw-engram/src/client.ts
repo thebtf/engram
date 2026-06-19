@@ -27,6 +27,7 @@ export interface Observation {
 export interface ContextInjectResponse {
   observations: Observation[];
   sessionId?: number;
+  rule_router?: RuleRouterPayload;
 }
 
 export interface ContextSearchResponse {
@@ -37,6 +38,35 @@ export interface ContextSearchResponse {
    * regardless of query relevance.
    */
   always_inject?: Observation[];
+  rule_router?: RuleRouterPayload;
+}
+
+export interface RuleRouterPacket {
+  rule_version_id?: number;
+  legacy_behavioral_rule_id?: number;
+  bucket?: string;
+  scope?: string;
+  audience?: string;
+  content?: string;
+  summary?: string;
+  evidence_handles?: string[];
+  state?: string;
+  budget_class?: string;
+  priority?: number;
+  suppression_reason?: string;
+}
+
+export interface RuleRouterPayload {
+  enabled?: boolean;
+  mode?: string;
+  kernel_count?: number;
+  contextual_count?: number;
+  suppressed_count?: number;
+  budget_outcome?: string;
+  kernel?: RuleRouterPacket[];
+  contextual?: RuleRouterPacket[];
+  suppressed?: RuleRouterPacket[];
+  fallback_reason?: string;
 }
 
 export interface SessionInitResponse {

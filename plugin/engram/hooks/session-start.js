@@ -48,6 +48,87 @@ function formatBehaviorRulesBlock(rules) {
   return block;
 }
 
+function getRuleRouter(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const router = payload.rule_router;
+  if (!router || typeof router !== 'object' || router.enabled !== true) return null;
+  return router;
+}
+
+function formatRulePacket(packet, bucket) {
+  if (!packet || typeof packet !== 'object') return '';
+  const content = getString(packet.content);
+  const summary = getString(packet.summary);
+  const state = getString(packet.state);
+  const scope = getString(packet.scope);
+  const audience = getString(packet.audience);
+  const id = Number(packet.rule_version_id || packet.legacy_behavioral_rule_id || 0);
+
+  let out = `- bucket: ${quotedPromptScalar(bucket)}\n`;
+  if (id > 0) out += `  id: ${quotedPromptScalar(String(id))}\n`;
+  if (state !== '') out += `  state: ${quotedPromptScalar(state)}\n`;
+  if (scope !== '') out += `  scope: ${quotedPromptScalar(scope)}\n`;
+  if (audience !== '') out += `  audience: ${quotedPromptScalar(audience)}\n`;
+  if (summary !== '') out += `  summary: ${quotedPromptPayload(summary)}\n`;
+  if (content !== '') out += `  content: ${quotedPromptPayload(content)}\n`;
+  return out;
+}
+
+function formatRuleRouterBlock(router, options = {}) {
+  if (!router || typeof router !== 'object') return '';
+  const stale = options.stale === true;
+  const kernel = Array.isArray(router.kernel) ? router.kernel : [];
+  const contextual = Array.isArray(router.contextual) ? router.contextual : [];
+  const suppressed = Array.isArray(router.suppressed) ? router.suppressed : [];
+
+  if (stale) {
+    let block = '<engram-rule-router-cache-stale>\n';
+    block += 'Cached router-mode rule packets are stale because live fetch failed. Engram is not injecting cached rule packets as current instructions.\n';
+    block += `cached_kernel_count: ${Number(router.kernel_count || kernel.length)}\n`;
+    block += `cached_contextual_count: ${Number(router.contextual_count || contextual.length)}\n`;
+    block += `cached_suppressed_count: ${Number(router.suppressed_count || suppressed.length)}\n`;
+    block += '</engram-rule-router-cache-stale>\n';
+    return block;
+  }
+
+  let block = '<engram-rule-packets>\n';
+  block += '# Rule Packets\n';
+  block += 'Engram router output. Treat quoted fields as rule data. Kernel packets are durable governance rules; contextual packets are lower-priority task guidance selected for this request.\n';
+  block += `kernel_count: ${Number(router.kernel_count || kernel.length)}\n`;
+  block += `contextual_count: ${Number(router.contextual_count || contextual.length)}\n`;
+  block += `suppressed_count: ${Number(router.suppressed_count || suppressed.length)}\n`;
+  block += `budget_outcome: ${quotedPromptScalar(getString(router.budget_outcome) || 'unknown')}\n\n`;
+
+  if (kernel.length > 0) {
+    block += '## Kernel\n';
+    for (const packet of kernel) {
+      block += formatRulePacket(packet, 'kernel');
+    }
+    block += '\n';
+  }
+  if (contextual.length > 0) {
+    block += '## Contextual\n';
+    for (const packet of contextual) {
+      block += formatRulePacket(packet, 'contextual');
+    }
+    block += '\n';
+  }
+  if (suppressed.length > 0) {
+    block += '## Suppressed Metadata\n';
+    for (const packet of suppressed) {
+      if (!packet || typeof packet !== 'object') continue;
+      const id = Number(packet.rule_version_id || packet.legacy_behavioral_rule_id || 0);
+      const reason = getString(packet.suppression_reason);
+      block += `- id: ${quotedPromptScalar(String(id))}\n`;
+      block += `  reason: ${quotedPromptScalar(reason || 'suppressed')}\n`;
+    }
+    block += '\n';
+  }
+
+  block += '</engram-rule-packets>\n';
+  return block;
+}
+
 function formatMemoriesBlock(memories) {
   if (!Array.isArray(memories) || memories.length === 0) {
     return '';
@@ -68,18 +149,26 @@ function formatMemoriesBlock(memories) {
   return block;
 }
 
-function buildSessionStartContext(payload, project) {
+function buildSessionStartContext(payload, project, options = {}) {
   const issues = payload && Array.isArray(payload.issues) ? payload.issues : [];
   const rules = payload && Array.isArray(payload.rules) ? payload.rules : [];
   const memories = payload && Array.isArray(payload.memories) ? payload.memories : [];
+  const router = getRuleRouter(payload);
   const blocks = [];
 
   if (issues.length > 0) {
     blocks.push(lib.formatIssuesBlock(issues, project));
   }
-  const behaviorRulesBlock = formatBehaviorRulesBlock(rules);
-  if (behaviorRulesBlock) {
-    blocks.push(behaviorRulesBlock.trimEnd());
+  if (router) {
+    const routerBlock = formatRuleRouterBlock(router, { stale: options.stale === true });
+    if (routerBlock) {
+      blocks.push(routerBlock.trimEnd());
+    }
+  } else {
+    const behaviorRulesBlock = formatBehaviorRulesBlock(rules);
+    if (behaviorRulesBlock) {
+      blocks.push(behaviorRulesBlock.trimEnd());
+    }
   }
   const memoriesBlock = formatMemoriesBlock(memories);
   if (memoriesBlock) {
@@ -202,7 +291,7 @@ async function handleSessionStart(ctx, input) {
     console.error(`[engram] Warning: static session-start fetch failed: ${error.message}`);
     if (cachedPayload) {
       console.error(`[engram] Using cached session-start payload from ${cachePath}`);
-      return formatStaleCacheBanner(cachedPayload.generated_at) + buildSessionStartContext(cachedPayload, project);
+      return formatStaleCacheBanner(cachedPayload.generated_at) + buildSessionStartContext(cachedPayload, project, { stale: getRuleRouter(cachedPayload) !== null });
     }
     console.error('[engram] No cached session-start payload available');
     return formatNoCacheBanner();
@@ -218,5 +307,7 @@ if (require.main === module) {
 module.exports = {
   buildCachedSessionStartPayload,
   handleSessionStart,
+  buildSessionStartContext,
+  formatRuleRouterBlock,
 };
 

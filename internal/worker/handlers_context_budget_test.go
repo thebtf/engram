@@ -4,16 +4,17 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 func makeObs(id int64, title, narrative string, facts []string) *models.Observation {
 	obs := &models.Observation{
-		ID:   id,
-		Type: "discovery",
-		Title: sql.NullString{String: title, Valid: true},
+		ID:        id,
+		Type:      "discovery",
+		Title:     sql.NullString{String: title, Valid: true},
 		Narrative: sql.NullString{String: narrative, Valid: narrative != ""},
-		Facts: models.JSONStringArray(facts),
+		Facts:     models.JSONStringArray(facts),
 	}
 	if narrative != "" {
 		obs.Subtitle = sql.NullString{String: title, Valid: true}
@@ -23,10 +24,10 @@ func makeObs(id int64, title, narrative string, facts []string) *models.Observat
 
 func TestEstimateObsTokens(t *testing.T) {
 	tests := []struct {
-		name     string
-		obs      *models.Observation
-		wantMin  int
-		wantMax  int
+		name    string
+		obs     *models.Observation
+		wantMin int
+		wantMax int
 	}{
 		{
 			name:    "short observation",
@@ -130,6 +131,20 @@ func TestFilterByIDs(t *testing.T) {
 	}
 	if result[0].ID != 1 || result[1].ID != 3 {
 		t.Errorf("expected IDs [1, 3], got [%d, %d]", result[0].ID, result[1].ID)
+	}
+}
+
+func TestLegacyAlwaysInjectEnabledHonorsRuleRouterFlag(t *testing.T) {
+	if !legacyAlwaysInjectEnabled(nil) {
+		t.Fatal("nil config should preserve legacy always-inject behavior")
+	}
+	cfg := config.Default()
+	if !legacyAlwaysInjectEnabled(cfg) {
+		t.Fatal("router disabled should preserve legacy always-inject behavior")
+	}
+	cfg.RuleRouterEnabled = true
+	if legacyAlwaysInjectEnabled(cfg) {
+		t.Fatal("router enabled must suppress legacy always-inject behavioral rules")
 	}
 }
 
@@ -242,7 +257,7 @@ func TestEstimateTokensWithLimit(t *testing.T) {
 	}
 
 	allFull := estimateTokensWithLimit(obs, -1)
-	mixed := estimateTokensWithLimit(obs, 1)   // only first is full
+	mixed := estimateTokensWithLimit(obs, 1) // only first is full
 	allCondensed := estimateTokensWithLimit(obs, 0)
 
 	if mixed >= allFull {

@@ -10,7 +10,12 @@
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { resolveIdentity } from '../identity.js';
-import { formatContext, quotedPromptScalar } from '../context/formatter.js';
+import {
+  formatContext,
+  formatRuleRouter,
+  isRouterPayloadEnabled,
+  quotedPromptScalar,
+} from '../context/formatter.js';
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartResult,
@@ -47,14 +52,16 @@ export async function handleBeforeAgentStart(
       ctx.workspaceDir,
     );
 
-    if (!response || !Array.isArray(response.observations) || response.observations.length === 0) {
-      return;
-    }
+    if (!response) return;
 
+    const observations = Array.isArray(response.observations) ? response.observations : [];
     const { context, injectedIds, trimmedCount } = formatContext(
-      response.observations,
+      observations,
       { tokenBudget: config.tokenBudget },
     );
+    const routerBlock = isRouterPayloadEnabled(response.rule_router)
+      ? formatRuleRouter(response.rule_router)
+      : '';
 
     if (trimmedCount > 0) {
       (logger ?? console).warn(
@@ -62,7 +69,7 @@ export async function handleBeforeAgentStart(
       );
     }
 
-    if (!context) return;
+    if (!context && !routerBlock) return;
 
     // Mark observations as injected (fire-and-forget)
     if (injectedIds.length > 0 && response.sessionId) {
@@ -89,7 +96,8 @@ export async function handleBeforeAgentStart(
 
     // Build static instructions + dynamic session context
     const staticInstructions = buildStaticInstructions(project);
-    const fullContext = staticInstructions + '\n\n' + context;
+    const dynamicContext = [routerBlock, context].filter(Boolean).join('\n\n');
+    const fullContext = staticInstructions + '\n\n' + dynamicContext;
 
     return { appendSystemContext: fullContext };
   } catch (err) {

@@ -911,3 +911,40 @@ func TestLoad_ContextSettings(t *testing.T) {
 	assert.Equal(t, []string{"bugfix", "feature"}, cfg.ContextObsTypes)
 	assert.Equal(t, []string{"security", "performance"}, cfg.ContextObsConcepts)
 }
+
+func (s *ConfigSuite) TestDefault_RuleRouterDefaults() {
+	cfg := Default()
+	s.False(cfg.RuleRouterEnabled)
+	s.Equal(8, cfg.RuleRouterKernelMax)
+	s.Equal(12, cfg.RuleRouterContextualMax)
+	s.Equal(4800, cfg.RuleRouterMaxRenderedChars)
+	s.True(cfg.RuleRouterTelemetryBestEffort)
+}
+
+func (s *ConfigSuite) TestRuleRouterEnvOverrides() {
+	s.T().Setenv("ENGRAM_RULE_ROUTER_ENABLED", "1")
+	s.T().Setenv("ENGRAM_RULE_ROUTER_KERNEL_MAX", "3")
+	s.T().Setenv("ENGRAM_RULE_ROUTER_CONTEXTUAL_MAX", "5")
+	s.T().Setenv("ENGRAM_RULE_ROUTER_MAX_RENDERED_CHARS", "2048")
+	s.T().Setenv("ENGRAM_RULE_ROUTER_TELEMETRY_BEST_EFFORT", "false")
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.True(cfg.RuleRouterEnabled)
+	s.Equal(3, cfg.RuleRouterKernelMax)
+	s.Equal(5, cfg.RuleRouterContextualMax)
+	s.Equal(2048, cfg.RuleRouterMaxRenderedChars)
+	s.False(cfg.RuleRouterTelemetryBestEffort)
+}
+
+func (s *ConfigSuite) TestRuleRouterInvalidNumericEnvFallsBack() {
+	s.T().Setenv("ENGRAM_RULE_ROUTER_KERNEL_MAX", "0")
+	s.T().Setenv("ENGRAM_RULE_ROUTER_CONTEXTUAL_MAX", "-1")
+	s.T().Setenv("ENGRAM_RULE_ROUTER_MAX_RENDERED_CHARS", "not-a-number")
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal(8, cfg.RuleRouterKernelMax)
+	s.Equal(12, cfg.RuleRouterContextualMax)
+	s.Equal(4800, cfg.RuleRouterMaxRenderedChars)
+}

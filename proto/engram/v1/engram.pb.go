@@ -423,11 +423,12 @@ func (x *GetSessionStartContextRequest) GetIssuesLimit() int32 {
 }
 
 type GetSessionStartContextResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Issues        []*SessionStartIssue   `protobuf:"bytes,1,rep,name=issues,proto3" json:"issues,omitempty"`
-	Rules         []*SessionStartRule    `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
-	Memories      []*SessionStartMemory  `protobuf:"bytes,3,rep,name=memories,proto3" json:"memories,omitempty"`
-	GeneratedAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Issues        []*SessionStartIssue    `protobuf:"bytes,1,rep,name=issues,proto3" json:"issues,omitempty"`
+	Rules         []*SessionStartRule     `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
+	Memories      []*SessionStartMemory   `protobuf:"bytes,3,rep,name=memories,proto3" json:"memories,omitempty"`
+	GeneratedAt   *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	RuleRouter    *SessionStartRuleRouter `protobuf:"bytes,5,opt,name=rule_router,json=ruleRouter,proto3" json:"rule_router,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -486,6 +487,13 @@ func (x *GetSessionStartContextResponse) GetMemories() []*SessionStartMemory {
 func (x *GetSessionStartContextResponse) GetGeneratedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.GeneratedAt
+	}
+	return nil
+}
+
+func (x *GetSessionStartContextResponse) GetRuleRouter() *SessionStartRuleRouter {
+	if x != nil {
+		return x.RuleRouter
 	}
 	return nil
 }
@@ -762,6 +770,254 @@ func (x *SessionStartRule) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+type SessionStartRuleRouter struct {
+	state           protoimpl.MessageState    `protogen:"open.v1"`
+	Enabled         bool                      `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Mode            string                    `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
+	KernelCount     int32                     `protobuf:"varint,3,opt,name=kernel_count,json=kernelCount,proto3" json:"kernel_count,omitempty"`
+	ContextualCount int32                     `protobuf:"varint,4,opt,name=contextual_count,json=contextualCount,proto3" json:"contextual_count,omitempty"`
+	SuppressedCount int32                     `protobuf:"varint,5,opt,name=suppressed_count,json=suppressedCount,proto3" json:"suppressed_count,omitempty"`
+	BudgetOutcome   string                    `protobuf:"bytes,6,opt,name=budget_outcome,json=budgetOutcome,proto3" json:"budget_outcome,omitempty"`
+	Kernel          []*SessionStartRulePacket `protobuf:"bytes,7,rep,name=kernel,proto3" json:"kernel,omitempty"`
+	Contextual      []*SessionStartRulePacket `protobuf:"bytes,8,rep,name=contextual,proto3" json:"contextual,omitempty"`
+	Suppressed      []*SessionStartRulePacket `protobuf:"bytes,9,rep,name=suppressed,proto3" json:"suppressed,omitempty"`
+	FallbackReason  string                    `protobuf:"bytes,10,opt,name=fallback_reason,json=fallbackReason,proto3" json:"fallback_reason,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SessionStartRuleRouter) Reset() {
+	*x = SessionStartRuleRouter{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionStartRuleRouter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionStartRuleRouter) ProtoMessage() {}
+
+func (x *SessionStartRuleRouter) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionStartRuleRouter.ProtoReflect.Descriptor instead.
+func (*SessionStartRuleRouter) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SessionStartRuleRouter) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *SessionStartRuleRouter) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *SessionStartRuleRouter) GetKernelCount() int32 {
+	if x != nil {
+		return x.KernelCount
+	}
+	return 0
+}
+
+func (x *SessionStartRuleRouter) GetContextualCount() int32 {
+	if x != nil {
+		return x.ContextualCount
+	}
+	return 0
+}
+
+func (x *SessionStartRuleRouter) GetSuppressedCount() int32 {
+	if x != nil {
+		return x.SuppressedCount
+	}
+	return 0
+}
+
+func (x *SessionStartRuleRouter) GetBudgetOutcome() string {
+	if x != nil {
+		return x.BudgetOutcome
+	}
+	return ""
+}
+
+func (x *SessionStartRuleRouter) GetKernel() []*SessionStartRulePacket {
+	if x != nil {
+		return x.Kernel
+	}
+	return nil
+}
+
+func (x *SessionStartRuleRouter) GetContextual() []*SessionStartRulePacket {
+	if x != nil {
+		return x.Contextual
+	}
+	return nil
+}
+
+func (x *SessionStartRuleRouter) GetSuppressed() []*SessionStartRulePacket {
+	if x != nil {
+		return x.Suppressed
+	}
+	return nil
+}
+
+func (x *SessionStartRuleRouter) GetFallbackReason() string {
+	if x != nil {
+		return x.FallbackReason
+	}
+	return ""
+}
+
+type SessionStartRulePacket struct {
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	RuleVersionId          int64                  `protobuf:"varint,1,opt,name=rule_version_id,json=ruleVersionId,proto3" json:"rule_version_id,omitempty"`
+	LegacyBehavioralRuleId int64                  `protobuf:"varint,2,opt,name=legacy_behavioral_rule_id,json=legacyBehavioralRuleId,proto3" json:"legacy_behavioral_rule_id,omitempty"`
+	Bucket                 string                 `protobuf:"bytes,3,opt,name=bucket,proto3" json:"bucket,omitempty"`
+	Scope                  string                 `protobuf:"bytes,4,opt,name=scope,proto3" json:"scope,omitempty"`
+	Audience               string                 `protobuf:"bytes,5,opt,name=audience,proto3" json:"audience,omitempty"`
+	Content                string                 `protobuf:"bytes,6,opt,name=content,proto3" json:"content,omitempty"`
+	Summary                string                 `protobuf:"bytes,7,opt,name=summary,proto3" json:"summary,omitempty"`
+	EvidenceHandles        []string               `protobuf:"bytes,8,rep,name=evidence_handles,json=evidenceHandles,proto3" json:"evidence_handles,omitempty"`
+	State                  string                 `protobuf:"bytes,9,opt,name=state,proto3" json:"state,omitempty"`
+	BudgetClass            string                 `protobuf:"bytes,10,opt,name=budget_class,json=budgetClass,proto3" json:"budget_class,omitempty"`
+	Priority               int32                  `protobuf:"varint,11,opt,name=priority,proto3" json:"priority,omitempty"`
+	SuppressionReason      string                 `protobuf:"bytes,12,opt,name=suppression_reason,json=suppressionReason,proto3" json:"suppression_reason,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *SessionStartRulePacket) Reset() {
+	*x = SessionStartRulePacket{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionStartRulePacket) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionStartRulePacket) ProtoMessage() {}
+
+func (x *SessionStartRulePacket) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionStartRulePacket.ProtoReflect.Descriptor instead.
+func (*SessionStartRulePacket) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SessionStartRulePacket) GetRuleVersionId() int64 {
+	if x != nil {
+		return x.RuleVersionId
+	}
+	return 0
+}
+
+func (x *SessionStartRulePacket) GetLegacyBehavioralRuleId() int64 {
+	if x != nil {
+		return x.LegacyBehavioralRuleId
+	}
+	return 0
+}
+
+func (x *SessionStartRulePacket) GetBucket() string {
+	if x != nil {
+		return x.Bucket
+	}
+	return ""
+}
+
+func (x *SessionStartRulePacket) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *SessionStartRulePacket) GetAudience() string {
+	if x != nil {
+		return x.Audience
+	}
+	return ""
+}
+
+func (x *SessionStartRulePacket) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *SessionStartRulePacket) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *SessionStartRulePacket) GetEvidenceHandles() []string {
+	if x != nil {
+		return x.EvidenceHandles
+	}
+	return nil
+}
+
+func (x *SessionStartRulePacket) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *SessionStartRulePacket) GetBudgetClass() string {
+	if x != nil {
+		return x.BudgetClass
+	}
+	return ""
+}
+
+func (x *SessionStartRulePacket) GetPriority() int32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
+func (x *SessionStartRulePacket) GetSuppressionReason() string {
+	if x != nil {
+		return x.SuppressionReason
+	}
+	return ""
+}
+
 type SessionStartMemory struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -779,7 +1035,7 @@ type SessionStartMemory struct {
 
 func (x *SessionStartMemory) Reset() {
 	*x = SessionStartMemory{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[8]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -791,7 +1047,7 @@ func (x *SessionStartMemory) String() string {
 func (*SessionStartMemory) ProtoMessage() {}
 
 func (x *SessionStartMemory) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[8]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -804,7 +1060,7 @@ func (x *SessionStartMemory) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionStartMemory.ProtoReflect.Descriptor instead.
 func (*SessionStartMemory) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{8}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SessionStartMemory) GetId() int64 {
@@ -879,7 +1135,7 @@ type NegotiateVersionRequest struct {
 
 func (x *NegotiateVersionRequest) Reset() {
 	*x = NegotiateVersionRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[9]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -891,7 +1147,7 @@ func (x *NegotiateVersionRequest) String() string {
 func (*NegotiateVersionRequest) ProtoMessage() {}
 
 func (x *NegotiateVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[9]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -904,7 +1160,7 @@ func (x *NegotiateVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NegotiateVersionRequest.ProtoReflect.Descriptor instead.
 func (*NegotiateVersionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{9}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *NegotiateVersionRequest) GetClientVersion() string {
@@ -925,7 +1181,7 @@ type NegotiateVersionResponse struct {
 
 func (x *NegotiateVersionResponse) Reset() {
 	*x = NegotiateVersionResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[10]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -937,7 +1193,7 @@ func (x *NegotiateVersionResponse) String() string {
 func (*NegotiateVersionResponse) ProtoMessage() {}
 
 func (x *NegotiateVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[10]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -950,7 +1206,7 @@ func (x *NegotiateVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NegotiateVersionResponse.ProtoReflect.Descriptor instead.
 func (*NegotiateVersionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{10}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *NegotiateVersionResponse) GetCompatible() bool {
@@ -991,7 +1247,7 @@ type CallToolRequest struct {
 
 func (x *CallToolRequest) Reset() {
 	*x = CallToolRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[11]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1003,7 +1259,7 @@ func (x *CallToolRequest) String() string {
 func (*CallToolRequest) ProtoMessage() {}
 
 func (x *CallToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[11]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1016,7 +1272,7 @@ func (x *CallToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallToolRequest.ProtoReflect.Descriptor instead.
 func (*CallToolRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{11}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CallToolRequest) GetToolName() string {
@@ -1060,7 +1316,7 @@ type CallToolResponse struct {
 
 func (x *CallToolResponse) Reset() {
 	*x = CallToolResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[12]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1072,7 +1328,7 @@ func (x *CallToolResponse) String() string {
 func (*CallToolResponse) ProtoMessage() {}
 
 func (x *CallToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[12]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1085,7 +1341,7 @@ func (x *CallToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallToolResponse.ProtoReflect.Descriptor instead.
 func (*CallToolResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{12}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CallToolResponse) GetIsError() bool {
@@ -1114,7 +1370,7 @@ type InitializeRequest struct {
 
 func (x *InitializeRequest) Reset() {
 	*x = InitializeRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[13]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1126,7 +1382,7 @@ func (x *InitializeRequest) String() string {
 func (*InitializeRequest) ProtoMessage() {}
 
 func (x *InitializeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[13]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1139,7 +1395,7 @@ func (x *InitializeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializeRequest.ProtoReflect.Descriptor instead.
 func (*InitializeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{13}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *InitializeRequest) GetClientName() string {
@@ -1175,7 +1431,7 @@ type InitializeResponse struct {
 
 func (x *InitializeResponse) Reset() {
 	*x = InitializeResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[14]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1187,7 +1443,7 @@ func (x *InitializeResponse) String() string {
 func (*InitializeResponse) ProtoMessage() {}
 
 func (x *InitializeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[14]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1200,7 +1456,7 @@ func (x *InitializeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializeResponse.ProtoReflect.Descriptor instead.
 func (*InitializeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{14}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *InitializeResponse) GetServerName() string {
@@ -1237,7 +1493,7 @@ type ToolDefinition struct {
 
 func (x *ToolDefinition) Reset() {
 	*x = ToolDefinition{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[15]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1249,7 +1505,7 @@ func (x *ToolDefinition) String() string {
 func (*ToolDefinition) ProtoMessage() {}
 
 func (x *ToolDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[15]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1262,7 +1518,7 @@ func (x *ToolDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDefinition.ProtoReflect.Descriptor instead.
 func (*ToolDefinition) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{15}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ToolDefinition) GetName() string {
@@ -1294,7 +1550,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[16]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1306,7 +1562,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[16]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1319,7 +1575,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{16}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{18}
 }
 
 type PingResponse struct {
@@ -1331,7 +1587,7 @@ type PingResponse struct {
 
 func (x *PingResponse) Reset() {
 	*x = PingResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[17]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1343,7 +1599,7 @@ func (x *PingResponse) String() string {
 func (*PingResponse) ProtoMessage() {}
 
 func (x *PingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[17]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1356,7 +1612,7 @@ func (x *PingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
 func (*PingResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{17}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PingResponse) GetStatus() string {
@@ -1384,7 +1640,7 @@ type CodeChunkMeta struct {
 
 func (x *CodeChunkMeta) Reset() {
 	*x = CodeChunkMeta{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[18]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1396,7 +1652,7 @@ func (x *CodeChunkMeta) String() string {
 func (*CodeChunkMeta) ProtoMessage() {}
 
 func (x *CodeChunkMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[18]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1409,7 +1665,7 @@ func (x *CodeChunkMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeChunkMeta.ProtoReflect.Descriptor instead.
 func (*CodeChunkMeta) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{18}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CodeChunkMeta) GetChunkId() string {
@@ -1475,7 +1731,7 @@ type CodeIndexNegotiateRequest struct {
 
 func (x *CodeIndexNegotiateRequest) Reset() {
 	*x = CodeIndexNegotiateRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[19]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1487,7 +1743,7 @@ func (x *CodeIndexNegotiateRequest) String() string {
 func (*CodeIndexNegotiateRequest) ProtoMessage() {}
 
 func (x *CodeIndexNegotiateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[19]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1500,7 +1756,7 @@ func (x *CodeIndexNegotiateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeIndexNegotiateRequest.ProtoReflect.Descriptor instead.
 func (*CodeIndexNegotiateRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{19}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CodeIndexNegotiateRequest) GetProjectId() string {
@@ -1540,7 +1796,7 @@ type CodeIndexNegotiateResponse struct {
 
 func (x *CodeIndexNegotiateResponse) Reset() {
 	*x = CodeIndexNegotiateResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[20]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1552,7 +1808,7 @@ func (x *CodeIndexNegotiateResponse) String() string {
 func (*CodeIndexNegotiateResponse) ProtoMessage() {}
 
 func (x *CodeIndexNegotiateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[20]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1565,7 +1821,7 @@ func (x *CodeIndexNegotiateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeIndexNegotiateResponse.ProtoReflect.Descriptor instead.
 func (*CodeIndexNegotiateResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{20}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CodeIndexNegotiateResponse) GetNeedChunks() []string {
@@ -1595,7 +1851,7 @@ type CodeChunkUpload struct {
 
 func (x *CodeChunkUpload) Reset() {
 	*x = CodeChunkUpload{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[21]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1607,7 +1863,7 @@ func (x *CodeChunkUpload) String() string {
 func (*CodeChunkUpload) ProtoMessage() {}
 
 func (x *CodeChunkUpload) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[21]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1620,7 +1876,7 @@ func (x *CodeChunkUpload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeChunkUpload.ProtoReflect.Descriptor instead.
 func (*CodeChunkUpload) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{21}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CodeChunkUpload) GetProjectId() string {
@@ -1667,7 +1923,7 @@ type CodeIndexUploadReceipt struct {
 
 func (x *CodeIndexUploadReceipt) Reset() {
 	*x = CodeIndexUploadReceipt{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[22]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1679,7 +1935,7 @@ func (x *CodeIndexUploadReceipt) String() string {
 func (*CodeIndexUploadReceipt) ProtoMessage() {}
 
 func (x *CodeIndexUploadReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[22]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1692,7 +1948,7 @@ func (x *CodeIndexUploadReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeIndexUploadReceipt.ProtoReflect.Descriptor instead.
 func (*CodeIndexUploadReceipt) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{22}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CodeIndexUploadReceipt) GetEmbedded() int32 {
@@ -1746,12 +2002,14 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x1dGetSessionStartContextRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12%\n" +
 	"\x0ememories_limit\x18\x02 \x01(\x05R\rmemoriesLimit\x12!\n" +
-	"\fissues_limit\x18\x03 \x01(\x05R\vissuesLimit\"\x83\x02\n" +
+	"\fissues_limit\x18\x03 \x01(\x05R\vissuesLimit\"\xc7\x02\n" +
 	"\x1eGetSessionStartContextResponse\x124\n" +
 	"\x06issues\x18\x01 \x03(\v2\x1c.engram.v1.SessionStartIssueR\x06issues\x121\n" +
 	"\x05rules\x18\x02 \x03(\v2\x1b.engram.v1.SessionStartRuleR\x05rules\x129\n" +
 	"\bmemories\x18\x03 \x03(\v2\x1d.engram.v1.SessionStartMemoryR\bmemories\x12=\n" +
-	"\fgenerated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\"\xb1\x05\n" +
+	"\fgenerated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\x12B\n" +
+	"\vrule_router\x18\x05 \x01(\v2!.engram.v1.SessionStartRuleRouterR\n" +
+	"ruleRouter\"\xb1\x05\n" +
 	"\x11SessionStartIssue\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -1785,7 +2043,37 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xbc\x02\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xd0\x03\n" +
+	"\x16SessionStartRuleRouter\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x12\n" +
+	"\x04mode\x18\x02 \x01(\tR\x04mode\x12!\n" +
+	"\fkernel_count\x18\x03 \x01(\x05R\vkernelCount\x12)\n" +
+	"\x10contextual_count\x18\x04 \x01(\x05R\x0fcontextualCount\x12)\n" +
+	"\x10suppressed_count\x18\x05 \x01(\x05R\x0fsuppressedCount\x12%\n" +
+	"\x0ebudget_outcome\x18\x06 \x01(\tR\rbudgetOutcome\x129\n" +
+	"\x06kernel\x18\a \x03(\v2!.engram.v1.SessionStartRulePacketR\x06kernel\x12A\n" +
+	"\n" +
+	"contextual\x18\b \x03(\v2!.engram.v1.SessionStartRulePacketR\n" +
+	"contextual\x12A\n" +
+	"\n" +
+	"suppressed\x18\t \x03(\v2!.engram.v1.SessionStartRulePacketR\n" +
+	"suppressed\x12'\n" +
+	"\x0ffallback_reason\x18\n" +
+	" \x01(\tR\x0efallbackReason\"\xa8\x03\n" +
+	"\x16SessionStartRulePacket\x12&\n" +
+	"\x0frule_version_id\x18\x01 \x01(\x03R\rruleVersionId\x129\n" +
+	"\x19legacy_behavioral_rule_id\x18\x02 \x01(\x03R\x16legacyBehavioralRuleId\x12\x16\n" +
+	"\x06bucket\x18\x03 \x01(\tR\x06bucket\x12\x14\n" +
+	"\x05scope\x18\x04 \x01(\tR\x05scope\x12\x1a\n" +
+	"\baudience\x18\x05 \x01(\tR\baudience\x12\x18\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\x12\x18\n" +
+	"\asummary\x18\a \x01(\tR\asummary\x12)\n" +
+	"\x10evidence_handles\x18\b \x03(\tR\x0fevidenceHandles\x12\x14\n" +
+	"\x05state\x18\t \x01(\tR\x05state\x12!\n" +
+	"\fbudget_class\x18\n" +
+	" \x01(\tR\vbudgetClass\x12\x1a\n" +
+	"\bpriority\x18\v \x01(\x05R\bpriority\x12-\n" +
+	"\x12suppression_reason\x18\f \x01(\tR\x11suppressionReason\"\xbc\x02\n" +
 	"\x12SessionStartMemory\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x18\n" +
 	"\aproject\x18\x02 \x01(\tR\aproject\x12\x18\n" +
@@ -1891,7 +2179,7 @@ func file_proto_engram_v1_engram_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(ProjectEventType)(0),                  // 0: engram.v1.ProjectEventType
 	(*SyncProjectStateRequest)(nil),        // 1: engram.v1.SyncProjectStateRequest
@@ -1902,67 +2190,73 @@ var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(*GetSessionStartContextResponse)(nil), // 6: engram.v1.GetSessionStartContextResponse
 	(*SessionStartIssue)(nil),              // 7: engram.v1.SessionStartIssue
 	(*SessionStartRule)(nil),               // 8: engram.v1.SessionStartRule
-	(*SessionStartMemory)(nil),             // 9: engram.v1.SessionStartMemory
-	(*NegotiateVersionRequest)(nil),        // 10: engram.v1.NegotiateVersionRequest
-	(*NegotiateVersionResponse)(nil),       // 11: engram.v1.NegotiateVersionResponse
-	(*CallToolRequest)(nil),                // 12: engram.v1.CallToolRequest
-	(*CallToolResponse)(nil),               // 13: engram.v1.CallToolResponse
-	(*InitializeRequest)(nil),              // 14: engram.v1.InitializeRequest
-	(*InitializeResponse)(nil),             // 15: engram.v1.InitializeResponse
-	(*ToolDefinition)(nil),                 // 16: engram.v1.ToolDefinition
-	(*PingRequest)(nil),                    // 17: engram.v1.PingRequest
-	(*PingResponse)(nil),                   // 18: engram.v1.PingResponse
-	(*CodeChunkMeta)(nil),                  // 19: engram.v1.CodeChunkMeta
-	(*CodeIndexNegotiateRequest)(nil),      // 20: engram.v1.CodeIndexNegotiateRequest
-	(*CodeIndexNegotiateResponse)(nil),     // 21: engram.v1.CodeIndexNegotiateResponse
-	(*CodeChunkUpload)(nil),                // 22: engram.v1.CodeChunkUpload
-	(*CodeIndexUploadReceipt)(nil),         // 23: engram.v1.CodeIndexUploadReceipt
-	nil,                                    // 24: engram.v1.ProjectEvent.MetadataEntry
-	(*timestamppb.Timestamp)(nil),          // 25: google.protobuf.Timestamp
+	(*SessionStartRuleRouter)(nil),         // 9: engram.v1.SessionStartRuleRouter
+	(*SessionStartRulePacket)(nil),         // 10: engram.v1.SessionStartRulePacket
+	(*SessionStartMemory)(nil),             // 11: engram.v1.SessionStartMemory
+	(*NegotiateVersionRequest)(nil),        // 12: engram.v1.NegotiateVersionRequest
+	(*NegotiateVersionResponse)(nil),       // 13: engram.v1.NegotiateVersionResponse
+	(*CallToolRequest)(nil),                // 14: engram.v1.CallToolRequest
+	(*CallToolResponse)(nil),               // 15: engram.v1.CallToolResponse
+	(*InitializeRequest)(nil),              // 16: engram.v1.InitializeRequest
+	(*InitializeResponse)(nil),             // 17: engram.v1.InitializeResponse
+	(*ToolDefinition)(nil),                 // 18: engram.v1.ToolDefinition
+	(*PingRequest)(nil),                    // 19: engram.v1.PingRequest
+	(*PingResponse)(nil),                   // 20: engram.v1.PingResponse
+	(*CodeChunkMeta)(nil),                  // 21: engram.v1.CodeChunkMeta
+	(*CodeIndexNegotiateRequest)(nil),      // 22: engram.v1.CodeIndexNegotiateRequest
+	(*CodeIndexNegotiateResponse)(nil),     // 23: engram.v1.CodeIndexNegotiateResponse
+	(*CodeChunkUpload)(nil),                // 24: engram.v1.CodeChunkUpload
+	(*CodeIndexUploadReceipt)(nil),         // 25: engram.v1.CodeIndexUploadReceipt
+	nil,                                    // 26: engram.v1.ProjectEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil),          // 27: google.protobuf.Timestamp
 }
 var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	0,  // 0: engram.v1.ProjectEvent.event_type:type_name -> engram.v1.ProjectEventType
-	24, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
+	26, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
 	7,  // 2: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
 	8,  // 3: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
-	9,  // 4: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
-	25, // 5: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
-	25, // 6: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
-	25, // 7: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
-	25, // 8: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
-	25, // 9: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
-	25, // 10: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
-	25, // 11: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
-	25, // 12: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
-	25, // 13: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
-	25, // 14: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
-	25, // 15: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
-	16, // 16: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
-	19, // 17: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
-	19, // 18: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
-	12, // 19: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
-	14, // 20: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
-	17, // 21: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
-	1,  // 22: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
-	3,  // 23: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
-	5,  // 24: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
-	10, // 25: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
-	20, // 26: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
-	22, // 27: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
-	13, // 28: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
-	15, // 29: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
-	18, // 30: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
-	2,  // 31: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
-	4,  // 32: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
-	6,  // 33: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
-	11, // 34: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
-	21, // 35: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
-	23, // 36: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
-	28, // [28:37] is the sub-list for method output_type
-	19, // [19:28] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	11, // 4: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
+	27, // 5: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
+	9,  // 6: engram.v1.GetSessionStartContextResponse.rule_router:type_name -> engram.v1.SessionStartRuleRouter
+	27, // 7: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
+	27, // 8: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
+	27, // 9: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
+	27, // 10: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
+	27, // 11: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
+	27, // 12: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
+	27, // 13: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
+	27, // 14: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
+	10, // 15: engram.v1.SessionStartRuleRouter.kernel:type_name -> engram.v1.SessionStartRulePacket
+	10, // 16: engram.v1.SessionStartRuleRouter.contextual:type_name -> engram.v1.SessionStartRulePacket
+	10, // 17: engram.v1.SessionStartRuleRouter.suppressed:type_name -> engram.v1.SessionStartRulePacket
+	27, // 18: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
+	27, // 19: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
+	18, // 20: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
+	21, // 21: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
+	21, // 22: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
+	14, // 23: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
+	16, // 24: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
+	19, // 25: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
+	1,  // 26: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
+	3,  // 27: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
+	5,  // 28: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
+	12, // 29: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
+	22, // 30: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
+	24, // 31: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
+	15, // 32: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
+	17, // 33: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
+	20, // 34: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
+	2,  // 35: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
+	4,  // 36: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
+	6,  // 37: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
+	13, // 38: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
+	23, // 39: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
+	25, // 40: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
+	32, // [32:41] is the sub-list for method output_type
+	23, // [23:32] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_proto_engram_v1_engram_proto_init() }
@@ -1976,7 +2270,7 @@ func file_proto_engram_v1_engram_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_engram_v1_engram_proto_rawDesc), len(file_proto_engram_v1_engram_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   24,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

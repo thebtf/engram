@@ -20,8 +20,9 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 	// ALTER TABLE ADD CONSTRAINT statements. Session identifiers here are
 	// external Claude/SDK session IDs, not dashboard sessions.id references.
 	whitelist := map[string]string{
-		"citation_log.session_id":  "external SDK session identifier (TEXT), not a row FK",
-		"injection_log.session_id": "external SDK session identifier (TEXT), not a row FK",
+		"citation_log.session_id":          "external SDK session identifier (TEXT), not a row FK",
+		"injection_log.session_id":         "external SDK session identifier (TEXT), not a row FK",
+		"rule_injection_events.session_id": "external SDK session identifier (TEXT), not a row FK",
 		// observation_injections.session_id was removed in CR-3: migration 138 drops
 		// observation_injections, so a whitelist key for a non-existent table is dead.
 		"retrieval_stats_log.query_id":          "analytics correlation identifier, not a table FK",
