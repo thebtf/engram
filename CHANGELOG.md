@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.26.4] - 2026-06-19
+
+### Fixed
+
+- **Codex hook dispatcher now fails open for missing or crashing child hooks.** The
+  root-resolving dispatcher logs incomplete cache slots or nonzero child hook exits
+  but returns a pass-through response, so hook drift after plugin updates does not
+  break active Codex sessions.
+
 ## [6.26.3] - 2026-06-19
 
 ### Fixed

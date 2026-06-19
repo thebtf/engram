@@ -80,21 +80,22 @@ function main() {
     const hookPath = resolveHookPath(relPath);
     if (!fs.existsSync(hookPath)) {
       process.stderr.write(`engram dispatcher: hook file is missing: ${hookPath}\n`);
-      process.exit(1);
+      continue;
     }
 
     const result = runHook(hookPath, stdinText, pluginRoot);
     if (trimText(result.stderr)) {
       process.stderr.write(result.stderr.endsWith('\n') ? result.stderr : result.stderr + '\n');
     }
-    if (trimText(result.stdout)) {
+    if (result.status === 0 && trimText(result.stdout)) {
       lastStdout = result.stdout;
     }
     if (result.status !== 0) {
-      if (trimText(result.stdout)) {
-        process.stdout.write(result.stdout.endsWith('\n') ? result.stdout : result.stdout + '\n');
-      }
-      process.exit(result.status);
+      const diagnostic = trimText(result.stderr) ? '' : trimText(result.stdout);
+      process.stderr.write(
+        `engram dispatcher: ${path.basename(hookPath)} exited with code ${result.status}`
+          + `${diagnostic ? `: ${diagnostic}` : ''}\n`,
+      );
     }
   }
 
