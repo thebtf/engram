@@ -45,6 +45,8 @@ func TestRuleGovernanceStore_ArbiterRunEvaluationAndCandidateAnnotation(t *testi
 	require.NoError(t, err)
 	require.NotZero(t, run.ID)
 	require.Equal(t, models.RuleArbiterRunStatusStarted, run.Status)
+	claimed := claimRuleArbiterCandidates(t, store, run.ID, time.Now().UTC())
+	require.Contains(t, ruleCandidateIDs(claimed), candidate.ID)
 
 	eval, err := store.CreateRuleArbiterEvaluation(ctx, &models.RuleArbiterEvaluation{
 		RunID:       run.ID,
@@ -95,6 +97,8 @@ func TestRuleGovernanceStore_ArbiterRejectsTerminalRunEvaluation(t *testing.T) {
 	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "unit-test")
 	require.NoError(t, err)
+	claimed := claimRuleArbiterCandidates(t, store, run.ID, time.Now().UTC())
+	require.Contains(t, ruleCandidateIDs(claimed), candidate.ID)
 
 	_, err = store.FinishRuleArbiterRun(ctx, run.ID, models.RuleArbiterRunStatusCompleted, models.RuleArbiterRunCounts{}, "")
 	require.NoError(t, err)
@@ -123,6 +127,9 @@ func TestRuleGovernanceStore_AnnotateRequiresMatchingEvaluation(t *testing.T) {
 	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "unit-test")
 	require.NoError(t, err)
+	claimed := claimRuleArbiterCandidates(t, store, run.ID, time.Now().UTC())
+	require.Contains(t, ruleCandidateIDs(claimed), candidate.ID)
+	require.Contains(t, ruleCandidateIDs(claimed), other.ID)
 	eval, err := store.CreateRuleArbiterEvaluation(ctx, &models.RuleArbiterEvaluation{
 		RunID:       run.ID,
 		CandidateID: other.ID,
@@ -151,6 +158,8 @@ func TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter(t *testing.
 	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "unit-test")
 	require.NoError(t, err)
+	claimed := claimRuleArbiterCandidates(t, store, run.ID, time.Now().UTC())
+	require.Contains(t, ruleCandidateIDs(claimed), candidate.ID)
 	eval, err := store.CreateRuleArbiterEvaluation(ctx, &models.RuleArbiterEvaluation{
 		RunID:       run.ID,
 		CandidateID: candidate.ID,
@@ -171,13 +180,97 @@ func TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter(t *testing.
 	})
 	require.NoError(t, err)
 
-	dueNow, err := store.ListPendingRuleCandidatesForArbiter(ctx, 20, time.Now().UTC())
+	nextRun, err := store.StartRuleArbiterRun(ctx, "unit-test-requeue")
+	require.NoError(t, err)
+	dueNow, err := store.ListPendingRuleCandidatesForArbiter(ctx, nextRun.ID, 20, time.Now().UTC())
 	require.NoError(t, err)
 	require.NotContains(t, ruleCandidateIDs(dueNow), candidate.ID)
+	_, err = store.FinishRuleArbiterRun(ctx, nextRun.ID, models.RuleArbiterRunStatusCompleted, models.RuleArbiterRunCounts{}, "")
+	require.NoError(t, err)
 
-	dueLater, err := store.ListPendingRuleCandidatesForArbiter(ctx, 20, future.Add(time.Second))
+	laterRun, err := store.StartRuleArbiterRun(ctx, "unit-test-requeue-later")
+	require.NoError(t, err)
+	dueLater, err := store.ListPendingRuleCandidatesForArbiter(ctx, laterRun.ID, 20, future.Add(time.Second))
 	require.NoError(t, err)
 	require.Contains(t, ruleCandidateIDs(dueLater), candidate.ID)
+}
+
+func TestRuleGovernanceStore_ArbiterRejectsUnclaimedEvaluationAndConcurrentClaim(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-claim-race"))
+	require.NoError(t, err)
+	firstRun, err := store.StartRuleArbiterRun(ctx, "unit-test-claim-first")
+	require.NoError(t, err)
+	firstClaimed := claimRuleArbiterCandidates(t, store, firstRun.ID, time.Now().UTC())
+	require.Contains(t, ruleCandidateIDs(firstClaimed), candidate.ID)
+
+	secondRun, err := store.StartRuleArbiterRun(ctx, "unit-test-claim-second")
+	require.NoError(t, err)
+	secondClaimed, err := store.ListPendingRuleCandidatesForArbiter(ctx, secondRun.ID, 20, time.Now().UTC())
+	require.NoError(t, err)
+	require.NotContains(t, ruleCandidateIDs(secondClaimed), candidate.ID)
+
+	_, err = store.CreateRuleArbiterEvaluation(ctx, &models.RuleArbiterEvaluation{
+		RunID:       secondRun.ID,
+		CandidateID: candidate.ID,
+		Action:      models.RuleArbiterActionHold,
+		Reason:      "second run must not evaluate a candidate claimed by the first run",
+		Confidence:  0.5,
+		ParseStatus: models.RuleArbiterParseStatusOK,
+	})
+	require.ErrorIs(t, err, models.ErrInvalidRuleTransition)
+
+	_, err = store.FinishRuleArbiterRun(ctx, firstRun.ID, models.RuleArbiterRunStatusCompleted, models.RuleArbiterRunCounts{}, "")
+	require.NoError(t, err)
+	afterClear, err := store.ListPendingRuleCandidatesForArbiter(ctx, secondRun.ID, 20, time.Now().UTC())
+	require.NoError(t, err)
+	require.Contains(t, ruleCandidateIDs(afterClear), candidate.ID)
+}
+
+func TestRuleGovernanceStore_ArbiterRejectsInvalidConfidence(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-confidence"))
+	require.NoError(t, err)
+	run, err := store.StartRuleArbiterRun(ctx, "unit-test-confidence")
+	require.NoError(t, err)
+	claimed := claimRuleArbiterCandidates(t, store, run.ID, time.Now().UTC())
+	require.Contains(t, ruleCandidateIDs(claimed), candidate.ID)
+
+	_, err = store.CreateRuleArbiterEvaluation(ctx, &models.RuleArbiterEvaluation{
+		RunID:       run.ID,
+		CandidateID: candidate.ID,
+		Action:      models.RuleArbiterActionHold,
+		Reason:      "confidence below range should fail",
+		Confidence:  -0.01,
+		ParseStatus: models.RuleArbiterParseStatusOK,
+	})
+	require.ErrorIs(t, err, models.ErrRuleRequiredFieldMissing)
+
+	eval, err := store.CreateRuleArbiterEvaluation(ctx, &models.RuleArbiterEvaluation{
+		RunID:       run.ID,
+		CandidateID: candidate.ID,
+		Action:      models.RuleArbiterActionHold,
+		Reason:      "valid confidence",
+		Confidence:  0.5,
+		ParseStatus: models.RuleArbiterParseStatusOK,
+	})
+	require.NoError(t, err)
+
+	_, err = store.AnnotateRuleCandidate(ctx, candidate.ID, models.RuleCandidateAnnotation{
+		Action:       models.RuleArbiterActionHold,
+		Reason:       "confidence above range should fail",
+		Confidence:   1.01,
+		RunID:        &run.ID,
+		EvaluationID: &eval.ID,
+		EvaluatedAt:  time.Now().UTC(),
+	})
+	require.ErrorIs(t, err, models.ErrRuleRequiredFieldMissing)
 }
 
 func requireRuleArbiterTableState(t *testing.T, db *gorm.DB, exists bool) {
@@ -189,6 +282,13 @@ func requireRuleArbiterTableState(t *testing.T, db *gorm.DB, exists bool) {
 
 func ptrTime(t time.Time) *time.Time {
 	return &t
+}
+
+func claimRuleArbiterCandidates(t *testing.T, store *RuleGovernanceStore, runID int64, now time.Time) []*models.RuleCandidate {
+	t.Helper()
+	claimed, err := store.ListPendingRuleCandidatesForArbiter(context.Background(), runID, 20, now)
+	require.NoError(t, err)
+	return claimed
 }
 
 func ruleCandidateIDs(candidates []*models.RuleCandidate) []int64 {

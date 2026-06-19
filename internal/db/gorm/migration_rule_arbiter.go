@@ -24,10 +24,17 @@ func ruleArbiterBackgroundMigration145() *gormigrate.Migration {
 				`ALTER TABLE rule_candidates
 					ADD COLUMN IF NOT EXISTS arbiter_evaluation_id BIGINT`,
 				`ALTER TABLE rule_candidates
+					ADD COLUMN IF NOT EXISTS arbiter_claim_run_id BIGINT`,
+				`ALTER TABLE rule_candidates
 					DROP CONSTRAINT IF EXISTS rule_candidates_arbiter_action_chk`,
 				`ALTER TABLE rule_candidates
 					ADD CONSTRAINT rule_candidates_arbiter_action_chk
 						CHECK (arbiter_action = '' OR arbiter_action IN ('propose','hold','reject','skip','error'))`,
+				`ALTER TABLE rule_candidates
+					DROP CONSTRAINT IF EXISTS rule_candidates_arbiter_confidence_chk`,
+				`ALTER TABLE rule_candidates
+					ADD CONSTRAINT rule_candidates_arbiter_confidence_chk
+						CHECK (arbiter_confidence >= 0 AND arbiter_confidence <= 1)`,
 				`CREATE TABLE IF NOT EXISTS rule_arbiter_runs (
 					id                       BIGSERIAL PRIMARY KEY,
 					trigger                  TEXT NOT NULL,
@@ -60,6 +67,8 @@ func ruleArbiterBackgroundMigration145() *gormigrate.Migration {
 					created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
 					CONSTRAINT rule_arbiter_evaluations_action_chk
 						CHECK (action IN ('propose','hold','reject','skip','error')),
+					CONSTRAINT rule_arbiter_evaluations_confidence_chk
+						CHECK (confidence >= 0 AND confidence <= 1),
 					CONSTRAINT rule_arbiter_evaluations_parse_status_chk
 						CHECK (parse_status IN ('ok','failed','not_applicable')),
 					CONSTRAINT rule_arbiter_evaluations_proposal_object_chk
@@ -75,6 +84,8 @@ func ruleArbiterBackgroundMigration145() *gormigrate.Migration {
 					ON rule_candidates (arbiter_action)`,
 				`CREATE INDEX IF NOT EXISTS idx_rule_candidates_arbiter_due
 					ON rule_candidates (status, review_after, created_at)`,
+				`CREATE INDEX IF NOT EXISTS idx_rule_candidates_arbiter_claim
+					ON rule_candidates (arbiter_claim_run_id)`,
 				`ALTER TABLE rule_candidates
 					DROP CONSTRAINT IF EXISTS fk_rule_candidates_arbiter_run`,
 				`ALTER TABLE rule_candidates
@@ -85,6 +96,11 @@ func ruleArbiterBackgroundMigration145() *gormigrate.Migration {
 				`ALTER TABLE rule_candidates
 					ADD CONSTRAINT fk_rule_candidates_arbiter_evaluation
 						FOREIGN KEY (arbiter_evaluation_id) REFERENCES rule_arbiter_evaluations(id) ON DELETE SET NULL`,
+				`ALTER TABLE rule_candidates
+					DROP CONSTRAINT IF EXISTS fk_rule_candidates_arbiter_claim_run`,
+				`ALTER TABLE rule_candidates
+					ADD CONSTRAINT fk_rule_candidates_arbiter_claim_run
+						FOREIGN KEY (arbiter_claim_run_id) REFERENCES rule_arbiter_runs(id) ON DELETE SET NULL`,
 			}
 			for _, s := range sqls {
 				if err := tx.Exec(s).Error; err != nil {
@@ -97,11 +113,15 @@ func ruleArbiterBackgroundMigration145() *gormigrate.Migration {
 			sqls := []string{
 				`ALTER TABLE rule_candidates DROP CONSTRAINT IF EXISTS fk_rule_candidates_arbiter_evaluation`,
 				`ALTER TABLE rule_candidates DROP CONSTRAINT IF EXISTS fk_rule_candidates_arbiter_run`,
+				`ALTER TABLE rule_candidates DROP CONSTRAINT IF EXISTS fk_rule_candidates_arbiter_claim_run`,
 				`ALTER TABLE rule_candidates DROP CONSTRAINT IF EXISTS rule_candidates_arbiter_action_chk`,
+				`ALTER TABLE rule_candidates DROP CONSTRAINT IF EXISTS rule_candidates_arbiter_confidence_chk`,
 				`DROP TABLE IF EXISTS rule_arbiter_evaluations`,
 				`DROP TABLE IF EXISTS rule_arbiter_runs`,
 				`DROP INDEX IF EXISTS idx_rule_candidates_arbiter_action`,
 				`DROP INDEX IF EXISTS idx_rule_candidates_arbiter_due`,
+				`DROP INDEX IF EXISTS idx_rule_candidates_arbiter_claim`,
+				`ALTER TABLE rule_candidates DROP COLUMN IF EXISTS arbiter_claim_run_id`,
 				`ALTER TABLE rule_candidates DROP COLUMN IF EXISTS arbiter_evaluation_id`,
 				`ALTER TABLE rule_candidates DROP COLUMN IF EXISTS arbiter_run_id`,
 				`ALTER TABLE rule_candidates DROP COLUMN IF EXISTS arbiter_confidence`,

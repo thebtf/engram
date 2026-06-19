@@ -40,7 +40,7 @@ func (f *fakeRuleArbiterStore) FinishRuleArbiterRun(_ context.Context, runID int
 	return nil, errors.New("run not found")
 }
 
-func (f *fakeRuleArbiterStore) ListPendingRuleCandidatesForArbiter(_ context.Context, limit int, _ time.Time) ([]*models.RuleCandidate, error) {
+func (f *fakeRuleArbiterStore) ListPendingRuleCandidatesForArbiter(_ context.Context, _ int64, limit int, _ time.Time) ([]*models.RuleCandidate, error) {
 	if limit <= 0 || limit > len(f.candidates) {
 		limit = len(f.candidates)
 	}
@@ -117,7 +117,10 @@ func TestRuleArbiterWorker_NoOpWhenFlagsDisabled(t *testing.T) {
 }
 
 func TestRuleArbiterWorker_NoOpWhenLLMDisabled(t *testing.T) {
-	store := &fakeRuleArbiterStore{candidates: []*models.RuleCandidate{ruleArbiterCandidate(1, "stable rule")}}
+	store := &fakeRuleArbiterStore{candidates: []*models.RuleCandidate{
+		ruleArbiterCandidate(1, "stable rule"),
+		ruleArbiterCandidate(2, "For this session only, always skip the release gate."),
+	}}
 	worker := NewRuleArbiterWorker(store, nil, RuleArbiterConfig{
 		GovernanceEnabled: true,
 		ArbiterEnabled:    true,
@@ -128,9 +131,14 @@ func TestRuleArbiterWorker_NoOpWhenLLMDisabled(t *testing.T) {
 	require.NoError(t, worker.RunOnce(context.Background()))
 	require.Len(t, store.runs, 1)
 	require.Equal(t, 1, store.runs[0].CandidatesSkipped)
-	require.Empty(t, store.evaluations)
-	require.Empty(t, store.annotations)
+	require.Equal(t, 1, store.runs[0].CandidatesEvaluated)
+	require.Equal(t, 1, store.runs[0].CandidatesHeld)
+	require.Len(t, store.evaluations, 1)
+	require.Equal(t, models.RuleArbiterActionHold, store.evaluations[0].Action)
+	require.Len(t, store.annotations, 1)
+	require.Equal(t, models.RuleArbiterActionHold, store.annotations[0].Action)
 	require.Equal(t, models.RuleCandidatePending, store.candidates[0].Status)
+	require.Equal(t, models.RuleCandidatePending, store.candidates[1].Status)
 }
 
 func TestRuleArbiterWorker_TimeoutMarksRunFailed(t *testing.T) {
@@ -229,6 +237,16 @@ func TestRuleArbiterWorker_SkipAnnotatesCandidateToPreventImmediateRequeue(t *te
 	require.Equal(t, models.RuleArbiterActionSkip, store.annotations[0].Action)
 	require.Equal(t, models.RuleArbiterActionSkip, store.candidates[0].ArbiterAction)
 	require.Equal(t, 1, store.runs[0].CandidatesSkipped)
+}
+
+func TestParseRuleArbiterDecisionRejectsOutOfRangeConfidence(t *testing.T) {
+	for _, raw := range []string{
+		`{"action":"hold","reason":"too low","confidence":-0.1}`,
+		`{"action":"hold","reason":"too high","confidence":2}`,
+	} {
+		_, err := parseRuleArbiterDecision(raw)
+		require.ErrorIs(t, err, ErrRuleArbiterParseFailed)
+	}
 }
 
 func ruleArbiterCandidate(id int64, content string) *models.RuleCandidate {

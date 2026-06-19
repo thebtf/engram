@@ -42,6 +42,7 @@ type ruleCandidateRow struct {
 	LastEvaluatedAt     *time.Time     `gorm:"column:last_evaluated_at"`
 	ArbiterRunID        *int64         `gorm:"column:arbiter_run_id"`
 	ArbiterEvaluationID *int64         `gorm:"column:arbiter_evaluation_id"`
+	ArbiterClaimRunID   *int64         `gorm:"column:arbiter_claim_run_id"`
 	SourceSignalType    string         `gorm:"column:source_signal_type;not null"`
 	SourceSessionID     sql.NullString `gorm:"column:source_session_id"`
 	SourceProject       sql.NullString `gorm:"column:source_project"`
@@ -111,6 +112,10 @@ func stringFromNull(value sql.NullString) string {
 		return ""
 	}
 	return value.String
+}
+
+func validRuleConfidence(value float64) bool {
+	return value >= 0 && value <= 1
 }
 
 type ruleFamilyRow struct {
@@ -278,7 +283,10 @@ func (s *RuleGovernanceStore) ListRuleCandidates(ctx context.Context, params Rul
 	return out, nil
 }
 
-func (s *RuleGovernanceStore) ListPendingRuleCandidatesForArbiter(ctx context.Context, limit int, now time.Time) ([]*models.RuleCandidate, error) {
+func (s *RuleGovernanceStore) ListPendingRuleCandidatesForArbiter(ctx context.Context, runID int64, limit int, now time.Time) ([]*models.RuleCandidate, error) {
+	if runID <= 0 {
+		return nil, models.ErrRuleRequiredFieldMissing
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -286,14 +294,53 @@ func (s *RuleGovernanceStore) ListPendingRuleCandidatesForArbiter(ctx context.Co
 		now = time.Now().UTC()
 	}
 	var rows []ruleCandidateRow
-	if err := s.db.WithContext(ctx).
-		Where("status = ?", string(models.RuleCandidatePending)).
-		Where("review_after IS NULL OR review_after <= ?", now).
-		Where("arbiter_action = '' OR review_after <= ?", now).
-		Order("created_at ASC").
-		Limit(limit).
-		Find(&rows).Error; err != nil {
-		return nil, fmt.Errorf("rule_governance list_pending_for_arbiter: %w", err)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run ruleArbiterRunRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&run, runID).Error; err != nil {
+			return fmt.Errorf("rule_governance list_pending_for_arbiter lock run %d: %w", runID, err)
+		}
+		if run.Status != string(models.RuleArbiterRunStatusStarted) {
+			return fmt.Errorf("%w: arbiter run %d status %s cannot claim candidates", models.ErrInvalidRuleTransition, runID, run.Status)
+		}
+
+		q := tx.Where("status = ?", string(models.RuleCandidatePending)).
+			Where("review_after IS NULL OR review_after <= ?", now).
+			Where("arbiter_action = '' OR review_after <= ?", now).
+			Where("arbiter_claim_run_id IS NULL").
+			Order("created_at ASC").
+			Limit(limit)
+		if tx.Dialector.Name() == "postgres" {
+			q = q.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		}
+		if err := q.Find(&rows).Error; err != nil {
+			return fmt.Errorf("rule_governance list_pending_for_arbiter: %w", err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		ids := make([]int64, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].ID)
+			rows[i].ArbiterClaimRunID = &runID
+		}
+		if err := tx.Model(&ruleCandidateRow{}).
+			Where("id IN ? AND arbiter_claim_run_id IS NULL", ids).
+			Updates(map[string]any{
+				"arbiter_claim_run_id": runID,
+				"updated_at":           time.Now().UTC(),
+			}).Error; err != nil {
+			return fmt.Errorf("rule_governance list_pending_for_arbiter claim: %w", err)
+		}
+		rows = nil
+		if err := tx.Where("id IN ? AND arbiter_claim_run_id = ?", ids, runID).
+			Order("created_at ASC").
+			Find(&rows).Error; err != nil {
+			return fmt.Errorf("rule_governance list_pending_for_arbiter claimed reread: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	out := make([]*models.RuleCandidate, len(rows))
 	for i := range rows {
@@ -340,18 +387,29 @@ func (s *RuleGovernanceStore) FinishRuleArbiterRun(ctx context.Context, runID in
 		"candidates_skipped":   counts.CandidatesSkipped,
 		"errors":               counts.Errors,
 	}
-	result := s.db.WithContext(ctx).Model(&ruleArbiterRunRow{}).
-		Where("id = ? AND status = ?", runID, string(models.RuleArbiterRunStatusStarted)).
-		Updates(updates)
-	if result.Error != nil {
-		return nil, fmt.Errorf("rule_governance finish_arbiter_run: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return nil, fmt.Errorf("%w: arbiter run %d is not started or does not exist", models.ErrInvalidRuleTransition, runID)
-	}
 	var row ruleArbiterRunRow
-	if err := s.db.WithContext(ctx).First(&row, runID).Error; err != nil {
-		return nil, fmt.Errorf("rule_governance finish_arbiter_run reread: %w", err)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&ruleArbiterRunRow{}).
+			Where("id = ? AND status = ?", runID, string(models.RuleArbiterRunStatusStarted)).
+			Updates(updates)
+		if result.Error != nil {
+			return fmt.Errorf("rule_governance finish_arbiter_run: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("%w: arbiter run %d is not started or does not exist", models.ErrInvalidRuleTransition, runID)
+		}
+		if err := tx.Model(&ruleCandidateRow{}).
+			Where("arbiter_claim_run_id = ?", runID).
+			Update("arbiter_claim_run_id", nil).Error; err != nil {
+			return fmt.Errorf("rule_governance finish_arbiter_run clear_claims: %w", err)
+		}
+		if err := tx.First(&row, runID).Error; err != nil {
+			return fmt.Errorf("rule_governance finish_arbiter_run reread: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return toRuleArbiterRun(&row), nil
 }
@@ -360,7 +418,7 @@ func (s *RuleGovernanceStore) CreateRuleArbiterEvaluation(ctx context.Context, e
 	if eval == nil {
 		return nil, fmt.Errorf("rule_governance create_arbiter_evaluation: evaluation must not be nil")
 	}
-	if eval.RunID <= 0 || eval.CandidateID <= 0 || !eval.Action.IsValid() || !eval.ParseStatus.IsValid() {
+	if eval.RunID <= 0 || eval.CandidateID <= 0 || !eval.Action.IsValid() || !eval.ParseStatus.IsValid() || !validRuleConfidence(eval.Confidence) {
 		return nil, models.ErrRuleRequiredFieldMissing
 	}
 	if strings.TrimSpace(eval.Reason) == "" {
@@ -388,6 +446,9 @@ func (s *RuleGovernanceStore) CreateRuleArbiterEvaluation(ctx context.Context, e
 		if candidate.Status != string(models.RuleCandidatePending) {
 			return fmt.Errorf("%w: candidate %d status %s cannot be evaluated", models.ErrInvalidRuleTransition, eval.CandidateID, candidate.Status)
 		}
+		if candidate.ArbiterClaimRunID == nil || *candidate.ArbiterClaimRunID != eval.RunID {
+			return fmt.Errorf("%w: candidate %d is not claimed by arbiter run %d", models.ErrInvalidRuleTransition, eval.CandidateID, eval.RunID)
+		}
 		row = fromRuleArbiterEvaluation(eval)
 		if err := tx.Create(row).Error; err != nil {
 			return fmt.Errorf("rule_governance create_arbiter_evaluation: %w", err)
@@ -401,7 +462,7 @@ func (s *RuleGovernanceStore) CreateRuleArbiterEvaluation(ctx context.Context, e
 }
 
 func (s *RuleGovernanceStore) AnnotateRuleCandidate(ctx context.Context, candidateID int64, ann models.RuleCandidateAnnotation) (*models.RuleCandidate, error) {
-	if candidateID <= 0 || !ann.Action.IsValid() || strings.TrimSpace(ann.Reason) == "" {
+	if candidateID <= 0 || !ann.Action.IsValid() || strings.TrimSpace(ann.Reason) == "" || !validRuleConfidence(ann.Confidence) {
 		return nil, models.ErrRuleRequiredFieldMissing
 	}
 	if ann.RunID == nil || *ann.RunID <= 0 || ann.EvaluationID == nil || *ann.EvaluationID <= 0 {
@@ -430,6 +491,9 @@ func (s *RuleGovernanceStore) AnnotateRuleCandidate(ctx context.Context, candida
 		}
 		if candidate.Status != string(models.RuleCandidatePending) {
 			return fmt.Errorf("%w: candidate %d status %s cannot be annotated", models.ErrInvalidRuleTransition, candidateID, candidate.Status)
+		}
+		if candidate.ArbiterClaimRunID == nil || *candidate.ArbiterClaimRunID != *ann.RunID {
+			return fmt.Errorf("%w: candidate %d is not claimed by arbiter run %d", models.ErrInvalidRuleTransition, candidateID, *ann.RunID)
 		}
 		var eval ruleArbiterEvaluationRow
 		if err := tx.Where("id = ? AND candidate_id = ? AND run_id = ? AND action = ?",

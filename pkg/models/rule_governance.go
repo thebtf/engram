@@ -61,6 +61,16 @@ func (a RuleArbiterAction) IsValid() bool {
 	}
 }
 
+func (a RuleArbiterAction) IsProposalDecision() bool {
+	switch a {
+	case RuleArbiterActionPropose, RuleArbiterActionHold, RuleArbiterActionReject,
+		RuleArbiterActionSkip:
+		return true
+	default:
+		return false
+	}
+}
+
 type RuleArbiterRunStatus string
 
 const (

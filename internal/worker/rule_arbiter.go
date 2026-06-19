@@ -30,7 +30,7 @@ type RuleArbiterConfig struct {
 type RuleArbiterStore interface {
 	StartRuleArbiterRun(ctx context.Context, trigger string) (*models.RuleArbiterRun, error)
 	FinishRuleArbiterRun(ctx context.Context, runID int64, status models.RuleArbiterRunStatus, counts models.RuleArbiterRunCounts, errorSummary string) (*models.RuleArbiterRun, error)
-	ListPendingRuleCandidatesForArbiter(ctx context.Context, limit int, now time.Time) ([]*models.RuleCandidate, error)
+	ListPendingRuleCandidatesForArbiter(ctx context.Context, runID int64, limit int, now time.Time) ([]*models.RuleCandidate, error)
 	CreateRuleArbiterEvaluation(ctx context.Context, eval *models.RuleArbiterEvaluation) (*models.RuleArbiterEvaluation, error)
 	AnnotateRuleCandidate(ctx context.Context, candidateID int64, ann models.RuleCandidateAnnotation) (*models.RuleCandidate, error)
 	RejectRuleCandidate(ctx context.Context, candidateID int64, req RuleTransitionRequest) (*models.RuleCandidate, error)
@@ -71,7 +71,7 @@ func (w *RuleArbiterWorker) RunOnce(ctx context.Context) error {
 	status := models.RuleArbiterRunStatusCompleted
 	errorSummary := ""
 
-	candidates, err := w.store.ListPendingRuleCandidatesForArbiter(runCtx, w.config.BatchLimit, time.Now().UTC())
+	candidates, err := w.store.ListPendingRuleCandidatesForArbiter(runCtx, run.ID, w.config.BatchLimit, time.Now().UTC())
 	if err != nil {
 		status = models.RuleArbiterRunStatusFailed
 		errorSummary = err.Error()
@@ -79,12 +79,6 @@ func (w *RuleArbiterWorker) RunOnce(ctx context.Context) error {
 		return errors.Join(err, finishErr)
 	}
 	counts.CandidatesSeen = len(candidates)
-
-	if w.evaluator == nil {
-		counts.CandidatesSkipped = len(candidates)
-		_, err = w.store.FinishRuleArbiterRun(ctx, run.ID, status, counts, errorSummary)
-		return err
-	}
 
 	for _, candidate := range candidates {
 		if runCtx.Err() != nil {
@@ -124,6 +118,11 @@ func (w *RuleArbiterWorker) evaluateCandidate(ctx context.Context, runID int64, 
 		return
 	}
 
+	if w.evaluator == nil {
+		counts.CandidatesSkipped++
+		return
+	}
+
 	decision, err := w.evaluator.Evaluate(ctx, candidate)
 	if err != nil {
 		counts.CandidatesEvaluated++
@@ -144,7 +143,7 @@ func (w *RuleArbiterWorker) evaluateCandidate(ctx context.Context, runID int64, 
 		return
 	}
 
-	if !decision.Action.IsValid() || strings.TrimSpace(decision.Reason) == "" {
+	if !decision.Action.IsProposalDecision() || strings.TrimSpace(decision.Reason) == "" {
 		counts.CandidatesEvaluated++
 		counts.Errors++
 		_ = w.recordEvaluation(ctx, runID, candidate.ID, "llm", models.RuleArbiterDecision{
@@ -320,14 +319,11 @@ func parseRuleArbiterDecision(raw string) (models.RuleArbiterDecision, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return models.RuleArbiterDecision{}, fmt.Errorf("%w: trailing JSON content", ErrRuleArbiterParseFailed)
 	}
-	if !parsed.Action.IsValid() || strings.TrimSpace(parsed.Reason) == "" {
+	if !parsed.Action.IsProposalDecision() || strings.TrimSpace(parsed.Reason) == "" {
 		return models.RuleArbiterDecision{}, fmt.Errorf("%w: missing valid action or reason", ErrRuleArbiterParseFailed)
 	}
-	if parsed.Confidence < 0 {
-		parsed.Confidence = 0
-	}
-	if parsed.Confidence > 1 {
-		parsed.Confidence = 1
+	if parsed.Confidence < 0 || parsed.Confidence > 1 {
+		return models.RuleArbiterDecision{}, fmt.Errorf("%w: confidence must be between 0 and 1", ErrRuleArbiterParseFailed)
 	}
 	return models.RuleArbiterDecision{
 		Action:     parsed.Action,
