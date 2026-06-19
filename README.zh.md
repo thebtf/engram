@@ -23,7 +23,7 @@ Engram 通过保留那些在生产中真正可靠的记忆原语来解决这个�
 
 在 v5.0.0 中，session-start inject 被简化为静态 composite payload：打开的 issues、always-inject behavioral rules，以及 recent memories。旧的动态 relevance / graph / reranking / extraction 栈已经离开主产品路径。
 
-缩减后的 static-first MCP surface 继续服务于 surviving entity model，并保持上下文窗口占用在可控范围内。
+此后，v6 在这个稳定核心之上重建了 governance：per-workstation keycards、proposal-only rule arbiter、bounded session-start rule router，以及 rule-governance telemetry / rollback controls。热路径依旧保持确定性——session-start 不调用 LLM——但 durable guidance 现在可以被审计和回滚。
 <!-- redoc:end:intro -->
 
 ---
@@ -33,11 +33,23 @@ Engram 通过保留那些在生产中真正可靠的记忆原语来解决这个�
 
 | 版本 | 亮点 |
 |------|------|
+| **v6.29.0** | **Rule Governance Telemetry (RG-3)** —— lifecycle health、exception queues、transition controls、rollback-aware snapshots，以及 usefulness telemetry。 |
 | **v5.0.0** | Cleaned Baseline — static-only storage、split observations、session-start gRPC + cache fallback |
 | **v4.4.0** | Loom tenant — background task execution 与 daemon-side project event bridge |
 | **v4.0.0** | Daemon architecture — muxcore engine、gRPC transport、local persistent daemon、auto-binary plugin |
 
 完整更新日志请查看 [Releases](https://github.com/thebtf/engram/releases)。
+
+### Two-Tier Token Model (v6)
+
+Engram v6 将两类凭据严格绑定到不同主机类型：
+
+| Tier | Name | Lives in | Purpose | Issuance |
+|---|---|---|---|---|
+| **1 — Operator key** | `ENGRAM_AUTH_ADMIN_TOKEN` | 仅 server-host environment（Docker、compose） | 用于 migrations、server-internal RPC 与 dashboard bootstrap 的管理员权限 | 由运维在服务器端设置 |
+| **2 — Worker keycard** | `ENGRAM_TOKEN` | Workstation `~/.claude/settings.json` env | Daemon ↔ server gRPC 与常规 MCP tool calls | 通过 admin 登录后的 `/tokens` 页面签发 |
+
+Operator key 绝不能出现在工作站上。Worker keycard 绝不能存放在服务器主机环境中。
 <!-- redoc:end:whats-new -->
 
 ---
@@ -163,11 +175,11 @@ curl http://your-server:37777/health
 ```bash
 # Linux/macOS: 添加到 shell 配置文件
 # Windows: 设置为系统环境变量
-ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
+ENGRAM_URL=http://your-server:37777
+ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
-重启 Claude Code。记忆功能现已激活。
+请先在 `http://your-server:37777/tokens` 生成 worker keycard，然后重启 Claude Code。记忆功能现已激活。
 <!-- redoc:end:quick-start -->
 
 ---
@@ -181,8 +193,8 @@ ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
 
 ```bash
 # 先设置环境变量
-ENGRAM_URL=http://your-server:37777/mcp
-ENGRAM_AUTH_ADMIN_TOKEN=your-admin-token
+ENGRAM_URL=http://your-server:37777
+ENGRAM_TOKEN=engram_your_workstation_keycard
 ```
 
 ```
@@ -207,6 +219,31 @@ DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
   docker compose up -d server
 ```
 
+### Binary Installation (v4+)
+
+从 [GitHub Releases](https://github.com/thebtf/engram/releases) 下载 daemon binary：
+
+```bash
+# Linux (amd64)
+curl -L https://github.com/thebtf/engram/releases/latest/download/engram-linux-amd64 -o engram
+chmod +x engram && sudo mv engram /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/thebtf/engram/releases/latest/download/engram-darwin-arm64 -o engram
+chmod +x engram && sudo mv engram /usr/local/bin/
+
+# Windows (amd64) — 下载 engram-windows-amd64.exe 并加入 PATH
+```
+
+然后设置：
+
+```bash
+export ENGRAM_URL=http://your-server:37777
+export ENGRAM_TOKEN=engram_your_workstation_keycard
+```
+
+验证：`echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | engram`
+
 ### 手动 MCP 配置
 
 如果不使用插件，可以在 `~/.claude/settings.json` 中直接配置 MCP：
@@ -220,7 +257,7 @@ DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
       "type": "url",
       "url": "http://your-server:37777/mcp",
       "headers": {
-        "Authorization": "Bearer ${ENGRAM_AUTH_ADMIN_TOKEN}"
+        "Authorization": "Bearer ${ENGRAM_TOKEN}"
       }
     }
   }
@@ -232,8 +269,10 @@ Claude Code 在运行时会从环境变量中展开 `${VAR}`。
 **CLI 快捷方式：**
 
 ```bash
-claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_AUTH_ADMIN_TOKEN":"${ENGRAM_AUTH_ADMIN_TOKEN}"}}' -s user
+claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_TOKEN":"${ENGRAM_TOKEN}"}}' -s user
 ```
+
+`ENGRAM_URL` 可以配置为服务器 origin（`http://host:37777`）或 MCP path（`http://host:37777/mcp`）；hooks 会为 REST 调用自动归一化到服务器 origin。`ENGRAM_TOKEN` 必须始终是 workstation keycard，绝不能使用 operator key。
 
 ### 从源码构建
 
@@ -249,21 +288,21 @@ make install  # 安装插件 + 启动 daemon
 ---
 
 <!-- redoc:start:upgrading -->
-## 升级到 v5.0.0
+## 升级到 v6.x
 
-v5.0.0 是一个 **breaking cleanup release**。
+v6 的关键升级契约是把 workstation token flow 与 static core 之上的 rule-governance milestones 统一起来。
 
 变化要点：
-- 主要 runtime 路径现在是 static-only
-- session-start inject 基于 issues + behavioral rules + memories
-- 旧的 dynamic learning / graph / reranking / extraction 栈已离开主产品路径
-- client 与 server 现在会在 session-start path 上显式检查 major-version compatibility
+- workstation auth 已从共享 admin token 改为 per-workstation keycards（`ENGRAM_TOKEN`）
+- session-start 仍保持确定性，但规则投递现在经过 candidate -> arbiter -> router -> telemetry milestones
+- rule-governance snapshots、rollback conflict handling 和 usefulness telemetry 已成为 backend surface 的一部分
+- client 与 server 继续在 session-start path 上显式检查 major-version compatibility
 
 升级步骤：
-1. 将插件升级到 `5.0.0`
-2. 将 daemon 升级到 `v5.0.0`
+1. 将 plugin 和 daemon 升级到目标 `v6.x` 版本
+2. 打开 `<server-url>/tokens`，签发 workstation keycard，并配置 `ENGRAM_TOKEN`
 3. 重启 Claude Code 和 daemon
-4. 验证 plugin update detection 与 session-start cache fallback
+4. 验证 plugin update detection、session-start cache fallback 和当前服务器版本
 
 **Docker 镜像：** 使用 `ghcr.io/thebtf/engram:latest`。数据库迁移会在启动时自动执行。
 <!-- redoc:end:upgrading -->
@@ -280,8 +319,7 @@ v5.0.0 是一个 **breaking cleanup release**。
 | `DATABASE_DSN` | — | PostgreSQL 连接字符串 **（必填）** |
 | `DATABASE_MAX_CONNS` | `10` | 最大数据库连接数 |
 | `ENGRAM_WORKER_PORT` | `37777` | 服务器端口 |
-| `ENGRAM_API_TOKEN` | — | Bearer 认证 token |
-| `ENGRAM_AUTH_ADMIN_TOKEN` | — | 管理员 token |
+| `ENGRAM_AUTH_ADMIN_TOKEN` | — | Operator/admin token，仅限 server host |
 | `ENGRAM_VAULT_KEY` | — | 用于 credentials 加密的标准 vault key |
 | `ENGRAM_ENCRYPTION_KEY` | — | 旧版 fallback vault key 环境变量 |
 | `ENGRAM_DATA_DIR` | 自动 | daemon 数据目录（也用于 session-start cache） |
@@ -291,8 +329,8 @@ v5.0.0 是一个 **breaking cleanup release**。
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENGRAM_URL` | — | plugin / hooks 使用的完整 server 或 MCP URL |
-| `ENGRAM_AUTH_ADMIN_TOKEN` | — | plugin 使用的 API token |
-| `ENGRAM_API_TOKEN` | — | hooks / plugin runtime 使用的 legacy fallback token |
+| `ENGRAM_TOKEN` | — | plugin、daemon 与 hooks 使用的 workstation keycard |
+| `ENGRAM_SERVER_URL` | — | 某些 launcher 中 `ENGRAM_URL` 的可选别名 |
 | `ENGRAM_DATA_DIR` | 自动 | cache 与 daemon state 目录 |
 | `ENGRAM_WORKSTATION_ID` | 自动 | 覆盖工作站 ID（8 位十六进制） |
 <!-- redoc:end:configuration -->
@@ -410,7 +448,7 @@ vault(action="get", name="OPENAI_KEY")
 | MCP 连接被拒绝 | 确认服务器正在运行：`curl http://your-server:37777/health`。检查环境中的 `ENGRAM_URL`。 |
 | 保险库返回 "encryption not configured" | 设置 `ENGRAM_ENCRYPTION_KEY`（64 位十六进制字符串 = 32 字节 AES-256）。 |
 | 仪表盘无法加载 | 确保使用 `make build` 构建（包含仪表盘）。检查浏览器控制台的错误信息。 |
-| 安装后插件未被检测到 | 重启 Claude Code。确认 `ENGRAM_URL` 和 `ENGRAM_AUTH_ADMIN_TOKEN` 已设置为环境变量。 |
+| 安装后插件未被检测到 | 重启 Claude Code。确认已设置 `ENGRAM_URL` 和 `ENGRAM_TOKEN`，并且该 token 是 workstation keycard，而不是 operator key。 |
 | 内存使用过高 | 减少 `DATABASE_MAX_CONNS`。如不需要可禁用整合功能。检查 `ENGRAM_EMBEDDING_DIMENSIONS`。 |
 
 服务器日志可在 `http://your-server:37777/api/logs` 查看。

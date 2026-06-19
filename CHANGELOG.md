@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.29.0] - 2026-06-20
+
+### Added
+
+- **Rule Governance Telemetry (RG-3, #324).** Added lifecycle health reads,
+  exception-oriented queues, transition controls, rollback-aware snapshots, and
+  usefulness telemetry on top of the rule-governance milestones.
+
+### Fixed
+
+- **Post-merge governance hardening (#325).** Rollback now preserves
+  `rollback_conflict` status outside aborted transactions, migrated databases
+  accept the widened snapshot status set via migration `147`, legacy snapshot
+  rollback payloads remain restorable, and `rule_governance_usefulness`
+  preserves its explicit project requirement while rejecting non-admin project
+  mismatches.
+
 ## [6.28.2] - 2026-06-19
 
 ### Fixed
