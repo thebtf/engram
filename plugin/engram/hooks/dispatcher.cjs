@@ -40,6 +40,7 @@ function runHook(hookPath, stdinText, pluginRoot) {
     input: stdinText,
     encoding: 'utf8',
     env,
+    maxBuffer: 1024 * 1024,
     windowsHide: true,
   });
 
@@ -57,14 +58,21 @@ function runHook(hookPath, stdinText, pluginRoot) {
 
 function main() {
   const eventName = process.env.ENGRAM_HOOK_EVENT || process.argv[2] || '';
-  const hookList = EVENT_HOOKS[eventName];
+  const hookList = Object.prototype.hasOwnProperty.call(EVENT_HOOKS, eventName)
+    ? EVENT_HOOKS[eventName]
+    : null;
   if (!hookList) {
     process.stderr.write(`engram dispatcher: unknown hook event ${JSON.stringify(eventName)}\n`);
     passThrough();
     return;
   }
 
-  const stdinText = fs.readFileSync(0, 'utf8');
+  let stdinText = '';
+  try {
+    stdinText = fs.readFileSync(0, 'utf8');
+  } catch (error) {
+    process.stderr.write(`engram dispatcher: failed to read stdin: ${error.message}\n`);
+  }
   const pluginRoot = path.resolve(__dirname, '..');
   let lastStdout = '';
 

@@ -101,16 +101,21 @@ test('launcher resolves latest Codex cache before stale CLAUDE_PLUGIN_ROOT', () 
     const codexHome = path.join(tempRoot, '.codex');
     const staleRoot = path.join(tempRoot, 'stale-plugin-root');
     const staleHooks = path.join(staleRoot, 'hooks');
-    const brokenCache = path.join(codexHome, 'plugins', 'cache', 'engram-marketplace', 'engram', '6.25.1');
-    const latestHooks = path.join(codexHome, 'plugins', 'cache', 'engram-marketplace', 'engram', '6.26.1', 'hooks');
+    const staleCacheHooks = path.join(codexHome, 'plugins', 'cache', 'engram-marketplace', 'engram', '6.25.1', 'hooks');
+    const latestHooks = path.join(codexHome, 'plugins', 'cache', 'engram', 'engram', '6.26.2', 'hooks');
 
     fs.mkdirSync(staleHooks, { recursive: true });
-    fs.mkdirSync(brokenCache, { recursive: true });
+    fs.mkdirSync(staleCacheHooks, { recursive: true });
     fs.mkdirSync(latestHooks, { recursive: true });
 
     fs.writeFileSync(
       path.join(staleHooks, 'dispatcher.cjs'),
       "process.stdout.write(JSON.stringify({root:'stale',event:process.env.ENGRAM_HOOK_EVENT})+'\\n');\n",
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(staleCacheHooks, 'dispatcher.cjs'),
+      "process.stdout.write(JSON.stringify({root:'old-cache',event:process.env.ENGRAM_HOOK_EVENT})+'\\n');\n",
       'utf8',
     );
     fs.writeFileSync(
