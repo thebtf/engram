@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -728,4 +729,40 @@ func TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates(t *test
 		err := db.Exec(`UPDATE rule_governance_snapshots SET status = ? WHERE snapshot_id = ?`, status, snapshotID).Error
 		require.NoError(t, err, "status %q must be accepted by the fresh rule_governance_snapshots schema", status)
 	}
+}
+
+func TestRuleGovernanceStore_RollbackSnapshotSupportsLegacyRuleVersionShape(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+	project := fmt.Sprintf("rg3-rollback-legacy-%d", time.Now().UnixNano())
+	versionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateActiveProject, "developer", 10)
+	snapshotID := uniqueSnapshot("rg3-rollback-legacy")
+
+	legacyBefore, err := json.Marshal(ruleVersionRow{
+		ID:                  versionID,
+		State:               string(models.RuleStateCanary),
+		ActivationPredicate: JSONRaw(fmt.Sprintf(`{"project":%q}`, project)),
+	})
+	require.NoError(t, err)
+	legacyAfter, err := json.Marshal(ruleVersionRow{
+		ID:                  versionID,
+		State:               string(models.RuleStateActiveProject),
+		ActivationPredicate: JSONRaw(fmt.Sprintf(`{"project":%q}`, project)),
+	})
+	require.NoError(t, err)
+
+	_, err = store.CreateRuleSnapshot(ctx, SnapshotRequest{
+		SnapshotID:  snapshotID,
+		OpType:      "rule_transition",
+		Actor:       "codex",
+		BeforeState: legacyBefore,
+		AfterState:  legacyAfter,
+	})
+	require.NoError(t, err)
+
+	result, err := store.RollbackRuleGovernanceSnapshot(ctx, snapshotID, transitionReq("rollback legacy snapshot shape", uniqueSnapshot("rg3-legacy-rollback-transition")))
+	require.NoError(t, err)
+	require.Contains(t, result.RestoredVersionIDs, versionID)
+	require.Equal(t, models.RuleStateCanary, getRuleVersionState(t, db, versionID))
 }

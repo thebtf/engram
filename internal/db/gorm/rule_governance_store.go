@@ -1142,6 +1142,9 @@ func (s *RuleGovernanceStore) RollbackRuleGovernanceSnapshot(ctx context.Context
 			return fmt.Errorf("%w: snapshot %q status %s cannot rollback", models.ErrInvalidRuleTransition, result.SnapshotID, row.Status)
 		}
 		before := decodeRuleGovernanceSnapshotState(row.BeforeState)
+		if len(before.RuleVersions) == 0 {
+			return fmt.Errorf("%w: snapshot %q has no rollback rule versions", models.ErrInvalidRuleTransition, result.SnapshotID)
+		}
 		after := decodeRuleGovernanceSnapshotStatePtr(row.AfterState)
 		expectedCurrent := after.RuleVersions
 		if len(expectedCurrent) == 0 {
@@ -1585,6 +1588,19 @@ func decodeRuleGovernanceSnapshotState(raw JSONRaw) ruleGovernanceSnapshotState 
 		return state
 	}
 	_ = json.Unmarshal(raw, &state)
+	if len(state.RuleVersions) > 0 || strings.TrimSpace(state.Project) != "" {
+		return state
+	}
+	var legacy ruleVersionRow
+	if err := json.Unmarshal(raw, &legacy); err == nil && legacy.ID > 0 {
+		return ruleGovernanceSnapshotState{
+			Project: projectFromRuleVersionRow(&legacy),
+			RuleVersions: []ruleGovernanceSnapshotRuleVersion{{
+				ID:    legacy.ID,
+				State: legacy.State,
+			}},
+		}
+	}
 	return state
 }
 
