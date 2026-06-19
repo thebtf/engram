@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.28.0] - 2026-06-19
+
+### Added
+
+- **Selective rule injection router (RG-2, #320).** Added a flag-gated
+  `rule_router` sidecar for session-start, search, and inject context surfaces.
+  Router mode renders bounded kernel/contextual rule packets from governed rule
+  versions and legacy fallback rows, with prompt-safe metadata for Claude/Codex
+  and OpenClaw consumers.
+- **Rule injection telemetry (RG-2, #320).** Added the additive
+  `rule_injection_events` table and store for emitted, suppressed, deferred,
+  legacy fallback, and router-error rule packet events without blocking prompt
+  delivery.
+
+### Fixed
+
+- **Router-mode plugin compatibility (RG-2, #320).** Claude/Codex session-start
+  rendering no longer labels contextual packets as "Always Active", stale
+  cached router packets are not resurrected as current instructions, and
+  OpenClaw search/inject paths receive the same `rule_router` sidecar that
+  replaced legacy always-inject guidance.
+
 ## [6.27.1] - 2026-06-19
 
 ### Fixed
@@ -1631,7 +1653,27 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.5.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.28.0...HEAD
+[6.28.0]: https://github.com/thebtf/engram/compare/v6.27.1...v6.28.0
+[6.27.1]: https://github.com/thebtf/engram/compare/v6.27.0...v6.27.1
+[6.27.0]: https://github.com/thebtf/engram/compare/v6.26.4...v6.27.0
+[6.26.4]: https://github.com/thebtf/engram/compare/v6.26.3...v6.26.4
+[6.26.3]: https://github.com/thebtf/engram/compare/v6.26.2...v6.26.3
+[6.26.2]: https://github.com/thebtf/engram/compare/v6.26.1...v6.26.2
+[6.26.1]: https://github.com/thebtf/engram/compare/v6.26.0...v6.26.1
+[6.26.0]: https://github.com/thebtf/engram/compare/v6.25.1...v6.26.0
+[6.25.1]: https://github.com/thebtf/engram/compare/v6.25.0...v6.25.1
+[6.25.0]: https://github.com/thebtf/engram/compare/v6.24.0...v6.25.0
+[6.24.0]: https://github.com/thebtf/engram/compare/v6.23.0...v6.24.0
+[6.23.0]: https://github.com/thebtf/engram/compare/v6.22.1...v6.23.0
+[6.22.1]: https://github.com/thebtf/engram/compare/v6.22.0...v6.22.1
+[6.22.0]: https://github.com/thebtf/engram/compare/v6.21.0...v6.22.0
+[6.21.0]: https://github.com/thebtf/engram/compare/v6.20.0...v6.21.0
+[6.20.0]: https://github.com/thebtf/engram/compare/v6.19.0...v6.20.0
+[6.19.0]: https://github.com/thebtf/engram/compare/v6.18.0...v6.19.0
+[6.18.0]: https://github.com/thebtf/engram/compare/v6.14.0...v6.18.0
+[6.14.0]: https://github.com/thebtf/engram/compare/v6.13.1...v6.14.0
+[6.13.1]: https://github.com/thebtf/engram/compare/v6.13.0...v6.13.1
 [6.5.0]: https://github.com/thebtf/engram/compare/v6.4.15...v6.5.0
 [6.4.15]: https://github.com/thebtf/engram/compare/v6.4.14...v6.4.15
 [6.4.14]: https://github.com/thebtf/engram/compare/v6.4.13...v6.4.14
