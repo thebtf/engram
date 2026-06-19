@@ -106,6 +106,31 @@ func TestStoreRule_GovernanceFlagCreatesRuleCandidate(t *testing.T) {
 	require.Equal(t, false, resp["active"])
 }
 
+func TestStoreRule_GovernanceFlagPreservesGlobalIntentWithContextProject(t *testing.T) {
+	t.Setenv("ENGRAM_RULE_GOVERNANCE_ENABLED", "true")
+
+	writer := &fakeRuleGovernanceCandidateWriter{}
+	s := NewServer(ServerOptions{Version: "test"})
+	s.ruleGovernanceStore = writer
+	ctx := contextWithProject(context.Background(), "git-derived-project")
+
+	args := mustJSON(t, map[string]any{
+		"content": "Agents must preserve global rule intent when no project is provided.",
+	})
+
+	out, err := s.handleStoreRule(ctx, args)
+	require.NoError(t, err)
+	require.Len(t, writer.created, 1)
+	require.Equal(t, "", writer.created[0].SourceProject)
+	require.Equal(t, "global", writer.created[0].ProposedScope)
+	require.NotContains(t, writer.created[0].ActivationPredicate, "project")
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &resp))
+	require.Equal(t, nil, resp["project"])
+	require.Equal(t, "global", resp["scope"])
+}
+
 func TestStoreRule_GovernanceFlagRedactsCandidateContent(t *testing.T) {
 	t.Setenv("ENGRAM_RULE_GOVERNANCE_ENABLED", "true")
 

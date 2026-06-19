@@ -12,12 +12,14 @@ import (
 )
 
 type fakeRuleArbiterStore struct {
-	candidates  []*models.RuleCandidate
-	evaluations []*models.RuleArbiterEvaluation
-	annotations []models.RuleCandidateAnnotation
-	rejected    []int64
-	runs        []*models.RuleArbiterRun
-	nextID      int64
+	candidates              []*models.RuleCandidate
+	evaluations             []*models.RuleArbiterEvaluation
+	annotations             []models.RuleCandidateAnnotation
+	rejected                []int64
+	runs                    []*models.RuleArbiterRun
+	finishContextsCanceled  []bool
+	finishContextsHadValues []bool
+	nextID                  int64
 }
 
 func (f *fakeRuleArbiterStore) StartRuleArbiterRun(_ context.Context, trigger string) (*models.RuleArbiterRun, error) {
@@ -27,7 +29,9 @@ func (f *fakeRuleArbiterStore) StartRuleArbiterRun(_ context.Context, trigger st
 	return run, nil
 }
 
-func (f *fakeRuleArbiterStore) FinishRuleArbiterRun(_ context.Context, runID int64, status models.RuleArbiterRunStatus, counts models.RuleArbiterRunCounts, errorSummary string) (*models.RuleArbiterRun, error) {
+func (f *fakeRuleArbiterStore) FinishRuleArbiterRun(ctx context.Context, runID int64, status models.RuleArbiterRunStatus, counts models.RuleArbiterRunCounts, errorSummary string) (*models.RuleArbiterRun, error) {
+	f.finishContextsCanceled = append(f.finishContextsCanceled, ctx.Err() != nil)
+	f.finishContextsHadValues = append(f.finishContextsHadValues, ctx.Value(testRuleArbiterContextKey{}) == "preserved")
 	for _, run := range f.runs {
 		if run.ID == runID {
 			run.Status = status
@@ -84,6 +88,7 @@ func (f *fakeRuleArbiterStore) RejectRuleCandidate(_ context.Context, candidateI
 }
 
 type fakeRuleArbiterEvaluator struct {
+	cancel   context.CancelFunc
 	decision models.RuleArbiterDecision
 	err      error
 	calls    int
@@ -91,8 +96,13 @@ type fakeRuleArbiterEvaluator struct {
 
 func (f *fakeRuleArbiterEvaluator) Evaluate(_ context.Context, _ *models.RuleCandidate) (models.RuleArbiterDecision, error) {
 	f.calls++
+	if f.cancel != nil {
+		f.cancel()
+	}
 	return f.decision, f.err
 }
+
+type testRuleArbiterContextKey struct{}
 
 type blockingRuleArbiterEvaluator struct{}
 
@@ -215,6 +225,31 @@ func TestRuleArbiterWorker_RejectsCandidateWithoutActiveMutation(t *testing.T) {
 	require.Equal(t, models.RuleCandidateRejected, store.candidates[0].Status)
 	require.Len(t, store.evaluations, 1)
 	require.Empty(t, store.annotations, "reject must not create or link active behavioral rules")
+}
+
+func TestRuleArbiterWorker_FinishRunUsesUncanceledContext(t *testing.T) {
+	store := &fakeRuleArbiterStore{candidates: []*models.RuleCandidate{ruleArbiterCandidate(1, "stable rule")}}
+	ctx := context.WithValue(context.Background(), testRuleArbiterContextKey{}, "preserved")
+	ctx, cancel := context.WithCancel(ctx)
+	evaluator := &fakeRuleArbiterEvaluator{
+		cancel: cancel,
+		decision: models.RuleArbiterDecision{
+			Action:     models.RuleArbiterActionSkip,
+			Reason:     "already handled",
+			Confidence: 0.5,
+		},
+	}
+	worker := NewRuleArbiterWorker(store, evaluator, RuleArbiterConfig{
+		GovernanceEnabled: true,
+		ArbiterEnabled:    true,
+		BatchLimit:        20,
+		Timeout:           time.Second,
+	})
+
+	require.NoError(t, worker.RunOnce(ctx))
+	require.Equal(t, []bool{false}, store.finishContextsCanceled)
+	require.Equal(t, []bool{true}, store.finishContextsHadValues)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
 }
 
 func TestRuleArbiterWorker_SkipAnnotatesCandidateToPreventImmediateRequeue(t *testing.T) {

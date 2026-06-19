@@ -49,7 +49,7 @@ func (s *Server) captureActiveRuleIntent(ctx context.Context, intent ruleIntentC
 		scope = string(models.ScopeProject)
 	}
 	project := strings.TrimSpace(intent.Project)
-	if project == "" {
+	if project == "" && scope == string(models.ScopeProject) {
 		project = projectFromContext(ctx)
 	}
 	audience := strings.TrimSpace(intent.Audience)

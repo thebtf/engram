@@ -75,7 +75,7 @@ func (w *RuleArbiterWorker) RunOnce(ctx context.Context) error {
 	if err != nil {
 		status = models.RuleArbiterRunStatusFailed
 		errorSummary = err.Error()
-		_, finishErr := w.store.FinishRuleArbiterRun(ctx, run.ID, status, counts, errorSummary)
+		_, finishErr := w.finishRun(ctx, run.ID, status, counts, errorSummary)
 		return errors.Join(err, finishErr)
 	}
 	counts.CandidatesSeen = len(candidates)
@@ -93,8 +93,18 @@ func (w *RuleArbiterWorker) RunOnce(ctx context.Context) error {
 		errorSummary = runCtx.Err().Error()
 	}
 
-	_, err = w.store.FinishRuleArbiterRun(ctx, run.ID, status, counts, errorSummary)
+	_, err = w.finishRun(ctx, run.ID, status, counts, errorSummary)
 	return err
+}
+
+func (w *RuleArbiterWorker) finishRun(ctx context.Context, runID int64, status models.RuleArbiterRunStatus, counts models.RuleArbiterRunCounts, errorSummary string) (*models.RuleArbiterRun, error) {
+	timeout := w.config.Timeout
+	if timeout <= 0 {
+		timeout = 8 * time.Second
+	}
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	return w.store.FinishRuleArbiterRun(finishCtx, runID, status, counts, errorSummary)
 }
 
 func (w *RuleArbiterWorker) evaluateCandidate(ctx context.Context, runID int64, candidate *models.RuleCandidate, counts *models.RuleArbiterRunCounts) {
