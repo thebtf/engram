@@ -87,6 +87,7 @@ function Install-Release {
 
         Write-Info "Installing to $InstallDir..."
         New-Item -ItemType Directory -Path "$InstallDir\hooks"         -Force | Out-Null
+        New-Item -ItemType Directory -Path "$InstallDir\scripts"       -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\.claude-plugin" -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\commands"       -Force | Out-Null
 
@@ -99,6 +100,11 @@ function Install-Release {
             Copy-Item "$TempDir\hooks\*.cjs" "$InstallDir\hooks\" -Force -ErrorAction Stop
         }
         Copy-Item "$TempDir\hooks\hooks.json" "$InstallDir\hooks\" -Force -ErrorAction Stop
+
+        if (-not (Test-Path "$TempDir\scripts\*.js")) {
+            Write-Err "Release archive is missing required JS scripts in $TempDir\scripts"
+        }
+        Copy-Item "$TempDir\scripts\*.js" "$InstallDir\scripts\" -Force -ErrorAction Stop
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 

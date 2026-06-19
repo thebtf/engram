@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.26.3] - 2026-06-19
+
+### Fixed
+
+- **Release archives and script installers now include plugin runtime scripts.** The
+  archive layout now ships `scripts/*.js` alongside hooks, and the macOS/Linux
+  and Windows installers copy those scripts into the installed plugin root. This
+  preserves `scripts/run-engram.js` for the Codex MCP wrapper and
+  `scripts/ensure-binary.js` for the hook dispatcher on archive installs.
+
 ## [6.26.2] - 2026-06-19
 
 ### Fixed
