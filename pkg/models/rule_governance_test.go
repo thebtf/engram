@@ -81,6 +81,33 @@ func TestRuleAuthorityRejectsBackgroundLLMAndSystemGlobalKernel(t *testing.T) {
 	}
 }
 
+func TestRuleAuthorityRejectsBackgroundLLMAndSystemActiveStates(t *testing.T) {
+	for _, actorKind := range []RuleActorKind{RuleActorBackground, RuleActorLLM, RuleActorSystem} {
+		req := RuleTransitionRequest{
+			Actor:           string(actorKind) + "-worker",
+			ActorKind:       actorKind,
+			Reason:          "background arbiter must not activate rules",
+			EvidenceHandles: []string{"evidence:rg1-active-guard"},
+			SnapshotID:      "snap-rg1-active-guard",
+		}
+
+		for _, tc := range []struct {
+			from RuleVersionState
+			to   RuleVersionState
+		}{
+			{from: RuleStateCanary, to: RuleStateActiveProject},
+			{from: RuleStateActiveProject, to: RuleStateActiveShared},
+			{from: RuleStateActiveShared, to: RuleStateActiveGlobal},
+			{from: RuleStateActiveGlobal, to: RuleStateKernel},
+		} {
+			err := ValidateRuleActorAuthority(tc.from, tc.to, req)
+			if !errors.Is(err, ErrRuleAuthorityDenied) {
+				t.Fatalf("%s actor must not promote %s -> %s, got %v", actorKind, tc.from, tc.to, err)
+			}
+		}
+	}
+}
+
 func TestRuleAuthorityRejectsUnknownActorKind(t *testing.T) {
 	req := RuleTransitionRequest{
 		Actor:           "unknown-actor-test",

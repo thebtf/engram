@@ -27,6 +27,7 @@ import (
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/writelint"
+	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
 )
 
@@ -55,10 +56,11 @@ type Server struct {
 	candidateStore         *gorm.CandidateStore // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	snapshotStore          *gorm.SnapshotStore  // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	codeChunkStore         *gorm.CodeChunkStore // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
-	settingsStoreWired     *gorm.SettingsStore  // #259 CR-3: wired from the worker's open store so the settings tool reuses one pool (no per-call NewStore)
-	bulkFacade             *bulkops.Facade      // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
-	testAuditWriter        auditWriter          // set only in tests via setTestAuditWriter
-	testMemoryEditor       memoryEditor         // set only in tests via setTestMemoryEditor
+	ruleGovernanceStore    ruleGovernanceCandidateWriter
+	settingsStoreWired     *gorm.SettingsStore // #259 CR-3: wired from the worker's open store so the settings tool reuses one pool (no per-call NewStore)
+	bulkFacade             *bulkops.Facade     // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
+	testAuditWriter        auditWriter         // set only in tests via setTestAuditWriter
+	testMemoryEditor       memoryEditor        // set only in tests via setTestMemoryEditor
 	vault                  *crypto.Vault
 	vaultInitErr           error
 	vaultOnce              sync.Once
@@ -67,6 +69,10 @@ type Server struct {
 	redactionRules         []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
 	statsDB                *gormlib.DB              // raw DB handle for stats raw-SQL queries; set via SetStatsDB
 	version                string
+}
+
+type ruleGovernanceCandidateWriter interface {
+	CreateRuleCandidate(ctx context.Context, c *models.RuleCandidate) (*models.RuleCandidate, error)
 }
 
 // ServerOptions holds the dependencies injected into the MCP Server.
@@ -116,6 +122,11 @@ func (s *Server) SetMemoryStore(ms *gorm.MemoryStore) {
 // SetBehavioralRulesStore sets the behavioral rules store (US3 Commit C).
 func (s *Server) SetBehavioralRulesStore(brs *gorm.BehavioralRulesStore) {
 	s.behavioralRulesStore = brs
+}
+
+// SetRuleGovernanceStore wires proposal-only rule governance capture.
+func (s *Server) SetRuleGovernanceStore(store ruleGovernanceCandidateWriter) {
+	s.ruleGovernanceStore = store
 }
 
 func (s *Server) SetPromotionStore(ps *gorm.PromotionStore) {

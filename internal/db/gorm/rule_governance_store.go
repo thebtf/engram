@@ -40,6 +40,8 @@ type ruleCandidateRow struct {
 	UpdatedAt           time.Time      `gorm:"column:updated_at;autoUpdateTime"`
 	ReviewAfter         *time.Time     `gorm:"column:review_after"`
 	LastEvaluatedAt     *time.Time     `gorm:"column:last_evaluated_at"`
+	ArbiterRunID        *int64         `gorm:"column:arbiter_run_id"`
+	ArbiterEvaluationID *int64         `gorm:"column:arbiter_evaluation_id"`
 	SourceSignalType    string         `gorm:"column:source_signal_type;not null"`
 	SourceSessionID     sql.NullString `gorm:"column:source_session_id"`
 	SourceProject       sql.NullString `gorm:"column:source_project"`
@@ -49,6 +51,8 @@ type ruleCandidateRow struct {
 	ProposedAudience    string         `gorm:"column:proposed_audience;not null"`
 	ActivationPredicate JSONRaw        `gorm:"column:activation_predicate_json;type:jsonb;not null;default:'{}'"`
 	EvidenceHandles     JSONRaw        `gorm:"column:evidence_handles_json;type:jsonb;not null;default:'[]'"`
+	ArbiterAction       string         `gorm:"column:arbiter_action;not null;default:''"`
+	ArbiterReason       string         `gorm:"column:arbiter_reason;not null;default:''"`
 	AntiCaptureStatus   string         `gorm:"column:anti_capture_status;not null"`
 	AntiCaptureReason   sql.NullString `gorm:"column:anti_capture_reason"`
 	ConflictStatus      string         `gorm:"column:conflict_status;not null"`
@@ -56,11 +60,47 @@ type ruleCandidateRow struct {
 	Fingerprint         string         `gorm:"column:fingerprint;not null;default:''"`
 	DecayPolicy         string         `gorm:"column:decay_policy;not null"`
 	ID                  int64          `gorm:"primaryKey;autoIncrement"`
+	ArbiterConfidence   float64        `gorm:"column:arbiter_confidence;not null;default:0"`
 	Confidence          float64        `gorm:"column:confidence;not null;default:0"`
 	RecurrenceCount     int            `gorm:"column:recurrence_count;not null;default:0"`
 }
 
 func (ruleCandidateRow) TableName() string { return "rule_candidates" }
+
+type ruleArbiterRunRow struct {
+	StartedAt           time.Time      `gorm:"column:started_at;autoCreateTime"`
+	FinishedAt          *time.Time     `gorm:"column:finished_at"`
+	Trigger             string         `gorm:"column:trigger;not null"`
+	Status              string         `gorm:"column:status;not null"`
+	ErrorSummary        sql.NullString `gorm:"column:error_summary"`
+	ID                  int64          `gorm:"primaryKey;autoIncrement"`
+	CandidatesSeen      int            `gorm:"column:candidates_seen;not null;default:0"`
+	CandidatesEvaluated int            `gorm:"column:candidates_evaluated;not null;default:0"`
+	CandidatesProposed  int            `gorm:"column:candidates_proposed;not null;default:0"`
+	CandidatesHeld      int            `gorm:"column:candidates_held;not null;default:0"`
+	CandidatesRejected  int            `gorm:"column:candidates_rejected;not null;default:0"`
+	CandidatesSkipped   int            `gorm:"column:candidates_skipped;not null;default:0"`
+	Errors              int            `gorm:"column:errors;not null;default:0"`
+}
+
+func (ruleArbiterRunRow) TableName() string { return "rule_arbiter_runs" }
+
+type ruleArbiterEvaluationRow struct {
+	CreatedAt     time.Time      `gorm:"column:created_at;autoCreateTime"`
+	Proposal      JSONRaw        `gorm:"column:proposal_json;type:jsonb;not null;default:'{}'"`
+	RawResponse   sql.NullString `gorm:"column:raw_response"`
+	ErrorSummary  sql.NullString `gorm:"column:error_summary"`
+	EvaluatorKind string         `gorm:"column:evaluator_kind;not null"`
+	Action        string         `gorm:"column:action;not null"`
+	Reason        string         `gorm:"column:reason;not null"`
+	ParseStatus   string         `gorm:"column:parse_status;not null"`
+	ID            int64          `gorm:"primaryKey;autoIncrement"`
+	RunID         int64          `gorm:"column:run_id;not null"`
+	CandidateID   int64          `gorm:"column:candidate_id;not null"`
+	Confidence    float64        `gorm:"column:confidence;not null;default:0"`
+}
+
+func (ruleArbiterEvaluationRow) TableName() string { return "rule_arbiter_evaluations" }
 
 func nullableString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: value != ""}
@@ -236,6 +276,181 @@ func (s *RuleGovernanceStore) ListRuleCandidates(ctx context.Context, params Rul
 		out[i] = toRuleCandidate(&rows[i])
 	}
 	return out, nil
+}
+
+func (s *RuleGovernanceStore) ListPendingRuleCandidatesForArbiter(ctx context.Context, limit int, now time.Time) ([]*models.RuleCandidate, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var rows []ruleCandidateRow
+	if err := s.db.WithContext(ctx).
+		Where("status = ?", string(models.RuleCandidatePending)).
+		Where("review_after IS NULL OR review_after <= ?", now).
+		Where("arbiter_action = '' OR review_after <= ?", now).
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance list_pending_for_arbiter: %w", err)
+	}
+	out := make([]*models.RuleCandidate, len(rows))
+	for i := range rows {
+		out[i] = toRuleCandidate(&rows[i])
+	}
+	return out, nil
+}
+
+func (s *RuleGovernanceStore) StartRuleArbiterRun(ctx context.Context, trigger string) (*models.RuleArbiterRun, error) {
+	trigger = strings.TrimSpace(trigger)
+	if trigger == "" {
+		trigger = "scheduled"
+	}
+	row := &ruleArbiterRunRow{
+		Trigger: trigger,
+		Status:  string(models.RuleArbiterRunStatusStarted),
+	}
+	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance start_arbiter_run: %w", err)
+	}
+	return toRuleArbiterRun(row), nil
+}
+
+func (s *RuleGovernanceStore) FinishRuleArbiterRun(ctx context.Context, runID int64, status models.RuleArbiterRunStatus, counts models.RuleArbiterRunCounts, errorSummary string) (*models.RuleArbiterRun, error) {
+	if runID <= 0 {
+		return nil, fmt.Errorf("rule_governance finish_arbiter_run: run id required")
+	}
+	if !status.IsValid() || status == models.RuleArbiterRunStatusStarted {
+		return nil, fmt.Errorf("%w: invalid arbiter run status %q", models.ErrInvalidRuleTransition, status)
+	}
+	if hasNegativeRuleArbiterCount(counts) {
+		return nil, models.ErrRuleRequiredFieldMissing
+	}
+	now := time.Now().UTC()
+	updates := map[string]any{
+		"finished_at":          &now,
+		"status":               string(status),
+		"error_summary":        nullableString(errorSummary),
+		"candidates_seen":      counts.CandidatesSeen,
+		"candidates_evaluated": counts.CandidatesEvaluated,
+		"candidates_proposed":  counts.CandidatesProposed,
+		"candidates_held":      counts.CandidatesHeld,
+		"candidates_rejected":  counts.CandidatesRejected,
+		"candidates_skipped":   counts.CandidatesSkipped,
+		"errors":               counts.Errors,
+	}
+	result := s.db.WithContext(ctx).Model(&ruleArbiterRunRow{}).
+		Where("id = ? AND status = ?", runID, string(models.RuleArbiterRunStatusStarted)).
+		Updates(updates)
+	if result.Error != nil {
+		return nil, fmt.Errorf("rule_governance finish_arbiter_run: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return nil, fmt.Errorf("%w: arbiter run %d is not started or does not exist", models.ErrInvalidRuleTransition, runID)
+	}
+	var row ruleArbiterRunRow
+	if err := s.db.WithContext(ctx).First(&row, runID).Error; err != nil {
+		return nil, fmt.Errorf("rule_governance finish_arbiter_run reread: %w", err)
+	}
+	return toRuleArbiterRun(&row), nil
+}
+
+func (s *RuleGovernanceStore) CreateRuleArbiterEvaluation(ctx context.Context, eval *models.RuleArbiterEvaluation) (*models.RuleArbiterEvaluation, error) {
+	if eval == nil {
+		return nil, fmt.Errorf("rule_governance create_arbiter_evaluation: evaluation must not be nil")
+	}
+	if eval.RunID <= 0 || eval.CandidateID <= 0 || !eval.Action.IsValid() || !eval.ParseStatus.IsValid() {
+		return nil, models.ErrRuleRequiredFieldMissing
+	}
+	if strings.TrimSpace(eval.Reason) == "" {
+		return nil, models.ErrRuleRequiredFieldMissing
+	}
+	eval.Reason = strings.TrimSpace(eval.Reason)
+	if strings.TrimSpace(eval.EvaluatorKind) == "" {
+		eval.EvaluatorKind = "llm"
+	} else {
+		eval.EvaluatorKind = strings.TrimSpace(eval.EvaluatorKind)
+	}
+	var row *ruleArbiterEvaluationRow
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run ruleArbiterRunRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&run, eval.RunID).Error; err != nil {
+			return fmt.Errorf("rule_governance create_arbiter_evaluation lock run %d: %w", eval.RunID, err)
+		}
+		if run.Status != string(models.RuleArbiterRunStatusStarted) {
+			return fmt.Errorf("%w: arbiter run %d status %s cannot accept evaluations", models.ErrInvalidRuleTransition, eval.RunID, run.Status)
+		}
+		var candidate ruleCandidateRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&candidate, eval.CandidateID).Error; err != nil {
+			return fmt.Errorf("rule_governance create_arbiter_evaluation lock candidate %d: %w", eval.CandidateID, err)
+		}
+		if candidate.Status != string(models.RuleCandidatePending) {
+			return fmt.Errorf("%w: candidate %d status %s cannot be evaluated", models.ErrInvalidRuleTransition, eval.CandidateID, candidate.Status)
+		}
+		row = fromRuleArbiterEvaluation(eval)
+		if err := tx.Create(row).Error; err != nil {
+			return fmt.Errorf("rule_governance create_arbiter_evaluation: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toRuleArbiterEvaluation(row), nil
+}
+
+func (s *RuleGovernanceStore) AnnotateRuleCandidate(ctx context.Context, candidateID int64, ann models.RuleCandidateAnnotation) (*models.RuleCandidate, error) {
+	if candidateID <= 0 || !ann.Action.IsValid() || strings.TrimSpace(ann.Reason) == "" {
+		return nil, models.ErrRuleRequiredFieldMissing
+	}
+	if ann.RunID == nil || *ann.RunID <= 0 || ann.EvaluationID == nil || *ann.EvaluationID <= 0 {
+		return nil, models.ErrRuleRequiredFieldMissing
+	}
+	ann.Reason = strings.TrimSpace(ann.Reason)
+	evaluatedAt := ann.EvaluatedAt
+	if evaluatedAt.IsZero() {
+		evaluatedAt = time.Now().UTC()
+	}
+	updates := map[string]any{
+		"arbiter_action":        string(ann.Action),
+		"arbiter_reason":        ann.Reason,
+		"arbiter_confidence":    ann.Confidence,
+		"arbiter_run_id":        ann.RunID,
+		"arbiter_evaluation_id": ann.EvaluationID,
+		"last_evaluated_at":     &evaluatedAt,
+		"review_after":          ann.ReviewAfter,
+		"updated_at":            time.Now().UTC(),
+	}
+	var row ruleCandidateRow
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var candidate ruleCandidateRow
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&candidate, candidateID).Error; err != nil {
+			return fmt.Errorf("rule_governance annotate_candidate lock candidate %d: %w", candidateID, err)
+		}
+		if candidate.Status != string(models.RuleCandidatePending) {
+			return fmt.Errorf("%w: candidate %d status %s cannot be annotated", models.ErrInvalidRuleTransition, candidateID, candidate.Status)
+		}
+		var eval ruleArbiterEvaluationRow
+		if err := tx.Where("id = ? AND candidate_id = ? AND run_id = ? AND action = ?",
+			*ann.EvaluationID, candidateID, *ann.RunID, string(ann.Action)).
+			First(&eval).Error; err != nil {
+			return fmt.Errorf("%w: evaluation %d does not match candidate/run/action", models.ErrInvalidRuleTransition, *ann.EvaluationID)
+		}
+		if err := tx.Model(&ruleCandidateRow{}).
+			Where("id = ?", candidateID).
+			Updates(updates).Error; err != nil {
+			return fmt.Errorf("rule_governance annotate_candidate: %w", err)
+		}
+		if err := tx.First(&row, candidateID).Error; err != nil {
+			return fmt.Errorf("rule_governance annotate_candidate reread: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toRuleCandidate(&row), nil
 }
 
 func (s *RuleGovernanceStore) CreateDraftFromCandidate(ctx context.Context, candidateID int64, req RuleTransitionRequest) (*models.RuleVersion, error) {
@@ -464,6 +679,8 @@ func toRuleCandidate(row *ruleCandidateRow) *models.RuleCandidate {
 		CreatedAt:           row.CreatedAt,
 		UpdatedAt:           row.UpdatedAt,
 		ReviewAfter:         row.ReviewAfter,
+		ArbiterRunID:        row.ArbiterRunID,
+		ArbiterEvaluationID: row.ArbiterEvaluationID,
 		SourceSignalType:    row.SourceSignalType,
 		SourceSessionID:     stringFromNull(row.SourceSessionID),
 		SourceProject:       stringFromNull(row.SourceProject),
@@ -473,6 +690,9 @@ func toRuleCandidate(row *ruleCandidateRow) *models.RuleCandidate {
 		ProposedAudience:    row.ProposedAudience,
 		ActivationPredicate: decodeObject(row.ActivationPredicate),
 		EvidenceHandles:     decodeStrings(row.EvidenceHandles),
+		ArbiterAction:       models.RuleArbiterAction(row.ArbiterAction),
+		ArbiterReason:       row.ArbiterReason,
+		ArbiterConfidence:   row.ArbiterConfidence,
 		Confidence:          row.Confidence,
 		RecurrenceCount:     row.RecurrenceCount,
 		AntiCaptureStatus:   row.AntiCaptureStatus,
@@ -486,6 +706,62 @@ func toRuleCandidate(row *ruleCandidateRow) *models.RuleCandidate {
 		c.LastEvaluatedAt = *row.LastEvaluatedAt
 	}
 	return c
+}
+
+func toRuleArbiterRun(row *ruleArbiterRunRow) *models.RuleArbiterRun {
+	return &models.RuleArbiterRun{
+		ID:           row.ID,
+		Trigger:      row.Trigger,
+		Status:       models.RuleArbiterRunStatus(row.Status),
+		StartedAt:    row.StartedAt,
+		FinishedAt:   row.FinishedAt,
+		ErrorSummary: stringFromNull(row.ErrorSummary),
+		RuleArbiterRunCounts: models.RuleArbiterRunCounts{
+			CandidatesSeen:      row.CandidatesSeen,
+			CandidatesEvaluated: row.CandidatesEvaluated,
+			CandidatesProposed:  row.CandidatesProposed,
+			CandidatesHeld:      row.CandidatesHeld,
+			CandidatesRejected:  row.CandidatesRejected,
+			CandidatesSkipped:   row.CandidatesSkipped,
+			Errors:              row.Errors,
+		},
+	}
+}
+
+func fromRuleArbiterEvaluation(eval *models.RuleArbiterEvaluation) *ruleArbiterEvaluationRow {
+	evaluatorKind := eval.EvaluatorKind
+	if evaluatorKind == "" {
+		evaluatorKind = "llm"
+	}
+	return &ruleArbiterEvaluationRow{
+		RunID:         eval.RunID,
+		CandidateID:   eval.CandidateID,
+		EvaluatorKind: evaluatorKind,
+		Action:        string(eval.Action),
+		Reason:        eval.Reason,
+		Confidence:    eval.Confidence,
+		ParseStatus:   string(eval.ParseStatus),
+		Proposal:      objectJSONFromMap(eval.Proposal),
+		RawResponse:   nullableString(eval.RawResponse),
+		ErrorSummary:  nullableString(eval.ErrorSummary),
+	}
+}
+
+func toRuleArbiterEvaluation(row *ruleArbiterEvaluationRow) *models.RuleArbiterEvaluation {
+	return &models.RuleArbiterEvaluation{
+		ID:            row.ID,
+		RunID:         row.RunID,
+		CandidateID:   row.CandidateID,
+		EvaluatorKind: row.EvaluatorKind,
+		Action:        models.RuleArbiterAction(row.Action),
+		Reason:        row.Reason,
+		Confidence:    row.Confidence,
+		ParseStatus:   models.RuleArbiterParseStatus(row.ParseStatus),
+		Proposal:      decodeObject(row.Proposal),
+		RawResponse:   stringFromNull(row.RawResponse),
+		ErrorSummary:  stringFromNull(row.ErrorSummary),
+		CreatedAt:     row.CreatedAt,
+	}
 }
 
 func toRuleVersion(row *ruleVersionRow) *models.RuleVersion {
@@ -629,6 +905,16 @@ func hasNonBlankEvidenceHandle(handles []string) bool {
 		}
 	}
 	return false
+}
+
+func hasNegativeRuleArbiterCount(counts models.RuleArbiterRunCounts) bool {
+	return counts.CandidatesSeen < 0 ||
+		counts.CandidatesEvaluated < 0 ||
+		counts.CandidatesProposed < 0 ||
+		counts.CandidatesHeld < 0 ||
+		counts.CandidatesRejected < 0 ||
+		counts.CandidatesSkipped < 0 ||
+		counts.Errors < 0
 }
 
 func validateRuleCandidateForCreate(c *models.RuleCandidate) error {

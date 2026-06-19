@@ -582,6 +582,10 @@ func (s *Service) initializeAsync() {
 	memoryStore := gorm.NewMemoryStore(store)
 	behavioralRulesStore := gorm.NewBehavioralRulesStore(store)
 	credentialStore := gorm.NewCredentialStore(store)
+	var ruleGovernanceStore *gorm.RuleGovernanceStore
+	if s.config.RuleGovernanceEnabled {
+		ruleGovernanceStore = gorm.NewRuleGovernanceStore(store.GetDB())
+	}
 
 	// Create feedback updater for vNext Phase A closed-loop learning.
 	feedbackUpdater := feedback.NewUpdater(memoryStore)
@@ -755,6 +759,9 @@ func (s *Service) initializeAsync() {
 	// switched from observations to memories/behavioral_rules.
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
+	if ruleGovernanceStore != nil {
+		mcpServer.SetRuleGovernanceStore(ruleGovernanceStore)
+	}
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared
@@ -946,6 +953,10 @@ func (s *Service) initializeAsync() {
 	// middleware start passing requests through to the data-plane handlers.
 	s.ready.Store(true)
 	log.Info().Msg("background init: complete, service ready")
+
+	// Start proposal-only rule governance arbiter after readiness. It never runs
+	// on session-start/user-prompt hot paths and requires both governance flags.
+	s.startRuleArbiterWorker(s.ctx, ruleGovernanceStore)
 
 	// Start project reaper (hourly cleanup of hard-expired soft-deleted projects).
 	projectReaper := reaper.New(store.DB)

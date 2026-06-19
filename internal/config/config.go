@@ -39,10 +39,10 @@ var CriticalConcepts = []string{
 // Config holds the application configuration.
 // Field order optimized for memory alignment (fieldalignment).
 type Config struct {
-	ContextFullField          string `json:"context_full_field"`
-	DBPath                    string `json:"db_path"`
-	Model                     string `json:"model"`
-	VectorStorageStrategy     string `json:"vector_storage_strategy"`
+	ContextFullField          string   `json:"context_full_field"`
+	DBPath                    string   `json:"db_path"`
+	Model                     string   `json:"model"`
+	VectorStorageStrategy     string   `json:"vector_storage_strategy"`
 	DatabaseDSN               string   `json:"-"`                  // env-only: DATABASE_DSN (contains password, never JSON)
 	DatabaseMaxConns          int      `json:"database_max_conns"` // PostgreSQL pool size (default: 10)
 	ContextObsConcepts        []string `json:"context_obs_concepts"`
@@ -60,17 +60,17 @@ type Config struct {
 	CollectionConfigPath      string   // env-only
 	WorkstationID             string   // env-only: WORKSTATION_ID
 	TelemetryEnabled          bool     `json:"telemetry_enabled"`
-	LogBufferSize             int      `json:"log_buffer_size"`    // Ring buffer capacity for /api/logs (default: 10000)
-	ContextMaxTokens          int      `json:"context_max_tokens"` // Token budget for context injection (default: 8000, 0=unlimited)
+	LogBufferSize             int      `json:"log_buffer_size"`              // Ring buffer capacity for /api/logs (default: 10000)
+	ContextMaxTokens          int      `json:"context_max_tokens"`           // Token budget for context injection (default: 8000, 0=unlimited)
 	StoreMemoryHardLimit      int      `json:"store_memory_hard_limit"`      // Max chars for store_memory content (default: 10000)
 	StoreMemorySoftLimit      int      `json:"store_memory_soft_limit"`      // Chars above which content is truncated (default: 1000)
 	StoreMemoryDedupThreshold float64  `json:"store_memory_dedup_threshold"` // Cosine similarity for dedup (default: 0.92)
 	EncryptionKeyFile         string   `json:"-"`                            // env-only: ENGRAM_ENCRYPTION_KEY_FILE (path to vault.key)
 	EncryptionKey             string   `json:"-"`                            // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
-	AlwaysInjectLimit         int      `json:"always_inject_limit"` // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
-	ProjectInjectLimit        int      `json:"project_inject_limit"` // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
-	InjectUnified             bool     `json:"inject_unified"`      // ENGRAM_INJECT_UNIFIED (default: true) — emergency rollback flag; removed after two release cycles
-	EnforceSourceProject      bool     `json:"enforce_source_project"` // ENGRAM_ENFORCE_SOURCE_PROJECT (default: true)
+	AlwaysInjectLimit         int      `json:"always_inject_limit"`          // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
+	ProjectInjectLimit        int      `json:"project_inject_limit"`         // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
+	InjectUnified             bool     `json:"inject_unified"`               // ENGRAM_INJECT_UNIFIED (default: true) — emergency rollback flag; removed after two release cycles
+	EnforceSourceProject      bool     `json:"enforce_source_project"`       // ENGRAM_ENFORCE_SOURCE_PROJECT (default: true)
 	AuthSkipLocal             bool     `json:"auth_skip_local"`
 	AuthTrustedProxy          string   `json:"auth_trusted_proxy"`
 
@@ -95,6 +95,28 @@ type Config struct {
 	// unprocessed rows — semantics are enforced by TranscriptStore.PruneUnprocessedOlderThan.
 	// Env: ENGRAM_TRANSCRIPT_RETENTION_DAYS
 	TranscriptRetentionDays int `json:"transcript_retention_days"`
+
+	// RuleGovernanceEnabled routes explicit active-rule intents into rule_candidates
+	// instead of directly writing active behavioral_rules.
+	// Env: ENGRAM_RULE_GOVERNANCE_ENABLED (default: false)
+	RuleGovernanceEnabled bool `json:"rule_governance_enabled"`
+
+	// RuleArbiterEnabled starts the bounded proposal-only background arbiter.
+	// It is effective only when RuleGovernanceEnabled is also true.
+	// Env: ENGRAM_RULE_ARBITER_ENABLED (default: false)
+	RuleArbiterEnabled bool `json:"rule_arbiter_enabled"`
+
+	// RuleArbiterBatchLimit caps candidates processed per worker run.
+	// Env: ENGRAM_RULE_ARBITER_BATCH_LIMIT (default: 20)
+	RuleArbiterBatchLimit int `json:"rule_arbiter_batch_limit"`
+
+	// RuleArbiterTimeoutMS caps one worker run.
+	// Env: ENGRAM_RULE_ARBITER_TIMEOUT_MS (default: 8000)
+	RuleArbiterTimeoutMS int `json:"rule_arbiter_timeout_ms"`
+
+	// RuleArbiterIntervalSeconds controls the background tick interval.
+	// Env: ENGRAM_RULE_ARBITER_INTERVAL_SECONDS (default: 300)
+	RuleArbiterIntervalSeconds int `json:"rule_arbiter_interval_seconds"`
 }
 
 // globalConfig is the singleton Config instance, lazily initialized by Get().
@@ -173,7 +195,7 @@ func Default() *Config {
 		MaxConns:                       4,
 		Model:                          DefaultModel,
 		VectorStorageStrategy:          "hub", // Hub storage strategy (LEANN-inspired)
-		HubThreshold:                   5, // Require 5+ accesses to store embedding
+		HubThreshold:                   5,     // Require 5+ accesses to store embedding
 		ContextObservations:            100,
 		ContextFullCount:               25,
 		ContextSessionCount:            10,
@@ -194,6 +216,9 @@ func Default() *Config {
 		InjectUnified:                  true, // Use unified RetrieveRelevant path for inject (FR-3). Set ENGRAM_INJECT_UNIFIED=false for emergency rollback.
 		EnforceSourceProject:           true, // Enforce source/project scoping on store/recall (T010)
 		OutcomeRecorderIntervalMinutes: 15,
+		RuleArbiterBatchLimit:          20,
+		RuleArbiterTimeoutMS:           8000,
+		RuleArbiterIntervalSeconds:     300,
 		SignalWeights: map[string]float64{
 			"git_commit":   1.0,
 			"pr_created":   2.0,
@@ -353,6 +378,27 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_TRANSCRIPT_RETENTION_DAYS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.TranscriptRetentionDays = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_GOVERNANCE_ENABLED")); v == "true" || v == "1" {
+		cfg.RuleGovernanceEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ARBITER_ENABLED")); v == "true" || v == "1" {
+		cfg.RuleArbiterEnabled = true
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ARBITER_BATCH_LIMIT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.RuleArbiterBatchLimit = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ARBITER_TIMEOUT_MS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.RuleArbiterTimeoutMS = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("ENGRAM_RULE_ARBITER_INTERVAL_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.RuleArbiterIntervalSeconds = n
 		}
 	}
 

@@ -546,6 +546,25 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 
 	if params.AlwaysInject {
+		if candidate, err := s.captureActiveRuleIntent(ctx, ruleIntentCapture{
+			Content:     params.Content,
+			Project:     params.Project,
+			Scope:       resolvedScope,
+			Audience:    "developer",
+			SessionID:   params.SessionID,
+			Actor:       params.AgentSource,
+			SourceTool:  "store_memory",
+			EvidenceTag: "always_inject",
+		}); err != nil {
+			return "", fmt.Errorf("store rule candidate: %w", err)
+		} else if candidate != nil {
+			return marshalRuleCandidateIntentResponse(candidate, map[string]any{
+				"title":         truncateTitle(candidate.ProposedContent, 80),
+				"type":          string(models.ObsTypeGuidance),
+				"scope":         resolvedScope,
+				"always_inject": true,
+			})
+		}
 		if s.behavioralRulesStore == nil {
 			return "", fmt.Errorf("always_inject=true requires behavioral rules store")
 		}

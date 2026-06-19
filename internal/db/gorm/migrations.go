@@ -4660,6 +4660,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 		},
 		ruleGovernanceMigration144(),
+		ruleArbiterBackgroundMigration145(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
