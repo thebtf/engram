@@ -176,6 +176,89 @@ test('launcher executes exported dispatcher main when resolved from plugin root'
   }
 });
 
+test('launcher fails open when resolved Codex cache dispatcher has missing child hooks', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-incomplete-cache-'));
+  try {
+    const codexHome = path.join(tempRoot, '.codex');
+    const latestHooks = path.join(codexHome, 'plugins', 'cache', 'engram-marketplace', 'engram', '6.26.4', 'hooks');
+    fs.mkdirSync(latestHooks, { recursive: true });
+    fs.copyFileSync(path.join(hooksDir, 'dispatcher.cjs'), path.join(latestHooks, 'dispatcher.cjs'));
+
+    const result = runLauncher(hookCommandFor('PreCompact'), JSON.stringify({ session_id: 's1' }), {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      CODEX_PLUGIN_ROOT: '',
+      CODEX_PLUGIN_DIR: '',
+      PLUGIN_ROOT: '',
+      CLAUDE_PLUGIN_ROOT: '',
+      CLAUDE_PLUGIN_DIR: '',
+    });
+
+    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /hook file is missing/);
+    assert.equal(result.stdout, '{"continue":true}\n');
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('dispatcher fails open when a child hook file is missing', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-missing-child-'));
+  try {
+    const tempHooks = path.join(tempRoot, 'plugin', 'hooks');
+    fs.mkdirSync(tempHooks, { recursive: true });
+    fs.copyFileSync(path.join(hooksDir, 'dispatcher.cjs'), path.join(tempHooks, 'dispatcher.cjs'));
+
+    const result = spawnSync(process.execPath, [path.join(tempHooks, 'dispatcher.cjs'), 'PreCompact'], {
+      input: JSON.stringify({ session_id: 's1' }),
+      encoding: 'utf8',
+      timeout: 2000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024,
+      env: { ...process.env },
+    });
+
+    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /hook file is missing/);
+    assert.equal(result.stdout, '{"continue":true}\n');
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('dispatcher fails open when a child hook exits nonzero', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-nonzero-child-'));
+  try {
+    const tempHooks = path.join(tempRoot, 'plugin', 'hooks');
+    fs.mkdirSync(tempHooks, { recursive: true });
+    fs.copyFileSync(path.join(hooksDir, 'dispatcher.cjs'), path.join(tempHooks, 'dispatcher.cjs'));
+    fs.writeFileSync(
+      path.join(tempHooks, 'pre-compact.js'),
+      "process.stdout.write('{\"continue\":false,\"stopReason\":\"partial\"}\\n'); process.stderr.write('simulated child failure\\n'); process.exit(7);\n",
+      'utf8',
+    );
+
+    const result = spawnSync(process.execPath, [path.join(tempHooks, 'dispatcher.cjs'), 'PreCompact'], {
+      input: JSON.stringify({ session_id: 's1' }),
+      encoding: 'utf8',
+      timeout: 2000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024,
+      env: { ...process.env },
+    });
+
+    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /simulated child failure/);
+    assert.match(result.stderr, /pre-compact\.js exited with code 7/);
+    assert.equal(result.stdout, '{"continue":true}\n');
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('release archives include scripts required by hooks and MCP wrapper', () => {
   const goreleaser = readRepoFile('.goreleaser.yaml');
   const codexMcp = JSON.parse(readRepoFile('plugin', 'engram', '.mcp.json'));
