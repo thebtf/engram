@@ -1,6 +1,8 @@
 param(
-  [string]$BaseUrl = "http://unleashed.lan:3000",
+  [Parameter(Mandatory = $true)]
+  [string]$BaseUrl,
   [string]$WorkerBaseUrl = "http://unleashed.lan:37777",
+  [string]$ExpectedTitle = "engram · консоль оператора",
   [ValidateSet("disabled", "token", "anonymous")]
   [string]$Mode = "anonymous",
   [string]$AdminToken = ""
@@ -58,6 +60,20 @@ function Assert-Status {
   }
 }
 
+function Get-Title {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Html
+  )
+
+  $match = [regex]::Match($Html, '<title>(.*?)</title>', 'IgnoreCase')
+  if (-not $match.Success) {
+    return ""
+  }
+
+  return $match.Groups[1].Value.Trim()
+}
+
 $normalizedBaseUrl = $BaseUrl.TrimEnd("/")
 $normalizedWorkerBaseUrl = $WorkerBaseUrl.TrimEnd("/")
 $rootUrl = "$normalizedBaseUrl/"
@@ -73,6 +89,10 @@ $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 Write-Step "Checking public operator-console root"
 $rootResponse = Invoke-Http -Method GET -Url $rootUrl
 Assert-Status -Response $rootResponse -ExpectedStatus @(200) -Step "root"
+$title = Get-Title -Html $rootResponse.Content
+if ($title -ne $ExpectedTitle) {
+  throw "Root does not look like the promoted operator-console. Expected title '$ExpectedTitle', got '$title'."
+}
 
 Write-Step "Checking proxied stats endpoints"
 $statsResponse = Invoke-Http -Method GET -Url $statsUrl -Session $session
@@ -119,6 +139,7 @@ else {
 Write-Step "Remote smoke passed"
 Write-Host ("MODE=" + $Mode)
 Write-Host ("ROOT_STATUS=" + $rootResponse.StatusCode)
+Write-Host ("ROOT_TITLE=" + $title)
 Write-Host ("STATS_STATUS=" + $statsResponse.StatusCode)
 Write-Host ("STATS_VNEXT_STATUS=" + $statsVnextResponse.StatusCode)
 Write-Host ("WORKER_HEALTH_STATUS=" + $workerHealthResponse.StatusCode)
