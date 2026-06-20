@@ -11,22 +11,20 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
-	"gorm.io/gorm"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	authpkg "github.com/thebtf/engram/internal/auth"
 )
 
-// isAuthDisabled returns true when ENGRAM_AUTH_DISABLED env var is "true" or "1".
+// isAuthDisabled returns true when ENGRAM_AUTH_DISABLED enables disabled-auth mode.
 func isAuthDisabled() bool {
-	v := os.Getenv("ENGRAM_AUTH_DISABLED")
-	return v == "true" || v == "1"
+	return authDisabledFromEnv()
 }
 
 // sessionPayload is the data stored inside the signed session cookie.
@@ -158,6 +156,16 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	// This endpoint is exempt from auth middleware so the SPA can check auth status.
 	// We manually verify auth here and return the result.
 	authDisabled := isAuthDisabled()
+	if authDisabled {
+		writeJSON(w, map[string]any{
+			"authenticated": true,
+			"role":          "admin",
+			"auth_disabled": true,
+			"source":        "auth-disabled",
+			"synthetic":     true,
+		})
+		return
+	}
 
 	role := getAuthRole(r)
 	if role != "" {

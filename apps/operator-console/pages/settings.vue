@@ -1,36 +1,106 @@
 <script setup lang="ts">
-/** Settings → Runtime flags — demonstrates SwitchRow with the restart-required contract.
- *  Seam: writes go to the flag endpoint; reload=true flags need a server restart to apply. */
-import { ref } from 'vue'
+/** Settings — read truth from GET /api/config; writes stay honest until /api/flags exists. */
+import { computed } from 'vue'
+import { useServerConfigSnapshot } from '../composables/useMockData'
 
-const quiet = ref(true)
-const graph = ref(true)
-const vnextF = ref(false)
-const legacyLogin = ref(false)
+const { t } = useI18n()
+const config = useServerConfigSnapshot()
+
+const injectUnified = computed({
+  get: () => config.snapshot.value.injectUnified,
+  set: () => {},
+})
+
+const telemetryEnabled = computed({
+  get: () => config.snapshot.value.telemetryEnabled,
+  set: () => {},
+})
+
+const enforceSourceProject = computed({
+  get: () => config.snapshot.value.enforceSourceProject,
+  set: () => {},
+})
 </script>
 
 <template>
   <div class="wrap">
-    <header class="head"><h1>Настройки</h1><p>Среда выполнения и поведение сервера. «restart» — изменение применится после перезапуска.</p></header>
+    <header class="head">
+      <h1>{{ t('settings.title') }}</h1>
+      <p>{{ t('settings.subtitle') }}</p>
+    </header>
+
+    <p v-if="config.error" class="msg err">{{ config.error }}</p>
+    <p v-else-if="config.pending" class="msg note">{{ t('settings.loading') }}</p>
 
     <section class="card">
-      <h3 class="card-t">Среда выполнения</h3>
-      <SwitchRow v-model="quiet" cls="live" title="Тихий режим"
-        desc="Глушит только injection-хуки; capture и обучение продолжают работать." evidence="ENGRAM_QUIET" />
-      <SwitchRow v-model="graph" cls="live" title="Связи знаний (граф)"
-        desc="Строит граф концептов и переходов между записями памяти." evidence="ENGRAM_GRAPH" />
-      <SwitchRow v-model="vnextF" cls="dormant" title="vNext F (крис­таллизация)"
-        desc="Очередь кандидатов в память за флагом. Пока выключено — раздел «На проверку» dormant." evidence="VNEXT_F" :reload="true" />
-      <SwitchRow v-model="legacyLogin" cls="live" danger title="Legacy admin-key вход"
-        desc="Опасно: разрешает вход по admin-токену в обход OAuth. Держите выключенным." evidence="ENGRAM_AUTH_LEGACY" :reload="true" />
+      <div class="card-head">
+        <h3 class="card-t">{{ t('settings.runtimeTitle') }}</h3>
+        <HonestyBadge cls="live" evidence="GET /api/config" />
+      </div>
+
+      <SwitchRow
+        v-model="injectUnified"
+        cls="live"
+        :title="t('settings.rows.injectUnified.title')"
+        :desc="t('settings.rows.injectUnified.desc')"
+        evidence="memory.inject_unified"
+        disabled
+      />
+      <SwitchRow
+        v-model="telemetryEnabled"
+        cls="live"
+        :title="t('settings.rows.telemetry.title')"
+        :desc="t('settings.rows.telemetry.desc')"
+        evidence="features.telemetry_enabled"
+        disabled
+      />
+      <SwitchRow
+        v-model="enforceSourceProject"
+        cls="live"
+        :title="t('settings.rows.enforceSourceProject.title')"
+        :desc="t('settings.rows.enforceSourceProject.desc')"
+        evidence="features.enforce_source_project"
+        disabled
+      />
+    </section>
+
+    <section class="card facts">
+      <h3 class="card-t">{{ t('settings.snapshotTitle') }}</h3>
+      <dl class="fact-grid">
+        <div class="fact"><dt>{{ t('settings.facts.contextObservations') }}</dt><dd>{{ config.snapshot.contextObservations }}</dd></div>
+        <div class="fact"><dt>{{ t('settings.facts.contextMaxTokens') }}</dt><dd>{{ config.snapshot.contextMaxTokens }}</dd></div>
+        <div class="fact"><dt>{{ t('settings.facts.contextSessionCount') }}</dt><dd>{{ config.snapshot.contextSessionCount }}</dd></div>
+        <div class="fact"><dt>{{ t('settings.facts.vectorStrategy') }}</dt><dd>{{ config.snapshot.vectorStrategy }}</dd></div>
+        <div class="fact"><dt>{{ t('settings.facts.databaseMaxConns') }}</dt><dd>{{ config.snapshot.databaseMaxConns }}</dd></div>
+        <div class="fact"><dt>{{ t('settings.facts.logBufferSize') }}</dt><dd>{{ config.snapshot.logBufferSize }}</dd></div>
+      </dl>
+    </section>
+
+    <section class="card mb">
+      <div class="card-head">
+        <h3 class="card-t">{{ t('settings.mustBuildTitle') }}</h3>
+        <HonestyBadge cls="mustbuild" evidence="GET /api/flags" />
+      </div>
+      <p class="mbody">{{ t('settings.mustBuildBody') }}</p>
     </section>
   </div>
 </template>
 
 <style scoped>
-.wrap { max-width:760px; }
+.wrap { max-width:920px; }
 .head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:700; }
 .head p { margin:0 0 16px; font-size:var(--text-sm); color:var(--muted); }
-.card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:8px 20px 16px; }
-.card-t { margin:14px 0 4px; font-size:var(--text-sm); font-weight:700; color:var(--fg); }
+.msg { margin:0 0 14px; font-size:var(--text-sm); }
+.msg.note { color:var(--muted); }
+.msg.err { color:var(--state-danger); }
+.card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:12px 20px 16px; margin-bottom:14px; }
+.card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:6px; }
+.card-t { margin:0; font-size:var(--text-sm); font-weight:700; color:var(--fg); }
+.facts { padding-top:16px; }
+.fact-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 16px; margin:0; }
+.fact { border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:12px 14px; background:var(--bg); }
+.fact dt { margin:0 0 6px; font-size:var(--text-xs); color:var(--muted); }
+.fact dd { margin:0; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--fg); }
+.mb { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 55%); }
+.mbody { margin:0; font-size:var(--text-sm); color:var(--fg-2); line-height:1.5; }
 </style>

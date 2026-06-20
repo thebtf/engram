@@ -4,8 +4,8 @@
  * components never change — they consume these composables, not raw fetches.
  *
  * Current live-wire policy:
- * - Memories, issues, vault status, vault credentials, and server info are backed by the
- *   current Engram HTTP surface.
+ * - Memories, issues, vault status, vault credentials, server info, rules, projects,
+ *   health, and server config are backed by the current Engram HTTP surface.
  * - Model rows remain mock until there is a direct, truthful model-health endpoint for
  *   this exact UI contract.
  */
@@ -46,6 +46,57 @@ export interface ModelRow {
   provider: string
   health: 'ok' | 'standby' | 'degraded'
   costs: string
+}
+
+export interface RuleRow {
+  id: number
+  content: string
+  project: string
+  priority: number
+  updated: string
+}
+
+export interface RuleCreateInput {
+  content: string
+  priority?: number
+  project?: string
+  editedBy?: string
+}
+
+export interface RuleUpdateInput {
+  content?: string
+  priority?: number
+  editedBy?: string
+}
+
+export interface ProjectSummary {
+  id: string
+  sessions: number
+  last: string
+}
+
+export interface ServerConfigSnapshot {
+  injectUnified: boolean
+  telemetryEnabled: boolean
+  enforceSourceProject: boolean
+  contextObservations: string
+  contextMaxTokens: string
+  contextSessionCount: string
+  vectorStrategy: string
+  databaseMaxConns: string
+  logBufferSize: string
+}
+
+export interface HealthSnapshot {
+  overall: string
+  components: Array<{ name: string; status: 'healthy' | 'degraded' | 'unhealthy' }>
+  embedding: {
+    chunkCount: string
+    withVectors: string
+    dimension: string
+    coverage: string
+  }
+  hasEmbedding: boolean
 }
 
 interface ApiMemory {
@@ -98,11 +149,60 @@ interface ApiSelfcheck {
   version?: string
   uptime?: string
   overall?: 'healthy' | 'degraded' | 'unhealthy'
-  components?: Array<{ status?: 'healthy' | 'degraded' | 'unhealthy' }>
+  components?: Array<{ name?: string; status?: 'healthy' | 'degraded' | 'unhealthy' }>
 }
 
 interface ApiStatsVnext {
   noise_ratio?: number
+  embedding?: {
+    chunk_count?: number
+    memories_with_chunks?: number
+    active_memory_count?: number
+    dimension?: number
+    embedding_coverage?: number
+  }
+}
+
+interface ApiRuleRow {
+  id: number
+  project?: string
+  content?: string
+  priority?: number
+  edited_by?: string
+  created_at?: string
+  updated_at?: string
+}
+
+interface ApiSessionRow {
+  id?: number
+  project?: string
+  started_at?: string
+  status?: string
+}
+
+interface ApiSessionsList {
+  sessions?: ApiSessionRow[]
+  total?: number
+}
+
+interface ApiConfig {
+  context?: {
+    observations?: number
+    max_tokens?: number
+    session_count?: number
+  }
+  memory?: {
+    inject_unified?: boolean
+  }
+  storage?: {
+    vector_strategy?: string
+    database_max_conns?: number
+    log_buffer_size?: number
+  }
+  features?: {
+    telemetry_enabled?: boolean
+    enforce_source_project?: boolean
+  }
 }
 
 const DEFAULT_API_BASE = '/api'
@@ -148,28 +248,43 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
-async function fetchJson<T>(path: string): Promise<T> {
+async function fetchApi(path: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(`${apiBase()}${path}`, {
     credentials: 'include',
+    ...init,
   })
 
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText} for ${path}`)
   }
 
+  return response
+}
+
+async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetchApi(path, init)
+  if (response.status === 204) {
+    return undefined as T
+  }
   return response.json() as Promise<T>
 }
 
 async function fetchText(path: string): Promise<string> {
-  const response = await fetch(`${apiBase()}${path}`, {
-    credentials: 'include',
-  })
-
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText} for ${path}`)
-  }
-
+  const response = await fetchApi(path)
   return response.text()
+}
+
+function jsonInit(method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', body?: unknown): RequestInit {
+  const init: RequestInit = { method }
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(body)
+  }
+  return init
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function compactAge(timestamp?: string): string {
@@ -203,6 +318,27 @@ function normalizeNoise(value?: number): string {
   return value.toFixed(2)
 }
 
+function normalizeProject(value?: string): string {
+  return value && value.trim() ? value.trim() : 'global'
+}
+
+function displayValue(value: unknown): string {
+  if (typeof value === 'number' && !Number.isNaN(value)) {
+    return String(value)
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value
+  }
+  return '—'
+}
+
+function percentValue(value?: number): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '—'
+  }
+  return `${Math.round(value)}%`
+}
+
 function mapMemoryRow(row: ApiMemory): Memory {
   return {
     id: String(row.id),
@@ -219,12 +355,26 @@ function mapMemoryRow(row: ApiMemory): Memory {
   }
 }
 
-async function loadAllMemories(): Promise<Memory[]> {
+function mapRuleRow(row: ApiRuleRow): RuleRow {
+  return {
+    id: row.id,
+    content: row.content || '—',
+    project: normalizeProject(row.project),
+    priority: typeof row.priority === 'number' ? row.priority : 0,
+    updated: compactAge(row.updated_at || row.created_at),
+  }
+}
+
+async function listProjects(): Promise<string[]> {
   const projects = await fetchJson<string[]>('/api/projects')
-  const uniqueProjects = [...new Set(projects.filter(Boolean))]
+  return [...new Set((projects || []).filter((value) => typeof value === 'string' && value.trim()))]
+}
+
+async function loadAllMemories(): Promise<Memory[]> {
+  const projects = await listProjects()
   const combined: Memory[] = []
 
-  for (const project of uniqueProjects) {
+  for (const project of projects) {
     const raw = (await fetchText(`/api/memories?project=${encodeURIComponent(project)}&limit=200`)).trim()
     if (!raw) continue
 
@@ -248,6 +398,69 @@ async function loadAllMemories(): Promise<Memory[]> {
   }
 
   return [...deduped.values()]
+}
+
+async function loadAllRules(): Promise<RuleRow[]> {
+  const projects = await listProjects()
+  const combined = new Map<number, RuleRow>()
+  const globalRows = await fetchJson<ApiRuleRow[]>('/api/rules?limit=100')
+
+  for (const row of globalRows || []) {
+    combined.set(row.id, mapRuleRow(row))
+  }
+
+  for (const project of projects) {
+    const rows = await fetchJson<ApiRuleRow[]>(`/api/rules?project=${encodeURIComponent(project)}&limit=100`)
+    for (const row of rows || []) {
+      combined.set(row.id, mapRuleRow(row))
+    }
+  }
+
+  return [...combined.values()].sort((left, right) => {
+    if (left.priority !== right.priority) {
+      return right.priority - left.priority
+    }
+    return left.content.localeCompare(right.content)
+  })
+}
+
+async function loadProjectSummaries(): Promise<ProjectSummary[]> {
+  const [projects, sessionsPayload] = await Promise.all([
+    listProjects(),
+    fetchJson<ApiSessionsList>('/api/sessions/list?limit=5000'),
+  ])
+
+  const sessions = sessionsPayload.sessions || []
+  const perProject = new Map<string, { sessions: number; lastStamp: number; last: string }>()
+
+  for (const project of projects) {
+    perProject.set(project, { sessions: 0, lastStamp: 0, last: '—' })
+  }
+
+  for (const session of sessions) {
+    const project = normalizeProject(session.project)
+    const current = perProject.get(project) || { sessions: 0, lastStamp: 0, last: '—' }
+    current.sessions += 1
+    const stamp = Date.parse(session.started_at || '')
+    if (!Number.isNaN(stamp) && stamp >= current.lastStamp) {
+      current.lastStamp = stamp
+      current.last = compactAge(session.started_at)
+    }
+    perProject.set(project, current)
+  }
+
+  return [...perProject.entries()]
+    .map(([id, entry]) => ({
+      id,
+      sessions: entry.sessions,
+      last: entry.last,
+    }))
+    .sort((left, right) => {
+      if (left.sessions !== right.sessions) {
+        return right.sessions - left.sessions
+      }
+      return left.id.localeCompare(right.id)
+    })
 }
 
 export const useMemories = () => {
@@ -319,6 +532,168 @@ export const useVaultStatus = () => {
   })
 
   return vault
+}
+
+export const useRules = () => {
+  const rows = useState<RuleRow[]>('live:rules', () => [])
+  const pending = useState<boolean>('live:rules:pending', () => false)
+  const error = useState<string | null>('live:rules:error', () => null)
+
+  async function refresh() {
+    pending.value = true
+    error.value = null
+    try {
+      rows.value = await loadAllRules()
+    } catch (nextError) {
+      error.value = errorMessage(nextError)
+    } finally {
+      pending.value = false
+    }
+  }
+
+  async function create(input: RuleCreateInput) {
+    await fetchJson<ApiRuleRow>('/api/rules', jsonInit('POST', {
+      content: input.content,
+      priority: input.priority ?? 0,
+      edited_by: input.editedBy || 'operator-console',
+      ...(input.project ? { project: input.project } : {}),
+    }))
+    await refresh()
+  }
+
+  async function update(id: number, input: RuleUpdateInput) {
+    await fetchJson<ApiRuleRow>(`/api/rules/${id}`, jsonInit('PATCH', {
+      ...(input.content !== undefined ? { content: input.content } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(input.editedBy !== undefined ? { edited_by: input.editedBy } : {}),
+    }))
+    await refresh()
+  }
+
+  async function remove(id: number) {
+    await fetchJson(`/api/rules/${id}`, jsonInit('DELETE'))
+    rows.value = rows.value.filter((row) => row.id !== id)
+  }
+
+  startOnce('rules', refresh)
+
+  return { rows, pending, error, refresh, create, update, remove }
+}
+
+export const useProjects = () => {
+  const rows = useState<ProjectSummary[]>('live:projects', () => [])
+  const pending = useState<boolean>('live:projects:pending', () => false)
+  const error = useState<string | null>('live:projects:error', () => null)
+
+  async function refresh() {
+    pending.value = true
+    error.value = null
+    try {
+      rows.value = await loadProjectSummaries()
+    } catch (nextError) {
+      error.value = errorMessage(nextError)
+    } finally {
+      pending.value = false
+    }
+  }
+
+  startOnce('projects', refresh)
+
+  return { rows, pending, error, refresh }
+}
+
+export const useServerConfigSnapshot = () => {
+  const snapshot = useState<ServerConfigSnapshot>('live:server-config', () => ({
+    injectUnified: false,
+    telemetryEnabled: false,
+    enforceSourceProject: false,
+    contextObservations: '—',
+    contextMaxTokens: '—',
+    contextSessionCount: '—',
+    vectorStrategy: '—',
+    databaseMaxConns: '—',
+    logBufferSize: '—',
+  }))
+  const pending = useState<boolean>('live:server-config:pending', () => false)
+  const error = useState<string | null>('live:server-config:error', () => null)
+
+  async function refresh() {
+    pending.value = true
+    error.value = null
+    try {
+      const payload = await fetchJson<ApiConfig>('/api/config')
+      snapshot.value = {
+        injectUnified: Boolean(payload.memory?.inject_unified),
+        telemetryEnabled: Boolean(payload.features?.telemetry_enabled),
+        enforceSourceProject: Boolean(payload.features?.enforce_source_project),
+        contextObservations: displayValue(payload.context?.observations),
+        contextMaxTokens: displayValue(payload.context?.max_tokens),
+        contextSessionCount: displayValue(payload.context?.session_count),
+        vectorStrategy: displayValue(payload.storage?.vector_strategy),
+        databaseMaxConns: displayValue(payload.storage?.database_max_conns),
+        logBufferSize: displayValue(payload.storage?.log_buffer_size),
+      }
+    } catch (nextError) {
+      error.value = errorMessage(nextError)
+    } finally {
+      pending.value = false
+    }
+  }
+
+  startOnce('server-config', refresh)
+
+  return { snapshot, pending, error, refresh }
+}
+
+export const useHealthSnapshot = () => {
+  const snapshot = useState<HealthSnapshot>('live:health', () => ({
+    overall: 'unknown',
+    components: [],
+    embedding: {
+      chunkCount: '—',
+      withVectors: '—',
+      dimension: '—',
+      coverage: '—',
+    },
+    hasEmbedding: false,
+  }))
+  const pending = useState<boolean>('live:health:pending', () => false)
+  const error = useState<string | null>('live:health:error', () => null)
+
+  async function refresh() {
+    pending.value = true
+    error.value = null
+    try {
+      const [selfcheck, vnext] = await Promise.all([
+        fetchJson<ApiSelfcheck>('/api/selfcheck'),
+        fetchJson<ApiStatsVnext>('/api/stats/vnext'),
+      ])
+
+      const embedding = vnext.embedding
+      snapshot.value = {
+        overall: selfcheck.overall || 'unknown',
+        components: (selfcheck.components || []).map((component) => ({
+          name: component.name || 'unknown',
+          status: component.status || 'unhealthy',
+        })),
+        embedding: {
+          chunkCount: displayValue(embedding?.chunk_count),
+          withVectors: displayValue(embedding?.memories_with_chunks ?? embedding?.active_memory_count),
+          dimension: displayValue(embedding?.dimension),
+          coverage: percentValue(embedding?.embedding_coverage),
+        },
+        hasEmbedding: Boolean(embedding),
+      }
+    } catch (nextError) {
+      error.value = errorMessage(nextError)
+    } finally {
+      pending.value = false
+    }
+  }
+
+  startOnce('health', refresh)
+
+  return { snapshot, pending, error, refresh }
 }
 
 export const useModels = () => ([

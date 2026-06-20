@@ -102,46 +102,45 @@ const maxRecentQueries = 100
 
 // Service is the main worker service orchestrator.
 type Service struct {
-	startTime               time.Time
-	ctx                     context.Context
-	initError               error
-	server                  *http.Server
-	sessionManager          *session.Manager
-	sseBroadcaster          *sse.Broadcaster
-	processor               *sdk.Processor
-	mcpHealth               *mcp.MCPHealth
-	collectionRegistry      *collections.Registry
-	sessionIdxStore         *sessions.Store
-	router                  *chi.Mux
-	store                   *gorm.Store
-	retrievalStats          map[string]*RetrievalStats
-	sessionStore            *gorm.SessionStore
-	tokenStore              *gorm.TokenStore
-	cancel                  context.CancelFunc
-	cachedObsCounts         map[string]cachedCount
-	config                  *config.Config
-	staleQueue              chan staleVerifyRequest
-	configWatcher           *watcher.Watcher
-	updater                 *update.Updater
-	similarityTelemetry     *telemetry.SimilarityTelemetry
-	rateLimiter             *PerClientRateLimiter
-	tokenAuth               *TokenAuth
-	expensiveOpLimiter      *ExpensiveOperationLimiter
-	logBuffer               *logbuf.RingBuffer
-	backfillTracker         *backfillTracker
-	grpcServer              *googlegrpc.Server
-	grpcInternalServer      sessionStartContextProvider
-	searchQueryLogStore     *gorm.SearchQueryLogStore
-	retrievalStatsLogStore  *gorm.RetrievalStatsLogStore
-	citationLogStore        *gorm.CitationLogStore
-	injectionTracker        *injection.Tracker
-	injectionLogStore       *gorm.InjectionLogStore
-	ruleInjectionEventStore *gorm.RuleInjectionEventStore
-	candidateStore          *gorm.CandidateStore     // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	snapshotStore           *gorm.SnapshotStore      // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	writelintTokenStore     writelint.TokenStore     // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	redactionRules          []redaction.CompiledRule // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
-	transcriptStore         *gorm.TranscriptStore    // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
+	startTime              time.Time
+	ctx                    context.Context
+	initError              error
+	server                 *http.Server
+	sessionManager         *session.Manager
+	sseBroadcaster         *sse.Broadcaster
+	processor              *sdk.Processor
+	mcpHealth              *mcp.MCPHealth
+	collectionRegistry     *collections.Registry
+	sessionIdxStore        *sessions.Store
+	router                 *chi.Mux
+	store                  *gorm.Store
+	retrievalStats         map[string]*RetrievalStats
+	sessionStore           *gorm.SessionStore
+	tokenStore             *gorm.TokenStore
+	cancel                 context.CancelFunc
+	cachedObsCounts        map[string]cachedCount
+	config                 *config.Config
+	staleQueue             chan staleVerifyRequest
+	configWatcher          *watcher.Watcher
+	updater                *update.Updater
+	similarityTelemetry    *telemetry.SimilarityTelemetry
+	rateLimiter            *PerClientRateLimiter
+	tokenAuth              *TokenAuth
+	expensiveOpLimiter     *ExpensiveOperationLimiter
+	logBuffer              *logbuf.RingBuffer
+	backfillTracker        *backfillTracker
+	grpcServer             *googlegrpc.Server
+	grpcInternalServer     sessionStartContextProvider
+	searchQueryLogStore    *gorm.SearchQueryLogStore
+	retrievalStatsLogStore *gorm.RetrievalStatsLogStore
+	citationLogStore       *gorm.CitationLogStore
+	injectionTracker       *injection.Tracker
+	injectionLogStore      *gorm.InjectionLogStore
+	candidateStore         *gorm.CandidateStore     // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	snapshotStore          *gorm.SnapshotStore      // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	writelintTokenStore    writelint.TokenStore     // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	redactionRules         []redaction.CompiledRule // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
+	transcriptStore        *gorm.TranscriptStore    // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
 	// transcriptCreatorOverride is a test seam: when non-nil it replaces
 	// transcriptStore in the handleSessionEnd persistence goroutine, letting unit
 	// tests assert the real handler path (redact → Create) without a live DB.
@@ -571,7 +570,6 @@ func (s *Service) initializeAsync() {
 	// CR-1 (provenance-cleanup): the legacy InjectionStore (observation_injections)
 	// was removed — injection_log is now the sole injection-record sink.
 	injectionLogStore := gorm.NewInjectionLogStore(store)
-	ruleInjectionEventStore := gorm.NewRuleInjectionEventStore(store.GetDB())
 
 	// Create citation log store for vNext Phase A citation tracking (migration 107).
 	citationLogStore := gorm.NewCitationLogStore(store)
@@ -584,10 +582,6 @@ func (s *Service) initializeAsync() {
 	memoryStore := gorm.NewMemoryStore(store)
 	behavioralRulesStore := gorm.NewBehavioralRulesStore(store)
 	credentialStore := gorm.NewCredentialStore(store)
-	var ruleGovernanceStore *gorm.RuleGovernanceStore
-	if s.config.RuleGovernanceEnabled {
-		ruleGovernanceStore = gorm.NewRuleGovernanceStore(store.GetDB())
-	}
 
 	// Create feedback updater for vNext Phase A closed-loop learning.
 	feedbackUpdater := feedback.NewUpdater(memoryStore)
@@ -613,7 +607,6 @@ func (s *Service) initializeAsync() {
 	s.store = store
 	s.sessionStore = sessionStore
 	s.injectionLogStore = injectionLogStore
-	s.ruleInjectionEventStore = ruleInjectionEventStore
 	s.citationLogStore = citationLogStore
 	s.injectionTracker = injection.NewTracker(injectionLogStore)
 	s.issueStore = issueStore
@@ -762,10 +755,6 @@ func (s *Service) initializeAsync() {
 	// switched from observations to memories/behavioral_rules.
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
-	if ruleGovernanceStore != nil {
-		mcpServer.SetRuleGovernanceStore(ruleGovernanceStore)
-	}
-	mcpServer.SetRuleInjectionTelemetryStore(ruleInjectionEventStore)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared
@@ -957,10 +946,6 @@ func (s *Service) initializeAsync() {
 	// middleware start passing requests through to the data-plane handlers.
 	s.ready.Store(true)
 	log.Info().Msg("background init: complete, service ready")
-
-	// Start proposal-only rule governance arbiter after readiness. It never runs
-	// on session-start/user-prompt hot paths and requires both governance flags.
-	s.startRuleArbiterWorker(s.ctx, ruleGovernanceStore)
 
 	// Start project reaper (hourly cleanup of hard-expired soft-deleted projects).
 	projectReaper := reaper.New(store.DB)
@@ -1398,7 +1383,6 @@ func (s *Service) setupRoutes() {
 		// Memory routes (US3 Commit E — explicit user memories stored in memories table)
 		r.Post("/api/memories", s.handleStoreMemoryExplicit)
 		r.Get("/api/memories", s.handleListMemories)
-		r.Get("/api/memories/{id}", s.handleGetMemoryByID)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Behavioral rules management

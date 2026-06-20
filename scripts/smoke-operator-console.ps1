@@ -159,11 +159,14 @@ $authMeUrl = "$origin/api/auth/me"
 $authLoginUrl = "$origin/api/auth/login"
 $issuesUrl = "$origin/api/issues"
 $acknowledgeIssuesUrl = "$origin/api/issues/acknowledge"
+$rulesUrl = "$origin/api/rules"
 $workerAuthMeUrl = "$workerOrigin/api/auth/me"
 
 $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 $createdIssueId = $null
 $smokeIssueId = $null
+$createdRuleId = $null
+$smokeRuleId = $null
 $smokeRunId = [guid]::NewGuid().ToString("N")
 $smokeComment = "operator-console smoke resolved mutation $smokeRunId"
 
@@ -294,6 +297,69 @@ try {
   Assert-Status -Response $deletedIssueResponse -ExpectedStatus @(404) -Step "issue cleanup verification"
   $createdIssueId = $null
 
+  Write-Step "Creating smoke rule through proxied operator-console API"
+  $createRuleResponse = Invoke-OperatorRequest `
+    -Method POST `
+    -Url $rulesUrl `
+    -Session $session `
+    -Body @{
+      content = "operator-console smoke rule $smokeRunId"
+      priority = 21
+      edited_by = "smoke-script"
+    }
+  Assert-Status -Response $createRuleResponse -ExpectedStatus @(201) -Step "rule create"
+
+  $createRuleBody = Read-JsonBody -Response $createRuleResponse -Step "rule create"
+  if ($null -eq $createRuleBody.id) {
+    throw "Rule create response did not include id. Body: $($createRuleResponse.Content)"
+  }
+
+  $createdRuleId = [int64]$createRuleBody.id
+  $smokeRuleId = $createdRuleId
+  $ruleUrl = "$rulesUrl/$createdRuleId"
+
+  Write-Step "Updating smoke rule"
+  $updateRuleResponse = Invoke-OperatorRequest `
+    -Method PATCH `
+    -Url $ruleUrl `
+    -Session $session `
+    -Body @{
+      priority = 34
+      edited_by = "smoke-script"
+    }
+  Assert-Status -Response $updateRuleResponse -ExpectedStatus @(200) -Step "rule update"
+
+  Write-Step "Listing rules to verify smoke rule presence"
+  $listRulesResponse = Invoke-OperatorRequest `
+    -Method GET `
+    -Url "${rulesUrl}?limit=200" `
+    -Session $session
+  Assert-Status -Response $listRulesResponse -ExpectedStatus @(200) -Step "rule list"
+  $listRulesBody = Read-JsonBody -Response $listRulesResponse -Step "rule list"
+  $listedRule = $listRulesBody | Where-Object { $_.id -eq $createdRuleId }
+  if ($null -eq $listedRule) {
+    throw "Smoke rule #$createdRuleId not found in list output. Body: $($listRulesResponse.Content)"
+  }
+
+  Write-Step "Deleting smoke rule"
+  $deleteRuleResponse = Invoke-OperatorRequest `
+    -Method DELETE `
+    -Url $ruleUrl `
+    -Session $session
+  Assert-Status -Response $deleteRuleResponse -ExpectedStatus @(200) -Step "rule delete"
+
+  Write-Step "Verifying smoke rule cleanup"
+  $postDeleteRulesResponse = Invoke-OperatorRequest `
+    -Method GET `
+    -Url "${rulesUrl}?limit=200" `
+    -Session $session
+  Assert-Status -Response $postDeleteRulesResponse -ExpectedStatus @(200) -Step "rule cleanup verification"
+  $postDeleteRulesBody = Read-JsonBody -Response $postDeleteRulesResponse -Step "rule cleanup verification"
+  if ($postDeleteRulesBody | Where-Object { $_.id -eq $createdRuleId }) {
+    throw "Smoke rule #$createdRuleId still present after delete. Body: $($postDeleteRulesResponse.Content)"
+  }
+  $createdRuleId = $null
+
   Write-Step "Smoke passed"
   Write-Host ("MODE=" + $Mode)
   Write-Host ("ROOT_STATUS=" + $rootResponse.StatusCode)
@@ -316,6 +382,12 @@ try {
   Write-Host ("ISSUE_RESOLVE_STATUS=" + $resolveIssueResponse.StatusCode)
   Write-Host ("ISSUE_DELETE_STATUS=" + $deleteIssueResponse.StatusCode)
   Write-Host ("ISSUE_CLEANUP_GET_STATUS=" + $deletedIssueResponse.StatusCode)
+  Write-Host ("RULE_ID=" + $smokeRuleId)
+  Write-Host ("RULE_CREATE_STATUS=" + $createRuleResponse.StatusCode)
+  Write-Host ("RULE_UPDATE_STATUS=" + $updateRuleResponse.StatusCode)
+  Write-Host ("RULE_LIST_STATUS=" + $listRulesResponse.StatusCode)
+  Write-Host ("RULE_DELETE_STATUS=" + $deleteRuleResponse.StatusCode)
+  Write-Host ("RULE_CLEANUP_LIST_STATUS=" + $postDeleteRulesResponse.StatusCode)
 }
 finally {
   if ($null -ne $createdIssueId) {
@@ -331,6 +403,22 @@ finally {
     }
     catch {
       Write-Warning "Cleanup for smoke issue #$createdIssueId failed: $_"
+    }
+  }
+
+  if ($null -ne $createdRuleId) {
+    Write-Step "Cleaning up leftover smoke rule #$createdRuleId"
+    try {
+      $cleanupRuleResponse = Invoke-OperatorRequest `
+        -Method DELETE `
+        -Url "$rulesUrl/$createdRuleId" `
+        -Session $session
+      if (@(200, 404) -notcontains [int]$cleanupRuleResponse.StatusCode) {
+        Write-Warning "Cleanup for smoke rule #$createdRuleId returned $($cleanupRuleResponse.StatusCode). Body: $($cleanupRuleResponse.Content)"
+      }
+    }
+    catch {
+      Write-Warning "Cleanup for smoke rule #$createdRuleId failed: $_"
     }
   }
 

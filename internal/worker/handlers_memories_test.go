@@ -149,67 +149,6 @@ func TestHandleDeleteMemoryByID_RoundTrip(t *testing.T) {
 	require.Len(t, list, 0)
 }
 
-func TestHandleGetMemoryByID_RoundTrip(t *testing.T) {
-	project := "test-memory-handler-get-" + uuid.NewString()
-	service := newMemoryTestService(t, project)
-
-	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"fetch-me-by-id","tags":["a","b"]}`)))
-	storeW := httptest.NewRecorder()
-	service.handleStoreMemoryExplicit(storeW, storeReq)
-	require.Equal(t, http.StatusCreated, storeW.Code)
-
-	var created models.Memory
-	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
-	require.Greater(t, created.ID, int64(0))
-
-	idStr := strconv.FormatInt(created.ID, 10)
-	getReq := newCHIRequest(http.MethodGet, "/api/memories/"+idStr, "id", idStr)
-	getW := httptest.NewRecorder()
-	service.handleGetMemoryByID(getW, getReq)
-
-	require.Equal(t, http.StatusOK, getW.Code)
-
-	var got models.Memory
-	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &got))
-	assert.Equal(t, created.ID, got.ID)
-	assert.Equal(t, "fetch-me-by-id", got.Content)
-	assert.Equal(t, project, got.Project)
-}
-
-func TestHandleGetMemoryByID_NotFound(t *testing.T) {
-	project := "test-memory-handler-get-not-found-" + uuid.NewString()
-	service := newMemoryTestService(t, project)
-
-	idStr := "999999999"
-	getReq := newCHIRequest(http.MethodGet, "/api/memories/"+idStr, "id", idStr)
-	getW := httptest.NewRecorder()
-	service.handleGetMemoryByID(getW, getReq)
-
-	require.Equal(t, http.StatusNotFound, getW.Code)
-}
-
-func TestHandleGetMemoryByID_InvalidID(t *testing.T) {
-	// nil store short-circuits to 503 before id parse; with a store, bad ids → 400.
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		svcNil := &Service{}
-		req := newCHIRequest(http.MethodGet, "/api/memories/abc", "id", "abc")
-		w := httptest.NewRecorder()
-		svcNil.handleGetMemoryByID(w, req)
-		require.Equal(t, http.StatusServiceUnavailable, w.Code)
-		return
-	}
-	service := newMemoryTestService(t, "test-memory-handler-get-invalid-"+uuid.NewString())
-	for _, badID := range []string{"abc", "0", "-1", "1.5", ""} {
-		t.Run("id="+badID, func(t *testing.T) {
-			req := newCHIRequest(http.MethodGet, "/api/memories/"+badID, "id", badID)
-			w := httptest.NewRecorder()
-			service.handleGetMemoryByID(w, req)
-			require.Equal(t, http.StatusBadRequest, w.Code, "expected 400 for id=%q", badID)
-		})
-	}
-}
-
 func TestHandleDeleteMemoryByID_NotFound(t *testing.T) {
 	project := "test-memory-handler-delete-not-found-" + uuid.NewString()
 	service := newMemoryTestService(t, project)

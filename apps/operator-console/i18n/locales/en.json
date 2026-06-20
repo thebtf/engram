@@ -69,5 +69,88 @@
     "colCreated": "Created",
     "colActions": "Actions",
     "reveal": "👁 Show"
+  },
+
+  "rules": {
+    "title": "Behavior Rules",
+    "subtitle": "Always-inject directives that enter every agent context. This surface now reads the real rules REST bridge.",
+    "quickAddTitle": "Quick add rule",
+    "quickAddPlaceholder": "For example: do not pretend a surface is live when no backend endpoint exists.",
+    "quickAddNote": "This MVP quick-add creates global rules only. Scope editing and the richer editor are still pending.",
+    "priorityLabel": "Priority",
+    "priorityMeta": "priority {n}",
+    "updatedMeta": "updated {value}",
+    "scopeGlobal": "global",
+    "loading": "Loading rules…",
+    "empty": "No active rules yet.",
+    "errors": {
+      "contentRequired": "Rule content is required."
+    },
+    "actions": {
+      "create": "Add",
+      "creating": "Saving…",
+      "delete": "Delete",
+      "deleting": "Deleting…"
+    }
+  },
+
+  "projects": {
+    "title": "Projects & Sessions",
+    "subtitle": "Projects on this server and their recent session activity.",
+    "loading": "Loading projects and sessions…",
+    "empty": "No projects found yet.",
+    "sessionsCount": "no sessions | {n} session | {n} sessions",
+    "lastActivity": "activity {value}"
+  },
+
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Read live config through /api/config. Runtime flag edits and model settings stay honest must-build until dedicated endpoints exist.",
+    "loading": "Loading configuration…",
+    "runtimeTitle": "Observed runtime toggles",
+    "snapshotTitle": "Configuration snapshot",
+    "mustBuildTitle": "What is still missing",
+    "mustBuildBody": "True runtime-flag editing and model settings still need dedicated endpoints: at minimum /api/flags and /api/settings/model. Until then this surface stays read-only instead of pretending to be operable.",
+    "rows": {
+      "injectUnified": {
+        "title": "Unified injection",
+        "desc": "Memory injection flows through the unified path instead of older split branches."
+      },
+      "telemetry": {
+        "title": "Telemetry enabled",
+        "desc": "The server records search and retrieval telemetry when the runtime enables it."
+      },
+      "enforceSourceProject": {
+        "title": "Enforce source project",
+        "desc": "Request source must stay within the allowed project boundary."
+      }
+    },
+    "facts": {
+      "contextObservations": "Context observations",
+      "contextMaxTokens": "Context max tokens",
+      "contextSessionCount": "Context session count",
+      "vectorStrategy": "Vector strategy",
+      "databaseMaxConns": "Database max conns",
+      "logBufferSize": "Log buffer size"
+    }
+  },
+
+  "health": {
+    "title": "Health",
+    "subtitle": "Server health: selfcheck, embedding coverage, and honestly marked must-build zones.",
+    "loading": "Loading health snapshot…",
+    "embeddingTitle": "Embedding coverage",
+    "servicesTitle": "Services",
+    "modelsTitle": "Models",
+    "overall": "Overall status",
+    "modelsNote": "Model rows remain mock-backed for now: this exact surface still lacks a direct truthful model-health endpoint.",
+    "migrationsTitle": "Migrations",
+    "migrationsBody": "A GET /api/migrations endpoint is still needed for truthful schema-status rendering.",
+    "embedding": {
+      "chunkCount": "chunks",
+      "withVectors": "memories with vectors",
+      "dimension": "dimension",
+      "coverage": "coverage"
+    }
   }
 }

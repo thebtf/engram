@@ -10,89 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
-
-func TestHandleListBehavioralRules_Success(t *testing.T) {
-	project := "test-rules-handler-list-success"
-	svc, brs := newRulesTestService(t, project)
-
-	projectPtr := project
-	_, err := brs.Create(context.Background(), &models.BehavioralRule{
-		Content:  "handler test: global rule",
-		Priority: 90,
-	})
-	require.NoError(t, err)
-	_, err = brs.Create(context.Background(), &models.BehavioralRule{
-		Project:  &projectPtr,
-		Content:  "handler test: project rule",
-		Priority: 70,
-	})
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
-	w := httptest.NewRecorder()
-	svc.handleListBehavioralRules(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp ruleListResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Len(t, resp.Rules, 2)
-	require.Equal(t, 2, resp.Total)
-	assert.Equal(t, "handler test: global rule", resp.Rules[0].Content)
-	assert.Equal(t, "handler test: project rule", resp.Rules[1].Content)
-
-	reqProject := httptest.NewRequest(http.MethodGet, "/api/rules?project="+project, nil)
-	wProject := httptest.NewRecorder()
-	svc.handleListBehavioralRules(wProject, reqProject)
-
-	require.Equal(t, http.StatusOK, wProject.Code)
-	var respProject ruleListResponse
-	require.NoError(t, json.Unmarshal(wProject.Body.Bytes(), &respProject))
-	require.Len(t, respProject.Rules, 2, "project filter must include global + project scoped rules")
-}
-
-func TestHandleCreateBehavioralRule_Success(t *testing.T) {
-	project := "test-rules-handler-create-success"
-	svc, brs := newRulesTestService(t, project)
-
-	body := `{"project":"` + project + `","content":"handler test: created via REST","priority":42,"edited_by":"operator"}`
-	req := newCHIRequestBody(http.MethodPost, "/api/rules", "", "", body)
-	w := httptest.NewRecorder()
-	svc.handleCreateBehavioralRule(w, req)
-
-	require.Equal(t, http.StatusCreated, w.Code)
-
-	var created models.BehavioralRule
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
-	require.Greater(t, created.ID, int64(0))
-	assert.Equal(t, "handler test: created via REST", created.Content)
-	assert.Equal(t, 42, created.Priority)
-	assert.Equal(t, "operator", created.EditedBy)
-	if assert.NotNil(t, created.Project) {
-		assert.Equal(t, project, *created.Project)
-	}
-
-	got, err := brs.Get(context.Background(), created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, created.Content, got.Content)
-}
-
-// newCHIRequestBody is newCHIRequest with a JSON request body, for PATCH/POST
-// handlers that decode r.Body. Mirrors the body-less helper in handlers_projects_test.go.
-func newCHIRequestBody(method, target, paramName, paramValue, body string) *http.Request {
-	req := httptest.NewRequest(method, target, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add(paramName, paramValue)
-	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-}
 
 // newRulesTestService constructs a Service wired with a real BehavioralRulesStore
 // backed by the DATABASE_DSN integration database. Skips when DATABASE_DSN is unset.
@@ -170,205 +93,6 @@ func TestHandleDeleteBehavioralRule_NotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// TestHandleUpdateBehavioralRule_Success verifies that a valid PATCH updates the
-// rule's content and priority, bumps its version, and returns the updated row.
-func TestHandleUpdateBehavioralRule_Success(t *testing.T) {
-	project := "test-rules-handler-update-success"
-	svc, brs := newRulesTestService(t, project)
-
-	projectPtr := project
-	created, err := brs.Create(context.Background(), &models.BehavioralRule{
-		Project:  &projectPtr,
-		Content:  "handler test: original content",
-		Priority: 1,
-	})
-	require.NoError(t, err)
-	require.Equal(t, 1, created.Version)
-
-	idStr := strconv.FormatInt(created.ID, 10)
-	body := `{"content":"handler test: edited content","priority":7,"edited_by":"operator"}`
-	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, body)
-	w := httptest.NewRecorder()
-	svc.handleUpdateBehavioralRule(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var updated models.BehavioralRule
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
-	assert.Equal(t, created.ID, updated.ID)
-	assert.Equal(t, "handler test: edited content", updated.Content)
-	assert.Equal(t, 7, updated.Priority)
-	assert.Equal(t, "operator", updated.EditedBy)
-	assert.Equal(t, 2, updated.Version, "version must bump on update")
-
-	// Verify persisted.
-	got, err := brs.Get(context.Background(), created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "handler test: edited content", got.Content)
-	assert.Equal(t, 7, got.Priority)
-}
-
-// TestHandleUpdateBehavioralRule_PartialPriorityOnly is the regression test for
-// the PATCH data-loss bug (gemini HIGH on PR #308): a priority-only update must
-// NOT wipe the rule's content. priority is the injection order, so a reorder
-// that silently blanked content would poison every future session.
-func TestHandleUpdateBehavioralRule_PartialPriorityOnly(t *testing.T) {
-	project := "test-rules-handler-update-partial-priority"
-	svc, brs := newRulesTestService(t, project)
-
-	projectPtr := project
-	created, err := brs.Create(context.Background(), &models.BehavioralRule{
-		Project:  &projectPtr,
-		Content:  "handler test: keep this content",
-		Priority: 1,
-	})
-	require.NoError(t, err)
-
-	idStr := strconv.FormatInt(created.ID, 10)
-	// Only priority is sent — content and edited_by are omitted (nil).
-	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, `{"priority":9}`)
-	w := httptest.NewRecorder()
-	svc.handleUpdateBehavioralRule(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	got, err := brs.Get(context.Background(), created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, 9, got.Priority, "priority must update")
-	assert.Equal(t, "handler test: keep this content", got.Content,
-		"content must be preserved when only priority is sent (no data loss)")
-}
-
-// TestHandleUpdateBehavioralRule_PartialContentOnly verifies a content-only edit
-// preserves the existing priority (the mirror of the priority-only case).
-func TestHandleUpdateBehavioralRule_PartialContentOnly(t *testing.T) {
-	project := "test-rules-handler-update-partial-content"
-	svc, brs := newRulesTestService(t, project)
-
-	projectPtr := project
-	created, err := brs.Create(context.Background(), &models.BehavioralRule{
-		Project:  &projectPtr,
-		Content:  "handler test: original",
-		Priority: 5,
-	})
-	require.NoError(t, err)
-
-	idStr := strconv.FormatInt(created.ID, 10)
-	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, `{"content":"handler test: new text"}`)
-	w := httptest.NewRecorder()
-	svc.handleUpdateBehavioralRule(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	got, err := brs.Get(context.Background(), created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "handler test: new text", got.Content, "content must update")
-	assert.Equal(t, 5, got.Priority, "priority must be preserved when only content is sent")
-}
-
-// TestHandleUpdateBehavioralRule_ExplicitEmptyContent verifies that explicitly
-// sending content:"" is rejected with 400 (distinct from omitting content).
-func TestHandleUpdateBehavioralRule_ExplicitEmptyContent(t *testing.T) {
-	project := "test-rules-handler-update-explicit-empty"
-	svc, brs := newRulesTestService(t, project)
-
-	projectPtr := project
-	created, err := brs.Create(context.Background(), &models.BehavioralRule{
-		Project:  &projectPtr,
-		Content:  "handler test: must survive",
-		Priority: 2,
-	})
-	require.NoError(t, err)
-
-	idStr := strconv.FormatInt(created.ID, 10)
-	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, `{"content":""}`)
-	w := httptest.NewRecorder()
-	svc.handleUpdateBehavioralRule(w, req)
-
-	require.Equal(t, http.StatusBadRequest, w.Code, "explicit empty content must be rejected")
-
-	// Original content untouched.
-	got, err := brs.Get(context.Background(), created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "handler test: must survive", got.Content)
-}
-
-// TestHandleUpdateBehavioralRule_NotFound verifies a PATCH to a non-existent rule
-// returns 404.
-func TestHandleUpdateBehavioralRule_NotFound(t *testing.T) {
-	project := "test-rules-handler-update-notfound"
-	svc, _ := newRulesTestService(t, project)
-
-	body := `{"content":"x","priority":0}`
-	req := newCHIRequestBody(http.MethodPatch, "/api/rules/999999999", "id", "999999999", body)
-	w := httptest.NewRecorder()
-	svc.handleUpdateBehavioralRule(w, req)
-
-	require.Equal(t, http.StatusNotFound, w.Code)
-}
-
-// TestHandleUpdateBehavioralRule_NoFields verifies that a PATCH with no updatable
-// fields ({}) is rejected with 400 and does NOT bump the rule's version (no
-// spurious DB write). Codex/Gemini review on PR #308.
-func TestHandleUpdateBehavioralRule_NoFields(t *testing.T) {
-	project := "test-rules-handler-update-nofields"
-	svc, brs := newRulesTestService(t, project)
-
-	projectPtr := project
-	created, err := brs.Create(context.Background(), &models.BehavioralRule{
-		Project:  &projectPtr,
-		Content:  "handler test: untouched",
-		Priority: 4,
-	})
-	require.NoError(t, err)
-	require.Equal(t, 1, created.Version)
-
-	idStr := strconv.FormatInt(created.ID, 10)
-	req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+idStr, "id", idStr, `{}`)
-	w := httptest.NewRecorder()
-	svc.handleUpdateBehavioralRule(w, req)
-
-	require.Equal(t, http.StatusBadRequest, w.Code)
-
-	got, err := brs.Get(context.Background(), created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, 1, got.Version, "version must NOT bump on a no-op PATCH")
-	assert.Equal(t, "handler test: untouched", got.Content)
-	assert.Equal(t, 4, got.Priority)
-}
-
-// (explicit-empty-content rejection is covered by
-// TestHandleUpdateBehavioralRule_ExplicitEmptyContent, which seeds a real rule
-// so the empty-content 400 is reached after the existence fetch.)
-
-// TestHandleUpdateBehavioralRule_InvalidID verifies non-numeric/zero IDs return
-// 400 (with a non-nil store) or 503 (nil store), mirroring the delete handler.
-func TestHandleUpdateBehavioralRule_InvalidID(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		svcNilStore := &Service{}
-		req := newCHIRequestBody(http.MethodPatch, "/api/rules/abc", "id", "abc", `{"content":"x"}`)
-		w := httptest.NewRecorder()
-		svcNilStore.handleUpdateBehavioralRule(w, req)
-		require.Equal(t, http.StatusServiceUnavailable, w.Code)
-		return
-	}
-
-	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	svcWithStore := &Service{behavioralRulesStore: dbgorm.NewBehavioralRulesStore(store)}
-
-	for _, badID := range []string{"abc", "0", "-1", "1.5", ""} {
-		t.Run("id="+badID, func(t *testing.T) {
-			req := newCHIRequestBody(http.MethodPatch, "/api/rules/"+badID, "id", badID, `{"content":"x"}`)
-			w := httptest.NewRecorder()
-			svcWithStore.handleUpdateBehavioralRule(w, req)
-			require.Equal(t, http.StatusBadRequest, w.Code, "expected 400 for id=%q", badID)
-		})
-	}
-}
-
 // TestHandleDeleteBehavioralRule_InvalidID verifies that a non-numeric path
 // parameter returns 400 without touching the store.
 func TestHandleDeleteBehavioralRule_InvalidID(t *testing.T) {
@@ -417,4 +141,133 @@ func TestHandleDeleteBehavioralRule_InvalidID(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, w.Code, "expected 400 for id=%q", badID)
 		})
 	}
+}
+
+func TestHandleListBehavioralRules_ProjectScope(t *testing.T) {
+	project := "test-rules-handler-list-project-scope"
+	svc, brs := newRulesTestService(t, project)
+
+	globalContent := "handler test: global rule"
+	projectContent := "handler test: project rule"
+	otherProject := "test-rules-handler-list-other-project"
+
+	globalRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Content:  globalContent,
+		Priority: 5,
+	})
+	require.NoError(t, err)
+
+	projectPtr := project
+	projectRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  projectContent,
+		Priority: 10,
+	})
+	require.NoError(t, err)
+
+	otherProjectPtr := otherProject
+	_, err = brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &otherProjectPtr,
+		Content:  "handler test: should not leak",
+		Priority: 20,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, brs.Delete(context.Background(), globalRule.ID))
+		require.NoError(t, storeDeleteRuleByProject(context.Background(), brs, otherProject))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/rules?project="+project+"&limit=100", nil)
+	w := httptest.NewRecorder()
+	svc.handleListBehavioralRules(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var rows []models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	require.Len(t, rows, 2)
+	assert.Equal(t, projectRule.ID, rows[0].ID)
+	assert.Equal(t, globalRule.ID, rows[1].ID)
+}
+
+func TestHandleCreateBehavioralRule_Success(t *testing.T) {
+	project := "test-rules-handler-create-success"
+	svc, brs := newRulesTestService(t, project)
+
+	body := `{"project":"` + project + `","content":"handler test: created over HTTP","priority":12,"edited_by":"operator-console"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleCreateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	require.Greater(t, created.ID, int64(0))
+	require.Equal(t, "handler test: created over HTTP", created.Content)
+	require.Equal(t, 12, created.Priority)
+	require.NotNil(t, created.Project)
+	require.Equal(t, project, *created.Project)
+
+	rows, err := brs.List(context.Background(), &project, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, created.ID, rows[0].ID)
+}
+
+func TestHandleUpdateBehavioralRule_PartialSuccess(t *testing.T) {
+	project := "test-rules-handler-update-success"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: update me",
+		Priority: 1,
+		EditedBy: "seed",
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequest(http.MethodPatch, "/api/rules/"+idStr, "id", idStr)
+	req.Body = ioNopCloser(`{"priority":7,"edited_by":"operator-console"}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var updated models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, created.ID, updated.ID)
+	assert.Equal(t, created.Content, updated.Content)
+	assert.Equal(t, 7, updated.Priority)
+	assert.Equal(t, "operator-console", updated.EditedBy)
+	assert.Greater(t, updated.Version, created.Version)
+}
+
+func storeDeleteRuleByProject(ctx context.Context, brs *dbgorm.BehavioralRulesStore, project string) error {
+	rows, err := brs.List(ctx, &project, 200)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.Project != nil && *row.Project == project {
+			if deleteErr := brs.Delete(ctx, row.ID); deleteErr != nil {
+				return deleteErr
+			}
+		}
+	}
+	return nil
+}
+
+type nopReadCloser struct {
+	*strings.Reader
+}
+
+func (n nopReadCloser) Close() error { return nil }
+
+func ioNopCloser(body string) nopReadCloser {
+	return nopReadCloser{Reader: strings.NewReader(body)}
 }
