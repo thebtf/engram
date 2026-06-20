@@ -80,6 +80,19 @@ For a source-free host that should only pull runtime images, use:
 docker compose -f deploy/docker-compose.runtime.yml up -d
 ```
 
+If the host already runs `engram-server` and PostgreSQL separately and you only
+need to add the new control plane, use the standalone operator-web rollout:
+
+```bash
+export OPERATOR_WEB_PORT=3000
+export OPERATOR_WEB_API_TARGET=http://host.docker.internal:37777
+docker compose -f deploy/docker-compose.operator-web-standalone.yml up -d
+```
+
+The standalone file uses `host.docker.internal:host-gateway` so the new
+`operator-web` container can proxy `/api/*` to an already-running server on the
+same host without re-wiring the existing backend deployment first.
+
 Services started:
 | Service | Port | Purpose |
 |---------|------|---------|
@@ -91,6 +104,11 @@ Recommended operator-facing entrypoint:
 - browser UI -> `http://host:3000`
 - workstation/plugin traffic -> `http://host:37777`
 
+If the host uses a reverse proxy or different public route, keep the same-origin
+rule intact:
+- browser route -> `operator-web`
+- `/api/*` on that same origin -> proxied to `engram-server`
+
 Verify:
 ```bash
 curl http://localhost:37777/health
@@ -101,6 +119,9 @@ curl http://localhost:3000/login
 
 curl http://localhost:3000/api/auth/setup-needed
 # proxied auth/bootstrap check through operator-web
+
+# optional workstation-side smoke against the deployed origin
+pwsh -NoProfile -File scripts/smoke-operator-web-remote.ps1 -BaseUrl http://host:3000 -WorkerBaseUrl http://host:37777
 ```
 
 ### Option B: Unraid
@@ -119,6 +140,10 @@ curl http://localhost:3000/api/auth/setup-needed
    - Set `NUXT_PUBLIC_API_BASE=/api`
    - Set `NUXT_ENGRAM_API_TARGET=http://<engram-server-host>:37777`
    - Map port `3000`
+   - If `operator-web` runs on the same host as the existing server container,
+     the repo now ships a ready-made standalone compose file:
+     - `deploy/docker-compose.operator-web-standalone.yml`
+     - default upstream target: `http://host.docker.internal:37777`
 
 4. **Enable pgvector** on first run:
    ```sql
@@ -319,6 +344,9 @@ curl http://your-server:3000/login
 
 # Proxied operator-web bootstrap check
 curl http://your-server:3000/api/auth/setup-needed
+
+# Optional remote workstation smoke
+pwsh -NoProfile -File scripts/smoke-operator-web-remote.ps1 -BaseUrl http://your-server:3000 -WorkerBaseUrl http://your-server:37777
 ```
 
 ---

@@ -1,0 +1,16 @@
+services:
+  operator-web:
+    image: ghcr.io/thebtf/engram-operator-web:main
+    ports:
+      - "${OPERATOR_WEB_PORT:-3000}:3000"
+    environment:
+      NITRO_HOST: "0.0.0.0"
+      NITRO_PORT: "3000"
+      NUXT_PUBLIC_API_BASE: "/api"
+      # Standalone rollout path for a host that already runs engram-server on :37777.
+      # Override this if operator-web should talk to a different hostname, container,
+      # or reverse-proxy upstream.
+      NUXT_ENGRAM_API_TARGET: "${OPERATOR_WEB_API_TARGET:-http://host.docker.internal:37777}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
