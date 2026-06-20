@@ -5,7 +5,10 @@ new operator control plane:
 
 - **Server** (Docker on remote host): Worker (API + MCP) + PostgreSQL
 - **Operator Console** (Docker on remote host): promoted `apps/operator-console`
-  browser host on `:3000`, proxying `/api/*` to the worker
+  browser host, typically running as an internal upstream on `:3000`
+- **Public browser origin**: normally the worker origin itself (`:37777`) when
+  `ENGRAM_OPERATOR_CONSOLE_URL` is set and the worker proxies browser routes to
+  the promoted console upstream while keeping `/api/*` local
 - **Client** (local workstation): Claude Code plugin (hooks + HTTP MCP)
 
 ## Token Model (v6)
@@ -75,8 +78,8 @@ Services started:
 | Service | Port | Purpose |
 |---------|------|---------|
 | `postgres` | 5432 | PostgreSQL 17 + pgvector |
-| `server` | 37777 | Worker API + MCP SSE (hooks, dashboard, nia tools) |
-| `operator-console` | 3000 | New promoted operator control plane |
+| `server` | 37777 | Worker API + MCP SSE + public browser origin when root proxy is enabled |
+| `operator-console` | 3000 | Internal promoted operator-console upstream (optional direct bind for debugging) |
 
 Verify:
 ```bash
@@ -96,8 +99,12 @@ This script:
 
 - builds the current-source `server` and `operator-console` images
 - brings up `postgres + server + operator-console`
-- checks the browser host and `/api` proxy
+- checks the dedicated browser host, the worker root proxy, and `/api`
 - validates issue mutation flow through the promoted host path
+
+For remote verification, use `scripts/smoke-operator-console-remote.ps1` with an
+explicit `-BaseUrl` for the actual deployed browser surface. Do not assume the
+local compose default `:3000` is the live public address on every server.
 
 ### Option B: Unraid
 
@@ -139,6 +146,7 @@ docker build --target operator-console -t engram-operator-console .
 docker run -d --name engram-server \
   -e DATABASE_DSN="postgres://engram:change-me@host.docker.internal:5432/engram?sslmode=disable" \
   -e ENGRAM_API_TOKEN="your-secret-token" \
+  -e ENGRAM_OPERATOR_CONSOLE_URL="http://host.docker.internal:3000" \
   -e ENGRAM_EMBEDDING_PROVIDER=openai \
   -e ENGRAM_EMBEDDING_BASE_URL=http://host.docker.internal:4000/v1 \
   -e ENGRAM_EMBEDDING_DIMENSIONS=4096 \

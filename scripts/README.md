@@ -140,10 +140,11 @@ The promoted operator-console host path has dedicated smoke scripts:
 - `scripts/smoke-operator-console.ps1`
   - local stack proof for `postgres + server + operator-console`
   - builds current-source images
-  - validates browser host `:3000`, `/api` proxy, and issue mutation flow
+  - validates dedicated browser host `:3000`, worker root proxy on `:37777`, `/api` proxy, and issue mutation flow
 - `scripts/smoke-operator-console-remote.ps1`
   - remote/public URL smoke for a deployed operator-console target
-  - validates root + `/api` proxy + worker health
+  - requires the actual deployed browser `BaseUrl` explicitly; no baked-in `:3000` assumption
+  - validates that root serves the promoted operator-console title, then checks `/api` proxy + worker health
   - supports `anonymous`, `disabled`, and `token` auth expectations
 
 Convenience target:

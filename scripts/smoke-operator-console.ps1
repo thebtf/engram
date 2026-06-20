@@ -148,8 +148,23 @@ function Read-JsonBody {
   }
 }
 
+function Get-HtmlTitle {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Html
+  )
+
+  $match = [regex]::Match($Html, '<title>(.*?)</title>', 'IgnoreCase')
+  if (-not $match.Success) {
+    throw "HTML title not found in response body."
+  }
+
+  $match.Groups[1].Value.Trim()
+}
+
 $origin = "http://127.0.0.1:$OperatorConsolePort"
 $workerOrigin = "http://127.0.0.1:$WorkerPort"
+$workerRootUrl = "$workerOrigin/"
 $rootUrl = "$origin/"
 $readyUrl = "$origin/api/ready"
 $selfcheckUrl = "$origin/api/selfcheck"
@@ -179,6 +194,17 @@ try {
 
   Write-Step "Waiting for operator-console root"
   $rootResponse = Wait-Http -Url $rootUrl -ExpectedStatus @(200)
+  $rootTitle = Get-HtmlTitle -Html $rootResponse.Content
+  if ($rootTitle -ne "engram · консоль оператора") {
+    throw "Expected promoted operator-console title on dedicated host, got '$rootTitle'"
+  }
+
+  Write-Step "Checking worker root is proxied to the promoted operator-console"
+  $workerRootResponse = Wait-Http -Url $workerRootUrl -ExpectedStatus @(200)
+  $workerRootTitle = Get-HtmlTitle -Html $workerRootResponse.Content
+  if ($workerRootTitle -ne "engram · консоль оператора") {
+    throw "Expected worker root to serve the promoted operator-console, got '$workerRootTitle'"
+  }
 
   if ($Mode -eq "disabled") {
     Write-Step "Waiting for proxied selfcheck"
@@ -363,6 +389,9 @@ try {
   Write-Step "Smoke passed"
   Write-Host ("MODE=" + $Mode)
   Write-Host ("ROOT_STATUS=" + $rootResponse.StatusCode)
+  Write-Host ("ROOT_TITLE=" + $rootTitle)
+  Write-Host ("WORKER_ROOT_STATUS=" + $workerRootResponse.StatusCode)
+  Write-Host ("WORKER_ROOT_TITLE=" + $workerRootTitle)
   Write-Host ("READY_STATUS=" + $readyResponse.StatusCode)
   Write-Host ("SELFCHECK_STATUS=" + $selfcheckResponse.StatusCode)
   Write-Host ("STATS_STATUS=" + $statsResponse.StatusCode)
