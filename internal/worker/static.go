@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	pathpkg "path"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -58,6 +61,7 @@ func loadOperatorConsoleProxy() (*httputil.ReverseProxy, string, error) {
 		}
 
 		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.ModifyResponse = setOperatorConsoleProxySecurityHeaders
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			http.Error(w, "Operator Console upstream unavailable: "+err.Error(), http.StatusBadGateway)
 		}
@@ -80,11 +84,27 @@ func serveOperatorConsole(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
-	// The proxied app owns its HTML body, so the worker cannot precompute CSP
-	// hashes for that response. Let the upstream provide its own policy.
-	w.Header().Del("Content-Security-Policy")
 	proxy.ServeHTTP(w, r)
 	return true
+}
+
+func setOperatorConsoleProxySecurityHeaders(resp *http.Response) error {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
+		return nil
+	}
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+
+	setOperatorConsoleHTMLSecurityHeaders(resp.Header, content)
+	resp.Body = io.NopCloser(bytes.NewReader(content))
+	resp.ContentLength = int64(len(content))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(content)))
+	resp.Header.Del("Content-Encoding")
+	return nil
 }
 
 // serveIndex writes the embedded index.html for the dashboard root.
