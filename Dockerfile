@@ -19,6 +19,10 @@ COPY apps/operator-console/ ./
 COPY design/operator-console/contracts /workspace/design/operator-console/contracts
 RUN npm run parity && npm run build
 
+# --- Operator console static bundle for server embed ---
+FROM operator-console-build AS operator-console-static-build
+RUN npm run generate
+
 # --- Go build stage ---
 FROM golang:1.25-bookworm AS builder
 
@@ -36,8 +40,10 @@ RUN go mod download
 
 COPY . .
 
-# Copy built dashboard into static directory for go:embed
-COPY --from=dashboard /ui/dist/ internal/worker/static/
+# Copy generated operator-console static bundle into static/ for go:embed.
+# This replaces the legacy embedded dashboard root inside the server image while
+# keeping apps/operator-console as the single frontend source of truth.
+COPY --from=operator-console-static-build /workspace/apps/operator-console/.output/public/ internal/worker/static/
 
 # Inject version from git tags
 ARG VERSION=dev
