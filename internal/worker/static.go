@@ -128,7 +128,20 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if contentType := mime.TypeByExtension(pathpkg.Ext(path)); contentType != "" {
+	contentType := mime.TypeByExtension(pathpkg.Ext(path))
+	if contentType == "" {
+		switch pathpkg.Ext(path) {
+		case ".json":
+			contentType = "application/json"
+		case ".js":
+			contentType = "application/javascript"
+		case ".css":
+			contentType = "text/css"
+		case ".svg":
+			contentType = "image/svg+xml"
+		}
+	}
+	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
 

@@ -107,8 +107,8 @@ function Assert-LocaleAsset {
     throw "Locale asset returned unexpected content-type '$contentType' from $localeUrl"
   }
 
-  if ($localeResponse.Content.TrimStart().StartsWith('<!DOCTYPE html>')) {
-    throw "Locale asset returned HTML instead of JSON from $localeUrl"
+  if (-not $localeResponse.Content -or $localeResponse.Content.TrimStart().StartsWith('<!DOCTYPE html>')) {
+    throw "Locale asset returned HTML or empty content instead of JSON from $localeUrl"
   }
 
   return [pscustomobject]@{
