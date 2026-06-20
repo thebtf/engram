@@ -96,7 +96,7 @@ function Get-CspDirective {
     [string]$Name
   )
 
-  foreach ($directive in ($Csp -split ';')) {
+  foreach ($directive in ($Csp -split '[;,]')) {
     $trimmed = $directive.Trim()
     if ($trimmed.StartsWith("$Name ")) {
       return $trimmed

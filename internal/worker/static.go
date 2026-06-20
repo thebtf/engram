@@ -80,13 +80,15 @@ func serveOperatorConsole(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
+	// The proxied app owns its HTML body, so the worker cannot precompute CSP
+	// hashes for that response. Let the upstream provide its own policy.
+	w.Header().Del("Content-Security-Policy")
 	proxy.ServeHTTP(w, r)
 	return true
 }
 
 // serveIndex writes the embedded index.html for the dashboard root.
 func serveIndex(w http.ResponseWriter, r *http.Request) {
-	setOperatorConsoleHTMLSecurityHeaders(w.Header())
 	if serveOperatorConsole(w, r) {
 		return
 	}
@@ -100,6 +102,7 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setOperatorConsoleHTMLSecurityHeaders(w.Header(), content)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")

@@ -60,15 +60,16 @@ func TestSecurityHeaders_CSPValue(t *testing.T) {
 
 func TestOperatorConsoleHTMLSecurityHeadersAllowNuxtInlineBootstrap(t *testing.T) {
 	hdr := http.Header{}
+	html := []byte(`<script type="module" src="/_nuxt/app.js"></script><script>window.__NUXT__={}</script><script type="application/json">[{"serverRendered":false}]</script>`)
 
-	setOperatorConsoleHTMLSecurityHeaders(hdr)
+	setOperatorConsoleHTMLSecurityHeaders(hdr, html)
 
 	csp := hdr.Get("Content-Security-Policy")
-	if csp != operatorConsoleContentSecurityPolicy {
-		t.Fatalf("operator console CSP = %q\nwant %q", csp, operatorConsoleContentSecurityPolicy)
+	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
+		t.Fatalf("operator console CSP must not allow arbitrary inline scripts, got %q", csp)
 	}
-	if !strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
-		t.Fatalf("operator console CSP must allow Nuxt inline bootstrap scripts, got %q", csp)
+	if got := strings.Count(csp, "'sha256-"); got != 2 {
+		t.Fatalf("operator console CSP must hash the 2 inline Nuxt scripts, got %d hash source(s) in %q", got, csp)
 	}
 }
 
