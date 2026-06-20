@@ -176,6 +176,61 @@ function Get-LocaleProbePath {
   $match.Groups[1].Value
 }
 
+function Get-CspDirective {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Csp,
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  foreach ($directive in ($Csp -split ';')) {
+    $trimmed = $directive.Trim()
+    if ($trimmed.StartsWith("$Name ")) {
+      return $trimmed
+    }
+  }
+
+  return ""
+}
+
+function Assert-NuxtInlineScriptCsp {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$Response,
+    [Parameter(Mandatory = $true)]
+    [string]$Step
+  )
+
+  $inlineScriptCount = [regex]::Matches($Response.Content, '<script(?![^>]+src=)[^>]*>', 'IgnoreCase').Count
+  $csp = @($Response.Headers['Content-Security-Policy']) -join ','
+  if ($inlineScriptCount -eq 0 -or $csp -eq "") {
+    return [pscustomobject]@{
+      InlineScriptCount = $inlineScriptCount
+      ScriptSrc = ""
+    }
+  }
+
+  $scriptSrc = Get-CspDirective -Csp $csp -Name "script-src"
+  if ($scriptSrc -eq "") {
+    $scriptSrc = Get-CspDirective -Csp $csp -Name "default-src"
+  }
+
+  $allowsInline = (
+    $scriptSrc -match "'unsafe-inline'" -or
+    $scriptSrc -match "'nonce-[^']+'" -or
+    $scriptSrc -match "'sha(256|384|512)-[^']+'"
+  )
+  if (-not $allowsInline) {
+    throw "$Step contains $inlineScriptCount inline script tag(s), but CSP '$scriptSrc' does not allow Nuxt inline bootstrap."
+  }
+
+  return [pscustomobject]@{
+    InlineScriptCount = $inlineScriptCount
+    ScriptSrc = $scriptSrc
+  }
+}
+
 function Assert-LocaleAsset {
   param(
     [Parameter(Mandatory = $true)]
@@ -242,6 +297,7 @@ try {
   if ($rootTitle -ne "engram · консоль оператора") {
     throw "Expected promoted operator-console title on dedicated host, got '$rootTitle'"
   }
+  $rootCspProbe = Assert-NuxtInlineScriptCsp -Response $rootResponse -Step "dedicated operator-console root"
   $rootLocalePath = Get-LocaleProbePath -Html $rootResponse.Content
   $rootLocaleResponse = Assert-LocaleAsset -Origin $origin -LocalePath $rootLocalePath
 
@@ -251,6 +307,7 @@ try {
   if ($workerRootTitle -ne "engram · консоль оператора") {
     throw "Expected worker root to serve the promoted operator-console, got '$workerRootTitle'"
   }
+  $workerRootCspProbe = Assert-NuxtInlineScriptCsp -Response $workerRootResponse -Step "worker root"
   $workerLocalePath = Get-LocaleProbePath -Html $workerRootResponse.Content
   $workerLocaleResponse = Assert-LocaleAsset -Origin $workerOrigin -LocalePath $workerLocalePath
 
@@ -438,11 +495,15 @@ try {
   Write-Host ("MODE=" + $Mode)
   Write-Host ("ROOT_STATUS=" + $rootResponse.StatusCode)
   Write-Host ("ROOT_TITLE=" + $rootTitle)
+  Write-Host ("ROOT_INLINE_SCRIPT_COUNT=" + $rootCspProbe.InlineScriptCount)
+  Write-Host ("ROOT_CSP_SCRIPT_SRC=" + $rootCspProbe.ScriptSrc)
   Write-Host ("ROOT_LOCALE_ASSET_URL=" + $rootLocaleResponse.Url)
   Write-Host ("ROOT_LOCALE_ASSET_STATUS=" + $rootLocaleResponse.StatusCode)
   Write-Host ("ROOT_LOCALE_ASSET_CONTENT_TYPE=" + $rootLocaleResponse.ContentType)
   Write-Host ("WORKER_ROOT_STATUS=" + $workerRootResponse.StatusCode)
   Write-Host ("WORKER_ROOT_TITLE=" + $workerRootTitle)
+  Write-Host ("WORKER_INLINE_SCRIPT_COUNT=" + $workerRootCspProbe.InlineScriptCount)
+  Write-Host ("WORKER_CSP_SCRIPT_SRC=" + $workerRootCspProbe.ScriptSrc)
   Write-Host ("WORKER_LOCALE_ASSET_URL=" + $workerLocaleResponse.Url)
   Write-Host ("WORKER_LOCALE_ASSET_STATUS=" + $workerLocaleResponse.StatusCode)
   Write-Host ("WORKER_LOCALE_ASSET_CONTENT_TYPE=" + $workerLocaleResponse.ContentType)

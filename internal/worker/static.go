@@ -86,6 +86,7 @@ func serveOperatorConsole(w http.ResponseWriter, r *http.Request) bool {
 
 // serveIndex writes the embedded index.html for the dashboard root.
 func serveIndex(w http.ResponseWriter, r *http.Request) {
+	setOperatorConsoleHTMLSecurityHeaders(w.Header())
 	if serveOperatorConsole(w, r) {
 		return
 	}

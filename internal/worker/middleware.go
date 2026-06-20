@@ -53,6 +53,10 @@ var allowedOrigins = map[string]bool{
 	"http://127.0.0.1:37777": true,
 }
 
+const strictContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
+
+const operatorConsoleContentSecurityPolicy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
+
 // SecurityHeaders sets defensive HTTP headers on every response.
 // Mitigates clickjacking, MIME-sniffing, XSS, and cross-origin data leaks.
 func SecurityHeaders(next http.Handler) http.Handler {
@@ -73,7 +77,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 		// Content Security Policy — granular per-source directives.
 		// TODO: Remove 'unsafe-inline' from style-src and migrate inline styles to nonce/hash-based CSP.
-		hdr.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'")
+		hdr.Set("Content-Security-Policy", strictContentSecurityPolicy)
 
 		// Permissions Policy — deny access to hardware APIs.
 		hdr.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
@@ -94,6 +98,12 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func setOperatorConsoleHTMLSecurityHeaders(hdr http.Header) {
+	// Nuxt's generated SPA shell includes inline bootstrap and payload scripts.
+	// Keep the relaxed script policy scoped to HTML shell responses only.
+	hdr.Set("Content-Security-Policy", operatorConsoleContentSecurityPolicy)
 }
 
 // MaxBodySize guards against denial-of-service via oversized request bodies.

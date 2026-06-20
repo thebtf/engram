@@ -88,6 +88,61 @@ function Get-LocaleProbePath {
   return $match.Groups[1].Value
 }
 
+function Get-CspDirective {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Csp,
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  foreach ($directive in ($Csp -split ';')) {
+    $trimmed = $directive.Trim()
+    if ($trimmed.StartsWith("$Name ")) {
+      return $trimmed
+    }
+  }
+
+  return ""
+}
+
+function Assert-NuxtInlineScriptCsp {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$Response,
+    [Parameter(Mandatory = $true)]
+    [string]$Step
+  )
+
+  $inlineScriptCount = [regex]::Matches($Response.Content, '<script(?![^>]+src=)[^>]*>', 'IgnoreCase').Count
+  $csp = @($Response.Headers['Content-Security-Policy']) -join ','
+  if ($inlineScriptCount -eq 0 -or $csp -eq "") {
+    return [pscustomobject]@{
+      InlineScriptCount = $inlineScriptCount
+      ScriptSrc = ""
+    }
+  }
+
+  $scriptSrc = Get-CspDirective -Csp $csp -Name "script-src"
+  if ($scriptSrc -eq "") {
+    $scriptSrc = Get-CspDirective -Csp $csp -Name "default-src"
+  }
+
+  $allowsInline = (
+    $scriptSrc -match "'unsafe-inline'" -or
+    $scriptSrc -match "'nonce-[^']+'" -or
+    $scriptSrc -match "'sha(256|384|512)-[^']+'"
+  )
+  if (-not $allowsInline) {
+    throw "$Step contains $inlineScriptCount inline script tag(s), but CSP '$scriptSrc' does not allow Nuxt inline bootstrap."
+  }
+
+  return [pscustomobject]@{
+    InlineScriptCount = $inlineScriptCount
+    ScriptSrc = $scriptSrc
+  }
+}
+
 function Assert-LocaleAsset {
   param(
     [Parameter(Mandatory = $true)]
@@ -137,6 +192,7 @@ $title = Get-Title -Html $rootResponse.Content
 if ($title -ne $ExpectedTitle) {
   throw "Root does not look like the promoted operator-console. Expected title '$ExpectedTitle', got '$title'."
 }
+$rootCspProbe = Assert-NuxtInlineScriptCsp -Response $rootResponse -Step "root"
 $localePath = Get-LocaleProbePath -Html $rootResponse.Content
 
 Write-Step "Checking locale asset serving for the SPA shell"
@@ -188,6 +244,8 @@ Write-Step "Remote smoke passed"
 Write-Host ("MODE=" + $Mode)
 Write-Host ("ROOT_STATUS=" + $rootResponse.StatusCode)
 Write-Host ("ROOT_TITLE=" + $title)
+Write-Host ("ROOT_INLINE_SCRIPT_COUNT=" + $rootCspProbe.InlineScriptCount)
+Write-Host ("ROOT_CSP_SCRIPT_SRC=" + $rootCspProbe.ScriptSrc)
 Write-Host ("LOCALE_ASSET_URL=" + $localeResponse.Url)
 Write-Host ("LOCALE_ASSET_STATUS=" + $localeResponse.StatusCode)
 Write-Host ("LOCALE_ASSET_CONTENT_TYPE=" + $localeResponse.ContentType)
