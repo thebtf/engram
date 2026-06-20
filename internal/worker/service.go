@@ -1200,7 +1200,7 @@ func (s *Service) setupMiddleware() {
 func (s *Service) setupRoutes() {
 	// Dashboard static assets served from the embedded filesystem.
 	s.router.Get("/", serveIndex)
-	s.router.Get("/_nuxt/*", serveOperatorConsoleOnly)
+	s.router.Get("/_nuxt/*", serveAssets)
 	s.router.Get("/assets/*", serveAssets)
 	s.router.Get("/branding/*", serveAssets)
 	s.router.Get("/favicon.svg", serveAssets)
@@ -1400,9 +1400,10 @@ func (s *Service) setupRoutes() {
 	})
 
 	// Catch-all browser routes for the promoted operator-console surface.
-	// When ENGRAM_OPERATOR_CONSOLE_URL is unset this stays a normal 404 and the
-	// embedded legacy dashboard remains available only at "/".
-	s.router.Get("/*", serveOperatorConsoleOnly)
+	// With the promoted app embedded into static/, this serves the SPA shell for
+	// client-side routes such as /memory and /settings. If an explicit upstream
+	// proxy is configured, serveIndex will delegate there instead.
+	s.router.Get("/*", serveIndex)
 }
 
 // recordRetrievalStatsExtended accumulates per-project retrieval metrics atomically.
