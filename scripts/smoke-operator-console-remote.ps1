@@ -114,11 +114,29 @@ function Assert-NuxtInlineScriptCsp {
     [string]$Step
   )
 
-  $inlineScriptCount = [regex]::Matches($Response.Content, '<script(?![^>]+src=)[^>]*>', 'IgnoreCase').Count
+  $scriptMatches = [regex]::Matches(
+    $Response.Content,
+    '<script\b([^>]*)>(.*?)</script>',
+    [System.Text.RegularExpressions.RegexOptions]'IgnoreCase,Singleline'
+  )
   $csp = @($Response.Headers['Content-Security-Policy']) -join ','
-  if ($inlineScriptCount -eq 0 -or $csp -eq "") {
+  $inlineScripts = @()
+  foreach ($scriptMatch in $scriptMatches) {
+    $attrs = $scriptMatch.Groups[1].Value
+    $content = $scriptMatch.Groups[2].Value
+    if ($attrs -match '\ssrc\s*=' -or $content.Length -eq 0) {
+      continue
+    }
+
+    $inlineScripts += [pscustomobject]@{
+      Attrs = $attrs
+      Content = $content
+    }
+  }
+
+  if ($inlineScripts.Count -eq 0 -or $csp -eq "") {
     return [pscustomobject]@{
-      InlineScriptCount = $inlineScriptCount
+      InlineScriptCount = $inlineScripts.Count
       ScriptSrc = ""
     }
   }
@@ -129,16 +147,39 @@ function Assert-NuxtInlineScriptCsp {
   }
 
   $allowsInline = (
-    $scriptSrc -match "'unsafe-inline'" -or
-    $scriptSrc -match "'nonce-[^']+'" -or
-    $scriptSrc -match "'sha(256|384|512)-[^']+'"
+    $scriptSrc -match "'unsafe-inline'"
   )
-  if (-not $allowsInline) {
-    throw "$Step contains $inlineScriptCount inline script tag(s), but CSP '$scriptSrc' does not allow Nuxt inline bootstrap."
+  if ($allowsInline) {
+    return [pscustomobject]@{
+      InlineScriptCount = $inlineScripts.Count
+      ScriptSrc = $scriptSrc
+    }
+  }
+
+  for ($i = 0; $i -lt $inlineScripts.Count; $i++) {
+    $script = $inlineScripts[$i]
+    $nonceMatch = [regex]::Match($script.Attrs, '\snonce\s*=\s*["'']?([^"''\s>]+)', 'IgnoreCase')
+    if ($nonceMatch.Success -and $scriptSrc.Contains("'nonce-$($nonceMatch.Groups[1].Value)'")) {
+      continue
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $bytes = [System.Text.Encoding]::UTF8.GetBytes($script.Content)
+      $hash = [Convert]::ToBase64String($sha256.ComputeHash($bytes))
+    }
+    finally {
+      $sha256.Dispose()
+    }
+    if ($scriptSrc.Contains("'sha256-$hash'")) {
+      continue
+    }
+
+    throw "$Step inline script #$($i + 1) is not covered by CSP '$scriptSrc'."
   }
 
   return [pscustomobject]@{
-    InlineScriptCount = $inlineScriptCount
+    InlineScriptCount = $inlineScripts.Count
     ScriptSrc = $scriptSrc
   }
 }
