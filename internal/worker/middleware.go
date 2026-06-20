@@ -53,6 +53,10 @@ var allowedOrigins = map[string]bool{
 	"http://127.0.0.1:37777": true,
 }
 
+const strictContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
+
+var inlineScriptPattern = regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script>`)
+
 // SecurityHeaders sets defensive HTTP headers on every response.
 // Mitigates clickjacking, MIME-sniffing, XSS, and cross-origin data leaks.
 func SecurityHeaders(next http.Handler) http.Handler {
@@ -73,7 +77,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 		// Content Security Policy — granular per-source directives.
 		// TODO: Remove 'unsafe-inline' from style-src and migrate inline styles to nonce/hash-based CSP.
-		hdr.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'")
+		hdr.Set("Content-Security-Policy", strictContentSecurityPolicy)
 
 		// Permissions Policy — deny access to hardware APIs.
 		hdr.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
@@ -94,6 +98,32 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func setOperatorConsoleHTMLSecurityHeaders(hdr http.Header, html []byte) {
+	scriptSrc := "script-src 'self'"
+	if hashSources := inlineScriptHashSources(html); len(hashSources) > 0 {
+		scriptSrc += " " + strings.Join(hashSources, " ")
+	}
+
+	hdr.Set("Content-Security-Policy", "default-src 'self'; "+scriptSrc+"; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'")
+}
+
+func inlineScriptHashSources(html []byte) []string {
+	matches := inlineScriptPattern.FindAllSubmatch(html, -1)
+	hashSources := make([]string, 0, len(matches))
+	for _, match := range matches {
+		attrs := strings.ToLower(string(match[1]))
+		content := match[2]
+		if strings.Contains(attrs, "src=") || len(content) == 0 {
+			continue
+		}
+
+		sum := sha256.Sum256(content)
+		hashSources = append(hashSources, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
+	}
+
+	return hashSources
 }
 
 // MaxBodySize guards against denial-of-service via oversized request bodies.

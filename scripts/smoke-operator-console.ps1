@@ -176,6 +176,102 @@ function Get-LocaleProbePath {
   $match.Groups[1].Value
 }
 
+function Get-CspDirective {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Csp,
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  foreach ($directive in ($Csp -split '[;,]')) {
+    $trimmed = $directive.Trim()
+    if ($trimmed.StartsWith("$Name ")) {
+      return $trimmed
+    }
+  }
+
+  return ""
+}
+
+function Assert-NuxtInlineScriptCsp {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$Response,
+    [Parameter(Mandatory = $true)]
+    [string]$Step
+  )
+
+  $scriptMatches = [regex]::Matches(
+    $Response.Content,
+    '<script\b([^>]*)>(.*?)</script>',
+    [System.Text.RegularExpressions.RegexOptions]'IgnoreCase,Singleline'
+  )
+  $csp = @($Response.Headers['Content-Security-Policy']) -join ','
+  $inlineScripts = @()
+  foreach ($scriptMatch in $scriptMatches) {
+    $attrs = $scriptMatch.Groups[1].Value
+    $content = $scriptMatch.Groups[2].Value
+    if ($attrs -match '\ssrc\s*=' -or $content.Length -eq 0) {
+      continue
+    }
+
+    $inlineScripts += [pscustomobject]@{
+      Attrs = $attrs
+      Content = $content
+    }
+  }
+
+  if ($inlineScripts.Count -eq 0 -or $csp -eq "") {
+    return [pscustomobject]@{
+      InlineScriptCount = $inlineScripts.Count
+      ScriptSrc = ""
+    }
+  }
+
+  $scriptSrc = Get-CspDirective -Csp $csp -Name "script-src"
+  if ($scriptSrc -eq "") {
+    $scriptSrc = Get-CspDirective -Csp $csp -Name "default-src"
+  }
+
+  $allowsInline = (
+    $scriptSrc -match "'unsafe-inline'"
+  )
+  if ($allowsInline) {
+    return [pscustomobject]@{
+      InlineScriptCount = $inlineScripts.Count
+      ScriptSrc = $scriptSrc
+    }
+  }
+
+  for ($i = 0; $i -lt $inlineScripts.Count; $i++) {
+    $script = $inlineScripts[$i]
+    $nonceMatch = [regex]::Match($script.Attrs, '\snonce\s*=\s*["'']?([^"''\s>]+)', 'IgnoreCase')
+    if ($nonceMatch.Success -and $scriptSrc.Contains("'nonce-$($nonceMatch.Groups[1].Value)'")) {
+      continue
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $bytes = [System.Text.Encoding]::UTF8.GetBytes($script.Content)
+      $hash = [Convert]::ToBase64String($sha256.ComputeHash($bytes))
+    }
+    finally {
+      $sha256.Dispose()
+    }
+    if ($scriptSrc.Contains("'sha256-$hash'")) {
+      continue
+    }
+
+    throw "$Step inline script #$($i + 1) is not covered by CSP '$scriptSrc'."
+  }
+
+  return [pscustomobject]@{
+    InlineScriptCount = $inlineScripts.Count
+    ScriptSrc = $scriptSrc
+  }
+}
+
 function Assert-LocaleAsset {
   param(
     [Parameter(Mandatory = $true)]
@@ -242,6 +338,7 @@ try {
   if ($rootTitle -ne "engram · консоль оператора") {
     throw "Expected promoted operator-console title on dedicated host, got '$rootTitle'"
   }
+  $rootCspProbe = Assert-NuxtInlineScriptCsp -Response $rootResponse -Step "dedicated operator-console root"
   $rootLocalePath = Get-LocaleProbePath -Html $rootResponse.Content
   $rootLocaleResponse = Assert-LocaleAsset -Origin $origin -LocalePath $rootLocalePath
 
@@ -251,6 +348,7 @@ try {
   if ($workerRootTitle -ne "engram · консоль оператора") {
     throw "Expected worker root to serve the promoted operator-console, got '$workerRootTitle'"
   }
+  $workerRootCspProbe = Assert-NuxtInlineScriptCsp -Response $workerRootResponse -Step "worker root"
   $workerLocalePath = Get-LocaleProbePath -Html $workerRootResponse.Content
   $workerLocaleResponse = Assert-LocaleAsset -Origin $workerOrigin -LocalePath $workerLocalePath
 
@@ -438,11 +536,15 @@ try {
   Write-Host ("MODE=" + $Mode)
   Write-Host ("ROOT_STATUS=" + $rootResponse.StatusCode)
   Write-Host ("ROOT_TITLE=" + $rootTitle)
+  Write-Host ("ROOT_INLINE_SCRIPT_COUNT=" + $rootCspProbe.InlineScriptCount)
+  Write-Host ("ROOT_CSP_SCRIPT_SRC=" + $rootCspProbe.ScriptSrc)
   Write-Host ("ROOT_LOCALE_ASSET_URL=" + $rootLocaleResponse.Url)
   Write-Host ("ROOT_LOCALE_ASSET_STATUS=" + $rootLocaleResponse.StatusCode)
   Write-Host ("ROOT_LOCALE_ASSET_CONTENT_TYPE=" + $rootLocaleResponse.ContentType)
   Write-Host ("WORKER_ROOT_STATUS=" + $workerRootResponse.StatusCode)
   Write-Host ("WORKER_ROOT_TITLE=" + $workerRootTitle)
+  Write-Host ("WORKER_INLINE_SCRIPT_COUNT=" + $workerRootCspProbe.InlineScriptCount)
+  Write-Host ("WORKER_CSP_SCRIPT_SRC=" + $workerRootCspProbe.ScriptSrc)
   Write-Host ("WORKER_LOCALE_ASSET_URL=" + $workerLocaleResponse.Url)
   Write-Host ("WORKER_LOCALE_ASSET_STATUS=" + $workerLocaleResponse.StatusCode)
   Write-Host ("WORKER_LOCALE_ASSET_CONTENT_TYPE=" + $workerLocaleResponse.ContentType)

@@ -3,6 +3,7 @@ package worker
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	authpkg "github.com/thebtf/engram/internal/auth"
@@ -40,7 +41,7 @@ func TestSecurityHeaders_CSPValue(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -48,13 +49,27 @@ func TestSecurityHeaders_CSPValue(t *testing.T) {
 	if csp == "" {
 		t.Fatal("Content-Security-Policy header must be present")
 	}
-	wantCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
-	if csp != wantCSP {
-		t.Errorf("CSP = %q\nwant %q", csp, wantCSP)
+	if csp != strictContentSecurityPolicy {
+		t.Errorf("CSP = %q\nwant %q", csp, strictContentSecurityPolicy)
 	}
 
 	if pp := rec.Header().Get("Permissions-Policy"); pp == "" {
 		t.Error("Permissions-Policy must be set")
+	}
+}
+
+func TestOperatorConsoleHTMLSecurityHeadersAllowNuxtInlineBootstrap(t *testing.T) {
+	hdr := http.Header{}
+	html := []byte(`<script type="module" src="/_nuxt/app.js"></script><script>window.__NUXT__={}</script><script type="application/json">[{"serverRendered":false}]</script>`)
+
+	setOperatorConsoleHTMLSecurityHeaders(hdr, html)
+
+	csp := hdr.Get("Content-Security-Policy")
+	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
+		t.Fatalf("operator console CSP must not allow arbitrary inline scripts, got %q", csp)
+	}
+	if got := strings.Count(csp, "'sha256-"); got != 2 {
+		t.Fatalf("operator console CSP must hash the 2 inline Nuxt scripts, got %d hash source(s) in %q", got, csp)
 	}
 }
 

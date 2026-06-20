@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	pathpkg "path"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -58,6 +61,7 @@ func loadOperatorConsoleProxy() (*httputil.ReverseProxy, string, error) {
 		}
 
 		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.ModifyResponse = setOperatorConsoleProxySecurityHeaders
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			http.Error(w, "Operator Console upstream unavailable: "+err.Error(), http.StatusBadGateway)
 		}
@@ -84,6 +88,25 @@ func serveOperatorConsole(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+func setOperatorConsoleProxySecurityHeaders(resp *http.Response) error {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
+		return nil
+	}
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+
+	setOperatorConsoleHTMLSecurityHeaders(resp.Header, content)
+	resp.Body = io.NopCloser(bytes.NewReader(content))
+	resp.ContentLength = int64(len(content))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(content)))
+	resp.Header.Del("Content-Encoding")
+	return nil
+}
+
 // serveIndex writes the embedded index.html for the dashboard root.
 func serveIndex(w http.ResponseWriter, r *http.Request) {
 	if serveOperatorConsole(w, r) {
@@ -99,6 +122,7 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setOperatorConsoleHTMLSecurityHeaders(w.Header(), content)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
