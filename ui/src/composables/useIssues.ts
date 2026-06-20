@@ -1,7 +1,9 @@
 import { ref, watch } from 'vue'
+import { useUiI18n } from '@/composables/useUiI18n'
 import { fetchIssues, type Issue } from '@/utils/api'
 
 export function useIssues() {
+  const { t } = useUiI18n()
   const issues = ref<Issue[]>([])
   const total = ref(0)
   const loading = ref(false)
@@ -39,7 +41,7 @@ export function useIssues() {
       projectNames.value = result.project_names || {}
     } catch (err: any) {
       if (err.name !== 'AbortError') {
-        error.value = err.message || 'Failed to load issues'
+        error.value = err.message || t.value.issues.errors.loadFailed
         issues.value = []
         total.value = 0
       }

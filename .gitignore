@@ -31,6 +31,9 @@ ui/bun.lock
 ui/dist/
 ui/.vite/
 ui/package.json
+apps/*/node_modules/
+apps/*/.nuxt/
+apps/*/.output/
 *.tsbuildinfo
 docs/node_modules/
 docs/dist/

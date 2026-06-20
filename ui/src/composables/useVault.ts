@@ -1,8 +1,10 @@
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useUiI18n } from '@/composables/useUiI18n'
 import type { VaultCredential, VaultStatus } from '@/utils/api'
 import { fetchCredentials, fetchCredential, deleteCredential, fetchVaultStatus } from '@/utils/api'
 
 export function useVault() {
+  const { t } = useUiI18n()
   const credentials = ref<VaultCredential[]>([])
   const vaultStatus = ref<VaultStatus | null>(null)
   const loading = ref(false)
@@ -31,7 +33,7 @@ export function useVault() {
       vaultStatus.value = status
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return
-      error.value = err instanceof Error ? err.message : 'Failed to load vault'
+      error.value = err instanceof Error ? err.message : t.value.vault.errors.loadFailed
     } finally {
       loading.value = false
     }
@@ -59,9 +61,9 @@ export function useVault() {
       const msg = err instanceof Error ? err.message : ''
       const normalized = msg.toLowerCase()
       if (/\b409\b/.test(normalized) || normalized.includes('key mismatch') || normalized.includes('encryption') || normalized.includes('decrypt')) {
-        actionError.value = 'Cannot decrypt: this credential was encrypted with a different vault key. Set the original ENGRAM_VAULT_KEY to reveal it.'
+        actionError.value = t.value.vault.errors.decryptMismatch
       } else {
-        actionError.value = msg || 'Failed to reveal credential'
+        actionError.value = msg || t.value.vault.errors.revealFailed
       }
     }
   }
@@ -89,7 +91,7 @@ export function useVault() {
         }
       }
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : 'Failed to delete credential'
+      actionError.value = err instanceof Error ? err.message : t.value.vault.errors.deleteFailed
       throw err
     }
   }

@@ -3,22 +3,23 @@
  * relative label such as "5m ago" or "2h ago". Values older than 7 days
  * fall back to the locale date string.
  */
-export function formatRelativeTime(dateOrEpoch: string | number): string {
+export function formatRelativeTime(dateOrEpoch: string | number, locale = 'en'): string {
   const timestamp = typeof dateOrEpoch === 'number' ? dateOrEpoch : new Date(dateOrEpoch).getTime()
   const now = Date.now()
   const diff = now - timestamp
+  const isRu = locale.toLowerCase().startsWith('ru')
 
   const seconds = Math.floor(diff / 1000)
   const minutes = Math.floor(seconds / 60)
   const hours = Math.floor(minutes / 60)
   const days = Math.floor(hours / 24)
 
-  if (seconds < 60) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  if (hours < 24) return `${hours}h ago`
-  if (days < 7) return `${days}d ago`
+  if (seconds < 60) return isRu ? 'только что' : 'just now'
+  if (minutes < 60) return isRu ? `${minutes}м назад` : `${minutes}m ago`
+  if (hours < 24) return isRu ? `${hours}ч назад` : `${hours}h ago`
+  if (days < 7) return isRu ? `${days}д назад` : `${days}d ago`
 
-  return new Date(timestamp).toLocaleDateString()
+  return new Date(timestamp).toLocaleDateString(isRu ? 'ru-RU' : locale)
 }
 
 /**
@@ -47,22 +48,22 @@ export function formatUptime(uptimeStr: string): string {
  * Wraps formatRelativeTime with null/undefined/zero-value safety. Returns the
  * em-dash placeholder (—) for any absent or un-parseable value.
  */
-export function safeDateFormat(value: string | number | null | undefined): string {
+export function safeDateFormat(value: string | number | null | undefined, locale = 'en'): string {
   if (value === null || value === undefined || value === '' || value === 0) return '—'
   const date = new Date(typeof value === 'number' ? value : value)
   if (isNaN(date.getTime())) return '—'
-  return formatRelativeTime(date.getTime())
+  return formatRelativeTime(date.getTime(), locale)
 }
 
 /**
  * Like safeDateFormat but returns a full locale date string instead of a
  * relative label. Returns the em-dash placeholder for absent or invalid values.
  */
-export function safeAbsoluteDate(value: string | number | null | undefined): string {
+export function safeAbsoluteDate(value: string | number | null | undefined, locale = 'en-US'): string {
   if (value === null || value === undefined || value === '' || value === 0) return '—'
   const date = new Date(typeof value === 'number' ? value : value)
   if (isNaN(date.getTime())) return '—'
-  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+  return date.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 /**

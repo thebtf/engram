@@ -109,6 +109,139 @@ export async function fetchProjects(): Promise<string[]> {
   return fetchWithRetry<string[]>(`${API_BASE}/projects`)
 }
 
+export interface NullableStringValue {
+  String: string
+  Valid: boolean
+}
+
+export interface SDKSession {
+  id: number
+  claude_session_id: string
+  project: string
+  status: string
+  started_at: string
+  started_at_epoch: number
+  prompt_counter: number
+  user_prompt: NullableStringValue
+  completed_at: NullableStringValue
+  outcome: NullableStringValue
+  outcome_reason: NullableStringValue
+  outcome_recorded_at: NullableStringValue
+  injection_strategy: NullableStringValue
+}
+
+export interface SessionListResponse {
+  sessions: SDKSession[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export async function fetchSessions(
+  params: {
+    project?: string
+    limit?: number
+    offset?: number
+  } = {},
+  signal?: AbortSignal,
+): Promise<SessionListResponse> {
+  const searchParams = new URLSearchParams()
+  if (params.project) searchParams.set('project', params.project)
+  if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
+  if (params.offset !== undefined) searchParams.set('offset', String(params.offset))
+  const query = searchParams.toString()
+  return fetchWithRetry<SessionListResponse>(`${API_BASE}/sessions/list${query ? '?' + query : ''}`, { signal })
+}
+
+export interface Rule {
+  id: number
+  project?: string | null
+  content: string
+  edited_by?: string
+  priority: number
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface RuleListResponse {
+  rules: Rule[]
+  total: number
+}
+
+export async function fetchRules(
+  params: {
+    project?: string
+    limit?: number
+  } = {},
+  signal?: AbortSignal,
+): Promise<RuleListResponse> {
+  const searchParams = new URLSearchParams()
+  if (params.project) searchParams.set('project', params.project)
+  if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
+  const query = searchParams.toString()
+  return fetchWithRetry<RuleListResponse>(`${API_BASE}/rules${query ? '?' + query : ''}`, { signal })
+}
+
+export async function createRule(
+  payload: {
+    content: string
+    project?: string
+    priority?: number
+    edited_by?: string
+  },
+  signal?: AbortSignal,
+): Promise<Rule> {
+  return postJson<Rule>(`${API_BASE}/rules`, payload, { signal })
+}
+
+export async function updateRule(
+  id: number,
+  payload: {
+    content?: string
+    priority?: number
+    edited_by?: string
+  },
+  signal?: AbortSignal,
+): Promise<Rule> {
+  return patchJson<Rule>(`${API_BASE}/rules/${id}`, payload, { signal })
+}
+
+export async function deleteRule(id: number, signal?: AbortSignal): Promise<void> {
+  await deleteJson<Record<string, unknown>>(`${API_BASE}/rules/${id}`, { signal })
+}
+
+export interface Memory {
+  id: number
+  project: string
+  content: string
+  tags: string[]
+  source_agent?: string
+  edited_by?: string
+  status?: string
+  tier?: string
+  epistemic_type?: string
+  privacy_scope?: string
+  confidence?: number
+  citation_count?: number
+  injection_count?: number
+  access_count?: number
+  created_at: string
+  updated_at: string
+}
+
+export async function fetchMemories(
+  project: string,
+  limit = 100,
+  signal?: AbortSignal,
+): Promise<Memory[]> {
+  const params = new URLSearchParams({
+    project,
+    limit: String(limit),
+  })
+  return fetchWithRetry<Memory[]>(`${API_BASE}/memories?${params.toString()}`, { signal })
+}
+
 // POST JSON helper with retry logic
 async function postJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
   const { timeout = DEFAULT_TIMEOUT, signal, retries = MAX_RETRIES } = options

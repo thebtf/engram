@@ -26,6 +26,21 @@ const routes = [
     component: () => import('@/views/HomeView.vue'),
   },
   {
+    path: '/memories',
+    name: 'memories',
+    component: () => import('@/views/MemoriesView.vue'),
+  },
+  {
+    path: '/rules',
+    name: 'rules',
+    component: () => import('@/views/RulesView.vue'),
+  },
+  {
+    path: '/projects',
+    name: 'projects',
+    component: () => import('@/views/ProjectsView.vue'),
+  },
+  {
     path: '/vault',
     name: 'vault',
     component: () => import('@/views/VaultView.vue'),
@@ -49,6 +64,11 @@ const routes = [
     path: '/system',
     name: 'system',
     component: () => import('@/views/SystemView.vue'),
+  },
+  {
+    path: '/settings',
+    name: 'settings',
+    component: () => import('@/views/SettingsView.vue'),
   },
   {
     path: '/admin',

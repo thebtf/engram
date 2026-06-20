@@ -5,11 +5,140 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
 )
+
+type createBehavioralRuleRequest struct {
+	Project  *string `json:"project,omitempty"`
+	Content  string  `json:"content"`
+	EditedBy string  `json:"edited_by,omitempty"`
+	Priority int     `json:"priority,omitempty"`
+}
+
+type ruleListResponse struct {
+	Rules []*models.BehavioralRule `json:"rules"`
+	Total int                      `json:"total"`
+}
+
+// handleListBehavioralRules godoc
+// @Summary List behavioral rules
+// @Description Returns active behavioral rules ordered by priority DESC, created_at DESC.
+// @Description When project is omitted, returns all active rules across global and project scopes.
+// @Description When project is set, returns project-scoped rules plus global rules for that project.
+// @Tags Rules
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Project ID; when present, includes global rules plus the named project"
+// @Param limit query int false "Maximum number of rows (default 200, max 1000)"
+// @Success 200 {object} ruleListResponse
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal server error"
+// @Router /api/rules [get]
+func (s *Service) handleListBehavioralRules(w http.ResponseWriter, r *http.Request) {
+	if s.behavioralRulesStore == nil {
+		http.Error(w, "behavioral rules store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	limit := 200
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	projectQuery := r.URL.Query().Get("project")
+
+	var (
+		rules []*models.BehavioralRule
+		err   error
+	)
+
+	if projectQuery == "" {
+		rules, err = s.behavioralRulesStore.ListAll(r.Context(), limit)
+	} else {
+		project := projectQuery
+		rules, err = s.behavioralRulesStore.List(r.Context(), &project, limit)
+	}
+	if err != nil {
+		log.Error().Err(err).Str("project", projectQuery).Msg("list behavioral rules failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, ruleListResponse{
+		Rules: rules,
+		Total: len(rules),
+	})
+}
+
+// handleCreateBehavioralRule godoc
+// @Summary Create a behavioral rule
+// @Description Creates a new active behavioral rule in either the global scope or a project scope.
+// @Tags Rules
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param rule body createBehavioralRuleRequest true "Rule fields"
+// @Success 201 {object} models.BehavioralRule
+// @Failure 400 {string} string "invalid request body"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal server error"
+// @Router /api/rules [post]
+func (s *Service) handleCreateBehavioralRule(w http.ResponseWriter, r *http.Request) {
+	if s.behavioralRulesStore == nil {
+		http.Error(w, "behavioral rules store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req createBehavioralRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	req.Content = strings.TrimSpace(req.Content)
+	if req.Content == "" {
+		http.Error(w, "content must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	var project *string
+	if req.Project != nil {
+		trimmed := strings.TrimSpace(*req.Project)
+		if trimmed != "" {
+			project = &trimmed
+		}
+	}
+
+	created, err := s.behavioralRulesStore.Create(r.Context(), &models.BehavioralRule{
+		Project:  project,
+		Content:  req.Content,
+		Priority: req.Priority,
+		EditedBy: req.EditedBy,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("project", func() string {
+			if project == nil {
+				return ""
+			}
+			return *project
+		}()).Msg("create behavioral rule failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, created)
+}
 
 // handleDeleteBehavioralRule godoc
 // @Summary Delete a behavioral rule by ID

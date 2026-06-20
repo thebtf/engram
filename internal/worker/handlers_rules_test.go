@@ -18,6 +18,72 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+func TestHandleListBehavioralRules_Success(t *testing.T) {
+	project := "test-rules-handler-list-success"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	_, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Content:  "handler test: global rule",
+		Priority: 90,
+	})
+	require.NoError(t, err)
+	_, err = brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: project rule",
+		Priority: 70,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	w := httptest.NewRecorder()
+	svc.handleListBehavioralRules(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp ruleListResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Rules, 2)
+	require.Equal(t, 2, resp.Total)
+	assert.Equal(t, "handler test: global rule", resp.Rules[0].Content)
+	assert.Equal(t, "handler test: project rule", resp.Rules[1].Content)
+
+	reqProject := httptest.NewRequest(http.MethodGet, "/api/rules?project="+project, nil)
+	wProject := httptest.NewRecorder()
+	svc.handleListBehavioralRules(wProject, reqProject)
+
+	require.Equal(t, http.StatusOK, wProject.Code)
+	var respProject ruleListResponse
+	require.NoError(t, json.Unmarshal(wProject.Body.Bytes(), &respProject))
+	require.Len(t, respProject.Rules, 2, "project filter must include global + project scoped rules")
+}
+
+func TestHandleCreateBehavioralRule_Success(t *testing.T) {
+	project := "test-rules-handler-create-success"
+	svc, brs := newRulesTestService(t, project)
+
+	body := `{"project":"` + project + `","content":"handler test: created via REST","priority":42,"edited_by":"operator"}`
+	req := newCHIRequestBody(http.MethodPost, "/api/rules", "", "", body)
+	w := httptest.NewRecorder()
+	svc.handleCreateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	require.Greater(t, created.ID, int64(0))
+	assert.Equal(t, "handler test: created via REST", created.Content)
+	assert.Equal(t, 42, created.Priority)
+	assert.Equal(t, "operator", created.EditedBy)
+	if assert.NotNil(t, created.Project) {
+		assert.Equal(t, project, *created.Project)
+	}
+
+	got, err := brs.Get(context.Background(), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.Content, got.Content)
+}
+
 // newCHIRequestBody is newCHIRequest with a JSON request body, for PATCH/POST
 // handlers that decode r.Body. Mirrors the body-less helper in handlers_projects_test.go.
 func newCHIRequestBody(method, target, paramName, paramValue, body string) *http.Request {

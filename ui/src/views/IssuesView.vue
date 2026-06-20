@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Plus, Loader2, MessageSquare } from 'lucide-vue-next'
+import { useUiI18n } from '@/composables/useUiI18n'
 import { useIssues } from '@/composables/useIssues'
 import { createIssue, fetchTrackedProjects } from '@/utils/api'
 import { formatRelativeTime } from '@/utils/formatters'
@@ -35,6 +36,7 @@ import {
 import { cn } from '@/lib/utils'
 
 const router = useRouter()
+const { t } = useUiI18n()
 const { issues, total, loading, error, statusFilter, sourceProjectFilter, typeFilter, projectNames, load } = useIssues()
 const myIssuesOnly = ref(false)
 
@@ -110,7 +112,7 @@ async function submitNewIssue() {
     showNewIssue.value = false
     await load()
   } catch (err: any) {
-    createError.value = err.message || 'Failed to create issue'
+    createError.value = err.message || t.value.issues.errors.createFailed
   } finally {
     creating.value = false
   }
@@ -170,24 +172,24 @@ function shortProject(project: string): string {
   return parts[parts.length - 1] || project
 }
 
-const statusGroups = [
-  { value: 'open,acknowledged,resolved,reopened', label: 'Active' },
-  { value: 'open', label: 'Open' },
-  { value: 'acknowledged', label: 'Acknowledged' },
-  { value: 'resolved', label: 'Resolved' },
-  { value: 'reopened', label: 'Reopened' },
-  { value: 'closed', label: 'Closed' },
-  { value: 'rejected', label: 'Rejected' },
-  { value: '', label: 'All' },
-] as const
+const statusGroups = computed(() => [
+  { value: 'open,acknowledged,resolved,reopened', label: t.value.issues.filters.active },
+  { value: 'open', label: t.value.issues.filters.open },
+  { value: 'acknowledged', label: t.value.issues.filters.acknowledged },
+  { value: 'resolved', label: t.value.issues.filters.resolved },
+  { value: 'reopened', label: t.value.issues.filters.reopened },
+  { value: 'closed', label: t.value.issues.filters.closed },
+  { value: 'rejected', label: t.value.issues.filters.rejected },
+  { value: '', label: t.value.issues.filters.all },
+])
 
-const issueTypes = [
-  { value: '', label: 'All' },
-  { value: 'bug', label: 'Bug' },
-  { value: 'feature', label: 'Feature' },
-  { value: 'improvement', label: 'Improvement' },
-  { value: 'task', label: 'Task' },
-] as const
+const issueTypes = computed(() => [
+  { value: '', label: t.value.issues.filters.all },
+  { value: 'bug', label: t.value.issues.filters.bug },
+  { value: 'feature', label: t.value.issues.filters.feature },
+  { value: 'improvement', label: t.value.issues.filters.improvement },
+  { value: 'task', label: t.value.issues.filters.task },
+])
 </script>
 
 <template>
@@ -195,7 +197,7 @@ const issueTypes = [
     <!-- Header: title + actions -->
     <div class="flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-3">
-        <h1 class="text-lg font-semibold">Issues</h1>
+        <h1 class="text-lg font-semibold">{{ t.issues.title }}</h1>
         <span class="text-sm text-muted-foreground">{{ total }}</span>
       </div>
       <div class="flex items-center gap-2">
@@ -204,11 +206,11 @@ const issueTypes = [
           :variant="myIssuesOnly ? 'default' : 'outline'"
           size="sm"
         >
-          My Issues
+          {{ t.issues.myIssues }}
         </Button>
         <Button @click="openNewIssue" size="sm">
           <Plus class="w-4 h-4 mr-1" />
-          New Issue
+          {{ t.issues.newIssue }}
         </Button>
       </div>
     </div>
@@ -251,7 +253,7 @@ const issueTypes = [
     <!-- Loading -->
     <div v-if="loading" class="flex items-center justify-center py-8 text-muted-foreground gap-2">
       <Loader2 class="w-4 h-4 animate-spin" />
-      <span>Loading issues...</span>
+      <span>{{ t.issues.loading }}</span>
     </div>
 
     <!-- Error -->
@@ -261,8 +263,8 @@ const issueTypes = [
     <EmptyState
       v-else-if="issues.length === 0"
       icon="fa-circle-exclamation"
-      title="No issues found"
-      description="Issues are created by AI agents to communicate across projects. Use the MCP 'issues' tool to create one."
+      :title="t.issues.emptyTitle"
+      :description="t.issues.emptyDescription"
     />
 
     <!-- Issue table -->
@@ -271,12 +273,12 @@ const issueTypes = [
         <TableHeader>
           <TableRow>
             <TableHead class="w-12">#</TableHead>
-            <TableHead class="w-20">Priority</TableHead>
-            <TableHead class="w-24">Type</TableHead>
-            <TableHead class="min-w-[300px]">Title</TableHead>
-            <TableHead class="w-36">Project</TableHead>
-            <TableHead class="w-24">Created</TableHead>
-            <TableHead class="w-16 text-right">Msg</TableHead>
+            <TableHead class="w-20">{{ t.issues.table.priority }}</TableHead>
+            <TableHead class="w-24">{{ t.issues.table.type }}</TableHead>
+            <TableHead class="min-w-[300px]">{{ t.issues.table.title }}</TableHead>
+            <TableHead class="w-36">{{ t.issues.table.project }}</TableHead>
+            <TableHead class="w-24">{{ t.issues.table.created }}</TableHead>
+            <TableHead class="w-16 text-right">{{ t.issues.table.messages }}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -330,7 +332,7 @@ const issueTypes = [
   <Dialog :open="showNewIssue" @update:open="showNewIssue = $event">
     <DialogContent class="max-w-lg">
       <DialogHeader>
-        <DialogTitle>New Issue</DialogTitle>
+        <DialogTitle>{{ t.issues.dialog.title }}</DialogTitle>
       </DialogHeader>
 
       <div class="space-y-4">
@@ -338,19 +340,19 @@ const issueTypes = [
 
         <!-- Title -->
         <div class="space-y-1.5">
-          <label class="text-sm font-medium">Title <span class="text-destructive">*</span></label>
+          <label class="text-sm font-medium">{{ t.issues.dialog.titleLabel }} <span class="text-destructive">*</span></label>
           <Input
             v-model="newTitle"
-            placeholder="Brief description of the issue"
+            :placeholder="t.issues.dialog.titlePlaceholder"
           />
         </div>
 
         <!-- Body -->
         <div class="space-y-1.5">
-          <label class="text-sm font-medium">Description</label>
+          <label class="text-sm font-medium">{{ t.issues.dialog.descriptionLabel }}</label>
           <Textarea
             v-model="newBody"
-            placeholder="Detailed description (optional)"
+            :placeholder="t.issues.dialog.descriptionPlaceholder"
             class="min-h-[100px] resize-y"
           />
         </div>
@@ -358,30 +360,30 @@ const issueTypes = [
         <!-- Type + Priority row -->
         <div class="flex gap-3">
           <div class="flex-1 space-y-1.5">
-            <label class="text-sm font-medium">Type</label>
+            <label class="text-sm font-medium">{{ t.issues.dialog.typeLabel }}</label>
             <Select v-model="newType">
               <SelectTrigger>
-                <SelectValue placeholder="Select type" />
+                <SelectValue :placeholder="t.issues.dialog.selectType" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="task">Task</SelectItem>
-                <SelectItem value="bug">Bug</SelectItem>
-                <SelectItem value="feature">Feature</SelectItem>
-                <SelectItem value="improvement">Improvement</SelectItem>
+                <SelectItem value="task">{{ t.issues.filters.task }}</SelectItem>
+                <SelectItem value="bug">{{ t.issues.filters.bug }}</SelectItem>
+                <SelectItem value="feature">{{ t.issues.filters.feature }}</SelectItem>
+                <SelectItem value="improvement">{{ t.issues.filters.improvement }}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div class="flex-1 space-y-1.5">
-            <label class="text-sm font-medium">Priority</label>
+            <label class="text-sm font-medium">{{ t.issues.dialog.priorityLabel }}</label>
             <Select v-model="newPriority">
               <SelectTrigger>
-                <SelectValue placeholder="Select priority" />
+                <SelectValue :placeholder="t.issues.dialog.selectPriority" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="low">Low</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-                <SelectItem value="critical">Critical</SelectItem>
+                <SelectItem value="medium">medium</SelectItem>
+                <SelectItem value="low">low</SelectItem>
+                <SelectItem value="high">high</SelectItem>
+                <SelectItem value="critical">critical</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -389,13 +391,13 @@ const issueTypes = [
 
         <!-- Target project -->
         <div v-if="trackedProjects.length > 0" class="space-y-1.5">
-          <label class="text-sm font-medium">Target Project</label>
+          <label class="text-sm font-medium">{{ t.issues.dialog.targetProjectLabel }}</label>
           <Select v-model="newTargetProject">
             <SelectTrigger>
-              <SelectValue placeholder="— none —" />
+              <SelectValue :placeholder="t.issues.dialog.noTarget" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">— none —</SelectItem>
+              <SelectItem value="">{{ t.issues.dialog.noTarget }}</SelectItem>
               <SelectItem v-for="p in trackedProjects" :key="p" :value="p">{{ p }}</SelectItem>
             </SelectContent>
           </Select>
@@ -403,13 +405,13 @@ const issueTypes = [
       </div>
 
       <DialogFooter>
-        <Button variant="secondary" @click="showNewIssue = false">Cancel</Button>
+        <Button variant="secondary" @click="showNewIssue = false">{{ t.issues.dialog.cancel }}</Button>
         <Button
           @click="submitNewIssue"
           :disabled="creating || !newTitle.trim()"
         >
           <Loader2 v-if="creating" class="w-4 h-4 mr-2 animate-spin" />
-          {{ creating ? 'Creating...' : 'Create Issue' }}
+          {{ creating ? t.issues.dialog.creating : t.issues.dialog.create }}
         </Button>
       </DialogFooter>
     </DialogContent>

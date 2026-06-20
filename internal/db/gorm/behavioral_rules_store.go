@@ -119,6 +119,30 @@ func (s *BehavioralRulesStore) List(ctx context.Context, project *string, limit 
 	return result, nil
 }
 
+// ListAll returns all active behavioral rules across global and project scopes.
+// Results are ordered by priority DESC, created_at DESC.
+// limit must be > 0; if ≤ 0 it is clamped to 50.
+func (s *BehavioralRulesStore) ListAll(ctx context.Context, limit int) ([]*models.BehavioralRule, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var rows []BehavioralRule
+	if err := s.db.WithContext(ctx).
+		Where("deleted_at IS NULL").
+		Order("priority DESC, created_at DESC").
+		Limit(limit).
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list all behavioral rules: %w", err)
+	}
+
+	result := make([]*models.BehavioralRule, len(rows))
+	for i := range rows {
+		result[i] = behavioralRuleRowToModel(&rows[i])
+	}
+	return result, nil
+}
+
 // Update updates an existing behavioral rule by ID.
 // Bumps version and sets updated_at. Returns a NEW populated model.
 // The caller's input struct is never mutated.
