@@ -1201,6 +1201,7 @@ func (s *Service) setupRoutes() {
 	// Dashboard static assets served from the embedded filesystem.
 	s.router.Get("/", serveIndex)
 	s.router.Get("/_nuxt/*", serveAssets)
+	s.router.Get("/i18n/*", serveAssets)
 	s.router.Get("/assets/*", serveAssets)
 	s.router.Get("/branding/*", serveAssets)
 	s.router.Get("/favicon.svg", serveAssets)

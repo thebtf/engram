@@ -34,6 +34,7 @@ ui/package.json
 apps/operator-console/node_modules/
 apps/operator-console/.nuxt/
 apps/operator-console/.output/
+apps/operator-console/public/i18n/locales/
 *.tsbuildinfo
 docs/node_modules/
 docs/dist/

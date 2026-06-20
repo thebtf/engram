@@ -162,6 +162,50 @@ function Get-HtmlTitle {
   $match.Groups[1].Value.Trim()
 }
 
+function Get-LocaleProbePath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Html
+  )
+
+  $match = [regex]::Match($Html, 'path:"([^"]*i18n/locales/[^"]+\.json)"')
+  if (-not $match.Success) {
+    throw "Locale asset path not found in operator-console HTML."
+  }
+
+  $match.Groups[1].Value
+}
+
+function Assert-LocaleAsset {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Origin,
+    [Parameter(Mandatory = $true)]
+    [string]$LocalePath
+  )
+
+  $normalizedOrigin = $Origin.TrimEnd("/")
+  $normalizedLocalePath = $LocalePath.TrimStart("/")
+  $localeUrl = "$normalizedOrigin/$normalizedLocalePath"
+  $localeResponse = Invoke-OperatorRequest -Method GET -Url $localeUrl
+  Assert-Status -Response $localeResponse -ExpectedStatus @(200) -Step "locale asset"
+
+  $contentType = @($localeResponse.Headers['Content-Type']) -join ','
+  if ($contentType -notmatch 'application/json') {
+    throw "Locale asset returned unexpected content-type '$contentType' from $localeUrl"
+  }
+
+  if ($localeResponse.Content.TrimStart().StartsWith('<!DOCTYPE html>')) {
+    throw "Locale asset returned HTML instead of JSON from $localeUrl"
+  }
+
+  return [pscustomobject]@{
+    Url = $localeUrl
+    StatusCode = [int]$localeResponse.StatusCode
+    ContentType = $contentType
+  }
+}
+
 $origin = "http://127.0.0.1:$OperatorConsolePort"
 $workerOrigin = "http://127.0.0.1:$WorkerPort"
 $workerRootUrl = "$workerOrigin/"
@@ -198,6 +242,8 @@ try {
   if ($rootTitle -ne "engram · консоль оператора") {
     throw "Expected promoted operator-console title on dedicated host, got '$rootTitle'"
   }
+  $rootLocalePath = Get-LocaleProbePath -Html $rootResponse.Content
+  $rootLocaleResponse = Assert-LocaleAsset -Origin $origin -LocalePath $rootLocalePath
 
   Write-Step "Checking worker root is proxied to the promoted operator-console"
   $workerRootResponse = Wait-Http -Url $workerRootUrl -ExpectedStatus @(200)
@@ -205,6 +251,8 @@ try {
   if ($workerRootTitle -ne "engram · консоль оператора") {
     throw "Expected worker root to serve the promoted operator-console, got '$workerRootTitle'"
   }
+  $workerLocalePath = Get-LocaleProbePath -Html $workerRootResponse.Content
+  $workerLocaleResponse = Assert-LocaleAsset -Origin $workerOrigin -LocalePath $workerLocalePath
 
   if ($Mode -eq "disabled") {
     Write-Step "Waiting for proxied selfcheck"
@@ -390,8 +438,14 @@ try {
   Write-Host ("MODE=" + $Mode)
   Write-Host ("ROOT_STATUS=" + $rootResponse.StatusCode)
   Write-Host ("ROOT_TITLE=" + $rootTitle)
+  Write-Host ("ROOT_LOCALE_ASSET_URL=" + $rootLocaleResponse.Url)
+  Write-Host ("ROOT_LOCALE_ASSET_STATUS=" + $rootLocaleResponse.StatusCode)
+  Write-Host ("ROOT_LOCALE_ASSET_CONTENT_TYPE=" + $rootLocaleResponse.ContentType)
   Write-Host ("WORKER_ROOT_STATUS=" + $workerRootResponse.StatusCode)
   Write-Host ("WORKER_ROOT_TITLE=" + $workerRootTitle)
+  Write-Host ("WORKER_LOCALE_ASSET_URL=" + $workerLocaleResponse.Url)
+  Write-Host ("WORKER_LOCALE_ASSET_STATUS=" + $workerLocaleResponse.StatusCode)
+  Write-Host ("WORKER_LOCALE_ASSET_CONTENT_TYPE=" + $workerLocaleResponse.ContentType)
   Write-Host ("READY_STATUS=" + $readyResponse.StatusCode)
   Write-Host ("SELFCHECK_STATUS=" + $selfcheckResponse.StatusCode)
   Write-Host ("STATS_STATUS=" + $statsResponse.StatusCode)

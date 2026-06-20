@@ -74,6 +74,50 @@ function Get-Title {
   return $match.Groups[1].Value.Trim()
 }
 
+function Get-LocaleProbePath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Html
+  )
+
+  $match = [regex]::Match($Html, 'path:"([^"]*i18n/locales/[^"]+\.json)"')
+  if (-not $match.Success) {
+    throw "Locale asset path not found in operator-console HTML."
+  }
+
+  return $match.Groups[1].Value
+}
+
+function Assert-LocaleAsset {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Origin,
+    [Parameter(Mandatory = $true)]
+    [string]$LocalePath
+  )
+
+  $normalizedOrigin = $Origin.TrimEnd("/")
+  $normalizedLocalePath = $LocalePath.TrimStart("/")
+  $localeUrl = "$normalizedOrigin/$normalizedLocalePath"
+  $localeResponse = Invoke-Http -Method GET -Url $localeUrl
+  Assert-Status -Response $localeResponse -ExpectedStatus @(200) -Step "locale asset"
+
+  $contentType = @($localeResponse.Headers['Content-Type']) -join ','
+  if ($contentType -notmatch 'application/json') {
+    throw "Locale asset returned unexpected content-type '$contentType' from $localeUrl"
+  }
+
+  if ($localeResponse.Content.TrimStart().StartsWith('<!DOCTYPE html>')) {
+    throw "Locale asset returned HTML instead of JSON from $localeUrl"
+  }
+
+  return [pscustomobject]@{
+    Url = $localeUrl
+    StatusCode = [int]$localeResponse.StatusCode
+    ContentType = $contentType
+  }
+}
+
 $normalizedBaseUrl = $BaseUrl.TrimEnd("/")
 $normalizedWorkerBaseUrl = $WorkerBaseUrl.TrimEnd("/")
 $rootUrl = "$normalizedBaseUrl/"
@@ -93,6 +137,10 @@ $title = Get-Title -Html $rootResponse.Content
 if ($title -ne $ExpectedTitle) {
   throw "Root does not look like the promoted operator-console. Expected title '$ExpectedTitle', got '$title'."
 }
+$localePath = Get-LocaleProbePath -Html $rootResponse.Content
+
+Write-Step "Checking locale asset serving for the SPA shell"
+$localeResponse = Assert-LocaleAsset -Origin $normalizedBaseUrl -LocalePath $localePath
 
 Write-Step "Checking proxied stats endpoints"
 $statsResponse = Invoke-Http -Method GET -Url $statsUrl -Session $session
@@ -140,6 +188,9 @@ Write-Step "Remote smoke passed"
 Write-Host ("MODE=" + $Mode)
 Write-Host ("ROOT_STATUS=" + $rootResponse.StatusCode)
 Write-Host ("ROOT_TITLE=" + $title)
+Write-Host ("LOCALE_ASSET_URL=" + $localeResponse.Url)
+Write-Host ("LOCALE_ASSET_STATUS=" + $localeResponse.StatusCode)
+Write-Host ("LOCALE_ASSET_CONTENT_TYPE=" + $localeResponse.ContentType)
 Write-Host ("STATS_STATUS=" + $statsResponse.StatusCode)
 Write-Host ("STATS_VNEXT_STATUS=" + $statsVnextResponse.StatusCode)
 Write-Host ("WORKER_HEALTH_STATUS=" + $workerHealthResponse.StatusCode)
