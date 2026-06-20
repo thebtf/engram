@@ -1,0 +1,156 @@
+{
+  "_note": "RU is the contract language — these strings mirror the .od/index.html mockup verbatim. This file is the localization seam (the i18n analogue of useMockData.ts): every visible string has a key here, components read it via t(). When the mockup changes a string, change it here and mark the section drifted in PARITY.json. Key convention: [area].[element], areas mirror nav section ids.",
+
+  "common": {
+    "show": "Показать",
+    "hide": "Скрыть",
+    "copy": "Скопировать",
+    "change": "Изменить",
+    "enabled": "включено",
+    "admin": "admin"
+  },
+
+  "shell": {
+    "brandHome": "На главную — Обзор",
+    "searchPlaceholder": "Поиск по консоли…",
+    "densityComfortable": "Комфорт",
+    "densityCompact": "Компактно",
+    "themeToLight": "Светлая тема",
+    "themeToDark": "Тёмная тема",
+    "language": "Язык",
+    "statusDegradation": "деградация",
+    "statusNoise": "шум"
+  },
+
+  "nav": {
+    "groups": {
+      "workspace": "Рабочее место",
+      "memoryProduct": "Память, продукт",
+      "behaviorWork": "Поведение и работа",
+      "storage": "Хранилище",
+      "administration": "Администрирование"
+    },
+    "items": {
+      "overview": "Обзор",
+      "search": "Поиск",
+      "memory": "Память",
+      "queue": "На проверку",
+      "noise": "Шум и польза",
+      "graph": "Связи знаний",
+      "books": "Книги-контекст",
+      "rules": "Правила поведения",
+      "issues": "Задачи",
+      "projects": "Проекты и сессии",
+      "secrets": "Секреты",
+      "documents": "Документы",
+      "collections": "Старые коллекции",
+      "access": "Доступ",
+      "settings": "Настройки",
+      "health": "Состояние"
+    },
+    "evidence": {
+      "booksPipeline": "конвейер обработки"
+    }
+  },
+
+  "secrets": {
+    "title": "Секреты",
+    "subtitle": "Ключи и доступы: значения не показываются в списке, раскрытие — явным действием.",
+    "vaultState": "Состояние vault",
+    "encryption": "Шифрование",
+    "fingerprint": "Отпечаток ключа",
+    "count": "Секретов",
+    "countPlural": "нет секретов | {n} секрет | {n} секрета | {n} секретов",
+    "nSecrets": "{n} секрет | {n} секрета | {n} секретов",
+    "fingerprintMasked": "•••• •••• •••• ••••",
+    "colKey": "Ключ",
+    "colProject": "Проект",
+    "colScope": "Область",
+    "colCreated": "Создан",
+    "colActions": "Действия",
+    "reveal": "👁 Показать"
+  },
+
+  "rules": {
+    "title": "Правила поведения",
+    "subtitle": "Always-inject директивы, которые попадают в каждый контекст агента. Сейчас surface опирается на реальный rules REST bridge.",
+    "quickAddTitle": "Быстро добавить правило",
+    "quickAddPlaceholder": "Например: не притворяться live там, где нет backend endpoint.",
+    "quickAddNote": "В этой MVP-версии создаются глобальные правила. Редактор и смена scope ещё не добраны.",
+    "priorityLabel": "Приоритет",
+    "priorityMeta": "приоритет {n}",
+    "updatedMeta": "обновлено {value}",
+    "scopeGlobal": "global",
+    "loading": "Загружаем правила…",
+    "empty": "Активных правил пока нет.",
+    "errors": {
+      "contentRequired": "Нужно заполнить текст правила."
+    },
+    "actions": {
+      "create": "Добавить",
+      "creating": "Сохраняем…",
+      "delete": "Удалить",
+      "deleting": "Удаляем…"
+    }
+  },
+
+  "projects": {
+    "title": "Проекты и сессии",
+    "subtitle": "Проекты на сервере и их недавняя активность по сессиям.",
+    "loading": "Загружаем проекты и сессии…",
+    "empty": "Проекты пока не найдены.",
+    "sessionsCount": "нет сессий | {n} сессия | {n} сессии | {n} сессий",
+    "lastActivity": "активность {value}"
+  },
+
+  "settings": {
+    "title": "Настройки",
+    "subtitle": "Читаем реальную конфигурацию через /api/config. Изменение флагов и model settings остаются honest must-build до появления отдельного endpoint.",
+    "loading": "Загружаем конфигурацию…",
+    "runtimeTitle": "Прочитанные runtime-переключатели",
+    "snapshotTitle": "Снимок конфигурации",
+    "mustBuildTitle": "Чего ещё не хватает",
+    "mustBuildBody": "Для настоящего редактирования runtime-флагов и модельных настроек всё ещё нужны отдельные endpoint'ы: как минимум /api/flags и /api/settings/model. До этого surface остаётся read-only и не притворяется operable.",
+    "rows": {
+      "injectUnified": {
+        "title": "Unified injection",
+        "desc": "Память инжектируется через unified path, а не через старые разрозненные ветки."
+      },
+      "telemetry": {
+        "title": "Telemetry enabled",
+        "desc": "Сервер пишет телеметрию поиска и retrieval, если эта возможность включена в рантайме."
+      },
+      "enforceSourceProject": {
+        "title": "Enforce source project",
+        "desc": "Источник запроса должен совпадать с разрешённым project boundary."
+      }
+    },
+    "facts": {
+      "contextObservations": "Context observations",
+      "contextMaxTokens": "Context max tokens",
+      "contextSessionCount": "Context session count",
+      "vectorStrategy": "Vector strategy",
+      "databaseMaxConns": "Database max conns",
+      "logBufferSize": "Log buffer size"
+    }
+  },
+
+  "health": {
+    "title": "Состояние",
+    "subtitle": "Здоровье сервера: selfcheck, embedding coverage и честно отмеченные must-build зоны.",
+    "loading": "Загружаем снимок состояния…",
+    "embeddingTitle": "Покрытие эмбеддингами",
+    "servicesTitle": "Сервисы",
+    "modelsTitle": "Модели",
+    "overall": "Общее состояние",
+    "modelsNote": "Строки моделей пока остаются mock-backed: для этой exact surface ещё нет прямого truthful model-health endpoint.",
+    "migrationsTitle": "Миграции",
+    "migrationsBody": "Нужен endpoint GET /api/migrations для честного отображения статуса схемы.",
+    "embedding": {
+      "chunkCount": "фрагментов",
+      "withVectors": "памяти с вектором",
+      "dimension": "размерность",
+      "coverage": "покрытие"
+    }
+  }
+}

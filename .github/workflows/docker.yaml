@@ -13,7 +13,6 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  OPERATOR_WEB_IMAGE_NAME: ${{ github.repository_owner }}/engram-operator-web
 
 jobs:
   docker:
@@ -48,11 +47,11 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Extract metadata (operator-web)
-        id: meta_operator_web
+      - name: Extract operator-console metadata
+        id: meta_console
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OPERATOR_WEB_IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-operator-console
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -72,13 +71,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build and push operator-web image
+      - name: Build and push operator-console image
         uses: docker/build-push-action@v6
         with:
           context: .
-          target: operator-web
+          target: operator-console
           push: true
-          tags: ${{ steps.meta_operator_web.outputs.tags }}
-          labels: ${{ steps.meta_operator_web.outputs.labels }}
+          tags: ${{ steps.meta_console.outputs.tags }}
+          labels: ${{ steps.meta_console.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

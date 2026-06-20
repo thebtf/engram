@@ -73,7 +73,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 		// Content Security Policy — granular per-source directives.
 		// TODO: Remove 'unsafe-inline' from style-src and migrate inline styles to nonce/hash-based CSP.
-		hdr.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self' data:; frame-ancestors 'none'")
+		hdr.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'")
 
 		// Permissions Policy — deny access to hardware APIs.
 		hdr.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
@@ -82,7 +82,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		if origin := r.Header.Get("Origin"); allowedOrigins[origin] {
 			hdr.Set("Access-Control-Allow-Origin", origin)
 			hdr.Set("Access-Control-Allow-Credentials", "true")
-			hdr.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			hdr.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			hdr.Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token, Authorization, X-Request-ID")
 		}
 
@@ -122,6 +122,19 @@ var readOnlyAllowedPosts = map[string]bool{
 	"/api/analytics/search-misses": true,
 }
 
+func parseAuthDisabledFlag(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1":
+		return true
+	default:
+		return false
+	}
+}
+
+func authDisabledFromEnv() bool {
+	return parseAuthDisabledFlag(os.Getenv("ENGRAM_AUTH_DISABLED"))
+}
+
 // TokenAuth provides token-based authentication for the worker HTTP API.
 // Supports five auth methods:
 //  1. Master operator key (ENGRAM_AUTH_ADMIN_TOKEN env var) via X-Auth-Token or Authorization: Bearer header -> admin (Source=master)
@@ -145,6 +158,7 @@ type TokenAuth struct {
 	statsCh                 chan string // buffered channel for async token stats increment
 	mu                      sync.RWMutex
 	enabled                 bool
+	authDisabled            bool
 	authentikEnabled        bool
 	authentikAutoProvision  bool
 	authentikTrustedProxies []string
@@ -154,7 +168,7 @@ type TokenAuth struct {
 // If token is empty and ENGRAM_AUTH_DISABLED is set, authentication is skipped.
 // Otherwise, authentication will be enforced at startup (see Service.Start).
 func NewTokenAuth(token string) (*TokenAuth, error) {
-	authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
+	authDisabled := authDisabledFromEnv()
 
 	// Derive HMAC cookie key from master token using SHA-256 (deterministic, no extra config).
 	var cookieKey []byte
@@ -164,9 +178,10 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 	}
 
 	ta := &TokenAuth{
-		enabled:   token != "" && !authDisabled,
-		token:     token,
-		cookieKey: cookieKey,
+		enabled:      token != "" && !authDisabled,
+		authDisabled: authDisabled,
+		token:        token,
+		cookieKey:    cookieKey,
 		// Bootstrap validator handles master-token bearer requests during the
 		// initialisation window before the DB-backed TokenStore is wired in.
 		// SetValidator replaces this with the full two-tier validator once
@@ -288,6 +303,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ta.mu.RLock()
 		enabled := ta.enabled
+		authDisabled := ta.authDisabled
 		exempt := ta.ExemptPaths[r.URL.Path]
 		cookieKey := ta.cookieKey
 		validator := ta.validator
@@ -298,7 +314,14 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		authentikTrustedProxies := ta.authentikTrustedProxies
 		ta.mu.RUnlock()
 
-		// Skip auth if disabled or path is exempt.
+		// Explicit disabled-auth mode behaves as a synthetic browser admin
+		// session so downstream dashboard handlers see one coherent access map.
+		if authDisabled {
+			next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), authpkg.Session("admin"))))
+			return
+		}
+
+		// Skip auth if not configured or path is exempt.
 		if !enabled || exempt {
 			next.ServeHTTP(w, r)
 			return

@@ -13,7 +13,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/auth"
-	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/scope"
@@ -26,33 +25,6 @@ import (
 
 type sessionStartContextProvider interface {
 	GetSessionStartContext(context.Context, *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error)
-}
-
-func legacyAlwaysInjectEnabled(cfg *config.Config) bool {
-	return cfg == nil || !cfg.RuleRouterEnabled
-}
-
-func (s *Service) contextRuleRouterSidecarMap(ctx context.Context, project string) map[string]any {
-	if s == nil || s.config == nil || !s.config.RuleRouterEnabled || s.grpcInternalServer == nil || strings.TrimSpace(project) == "" {
-		return nil
-	}
-	resp, err := s.grpcInternalServer.GetSessionStartContext(ctx, &pb.GetSessionStartContextRequest{
-		Project:       project,
-		MemoriesLimit: 1,
-		IssuesLimit:   1,
-	})
-	if err != nil {
-		log.Debug().Err(err).Str("project", project).Msg("rule router sidecar unavailable")
-		return nil
-	}
-	return sessionStartRuleRouterToMap(resp.GetRuleRouter())
-}
-
-func withRuleRouterSidecar(response map[string]any, router map[string]any) map[string]any {
-	if router != nil {
-		response["rule_router"] = router
-	}
-	return response
 }
 
 // behavioralRulesToObservations converts behavioral rules into the observation shape
@@ -283,7 +255,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		alwaysInjectLimit = 20
 	}
 	var alwaysInjectObs []*models.Observation
-	if legacyAlwaysInjectEnabled(s.config) && s.behavioralRulesStore != nil {
+	if s.behavioralRulesStore != nil {
 		projectPtr := &project
 		if project == "" {
 			projectPtr = nil
@@ -296,8 +268,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ruleRouterSidecar := s.contextRuleRouterSidecarMap(r.Context(), project)
-	writeJSON(w, withRuleRouterSidecar(map[string]any{
+	writeJSON(w, map[string]any{
 		"project":       project,
 		"query":         query,
 		"intent":        detectedIntent,
@@ -307,7 +278,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		"threshold":     threshold,
 		"max_results":   maxResults,
 		"total_results": totalResults,
-	}, ruleRouterSidecar))
+	})
 }
 
 // handleFileContext godoc
@@ -492,7 +463,6 @@ type sessionStartCompatibilityResponse struct {
 	Issues      []map[string]any `json:"issues"`
 	Rules       []map[string]any `json:"rules"`
 	Memories    []map[string]any `json:"memories"`
-	RuleRouter  map[string]any   `json:"rule_router,omitempty"`
 	GeneratedAt string           `json:"generated_at"`
 }
 
@@ -592,49 +562,6 @@ func sessionStartMemoriesToMaps(memories []*pb.SessionStartMemory) []map[string]
 	return result
 }
 
-func sessionStartRuleRouterToMap(router *pb.SessionStartRuleRouter) map[string]any {
-	if router == nil {
-		return nil
-	}
-	return map[string]any{
-		"enabled":          router.GetEnabled(),
-		"mode":             router.GetMode(),
-		"kernel_count":     router.GetKernelCount(),
-		"contextual_count": router.GetContextualCount(),
-		"suppressed_count": router.GetSuppressedCount(),
-		"budget_outcome":   router.GetBudgetOutcome(),
-		"kernel":           sessionStartRulePacketsToMaps(router.GetKernel()),
-		"contextual":       sessionStartRulePacketsToMaps(router.GetContextual()),
-		"suppressed":       sessionStartRulePacketsToMaps(router.GetSuppressed()),
-		"fallback_reason":  router.GetFallbackReason(),
-	}
-}
-
-func sessionStartRulePacketsToMaps(packets []*pb.SessionStartRulePacket) []map[string]any {
-	result := make([]map[string]any, 0, len(packets))
-	for _, packet := range packets {
-		if packet == nil {
-			continue
-		}
-		entry := map[string]any{
-			"rule_version_id":           packet.GetRuleVersionId(),
-			"legacy_behavioral_rule_id": packet.GetLegacyBehavioralRuleId(),
-			"bucket":                    packet.GetBucket(),
-			"scope":                     packet.GetScope(),
-			"audience":                  packet.GetAudience(),
-			"content":                   packet.GetContent(),
-			"summary":                   packet.GetSummary(),
-			"evidence_handles":          append([]string(nil), packet.GetEvidenceHandles()...),
-			"state":                     packet.GetState(),
-			"budget_class":              packet.GetBudgetClass(),
-			"priority":                  packet.GetPriority(),
-			"suppression_reason":        packet.GetSuppressionReason(),
-		}
-		result = append(result, entry)
-	}
-	return result
-}
-
 // handleSessionStartContextStatic godoc
 // @Summary Get static session-start context
 // @Description Returns static session-start context sourced from the server gRPC implementation: active issues, behavioral rules, recent memories, and generated_at.
@@ -726,23 +653,17 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 		s.initMu.RLock()
 		injLogStore := s.injectionLogStore
 		memStore := s.memoryStore
-		ruleEventStore := s.ruleInjectionEventStore
-		ruleTelemetryEnabled := s.config == nil || s.config.RuleRouterTelemetryBestEffort
 		s.initMu.RUnlock()
-		ids := collectSessionStartMemoryIDs(resp.GetMemories())
-		var ruleEvents []*models.RuleInjectionEvent
-		if ruleTelemetryEnabled {
-			ruleEvents = collectSessionStartRuleEvents(sessionID, project, "session-start", resp.GetRuleRouter())
-		}
-		if (injLogStore != nil && len(ids) > 0) || (ruleEventStore != nil && len(ruleEvents) > 0) {
-			capturedSessionID := sessionID
-			capturedProject := project
-			s.wg.Add(1)
-			go func() {
-				defer s.wg.Done()
-				recCtx, cancel := s.detachedContext(30 * time.Second)
-				defer cancel()
-				if injLogStore != nil && len(ids) > 0 {
+		if injLogStore != nil {
+			ids := collectSessionStartMemoryIDs(resp.GetMemories())
+			if len(ids) > 0 {
+				capturedSessionID := sessionID
+				capturedProject := project
+				s.wg.Add(1)
+				go func() {
+					defer s.wg.Done()
+					recCtx, cancel := s.detachedContext(30 * time.Second)
+					defer cancel()
 					if err := injLogStore.Record(recCtx, capturedSessionID, capturedProject, ids); err != nil {
 						log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_log: session-start record failed")
 					}
@@ -751,13 +672,8 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 							log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_count: session-start increment failed")
 						}
 					}
-				}
-				if ruleEventStore != nil && len(ruleEvents) > 0 {
-					if err := ruleEventStore.RecordEvents(recCtx, ruleEvents); err != nil {
-						log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("rule_injection_events: session-start record failed")
-					}
-				}
-			}()
+				}()
+			}
 		}
 	}
 
@@ -765,7 +681,6 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 		Issues:      sessionStartIssuesToMaps(resp.GetIssues()),
 		Rules:       sessionStartRulesToMaps(resp.GetRules()),
 		Memories:    sessionStartMemoriesToMaps(resp.GetMemories()),
-		RuleRouter:  sessionStartRuleRouterToMap(resp.GetRuleRouter()),
 		GeneratedAt: generatedAt,
 	})
 }
@@ -811,82 +726,6 @@ func collectSessionStartMemoryIDs(memories []*pb.SessionStartMemory) []int64 {
 		ids = append(ids, id)
 	}
 	return ids
-}
-
-func collectSessionStartRuleEvents(sessionID, project, surface string, router *pb.SessionStartRuleRouter) []*models.RuleInjectionEvent {
-	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(project) == "" || strings.TrimSpace(surface) == "" || router == nil || !router.GetEnabled() {
-		return nil
-	}
-
-	var events []*models.RuleInjectionEvent
-	for i, packet := range router.GetKernel() {
-		if packet == nil {
-			continue
-		}
-		events = append(events, ruleInjectionEventFromPacket(sessionID, project, surface, packet, models.RuleInjectionEmittedKernel, "", i+1))
-	}
-	for i, packet := range router.GetContextual() {
-		if packet == nil {
-			continue
-		}
-		eventType := models.RuleInjectionEmittedContextual
-		reason := ""
-		if packet.GetLegacyBehavioralRuleId() > 0 && packet.GetRuleVersionId() == 0 {
-			eventType = models.RuleInjectionFallbackLegacy
-			reason = "legacy_behavioral_rule_fallback"
-		}
-		events = append(events, ruleInjectionEventFromPacket(sessionID, project, surface, packet, eventType, reason, i+1))
-	}
-	for i, packet := range router.GetSuppressed() {
-		if packet == nil {
-			continue
-		}
-		reason := strings.TrimSpace(packet.GetSuppressionReason())
-		eventType := ruleInjectionSuppressionEventType(reason)
-		events = append(events, ruleInjectionEventFromPacket(sessionID, project, surface, packet, eventType, reason, i+1))
-	}
-	if strings.TrimSpace(router.GetFallbackReason()) != "" {
-		events = append(events, &models.RuleInjectionEvent{
-			SessionID:      sessionID,
-			Project:        project,
-			Surface:        surface,
-			EventType:      models.RuleInjectionRouterError,
-			Reason:         router.GetFallbackReason(),
-			BudgetPosition: len(events) + 1,
-		})
-	}
-	return events
-}
-
-func ruleInjectionEventFromPacket(sessionID, project, surface string, packet *pb.SessionStartRulePacket, eventType models.RuleInjectionEventType, reason string, position int) *models.RuleInjectionEvent {
-	event := &models.RuleInjectionEvent{
-		SessionID:      sessionID,
-		Project:        project,
-		Surface:        surface,
-		EventType:      eventType,
-		Reason:         reason,
-		BudgetPosition: position,
-	}
-	if id := packet.GetRuleVersionId(); id > 0 {
-		event.RuleVersionID = &id
-	}
-	if id := packet.GetLegacyBehavioralRuleId(); id > 0 {
-		event.LegacyBehavioralRuleID = &id
-	}
-	return event
-}
-
-func ruleInjectionSuppressionEventType(reason string) models.RuleInjectionEventType {
-	switch reason {
-	case "deferred_budget":
-		return models.RuleInjectionDeferredBudget
-	case "suppressed_state":
-		return models.RuleInjectionSuppressedState
-	case "suppressed_prompt_safety":
-		return models.RuleInjectionSuppressedPromptSafety
-	default:
-		return models.RuleInjectionSuppressedPredicate
-	}
 }
 
 // grpcCodeToHTTP maps gRPC status codes to HTTP status codes for error forwarding.
@@ -1019,7 +858,6 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	ruleRouterSidecar := s.contextRuleRouterSidecarMap(ctx, project)
 
 	// --- Recent section: last 5 observations by created_at ---
 	scopeFilter := retrievalScope{Project: project, AgentID: agentID}
@@ -1088,7 +926,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 
 	// --- Guidance section: top behavioral rules in v5 ---
 	var guidanceObservations []*models.Observation
-	if legacyAlwaysInjectEnabled(s.config) && s.behavioralRulesStore != nil {
+	if s.behavioralRulesStore != nil {
 		projectPtr := &project
 		if project == "" {
 			projectPtr = nil
@@ -1115,7 +953,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	if alwaysInjectLimit <= 0 {
 		alwaysInjectLimit = 20
 	}
-	if legacyAlwaysInjectEnabled(s.config) && s.behavioralRulesStore != nil {
+	if s.behavioralRulesStore != nil {
 		projectPtr := &project
 		if project == "" {
 			projectPtr = nil
@@ -1345,7 +1183,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				Float64("exploration_ratio", explorationRatio).
 				Msg("vnext Thompson Sampling injection")
 
-			writeJSON(w, withRuleRouterSidecar(map[string]any{
+			writeJSON(w, map[string]any{
 				"strategy":           "thompson_sampling",
 				"project":            project,
 				"observations":       vnextObs,
@@ -1360,7 +1198,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				"token_estimate":     tokenEstimate,
 				"budget_trimmed":     budgetTrimmed,
 				"injection_metadata": injectionMetadata,
-			}, ruleRouterSidecar))
+			})
 			return
 		}
 	}
@@ -1420,7 +1258,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		// Recalculate token estimate accounting for condensed format savings.
 		compactTokenEstimate := estimateTokensWithLimit(clusteredObservations, fullCount) +
 			estimateTokens(guidanceObservations)
-		writeJSON(w, withRuleRouterSidecar(map[string]any{
+		writeJSON(w, map[string]any{
 			"strategy":           selectedStrategy,
 			"project":            project,
 			"observations":       compactObservationsWithLimit(clusteredObservations, fullCount),
@@ -1434,9 +1272,9 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"duplicates_removed": duplicatesRemoved,
 			"token_estimate":     compactTokenEstimate,
 			"budget_trimmed":     budgetTrimmed,
-		}, ruleRouterSidecar))
+		})
 	} else {
-		writeJSON(w, withRuleRouterSidecar(map[string]any{
+		writeJSON(w, map[string]any{
 			"project":            project,
 			"strategy":           selectedStrategy,
 			"observations":       clusteredObservations,
@@ -1450,7 +1288,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"duplicates_removed": duplicatesRemoved,
 			"token_estimate":     tokenEstimate,
 			"budget_trimmed":     budgetTrimmed,
-		}, ruleRouterSidecar))
+		})
 	}
 }
 

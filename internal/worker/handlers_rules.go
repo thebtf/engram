@@ -9,33 +9,56 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
+
+	"github.com/thebtf/engram/pkg/models"
 )
 
-type createBehavioralRuleRequest struct {
-	Project  *string `json:"project,omitempty"`
-	Content  string  `json:"content"`
-	EditedBy string  `json:"edited_by,omitempty"`
-	Priority int     `json:"priority,omitempty"`
+type behavioralRuleRequest struct {
+	Project  *string `json:"project"`
+	Content  *string `json:"content"`
+	Priority *int    `json:"priority"`
+	EditedBy *string `json:"edited_by"`
 }
 
-type ruleListResponse struct {
-	Rules []*models.BehavioralRule `json:"rules"`
-	Total int                      `json:"total"`
+func parseBehavioralRuleID(r *http.Request) (int64, bool) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+func normalizedOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func decodeBehavioralRuleRequest(r *http.Request) (*behavioralRuleRequest, error) {
+	var req behavioralRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, err
+	}
+	return &req, nil
 }
 
 // handleListBehavioralRules godoc
 // @Summary List behavioral rules
-// @Description Returns active behavioral rules ordered by priority DESC, created_at DESC.
-// @Description When project is omitted, returns all active rules across global and project scopes.
-// @Description When project is set, returns project-scoped rules plus global rules for that project.
+// @Description Returns active behavioral rules. When project is set, returns project-scoped and global rules; otherwise returns global rules only.
 // @Tags Rules
 // @Produce json
 // @Security ApiKeyAuth
-// @Param project query string false "Project ID; when present, includes global rules plus the named project"
-// @Param limit query int false "Maximum number of rows (default 200, max 1000)"
-// @Success 200 {object} ruleListResponse
+// @Param project query string false "Project slug (optional)"
+// @Param limit query int false "Maximum rows (default 50)"
+// @Success 200 {array} models.BehavioralRule
+// @Failure 400 {string} string "invalid limit"
 // @Failure 503 {string} string "service unavailable"
 // @Failure 500 {string} string "internal server error"
 // @Router /api/rules [get]
@@ -45,51 +68,36 @@ func (s *Service) handleListBehavioralRules(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	limit := 200
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-			limit = parsed
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
 		}
-	}
-	if limit > 1000 {
-		limit = 1000
+		limit = parsed
 	}
 
-	projectQuery := r.URL.Query().Get("project")
-
-	var (
-		rules []*models.BehavioralRule
-		err   error
-	)
-
-	if projectQuery == "" {
-		rules, err = s.behavioralRulesStore.ListAll(r.Context(), limit)
-	} else {
-		project := projectQuery
-		rules, err = s.behavioralRulesStore.List(r.Context(), &project, limit)
-	}
+	rules, err := s.behavioralRulesStore.List(r.Context(), normalizedOptionalString(ptrString(r.URL.Query().Get("project"))), limit)
 	if err != nil {
-		log.Error().Err(err).Str("project", projectQuery).Msg("list behavioral rules failed")
+		log.Error().Err(err).Msg("list behavioral rules failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, ruleListResponse{
-		Rules: rules,
-		Total: len(rules),
-	})
+	writeJSON(w, rules)
 }
 
 // handleCreateBehavioralRule godoc
 // @Summary Create a behavioral rule
-// @Description Creates a new active behavioral rule in either the global scope or a project scope.
+// @Description Creates an always-inject behavioral rule. Omit project to create a global rule.
 // @Tags Rules
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param rule body createBehavioralRuleRequest true "Rule fields"
+// @Param body body behavioralRuleRequest true "Rule create payload"
 // @Success 201 {object} models.BehavioralRule
-// @Failure 400 {string} string "invalid request body"
+// @Failure 400 {string} string "content is required"
 // @Failure 503 {string} string "service unavailable"
 // @Failure 500 {string} string "internal server error"
 // @Router /api/rules [post]
@@ -99,45 +107,119 @@ func (s *Service) handleCreateBehavioralRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var req createBehavioralRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+	req, err := decodeBehavioralRuleRequest(r)
+	if err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	req.Content = strings.TrimSpace(req.Content)
-	if req.Content == "" {
-		http.Error(w, "content must not be empty", http.StatusBadRequest)
+	content := strings.TrimSpace(stringValue(req.Content))
+	if content == "" {
+		http.Error(w, "content is required", http.StatusBadRequest)
 		return
 	}
 
-	var project *string
-	if req.Project != nil {
-		trimmed := strings.TrimSpace(*req.Project)
-		if trimmed != "" {
-			project = &trimmed
-		}
+	priority := 0
+	if req.Priority != nil {
+		priority = *req.Priority
 	}
 
 	created, err := s.behavioralRulesStore.Create(r.Context(), &models.BehavioralRule{
-		Project:  project,
-		Content:  req.Content,
-		Priority: req.Priority,
-		EditedBy: req.EditedBy,
+		Project:  normalizedOptionalString(req.Project),
+		Content:  content,
+		Priority: priority,
+		EditedBy: strings.TrimSpace(stringValue(req.EditedBy)),
 	})
 	if err != nil {
-		log.Error().Err(err).Str("project", func() string {
-			if project == nil {
-				return ""
-			}
-			return *project
-		}()).Msg("create behavioral rule failed")
+		log.Error().Err(err).Msg("create behavioral rule failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, created)
+}
+
+// handleUpdateBehavioralRule godoc
+// @Summary Update a behavioral rule
+// @Description Partially updates a behavioral rule by ID. Missing fields keep their current values.
+// @Tags Rules
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Rule ID"
+// @Param body body behavioralRuleRequest true "Rule update payload"
+// @Success 200 {object} models.BehavioralRule
+// @Failure 400 {string} string "invalid rule id"
+// @Failure 404 {string} string "rule not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal server error"
+// @Router /api/rules/{id} [patch]
+func (s *Service) handleUpdateBehavioralRule(w http.ResponseWriter, r *http.Request) {
+	if s.behavioralRulesStore == nil {
+		http.Error(w, "behavioral rules store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	id, ok := parseBehavioralRuleID(r)
+	if !ok {
+		http.Error(w, "invalid rule id", http.StatusBadRequest)
+		return
+	}
+
+	current, err := s.behavioralRulesStore.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "rule not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("load behavioral rule for update failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	req, err := decodeBehavioralRuleRequest(r)
+	if err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	content := current.Content
+	if req.Content != nil {
+		content = strings.TrimSpace(*req.Content)
+		if content == "" {
+			http.Error(w, "content must not be empty", http.StatusBadRequest)
+			return
+		}
+	}
+
+	priority := current.Priority
+	if req.Priority != nil {
+		priority = *req.Priority
+	}
+
+	editedBy := current.EditedBy
+	if req.EditedBy != nil {
+		editedBy = strings.TrimSpace(*req.EditedBy)
+	}
+
+	updated, err := s.behavioralRulesStore.Update(r.Context(), &models.BehavioralRule{
+		ID:       id,
+		Content:  content,
+		Priority: priority,
+		EditedBy: editedBy,
+	})
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "rule not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("update behavioral rule failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, updated)
 }
 
 // handleDeleteBehavioralRule godoc
@@ -160,9 +242,8 @@ func (s *Service) handleDeleteBehavioralRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	idStr := chi.URLParam(r, "id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || id <= 0 {
+	id, ok := parseBehavioralRuleID(r)
+	if !ok {
 		http.Error(w, "invalid rule id", http.StatusBadRequest)
 		return
 	}
@@ -180,108 +261,13 @@ func (s *Service) handleDeleteBehavioralRule(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, map[string]int64{"deleted": id})
 }
 
-// updateBehavioralRuleRequest is the JSON body for PATCH /api/rules/{id}.
-// All fields are pointers so the handler can perform a true partial update:
-// an omitted field (nil) is left untouched, distinct from an explicit zero
-// value. This matters because priority IS the rule's injection order — a
-// content-only edit must not silently reset priority to 0, and a priority-only
-// reorder must not wipe content. project is NOT editable — changing a rule's
-// scope is a design-time concern (the store's Update deliberately excludes it),
-// so the field is absent here.
-type updateBehavioralRuleRequest struct {
-	Content  *string `json:"content,omitempty"`
-	EditedBy *string `json:"edited_by,omitempty"`
-	Priority *int    `json:"priority,omitempty"`
+func ptrString(value string) *string {
+	return &value
 }
 
-// handleUpdateBehavioralRule godoc
-// @Summary Edit a behavioral rule's content and priority
-// @Description Updates the content, priority, and edited_by of an existing rule
-// @Description by numeric ID and bumps its version. A rule's project scope is
-// @Description immutable and cannot be changed here. Returns 404 if the rule does
-// @Description not exist or has been deleted. Closes the must-build edit-rule gap:
-// @Description the store Update method was wired and tested but had no REST/MCP
-// @Description caller, forcing operators to delete-and-recreate to change a rule.
-// @Tags Rules
-// @Accept json
-// @Produce json
-// @Security ApiKeyAuth
-// @Param id path int true "Rule ID"
-// @Param rule body updateBehavioralRuleRequest true "Updated rule fields"
-// @Success 200 {object} models.BehavioralRule
-// @Failure 400 {string} string "invalid rule id or body"
-// @Failure 404 {string} string "rule not found"
-// @Failure 503 {string} string "service unavailable"
-// @Failure 500 {string} string "internal server error"
-// @Router /api/rules/{id} [patch]
-func (s *Service) handleUpdateBehavioralRule(w http.ResponseWriter, r *http.Request) {
-	if s.behavioralRulesStore == nil {
-		http.Error(w, "behavioral rules store not available", http.StatusServiceUnavailable)
-		return
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
 	}
-
-	idStr := chi.URLParam(r, "id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || id <= 0 {
-		http.Error(w, "invalid rule id", http.StatusBadRequest)
-		return
-	}
-
-	var req updateBehavioralRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Partial-update semantics: fetch the current row, then apply only the fields
-	// the caller explicitly provided. Without the fetch-merge step, the store's
-	// Update (which writes content/priority/edited_by unconditionally) would
-	// overwrite any omitted field with its zero value — silently wiping a rule's
-	// content on a priority-only reorder, or resetting injection priority to 0 on
-	// a content-only edit.
-	// No-op guard: an empty body ({}) or one with no recognized fields would
-	// otherwise fetch + Update, bumping version and updated_at with no real
-	// change. Return 400 so the caller knows nothing was applied.
-	if req.Content == nil && req.Priority == nil && req.EditedBy == nil {
-		http.Error(w, "no updatable fields provided (content, priority, or edited_by)", http.StatusBadRequest)
-		return
-	}
-
-	existing, err := s.behavioralRulesStore.Get(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			http.Error(w, "rule not found", http.StatusNotFound)
-			return
-		}
-		log.Error().Err(err).Int64("id", id).Msg("get behavioral rule for update failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if req.Content != nil {
-		if *req.Content == "" {
-			http.Error(w, "content must not be empty", http.StatusBadRequest)
-			return
-		}
-		existing.Content = *req.Content
-	}
-	if req.Priority != nil {
-		existing.Priority = *req.Priority
-	}
-	if req.EditedBy != nil {
-		existing.EditedBy = *req.EditedBy
-	}
-
-	updated, err := s.behavioralRulesStore.Update(r.Context(), existing)
-	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			http.Error(w, "rule not found", http.StatusNotFound)
-			return
-		}
-		log.Error().Err(err).Int64("id", id).Msg("update behavioral rule failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, updated)
+	return *value
 }

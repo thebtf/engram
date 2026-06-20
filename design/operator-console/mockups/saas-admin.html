@@ -1,0 +1,1127 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engram SaaS — супер-админка (макет)</title>
+<style>
+:root{
+  --bg:#f4f7fb; --surface:#ffffff; --surface-warm:#eef6ff;
+  --fg:#111827; --fg-2:#334155; --muted:#556375; --meta:#0ea5e9;
+  --border:#d8e2ee; --border-soft:#edf3f8;
+  --accent:#0ea5e9; --accent-on:#04131d; --accent-hover:color-mix(in oklab,var(--accent),black 8%);
+  --success:#10b981; --warn:#f59e0b; --danger:#ef4444;
+  --font-body:Inter,system-ui,sans-serif; --font-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --text-xs:11px; --text-sm:13px; --text-base:15px; --text-lg:17px; --text-xl:22px; --text-2xl:30px;
+  --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px; --space-6:24px; --space-8:32px;
+  --radius-pill:9999px; --r-sm:6px; --r-md:10px; --r-lg:14px;
+  --elev-raised:0 18px 46px rgba(15,23,42,.10); --focus-ring:0 0 0 3px rgba(14,165,233,.30);
+  --motion-fast:120ms; --ease:cubic-bezier(.2,0,0,1);
+  --class-live:#16a34a; --class-dormant:#d97706; --class-stale:#6b7280; --class-mustbuild:#7c3aed; --state-danger:#dc2626;
+  /* platform tier accent — violet to distinguish super-admin from operator console */
+  --plat:#7c3aed;
+}
+[data-theme="dark"]{
+  --bg:#0b0d10; --surface:#14171c; --surface-warm:#1c2027; --fg:#e6e9ef; --fg-2:#c2c8d2; --muted:#8b94a3; --meta:#38bdf8;
+  --border:#262b33; --border-soft:#1c2027; --accent:#4c8dff; --accent-on:#04131d; --success:#34d399; --warn:#fbbf24; --danger:#f87171;
+  --elev-raised:0 18px 46px rgba(0,0,0,.5); --focus-ring:0 0 0 3px rgba(76,141,255,.40);
+  --class-live:#34d399; --class-dormant:#fbbf24; --class-stale:#6b7280; --class-mustbuild:#a78bfa; --state-danger:#f87171;
+  --plat:#a78bfa;
+}
+*{box-sizing:border-box} html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:var(--text-base);line-height:1.48;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--font-mono)} a{color:var(--accent);text-decoration:none}
+:focus-visible{outline:none;box-shadow:var(--focus-ring);border-radius:var(--r-sm)}
+button{font-family:inherit;cursor:pointer}
+.tabnum{font-variant-numeric:tabular-nums}
+
+.shell{display:grid;grid-template-columns:252px minmax(0,1fr);min-height:100vh}
+.rail{border-right:1px solid var(--border);background:color-mix(in oklab,var(--surface),var(--bg) 30%);padding:18px 12px;display:flex;flex-direction:column;gap:2px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;letter-spacing:-.02em;font-size:var(--text-base);padding:6px 8px 4px}
+.brand .glyph{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;background:var(--plat);color:#fff;font-weight:800;font-size:13px}
+.plat-chip{margin:2px 8px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--plat);background:color-mix(in oklab,var(--plat),transparent 86%);border:1px solid color-mix(in oklab,var(--plat),transparent 60%);padding:3px 8px;border-radius:var(--radius-pill);display:inline-block;width:fit-content}
+.rgroup{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:14px 10px 6px}
+.rtab{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:var(--fg-2);padding:8px 10px;border-radius:var(--r-sm);font-size:var(--text-sm);font-weight:600;text-align:left;transition:background var(--motion-fast) var(--ease)}
+.rtab:hover{background:var(--surface-warm);color:var(--fg)}
+.rtab[aria-current="true"]{background:color-mix(in oklab,var(--plat),transparent 86%);color:var(--plat)}
+.rtab svg{width:16px;height:16px;flex:none}
+.rtab .cnt{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--muted);background:var(--surface-warm);border:1px solid var(--border);padding:1px 6px;border-radius:var(--radius-pill)}
+.rtab[aria-current="true"] .cnt{color:var(--plat);border-color:color-mix(in oklab,var(--plat),transparent 60%)}
+
+.main{min-width:0;display:flex;flex-direction:column}
+.topbar{height:46px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;align-items:center;gap:12px;padding:0 var(--space-6)}
+.topbar .sp{flex:1}
+.identity{display:inline-flex;align-items:center;gap:8px;height:32px;padding:3px 10px 3px 3px;border-radius:var(--radius-pill);background:var(--surface-warm);border:1px solid var(--border);font-weight:600;font-size:var(--text-xs)}
+.identity .avatar{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px;background:var(--plat)}
+.themebtn{height:30px;width:34px;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--surface);color:var(--fg-2)}
+.head{padding:22px var(--space-8) 0;border-bottom:1px solid var(--border);background:var(--surface)}
+.head .crumbs{font-size:var(--text-xs);color:var(--muted);font-family:var(--font-mono)}
+.head h1{font-size:var(--text-xl);font-weight:800;letter-spacing:-.015em;margin:7px 0 3px;display:flex;align-items:center;gap:10px}
+.head p{color:var(--muted);font-size:var(--text-sm);margin:0 0 18px;max-width:76ch}
+.body{padding:24px var(--space-8) 80px;overflow:auto}
+
+/* primitives */
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:var(--r-sm);background:var(--surface);border:1px solid var(--border);color:var(--fg-2);font-size:var(--text-xs);font-weight:600}
+.tbtn:hover{border-color:var(--plat);color:var(--fg)}
+.tbtn.primary{background:var(--plat);border-color:var(--plat);color:#fff}
+.tbtn.primary:hover{filter:brightness(1.08)}
+.act{font-size:var(--text-xs);font-weight:600;padding:5px 10px;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--surface);color:var(--fg-2)}
+.act:hover{border-color:var(--plat);color:var(--fg)}
+.act.danger:hover{border-color:var(--danger);color:var(--danger)}
+.bdg{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:5px;border:1px solid transparent;display:inline-flex;gap:5px;align-items:center;text-transform:none}
+.bdg.live{color:var(--class-live);background:color-mix(in oklab,var(--class-live),transparent 88%);border-color:color-mix(in oklab,var(--class-live),transparent 62%)}
+.bdg.trial{color:var(--meta);background:color-mix(in oklab,var(--meta),transparent 88%);border-color:color-mix(in oklab,var(--meta),transparent 62%)}
+.bdg.past{color:var(--warn);background:color-mix(in oklab,var(--warn),transparent 86%);border-color:color-mix(in oklab,var(--warn),transparent 60%)}
+.bdg.cancel{color:var(--muted);background:var(--surface-warm);border-color:var(--border)}
+.bdg.plat{color:var(--plat);background:color-mix(in oklab,var(--plat),transparent 86%);border-color:color-mix(in oklab,var(--plat),transparent 60%)}
+.tag{display:inline-flex;align-items:center;padding:2px 8px;border:1px solid var(--border);border-radius:var(--radius-pill);color:var(--fg-2);font-size:10px;font-family:var(--font-mono)}
+.txt{border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);color:var(--fg);font-size:var(--text-sm);padding:7px 10px;width:100%;font-family:var(--font-mono)}
+.toggle{width:40px;height:23px;border-radius:var(--radius-pill);background:var(--border);border:0;position:relative;flex:none;transition:background var(--motion-fast)}
+.toggle::after{content:"";position:absolute;top:3px;left:3px;width:17px;height:17px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform var(--motion-fast)}
+.toggle[aria-checked="true"]{background:var(--class-live)} .toggle[aria-checked="true"]::after{transform:translateX(17px)}
+.avatar2{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800;font-size:12px;flex:none}
+
+.section-t{font-size:var(--text-xs);font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.toolbar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.toolbar .spacer{flex:1}
+.search{display:flex;align-items:center;gap:7px;height:32px;padding:0 11px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);color:var(--muted);min-width:240px}
+.search input{border:0;background:transparent;color:var(--fg);font-size:var(--text-sm);width:100%;outline:none;font-family:inherit}
+
+/* KPI cards */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:22px}
+.kpi{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--surface);padding:15px 16px}
+.kpi .k{font-size:var(--text-xs);color:var(--muted);font-weight:600}
+.kpi .v{font-size:var(--text-2xl);font-weight:800;letter-spacing:-.02em;margin-top:6px;font-variant-numeric:tabular-nums}
+.kpi .d{font-size:var(--text-xs);margin-top:3px}
+.kpi .up{color:var(--success)} .kpi .down{color:var(--danger)}
+
+/* tables */
+.tbl{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden}
+.tbl th{text-align:left;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:11px 14px;background:color-mix(in oklab,var(--surface),var(--bg) 35%);border-bottom:1px solid var(--border)}
+.tbl td{padding:12px 14px;border-bottom:1px solid var(--border-soft);font-size:var(--text-sm);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:0}
+.tbl tbody tr:hover td{background:color-mix(in oklab,var(--surface-warm),transparent 45%)}
+.tbl .r{text-align:right}
+.wsc{display:flex;align-items:center;gap:10px}
+.wsc .wn{font-weight:600}.wsc .wu{font-size:var(--text-xs);color:var(--muted);font-family:var(--font-mono)}
+.wlogo{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:13px;flex:none}
+.usebar{height:6px;border-radius:3px;background:var(--surface-warm);overflow:hidden;min-width:90px;border:1px solid var(--border)}
+.usebar i{display:block;height:100%;background:var(--plat)}
+.usebar.warn i{background:var(--warn)} .usebar.full i{background:var(--danger)}
+.rowact{display:inline-flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+
+/* matrix */
+.matrix{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden}
+.matrix th,.matrix td{padding:11px 14px;border-bottom:1px solid var(--border-soft);font-size:var(--text-sm);text-align:center}
+.matrix th{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);background:color-mix(in oklab,var(--surface),var(--bg) 35%)}
+.matrix th.plan b{display:block;color:var(--fg);font-size:var(--text-base);text-transform:none;letter-spacing:0;margin-bottom:2px}
+.matrix th.plan span{color:var(--muted);font-family:var(--font-mono);font-weight:600;font-size:10px}
+.matrix td.feat{text-align:left;font-weight:600;color:var(--fg)}
+.matrix td.feat small{display:block;color:var(--muted);font-weight:500;font-size:11px;margin-top:2px}
+.matrix tr:last-child td{border-bottom:0}
+.matrix .yes{color:var(--class-live);font-weight:800}
+.matrix .no{color:var(--muted)}
+.matrix .q{color:var(--fg);font-family:var(--font-mono);font-weight:600}
+.matrix .ovr{position:relative}
+.matrix .ovr::after{content:"override";position:absolute;top:2px;right:4px;font-size:7px;font-weight:800;text-transform:uppercase;color:var(--plat)}
+.matrix tr:hover td:not(.feat){background:color-mix(in oklab,var(--surface-warm),transparent 40%)}
+.matrix .planhi{background:color-mix(in oklab,var(--plat),transparent 94%)}
+
+/* plan cards */
+.plan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.plan-card{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--surface);padding:18px;display:flex;flex-direction:column;gap:10px}
+.plan-card.hi{border-color:color-mix(in oklab,var(--plat),transparent 50%);box-shadow:0 0 0 1px color-mix(in oklab,var(--plat),transparent 70%)}
+.plan-card h3{margin:0;font-size:var(--text-lg);font-weight:800}
+.plan-card .price{font-size:var(--text-2xl);font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.plan-card .price span{font-size:var(--text-xs);color:var(--muted);font-weight:600}
+.plan-card ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.plan-card li{font-size:var(--text-xs);color:var(--fg-2);display:flex;gap:7px;align-items:center}
+.plan-card li::before{content:"✓";color:var(--class-live);font-weight:800}
+.plan-card .pf{margin-top:auto;display:flex;gap:6px;align-items:center;font-size:var(--text-xs);color:var(--muted)}
+
+.note{padding:12px 14px;border-radius:var(--r-md);background:color-mix(in oklab,var(--plat),transparent 90%);border:1px solid color-mix(in oklab,var(--plat),transparent 65%);color:var(--fg-2);font-size:var(--text-sm);margin-bottom:18px;line-height:1.5;display:flex;gap:11px;align-items:flex-start}
+.note .mk{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--plat);color:#fff;font-size:11px;font-weight:800;flex:none}
+.foot-note{margin-top:22px;font-size:var(--text-xs);color:var(--muted);line-height:1.5;max-width:82ch}
+.hide{display:none}
+
+/* service models card */
+.svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.svc-card{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:15px;display:flex;flex-direction:column;gap:9px}
+.svc-card .sh{display:flex;align-items:center;gap:9px}
+.svc-card .role{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--plat);background:color-mix(in oklab,var(--plat),transparent 86%);padding:2px 7px;border-radius:5px}
+.svc-card .mn{font-weight:700;font-size:var(--text-sm)} .svc-card .mu{font-size:var(--text-xs);color:var(--muted);font-family:var(--font-mono)}
+
+/* ── payments ── */
+.pay-region{display:flex;align-items:center;gap:10px;margin:0 0 12px}
+.pay-region .rt{font-size:var(--text-xs);font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.pay-region .ln{flex:1;height:1px;background:var(--border)}
+.pay-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:26px}
+.pay-card{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:15px;display:flex;flex-direction:column;gap:11px}
+.pay-card.on{border-color:color-mix(in oklab,var(--class-live),transparent 56%)}
+.pay-card .ph{display:flex;align-items:center;gap:11px}
+.pay-mark{width:38px;height:30px;border-radius:6px;display:grid;place-items:center;font-weight:800;font-size:12px;color:#fff;flex:none;letter-spacing:-.02em}
+.pay-card .pn{font-weight:700;font-size:var(--text-sm)}
+.pay-card .pcov{font-size:var(--text-xs);color:var(--muted)}
+.pay-methods{display:flex;flex-wrap:wrap;gap:5px}
+.pay-chip{font-size:10px;font-weight:600;color:var(--fg-2);background:var(--surface-warm);border:1px solid var(--border);border-radius:var(--radius-pill);padding:2px 8px}
+.pay-chip.cur{font-family:var(--font-mono);letter-spacing:.02em}
+.pay-foot{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:10px;border-top:1px solid var(--border-soft);font-size:var(--text-xs);color:var(--muted)}
+.pay-mode{display:inline-flex;border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden}
+.pay-mode button{border:0;background:transparent;color:var(--muted);font-size:10px;font-weight:700;padding:3px 8px}
+.pay-mode button[aria-pressed="true"]{background:var(--surface-warm);color:var(--fg)}
+.cur-base{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:18px}
+.cur-pill{font-family:var(--font-mono);font-size:var(--text-xs);font-weight:600;color:var(--fg-2);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-pill);padding:5px 12px;display:inline-flex;gap:7px;align-items:center}
+.cur-pill.base{color:var(--plat);border-color:color-mix(in oklab,var(--plat),transparent 55%);background:color-mix(in oklab,var(--plat),transparent 90%)}
+.cur-pill .x{color:var(--muted);cursor:pointer}
+.set-card{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:0 16px}
+.set-row{display:flex;align-items:center;gap:16px;padding:13px 0;border-top:1px solid var(--border-soft)}
+.set-row:first-child{border-top:0}
+.set-row .sc{flex:1;min-width:0} .set-row .sc b{font-size:var(--text-sm)} .set-row .sc p{margin:3px 0 0;color:var(--muted);font-size:var(--text-xs);line-height:1.4}
+.set-row .ctrl{flex:none;display:flex;align-items:center;gap:8px}
+.sel2{border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);color:var(--fg);font-size:var(--text-sm);padding:6px 9px;font-family:var(--font-mono)}
+
+/* ── entities (building blocks) ── */
+.ent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:11px}
+.ent-card{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:14px;display:flex;flex-direction:column;gap:8px}
+.ent-card .eh{display:flex;align-items:center;gap:8px}
+.ent-card .etype{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:5px}
+.etype.quota{color:var(--plat);background:color-mix(in oklab,var(--plat),transparent 86%)}
+.etype.bool{color:var(--class-live);background:color-mix(in oklab,var(--class-live),transparent 86%)}
+.etype.limit{color:var(--warn);background:color-mix(in oklab,var(--warn),transparent 84%)}
+.ent-card .en{font-weight:700;font-size:var(--text-sm);flex:1}
+.ent-card .eid{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--muted)}
+.ent-card .ed{font-size:var(--text-xs);color:var(--fg-2);line-height:1.45}
+.ent-card .ef{display:flex;align-items:center;gap:6px;margin-top:auto;padding-top:9px;border-top:1px solid var(--border-soft);font-size:var(--text-xs);color:var(--muted)}
+.wire{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:var(--meta)}
+
+/* ── plan builder ── */
+.builder{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px;align-items:start}
+.bld-main{display:flex;flex-direction:column;gap:14px;min-width:0}
+.bld-head{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.bld-field{display:flex;flex-direction:column;gap:5px}
+.bld-field label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.bld-comp{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface)}
+.bld-comp .bch{font-size:var(--text-xs);font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:11px 14px;border-bottom:1px solid var(--border)}
+.bld-line{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--border-soft)}
+.bld-line:last-child{border-bottom:0}
+.bld-line .bn{flex:1;min-width:0} .bld-line .bn b{font-size:var(--text-sm)} .bld-line .bn span{font-size:var(--text-xs);color:var(--muted);font-family:var(--font-mono)}
+.bld-line .bv{display:flex;align-items:center;gap:8px;flex:none}
+.bld-line .bv input{width:90px;text-align:right}
+.bld-add{display:flex;align-items:center;gap:8px;padding:11px 14px;color:var(--muted);font-size:var(--text-sm)}
+.bld-side{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:12px;position:sticky;top:12px}
+.bld-side .bs-row{display:flex;justify-content:space-between;font-size:var(--text-sm);padding:7px 0;border-top:1px solid var(--border-soft)}
+.bld-side .bs-row:first-of-type{border-top:0}
+.bld-side .bs-row b{font-variant-numeric:tabular-nums}
+.bld-price{font-size:var(--text-2xl);font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.ver-row{display:flex;align-items:center;gap:7px;font-size:var(--text-xs);color:var(--muted)}
+.discount-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.disc-pill{font-size:var(--text-xs);font-weight:700;border:1px solid var(--border);border-radius:var(--radius-pill);padding:4px 11px;color:var(--fg-2);background:var(--surface)}
+.disc-pill.on{color:var(--plat);border-color:color-mix(in oklab,var(--plat),transparent 50%);background:color-mix(in oklab,var(--plat),transparent 90%)}
+
+/* version badges */
+.bdg.ver{font-family:var(--font-mono);color:var(--fg-2);background:var(--surface-warm);border-color:var(--border)}
+.bdg.arch{color:var(--class-stale);background:color-mix(in oklab,var(--class-stale),transparent 86%);border-color:color-mix(in oklab,var(--class-stale),transparent 62%)}
+.plan-card.arch{opacity:.72;border-style:dashed}
+.plan-card .ptop{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* ── transfers ── */
+.xfer{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:start;margin-bottom:18px}
+.xfer-col{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:14px}
+.xfer-col h4{margin:0 0 10px;font-size:var(--text-xs);font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.xfer-arrow{align-self:center;color:var(--plat);font-size:24px}
+.xfer-item{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:var(--r-sm);border:1px solid transparent}
+.xfer-item:hover{background:var(--surface-warm)}
+.xfer-item.sel{background:color-mix(in oklab,var(--plat),transparent 90%);border-color:color-mix(in oklab,var(--plat),transparent 60%)}
+.xfer-item .chk{width:16px;height:16px;border:2px solid var(--border);border-radius:4px;flex:none}
+.xfer-item.sel .chk{border-color:var(--plat);background:var(--plat);position:relative}
+.xfer-item.sel .chk::after{content:"✓";position:absolute;inset:0;color:#fff;font-size:10px;display:grid;place-items:center}
+.xfer-item .nm{flex:1;font-size:var(--text-sm)} .xfer-item .nm small{display:block;color:var(--muted);font-size:10px;font-family:var(--font-mono)}
+.grp-ic{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;background:var(--plat);color:#fff;font-size:10px;font-weight:800;flex:none}
+.xfer-opts{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:14px}
+.xfer-opt{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--border-soft)}
+.xfer-opt:first-child{border-top:0}
+.xfer-opt .rd{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);flex:none;margin-top:1px}
+.xfer-opt.sel .rd{border-color:var(--plat)} .xfer-opt.sel .rd{box-shadow:inset 0 0 0 3px var(--plat)}
+.xfer-opt b{font-size:var(--text-sm)} .xfer-opt p{margin:2px 0 0;font-size:var(--text-xs);color:var(--muted);line-height:1.4}
+
+/* ── revenue / accounting ── */
+.rev-cols{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:22px}
+@media (max-width:900px){.rev-cols{grid-template-columns:1fr}.builder{grid-template-columns:1fr}.xfer{grid-template-columns:1fr}}
+.panel{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--surface);padding:16px}
+.panel h3{margin:0 0 4px;font-size:var(--text-sm);font-weight:800}
+.panel .psub{font-size:var(--text-xs);color:var(--muted);margin-bottom:14px}
+.bars{display:flex;align-items:flex-end;gap:10px;height:140px;padding-top:10px}
+.bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end}
+.bar .stack{width:100%;max-width:34px;border-radius:4px 4px 0 0;display:flex;flex-direction:column-reverse;overflow:hidden}
+.bar .seg{width:100%}
+.bar .lbl{font-size:9px;color:var(--muted);font-family:var(--font-mono)}
+.bar .val{font-size:9px;font-weight:700;color:var(--fg-2);font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:var(--text-xs);color:var(--muted)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+/* funnel */
+.funnel{display:flex;flex-direction:column;gap:7px}
+.fn-row{display:flex;align-items:center;gap:11px}
+.fn-bar{height:34px;border-radius:var(--r-sm);background:color-mix(in oklab,var(--plat),transparent 20%);display:flex;align-items:center;padding:0 12px;color:#fff;font-weight:700;font-size:var(--text-sm);min-width:64px}
+.fn-meta{font-size:var(--text-xs);color:var(--muted)} .fn-meta b{color:var(--fg);font-variant-numeric:tabular-nums}
+/* provider split */
+.split-row{display:flex;align-items:center;gap:11px;padding:10px 0;border-top:1px solid var(--border-soft)}
+.split-row:first-child{border-top:0}
+.split-row .pm{width:30px;height:24px;border-radius:5px;display:grid;place-items:center;color:#fff;font-size:9px;font-weight:800;flex:none}
+.split-row .sn{flex:1;font-size:var(--text-sm)}
+.split-row .sbar{width:120px;height:7px;border-radius:4px;background:var(--surface-warm);border:1px solid var(--border);overflow:hidden}
+.split-row .sbar i{display:block;height:100%;background:var(--plat)}
+.split-row .sv{font-family:var(--font-mono);font-size:var(--text-xs);font-variant-numeric:tabular-nums;color:var(--fg-2);min-width:78px;text-align:right}
+/* forecast cards */
+.fc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.fc-card{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:15px}
+.fc-card .k{font-size:var(--text-xs);color:var(--muted);font-weight:600}
+.fc-card .v{font-size:var(--text-xl);font-weight:800;margin-top:5px;font-variant-numeric:tabular-nums}
+.fc-card .r{font-size:10px;color:var(--muted);margin-top:3px}
+.fc-card .up{color:var(--success)} .fc-card .down{color:var(--danger)}
+.spark{display:flex;align-items:flex-end;gap:2px;height:26px;margin-top:8px}
+.spark i{flex:1;background:color-mix(in oklab,var(--plat),transparent 55%);border-radius:1px}
+
+/* ── workspace detail (drill-down support cockpit) ── */
+.wsd-back{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--surface);color:var(--fg-2);font-size:var(--text-xs);font-weight:600;padding:6px 11px;border-radius:var(--r-sm);margin-bottom:16px}
+.wsd-back:hover{border-color:var(--plat);color:var(--fg)}
+.wsd-hero{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+.wsd-logo{width:52px;height:52px;border-radius:12px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:18px;flex:none}
+.wsd-id h2{margin:0;font-size:var(--text-2xl);font-weight:800;letter-spacing:-.02em}
+.wsd-id .u{font-size:var(--text-sm);color:var(--muted);font-family:var(--font-mono)}
+.wsd-actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.wsd-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;align-items:start}
+.wsd-card{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--surface);padding:16px}
+.wsd-card.c4{grid-column:span 4} .wsd-card.c6{grid-column:span 6} .wsd-card.c8{grid-column:span 8} .wsd-card.c12{grid-column:span 12}
+@media (max-width:900px){.wsd-card.c4,.wsd-card.c6,.wsd-card.c8{grid-column:span 12}}
+.wsd-card h3{margin:0 0 12px;font-size:var(--text-xs);font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);display:flex;align-items:center;gap:8px}
+.wsd-card h3 .act{margin-left:auto}
+.dl{display:flex;flex-direction:column;gap:0}
+.dl .d{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--border-soft);font-size:var(--text-sm)}
+.dl .d:first-child{border-top:0}
+.dl .d span{color:var(--muted)} .dl .d b{font-weight:600;font-variant-numeric:tabular-nums}
+.meter{margin:4px 0 2px}
+.meter .ml{display:flex;justify-content:space-between;font-size:var(--text-xs);margin-bottom:5px}
+.meter .ml .mv{font-family:var(--font-mono);font-variant-numeric:tabular-nums;color:var(--fg-2)}
+.meter .mt{height:8px;border-radius:4px;background:var(--surface-warm);border:1px solid var(--border);overflow:hidden}
+.meter .mt i{display:block;height:100%;background:var(--plat)}
+.meter.warn .mt i{background:var(--warn)} .meter.full .mt i{background:var(--danger)}
+.mini-row{display:flex;align-items:center;gap:9px;padding:8px 0;border-top:1px solid var(--border-soft);font-size:var(--text-sm)}
+.mini-row:first-child{border-top:0}
+.mini-av{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800;font-size:10px;flex:none}
+.mini-row .mm{flex:1;min-width:0}.mini-row .mm .mu{font-size:10px;color:var(--muted);font-family:var(--font-mono)}
+.tl{display:flex;flex-direction:column;gap:0}
+.tl .te{display:flex;gap:10px;padding:8px 0;border-top:1px solid var(--border-soft);font-size:var(--text-xs)}
+.tl .te:first-child{border-top:0}
+.tl .te .tt{font-family:var(--font-mono);color:var(--muted);white-space:nowrap;min-width:74px}
+.health-pill{display:inline-flex;align-items:center;gap:6px;font-size:var(--text-xs);font-weight:700;padding:3px 9px;border-radius:var(--radius-pill)}
+.health-pill.ok{color:var(--class-live);background:color-mix(in oklab,var(--class-live),transparent 86%)}
+.health-pill.warn{color:var(--warn);background:color-mix(in oklab,var(--warn),transparent 84%)}
+/* invoice line items + totals */
+.li-tbl{width:100%;border-collapse:collapse}
+.li-tbl th{text-align:left;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:0 0 8px;border-bottom:1px solid var(--border)}
+.li-tbl th.r,.li-tbl td.r{text-align:right}
+.li-tbl td{padding:10px 0;border-bottom:1px solid var(--border-soft);font-size:var(--text-sm);vertical-align:top}
+.li-tbl td .sub{display:block;color:var(--muted);font-size:var(--text-xs);margin-top:2px}
+.li-tot{display:flex;justify-content:space-between;font-size:var(--text-sm);padding:8px 0;border-top:1px solid var(--border-soft)}
+.li-tot:first-of-type{border-top:0;margin-top:6px}
+.li-tot.grand{border-top:2px solid var(--border);margin-top:4px;padding-top:11px;font-size:var(--text-lg);font-weight:800}
+.li-tot b{font-variant-numeric:tabular-nums}
+.inv-stamp{display:inline-flex;align-items:center;gap:7px;font-size:var(--text-sm);font-weight:700;padding:5px 13px;border-radius:var(--radius-pill)}
+.inv-stamp.live{color:var(--class-live);background:color-mix(in oklab,var(--class-live),transparent 86%)}
+.inv-stamp.past{color:var(--warn);background:color-mix(in oklab,var(--warn),transparent 84%)}
+.inv-stamp.trial{color:var(--meta);background:color-mix(in oklab,var(--meta),transparent 86%)}
+@media (max-width:760px){ .matrix{font-size:var(--text-xs)} }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand"><span class="glyph">e</span> engram</div>
+    <span class="plat-chip">платформа · super-admin</span>
+    <div class="rgroup">Обзор</div>
+    <button class="rtab" data-tab="overview" aria-current="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.3" y="2.3" width="5" height="5" rx="1"/><rect x="8.7" y="2.3" width="5" height="5" rx="1"/><rect x="2.3" y="8.7" width="5" height="5" rx="1"/><rect x="8.7" y="8.7" width="5" height="5" rx="1"/></svg>Сводка</button>
+    <div class="rgroup">Арендаторы</div>
+    <button class="rtab" data-tab="workspaces"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6 8 2.6 13.5 6v6.4H2.5Z"/><path d="M6.2 12.4V8.4h3.6v4"/></svg>Воркспейсы <span class="cnt">128</span></button>
+    <button class="rtab" data-tab="users"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.1"/><path d="M2.3 13c0-2.3 1.7-3.5 3.7-3.5s3.7 1.2 3.7 3.5"/><circle cx="11.4" cy="5.4" r="1.6"/><path d="M10.4 9.5c1.9.15 3.2 1.2 3.2 3.5"/></svg>Пользователи <span class="cnt">2.4k</span></button>
+    <div class="rgroup">Тарификация</div>
+    <button class="rtab" data-tab="entities"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 13.6 5v6L8 14 2.4 11V5Z"/><path d="M2.4 5 8 8l5.6-3M8 8v6"/></svg>Функции</button>
+    <button class="rtab" data-tab="plans"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.3" y="3.5" width="11.4" height="9" rx="1.4"/><path d="M2.3 6.5h11.4M5 10h3"/></svg>Планы</button>
+    <button class="rtab" data-tab="planedit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.4 10.6 3.8a1.4 1.4 0 0 1 2 2L5 13.4 2.4 14Z"/><path d="M9.2 5.2 11 7"/></svg>Редактор плана</button>
+    <button class="rtab" data-tab="matrix"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.3" y="2.3" width="11.4" height="11.4" rx="1.2"/><path d="M2.3 6.1h11.4M2.3 9.9h11.4M6.1 2.3v11.4M9.9 2.3v11.4"/></svg>План × Функция</button>
+    <button class="rtab" data-tab="subs"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 8a5.4 5.4 0 0 1 9.2-3.8M13.4 8a5.4 5.4 0 0 1-9.2 3.8"/><path d="M11.8 2v2.4H9.4M4.2 14v-2.4h2.4"/></svg>Подписки</button>
+    <button class="rtab" data-tab="transfers"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5h9M9 3l2.5 2.5L9 8M13.5 10.5h-9M7 8l-2.5 2.5L7 13"/></svg>Переносы</button>
+    <button class="rtab" data-tab="payments"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3.6" width="12" height="8.8" rx="1.4"/><path d="M2 6.6h12M4.6 9.8h2.2"/></svg>Платежи и валюты</button>
+    <div class="rgroup">Бухгалтерия</div>
+    <button class="rtab" data-tab="revenue"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.4 13h11.2M4 13V8.5M7.3 13V5M10.6 13V9.5M13.2 13V4"/></svg>Выручка и аналитика</button>
+    <button class="rtab" data-tab="invoices"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h8v12l-2-1-2 1-2-1-2 1Z"/><path d="M6 5h4M6 7.5h4M6 10h2.5"/></svg>Счета</button>
+    <div class="rgroup">Сервис</div>
+    <button class="rtab" data-tab="models"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2"/><path d="M6.2 4.2V2M9.8 4.2V2M6.2 11.8V14M9.8 11.8V14M4.2 6.2H2M4.2 9.8H2M11.8 6.2H14M11.8 9.8H14"/></svg>Модели и доступы LLM</button>
+    <button class="rtab" data-tab="audit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 4h7.4M2.6 7h4.8M2.6 10h4"/><circle cx="11.2" cy="10.6" r="2.8"/><path d="M11.2 9.2v1.4h1.3"/></svg>Аудит и доступ</button>
+  </aside>
+
+  <div class="main">
+    <div class="topbar"><div class="sp"></div><button class="themebtn" id="themeBtn">◐</button><span class="identity"><span class="avatar">SA</span>platform-admin · Superadmin</span></div>
+
+    <!-- OVERVIEW -->
+    <div class="head" id="h-overview"><div class="crumbs">Платформа · Сводка</div><h1>Сводка платформы</h1><p>Состояние SaaS: арендаторы, выручка, потребление. Поверхность платформенного оператора — не путать с консолью оператора одного инстанса.</p></div>
+    <div class="body" data-pane="overview">
+      <div class="kpis">
+        <div class="kpi"><div class="k">Воркспейсы</div><div class="v tabnum">128</div><div class="d up">+9 за 30 дней</div></div>
+        <div class="kpi"><div class="k">Активные подписки</div><div class="v tabnum">94</div><div class="d up">+6</div></div>
+        <div class="kpi"><div class="k">MRR</div><div class="v tabnum">412k ₽</div><div class="d up">+7.4%</div></div>
+        <div class="kpi"><div class="k">Пользователи</div><div class="v tabnum">2 418</div><div class="d up">+121</div></div>
+        <div class="kpi"><div class="k">Trial → платно</div><div class="v tabnum">38%</div><div class="d down">−2 п.п.</div></div>
+        <div class="kpi"><div class="k">Просрочка оплаты</div><div class="v tabnum">3</div><div class="d down">воркспейса</div></div>
+      </div>
+      <div class="section-t">Требуют внимания</div>
+      <table class="tbl"><thead><tr><th>Воркспейс</th><th>Что</th><th>План</th><th class="r">Действие</th></tr></thead><tbody>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#ef4444">RT</span><div><div class="wn">RetailTech</div><div class="wu">retailtech.io</div></div></div></td><td><span class="bdg past">оплата просрочена 4 дня</span></td><td>Business</td><td class="r"><span class="rowact"><button class="act">Написать</button><button class="act">Открыть</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#0ea5e9">DS</span><div><div class="wn">DubStudio</div><div class="wu">dubstudio.ru</div></div></div></td><td><span class="bdg trial">trial кончается завтра</span></td><td>—</td><td class="r"><span class="rowact"><button class="act">Продлить trial</button><button class="act">Открыть</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#7c3aed">NM</span><div><div class="wn">Novamedia</div><div class="wu">novamedia.ru</div></div></div></td><td><span class="bdg past">квота памяти 96%</span></td><td>Business</td><td class="r"><span class="rowact"><button class="act">Предложить апгрейд</button><button class="act">Открыть</button></span></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- WORKSPACES -->
+    <div class="head hide" id="h-workspaces"><div class="crumbs">Арендаторы · Воркспейсы</div><h1>Воркспейсы</h1><p>Каждый воркспейс — отдельный арендатор (tenant) с собственным планом, участниками и потреблением. Self-hosted инсталляции тоже видны здесь как воркспейс на плане Unlimited.</p></div>
+    <div class="body hide" data-pane="workspaces">
+      <div class="toolbar"><div class="search"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6.5" cy="6.5" r="4.3"/><path d="M9.6 9.6 14 14"/></svg><input placeholder="Поиск воркспейса…"></div><div class="spacer"></div><button class="tbtn">Фильтр: все планы</button><button class="tbtn primary">＋ Создать воркспейс</button></div>
+      <table class="tbl"><thead><tr><th>Воркспейс</th><th>Владелец</th><th>План</th><th>Участники</th><th>Память (квота)</th><th>Статус</th><th class="r">Действия</th></tr></thead><tbody>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#7c3aed">NM</span><div><div class="wn">Novamedia</div><div class="wu">novamedia.ru</div></div></div></td><td>Олег Доброяков</td><td><span class="bdg plat">Business</span></td><td class="tabnum">14 / 50</td><td><div style="display:flex;align-items:center;gap:8px"><div class="usebar warn"><i style="width:96%"></i></div><span class="mono tabnum">960k/1M</span></div></td><td><span class="bdg live">активен</span></td><td class="r"><span class="rowact"><button class="act">Войти как</button><button class="act">Открыть</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#ef4444">RT</span><div><div class="wn">RetailTech</div><div class="wu">retailtech.io</div></div></div></td><td>A. Smirnov</td><td><span class="bdg plat">Business</span></td><td class="tabnum">22 / 50</td><td><div style="display:flex;align-items:center;gap:8px"><div class="usebar"><i style="width:54%"></i></div><span class="mono tabnum">540k/1M</span></div></td><td><span class="bdg past">просрочка</span></td><td class="r"><span class="rowact"><button class="act">Войти как</button><button class="act">Открыть</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#10b981">GA</span><div><div class="wn">GameAudio</div><div class="wu">gameaudio.dev</div></div></div></td><td>M. Petrova</td><td><span class="bdg plat">Team</span></td><td class="tabnum">8 / 15</td><td><div style="display:flex;align-items:center;gap:8px"><div class="usebar"><i style="width:31%"></i></div><span class="mono tabnum">31k/100k</span></div></td><td><span class="bdg live">активен</span></td><td class="r"><span class="rowact"><button class="act">Войти как</button><button class="act">Открыть</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#0ea5e9">DS</span><div><div class="wn">DubStudio</div><div class="wu">dubstudio.ru</div></div></div></td><td>I. Volkov</td><td><span class="bdg cancel">—</span></td><td class="tabnum">3 / 3</td><td><div style="display:flex;align-items:center;gap:8px"><div class="usebar"><i style="width:12%"></i></div><span class="mono tabnum">1.2k/10k</span></div></td><td><span class="bdg trial">trial</span></td><td class="r"><span class="rowact"><button class="act">Войти как</button><button class="act">Открыть</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#64748b">UL</span><div><div class="wn">unleashed.lan</div><div class="wu">self-hosted</div></div></div></td><td>Олег Доброяков</td><td><span class="bdg plat">Unlimited</span></td><td class="tabnum">5 / ∞</td><td><div style="display:flex;align-items:center;gap:8px"><div class="usebar"><i style="width:8%"></i></div><span class="mono tabnum">18k/∞</span></div></td><td><span class="bdg live">self-hosted</span></td><td class="r"><span class="rowact"><button class="act" disabled>—</button><button class="act">Открыть</button></span></td></tr>
+      </tbody></table>
+      <p class="foot-note">«Войти как» — impersonation: суперадмин входит в воркспейс для поддержки, действие строго логируется в Аудит. Self-hosted строка без impersonation: чужой инстанс не под управлением платформы.</p>
+    </div>
+
+    <!-- WORKSPACE DETAIL (drill-down, no rail tab) -->
+    <div class="body hide" data-pane="wsdetail" id="wsdetailBody"></div>
+
+    <!-- PLAN DETAIL (drill-down, no rail tab) -->
+    <div class="body hide" data-pane="pldetail" id="pldetailBody"></div>
+
+    <!-- INVOICE DETAIL (drill-down, no rail tab) -->
+    <div class="body hide" data-pane="invdetail" id="invdetailBody"></div>
+
+    <!-- PLATFORM USER DETAIL (drill-down, no rail tab) -->
+    <div class="body hide" data-pane="pudetail" id="pudetailBody"></div>
+
+    <!-- PLATFORM USERS -->
+    <div class="head hide" id="h-users"><div class="crumbs">Арендаторы · Пользователи</div><h1>Платформенные пользователи</h1><p>Глобальный справочник: один человек может состоять в нескольких воркспейсах с разными ролями.</p></div>
+    <div class="body hide" data-pane="users">
+      <div class="toolbar"><div class="search"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6.5" cy="6.5" r="4.3"/><path d="M9.6 9.6 14 14"/></svg><input placeholder="Поиск по email…"></div><div class="spacer"></div><button class="tbtn">Экспорт</button></div>
+      <table class="tbl"><thead><tr><th>Пользователь</th><th>Воркспейсы</th><th>Зарегистрирован</th><th>Статус</th><th class="r">Действия</th></tr></thead><tbody>
+        <tr data-puser="oleg"><td><div class="wsc"><span class="avatar2" style="background:#7c3aed">ОД</span><div><div class="wn">Олег Доброяков</div><div class="wu">oleg@novamedia.ru</div></div></div></td><td><span class="tag">Novamedia · Owner</span> <span class="tag">unleashed · Owner</span></td><td class="mono tabnum">12.03.2026</td><td><span class="bdg live">активен</span></td><td class="r"><button class="act">Профиль</button></td></tr>
+        <tr data-puser="smirnov"><td><div class="wsc"><span class="avatar2" style="background:#0ea5e9">АС</span><div><div class="wn">A. Smirnov</div><div class="wu">a.smirnov@retailtech.io</div></div></div></td><td><span class="tag">RetailTech · Owner</span></td><td class="mono tabnum">04.01.2026</td><td><span class="bdg live">активен</span></td><td class="r"><button class="act">Профиль</button></td></tr>
+        <tr data-puser="petrova"><td><div class="wsc"><span class="avatar2" style="background:#10b981">МП</span><div><div class="wn">M. Petrova</div><div class="wu">m@gameaudio.dev</div></div></div></td><td><span class="tag">GameAudio · Owner</span> <span class="tag">Novamedia · Member</span></td><td class="mono tabnum">22.02.2026</td><td><span class="bdg live">активен</span></td><td class="r"><button class="act">Профиль</button></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- PLANS -->
+    <div class="head hide" id="h-plans"><div class="crumbs">Тарификация · Планы</div><h1>Планы</h1><p>Тарифы платформы. Цена, модель мест, trial. Состав функций — на вкладке «План × Функция».</p></div>
+    <div class="body hide" data-pane="plans">
+      <div class="toolbar"><button class="tbtn">Действующие</button><button class="tbtn" style="opacity:.6">Архивные</button><div class="spacer"></div><button class="tbtn">Редактор плана →</button><button class="tbtn primary">＋ Новый план</button></div>
+      <div class="plan-grid">
+        <div class="plan-card" data-plan="free"><div class="ptop"><h3>Free</h3><span class="bdg ver">v3</span></div><div class="price">0 ₽</div><ul><li>3 места</li><li>10k записей</li><li>Базовая память</li></ul><div class="pf"><span class="bdg cancel">публичный</span> · 34 воркспейса</div></div>
+        <div class="plan-card" data-plan="team"><div class="ptop"><h3>Team</h3><span class="bdg ver">v4</span></div><div class="price">1 900 ₽<span>/мес · место</span></div><ul><li>15 мест</li><li>100k записей</li><li>Книги-контекст</li><li>Аудит 30 дней</li></ul><div class="pf"><span class="bdg live">публичный</span> · −15% за год · 41 воркспейс</div></div>
+        <div class="plan-card hi" data-plan="business"><div class="ptop"><h3>Business</h3><span class="bdg ver">v4</span></div><div class="price">5 900 ₽<span>/мес · место</span></div><ul><li>50 мест</li><li>1M записей</li><li>OIDC / SSO</li><li>Аудит 1 год</li></ul><div class="pf"><span class="bdg live">публичный</span> · −20% за год · 19 воркспейсов</div></div>
+        <div class="plan-card" data-plan="enterprise"><div class="ptop"><h3>Enterprise</h3><span class="bdg ver">v2</span></div><div class="price">∞<span>договорная</span></div><ul><li>Безлимит мест</li><li>Кастомные роли</li><li>SLA</li><li>Выделенный инстанс</li></ul><div class="pf"><span class="bdg plat">custom</span> · 6 воркспейсов</div></div>
+        <div class="plan-card arch" data-plan="team_v3"><div class="ptop"><h3>Team</h3><span class="bdg ver">v3</span><span class="bdg arch">архивный</span></div><div class="price">1 490 ₽<span>/мес · место</span></div><ul><li>10 мест</li><li>50k записей</li><li>Книги-контекст</li></ul><div class="pf"><span class="bdg arch">закрыт для новых</span> · 7 воркспейсов ещё на нём</div></div>
+        <div class="plan-card" data-plan="unlimited"><div class="ptop"><h3>Unlimited</h3><span class="bdg ver">v1</span></div><div class="price">—<span>self-hosted</span></div><ul><li>Без биллинга</li><li>Один воркспейс</li><li>Всё включено</li></ul><div class="pf"><span class="bdg cancel">внутренний</span> · self-hosted</div></div>
+      </div>
+      <p class="foot-note">Версия плана растёт при каждом изменении состава/цены; воркспейсы остаются на своей версии до миграции. Архивный план закрыт для новых подписок, но клиенты на нём продолжают работать (см. «Переносы»).</p>
+    </div>
+
+    <!-- PLAN EDITOR -->
+    <div class="head hide" id="h-planedit"><div class="crumbs">Тарификация · Редактор плана</div><h1>Редактор плана — Business <span class="bdg ver">черновик v5</span></h1><p>План собирается из функций: каждая подключённая функция становится правом (entitlement) с конкретным значением — лимитом или вкл/выкл. Слева — состав прав, справа — цена, версия и условия годовой оплаты.</p></div>
+    <div class="body hide" data-pane="planedit">
+      <div class="builder">
+        <div class="bld-main">
+          <div class="bld-head">
+            <div class="bld-field"><label>Название</label><input class="txt" value="Business" style="width:180px"></div>
+            <div class="bld-field"><label>Статус</label><select class="sel2"><option>публичный</option><option>скрытый</option><option>custom</option></select></div>
+            <div class="bld-field"><label>Базовая цена / место · мес</label><input class="txt" value="5900" style="width:120px"></div>
+          </div>
+          <div class="bld-comp">
+            <div class="bch">Состав плана — права (функция → значение)</div>
+            <div class="bld-line"><div class="bn"><b>Места</b><span>seats · quota</span></div><div class="bv"><input class="txt" value="50"><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div></div>
+            <div class="bld-line"><div class="bn"><b>Объём памяти</b><span>memory.records · quota</span></div><div class="bv"><input class="txt" value="1000000"><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div></div>
+            <div class="bld-line"><div class="bn"><b>Хранение аудита</b><span>audit.retention · limit (дней)</span></div><div class="bv"><input class="txt" value="365"><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div></div>
+            <div class="bld-line"><div class="bn"><b>Книги-контекст</b><span>books · boolean</span></div><div class="bv"><span style="font-size:var(--text-xs);color:var(--muted)">вкл</span><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div></div>
+            <div class="bld-line"><div class="bn"><b>OIDC / SSO</b><span>auth.oidc · boolean</span></div><div class="bv"><span style="font-size:var(--text-xs);color:var(--muted)">вкл</span><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div></div>
+            <div class="bld-line"><div class="bn"><b>Кастомные роли</b><span>roles.custom · boolean</span></div><div class="bv"><span style="font-size:var(--text-xs);color:var(--muted)">выкл</span><span class="toggle" role="switch" aria-checked="false" onclick="tg(this)"></span></div></div>
+            <div class="bld-add"><span style="font-size:18px">＋</span> Подключить функцию из каталога…</div>
+          </div>
+        </div>
+        <div class="bld-side">
+          <div><div style="font-size:var(--text-xs);color:var(--muted);font-weight:600">Цена / место · мес</div><div class="bld-price">5 900 ₽</div></div>
+          <div>
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:7px">Скидка за годовую подписку</div>
+            <div class="discount-row"><span class="disc-pill">0%</span><span class="disc-pill">10%</span><span class="disc-pill on">20%</span><span class="disc-pill">25%</span></div>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:7px">Годовой биллинг</div>
+            <div class="pay-mode" style="width:100%"><button aria-pressed="true" style="flex:1">сразу за год</button><button aria-pressed="false" style="flex:1">за год, помесячно</button></div>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:10px">
+            <div class="bs-row"><span>Год / место (−20%)</span><b>56 640 ₽</b></div>
+            <div class="bs-row"><span>Помесячно · год</span><b>4 720 ₽/мес</b></div>
+            <div class="bs-row"><span>Экономия за год</span><b style="color:var(--success)">14 160 ₽</b></div>
+          </div>
+          <div class="ver-row" style="border-top:1px solid var(--border);padding-top:10px"><span>Текущая: <b style="color:var(--fg)">v4</b> → сохранить как <b style="color:var(--plat)">v5</b></span></div>
+          <div style="display:flex;gap:8px"><button class="tbtn" style="flex:1">Архивировать v4</button><button class="tbtn primary" style="flex:1">Сохранить v5</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ENTITIES (building blocks) -->
+    <div class="head hide" id="h-entities"><div class="crumbs">Тарификация · Функции</div><h1>Функции <span class="bdg plat">features</span></h1><p>Функция (feature) — определение возможности: «что» умеет продукт. В плане каждая функция превращается в <b>право</b> (entitlement) — грант доступа с конкретным значением: 50 мест, 1M записей, вкл/выкл. Тип задаёт способ гейтинга: <b>quota</b> (число с лимитом), <b>boolean</b> (есть/нет), <b>limit</b> (порог). Из функций собираются планы в «Редакторе плана». Модель — как в Chargebee/Stripe Billing.</p></div>
+    <div class="body hide" data-pane="entities">
+      <div class="toolbar"><div class="search"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6.5" cy="6.5" r="4.3"/><path d="M9.6 9.6 14 14"/></svg><input placeholder="Поиск функции…"></div><div class="spacer"></div><button class="tbtn">Импорт из кода</button><button class="tbtn primary">＋ Функция</button></div>
+      <div class="note"><span class="mk">i</span><div><b>Функция → Право → План.</b> Поле <span class="mono">key</span> функции — точка подключения в продукте: <span class="mono">entitlement('memory.records')</span> читает значение права из плана воркспейса. Функция — переиспользуемое определение; право — её привязка к плану со значением. Функции версионируются вместе с планом, в который входят.</div></div>
+      <div class="ent-grid">
+        <div class="ent-card"><div class="eh"><span class="etype quota">quota</span><span class="en">Места</span></div><div class="eid">seats</div><div class="ed">Сколько пользователей может состоять в воркспейсе. Жёсткий лимит на приглашения.</div><div class="ef"><span class="wire">◈ wired</span> в 4 плана · gate: seats</div></div>
+        <div class="ent-card"><div class="eh"><span class="etype quota">quota</span><span class="en">Объём памяти</span></div><div class="eid">memory.records</div><div class="ed">Потолок числа записей памяти. При достижении — блок записи + предложение апгрейда.</div><div class="ef"><span class="wire">◈ wired</span> в 4 плана · gate: memory.records</div></div>
+        <div class="ent-card"><div class="eh"><span class="etype bool">boolean</span><span class="en">Книги-контекст</span></div><div class="eid">books</div><div class="ed">Доступ к book-as-context. Включает раздел «Книги» в продукте.</div><div class="ef"><span class="wire">◈ wired</span> в 3 плана · gate: books</div></div>
+        <div class="ent-card"><div class="eh"><span class="etype bool">boolean</span><span class="en">OIDC / SSO</span></div><div class="eid">auth.oidc</div><div class="ed">Корпоративный вход через OIDC-брокер. Разблокирует SSO-таб в Доступе.</div><div class="ef"><span class="wire">◈ wired</span> в 2 плана · gate: auth.oidc</div></div>
+        <div class="ent-card"><div class="eh"><span class="etype limit">limit</span><span class="en">Хранение аудита</span></div><div class="eid">audit.retention</div><div class="ed">Срок хранения журнала аудита (дни). Старше — обрезается.</div><div class="ef"><span class="wire">◈ wired</span> в 3 плана · gate: audit.retention</div></div>
+        <div class="ent-card"><div class="eh"><span class="etype bool">boolean</span><span class="en">Кастомные роли</span></div><div class="eid">roles.custom</div><div class="ed">Гранулярные роли с произвольными правами. Только Enterprise.</div><div class="ef"><span class="wire">◈ wired</span> в 1 план · gate: roles.custom</div></div>
+        <div class="ent-card"><div class="eh"><span class="etype quota">quota</span><span class="en">LLM-токены / мес</span></div><div class="eid">llm.tokens.month</div><div class="ed">Месячный бюджет токенов на воркспейс. Считается метрингом.</div><div class="ef"><span class="wire" style="color:var(--muted)">○ черновик</span> · не в планах</div></div>
+        <div class="ent-card" style="border-style:dashed;align-items:center;justify-content:center;color:var(--muted);min-height:120px"><span style="font-size:24px">＋</span><span style="font-size:var(--text-xs)">Новая функция</span></div>
+      </div>
+    </div>
+
+    <!-- MATRIX -->
+    <div class="head hide" id="h-matrix"><div class="crumbs">Тарификация · План × Функция</div><h1>Матрица «План × Функция»</h1><p>Шаблон «функция доступна в таком-то плане». Ячейка задаёт значение feature-gate. Серая метка «override» — индивидуальное исключение для воркспейса (enterprise-сделка, grandfathering).</p></div>
+    <div class="body hide" data-pane="matrix">
+      <div class="note"><span class="mk">i</span><div>Один компонент <b>feature-gate</b> читает эту матрицу и внутри продукта рендерит «доступно / нужен апгрейд до плана X / квота исчерпана». Матрица — источник правды и для биллинга, и для гейтинга в UI.</div></div>
+      <table class="matrix"><thead><tr>
+        <th style="text-align:left;width:34%">Функция</th>
+        <th class="plan"><b>Free</b><span>0 ₽</span></th><th class="plan"><b>Team</b><span>1 900 ₽</span></th><th class="plan planhi"><b>Business</b><span>5 900 ₽</span></th><th class="plan"><b>Enterprise</b><span>custom</span></th>
+      </tr></thead><tbody>
+        <tr><td class="feat">Места<small>seats · quota</small></td><td class="q">3</td><td class="q">15</td><td class="q planhi">50</td><td class="q">∞</td></tr>
+        <tr><td class="feat">Объём памяти<small>memory.records · quota</small></td><td class="q">10k</td><td class="q">100k</td><td class="q planhi">1M</td><td class="q ovr">2M</td></tr>
+        <tr><td class="feat">Книги-контекст<small>books · boolean</small></td><td class="no">—</td><td class="yes">✓</td><td class="yes planhi">✓</td><td class="yes">✓</td></tr>
+        <tr><td class="feat">OIDC / SSO<small>auth.oidc · boolean</small></td><td class="no">—</td><td class="no">—</td><td class="yes planhi">✓</td><td class="yes">✓</td></tr>
+        <tr><td class="feat">Хранение аудита<small>audit.retention · limit</small></td><td class="no">—</td><td class="q">30 дн</td><td class="q planhi">1 год</td><td class="q">∞</td></tr>
+        <tr><td class="feat">Кастомные роли<small>roles.custom · boolean</small></td><td class="no">—</td><td class="no">—</td><td class="no planhi">—</td><td class="yes">✓</td></tr>
+        <tr><td class="feat">SLA / выделенный инстанс<small>boolean</small></td><td class="no">—</td><td class="no">—</td><td class="no planhi">—</td><td class="yes">✓</td></tr>
+      </tbody></table>
+      <p class="foot-note">Легенда: <span class="matrix" style="border:0"><span class="yes">✓</span></span> включено · <span class="q">N</span> квота/лимит · <span class="no">—</span> нет · метка <b style="color:var(--plat)">override</b> — переопределение на уровне воркспейса.</p>
+    </div>
+
+    <!-- SUBSCRIPTIONS -->
+    <div class="head hide" id="h-subs"><div class="crumbs">Тарификация · Подписки</div><h1>Подписки</h1><p>Привязка воркспейс → план: статус, места, период, продление. Биллинг и счета — рядом.</p></div>
+    <div class="body hide" data-pane="subs">
+      <table class="tbl"><thead><tr><th>Воркспейс</th><th>План</th><th>Статус</th><th>Места</th><th>Период</th><th>Продление</th><th class="r">Действия</th></tr></thead><tbody>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#7c3aed">NM</span><div class="wn">Novamedia</div></div></td><td>Business</td><td><span class="bdg live">активна</span></td><td class="tabnum">14 / 50</td><td>годовой</td><td class="mono tabnum">12.03.2027</td><td class="r"><span class="rowact"><button class="act">Счета</button><button class="act">Сменить план</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#ef4444">RT</span><div class="wn">RetailTech</div></div></td><td>Business</td><td><span class="bdg past">просрочка</span></td><td class="tabnum">22 / 50</td><td>месячный</td><td class="mono tabnum">15.06.2026</td><td class="r"><span class="rowact"><button class="act">Счета</button><button class="act">Напомнить</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#10b981">GA</span><div class="wn">GameAudio</div></div></td><td>Team</td><td><span class="bdg live">активна</span></td><td class="tabnum">8 / 15</td><td>месячный</td><td class="mono tabnum">02.07.2026</td><td class="r"><span class="rowact"><button class="act">Счета</button><button class="act">Сменить план</button></span></td></tr>
+        <tr><td><div class="wsc"><span class="wlogo" style="background:#0ea5e9">DS</span><div class="wn">DubStudio</div></div></td><td>Team (trial)</td><td><span class="bdg trial">trial</span></td><td class="tabnum">3 / 15</td><td>14 дней</td><td class="mono tabnum">истекает завтра</td><td class="r"><span class="rowact"><button class="act">Продлить</button><button class="act">Конвертировать</button></span></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- TRANSFERS -->
+    <div class="head hide" id="h-transfers"><div class="crumbs">Тарификация · Переносы</div><h1>Переносы между планами</h1><p>Перенос отдельных пользователей и корпоративных групп с плана на план — по запросу или автоматически при миграции с архивного плана. Можно оставить клиента на архивном плане на срок или бессрочно.</p></div>
+    <div class="body hide" data-pane="transfers">
+      <div class="xfer">
+        <div class="xfer-col">
+          <h4>Откуда · Team v3 <span class="bdg arch" style="margin-left:4px">архивный</span></h4>
+          <div class="xfer-item sel"><span class="chk"></span><span class="grp-ic">NM</span><div class="nm">Novamedia <small>группа · 14 польз.</small></div></div>
+          <div class="xfer-item sel"><span class="chk"></span><span class="grp-ic" style="background:#0ea5e9">DS</span><div class="nm">DubStudio <small>группа · 3 польз.</small></div></div>
+          <div class="xfer-item"><span class="chk"></span><span class="grp-ic" style="background:#64748b;border-radius:50%">АП</span><div class="nm">anton@studio.ru <small>пользователь</small></div></div>
+          <div class="xfer-item"><span class="chk"></span><span class="grp-ic" style="background:#64748b;border-radius:50%">ЕС</span><div class="nm">elena@studio.ru <small>пользователь</small></div></div>
+        </div>
+        <div class="xfer-arrow">→</div>
+        <div class="xfer-col">
+          <h4>Куда · план назначения</h4>
+          <div style="margin-bottom:12px"><select class="sel2" style="width:100%"><option>Team v4 (актуальный)</option><option>Business v4</option><option>Enterprise v2</option></select></div>
+          <div class="xfer-opts" style="border:0;padding:0">
+            <div class="xfer-opt sel"><span class="rd"></span><div><b>Перенести сейчас</b><p>Сразу на новый план. Перерасчёт по остатку периода (пропорционально).</p></div></div>
+            <div class="xfer-opt"><span class="rd"></span><div><b>При следующем продлении</b><p>Дождаться конца оплаченного периода, затем перевести. Без перерасчёта.</p></div></div>
+            <div class="xfer-opt"><span class="rd"></span><div><b>Оставить на архивном</b><p>Не переносить. Grandfathering: <select class="sel2" style="margin-top:6px"><option>до 31.12.2026</option><option>+ 6 месяцев</option><option>бессрочно</option></select></p></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="toolbar"><span class="bdg plat">выбрано: 2 группы · 17 польз.</span><div class="spacer"></div><button class="tbtn">Предпросмотр счёта</button><button class="tbtn primary">Выполнить перенос</button></div>
+      <div class="note"><span class="mk">i</span><div><b>Автоперенос с архивных.</b> Можно включить правило: при архивации плана все его клиенты автоматически мигрируют на план-преемник в дату X, кроме помеченных «оставить». Ручной перенос — для точечных запросов.</div></div>
+    </div>
+
+    <!-- PAYMENTS & CURRENCIES -->
+    <div class="head hide" id="h-payments"><div class="crumbs">Тарификация · Платежи и валюты</div><h1>Платежи и валюты</h1><p>Какими шлюзами платформа принимает оплату и в каких валютах выставляет счета. Глобальные провайдеры не работают с картами РФ — для рынка СНГ нужны локальные шлюзы и СБП. Провайдер выбирается под валюту/регион воркспейса автоматически.</p></div>
+    <div class="body hide" data-pane="payments">
+      <div class="note"><span class="mk">i</span><div>Ключи всех провайдеров — write-only, reveal одноразовый. Режим <b>test/live</b> переключается на провайдере. Воркспейсу платёж маршрутизируется по его валюте: ₽ → локальный шлюз/СБП, $/€ → глобальный.</div></div>
+
+      <div class="pay-region"><span class="rt">Глобальные</span><span class="ln"></span><span class="bdg live">2 активны</span></div>
+      <div class="pay-grid">
+        <div class="pay-card on">
+          <div class="ph"><span class="pay-mark" style="background:#635bff">Stripe</span><div style="flex:1"><div class="pn">Stripe</div><div class="pcov">Карты, Apple/Google Pay · 40+ стран</div></div><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip cur">USD</span><span class="pay-chip cur">EUR</span><span class="pay-chip cur">GBP</span><span class="pay-chip">Visa/MC</span><span class="pay-chip">Apple Pay</span></div>
+          <div class="pay-foot"><div class="pay-mode"><button aria-pressed="false">test</button><button aria-pressed="true">live</button></div><span>комиссия 2.9% + $0.30</span><span style="flex:1"></span><button class="act">Ключи</button></div>
+        </div>
+        <div class="pay-card on">
+          <div class="ph"><span class="pay-mark" style="background:#003087">PayPal</span><div style="flex:1"><div class="pn">PayPal</div><div class="pcov">Кошелёк + карты · глобально</div></div><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip cur">USD</span><span class="pay-chip cur">EUR</span><span class="pay-chip">PayPal balance</span></div>
+          <div class="pay-foot"><div class="pay-mode"><button aria-pressed="false">test</button><button aria-pressed="true">live</button></div><span>3.4% + фикс</span><span style="flex:1"></span><button class="act">Ключи</button></div>
+        </div>
+        <div class="pay-card">
+          <div class="ph"><span class="pay-mark" style="background:#0a2540;font-size:11px">Paddle</span><div style="flex:1"><div class="pn">Paddle</div><div class="pcov">Merchant of Record · налоги/VAT на себе</div></div><span class="toggle" role="switch" aria-checked="false" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip">MoR</span><span class="pay-chip">авто-VAT</span></div>
+        </div>
+        <div class="pay-card">
+          <div class="ph"><span class="pay-mark" style="background:#0abf53;font-size:11px">Adyen</span><div style="flex:1"><div class="pn">Adyen</div><div class="pcov">Энтерпрайз-эквайринг · 100+ методов</div></div><span class="toggle" role="switch" aria-checked="false" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip">enterprise</span></div>
+        </div>
+      </div>
+
+      <div class="pay-region"><span class="rt">СНГ и Россия</span><span class="ln"></span><span class="bdg live">2 активны</span></div>
+      <div class="pay-grid">
+        <div class="pay-card on">
+          <div class="ph"><span class="pay-mark" style="background:#ff5c00;font-size:10px">ЮKassa</span><div style="flex:1"><div class="pn">ЮKassa</div><div class="pcov">Карты МИР/Visa/MC, СБП, кошельки · РФ</div></div><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip cur">RUB</span><span class="pay-chip">МИР</span><span class="pay-chip">СБП</span><span class="pay-chip">ЮMoney</span><span class="pay-chip">рассрочка</span></div>
+          <div class="pay-foot"><div class="pay-mode"><button aria-pressed="false">test</button><button aria-pressed="true">live</button></div><span>от 2.8%</span><span style="flex:1"></span><button class="act">Ключи</button></div>
+        </div>
+        <div class="pay-card on">
+          <div class="ph"><span class="pay-mark" style="background:#111;font-size:11px">СБП</span><div style="flex:1"><div class="pn">СБП (QR)</div><div class="pcov">Система быстрых платежей · оплата по QR</div></div><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip cur">RUB</span><span class="pay-chip">QR</span><span class="pay-chip">комиссия ~0.7%</span></div>
+          <div class="pay-foot"><div class="pay-mode"><button aria-pressed="false">test</button><button aria-pressed="true">live</button></div><span>через банк-эквайер</span><span style="flex:1"></span><button class="act">Ключи</button></div>
+        </div>
+        <div class="pay-card">
+          <div class="ph"><span class="pay-mark" style="background:#ffdd2d;color:#111;font-size:10px">Т-Касса</span><div style="flex:1"><div class="pn">Т-Касса (Тинькофф)</div><div class="pcov">Эквайринг, СБП, рассрочка · РФ</div></div><span class="toggle" role="switch" aria-checked="false" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip cur">RUB</span><span class="pay-chip">МИР</span><span class="pay-chip">СБП</span><span class="pay-chip">долями</span></div>
+        </div>
+        <div class="pay-card">
+          <div class="ph"><span class="pay-mark" style="background:#1a3d7c;font-size:9px">CloudPay</span><div style="flex:1"><div class="pn">CloudPayments</div><div class="pcov">Эквайринг, рекуррент · РФ/СНГ</div></div><span class="toggle" role="switch" aria-checked="false" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip cur">RUB</span><span class="pay-chip cur">KZT</span><span class="pay-chip">рекуррент</span></div>
+        </div>
+        <div class="pay-card">
+          <div class="ph"><span class="pay-mark" style="background:#16a34a;font-size:10px">Robo</span><div style="flex:1"><div class="pn">Robokassa</div><div class="pcov">Агрегатор, много методов · РФ/СНГ</div></div><span class="toggle" role="switch" aria-checked="false" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip cur">RUB</span><span class="pay-chip">агрегатор</span></div>
+        </div>
+        <div class="pay-card">
+          <div class="ph"><span class="pay-mark" style="background:#00a3e0;font-size:11px">Kaspi</span><div style="flex:1"><div class="pn">Kaspi.kz</div><div class="pcov">Казахстан · карты/кошелёк</div></div><span class="toggle" role="switch" aria-checked="false" onclick="tg(this)"></span></div>
+          <div class="pay-methods"><span class="pay-chip cur">KZT</span><span class="pay-chip">Kaspi Pay</span></div>
+        </div>
+      </div>
+
+      <div class="pay-region"><span class="rt">Валюты и настройки</span><span class="ln"></span></div>
+      <div class="section-t">Принимаемые валюты</div>
+      <div class="cur-base">
+        <span class="cur-pill base">RUB ₽ · базовая</span>
+        <span class="cur-pill">USD $ <span class="x">×</span></span>
+        <span class="cur-pill">EUR € <span class="x">×</span></span>
+        <span class="cur-pill">KZT ₸ <span class="x">×</span></span>
+        <span class="cur-pill" style="border-style:dashed;color:var(--muted)">+ валюта</span>
+      </div>
+      <div class="set-card" style="margin-bottom:20px">
+        <div class="set-row"><div class="sc"><b>Базовая валюта учёта</b><p>В ней ведётся MRR и сводная отчётность платформы. Цены планов задаются отдельно по валютам.</p></div><div class="ctrl"><select class="sel2"><option>RUB ₽</option><option>USD $</option><option>EUR €</option></select></div></div>
+        <div class="set-row"><div class="sc"><b>Конвертация цен</b><p>Фиксированные цены на валюту (ручной прайс) или авто-конвертация по курсу ЦБ/ECB на момент счёта.</p></div><div class="ctrl"><div class="pay-mode"><button aria-pressed="true">фикс. прайс</button><button aria-pressed="false">авто-курс</button></div></div></div>
+        <div class="set-row"><div class="sc"><b>Маршрутизация провайдера</b><p>Автовыбор шлюза по валюте воркспейса: ₽ → локальный/СБП, $/€ → глобальный. Можно закрепить вручную.</p></div><div class="ctrl"><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span><span style="font-size:var(--text-xs);color:var(--muted)">авто</span></div></div>
+        <div class="set-row"><div class="sc"><b>НДС / налог</b><p>Включать налог в цену или добавлять при оформлении. Для MoR-провайдеров (Paddle) — на стороне провайдера.</p></div><div class="ctrl"><select class="sel2"><option>включён в цену</option><option>добавляется сверху</option><option>через MoR</option></select></div></div>
+        <div class="set-row"><div class="sc"><b>Ретраи при сбое оплаты</b><p>Сколько раз и с каким интервалом повторять списание перед переводом подписки в «просрочка».</p></div><div class="ctrl"><select class="sel2"><option>3 раза / 3 дня</option><option>5 раз / 5 дней</option><option>выкл</option></select></div></div>
+      </div>
+      <p class="foot-note">Это макет: провайдеры, комиссии и методы — иллюстративные, под уточнение бизнесом. Реальный набор шлюзов и тарифы фиксируются при подключении эквайринга. Ключи провайдеров никогда не хранятся в открытом виде на клиенте.</p>
+    </div>
+
+    <!-- REVENUE & ANALYTICS -->
+    <div class="head hide" id="h-revenue"><div class="crumbs">Бухгалтерия · Выручка и аналитика</div><h1>Выручка и аналитика</h1><p>Месячная выручка по всем платёжным системам, распределение клиентов по шлюзам, воронка продаж, прогноз и тренды по активным клиентам.</p></div>
+    <div class="body hide" data-pane="revenue">
+      <div class="kpis">
+        <div class="kpi"><div class="k">MRR</div><div class="v tabnum">412k ₽</div><div class="d up">+7.4% м/м</div></div>
+        <div class="kpi"><div class="k">ARR (прогноз)</div><div class="v tabnum">4.94M ₽</div><div class="d up">+31% г/г</div></div>
+        <div class="kpi"><div class="k">ARPA</div><div class="v tabnum">4 380 ₽</div><div class="d">средн. на воркспейс</div></div>
+        <div class="kpi"><div class="k">Отток (churn)</div><div class="v tabnum">2.1%</div><div class="d down">+0.3 п.п.</div></div>
+      </div>
+
+      <div class="rev-cols">
+        <div class="panel">
+          <h3>Выручка по месяцам</h3><div class="psub">с разбивкой по платёжным системам</div>
+          <div class="bars">
+            <div class="bar"><div class="stack" style="height:52%"><div class="seg" style="background:#635bff;height:34%"></div><div class="seg" style="background:#ff5c00;height:48%"></div><div class="seg" style="background:#111;height:18%"></div></div><div class="val">286k</div><div class="lbl">Фев</div></div>
+            <div class="bar"><div class="stack" style="height:60%"><div class="seg" style="background:#635bff;height:32%"></div><div class="seg" style="background:#ff5c00;height:50%"></div><div class="seg" style="background:#111;height:18%"></div></div><div class="val">324k</div><div class="lbl">Мар</div></div>
+            <div class="bar"><div class="stack" style="height:64%"><div class="seg" style="background:#635bff;height:30%"></div><div class="seg" style="background:#ff5c00;height:52%"></div><div class="seg" style="background:#111;height:18%"></div></div><div class="val">351k</div><div class="lbl">Апр</div></div>
+            <div class="bar"><div class="stack" style="height:71%"><div class="seg" style="background:#635bff;height:29%"></div><div class="seg" style="background:#ff5c00;height:53%"></div><div class="seg" style="background:#111;height:18%"></div></div><div class="val">384k</div><div class="lbl">Май</div></div>
+            <div class="bar"><div class="stack" style="height:78%"><div class="seg" style="background:#635bff;height:28%"></div><div class="seg" style="background:#ff5c00;height:54%"></div><div class="seg" style="background:#111;height:18%"></div></div><div class="val">412k</div><div class="lbl">Июн</div></div>
+            <div class="bar"><div class="stack" style="height:84%;opacity:.5;border:1px dashed var(--border)"><div class="seg" style="background:#635bff;height:28%"></div><div class="seg" style="background:#ff5c00;height:54%"></div><div class="seg" style="background:#111;height:18%"></div></div><div class="val">≈442k</div><div class="lbl">Июл*</div></div>
+          </div>
+          <div class="legend"><span><i style="background:#635bff"></i>Stripe</span><span><i style="background:#ff5c00"></i>ЮKassa</span><span><i style="background:#111"></i>СБП</span><span style="color:var(--muted)">* прогноз</span></div>
+        </div>
+        <div class="panel">
+          <h3>Клиенты по платёжным системам</h3><div class="psub">сколько воркспейсов платит через какой шлюз</div>
+          <div class="split-row"><span class="pm" style="background:#ff5c00;font-size:8px">ЮKassa</span><span class="sn">ЮKassa</span><div class="sbar"><i style="width:54%"></i></div><span class="sv">51 · 54%</span></div>
+          <div class="split-row"><span class="pm" style="background:#635bff">Stripe</span><span class="sn">Stripe</span><div class="sbar"><i style="width:28%"></i></div><span class="sv">26 · 28%</span></div>
+          <div class="split-row"><span class="pm" style="background:#111">СБП</span><span class="sn">СБП (QR)</span><div class="sbar"><i style="width:12%"></i></div><span class="sv">11 · 12%</span></div>
+          <div class="split-row"><span class="pm" style="background:#003087">PP</span><span class="sn">PayPal</span><div class="sbar"><i style="width:6%"></i></div><span class="sv">6 · 6%</span></div>
+        </div>
+      </div>
+
+      <div class="rev-cols">
+        <div class="panel">
+          <h3>Воронка продаж</h3><div class="psub">путь от лида до платящего клиента за 30 дней</div>
+          <div class="funnel">
+            <div class="fn-row"><div class="fn-bar" style="width:100%">Лиды</div><div class="fn-meta"><b>1 240</b> · вход</div></div>
+            <div class="fn-row"><div class="fn-bar" style="width:74%;background:color-mix(in oklab,var(--plat),transparent 32%)">Регистрации</div><div class="fn-meta"><b>918</b> · 74%</div></div>
+            <div class="fn-row"><div class="fn-bar" style="width:41%;background:color-mix(in oklab,var(--plat),transparent 44%)">Trial</div><div class="fn-meta"><b>508</b> · 41%</div></div>
+            <div class="fn-row"><div class="fn-bar" style="width:16%;background:color-mix(in oklab,var(--plat),transparent 56%)">Платящие</div><div class="fn-meta"><b>193</b> · 16%</div></div>
+            <div class="fn-row"><div class="fn-bar" style="width:11%;background:color-mix(in oklab,var(--plat),transparent 66%)">Годовые</div><div class="fn-meta"><b>136</b> · 11%</div></div>
+          </div>
+          <p style="font-size:var(--text-xs);color:var(--muted);margin:12px 0 0;line-height:1.5">Воронка показывает, где теряются клиенты: каждый этап — доля от входа. Падение trial→платящие (41%→16%) — главная точка роста.</p>
+        </div>
+        <div class="panel">
+          <h3>Прогноз и тренды</h3><div class="psub">по активным клиентам и подпискам</div>
+          <div class="fc-grid">
+            <div class="fc-card"><div class="k">Месяц</div><div class="v tabnum">442k ₽</div><div class="r up">+7% к июню</div><div class="spark"><i style="height:40%"></i><i style="height:52%"></i><i style="height:48%"></i><i style="height:64%"></i><i style="height:70%"></i><i style="height:82%"></i></div></div>
+            <div class="fc-card"><div class="k">Квартал</div><div class="v tabnum">1.38M ₽</div><div class="r up">+19% к Q2</div><div class="spark"><i style="height:30%"></i><i style="height:45%"></i><i style="height:55%"></i><i style="height:60%"></i><i style="height:74%"></i><i style="height:88%"></i></div></div>
+            <div class="fc-card"><div class="k">Год (ARR)</div><div class="v tabnum">4.94M ₽</div><div class="r up">+31% г/г</div><div class="spark"><i style="height:25%"></i><i style="height:38%"></i><i style="height:50%"></i><i style="height:62%"></i><i style="height:78%"></i><i style="height:95%"></i></div></div>
+          </div>
+          <p style="font-size:var(--text-xs);color:var(--muted);margin:14px 0 0;line-height:1.5">Прогноз строится по активным подпискам с учётом оттока и годовых обязательств. Пунктир на графике выручки — экстраполяция текущего тренда.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- INVOICES -->
+    <div class="head hide" id="h-invoices"><div class="crumbs">Бухгалтерия · Счета</div><h1>Счета</h1><p>Автоматическое выставление по подпискам и ручные счета. Статус оплаты, провайдер, экспорт.</p></div>
+    <div class="body hide" data-pane="invoices">
+      <div class="set-card" style="margin-bottom:18px">
+        <div class="set-row"><div class="sc"><b>Автоматическое выставление</b><p>Счёт формируется и отправляется в день продления подписки. Оплата списывается выбранным провайдером.</p></div><div class="ctrl"><span class="toggle" role="switch" aria-checked="true" onclick="tg(this)"></span></div></div>
+        <div class="set-row"><div class="sc"><b>Нумерация и формат</b><p>Сквозной номер, реквизиты, НДС-строка. Формат счёта для юрлиц и самозанятых.</p></div><div class="ctrl"><select class="sel2"><option>ИП / ООО (с НДС)</option><option>Самозанятый</option><option>Инвойс (export)</option></select></div></div>
+      </div>
+      <div class="toolbar"><button class="tbtn">Все</button><button class="tbtn" style="opacity:.6">Неоплачены</button><div class="spacer"></div><button class="tbtn">Экспорт CSV</button><button class="tbtn primary">＋ Ручной счёт</button></div>
+      <table class="tbl"><thead><tr><th>№</th><th>Воркспейс</th><th>Сумма</th><th>Провайдер</th><th>Тип</th><th>Дата</th><th>Статус</th><th class="r">Действия</th></tr></thead><tbody>
+        <tr data-inv="0412"><td class="mono">INV-2026-0412</td><td>Novamedia</td><td class="mono tabnum">56 640 ₽</td><td>ЮKassa</td><td><span class="bdg plat">авто · год</span></td><td class="mono tabnum">12.06</td><td><span class="bdg live">оплачен</span></td><td class="r"><span class="rowact"><button class="act">PDF</button><button class="act">Открыть</button></span></td></tr>
+        <tr data-inv="0411"><td class="mono">INV-2026-0411</td><td>GameAudio</td><td class="mono tabnum">15 200 ₽</td><td>Stripe</td><td><span class="bdg plat">авто · мес</span></td><td class="mono tabnum">10.06</td><td><span class="bdg live">оплачен</span></td><td class="r"><span class="rowact"><button class="act">PDF</button><button class="act">Открыть</button></span></td></tr>
+        <tr data-inv="0410"><td class="mono">INV-2026-0410</td><td>RetailTech</td><td class="mono tabnum">129 800 ₽</td><td>Stripe</td><td><span class="bdg plat">авто · год</span></td><td class="mono tabnum">08.06</td><td><span class="bdg past">просрочен 4 дня</span></td><td class="r"><span class="rowact"><button class="act">Напомнить</button><button class="act">Открыть</button></span></td></tr>
+        <tr data-inv="0409"><td class="mono">INV-2026-0409</td><td>Enterprise · CustomCorp</td><td class="mono tabnum">480 000 ₽</td><td>—</td><td><span class="bdg ver">ручной</span></td><td class="mono tabnum">05.06</td><td><span class="bdg trial">выставлен</span></td><td class="r"><span class="rowact"><button class="act">PDF</button><button class="act">Открыть</button></span></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- SERVICE MODELS -->
+    <div class="head hide" id="h-models"><div class="crumbs">Сервис · Модели и доступы LLM</div><h1>Модели и доступы LLM <span class="bdg plat">service-wide</span></h1><p>LLM-эндпойнты подключаются один раз на всю платформу, а не на воркспейс. Здесь — все доступы (провайдеры, API base, ключи) и привязка ролей Engram к моделям, общие для сервиса.</p></div>
+    <div class="body hide" data-pane="models">
+      <div class="note"><span class="mk">i</span><div>В self-hosted эти настройки живут в консоли оператора (одна инсталляция). В SaaS они поднимаются на уровень платформы: один пул доступов обслуживает все воркспейсы. Подбор модели на воркспейс (если включён планом) ложится поверх этого пула.</div></div>
+      <div class="section-t">Роли Engram → модель (service-wide)</div>
+      <div class="svc-grid" style="margin-bottom:22px">
+        <div class="svc-card"><div class="sh"><span class="role">ответы</span><span class="mn" style="flex:1">engram/ops-llm</span></div><div class="mu">через доступ: litellm-main · gpt-4o</div></div>
+        <div class="svc-card"><div class="sh"><span class="role">embeddings</span><span class="mn" style="flex:1">engram/embed</span></div><div class="mu">через доступ: litellm-main · text-embedding-3-large</div></div>
+        <div class="svc-card"><div class="sh"><span class="role">reranker</span><span class="mn" style="flex:1">engram/rerank</span></div><div class="mu">через доступ: cohere-main · rerank-v3</div></div>
+        <div class="svc-card"><div class="sh"><span class="role">ingest (fast)</span><span class="mn" style="flex:1">recall/gpt-4o-mini</span></div><div class="mu">через доступ: litellm-main</div></div>
+      </div>
+      <div class="section-t">Доступы (провайдеры / API base / ключи)</div>
+      <table class="tbl"><thead><tr><th>Доступ</th><th>Провайдер</th><th>API base</th><th>Моделей</th><th>Статус</th><th class="r">Действия</th></tr></thead><tbody>
+        <tr><td class="mono">litellm-main</td><td>LiteLLM</td><td class="mono muted">https://llm.engram.cloud/v1</td><td class="tabnum">3</td><td><span class="bdg live">активен</span></td><td class="r"><button class="act">Изменить</button></td></tr>
+        <tr><td class="mono">cohere-main</td><td>Cohere</td><td class="mono muted">https://api.cohere.ai/v1</td><td class="tabnum">1</td><td><span class="bdg live">активен</span></td><td class="r"><button class="act">Изменить</button></td></tr>
+        <tr><td class="mono">openai-direct</td><td>OpenAI</td><td class="mono muted">https://api.openai.com/v1</td><td class="tabnum">0</td><td><span class="bdg cancel">не используется</span></td><td class="r"><button class="act">Изменить</button></td></tr>
+      </tbody></table>
+      <p class="foot-note">Ключи — write-only, reveal одноразовый (как в консоли оператора). Один доступ обслуживает несколько ролей/моделей. Те же примитивы, что в self-hosted Settings → Доступы, подняты на платформенный уровень.</p>
+    </div>
+
+    <!-- AUDIT -->
+    <div class="head hide" id="h-audit"><div class="crumbs">Сервис · Аудит и доступ</div><h1>Аудит и доступ платформы</h1><p>Действия суперадминов и поддержки: impersonation, смена планов, правки матрицы, доступы LLM. Только чтение.</p></div>
+    <div class="body hide" data-pane="audit">
+      <table class="tbl"><thead><tr><th style="width:130px">Время</th><th>Кто</th><th>Событие</th><th>Детали</th></tr></thead><tbody>
+        <tr><td class="mono muted">14:22</td><td>platform-admin</td><td><span class="bdg plat">impersonation</span></td><td>вход как RetailTech · поддержка биллинга</td></tr>
+        <tr><td class="mono muted">13:40</td><td>platform-admin</td><td><span class="bdg past">смена плана</span></td><td>Novamedia: Team → Business</td></tr>
+        <tr><td class="mono muted">11:05</td><td>support-2</td><td><span class="bdg live">матрица</span></td><td>override: Enterprise · memory.records → 2M</td></tr>
+        <tr><td class="mono muted">вчера</td><td>platform-admin</td><td><span class="bdg plat">доступ LLM</span></td><td>cohere-main добавлен (reranker)</td></tr>
+      </tbody></table>
+    </div>
+  </div>
+</div>
+<script>
+  const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+  function show(tab){ $$('.rtab').forEach(b=>b.setAttribute('aria-current', b.dataset.tab===tab)); $$('[data-pane]').forEach(p=>p.classList.toggle('hide',p.dataset.pane!==tab)); $$('.head').forEach(h=>h.classList.toggle('hide',h.id!=='h-'+tab)); window.scrollTo(0,0); }
+  $$('.rtab').forEach(b=>{ if(b.dataset.tab) b.onclick=()=>show(b.dataset.tab); });
+  $('#themeBtn').onclick=()=>{ const r=document.documentElement; r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'; };
+
+  /* ── workspace drill-down: одна карточка сводит план, подписку, потребление, участников, счета ── */
+  const WS = {
+    NM:{ logo:'NM', col:'#7c3aed', name:'Novamedia', url:'novamedia.ru', owner:'Олег Доброяков', plan:'Business', planVer:'v4', sub:'активна', subCls:'live', period:'годовой · −20%', renew:'12.03.2027', mrr:'56 640 ₽/год', seats:[14,50], mem:[960,1000,'k'], memCls:'warn', llm:[2.1,5,'M ток.'], health:'warn', healthTxt:'квота памяти 96%',
+      members:[['ОД','#7c3aed','Олег Доброяков','Owner'],['МК','#a855f7','Мария Карпова','Admin'],['АП','#0ea5e9','Антон Петров','Member']],
+      invoices:[['INV-2026-0412','56 640 ₽','ЮKassa','оплачен','live'],['INV-2025-0388','47 200 ₽','ЮKassa','оплачен','live']],
+      tl:[['12.06','счёт INV-0412 оплачен · ЮKassa'],['13.04','план Team → Business'],['12.03.2026','воркспейс создан']] },
+    RT:{ logo:'RT', col:'#ef4444', name:'RetailTech', url:'retailtech.io', owner:'A. Smirnov', plan:'Business', planVer:'v4', sub:'просрочка', subCls:'past', period:'месячный', renew:'15.06.2026', mrr:'129 800 ₽/год', seats:[22,50], mem:[540,1000,'k'], memCls:'', llm:[3.4,5,'M ток.'], health:'warn', healthTxt:'оплата просрочена 4 дня',
+      members:[['АС','#ef4444','A. Smirnov','Owner'],['ИП','#0ea5e9','I. Popov','Admin']],
+      invoices:[['INV-2026-0410','129 800 ₽','Stripe','просрочен 4 дня','past'],['INV-2025-0356','118 000 ₽','Stripe','оплачен','live']],
+      tl:[['08.06','счёт INV-0410 — просрочка'],['10.01','воркспейс создан']] },
+    GA:{ logo:'GA', col:'#10b981', name:'GameAudio', url:'gameaudio.dev', owner:'M. Petrova', plan:'Team', planVer:'v4', sub:'активна', subCls:'live', period:'месячный', renew:'02.07.2026', mrr:'15 200 ₽/мес', seats:[8,15], mem:[31,100,'k'], memCls:'', llm:[0.8,2,'M ток.'], health:'ok', healthTxt:'всё в норме',
+      members:[['МП','#10b981','M. Petrova','Owner']],
+      invoices:[['INV-2026-0411','15 200 ₽','Stripe','оплачен','live']],
+      tl:[['10.06','счёт INV-0411 оплачен'],['22.02','воркспейс создан']] },
+    DS:{ logo:'DS', col:'#0ea5e9', name:'DubStudio', url:'dubstudio.ru', owner:'I. Volkov', plan:'Team (trial)', planVer:'—', sub:'trial', subCls:'trial', period:'14 дней', renew:'истекает завтра', mrr:'—', seats:[3,15], mem:[1.2,10,'k'], memCls:'', llm:[0.1,2,'M ток.'], health:'warn', healthTxt:'trial кончается завтра',
+      members:[['ИВ','#0ea5e9','I. Volkov','Owner']],
+      invoices:[],
+      tl:[['18.06','начат trial'],['18.06','воркспейс создан']] },
+    UL:{ logo:'UL', col:'#64748b', name:'unleashed.lan', url:'self-hosted', owner:'Олег Доброяков', plan:'Unlimited', planVer:'v1', sub:'self-hosted', subCls:'live', period:'без биллинга', renew:'—', mrr:'—', seats:[5,'∞'], mem:[18,'∞','k'], memCls:'', llm:['∞','∞',''], health:'ok', healthTxt:'self-hosted · вне платформы', selfhosted:true,
+      members:[['ОД','#64748b','Олег Доброяков','Owner']],
+      invoices:[],
+      tl:[['—','self-hosted инстанс, не под управлением платформы']] },
+  };
+  function meter(arr, cls){ const [u,t,suf='']=arr; const pct = (typeof t==='number'&&typeof u==='number')? Math.min(100, Math.round(u/t*100)) : 8;
+    return `<div class="meter ${cls||''}"><div class="ml"><span></span><span class="mv">${u}${suf} / ${t}${suf}</span></div><div class="mt"><i style="width:${pct}%"></i></div></div>`; }
+  function openWorkspace(key){
+    const w = WS[key]; if(!w) return;
+    const invRows = w.invoices.length ? w.invoices.map(i=>`<div class="mini-row"><span class="mono" style="flex:1">${i[0]}</span><b class="mono tabnum">${i[1]}</b><span class="bdg ${i[4]}">${i[3]}</span></div>`).join('')
+      : '<div style="color:var(--muted);font-size:var(--text-sm);padding:8px 0">Счетов пока нет.</div>';
+    const memberRows = w.members.map(m=>`<div class="mini-row"><span class="mini-av" style="background:${m[1]}">${m[0]}</span><div class="mm"><div>${m[2]}</div></div><span class="bdg ${m[3]==='Owner'?'plat':'cancel'}">${m[3]}</span></div>`).join('');
+    const tlRows = w.tl.map(t=>`<div class="te"><span class="tt">${t[0]}</span><span>${t[1]}</span></div>`).join('');
+    const impersonate = w.selfhosted ? '' : `<button class="tbtn" id="wsImp">Войти как</button>`;
+    $('#wsdetailBody').innerHTML = `
+      <button class="wsd-back" id="wsBack">← К воркспейсам</button>
+      <div class="wsd-hero">
+        <span class="wsd-logo" style="background:${w.col}">${w.logo}</span>
+        <div class="wsd-id"><h2>${w.name}</h2><div class="u">${w.url} · владелец: ${w.owner}</div></div>
+        <div class="wsd-actions">${impersonate}<button class="tbtn">Сменить план</button><button class="tbtn primary">Счета</button></div>
+      </div>
+      <div class="wsd-grid">
+        <div class="wsd-card c4"><h3>Подписка</h3>
+          <div class="dl">
+            <div class="d"><span>План</span><b><span class="bdg plat">${w.plan}</span> <span class="bdg ver">${w.planVer}</span></b></div>
+            <div class="d"><span>Статус</span><b><span class="bdg ${w.subCls}">${w.sub}</span></b></div>
+            <div class="d"><span>Период</span><b>${w.period}</b></div>
+            <div class="d"><span>Продление</span><b class="mono">${w.renew}</b></div>
+            <div class="d"><span>Выручка</span><b>${w.mrr}</b></div>
+          </div>
+        </div>
+        <div class="wsd-card c4"><h3>Потребление</h3>
+          <div class="meter"><div class="ml"><span>Места</span><span class="mv">${w.seats[0]} / ${w.seats[1]}</span></div><div class="mt"><i style="width:${typeof w.seats[1]==='number'?Math.round(w.seats[0]/w.seats[1]*100):10}%"></i></div></div>
+          <div style="height:10px"></div>
+          ${meter(w.mem, w.memCls).replace('<span></span>','<span>Память</span>')}
+          <div style="height:10px"></div>
+          ${meter(w.llm,'').replace('<span></span>','<span>LLM-токены / мес</span>')}
+        </div>
+        <div class="wsd-card c4"><h3>Состояние</h3>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <span class="health-pill ${w.health}">${w.health==='ok'?'● в норме':'▲ внимание'}</span>
+            <div style="font-size:var(--text-sm);color:var(--fg-2);line-height:1.5">${w.healthTxt}</div>
+            ${w.health!=='ok'&&!w.selfhosted?'<button class="tbtn" style="align-self:flex-start">Предложить апгрейд</button>':''}
+          </div>
+        </div>
+        <div class="wsd-card c6"><h3>Участники <span class="bdg cancel">${w.members.length}</span><button class="act">Управлять</button></h3>${memberRows}</div>
+        <div class="wsd-card c6"><h3>Счета<button class="act">Все счета</button></h3>${invRows}</div>
+        <div class="wsd-card c12"><h3>История</h3><div class="tl">${tlRows}</div></div>
+      </div>`;
+    show('wsdetail');
+    $('#wsBack').onclick=()=>show('workspaces');
+    if($('#wsImp')) $('#wsImp').onclick=()=>impersonateModal(w);
+  }
+  function impersonateModal(w){
+    if(confirm(`Войти как «${w.name}»?\n\nВы войдёте в воркспейс от лица оператора для поддержки. Действие будет залогировано в Аудит платформы.`)) {
+      alert('Сессия impersonation начата (макет). Запись добавлена в Аудит.');
+    }
+  }
+  // wire "Открыть" / "Войти как" across workspace table + overview attention rows
+  function wireWsActions(){
+    $$('[data-pane="workspaces"] tbody tr, [data-pane="overview"] tbody tr').forEach(tr=>{
+      const logo = tr.querySelector('.wlogo'); if(!logo) return;
+      const key = logo.textContent.trim();
+      if(!WS[key]) return;
+      tr.querySelectorAll('button').forEach(btn=>{
+        const t=btn.textContent.trim();
+        if(/Открыть/.test(t)) btn.onclick=()=>openWorkspace(key);
+        else if(/Войти как/.test(t)) btn.onclick=()=>impersonateModal(WS[key]);
+      });
+      // make the workspace name itself a drill-down affordance
+      const wn=tr.querySelector('.wn'); if(wn){ wn.style.cursor='pointer'; wn.onclick=()=>openWorkspace(key); }
+    });
+  }
+  wireWsActions();
+
+  /* ── plan drill-down: состав прав, воркспейсы по версиям, выручка ── */
+  const PLANS = {
+    business:{ name:'Business', ver:'v4', col:'#7c3aed', status:'публичный', statusCls:'live', price:'5 900 ₽', period:'/мес · место', disc:'−20% за год', billing:'сразу за год / помесячно', ws:19, mrr:'1.34M ₽', archived:false,
+      rights:[['Места','seats','quota','50'],['Объём памяти','memory.records','quota','1 000 000'],['Хранение аудита','audit.retention','limit','365 дн'],['Книги-контекст','books','bool','вкл'],['OIDC / SSO','auth.oidc','bool','вкл'],['Кастомные роли','roles.custom','bool','выкл']],
+      versions:[['v4','действующая',19,'live'],['v3','устаревшая',5,'cancel'],['v2','устаревшая',1,'cancel']],
+      tenants:[['NM','#7c3aed','Novamedia','v4'],['RT','#ef4444','RetailTech','v4'],['CC','#0ea5e9','CustomCorp','v3']] },
+    team:{ name:'Team', ver:'v4', col:'#10b981', status:'публичный', statusCls:'live', price:'1 900 ₽', period:'/мес · место', disc:'−15% за год', billing:'сразу за год / помесячно', ws:41, mrr:'724k ₽', archived:false,
+      rights:[['Места','seats','quota','15'],['Объём памяти','memory.records','quota','100 000'],['Хранение аудита','audit.retention','limit','30 дн'],['Книги-контекст','books','bool','вкл'],['OIDC / SSO','auth.oidc','bool','выкл']],
+      versions:[['v4','действующая',41,'live'],['v3','архивная',7,'arch']],
+      tenants:[['GA','#10b981','GameAudio','v4']] },
+    team_v3:{ name:'Team', ver:'v3', col:'#10b981', status:'архивный', statusCls:'arch', price:'1 490 ₽', period:'/мес · место', disc:'—', billing:'как было при подписке', ws:7, mrr:'104k ₽', archived:true,
+      rights:[['Места','seats','quota','10'],['Объём памяти','memory.records','quota','50 000'],['Книги-контекст','books','bool','вкл']],
+      versions:[['v3','архивная · закрыт для новых',7,'arch']],
+      tenants:[['ST','#64748b','SomeTenant','v3'],['OT','#64748b','OldClient','v3']] },
+    free:{ name:'Free', ver:'v3', col:'#64748b', status:'публичный', statusCls:'cancel', price:'0 ₽', period:'', disc:'—', billing:'—', ws:34, mrr:'0 ₽', archived:false,
+      rights:[['Места','seats','quota','3'],['Объём памяти','memory.records','quota','10 000'],['Книги-контекст','books','bool','выкл']],
+      versions:[['v3','действующая',34,'live']], tenants:[] },
+    enterprise:{ name:'Enterprise', ver:'v2', col:'#7c3aed', status:'custom', statusCls:'plat', price:'договорная', period:'', disc:'индивид.', billing:'по договору', ws:6, mrr:'2.88M ₽', archived:false,
+      rights:[['Места','seats','quota','∞'],['Объём памяти','memory.records','quota','2 000 000 (override)'],['Кастомные роли','roles.custom','bool','вкл'],['SLA','sla','bool','вкл']],
+      versions:[['v2','действующая',6,'live']],
+      tenants:[['CC','#0ea5e9','CustomCorp','v2']] },
+    unlimited:{ name:'Unlimited', ver:'v1', col:'#64748b', status:'внутренний', statusCls:'cancel', price:'—', period:'self-hosted', disc:'—', billing:'без биллинга', ws:1, mrr:'—', archived:false, selfhosted:true,
+      rights:[['Всё включено','*','bool','вкл'],['Места','seats','quota','∞'],['Объём памяти','memory.records','quota','∞']],
+      versions:[['v1','действующая',1,'live']],
+      tenants:[['UL','#64748b','unleashed.lan','v1']] },
+  };
+  const rtypeCls={quota:'quota',bool:'bool',limit:'limit'};
+  function openPlan(key){
+    const p=PLANS[key]; if(!p) return;
+    const rights=p.rights.map(r=>`<div class="mini-row"><span class="etype ${rtypeCls[r[2]]||'bool'}" style="flex:none">${r[2]}</span><div class="mm"><div>${r[0]}</div><div class="mu">${r[1]}</div></div><b class="mono tabnum">${r[3]}</b></div>`).join('');
+    const vers=p.versions.map(v=>`<div class="mini-row"><span class="bdg ver">${v[0]}</span><div class="mm"><div>${v[1]}</div></div><b class="tabnum">${v[2]} вс.</b> <span class="bdg ${v[3]}" style="margin-left:6px">${v[3]==='live'?'активна':v[3]==='arch'?'архив':'старая'}</span></div>`).join('');
+    const tenants=p.tenants.length? p.tenants.map(t=>`<div class="mini-row"><span class="mini-av" style="background:${t[1]}">${t[0]}</span><div class="mm"><div>${t[2]}</div></div><span class="bdg ver">${t[3]}</span></div>`).join('') : '<div style="color:var(--muted);font-size:var(--text-sm);padding:8px 0">Нет воркспейсов.</div>';
+    const archActions = p.archived
+      ? `<button class="tbtn" id="plMigrate">Перенести клиентов →</button><button class="tbtn">Продлить срок</button>`
+      : `<button class="tbtn" id="plEdit">Редактировать</button>${p.selfhosted?'':'<button class="tbtn">Архивировать</button>'}`;
+    $('#pldetailBody').innerHTML=`
+      <button class="wsd-back" id="plBack">← К планам</button>
+      <div class="wsd-hero">
+        <span class="wsd-logo" style="background:${p.col}">${p.name[0]}</span>
+        <div class="wsd-id"><h2>${p.name} <span class="bdg ver" style="font-size:var(--text-sm);vertical-align:middle">${p.ver}</span>${p.archived?' <span class="bdg arch" style="vertical-align:middle">архивный</span>':''}</h2><div class="u">${p.status} · ${p.ws} воркспейсов · выручка ${p.mrr}</div></div>
+        <div class="wsd-actions">${archActions}</div>
+      </div>
+      <div class="wsd-grid">
+        <div class="wsd-card c4"><h3>Цена и биллинг</h3>
+          <div class="dl">
+            <div class="d"><span>Цена</span><b>${p.price}${p.period?' <span style="color:var(--muted);font-weight:400">'+p.period+'</span>':''}</b></div>
+            <div class="d"><span>Скидка за год</span><b>${p.disc}</b></div>
+            <div class="d"><span>Годовой биллинг</span><b style="font-size:var(--text-xs)">${p.billing}</b></div>
+            <div class="d"><span>Статус</span><b><span class="bdg ${p.statusCls}">${p.status}</span></b></div>
+            <div class="d"><span>Выручка плана</span><b>${p.mrr}</b></div>
+          </div>
+        </div>
+        <div class="wsd-card c8"><h3>Состав прав <span class="bdg cancel">${p.rights.length}</span><button class="act" id="plToEditor">В редактор</button></h3>${rights}</div>
+        <div class="wsd-card c6"><h3>Версии плана</h3>${vers}<p style="font-size:var(--text-xs);color:var(--muted);margin:12px 0 0;line-height:1.5">Воркспейсы остаются на своей версии до миграции. Меняешь состав/цену — растёт версия.</p></div>
+        <div class="wsd-card c6"><h3>Воркспейсы на плане <span class="bdg cancel">${p.ws}</span></h3>${tenants}</div>
+      </div>`;
+    show('pldetail');
+    $('#plBack').onclick=()=>show('plans');
+    const toEd=()=>show('planedit');
+    if($('#plToEditor')) $('#plToEditor').onclick=toEd;
+    if($('#plEdit')) $('#plEdit').onclick=toEd;
+    if($('#plMigrate')) $('#plMigrate').onclick=()=>show('transfers');
+    $('#pldetailBody').querySelectorAll('.mini-row .mm > div:first-child').forEach(()=>{});
+    // tenant rows → workspace drill-down where key exists
+    $('#pldetailBody').querySelectorAll('.wsd-card .mini-row').forEach(row=>{
+      const av=row.querySelector('.mini-av'); if(!av) return; const k=av.textContent.trim();
+      if(WS[k]){ row.style.cursor='pointer'; row.onclick=()=>openWorkspace(k); }
+    });
+  }
+  // wire plan cards → plan detail
+  $$('[data-plan]').forEach(card=>{ card.style.cursor='pointer'; card.onclick=()=>openPlan(card.dataset.plan); });
+
+  /* ── invoice drill-down: позиции, реквизиты, история платежа ── */
+  const INVOICES = {
+    '0412':{ no:'INV-2026-0412', ws:'NM', wsName:'Novamedia', wsCol:'#7c3aed', status:'оплачен', statusCls:'live', kind:'авто · годовой', provider:'ЮKassa', issued:'12.06.2026', due:'12.06.2026', paid:'12.06.2026',
+      bill:['ООО «Новамедиа»','ИНН 7701234567 · КПП 770101001','г. Москва, ул. Примерная, 1','oleg@novamedia.ru'],
+      items:[['Business · год · 14 мест','подписка 12.06.26 — 12.06.27','14 × 4 720 ₽','66 080 ₽'],['Скидка за годовую оплату','−20%','','−13 216 ₽']],
+      sub:'66 080 ₽', disc:'−13 216 ₽', vat:'нет (УСН)', total:'56 640 ₽',
+      tl:[['12.06 14:02','счёт выставлен автоматически','plat'],['12.06 14:05','оплата получена · ЮKassa','live'],['12.06 14:05','подписка продлена до 12.06.2027','live']] },
+    '0410':{ no:'INV-2026-0410', ws:'RT', wsName:'RetailTech', wsCol:'#ef4444', status:'просрочен 4 дня', statusCls:'past', kind:'авто · годовой', provider:'Stripe', issued:'08.06.2026', due:'08.06.2026', paid:'—',
+      bill:['RetailTech LLC','VAT EE123456789','Tallinn, Estonia','a.smirnov@retailtech.io'],
+      items:[['Business · год · 22 места','подписка 08.06.26 — 08.06.27','22 × 4 720 ₽','103 840 ₽'],['Овердрафт мест (доп. 5)','сверх лимита плана','5 × 5 192 ₽','25 960 ₽']],
+      sub:'129 800 ₽', disc:'—', vat:'reverse charge', total:'129 800 ₽',
+      tl:[['08.06','счёт выставлен','plat'],['08.06','списание отклонено · карта','past'],['10.06','ретрай 1 — отклонён','past'],['12.06','ретрай 2 — отклонён · напоминание','past']] },
+    '0411':{ no:'INV-2026-0411', ws:'GA', wsName:'GameAudio', wsCol:'#10b981', status:'оплачен', statusCls:'live', kind:'авто · месячный', provider:'Stripe', issued:'10.06.2026', due:'10.06.2026', paid:'10.06.2026',
+      bill:['GameAudio','m@gameaudio.dev'],
+      items:[['Team · месяц · 8 мест','подписка 10.06 — 10.07','8 × 1 900 ₽','15 200 ₽']],
+      sub:'15 200 ₽', disc:'—', vat:'нет', total:'15 200 ₽',
+      tl:[['10.06','счёт выставлен','plat'],['10.06','оплата получена · Stripe','live']] },
+    '0409':{ no:'INV-2026-0409', ws:'CC', wsName:'CustomCorp', wsCol:'#0ea5e9', status:'выставлен', statusCls:'trial', kind:'ручной', provider:'банковский перевод', issued:'05.06.2026', due:'20.06.2026', paid:'—',
+      bill:['CustomCorp АО','ИНН 7712345678','г. Санкт-Петербург','finance@customcorp.ru'],
+      items:[['Enterprise · год · выделенный инстанс','индивидуальный договор №CC-26/04','','400 000 ₽'],['Премиум SLA · 24/7','годовое обслуживание','','80 000 ₽']],
+      sub:'480 000 ₽', disc:'—', vat:'включён 20%', total:'480 000 ₽',
+      tl:[['05.06','счёт выставлен вручную · оператор','plat'],['05.06','отправлен на finance@customcorp.ru','live']] },
+  };
+  function openInvoice(id){
+    const v=INVOICES[id]; if(!v) return;
+    const items=v.items.map(it=>`<tr><td>${it[0]}<span class="sub">${it[1]}</span></td><td class="r mono" style="white-space:nowrap;color:var(--muted)">${it[2]}</td><td class="r mono tabnum"><b>${it[3]}</b></td></tr>`).join('');
+    const bill=v.bill.map((l,i)=>`<div style="${i===0?'font-weight:600;color:var(--fg)':'color:var(--muted);font-size:var(--text-xs)'}">${l}</div>`).join('');
+    const tl=v.tl.map(t=>`<div class="te"><span class="tt">${t[0]}</span><span><span class="bdg ${t[2]}" style="margin-right:6px">●</span>${t[1]}</span></div>`).join('');
+    const payAction = v.statusCls==='live' ? '' : v.statusCls==='past'
+      ? '<button class="tbtn primary" id="invRemind">Напомнить</button><button class="tbtn">Списать вручную</button>'
+      : '<button class="tbtn primary" id="invMarkPaid">Отметить оплаченным</button><button class="tbtn">Отправить повторно</button>';
+    $('#invdetailBody').innerHTML=`
+      <button class="wsd-back" id="invBack">← К счетам</button>
+      <div class="wsd-hero">
+        <div class="wsd-id"><h2 class="mono" style="font-size:var(--text-xl)">${v.no}</h2><div class="u">${v.kind} · ${v.provider}</div></div>
+        <div class="wsd-actions"><span class="inv-stamp ${v.statusCls}">${v.statusCls==='live'?'● оплачен':v.statusCls==='past'?'▲ '+v.status:'◷ '+v.status}</span><button class="tbtn">PDF</button>${payAction}</div>
+      </div>
+      <div class="wsd-grid">
+        <div class="wsd-card c8"><h3>Позиции счёта</h3>
+          <table class="li-tbl"><thead><tr><th>Описание</th><th class="r">Расчёт</th><th class="r">Сумма</th></tr></thead><tbody>${items}</tbody></table>
+          <div style="margin-top:10px">
+            <div class="li-tot"><span>Подытог</span><b class="mono tabnum">${v.sub}</b></div>
+            ${v.disc!=='—'?`<div class="li-tot"><span>Скидка</span><b class="mono tabnum" style="color:var(--success)">${v.disc}</b></div>`:''}
+            <div class="li-tot"><span>НДС</span><b>${v.vat}</b></div>
+            <div class="li-tot grand"><span>Итого</span><b class="mono tabnum">${v.total}</b></div>
+          </div>
+        </div>
+        <div class="wsd-card c4"><h3>Реквизиты</h3>
+          <div style="margin-bottom:14px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:6px">Плательщик</div>${bill}</div>
+          <div class="dl">
+            <div class="d"><span>Воркспейс</span><b><span class="mini-av" style="width:18px;height:18px;font-size:8px;display:inline-grid;background:${v.wsCol};vertical-align:middle">${v.ws}</span> ${v.wsName}</b></div>
+            <div class="d"><span>Выставлен</span><b class="mono">${v.issued}</b></div>
+            <div class="d"><span>Оплатить до</span><b class="mono">${v.due}</b></div>
+            <div class="d"><span>Оплачен</span><b class="mono">${v.paid}</b></div>
+            <div class="d"><span>Провайдер</span><b>${v.provider}</b></div>
+          </div>
+        </div>
+        <div class="wsd-card c12"><h3>История платежа</h3><div class="tl">${tl}</div></div>
+      </div>`;
+    show('invdetail');
+    $('#invBack').onclick=()=>show('invoices');
+    if($('#invRemind')) $('#invRemind').onclick=()=>alert('Напоминание отправлено плательщику (макет).');
+    if($('#invMarkPaid')) $('#invMarkPaid').onclick=()=>alert('Счёт отмечен оплаченным (макет). Запись в Аудит.');
+    // workspace chip → workspace drill-down
+    const chip=$('#invdetailBody').querySelector('.mini-av');
+    if(chip && WS[v.ws]){ const b=chip.parentElement; b.style.cursor='pointer'; b.onclick=()=>openWorkspace(v.ws); }
+  }
+  // wire invoice rows → invoice detail
+  $$('[data-inv]').forEach(tr=>{
+    const open=tr.querySelector('button.act:last-child'); // "Открыть"
+    if(open && /Открыть/.test(open.textContent)) open.onclick=()=>openInvoice(tr.dataset.inv);
+    const no=tr.querySelector('.mono'); if(no){ no.style.cursor='pointer'; no.onclick=()=>openInvoice(tr.dataset.inv); }
+  });
+
+  /* ── platform user drill-down: членства в воркспейсах, способы входа, сессии, активность ── */
+  const PUSERS={
+    oleg:{ini:'ОД',col:'#7c3aed',name:'Олег Доброяков',email:'oleg@novamedia.ru',created:'12.03.2026',status:'активен',statusCls:'live',last:'сейчас',
+      memberships:[['NM','#7c3aed','Novamedia','Owner','plat'],['UL','#64748b','unleashed.lan','Owner','plat']],
+      logins:['google'],
+      sessions:[['Рабочая станция · Windows','Chrome 141','сейчас',true],['iPhone','Safari · мобильный','вчера',false]],
+      tl:[['сейчас','вход · Novamedia','live'],['13.04','создал воркспейс unleashed.lan','off'],['12.03.2026','регистрация на платформе','off']]},
+    smirnov:{ini:'АС',col:'#0ea5e9',name:'A. Smirnov',email:'a.smirnov@retailtech.io',created:'04.01.2026',status:'активен',statusCls:'live',last:'3 ч назад',
+      memberships:[['RT','#ef4444','RetailTech','Owner','plat']],
+      logins:['github'],
+      sessions:[['MacBook · macOS','Safari 18','3 ч назад',true]],
+      tl:[['3 ч назад','вход · RetailTech','live'],['04.01.2026','регистрация · создал RetailTech','off']]},
+    petrova:{ini:'МП',col:'#10b981',name:'M. Petrova',email:'m@gameaudio.dev',created:'22.02.2026',status:'активен',statusCls:'live',last:'вчера',
+      memberships:[['GA','#10b981','GameAudio','Owner','plat'],['NM','#7c3aed','Novamedia','Member','cancel']],
+      logins:['google','github'],
+      sessions:[['ПК · Linux','Firefox 130','вчера',true]],
+      tl:[['вчера','вход · GameAudio','live'],['10.03','приглашена в Novamedia как Member','off'],['22.02.2026','регистрация · создала GameAudio','off']]},
+  };
+  const PU_PMARK={
+    google:'<svg width="14" height="14" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.3 9.14 5.38 12 5.38z"/></svg>',
+    github:'<svg width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M12 1a11 11 0 0 0-3.48 21.44c.55.1.75-.24.75-.53v-1.86c-3.06.67-3.71-1.47-3.71-1.47-.5-1.28-1.23-1.62-1.23-1.62-1-.69.08-.67.08-.67 1.11.08 1.69 1.14 1.69 1.14.99 1.69 2.59 1.2 3.22.92.1-.72.39-1.2.7-1.48-2.44-.28-5.01-1.22-5.01-5.43 0-1.2.43-2.18 1.13-2.95-.11-.28-.49-1.4.11-2.91 0 0 .92-.3 3.02 1.12a10.5 10.5 0 0 1 5.5 0c2.1-1.42 3.02-1.12 3.02-1.12.6 1.51.22 2.63.11 2.91.7.77 1.13 1.75 1.13 2.95 0 4.22-2.58 5.15-5.03 5.42.4.34.75 1.01.75 2.04v3.02c0 .29.2.64.76.53A11 11 0 0 0 12 1z"/></svg>',
+    sso:'<svg width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M12 1 3 5v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V5l-9-4zm0 6a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5zm0 12c-2 0-3.8-1-4.9-2.6.05-1.6 3.3-2.5 4.9-2.5s4.85.9 4.9 2.5A5.97 5.97 0 0 1 12 19z"/></svg>',
+  };
+  const PU_PNAME={google:'Google',github:'GitHub',sso:'SSO'};
+  function openPlatUser(key){
+    const u=PUSERS[key]; if(!u) return;
+    const ws=u.memberships.map(m=>`<div class="mini-row"><span class="mini-av" style="background:${m[1]};border-radius:7px">${m[0]}</span><div class="mm"><div>${m[2]}</div></div><span class="bdg ${m[4]}">${m[3]}</span></div>`).join('');
+    const logins=u.logins.map(l=>`<span class="ac-provchip" style="display:inline-grid;place-items:center;width:26px;height:26px;border:1px solid var(--border);border-radius:7px;background:var(--surface-warm)">${PU_PMARK[l]||''}</span>`).join(' ');
+    const sess=u.sessions.map(s=>`<div class="mini-row"><div class="mm"><div>${s[0]}</div><div class="mu" style="font-size:10px;color:var(--muted);font-family:var(--font-mono)">${s[1]} · ${s[2]}</div></div>${s[3]?'<span class="bdg live">текущая</span>':'<button class="act danger" data-revoke>Завершить</button>'}</div>`).join('');
+    const tl=u.tl.map(t=>`<div class="te"><span class="tt">${t[0]}</span><span><span class="bdg ${t[2]}" style="margin-right:6px">●</span>${t[1]}</span></div>`).join('');
+    $('#pudetailBody').innerHTML=`
+      <button class="wsd-back" id="puBack">← К пользователям</button>
+      <div class="wsd-hero">
+        <span class="wsd-logo" style="background:${u.col};border-radius:50%">${u.ini}</span>
+        <div class="wsd-id"><h2>${u.name}</h2><div class="u">${u.email} · на платформе с ${u.created}</div></div>
+        <div class="wsd-actions"><button class="tbtn">Написать</button><button class="tbtn" id="puImp">Войти как</button></div>
+      </div>
+      <div class="wsd-grid">
+        <div class="wsd-card c4"><h3>Аккаунт</h3>
+          <div class="dl">
+            <div class="d"><span>Статус</span><b><span class="bdg ${u.statusCls}">${u.status}</span></b></div>
+            <div class="d"><span>Воркспейсов</span><b>${u.memberships.length}</b></div>
+            <div class="d"><span>Последняя активность</span><b class="mono">${u.last}</b></div>
+            <div class="d"><span>Регистрация</span><b class="mono">${u.created}</b></div>
+            <div class="d"><span>Способы входа</span><b>${logins}</b></div>
+          </div>
+        </div>
+        <div class="wsd-card c8"><h3>Членства в воркспейсах <span class="bdg cancel">${u.memberships.length}</span></h3>${ws}<p style="font-size:var(--text-xs);color:var(--muted);margin:12px 0 0;line-height:1.5">Один человек может состоять в нескольких воркспейсах с разными ролями. Клик по воркспейсу — переход в его карточку.</p></div>
+        <div class="wsd-card c6"><h3>Активные сессии <span class="bdg cancel">${u.sessions.length}</span></h3>${sess}</div>
+        <div class="wsd-card c6"><h3>Активность</h3><div class="tl">${tl}</div></div>
+      </div>`;
+    show('pudetail');
+    $('#puBack').onclick=()=>show('users');
+    if($('#puImp')) $('#puImp').onclick=()=>alert('Impersonation платформенного пользователя — строго логируется (макет).');
+    $('#pudetailBody').querySelectorAll('[data-revoke]').forEach(b=>b.onclick=()=>{ b.closest('.mini-row').style.opacity='.4'; b.disabled=true; b.textContent='Завершена'; });
+    // membership rows → workspace drill-down where key matches
+    $('#pudetailBody').querySelectorAll('.wsd-card .mini-row').forEach(row=>{
+      const av=row.querySelector('.mini-av'); if(!av) return; const k=av.textContent.trim();
+      if(typeof WS!=='undefined' && WS[k]){ row.style.cursor='pointer'; row.onclick=()=>openWorkspace(k); }
+    });
+  }
+  // wire platform user rows → detail
+  $$('[data-puser]').forEach(tr=>{
+    const prof=tr.querySelector('button.act'); if(prof && /Профиль/.test(prof.textContent)) prof.onclick=()=>openPlatUser(tr.dataset.puser);
+    const wn=tr.querySelector('.wn'); if(wn){ wn.style.cursor='pointer'; wn.onclick=()=>openPlatUser(tr.dataset.puser); }
+  });
+
+  // wire subscription rows: name → workspace detail, Счета → invoices, Сменить план → transfers
+  $$('[data-pane="subs"] tbody tr').forEach(tr=>{
+    const logo=tr.querySelector('.wlogo'); const key=logo?logo.textContent.trim():null;
+    const wn=tr.querySelector('.wn'); if(wn && key && WS[key]){ wn.style.cursor='pointer'; wn.onclick=()=>openWorkspace(key); }
+    tr.querySelectorAll('button.act').forEach(btn=>{
+      const t=btn.textContent.trim();
+      if(/Счета/.test(t)) btn.onclick=()=>show('invoices');
+      else if(/Сменить план/.test(t)) btn.onclick=()=>show('transfers');
+    });
+  });
+
+  // wire payment-provider "Ключи" → write-only secret panel (reveal one-shot, never stored in clear)
+  $$('[data-pane="payments"] .pay-card').forEach(card=>{
+    const btn=[...card.querySelectorAll('button.act')].find(b=>/Ключи/.test(b.textContent)); if(!btn) return;
+    const name=(card.querySelector('.pn')||{}).textContent||'провайдер';
+    btn.onclick=()=>{
+      if(card.querySelector('.pay-keys')) { card.querySelector('.pay-keys').remove(); btn.setAttribute('aria-expanded','false'); return; }
+      btn.setAttribute('aria-expanded','true');
+      const box=document.createElement('div'); box.className='pay-keys';
+      box.style.cssText='border-top:1px solid var(--border);margin-top:10px;padding-top:10px;display:grid;gap:8px';
+      box.innerHTML=`
+        <div style="font-size:11px;color:var(--muted)">${name} · ключи write-only. Сохранённые значения не показываются — reveal одноразовый и логируется.</div>
+        <label style="font-size:11px;color:var(--fg-2)">Publishable / Public key
+          <input class="txt" type="text" placeholder="pk_live_…" style="margin-top:3px">
+        </label>
+        <label style="font-size:11px;color:var(--fg-2)">Secret key <span class="bdg cancel" style="margin-left:4px">write-only</span>
+          <input class="txt" type="password" value="storedsecret" style="margin-top:3px">
+        </label>
+        <label style="font-size:11px;color:var(--fg-2)">Webhook signing secret
+          <input class="txt" type="password" value="storedsecret" style="margin-top:3px">
+        </label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="act" data-reveal>Показать секрет (1 раз)</button>
+          <button class="tbtn primary" data-savekeys>Сохранить</button>
+          <span class="reveal-note" style="font-size:10px;color:var(--muted)"></span>
+        </div>`;
+      card.appendChild(box);
+      box.querySelector('[data-reveal]').onclick=(e)=>{
+        const sec=box.querySelectorAll('input[type=password]')[0];
+        sec.type='text'; sec.value='sk_live_4eC39Hq●one-shot●revealed';
+        e.target.disabled=true; e.target.textContent='Показано · повтор недоступен';
+        box.querySelector('.reveal-note').textContent='reveal записан в Аудит';
+      };
+      box.querySelector('[data-savekeys]').onclick=()=>{ box.querySelector('.reveal-note').textContent='ключи сохранены (макет)'; };
+    };
+  });
+
+  // wire models "Доступ → Изменить" → inline endpoint/key editor (same write-only discipline)
+  $$('[data-pane="models"] tbody tr').forEach(tr=>{
+    const btn=[...tr.querySelectorAll('button.act')].find(b=>/Изменить/.test(b.textContent)); if(!btn) return;
+    const name=(tr.querySelector('.mono')||{}).textContent||'доступ';
+    btn.onclick=()=>{
+      const next=tr.nextElementSibling;
+      if(next && next.classList.contains('acc-edit')){ next.remove(); return; }
+      const row=document.createElement('tr'); row.className='acc-edit';
+      row.innerHTML=`<td colspan="6" style="background:var(--surface-warm)">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:6px 2px">
+          <label style="font-size:11px;color:var(--fg-2)">API base
+            <input class="txt" type="text" value="${(tr.querySelectorAll('.mono')[1]||{}).textContent||''}" style="margin-top:3px"></label>
+          <label style="font-size:11px;color:var(--fg-2)">Провайдер
+            <input class="txt" type="text" value="${(tr.children[1]||{}).textContent||''}" style="margin-top:3px"></label>
+          <label style="font-size:11px;color:var(--fg-2)">API key <span class="bdg cancel" style="margin-left:4px">write-only</span>
+            <input class="txt" type="password" value="storedsecret" style="margin-top:3px"></label>
+          <div style="display:flex;align-items:flex-end;gap:8px">
+            <button class="act" data-reveal>Показать (1 раз)</button>
+            <button class="tbtn primary" data-save>Сохранить</button>
+          </div>
+        </div></td>`;
+      tr.after(row);
+      row.querySelector('[data-reveal]').onclick=(e)=>{ const s=row.querySelector('input[type=password]'); s.type='text'; s.value='sk-●one-shot●'+name; e.target.disabled=true; e.target.textContent='Показано'; };
+      row.querySelector('[data-save]').onclick=()=>row.remove();
+    };
+  });
+
+  // wire audit cross-links (read-only log → jump to the surface the entry refers to)
+  $$('[data-pane="audit"] button.act').forEach(btn=>{
+    const t=btn.textContent.trim();
+    if(/В редактор/.test(t)) btn.onclick=()=>show('planedit');
+    else if(/Все счета/.test(t)) btn.onclick=()=>show('invoices');
+    else if(/Управлять/.test(t)) btn.onclick=()=>show('models');
+    else if(/Завершить/.test(t)) btn.onclick=()=>{ btn.disabled=true; btn.textContent='Завершена'; };
+  });
+</script>
+</body>
+</html>

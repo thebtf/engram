@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engram — Доступ (макет администрирования)</title>
+<style>
+:root{
+  --bg:#f4f7fb; --surface:#ffffff; --surface-warm:#eef6ff;
+  --fg:#111827; --fg-2:#334155; --muted:#556375; --meta:#0ea5e9;
+  --border:#d8e2ee; --border-soft:#edf3f8;
+  --accent:#0ea5e9; --accent-on:#04131d; --accent-hover:color-mix(in oklab,var(--accent),black 8%);
+  --success:#10b981; --warn:#f59e0b; --danger:#ef4444;
+  --font-body:Inter,system-ui,sans-serif; --font-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --text-xs:11px; --text-sm:13px; --text-base:15px; --text-lg:17px; --text-xl:22px; --text-2xl:30px;
+  --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px; --space-6:24px; --space-8:32px;
+  --radius-pill:9999px; --r-sm:6px; --r-md:10px; --r-lg:14px;
+  --elev-raised:0 18px 46px rgba(15,23,42,.10); --focus-ring:0 0 0 3px rgba(14,165,233,.30);
+  --motion-fast:120ms; --ease:cubic-bezier(.2,0,0,1);
+  --class-live:#16a34a; --class-dormant:#d97706; --class-stale:#6b7280; --class-mustbuild:#7c3aed; --state-danger:#dc2626;
+}
+[data-theme="dark"]{
+  --bg:#0b0d10; --surface:#14171c; --surface-warm:#1c2027; --fg:#e6e9ef; --fg-2:#c2c8d2; --muted:#8b94a3; --meta:#38bdf8;
+  --border:#262b33; --border-soft:#1c2027; --accent:#4c8dff; --accent-on:#04131d; --success:#34d399; --warn:#fbbf24; --danger:#f87171;
+  --elev-raised:0 18px 46px rgba(0,0,0,.5); --focus-ring:0 0 0 3px rgba(76,141,255,.40);
+  --class-live:#34d399; --class-dormant:#fbbf24; --class-stale:#6b7280; --class-mustbuild:#a78bfa; --state-danger:#f87171;
+}
+*{box-sizing:border-box} html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:var(--text-base);line-height:1.48;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--font-mono)} a{color:var(--accent);text-decoration:none}
+:focus-visible{outline:none;box-shadow:var(--focus-ring);border-radius:var(--r-sm)}
+button{font-family:inherit;cursor:pointer}
+.tabnum{font-variant-numeric:tabular-nums}
+
+/* shell */
+.shell{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh}
+.rail{border-right:1px solid var(--border);background:color-mix(in oklab,var(--surface),var(--bg) 30%);padding:18px 12px;display:flex;flex-direction:column;gap:2px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;letter-spacing:-.02em;font-size:var(--text-base);padding:6px 8px 14px}
+.brand .glyph{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;background:var(--accent);color:#fff;font-weight:800;font-size:13px}
+.rgroup{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:14px 10px 6px}
+.rtab{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:var(--fg-2);padding:8px 10px;border-radius:var(--r-sm);font-size:var(--text-sm);font-weight:600;text-align:left;transition:background var(--motion-fast) var(--ease)}
+.rtab:hover{background:var(--surface-warm);color:var(--fg)}
+.rtab[aria-current="true"]{background:color-mix(in oklab,var(--accent),transparent 86%);color:var(--accent)}
+.rtab svg{width:16px;height:16px;flex:none}
+.rtab .cnt{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--muted);background:var(--surface-warm);border:1px solid var(--border);padding:1px 6px;border-radius:var(--radius-pill)}
+.rtab[aria-current="true"] .cnt{color:var(--accent);border-color:color-mix(in oklab,var(--accent),transparent 60%)}
+
+/* main */
+.main{min-width:0;display:flex;flex-direction:column}
+.head{padding:22px var(--space-8) 0;border-bottom:1px solid var(--border);background:var(--surface)}
+.head .crumbs{font-size:var(--text-xs);color:var(--muted);font-family:var(--font-mono)}
+.head h1{font-size:var(--text-xl);font-weight:800;letter-spacing:-.015em;margin:7px 0 3px}
+.head p{color:var(--muted);font-size:var(--text-sm);margin:0;max-width:74ch}
+.htabs{display:flex;gap:2px;margin-top:16px}
+.htab{border:0;background:transparent;color:var(--muted);font-weight:700;font-size:var(--text-sm);padding:9px 13px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.htab:hover{color:var(--fg)}
+.htab[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.body{padding:24px var(--space-8) 80px;overflow:auto}
+
+/* primitives */
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:var(--r-sm);background:var(--surface);border:1px solid var(--border);color:var(--fg-2);font-size:var(--text-xs);font-weight:600}
+.tbtn:hover{border-color:var(--accent);color:var(--fg)}
+.tbtn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-on)}
+.tbtn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+.tbtn svg{width:14px;height:14px}
+.act{font-size:var(--text-xs);font-weight:600;padding:5px 10px;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--surface);color:var(--fg-2)}
+.act:hover{border-color:var(--accent);color:var(--fg)}
+.act.danger:hover{border-color:var(--danger);color:var(--danger)}
+.toggle{width:40px;height:23px;border-radius:var(--radius-pill);background:var(--border);border:0;position:relative;flex:none;transition:background var(--motion-fast)}
+.toggle::after{content:"";position:absolute;top:3px;left:3px;width:17px;height:17px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform var(--motion-fast)}
+.toggle[aria-checked="true"]{background:var(--class-live)} .toggle[aria-checked="true"]::after{transform:translateX(17px)}
+.bdg{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:5px;border:1px solid transparent;display:inline-flex;gap:5px;align-items:center;text-transform:uppercase}
+.bdg.live{color:var(--class-live);background:color-mix(in oklab,var(--class-live),transparent 88%);border-color:color-mix(in oklab,var(--class-live),transparent 62%);text-transform:none}
+.bdg.off{color:var(--muted);background:var(--surface-warm);border-color:var(--border);text-transform:none}
+.bdg.warn{color:var(--warn);background:color-mix(in oklab,var(--warn),transparent 86%);border-color:color-mix(in oklab,var(--warn),transparent 60%);text-transform:none}
+.bdg.role-owner{color:var(--accent);background:color-mix(in oklab,var(--accent),transparent 86%);border-color:color-mix(in oklab,var(--accent),transparent 60%);text-transform:none}
+.bdg.role-admin{color:var(--class-mustbuild);background:color-mix(in oklab,var(--class-mustbuild),transparent 86%);border-color:color-mix(in oklab,var(--class-mustbuild),transparent 60%);text-transform:none}
+.bdg.role-op{color:var(--fg-2);background:var(--surface-warm);border-color:var(--border);text-transform:none}
+.bdg.role-view{color:var(--muted);background:var(--surface-warm);border-color:var(--border);text-transform:none}
+.tag{display:inline-flex;align-items:center;padding:2px 8px;border:1px solid var(--border);border-radius:var(--radius-pill);color:var(--fg-2);font-size:10px;font-family:var(--font-mono)}
+.txt{border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);color:var(--fg);font-size:var(--text-sm);padding:7px 10px;width:100%;font-family:var(--font-mono)}
+.avatar{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800;font-size:12px;flex:none}
+
+.section-t{font-size:var(--text-xs);font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:6px 0 12px}
+.toolbar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.toolbar .spacer{flex:1}
+.search{display:flex;align-items:center;gap:7px;height:32px;padding:0 11px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);color:var(--muted);font-size:var(--text-sm);min-width:240px}
+.search input{border:0;background:transparent;color:var(--fg);font-size:var(--text-sm);width:100%;outline:none;font-family:inherit}
+
+/* provider cards */
+.prov-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+.pcard{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:12px}
+.pcard.on{border-color:color-mix(in oklab,var(--class-live),transparent 55%)}
+.pcard .ph{display:flex;align-items:center;gap:11px}
+.pcard .pmark{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--surface-warm);border:1px solid var(--border);flex:none}
+.pcard .pmark svg,.pcard .pmark .pg{width:19px;height:19px}
+.pcard .pname{font-weight:700;font-size:var(--text-sm)}
+.pcard .psub{font-size:var(--text-xs);color:var(--muted);font-family:var(--font-mono)}
+.pcard .pfields{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--border-soft);padding-top:12px}
+.pcard label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:4px;display:block}
+.pcard .redir{display:flex;gap:6px;align-items:center}
+.pcard .redir .txt{font-size:11px;color:var(--fg-2)}
+.pcard.collapsed .pfields{display:none}
+
+/* table */
+.tbl{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden}
+.tbl th{text-align:left;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:11px 14px;background:color-mix(in oklab,var(--surface),var(--bg) 35%);border-bottom:1px solid var(--border)}
+.tbl td{padding:12px 14px;border-bottom:1px solid var(--border-soft);font-size:var(--text-sm);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:0}
+.tbl tr:hover td{background:color-mix(in oklab,var(--surface-warm),transparent 40%)}
+.uc{display:flex;align-items:center;gap:10px}
+.uc .um{min-width:0}
+.uc .un{font-weight:600;color:var(--fg)} .uc .ue{font-size:var(--text-xs);color:var(--muted);font-family:var(--font-mono)}
+.provchips{display:inline-flex;gap:4px}
+.provchips .pg{width:14px;height:14px}
+.right{text-align:right} .rowact{display:inline-flex;gap:6px;justify-content:flex-end}
+
+/* roles ladder */
+.ladder{display:flex;flex-direction:column;gap:10px;max-width:760px}
+.rung{display:flex;gap:14px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:14px 16px}
+.rung .rl{width:120px;flex:none;display:flex;align-items:center;gap:8px;font-weight:700}
+.rung .rd{color:var(--muted);font-size:var(--text-sm);line-height:1.5}
+.rung .rc{margin-left:auto;flex:none;font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);text-align:right}
+.rung .level{width:7px;align-self:stretch;border-radius:4px;flex:none}
+
+/* policy */
+.policy{display:flex;flex-direction:column;gap:10px;max-width:760px}
+.popt{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);padding:14px 16px}
+.popt.sel{border-color:var(--accent);background:color-mix(in oklab,var(--accent),transparent 92%)}
+.radio{width:18px;height:18px;border-radius:50%;border:2px solid var(--border);flex:none;margin-top:1px;position:relative}
+.popt.sel .radio{border-color:var(--accent)} .popt.sel .radio::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--accent)}
+.popt b{display:block;font-size:var(--text-sm)} .popt p{margin:3px 0 0;color:var(--muted);font-size:var(--text-xs);line-height:1.45}
+
+/* matrix (SaaS teaser) */
+
+.hide{display:none}
+.foot-note{margin-top:24px;font-size:var(--text-xs);color:var(--muted);line-height:1.5;max-width:80ch}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.topbar{height:46px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;align-items:center;gap:12px;padding:0 var(--space-6)}
+.topbar .sp{flex:1}
+.identity{display:inline-flex;align-items:center;gap:8px;height:32px;padding:3px 10px 3px 3px;border-radius:var(--radius-pill);background:var(--surface-warm);border:1px solid var(--border);font-weight:600;font-size:var(--text-xs)}
+.identity .avatar{width:26px;height:26px;font-size:11px;background:var(--accent)}
+.themebtn{height:30px;width:34px;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--surface);color:var(--fg-2)}
+/* user detail (drill-down) */
+.ud-back{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--surface);color:var(--fg-2);font-size:var(--text-xs);font-weight:600;padding:6px 11px;border-radius:var(--r-sm);margin-bottom:16px;cursor:pointer}
+.ud-back:hover{border-color:var(--accent);color:var(--fg)}
+.ud-hero{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+.ud-av{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800;font-size:18px;flex:none}
+.ud-id h2{margin:0;font-size:var(--text-2xl);font-weight:800;letter-spacing:-.02em}
+.ud-id .u{font-size:var(--text-sm);color:var(--muted);font-family:var(--font-mono)}
+.ud-actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.ud-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;align-items:start}
+.ud-card{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--surface);padding:16px}
+.ud-card.c4{grid-column:span 4}.ud-card.c6{grid-column:span 6}.ud-card.c8{grid-column:span 8}.ud-card.c12{grid-column:span 12}
+@media(max-width:900px){.ud-card.c4,.ud-card.c6,.ud-card.c8{grid-column:span 12}}
+.ud-card h3{margin:0 0 12px;font-size:var(--text-xs);font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);display:flex;align-items:center;gap:8px}
+.ud-card h3 .act{margin-left:auto}
+.udl{display:flex;flex-direction:column}
+.udl .d{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--border-soft);font-size:var(--text-sm)}
+.udl .d:first-child{border-top:0}
+.udl .d span{color:var(--muted)}.udl .d b{font-weight:600}
+.ud-mini{display:flex;align-items:center;gap:9px;padding:9px 0;border-top:1px solid var(--border-soft);font-size:var(--text-sm)}
+.ud-mini:first-child{border-top:0}
+.ud-mini .pic{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;background:var(--surface-warm);border:1px solid var(--border);flex:none}
+.ud-mini .pic .pg{width:16px;height:16px}
+.ud-mini .mm{flex:1;min-width:0}.ud-mini .mm .sub{font-size:10px;color:var(--muted);font-family:var(--font-mono)}
+.ud-tl{display:flex;flex-direction:column}
+.ud-tl .te{display:flex;gap:10px;padding:8px 0;border-top:1px solid var(--border-soft);font-size:var(--text-xs)}
+.ud-tl .te:first-child{border-top:0}
+.ud-tl .te .tt{font-family:var(--font-mono);color:var(--muted);white-space:nowrap;min-width:90px}
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- LEFT RAIL: settings groups, Доступ expanded -->
+  <aside class="rail">
+    <div class="brand"><span class="glyph">e</span> Настройки</div>
+    <div class="rgroup">Основное</div>
+    <button class="rtab">Общие</button>
+    <div class="rgroup">Модели</div>
+    <button class="rtab">Модели</button>
+    <button class="rtab">Доступы (LLM)</button>
+    <div class="rgroup">Доступ <span style="color:var(--class-live)">●</span></div>
+    <button class="rtab" data-tab="prov" aria-current="true">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 4v4.2C13 11.4 10.7 13.9 8 14.8 5.3 13.9 3 11.4 3 8.2V4Z"/><path d="M6.1 8 7.4 9.4 10 6.6"/></svg>
+      Провайдеры входа <span class="cnt">3 / 5</span></button>
+    <button class="rtab" data-tab="policy">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M3 8h7M3 12h10"/><circle cx="12.5" cy="8" r="1.4"/></svg>
+      Политика доступа</button>
+    <button class="rtab" data-tab="users">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.4" r="2.6"/><path d="M3 13.4c0-2.5 2.2-4 5-4s5 1.5 5 4"/></svg>
+      Пользователи <span class="cnt">5</span></button>
+    <button class="rtab" data-tab="invites">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.3" y="3.8" width="11.4" height="8.4" rx="1.3"/><path d="m2.6 4.6 5.4 4 5.4-4"/></svg>
+      Приглашения <span class="cnt">2</span></button>
+    <button class="rtab" data-tab="roles">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 13 4.4v3.4C13 11 10.8 13.4 8 14.4 5.2 13.4 3 11 3 7.8V4.4Z"/><path d="M8 6v3M6.2 7.5h3.6"/></svg>
+      Роли</button>
+    <button class="rtab" data-tab="sessions">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.2" y="3.4" width="11.6" height="7.4" rx="1.3"/><path d="M5.6 13.4h4.8M8 10.8v2.6"/></svg>
+      Сессии</button>
+    <button class="rtab" data-tab="audit">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.2h6l3 3V13.8H4Z"/><path d="M9.6 2.4V5.4h3M6 9h4M6 11h4"/></svg>
+      Журнал доступа</button>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="topbar">
+      <div class="sp"></div>
+      <button class="themebtn" id="themeBtn">◐</button>
+      <span class="identity"><span class="avatar">ОД</span>Олег Доброяков · Owner</span>
+    </div>
+
+    <!-- PROVIDERS -->
+    <div class="head" id="h-prov">
+      <div class="crumbs">Настройки · Доступ · Провайдеры входа</div>
+      <h1>Провайдеры входа</h1>
+      <p>Как пользователи входят в этот self-hosted инстанс. Включите нужные провайдеры и заполните их OAuth-реквизиты. Прямые соц-провайдеры и/или один корпоративный OIDC-брокер (Authentik, Keycloak, Zitadel).</p>
+    </div>
+    <div class="body" data-pane="prov">
+      <div class="toolbar">
+        <span class="section-t" style="margin:0">Прямые провайдеры</span>
+        <div class="spacer"></div>
+        <span class="bdg live"><span class="dot" style="background:var(--class-live)"></span>3 включено</span>
+      </div>
+      <div class="prov-grid">
+        <!-- Google -->
+        <div class="pcard on">
+          <div class="ph">
+            <span class="pmark"><svg class="pg" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.6 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.56 2.66-3.86 2.66-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.8.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.93v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.95 10.7a5.4 5.4 0 0 1 0-3.4V4.97H.93a9 9 0 0 0 0 8.06l3.02-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58C13.46.89 11.42 0 9 0A9 9 0 0 0 .93 4.97L3.95 7.3C4.66 5.17 6.65 3.58 9 3.58z"/></svg></span>
+            <div style="flex:1"><div class="pname">Google</div><div class="psub">настроен · 3 польз.</div></div>
+            <span class="toggle" aria-checked="true" role="switch" onclick="tg(this)"></span>
+          </div>
+          <div class="pfields">
+            <div><label>Client ID</label><input class="txt" value="48213••••.apps.googleusercontent.com" readonly></div>
+            <div><label>Client secret</label><input class="txt" type="password" value="storedsecret" placeholder="•••• хранится зашифрованным"></div>
+            <div><label>Redirect URI</label><div class="redir"><input class="txt" value="https://engram.local/auth/google/callback" readonly><button class="act">копировать</button></div></div>
+          </div>
+        </div>
+        <!-- GitHub -->
+        <div class="pcard on">
+          <div class="ph">
+            <span class="pmark"><svg class="pg" viewBox="0 0 18 18"><path fill="currentColor" d="M9 .5a8.5 8.5 0 0 0-2.69 16.57c.43.08.58-.18.58-.41l-.01-1.45c-2.36.51-2.86-1.14-2.86-1.14-.39-.98-.95-1.24-.95-1.24-.77-.53.06-.52.06-.52.85.06 1.3.88 1.3.88.76 1.3 1.99.92 2.47.7.08-.55.3-.92.54-1.13-1.89-.21-3.87-.94-3.87-4.2 0-.93.33-1.69.88-2.29-.09-.21-.38-1.08.08-2.25 0 0 .71-.23 2.34.87a8.1 8.1 0 0 1 4.26 0c1.62-1.1 2.33-.87 2.33-.87.46 1.17.17 2.04.08 2.25.55.6.88 1.36.88 2.29 0 3.27-1.99 3.99-3.88 4.2.3.27.58.78.58 1.58l-.01 2.34c0 .23.15.5.59.41A8.5 8.5 0 0 0 9 .5z"/></svg></span>
+            <div style="flex:1"><div class="pname">GitHub</div><div class="psub">настроен · 1 польз.</div></div>
+            <span class="toggle" aria-checked="true" role="switch" onclick="tg(this)"></span>
+          </div>
+          <div class="pfields">
+            <div><label>Client ID</label><input class="txt" value="Iv1.9c2a••••" readonly></div>
+            <div><label>Client secret</label><input class="txt" type="password" value="storedsecret"></div>
+            <div><label>Redirect URI</label><div class="redir"><input class="txt" value="https://engram.local/auth/github/callback" readonly><button class="act">копировать</button></div></div>
+          </div>
+        </div>
+        <!-- Yandex (collapsed/off) -->
+        <div class="pcard collapsed">
+          <div class="ph">
+            <span class="pmark"><svg class="pg" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="#FC3F1D"/><path fill="#fff" d="M10.16 4.4h-1.1c-1.5 0-2.62.93-2.62 2.62 0 1.18.5 1.86 1.5 2.55l-1.9 3.43h1.6l1.74-3.27h.7v3.27h1.34V4.4h-1.26zm-.96 4.16c-.86 0-1.36-.45-1.36-1.6 0-1.18.55-1.6 1.36-1.6h.86v3.2z"/></svg></span>
+            <div style="flex:1"><div class="pname">Яндекс</div><div class="psub">не настроен</div></div>
+            <span class="toggle" aria-checked="false" role="switch" onclick="tg(this)"></span>
+          </div>
+        </div>
+        <!-- VK (collapsed/off) -->
+        <div class="pcard collapsed">
+          <div class="ph">
+            <span class="pmark"><svg class="pg" viewBox="0 0 18 18"><rect width="18" height="18" rx="4.5" fill="#07F"/><path fill="#fff" d="M14.6 6.06c.1-.3 0-.53-.45-.53h-1.5c-.37 0-.54.2-.63.42 0 0-.74 1.8-1.78 2.97-.34.33-.49.44-.67.44-.1 0-.23-.11-.23-.4V6.05c0-.36-.1-.52-.4-.52H6.43c-.22 0-.36.17-.36.33 0 .34.5.42.56 1.38v2.08c0 .45-.08.53-.26.53-.49 0-1.68-1.81-2.39-3.88-.14-.4-.28-.55-.65-.55H1.82c-.42 0-.5.2-.5.42 0 .37.48 2.28 2.29 4.81 1.2 1.73 2.9 2.66 4.45 2.66.93 0 1.04-.21 1.04-.56v-1.3c0-.4.1-.49.38-.49.2 0 .56.11 1.4.91.95.95 1.1 1.44 1.64 1.44h1.5c.42 0 .63-.21.51-.62-.13-.42-.59-1.02-1.2-1.74-.33-.39-.83-.81-.98-1.02-.21-.27-.15-.39 0-.63 0 0 1.74-2.45 1.92-3.28z"/></svg></span>
+            <div style="flex:1"><div class="pname">VK</div><div class="psub">не настроен</div></div>
+            <span class="toggle" aria-checked="false" role="switch" onclick="tg(this)"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="toolbar" style="margin-top:28px">
+        <span class="section-t" style="margin:0">Корпоративный OIDC-брокер</span>
+        <div class="spacer"></div>
+        <span class="bdg live"><span class="dot" style="background:var(--class-live)"></span>подключён</span>
+      </div>
+      <div class="pcard on" style="max-width:760px">
+        <div class="ph">
+          <span class="pmark"><svg viewBox="0 0 18 18" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.5 15 4v4.4C15 12 12.5 14.8 9 16 5.5 14.8 3 12 3 8.4V4Z"/><path d="M6.6 9 8.2 10.6 11.4 7"/></svg></span>
+          <div style="flex:1"><div class="pname">SSO · Authentik (OIDC)</div><div class="psub">issuer проверен · маппинг ролей активен</div></div>
+          <span class="toggle" aria-checked="true" role="switch" onclick="tg(this)"></span>
+        </div>
+        <div class="pfields" style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px">
+          <div style="grid-column:1/-1"><label>Issuer URL</label><input class="txt" value="https://auth.novamedia.ru/application/o/engram/" readonly></div>
+          <div><label>Client ID</label><input class="txt" value="engram-console" readonly></div>
+          <div><label>Client secret</label><input class="txt" type="password" value="storedsecret"></div>
+          <div><label>Claim → роль (маппинг)</label><input class="txt" value="groups: engram-admins → admin" readonly></div>
+          <div><label>Роль по умолчанию</label><input class="txt" value="operator" readonly></div>
+        </div>
+      </div>
+      <p class="foot-note">Secret’ы — write-only: показываются как «хранится зашифрованным», reveal одноразовый. Redirect URI генерируется из адреса инстанса — копируется в настройки провайдера. Тот же набор провайдеров появляется на экране входа автоматически (data-driven).</p>
+    </div>
+
+    <!-- POLICY -->
+    <div class="head hide" id="h-policy">
+      <div class="crumbs">Настройки · Доступ · Политика доступа</div>
+      <h1>Политика доступа</h1>
+      <p>Кто вообще может войти. Без этого правила любой аккаунт включённого провайдера (например, любой Google) получит вход. Для self-hosted это главный гейт.</p>
+    </div>
+    <div class="body hide" data-pane="policy">
+      <div class="policy">
+        <div class="popt"><span class="radio"></span><div><b>Только по приглашению</b><p>Вход разрешён лишь тем, кого администратор пригласил по email. Самый строгий режим — рекомендуется по умолчанию.</p></div></div>
+        <div class="popt sel"><span class="radio"></span><div><b>Разрешённые домены</b><p>Любой пользователь с email из списка доменов входит автоматически. Текущий список ниже.</p>
+          <div style="display:flex;gap:6px;margin-top:10px"><span class="tag">@novamedia.ru</span><span class="tag">@unleashed.lan</span><button class="act">+ домен</button></div></div></div>
+        <div class="popt"><span class="radio"></span><div><b>Открытая регистрация с подтверждением</b><p>Войти может любой, но до подтверждения администратором аккаунт в статусе «ожидает». Для команд, где удобнее одобрять постфактум.</p></div></div>
+      </div>
+      <div class="toolbar" style="margin-top:24px"><span class="section-t" style="margin:0">Роль новым пользователям</span></div>
+      <div style="display:flex;gap:8px"><span class="bdg role-op">operator</span><button class="act">изменить</button></div>
+      <p class="foot-note">Owner назначается при установке и не может быть понижен через эту панель.</p>
+    </div>
+
+    <!-- USERS -->
+    <div class="head hide" id="h-users">
+      <div class="crumbs">Настройки · Доступ · Пользователи</div>
+      <h1>Пользователи</h1>
+      <p>Все, у кого есть доступ к этому инстансу. Роль определяет, что человек может делать; провайдеры — как он входит.</p>
+    </div>
+    <div class="body hide" data-pane="users">
+      <div class="toolbar">
+        <div class="search"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6.5" cy="6.5" r="4.3"/><path d="M9.6 9.6 14 14"/></svg><input placeholder="Поиск по имени или email…"></div>
+        <div class="spacer"></div>
+        <button class="tbtn">Фильтр: все роли</button>
+        <button class="tbtn primary"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>Пригласить</button>
+      </div>
+      <table class="tbl">
+        <thead><tr><th>Пользователь</th><th>Роль</th><th>Провайдеры</th><th>Статус</th><th>Последний вход</th><th class="right">Действия</th></tr></thead>
+        <tbody>
+          <tr data-user="oleg"><td><div class="uc"><span class="avatar" style="background:var(--accent)">ОД</span><div class="um"><div class="un">Олег Доброяков</div><div class="ue">oleg@novamedia.ru</div></div></div></td>
+            <td><span class="bdg role-owner">Owner</span></td>
+            <td><span class="provchips"><svg class="pg" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.6 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.56 2.66-3.86 2.66-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.8.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.93v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.95 10.7a5.4 5.4 0 0 1 0-3.4V4.97H.93a9 9 0 0 0 0 8.06z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58C13.46.89 11.42 0 9 0A9 9 0 0 0 .93 4.97L3.95 7.3C4.66 5.17 6.65 3.58 9 3.58z"/></svg></span></td>
+            <td><span class="bdg live">активен</span></td><td class="mono tabnum" style="color:var(--muted)">сейчас</td>
+            <td class="right"><span class="rowact"><button class="act">Сессии</button><button class="act" disabled>Owner</button></span></td></tr>
+
+          <tr data-user="maria"><td><div class="uc"><span class="avatar" style="background:#a855f7">МК</span><div class="um"><div class="un">Мария Карпова</div><div class="ue">maria@novamedia.ru</div></div></div></td>
+            <td><span class="bdg role-admin">Admin</span></td>
+            <td><span class="provchips"><svg class="pg" viewBox="0 0 18 18"><path fill="currentColor" d="M9 .5a8.5 8.5 0 0 0-2.69 16.57c.43.08.58-.18.58-.41V15.2c-2.36.51-2.86-1.14-2.86-1.14-.39-.98-.95-1.24-.95-1.24-.77-.53.06-.52.06-.52.85.06 1.3.88 1.3.88.76 1.3 1.99.92 2.47.7.08-.55.3-.92.54-1.13-1.89-.21-3.87-.94-3.87-4.2 0-.93.33-1.69.88-2.29-.09-.21-.38-1.08.08-2.25 0 0 .71-.23 2.34.87a8.1 8.1 0 0 1 4.26 0c1.62-1.1 2.33-.87 2.33-.87.46 1.17.17 2.04.08 2.25.55.6.88 1.36.88 2.29 0 3.27-1.99 3.99-3.88 4.2.3.27.58.78.58 1.58V16.16c0 .23.15.5.59.41A8.5 8.5 0 0 0 9 .5z"/></svg></span></td>
+            <td><span class="bdg live">активен</span></td><td class="mono tabnum" style="color:var(--muted)">2 ч назад</td>
+            <td class="right"><span class="rowact"><button class="act">Роль</button><button class="act">Сессии</button><button class="act danger">Отключить</button></span></td></tr>
+
+          <tr data-user="anton"><td><div class="uc"><span class="avatar" style="background:#0ea5e9">АП</span><div class="um"><div class="un">Антон Петров</div><div class="ue">anton@novamedia.ru</div></div></div></td>
+            <td><span class="bdg role-op">Operator</span></td>
+            <td><span class="provchips"><svg class="pg" viewBox="0 0 18 18"><path fill="none" stroke="var(--accent)" stroke-width="1.5" d="M9 1.5 15 4v4.4C15 12 12.5 14.8 9 16 5.5 14.8 3 12 3 8.4V4Z"/></svg></span></td>
+            <td><span class="bdg live">активен</span></td><td class="mono tabnum" style="color:var(--muted)">вчера</td>
+            <td class="right"><span class="rowact"><button class="act">Роль</button><button class="act">Сессии</button><button class="act danger">Отключить</button></span></td></tr>
+
+          <tr data-user="elena"><td><div class="uc"><span class="avatar" style="background:#64748b">ЕС</span><div class="um"><div class="un">Елена Соколова</div><div class="ue">elena@novamedia.ru</div></div></div></td>
+            <td><span class="bdg role-view">Viewer</span></td>
+            <td><span class="provchips"><svg class="pg" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="#FC3F1D"/><path fill="#fff" d="M10.16 4.4h-1.1c-1.5 0-2.62.93-2.62 2.62 0 1.18.5 1.86 1.5 2.55l-1.9 3.43h1.6l1.74-3.27h.7v3.27h1.34V4.4z"/></svg></span></td>
+            <td><span class="bdg live">активен</span></td><td class="mono tabnum" style="color:var(--muted)">5 дн назад</td>
+            <td class="right"><span class="rowact"><button class="act">Роль</button><button class="act">Сессии</button><button class="act danger">Отключить</button></span></td></tr>
+
+          <tr data-user="dmitry"><td><div class="uc"><span class="avatar" style="background:#475569">ДН</span><div class="um"><div class="un">Дмитрий Новиков</div><div class="ue">dmitry@gmail.com</div></div></div></td>
+            <td><span class="bdg role-op">Operator</span></td>
+            <td><span class="provchips"></span></td>
+            <td><span class="bdg warn">приостановлен</span></td><td class="mono tabnum" style="color:var(--muted)">3 нед назад</td>
+            <td class="right"><span class="rowact"><button class="act">Роль</button><button class="act">Включить</button><button class="act danger">Удалить</button></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- INVITES -->
+    <div class="head hide" id="h-invites">
+      <div class="crumbs">Настройки · Доступ · Приглашения</div>
+      <h1>Приглашения</h1>
+      <p>Отправленные приглашения, ещё не принятые. Ссылка действует ограниченное время.</p>
+    </div>
+    <div class="body hide" data-pane="invites">
+      <div class="toolbar"><div class="spacer"></div><button class="tbtn primary"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>Новое приглашение</button></div>
+      <table class="tbl">
+        <thead><tr><th>Email</th><th>Роль</th><th>Кем выдано</th><th>Истекает</th><th class="right">Действия</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">studio@novamedia.ru</td><td><span class="bdg role-op">Operator</span></td><td>Олег Доброяков</td><td class="mono tabnum" style="color:var(--warn)">через 2 дня</td><td class="right"><span class="rowact"><button class="act">Копировать ссылку</button><button class="act">Переслать</button><button class="act danger">Отозвать</button></span></td></tr>
+          <tr><td class="mono">freelancer@gmail.com</td><td><span class="bdg role-view">Viewer</span></td><td>Мария Карпова</td><td class="mono tabnum" style="color:var(--muted)">через 6 дней</td><td class="right"><span class="rowact"><button class="act">Копировать ссылку</button><button class="act">Переслать</button><button class="act danger">Отозвать</button></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ROLES -->
+    <div class="head hide" id="h-roles">
+      <div class="crumbs">Настройки · Доступ · Роли</div>
+      <h1>Роли</h1>
+      <p>Четыре уровня для self-hosted. Та же лестница масштабируется в SaaS: Owner/Admin воркспейса ложатся поверх платформенного Superadmin.</p>
+    </div>
+    <div class="body hide" data-pane="roles">
+      <div class="ladder">
+        <div class="rung"><span class="level" style="background:var(--accent)"></span><div class="rl"><span class="bdg role-owner">Owner</span></div><div class="rd">Владелец инсталляции. Полный контроль, включая провайдеров входа и роли. Назначается при установке, неудаляем.</div><div class="rc">1 чел.</div></div>
+        <div class="rung"><span class="level" style="background:var(--class-mustbuild)"></span><div class="rl"><span class="bdg role-admin">Admin</span></div><div class="rd">Управляет пользователями, приглашениями и настройками консоли. Не может снять Owner.</div><div class="rc">1 чел.</div></div>
+        <div class="rung"><span class="level" style="background:var(--fg-2)"></span><div class="rl"><span class="bdg role-op">Operator</span></div><div class="rd">Текущая рабочая роль: память, кандидаты, правила, задачи. Без доступа к управлению пользователями.</div><div class="rc">2 чел.</div></div>
+        <div class="rung"><span class="level" style="background:var(--muted)"></span><div class="rl"><span class="bdg role-view">Viewer</span></div><div class="rd">Только чтение всех операционных поверхностей. Никаких мутаций.</div><div class="rc">1 чел.</div></div>
+      </div>
+      <p class="foot-note">В self-hosted роли фиксированы (преднабор). Кастомные роли с гранулярными правами — это уже SaaS-уровень, отдельным разделом.</p>
+    </div>
+
+    <!-- SESSIONS -->
+    <div class="head hide" id="h-sessions">
+      <div class="crumbs">Настройки · Доступ · Сессии</div>
+      <h1>Сессии</h1>
+      <p>Все активные сессии всех пользователей инстанса. Подозрительную можно завершить здесь же.</p>
+    </div>
+    <div class="body hide" data-pane="sessions">
+      <table class="tbl">
+        <thead><tr><th>Пользователь</th><th>Устройство</th><th>IP / агент</th><th>Начата</th><th class="right">Действия</th></tr></thead>
+        <tbody>
+          <tr><td><div class="uc"><span class="avatar" style="background:var(--accent);width:24px;height:24px;font-size:10px">ОД</span>Олег Д.</div></td><td>Рабочая станция · Windows</td><td class="mono" style="color:var(--muted)">Chrome 141 · engram.local</td><td class="mono tabnum">сейчас</td><td class="right"><span class="bdg live">текущая</span></td></tr>
+          <tr><td><div class="uc"><span class="avatar" style="background:#a855f7;width:24px;height:24px;font-size:10px">МК</span>Мария К.</div></td><td>MacBook · macOS</td><td class="mono" style="color:var(--muted)">Safari 18 · 10.0.0.42</td><td class="mono tabnum">2 ч назад</td><td class="right"><button class="act danger">Завершить</button></td></tr>
+          <tr><td><div class="uc"><span class="avatar" style="background:#0ea5e9;width:24px;height:24px;font-size:10px">АП</span>Антон П.</div></td><td>CLI · MCP-токен</td><td class="mono" style="color:var(--muted)">engram-mcp/6.25</td><td class="mono tabnum">вчера</td><td class="right"><button class="act danger">Завершить</button></td></tr>
+        </tbody>
+      </table>
+      <div class="toolbar" style="margin-top:16px"><div class="spacer"></div><button class="tbtn">Завершить все, кроме текущей</button></div>
+    </div>
+
+    <!-- AUDIT -->
+    <div class="head hide" id="h-audit">
+      <div class="crumbs">Настройки · Доступ · Журнал доступа</div>
+      <h1>Журнал доступа</h1>
+      <p>Кто вошёл, кому сменили роль, какие приглашения выданы, что менялось в OAuth-конфиге. Только чтение.</p>
+    </div>
+    <div class="body hide" data-pane="audit">
+      <table class="tbl">
+        <thead><tr><th>Время</th><th>Кто</th><th>Событие</th><th>Детали</th></tr></thead>
+        <tbody>
+          <tr><td class="mono tabnum" style="color:var(--muted)">14:02</td><td>Мария Карпова</td><td><span class="bdg warn">смена роли</span></td><td>Антон Петров: Viewer → Operator</td></tr>
+          <tr><td class="mono tabnum" style="color:var(--muted)">11:48</td><td>Олег Доброяков</td><td><span class="bdg live">вход</span></td><td>через Google · engram.local</td></tr>
+          <tr><td class="mono tabnum" style="color:var(--muted)">вчера 19:30</td><td>Олег Доброяков</td><td><span class="bdg off">OAuth-конфиг</span></td><td>GitHub-провайдер включён</td></tr>
+          <tr><td class="mono tabnum" style="color:var(--muted)">вчера 18:10</td><td>Мария Карпова</td><td><span class="bdg off">приглашение</span></td><td>studio@novamedia.ru · Operator</td></tr>
+          <tr><td class="mono tabnum" style="color:var(--muted)">2 дня назад</td><td>Олег Доброяков</td><td><span class="bdg warn">политика</span></td><td>режим: invite-only → разрешённые домены</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- USER DETAIL (drill-down, no rail tab) -->
+    <div class="body hide" data-pane="udetail" id="udetailBody"></div>
+
+  </div>
+</div>
+
+<script>
+  const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+  function tg(t){ t.setAttribute('aria-checked', t.getAttribute('aria-checked')!=='true'); const card=t.closest('.pcard'); if(card){ const on=t.getAttribute('aria-checked')==='true'; card.classList.toggle('on',on); card.classList.toggle('collapsed',!on);} }
+  function show(tab){
+    $$('.rtab').forEach(b=>b.setAttribute('aria-current', b.dataset.tab===tab));
+    $$('[data-pane]').forEach(p=>p.classList.toggle('hide', p.dataset.pane!==tab));
+    $$('.head').forEach(h=>h.classList.toggle('hide', h.id!=='h-'+tab));
+  }
+  $$('.rtab').forEach(b=>{ if(b.dataset.tab) b.onclick=()=>show(b.dataset.tab); });
+  $('#themeBtn').onclick=()=>{ const r=document.documentElement; r.dataset.theme = r.dataset.theme==='dark'?'light':'dark'; };
+
+  /* ── user drill-down: роль, провайдеры, сессии, история доступа в одной карточке ── */
+  const PMARK={
+    google:'<svg class="pg" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.6 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.56 2.66-3.86 2.66-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.8.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.93v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.95 10.7a5.4 5.4 0 0 1 0-3.4V4.97H.93a9 9 0 0 0 0 8.06z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58C13.46.89 11.42 0 9 0A9 9 0 0 0 .93 4.97L3.95 7.3C4.66 5.17 6.65 3.58 9 3.58z"/></svg>',
+    github:'<svg class="pg" viewBox="0 0 18 18"><path fill="currentColor" d="M9 .5a8.5 8.5 0 0 0-2.69 16.57c.43.08.58-.18.58-.41V15.2c-2.36.51-2.86-1.14-2.86-1.14-.39-.98-.95-1.24-.95-1.24-.77-.53.06-.52.06-.52.85.06 1.3.88 1.3.88.76 1.3 1.99.92 2.47.7.08-.55.3-.92.54-1.13-1.89-.21-3.87-.94-3.87-4.2 0-.93.33-1.69.88-2.29-.09-.21-.38-1.08.08-2.25 0 0 .71-.23 2.34.87a8.1 8.1 0 0 1 4.26 0c1.62-1.1 2.33-.87 2.33-.87.46 1.17.17 2.04.08 2.25.55.6.88 1.36.88 2.29 0 3.27-1.99 3.99-3.88 4.2.3.27.58.78.58 1.58V16.16c0 .23.15.5.59.41A8.5 8.5 0 0 0 9 .5z"/></svg>',
+    sso:'<svg class="pg" viewBox="0 0 18 18"><path fill="none" stroke="var(--accent)" stroke-width="1.5" d="M9 1.5 15 4v4.4C15 12 12.5 14.8 9 16 5.5 14.8 3 12 3 8.4V4Z"/></svg>',
+    yandex:'<svg class="pg" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="#FC3F1D"/><path fill="#fff" d="M10.16 4.4h-1.1c-1.5 0-2.62.93-2.62 2.62 0 1.18.5 1.86 1.5 2.55l-1.9 3.43h1.6l1.74-3.27h.7v3.27h1.34V4.4z"/></svg>',
+  };
+  const provName={google:'Google',github:'GitHub',sso:'SSO · Authentik',yandex:'Яндекс'};
+  const roleBadge={owner:'<span class="bdg role-owner">Owner</span>',admin:'<span class="bdg role-admin">Admin</span>',operator:'<span class="bdg role-op">Operator</span>',viewer:'<span class="bdg role-view">Viewer</span>'};
+  const USERS={
+    oleg:{ini:'ОД',col:'var(--accent)',name:'Олег Доброяков',email:'oleg@novamedia.ru',role:'owner',status:'активен',statusCls:'live',last:'сейчас',created:'12.03.2026',
+      provs:['google'],primary:'google',
+      sessions:[['Рабочая станция · Windows','Chrome 141 · engram.local','сейчас',true]],
+      tl:[['11:48','вход через Google','live'],['вчера 19:30','включил GitHub-провайдер','off'],['12.03.2026','аккаунт создан · Owner','off']]},
+    maria:{ini:'МК',col:'#a855f7',name:'Мария Карпова',email:'maria@novamedia.ru',role:'admin',status:'активен',statusCls:'live',last:'2 ч назад',created:'14.03.2026',
+      provs:['github'],primary:'github',
+      sessions:[['MacBook · macOS','Safari 18 · 10.0.0.42','2 ч назад',false]],
+      tl:[['14:02','сменила роль Антону: Viewer → Operator','warn'],['вчера 18:10','выдала приглашение studio@novamedia.ru','off'],['14.03.2026','аккаунт создан · Admin','off']]},
+    anton:{ini:'АП',col:'#0ea5e9',name:'Антон Петров',email:'anton@novamedia.ru',role:'operator',status:'активен',statusCls:'live',last:'вчера',created:'20.03.2026',
+      provs:['sso'],primary:'sso',
+      sessions:[['CLI · MCP-токен','engram-mcp/6.25','вчера',false]],
+      tl:[['вчера','вход через SSO','live'],['14:02','роль повышена: Viewer → Operator','warn'],['20.03.2026','аккаунт создан · Viewer','off']]},
+    elena:{ini:'ЕС',col:'#64748b',name:'Елена Соколова',email:'elena@novamedia.ru',role:'viewer',status:'активен',statusCls:'live',last:'5 дн назад',created:'02.04.2026',
+      provs:['yandex'],primary:'yandex',
+      sessions:[],
+      tl:[['5 дн назад','вход через Яндекс','live'],['02.04.2026','аккаунт создан · Viewer','off']]},
+    dmitry:{ini:'ДН',col:'#475569',name:'Дмитрий Новиков',email:'dmitry@gmail.com',role:'operator',status:'приостановлен',statusCls:'warn',last:'3 нед назад',created:'10.02.2026',
+      provs:[],primary:null,
+      sessions:[],
+      tl:[['3 нед назад','доступ приостановлен администратором','warn'],['10.02.2026','аккаунт создан · Operator','off']]},
+  };
+  function openUser(key){
+    const u=USERS[key]; if(!u) return;
+    const provs = u.provs.length ? u.provs.map(p=>`<div class="ud-mini"><span class="pic">${PMARK[p]||''}</span><div class="mm"><div>${provName[p]}</div><div class="sub">${p===u.primary?'основной способ входа':'связан'}</div></div>${p===u.primary?'<span class="bdg live">основной</span>':''}</div>`).join('')
+      : '<div style="color:var(--muted);font-size:var(--text-sm);padding:8px 0">Провайдеры не привязаны — вход недоступен.</div>';
+    const sess = u.sessions.length ? u.sessions.map(s=>`<div class="ud-mini"><div class="mm"><div>${s[0]}</div><div class="sub">${s[1]} · ${s[2]}</div></div>${s[3]?'<span class="bdg live">текущая</span>':'<button class="act danger" data-revoke>Завершить</button>'}</div>`).join('')
+      : '<div style="color:var(--muted);font-size:var(--text-sm);padding:8px 0">Активных сессий нет.</div>';
+    const tl = u.tl.map(t=>`<div class="te"><span class="tt">${t[0]}</span><span><span class="bdg ${t[2]}" style="margin-right:6px">●</span>${t[1]}</span></div>`).join('');
+    const owner = u.role==='owner';
+    const statusAction = u.statusCls==='warn' ? '<button class="act">Включить</button>' : (owner?'':'<button class="act danger">Отключить</button>');
+    const actions = owner ? '<button class="tbtn">Сессии</button>' : `<button class="tbtn" id="udRole">Сменить роль</button>${statusAction}`;
+    $('#udetailBody').innerHTML=`
+      <button class="ud-back" id="udBack">← К пользователям</button>
+      <div class="ud-hero">
+        <span class="ud-av" style="background:${u.col}">${u.ini}</span>
+        <div class="ud-id"><h2>${u.name}</h2><div class="u">${u.email} · в системе с ${u.created}</div></div>
+        <div class="ud-actions">${actions}</div>
+      </div>
+      <div class="ud-grid">
+        <div class="ud-card c4"><h3>Доступ</h3>
+          <div class="udl">
+            <div class="d"><span>Роль</span><b>${roleBadge[u.role]}</b></div>
+            <div class="d"><span>Статус</span><b><span class="bdg ${u.statusCls}">${u.status}</span></b></div>
+            <div class="d"><span>Последний вход</span><b class="mono">${u.last}</b></div>
+            <div class="d"><span>Создан</span><b class="mono">${u.created}</b></div>
+          </div>
+        </div>
+        <div class="ud-card c8"><h3>Провайдеры входа <span class="bdg off">${u.provs.length}</span></h3>${provs}</div>
+        <div class="ud-card c6"><h3>Активные сессии <span class="bdg off">${u.sessions.length}</span></h3>${sess}</div>
+        <div class="ud-card c6"><h3>Состояние</h3>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            ${u.statusCls==='warn'?'<div style="font-size:var(--text-sm);color:var(--warn);line-height:1.5">▲ Доступ приостановлен. Вход заблокирован, сессии завершены.</div>'
+              : owner?'<div style="font-size:var(--text-sm);color:var(--fg-2);line-height:1.5">Владелец инсталляции. Роль не понижается через эту панель.</div>'
+              : '<div style="font-size:var(--text-sm);color:var(--class-live);line-height:1.5">● Активен. Вход и работа разрешены по роли.</div>'}
+          </div>
+        </div>
+        <div class="ud-card c12"><h3>История доступа</h3><div class="ud-tl">${tl}</div></div>
+      </div>`;
+    show('udetail');
+    $('#udBack').onclick=()=>show('users');
+    if($('#udRole')) $('#udRole').onclick=()=>{ const r=prompt('Новая роль (admin / operator / viewer):', u.role); if(r&&['admin','operator','viewer'].includes(r.trim())){ u.role=r.trim(); openUser(key); } };
+    $('#udetailBody').querySelectorAll('[data-revoke]').forEach(b=>b.onclick=()=>{ b.closest('.ud-mini').style.opacity='.4'; b.disabled=true; b.textContent='Завершена'; });
+  }
+  // wire user rows → detail (Открыть not present; use name click + add detail affordance)
+  $$('[data-user]').forEach(tr=>{
+    const key=tr.dataset.user;
+    const un=tr.querySelector('.un'); if(un){ un.style.cursor='pointer'; un.onclick=()=>openUser(key); }
+    tr.querySelectorAll('button.act').forEach(btn=>{
+      const t=btn.textContent.trim();
+      if(/Сессии/.test(t)) btn.onclick=()=>openUser(key);
+      else if(/^Роль$/.test(t)) btn.onclick=()=>{ const cur=(tr.querySelector('.bdg[class*="role-"]')||{}).textContent||''; const r=prompt('Новая роль (Admin / Operator / Viewer):',cur); if(r){ const b=tr.querySelector('.bdg[class*="role-"]'); if(b){ b.textContent=r.trim(); } } };
+      else if(/Отключить/.test(t)) btn.onclick=()=>{ if(confirm('Приостановить пользователя? Активные сессии будут завершены.')){ const s=tr.querySelector('.bdg.live'); if(s){ s.className='bdg warn'; s.textContent='приостановлен'; } btn.textContent='Включить'; } };
+      else if(/Включить/.test(t)) btn.onclick=()=>{ const s=tr.querySelector('.bdg.warn'); if(s){ s.className='bdg live'; s.textContent='активен'; } btn.textContent='Отключить'; };
+      else if(/Удалить/.test(t)) btn.onclick=()=>{ if(confirm('Удалить пользователя без возможности восстановления?')){ tr.style.opacity='.4'; tr.querySelectorAll('button').forEach(b=>b.disabled=true); } };
+    });
+  });
+  // wire invites: copy-link / resend / revoke
+  $$('[data-pane="invites"] tbody tr').forEach(tr=>{
+    tr.querySelectorAll('button.act').forEach(btn=>{
+      const t=btn.textContent.trim();
+      if(/Копировать ссылку/.test(t)) btn.onclick=()=>{ const old=btn.textContent; btn.textContent='Скопировано ✓'; setTimeout(()=>btn.textContent=old,1400); };
+      else if(/Переслать/.test(t)) btn.onclick=()=>alert('Приглашение отправлено повторно (макет).');
+      else if(/Отозвать/.test(t)) btn.onclick=()=>{ if(confirm('Отозвать приглашение? Ссылка перестанет действовать.')){ tr.style.opacity='.4'; tr.querySelectorAll('button').forEach(b=>b.disabled=true); } };
+    });
+  });
+  // wire sessions: terminate single / terminate-all-but-current
+  $$('[data-pane="sessions"] tbody tr').forEach(tr=>{
+    const btn=[...tr.querySelectorAll('button.act')].find(b=>/Завершить/.test(b.textContent)); if(!btn) return;
+    btn.onclick=()=>{ tr.style.opacity='.4'; btn.disabled=true; btn.textContent='Завершена'; };
+  });
+  $$('[data-pane="sessions"] .tbtn').forEach(b=>{ if(/Завершить все/.test(b.textContent)) b.onclick=()=>{ if(confirm('Завершить все сессии, кроме текущей?')) $$('[data-pane="sessions"] tbody tr').forEach(tr=>{ const x=[...tr.querySelectorAll('button.act')].find(z=>/Завершить/.test(z.textContent)); if(x){ tr.style.opacity='.4'; x.disabled=true; x.textContent='Завершена'; } }); }; });
+</script>
+</body>
+</html>

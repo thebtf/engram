@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# --- Legacy dashboard build stage ---
+# --- Dashboard build stage ---
 FROM node:22-bookworm-slim AS dashboard
 
 WORKDIR /ui
@@ -9,14 +9,15 @@ RUN npm ci
 COPY ui/ .
 RUN npm run build
 
-# --- Operator web build stage ---
-FROM node:22-bookworm-slim AS operator-web-builder
+# --- Operator console build stage ---
+FROM node:22-bookworm-slim AS operator-console-build
 
-WORKDIR /operator-web
-COPY apps/operator-web/package.json apps/operator-web/package-lock.json ./
+WORKDIR /workspace/apps/operator-console
+COPY apps/operator-console/package.json apps/operator-console/package-lock.json ./
 RUN npm ci
-COPY apps/operator-web/ .
-RUN npm run build
+COPY apps/operator-console/ ./
+COPY design/operator-console/contracts /workspace/design/operator-console/contracts
+RUN npm run parity && npm run build
 
 # --- Go build stage ---
 FROM golang:1.25-bookworm AS builder
@@ -67,22 +68,17 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ENTRYPOINT ["engram-server"]
 
-# --- Operator web image ---
-FROM node:22-bookworm-slim AS operator-web
+# --- Operator console image ---
+FROM node:22-bookworm-slim AS operator-console
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-ENV NITRO_PORT=3000
-ENV NITRO_HOST=0.0.0.0
-ENV NUXT_PUBLIC_API_BASE=/api
-ENV NUXT_ENGRAM_API_TARGET=http://server:37777
+COPY --from=operator-console-build /workspace/apps/operator-console/.output ./.output
 
-COPY --from=operator-web-builder /operator-web/.output/ ./.output/
+ENV NITRO_HOST=0.0.0.0
+ENV NITRO_PORT=3000
+ENV NUXT_PUBLIC_API_BASE=/api
 
 EXPOSE 3000
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:3000/login || exit 1
 
 ENTRYPOINT ["node", ".output/server/index.mjs"]

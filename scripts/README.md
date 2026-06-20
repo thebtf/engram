@@ -130,3 +130,24 @@ Invoke-ScriptAnalyzer -Path scripts/safety-gate.ps1 -Severity Warning
 ```
 
 Expected output: no warnings.
+
+---
+
+## operator-console smoke
+
+The promoted operator-console host path has dedicated smoke scripts:
+
+- `scripts/smoke-operator-console.ps1`
+  - local stack proof for `postgres + server + operator-console`
+  - builds current-source images
+  - validates browser host `:3000`, `/api` proxy, and issue mutation flow
+- `scripts/smoke-operator-console-remote.ps1`
+  - remote/public URL smoke for a deployed operator-console target
+  - validates root + `/api` proxy + worker health
+  - supports `anonymous`, `disabled`, and `token` auth expectations
+
+Convenience target:
+
+```powershell
+make smoke-operator-console
+```

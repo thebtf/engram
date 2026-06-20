@@ -1,0 +1,156 @@
+{
+  "_note": "ZH (Simplified Chinese, zh-Hans) — third launch locale. Keys mirror ru.json exactly. A missing key falls back to ru (the contract) via i18n.config fallbackLocale, so a partial translation still renders. Chinese has ONE grammatical number form, so plural keys have a single slot (no pipes); the built-in plural rule handles it.",
+
+  "common": {
+    "show": "显示",
+    "hide": "隐藏",
+    "copy": "复制",
+    "change": "修改",
+    "enabled": "已启用",
+    "admin": "管理员"
+  },
+
+  "shell": {
+    "brandHome": "返回首页 — 概览",
+    "searchPlaceholder": "在控制台中搜索…",
+    "densityComfortable": "宽松",
+    "densityCompact": "紧凑",
+    "themeToLight": "浅色主题",
+    "themeToDark": "深色主题",
+    "language": "语言",
+    "statusDegradation": "降级",
+    "statusNoise": "噪声"
+  },
+
+  "nav": {
+    "groups": {
+      "workspace": "工作区",
+      "memoryProduct": "记忆与产品",
+      "behaviorWork": "行为与工作",
+      "storage": "存储",
+      "administration": "管理"
+    },
+    "items": {
+      "overview": "概览",
+      "search": "搜索",
+      "memory": "记忆",
+      "queue": "待审核",
+      "noise": "噪声与价值",
+      "graph": "知识关联",
+      "books": "上下文书籍",
+      "rules": "行为规则",
+      "issues": "任务",
+      "projects": "项目与会话",
+      "secrets": "密钥",
+      "documents": "文档",
+      "collections": "旧集合",
+      "access": "访问控制",
+      "settings": "设置",
+      "health": "状态"
+    },
+    "evidence": {
+      "booksPipeline": "处理流水线"
+    }
+  },
+
+  "secrets": {
+    "title": "密钥",
+    "subtitle": "密钥与凭据：列表中不显示具体值，需显式操作才能查看。",
+    "vaultState": "保险库状态",
+    "encryption": "加密",
+    "fingerprint": "密钥指纹",
+    "count": "密钥数",
+    "countPlural": "没有密钥 | {n} 个密钥",
+    "nSecrets": "{n} 个密钥",
+    "fingerprintMasked": "•••• •••• •••• ••••",
+    "colKey": "密钥",
+    "colProject": "项目",
+    "colScope": "范围",
+    "colCreated": "创建时间",
+    "colActions": "操作",
+    "reveal": "👁 显示"
+  },
+
+  "rules": {
+    "title": "行为规则",
+    "subtitle": "会进入每个代理上下文的 always-inject 指令。该页面现在读取真实的 rules REST bridge。",
+    "quickAddTitle": "快速添加规则",
+    "quickAddPlaceholder": "例如：如果后端 endpoint 不存在，就不要把页面伪装成 live。",
+    "quickAddNote": "这个 MVP 的快速添加目前只创建全局规则。scope 编辑和完整编辑器仍待实现。",
+    "priorityLabel": "优先级",
+    "priorityMeta": "优先级 {n}",
+    "updatedMeta": "更新于 {value}",
+    "scopeGlobal": "global",
+    "loading": "正在加载规则…",
+    "empty": "目前还没有活跃规则。",
+    "errors": {
+      "contentRequired": "必须填写规则内容。"
+    },
+    "actions": {
+      "create": "添加",
+      "creating": "保存中…",
+      "delete": "删除",
+      "deleting": "删除中…"
+    }
+  },
+
+  "projects": {
+    "title": "项目与会话",
+    "subtitle": "服务器上的项目以及它们最近的会话活动。",
+    "loading": "正在加载项目和会话…",
+    "empty": "暂时还没有项目。",
+    "sessionsCount": "{n} 个会话",
+    "lastActivity": "活动 {value}"
+  },
+
+  "settings": {
+    "title": "设置",
+    "subtitle": "通过 /api/config 读取真实配置。运行时开关编辑和模型设置在专用 endpoint 出现前保持诚实的 must-build 状态。",
+    "loading": "正在加载配置…",
+    "runtimeTitle": "已观测到的运行时开关",
+    "snapshotTitle": "配置快照",
+    "mustBuildTitle": "仍然缺少什么",
+    "mustBuildBody": "真正的运行时 flag 编辑和模型设置仍需要独立 endpoint，至少包括 /api/flags 和 /api/settings/model。在那之前，这个 surface 保持只读，而不是假装可以操作。",
+    "rows": {
+      "injectUnified": {
+        "title": "Unified injection",
+        "desc": "记忆注入走统一路径，而不是旧的分裂分支。"
+      },
+      "telemetry": {
+        "title": "Telemetry enabled",
+        "desc": "当运行时启用时，服务器会记录 search 和 retrieval telemetry。"
+      },
+      "enforceSourceProject": {
+        "title": "Enforce source project",
+        "desc": "请求来源必须保持在允许的 project boundary 内。"
+      }
+    },
+    "facts": {
+      "contextObservations": "Context observations",
+      "contextMaxTokens": "Context max tokens",
+      "contextSessionCount": "Context session count",
+      "vectorStrategy": "Vector strategy",
+      "databaseMaxConns": "Database max conns",
+      "logBufferSize": "Log buffer size"
+    }
+  },
+
+  "health": {
+    "title": "状态",
+    "subtitle": "服务器健康：selfcheck、embedding coverage，以及诚实标记的 must-build 区域。",
+    "loading": "正在加载状态快照…",
+    "embeddingTitle": "Embedding 覆盖率",
+    "servicesTitle": "服务",
+    "modelsTitle": "模型",
+    "overall": "总体状态",
+    "modelsNote": "模型行目前仍是 mock-backed：这个 exact surface 还没有直接而真实的 model-health endpoint。",
+    "migrationsTitle": "迁移",
+    "migrationsBody": "要真实展示 schema 状态，仍需要 GET /api/migrations endpoint。",
+    "embedding": {
+      "chunkCount": "分块数",
+      "withVectors": "带向量的记忆",
+      "dimension": "维度",
+      "coverage": "覆盖率"
+    }
+  }
+}

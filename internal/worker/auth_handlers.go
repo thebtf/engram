@@ -344,6 +344,10 @@ func (h *AuthHandlers) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"admin access required"}`, http.StatusForbidden)
 		return
 	}
+	if h.users == nil {
+		http.Error(w, `{"error":"not ready"}`, http.StatusServiceUnavailable)
+		return
+	}
 
 	users, err := h.users.ListUsers()
 	if err != nil {

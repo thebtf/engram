@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	authpkg "github.com/thebtf/engram/internal/auth"
 )
 
 // ---------------------------------------------------------------------------
@@ -46,7 +48,7 @@ func TestSecurityHeaders_CSPValue(t *testing.T) {
 	if csp == "" {
 		t.Fatal("Content-Security-Policy header must be present")
 	}
-	wantCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self' data:; frame-ancestors 'none'"
+	wantCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
 	if csp != wantCSP {
 		t.Errorf("CSP = %q\nwant %q", csp, wantCSP)
 	}
@@ -185,6 +187,136 @@ func TestTokenAuth_DisabledAllowsAll(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("disabled auth: status=%d, want 200", rec.Code)
+	}
+}
+
+func TestTokenAuth_DisabledInjectsAdminContext(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "true")
+
+	ta, err := NewTokenAuth("")
+	if err != nil {
+		t.Fatalf("NewTokenAuth: %v", err)
+	}
+
+	var sawIdentity bool
+	var sawSessionAdmin bool
+	var sawLegacyAdmin bool
+	h := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := authpkg.IdentityFrom(r.Context())
+		sawIdentity = ok
+		if ok {
+			sawSessionAdmin = id.IsSessionAdmin()
+		}
+		sawLegacyAdmin = getAuthRole(r) == "admin"
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disabled auth: status=%d, want 200", rec.Code)
+	}
+	if !sawIdentity {
+		t.Fatal("disabled auth should expose auth identity to downstream handler")
+	}
+	if !sawSessionAdmin {
+		t.Fatal("disabled auth identity should be a session admin")
+	}
+	if !sawLegacyAdmin {
+		t.Fatal(`disabled auth should expose legacy role "admin" to downstream handler`)
+	}
+}
+
+func TestTokenAuth_DisabledEmptyTokenDoesNotInjectAdminContext(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "")
+
+	ta, err := NewTokenAuth("")
+	if err != nil {
+		t.Fatalf("NewTokenAuth: %v", err)
+	}
+
+	var sawIdentity bool
+	var sawLegacyRole string
+	h := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, sawIdentity = authpkg.IdentityFrom(r.Context())
+		sawLegacyRole = getAuthRole(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/memory", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty-token bootstrap path: status=%d, want 200", rec.Code)
+	}
+	if sawIdentity {
+		t.Fatal("empty token without explicit disabled-auth should not expose auth identity")
+	}
+	if sawLegacyRole == "admin" {
+		t.Fatal("empty token without explicit disabled-auth should not expose legacy admin role")
+	}
+}
+
+func TestTokenAuth_DisabledStateSeparatesExplicitEnv(t *testing.T) {
+	cases := []struct {
+		name             string
+		token            string
+		authDisabledEnv  string
+		wantEnabled      bool
+		wantAuthDisabled bool
+	}{
+		{
+			name:             "empty token is not explicit disabled auth",
+			token:            "",
+			authDisabledEnv:  "",
+			wantEnabled:      false,
+			wantAuthDisabled: false,
+		},
+		{
+			name:             "token with no disabled auth stays enabled",
+			token:            "secret-token-xyz",
+			authDisabledEnv:  "",
+			wantEnabled:      true,
+			wantAuthDisabled: false,
+		},
+		{
+			name:             "true disables auth explicitly",
+			token:            "secret-token-xyz",
+			authDisabledEnv:  "true",
+			wantEnabled:      false,
+			wantAuthDisabled: true,
+		},
+		{
+			name:             "one disables auth explicitly",
+			token:            "secret-token-xyz",
+			authDisabledEnv:  "1",
+			wantEnabled:      false,
+			wantAuthDisabled: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_AUTH_DISABLED", tc.authDisabledEnv)
+
+			ta, err := NewTokenAuth(tc.token)
+			if err != nil {
+				t.Fatalf("NewTokenAuth: %v", err)
+			}
+
+			if ta.IsEnabled() != tc.wantEnabled {
+				t.Fatalf("IsEnabled()=%v, want %v", ta.IsEnabled(), tc.wantEnabled)
+			}
+			if ta.authDisabled != tc.wantAuthDisabled {
+				t.Fatalf("authDisabled=%v, want %v", ta.authDisabled, tc.wantAuthDisabled)
+			}
+			if isAuthDisabled() != tc.wantAuthDisabled {
+				t.Fatalf("isAuthDisabled()=%v, want %v", isAuthDisabled(), tc.wantAuthDisabled)
+			}
+		})
 	}
 }
 

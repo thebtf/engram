@@ -31,9 +31,9 @@ ui/bun.lock
 ui/dist/
 ui/.vite/
 ui/package.json
-apps/*/node_modules/
-apps/*/.nuxt/
-apps/*/.output/
+apps/operator-console/node_modules/
+apps/operator-console/.nuxt/
+apps/operator-console/.output/
 *.tsbuildinfo
 docs/node_modules/
 docs/dist/
@@ -65,6 +65,7 @@ credentials.json
 .engram/
 tmp/
 temp/
+.od/**
 
 # Test artifacts
 __debug_bin*
