@@ -1,0 +1,67 @@
+/* ============================================================================
+   engram Operator Console — design tokens for the Nuxt build.
+   Source of truth: .od/DESIGN.md. Dark is the base; light is the mirror.
+   Drop into nuxt.config `css: ['~/assets/tokens.css']` and toggle the theme by
+   setting `data-theme="dark|light"` on <html> (use @nuxtjs/color-mode or
+   useColorMode()). Tailwind/Nuxt UI read these via the bridge in app.config.ts.
+   ----------------------------------------------------------------------------
+   Honesty contract lives in --class-* (live / dormant / stale / mustbuild).
+   The One Accent Rule: --accent is the ONLY accent; never add a second.
+   ========================================================================== */
+
+:root,
+[data-theme="light"] {
+  /* surface + text */
+  --bg:#f4f7fb; --surface:#ffffff; --surface-warm:#eef6ff;
+  --fg:#111827; --fg-2:#334155; --muted:#556375; --meta:#0284c7;
+  --border:#d8e2ee; --border-soft:#edf3f8;
+  /* the one accent */
+  --accent:#0ea5e9; --accent-on:#ffffff;
+  --success:#16a34a; --warn:#d97706; --danger:#dc2626;
+  /* honesty classification — readable on any background */
+  --class-live:#16a34a; --class-dormant:#d97706; --class-stale:#6b7280; --class-mustbuild:#7c3aed;
+  --state-danger:#dc2626; --state-warn:#ea580c;
+  --heat-cited:#16a34a; --heat-uncited:#9aa3b0;
+  --secret-tint:#fdf6ec; --reveal-key:#16a34a; --reveal-timer:#b45309;
+  /* elevation: flat by default; shadow only for modal/popover/toast */
+  --elev-ring:0 0 0 1px var(--border);
+  --elev-raised:0 18px 46px rgba(15,30,60,0.10);
+  --focus-ring:0 0 0 3px rgba(14,165,233,0.32);
+}
+
+[data-theme="dark"] {
+  --bg:#0b0d10; --surface:#14171c; --surface-warm:#1c2027;
+  --fg:#e6e9ef; --fg-2:#c2c8d2; --muted:#8b94a3; --meta:#38bdf8;
+  --border:#262b33; --border-soft:#1c2027;
+  --accent:#4c8dff; --accent-on:#04131d;
+  --success:#34d399; --warn:#fbbf24; --danger:#f87171;
+  --class-live:#34d399; --class-dormant:#fbbf24; --class-stale:#6b7280; --class-mustbuild:#a78bfa;
+  --state-danger:#f87171; --state-warn:#fb923c;
+  --heat-cited:#34d399; --heat-uncited:#5c6470;
+  --secret-tint:#1a1410; --reveal-key:#22c55e; --reveal-timer:#f59e0b;
+  --elev-ring:0 0 0 1px var(--border);
+  --elev-raised:0 18px 46px rgba(0,0,0,0.5);
+  --focus-ring:0 0 0 3px rgba(76,141,255,0.40);
+}
+
+:root {
+  /* radii */
+  --r-sm:6px; --r-md:10px; --r-lg:14px; --radius-pill:9999px;
+  /* type families */
+  --font-body:Inter, system-ui, sans-serif;
+  --font-display:Inter, system-ui, sans-serif;
+  --font-mono:"IBM Plex Mono", ui-monospace, Menlo, monospace;
+  /* fixed scale (rem-ish px, NOT clamp) */
+  --text-xs:11px; --text-sm:13px; --text-base:15px; --text-lg:17px;
+  --text-xl:22px; --text-2xl:30px; --text-3xl:42px; --text-4xl:56px;
+  /* 8pt spacing */
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:20px; --space-6:24px; --space-8:32px; --space-12:48px;
+  /* motion */
+  --motion-fast:120ms; --motion-base:200ms;
+  --ease-standard:cubic-bezier(.2,0,0,1);
+  --tracking-display:-0.015em;
+}
+
+/* Tabular Figures Rule — data digits never reflow. Apply to mono/number cells. */
+.mono, [data-num], .tabnum { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }

@@ -1,0 +1,51 @@
+/**
+ * Token bridge — make Nuxt UI / Tailwind resolve to the SAME CSS vars as tokens.css.
+ * Rename to `app.config.ts` in the Nuxt app root. This keeps "one accent, one source":
+ * UI components and .od-specific components read identical variables.
+ *
+ * Nuxt UI v3 reads `ui.colors` from app.config; Tailwind v4 reads the @theme block.
+ * Both point at the CSS vars defined in assets/tokens.css, so theme switching
+ * (data-theme=dark|light) recolours everything at once.
+ */
+export default defineAppConfig({
+  ui: {
+    // map the framework's semantic colours onto our single accent + semantics
+    colors: {
+      primary: 'sky',     // overridden below to the CSS var; sky is the closest Tailwind ramp to --accent
+      neutral: 'slate',
+      success: 'emerald',
+      warning: 'amber',
+      error: 'red',
+    },
+    // flat by default: kill resting shadows so cards don't "float" (DESIGN.md §4)
+    card: { slots: { root: 'shadow-none ring-1 ring-[var(--border)] bg-[var(--surface)] rounded-[var(--r-md)]' } },
+    button: {
+      slots: { base: 'rounded-[var(--r-md)] font-medium' },
+      defaultVariants: { color: 'primary' },
+    },
+    modal: { slots: { content: 'shadow-[var(--elev-raised)] rounded-[var(--r-lg)] ring-1 ring-[var(--border)]' } },
+  },
+})
+
+/*
+ * Tailwind v4 @theme (put in your main.css, alongside `@import "tailwindcss";`):
+ *
+ *   @theme {
+ *     --color-bg: var(--bg);
+ *     --color-surface: var(--surface);
+ *     --color-fg: var(--fg);
+ *     --color-accent: var(--accent);
+ *     --color-class-live: var(--class-live);
+ *     --color-class-dormant: var(--class-dormant);
+ *     --color-class-stale: var(--class-stale);
+ *     --color-class-mustbuild: var(--class-mustbuild);
+ *     --font-sans: var(--font-body);
+ *     --font-mono: var(--font-mono);
+ *     --radius-sm: var(--r-sm);
+ *     --radius-md: var(--r-md);
+ *     --radius-lg: var(--r-lg);
+ *   }
+ *
+ * Then `bg-surface text-fg ring-accent rounded-md` all resolve to the .od tokens,
+ * and flipping data-theme on <html> recolours the whole app with no rebuild.
+ */

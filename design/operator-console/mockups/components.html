@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engram console — reusable components</title>
+<style>
+/* ===== Tokens (verbatim from index.html — the design contract) ===== */
+:root{
+  --bg:#f4f7fb; --surface:#ffffff; --surface-warm:#eef6ff;
+  --fg:#111827; --fg-2:#334155; --muted:#556375; --meta:#0ea5e9;
+  --border:#d8e2ee; --border-soft:#edf3f8;
+  --accent:#0ea5e9; --accent-on:#04131d;
+  --accent-hover:color-mix(in oklab,var(--accent),black 8%);
+  --success:#10b981; --warn:#f59e0b; --danger:#ef4444;
+  --font-display:Inter,system-ui,sans-serif; --font-body:Inter,system-ui,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --text-xs:11px; --text-sm:13px; --text-base:15px; --text-lg:17px; --text-xl:22px; --text-2xl:30px;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px; --space-6:24px; --space-8:32px;
+  --radius-pill:9999px; --r-sm:6px; --r-md:10px; --r-lg:14px;
+  --elev-ring:0 0 0 1px var(--border); --elev-raised:0 18px 46px rgba(15,23,42,.10);
+  --focus-ring:0 0 0 3px rgba(14,165,233,.30);
+  --motion-fast:120ms; --ease-standard:cubic-bezier(.2,0,0,1);
+  --class-live:#16a34a; --class-dormant:#d97706; --class-stale:#6b7280; --class-mustbuild:#7c3aed;
+  --state-danger:#dc2626; --state-warn:#ea580c;
+}
+[data-theme="dark"]{
+  --bg:#0b0d10; --surface:#14171c; --surface-warm:#1c2027;
+  --fg:#e6e9ef; --fg-2:#c2c8d2; --muted:#8b94a3; --meta:#38bdf8;
+  --border:#262b33; --border-soft:#1c2027;
+  --accent:#4c8dff; --accent-on:#04131d; --success:#34d399; --warn:#fbbf24; --danger:#f87171;
+  --elev-raised:0 18px 46px rgba(0,0,0,.5); --focus-ring:0 0 0 3px rgba(76,141,255,.40);
+  --class-live:#34d399; --class-dormant:#fbbf24; --class-stale:#6b7280; --class-mustbuild:#a78bfa;
+  --state-danger:#f87171; --state-warn:#fb923c;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg); color:var(--fg); font-family:var(--font-body); font-size:var(--text-base); line-height:1.48; -webkit-font-smoothing:antialiased;}
+.mono{font-family:var(--font-mono)}
+a{color:var(--accent); text-decoration:none}
+:focus-visible{outline:none; box-shadow:var(--focus-ring); border-radius:var(--r-sm)}
+
+/* layout */
+.wrap{max-width:1080px; margin:0 auto; padding:48px 24px 120px}
+.pagehead{display:flex; align-items:flex-end; justify-content:space-between; gap:20px; flex-wrap:wrap; margin-bottom:40px; padding-bottom:24px; border-bottom:1px solid var(--border)}
+.pagehead h1{font-size:var(--text-2xl); font-weight:800; letter-spacing:-.02em; margin:0}
+.pagehead p{color:var(--muted); font-size:var(--text-sm); margin:6px 0 0; max-width:56ch}
+.brand{display:flex; align-items:center; gap:10px; font-weight:800; font-size:var(--text-lg); margin-bottom:4px}
+.brand .glyph{width:28px; height:28px; border-radius:7px; display:grid; place-items:center; background:var(--accent); color:#fff; font-weight:800; font-size:14px}
+.themebtn{height:34px; padding:0 14px; border-radius:var(--r-sm); border:1px solid var(--border); background:var(--surface); color:var(--fg-2); font-weight:600; font-size:var(--text-xs); cursor:pointer}
+.themebtn:hover{border-color:var(--accent); color:var(--fg)}
+
+section.group{margin-top:44px}
+.group > h2{font-size:var(--text-lg); font-weight:800; margin:0 0 4px; letter-spacing:-.01em}
+.group > .gd{color:var(--muted); font-size:var(--text-sm); margin:0 0 18px}
+
+.spec{border:1px solid var(--border); border-radius:var(--r-lg); background:var(--surface); overflow:hidden; margin-bottom:18px}
+.spec .demo{padding:24px; display:flex; flex-wrap:wrap; gap:14px; align-items:center; background:
+  linear-gradient(0deg, color-mix(in oklab,var(--bg),transparent 40%), color-mix(in oklab,var(--bg),transparent 40%)),
+  repeating-linear-gradient(45deg, transparent 0 11px, color-mix(in oklab,var(--border),transparent 70%) 11px 12px);}
+.spec .demo.col{flex-direction:column; align-items:stretch}
+.spec .meta{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 16px; border-top:1px solid var(--border); background:var(--surface-warm)}
+.spec .meta .name{font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg); font-weight:600}
+.spec .meta .use{color:var(--muted); font-size:var(--text-xs)}
+pre.code{margin:0; border-top:1px solid var(--border); background:color-mix(in oklab,var(--surface),var(--bg) 40%); color:var(--fg-2); font-family:var(--font-mono); font-size:12px; line-height:1.6; padding:14px 16px; overflow:auto; max-height:280px}
+pre.code .k{color:var(--meta)} pre.code .s{color:var(--success)}
+
+/* swatches */
+.swatches{display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; width:100%}
+.sw{border:1px solid var(--border); border-radius:var(--r-md); overflow:hidden; background:var(--surface)}
+.sw .chip{height:54px} .sw .lbl{padding:7px 9px; font-family:var(--font-mono); font-size:10px; color:var(--fg-2)}
+.sw .lbl b{display:block; color:var(--fg); font-size:11px}
+
+.typescale > div{margin:2px 0; color:var(--fg)}
+
+/* ===== component CSS (subset, verbatim semantics from index.html) ===== */
+.tbtn{display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 10px; border-radius:var(--r-sm); background:var(--surface); border:1px solid var(--border); color:var(--fg-2); font-size:var(--text-xs); font-weight:600; cursor:pointer; font-family:inherit}
+.tbtn:hover{border-color:var(--accent); color:var(--fg)}
+.tbtn.primary{background:var(--accent); border-color:var(--accent); color:var(--accent-on)}
+.tbtn.primary:hover{background:var(--accent-hover); border-color:var(--accent-hover)}
+.act{font-size:var(--text-xs); font-weight:600; padding:6px 11px; border-radius:var(--r-sm); border:1px solid var(--border); background:var(--surface); color:var(--fg-2); display:inline-flex; gap:5px; align-items:center; cursor:pointer; font-family:inherit}
+.mbp{font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; color:var(--class-mustbuild); background:color-mix(in oklab,var(--class-mustbuild),transparent 86%); padding:1px 5px; border-radius:4px}
+.seg{display:inline-flex; background:var(--surface-warm); border:1px solid var(--border); border-radius:var(--r-sm); overflow:hidden}
+.seg button{border:0; background:transparent; padding:5px 9px; font-size:10px; font-weight:700; color:var(--muted); cursor:pointer; font-family:inherit}
+.seg button[aria-pressed="true"]{background:var(--surface); color:var(--fg)}
+.bdg{font-size:10px; font-weight:700; letter-spacing:.06em; padding:2px 7px; border-radius:5px; text-transform:uppercase; border:1px solid transparent; display:inline-flex; gap:4px; align-items:center}
+.bdg.live{color:var(--class-live); background:color-mix(in oklab,var(--class-live),transparent 88%); border-color:color-mix(in oklab,var(--class-live),transparent 62%); text-transform:none}
+.bdg.gate{color:var(--class-dormant); background:color-mix(in oklab,var(--class-dormant),transparent 88%); border-color:color-mix(in oklab,var(--class-dormant),transparent 62%); font-family:var(--font-mono); text-transform:none}
+.bdg.mb{color:var(--class-mustbuild); background:color-mix(in oklab,var(--class-mustbuild),transparent 88%); border-color:color-mix(in oklab,var(--class-mustbuild),transparent 60%)}
+.bdg.status{color:var(--fg-2); background:var(--surface-warm); border-color:var(--border)}
+.toggle{width:42px; height:24px; border-radius:var(--radius-pill); background:var(--border); border:0; position:relative; flex:none; transition:background var(--motion-fast); cursor:pointer}
+.toggle::after{content:""; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:var(--surface); box-shadow:0 1px 3px rgba(0,0,0,.3); transition:transform var(--motion-fast)}
+.toggle[aria-checked="true"]{background:var(--class-live)} .toggle[aria-checked="true"]::after{transform:translateX(18px)}
+.toggle.danger[aria-checked="true"]{background:var(--state-danger)}
+.tag{display:inline-flex; align-items:center; padding:2px 7px; border:1px solid var(--border); border-radius:var(--radius-pill); color:var(--fg-2); font-size:10px; font-family:var(--font-mono)}
+.txt{border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); font-size:var(--text-sm); padding:6px 9px; width:100%; font-family:var(--font-mono)}
+
+/* entity row */
+.erow{display:flex; align-items:center; gap:12px; padding:11px 14px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); width:100%}
+.erow .ebody{flex:1; min-width:0}
+.erow .epreview{font-size:var(--text-sm); color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.erow .emeta{display:flex; gap:8px; margin-top:5px; color:var(--muted); font-size:var(--text-xs)}
+.erow .eside{display:flex; gap:8px; align-items:center}
+
+/* identity chip */
+.identity{display:inline-flex; align-items:center; gap:8px; height:32px; padding:3px 10px 3px 3px; border-radius:var(--radius-pill); background:var(--surface-warm); border:1px solid var(--border); color:var(--fg); font-weight:600; font-size:var(--text-xs); cursor:pointer}
+.identity:hover{border-color:var(--accent)}
+.identity .iav{width:26px; height:26px; border-radius:50%; flex:none; display:grid; place-items:center; font-weight:800; font-size:11px; color:#fff; background:var(--accent)}
+.identity .iwho{display:flex; flex-direction:column; line-height:1.05}
+.identity .iname{font-weight:700; color:var(--fg)} .identity .imeta{font-size:9px; font-weight:600; color:var(--muted); font-family:var(--font-mono)}
+.identity .icaret{color:var(--muted); font-size:9px}
+
+/* settings row */
+.settings-row{display:grid; grid-template-columns:minmax(220px,1fr) minmax(200px,300px); gap:20px; align-items:start; padding:14px 0; border-top:1px solid var(--border-soft); width:100%}
+.settings-row:first-child{border-top:0}
+.setting-copy b{display:block; font-size:var(--text-sm); color:var(--fg)} .setting-copy p{margin:3px 0 0; color:var(--muted); font-size:var(--text-xs); line-height:1.4}
+.setting-control{display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap}
+
+/* provider buttons */
+.ag-providers{display:grid; grid-template-columns:1fr 1fr; gap:9px; width:100%; max-width:380px}
+.ag-prov{display:inline-flex; align-items:center; justify-content:center; gap:9px; height:42px; border-radius:var(--r-sm); border:1px solid var(--border); background:var(--surface); color:var(--fg); font-weight:600; font-size:var(--text-sm); cursor:pointer; font-family:inherit}
+.ag-prov:hover{border-color:var(--accent); background:var(--surface-warm)}
+.ag-prov.full{grid-column:1 / -1}
+.ag-prov .pg{width:18px; height:18px; flex:none}
+
+/* toast / modal mini-previews */
+.toast-demo{background:var(--fg); color:var(--bg); padding:9px 15px; border-radius:var(--r-sm); font-size:var(--text-sm); font-weight:600; box-shadow:var(--elev-raised); display:inline-block}
+.modal-demo{width:260px; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--elev-raised); overflow:hidden}
+.modal-demo h3{margin:0; padding:14px 16px; font-size:var(--text-base)}
+.modal-demo .mb{padding:0 16px 12px; color:var(--fg-2); font-size:var(--text-sm)}
+.modal-demo .mf{padding:12px 16px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px}
+
+.toc{position:sticky; top:0; background:color-mix(in oklab,var(--bg),transparent 8%); backdrop-filter:blur(8px); display:flex; flex-wrap:wrap; gap:6px; padding:12px 0; margin-bottom:8px; z-index:5; border-bottom:1px solid var(--border-soft)}
+.toc a{font-size:var(--text-xs); font-weight:600; color:var(--fg-2); padding:5px 10px; border-radius:var(--radius-pill); border:1px solid var(--border)}
+.toc a:hover{border-color:var(--accent); color:var(--fg)}
+.note{padding:12px 14px; border-radius:var(--r-md); background:var(--surface-warm); border:1px solid var(--border); color:var(--fg-2); font-size:var(--text-sm); line-height:1.5}
+.note b{color:var(--fg)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="pagehead">
+    <div>
+      <div class="brand"><span class="glyph">e</span> engram</div>
+      <h1>Reusable components</h1>
+      <p>Живая галерея переиспользуемых компонентов операторской консоли. Те же токены, те же классы, что в <span class="mono">index.html</span>. Открой в браузере, переключи тему, копируй разметку. Сопровождает <span class="mono">DEVELOPER-PLAYBOOK.md</span>.</p>
+    </div>
+    <button class="themebtn" id="themeBtn">◐ Тема</button>
+  </div>
+
+  <div class="toc">
+    <a href="#tokens">Токены</a><a href="#buttons">Кнопки</a><a href="#badges">Классификация</a>
+    <a href="#toggle">Переключатели</a><a href="#inputs">Поля</a><a href="#row">Entity Row</a>
+    <a href="#settings">Settings Row</a><a href="#identity">Identity</a><a href="#auth">Login</a>
+    <a href="#overlays">Overlays</a>
+  </div>
+
+  <div class="note" style="margin-top:18px"><b>Honesty contract.</b> Классификационные бейджи (<span class="mono">live / gate / mb / status</span>) — это не декор. Каждый из них обязан отражать реальное состояние бэкенда. Никогда не показывай мёртвый контрол как рабочий — это смысл существования консоли.</div>
+
+  <!-- TOKENS -->
+  <section class="group" id="tokens">
+    <h2>Токены</h2>
+    <p class="gd">Цвет, тип, радиусы. Тёмная тема — основная (operator / второй монитор), светлая — дневная проверка. Один акцент.</p>
+    <div class="spec"><div class="demo col">
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="background:var(--bg)"></div><div class="lbl"><b>--bg</b>фон</div></div>
+        <div class="sw"><div class="chip" style="background:var(--surface)"></div><div class="lbl"><b>--surface</b>карточки</div></div>
+        <div class="sw"><div class="chip" style="background:var(--surface-warm)"></div><div class="lbl"><b>--surface-warm</b>вторич.</div></div>
+        <div class="sw"><div class="chip" style="background:var(--accent)"></div><div class="lbl"><b>--accent</b>единый акцент</div></div>
+        <div class="sw"><div class="chip" style="background:var(--success)"></div><div class="lbl"><b>--success</b></div></div>
+        <div class="sw"><div class="chip" style="background:var(--warn)"></div><div class="lbl"><b>--warn</b></div></div>
+        <div class="sw"><div class="chip" style="background:var(--danger)"></div><div class="lbl"><b>--danger</b></div></div>
+        <div class="sw"><div class="chip" style="background:var(--class-live)"></div><div class="lbl"><b>--class-live</b>работает</div></div>
+        <div class="sw"><div class="chip" style="background:var(--class-dormant)"></div><div class="lbl"><b>--class-dormant</b>за флагом</div></div>
+        <div class="sw"><div class="chip" style="background:var(--class-stale)"></div><div class="lbl"><b>--class-stale</b>надгробие</div></div>
+        <div class="sw"><div class="chip" style="background:var(--class-mustbuild)"></div><div class="lbl"><b>--class-mustbuild</b>в работе</div></div>
+      </div>
+      <div class="typescale" style="margin-top:8px; width:100%">
+        <div style="font-size:var(--text-2xl); font-weight:800; letter-spacing:-.02em">30 · display</div>
+        <div style="font-size:var(--text-xl); font-weight:700">22 · заголовок</div>
+        <div style="font-size:var(--text-base)">15 · текст · <span class="mono" style="font-variant-numeric:tabular-nums">1 234 567 tabular</span></div>
+        <div style="font-size:var(--text-sm); color:var(--fg-2)">13 · вторичный</div>
+        <div style="font-size:var(--text-xs); color:var(--muted)" class="mono">11 · мета / mono</div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- BUTTONS -->
+  <section class="group" id="buttons">
+    <h2>Кнопки и действия</h2>
+    <p class="gd"><span class="mono">.tbtn</span> — нейтральная, <span class="mono">.primary</span> — единственный акцент. <span class="mono">.act</span> с пилюлей <span class="mono">.mbp</span> честно помечает действие, которому нужен бэкенд.</p>
+    <div class="spec">
+      <div class="demo">
+        <button class="tbtn">Вторичная</button>
+        <button class="tbtn primary">Основная</button>
+        <button class="act">Действие</button>
+        <button class="act">Удалить <span class="mbp">нужен backend</span></button>
+        <div class="seg"><button aria-pressed="true">Комфорт</button><button aria-pressed="false">Компактно</button></div>
+      </div>
+      <div class="meta"><span class="name">.tbtn / .tbtn.primary / .act / .seg</span><span class="use">высота 30px · единый акцент только на .primary</span></div>
+      <pre class="code">&lt;button class="<span class="k">tbtn</span>"&gt;Вторичная&lt;/button&gt;
+&lt;button class="<span class="k">tbtn primary</span>"&gt;Основная&lt;/button&gt;
+&lt;button class="<span class="k">act</span>"&gt;Удалить &lt;span class="<span class="k">mbp</span>"&gt;нужен backend&lt;/span&gt;&lt;/button&gt;</pre>
+    </div>
+  </section>
+
+  <!-- BADGES -->
+  <section class="group" id="badges">
+    <h2>Классификация (honesty)</h2>
+    <p class="gd">Словарь честности. Выбирается по реальному состоянию, не по вкусу.</p>
+    <div class="spec">
+      <div class="demo">
+        <span class="bdg live">работает</span>
+        <span class="bdg gate">за флагом VNEXT_F</span>
+        <span class="bdg mb">в работе</span>
+        <span class="bdg status">нейтральный</span>
+      </div>
+      <div class="meta"><span class="name">.bdg.live / .gate / .mb / .status</span><span class="use">live=зелёный · gate=янтарь+mono · mb=фиолет · status=нейтр.</span></div>
+      <pre class="code">&lt;span class="<span class="k">bdg live</span>"&gt;работает&lt;/span&gt;
+&lt;span class="<span class="k">bdg gate</span>"&gt;за флагом&lt;/span&gt;
+&lt;span class="<span class="k">bdg mb</span>"&gt;в работе&lt;/span&gt;</pre>
+    </div>
+  </section>
+
+  <!-- TOGGLE -->
+  <section class="group" id="toggle">
+    <h2>Переключатели</h2>
+    <p class="gd">Чистый CSS, переключается через <span class="mono">aria-checked</span>. <span class="mono">.danger</span> — когда «включено» = опасно.</p>
+    <div class="spec">
+      <div class="demo">
+        <span class="toggle" aria-checked="true" role="switch" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked')!=='true')"></span>
+        <span class="toggle" aria-checked="false" role="switch" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked')!=='true')"></span>
+        <span class="toggle danger" aria-checked="true" role="switch" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked')!=='true')"></span>
+      </div>
+      <div class="meta"><span class="name">.toggle[aria-checked] / .toggle.danger</span><span class="use">кликни — переключатели живые</span></div>
+      <pre class="code">&lt;span class="<span class="k">toggle</span>" role="switch" aria-checked="<span class="s">true</span>"&gt;&lt;/span&gt;
+&lt;span class="<span class="k">toggle danger</span>" role="switch" aria-checked="<span class="s">true</span>"&gt;&lt;/span&gt;</pre>
+    </div>
+  </section>
+
+  <!-- INPUTS -->
+  <section class="group" id="inputs">
+    <h2>Поля</h2>
+    <p class="gd"><span class="mono">.txt</span> — моноширинное поле для данных, ключей, идентификаторов. Секреты — всегда <span class="mono">type=password</span>.</p>
+    <div class="spec">
+      <div class="demo col" style="max-width:380px">
+        <input class="txt" placeholder="engram/ops-llm">
+        <input class="txt" type="password" placeholder="вводится один раз">
+        <span class="tag">unleashed.lan:37777</span>
+      </div>
+      <div class="meta"><span class="name">.txt / .tag</span><span class="use">секрет write-only · reveal одноразовый</span></div>
+      <pre class="code">&lt;input class="<span class="k">txt</span>" placeholder="…"&gt;
+&lt;input class="<span class="k">txt</span>" type="<span class="s">password</span>"&gt;</pre>
+    </div>
+  </section>
+
+  <!-- ENTITY ROW -->
+  <section class="group" id="row">
+    <h2>Entity Row</h2>
+    <p class="gd">Опорный элемент списков во всех разделах: память, кандидаты, книги, задачи.</p>
+    <div class="spec">
+      <div class="demo col">
+        <div class="erow">
+          <div class="ebody">
+            <div class="epreview">Решение: переход на embedding 1536 для обоих хранилищ</div>
+            <div class="emeta"><span class="bdg status">decision</span><span>project · engram</span><span class="mono">m_77b0</span></div>
+          </div>
+          <div class="eside"><span class="bdg live">цитируется</span><button class="act">Открыть</button></div>
+        </div>
+      </div>
+      <div class="meta"><span class="name">.erow + .ebody/.emeta/.eside</span><span class="use">один паттерн строки на весь продукт</span></div>
+      <pre class="code">&lt;div class="<span class="k">erow</span>"&gt;
+  &lt;div class="<span class="k">ebody</span>"&gt;
+    &lt;div class="<span class="k">epreview</span>"&gt;Заголовок записи&lt;/div&gt;
+    &lt;div class="<span class="k">emeta</span>"&gt;&lt;span class="bdg status"&gt;decision&lt;/span&gt;…&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class="<span class="k">eside</span>"&gt;&lt;button class="act"&gt;Открыть&lt;/button&gt;&lt;/div&gt;
+&lt;/div&gt;</pre>
+    </div>
+  </section>
+
+  <!-- SETTINGS ROW -->
+  <section class="group" id="settings">
+    <h2>Settings Row</h2>
+    <p class="gd">Вся поверхность настроек собрана из одной функции <span class="mono">settingRow(title, desc, control)</span>: подпись слева, контрол справа.</p>
+    <div class="spec">
+      <div class="demo col">
+        <div class="settings-row">
+          <div class="setting-copy"><b>Legacy-вход по админскому ключу</b><p>Запасной прямой вход в обход OAuth. Выключите, чтобы оставить только OAuth.</p></div>
+          <div class="setting-control"><span class="toggle danger" aria-checked="true" role="switch" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked')!=='true')"></span></div>
+        </div>
+        <div class="settings-row">
+          <div class="setting-copy"><b>Вход через провайдера</b><p>Google, GitHub, Яндекс, VK, SSO. Базовый способ, отключить нельзя.</p></div>
+          <div class="setting-control"><span class="bdg live">всегда включён</span></div>
+        </div>
+      </div>
+      <div class="meta"><span class="name">settingRow(title, desc, control)</span><span class="use">grid: копия | контрол</span></div>
+      <pre class="code"><span class="k">settingRow</span>('Legacy-вход', 'Запасной вход в обход OAuth…',
+  `&lt;span class="<span class="k">toggle danger</span>" role="switch" aria-checked="true"&gt;&lt;/span&gt;`)</pre>
+    </div>
+  </section>
+
+  <!-- IDENTITY -->
+  <section class="group" id="identity">
+    <h2>Identity — «кто залогинен»</h2>
+    <p class="gd">Чип в топбаре заменяет статичную плашку. Клик → поповер: Профиль / Сеансы / Выйти.</p>
+    <div class="spec">
+      <div class="demo">
+        <span class="identity"><span class="iav">ОД</span><span class="iwho"><span class="iname">Олег Доброяков</span><span class="imeta">Google</span></span><span class="icaret">▾</span></span>
+        <span class="identity"><span class="iav" style="background:var(--muted)">·</span><span class="iwho"><span class="iname">Не выполнен вход</span><span class="imeta">гость</span></span></span>
+      </div>
+      <div class="meta"><span class="name">.identity → openIdentityMenu()</span><span class="use">аватар-инициалы · способ входа во второй строке</span></div>
+      <pre class="code">&lt;button class="<span class="k">identity</span>"&gt;
+  &lt;span class="<span class="k">iav</span>"&gt;ОД&lt;/span&gt;
+  &lt;span class="<span class="k">iwho</span>"&gt;&lt;span class="iname"&gt;Имя&lt;/span&gt;&lt;span class="imeta"&gt;Google&lt;/span&gt;&lt;/span&gt;
+  &lt;span class="<span class="k">icaret</span>"&gt;▾&lt;/span&gt;
+&lt;/button&gt;</pre>
+    </div>
+  </section>
+
+  <!-- AUTH / LOGIN -->
+  <section class="group" id="auth">
+    <h2>Login — провайдеры входа</h2>
+    <p class="gd">OAuth/OIDC-кнопки, управляемые данными (<span class="mono">AUTH_PROVIDERS</span> + <span class="mono">PROVIDER_MARK</span>). SSO растягивается на всю ширину. Legacy-таб — отдельный запасной вход.</p>
+    <div class="spec">
+      <div class="demo col">
+        <div class="ag-providers">
+          <button class="ag-prov" type="button"><svg class="pg" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.6 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.56 2.66-3.86 2.66-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.8.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.93v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.95 10.7a5.4 5.4 0 0 1 0-3.4V4.97H.93a9 9 0 0 0 0 8.06l3.02-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58C13.46.89 11.42 0 9 0A9 9 0 0 0 .93 4.97L3.95 7.3C4.66 5.17 6.65 3.58 9 3.58z"/></svg><span>Google</span></button>
+          <button class="ag-prov" type="button"><svg class="pg" viewBox="0 0 18 18"><path fill="currentColor" d="M9 .5a8.5 8.5 0 0 0-2.69 16.57c.43.08.58-.18.58-.41l-.01-1.45c-2.36.51-2.86-1.14-2.86-1.14-.39-.98-.95-1.24-.95-1.24-.77-.53.06-.52.06-.52.85.06 1.3.88 1.3.88.76 1.3 1.99.92 2.47.7.08-.55.3-.92.54-1.13-1.89-.21-3.87-.94-3.87-4.2 0-.93.33-1.69.88-2.29-.09-.21-.38-1.08.08-2.25 0 0 .71-.23 2.34.87a8.1 8.1 0 0 1 4.26 0c1.62-1.1 2.33-.87 2.33-.87.46 1.17.17 2.04.08 2.25.55.6.88 1.36.88 2.29 0 3.27-1.99 3.99-3.88 4.2.3.27.58.78.58 1.58l-.01 2.34c0 .23.15.5.59.41A8.5 8.5 0 0 0 9 .5z"/></svg><span>GitHub</span></button>
+          <button class="ag-prov" type="button"><svg class="pg" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="#FC3F1D"/><path fill="#fff" d="M10.16 4.4h-1.1c-1.5 0-2.62.93-2.62 2.62 0 1.18.5 1.86 1.5 2.55l-1.9 3.43h1.6l1.74-3.27h.7v3.27h1.34V4.4h-1.26zm-.96 4.16c-.86 0-1.36-.45-1.36-1.6 0-1.18.55-1.6 1.36-1.6h.86v3.2z"/></svg><span>Яндекс</span></button>
+          <button class="ag-prov" type="button"><svg class="pg" viewBox="0 0 18 18"><rect width="18" height="18" rx="4.5" fill="#07F"/><path fill="#fff" d="M14.6 6.06c.1-.3 0-.53-.45-.53h-1.5c-.37 0-.54.2-.63.42 0 0-.74 1.8-1.78 2.97-.34.33-.49.44-.67.44-.1 0-.23-.11-.23-.4V6.05c0-.36-.1-.52-.4-.52H6.43c-.22 0-.36.17-.36.33 0 .34.5.42.56 1.38v2.08c0 .45-.08.53-.26.53-.49 0-1.68-1.81-2.39-3.88-.14-.4-.28-.55-.65-.55H1.82c-.42 0-.5.2-.5.42 0 .37.48 2.28 2.29 4.81 1.2 1.73 2.9 2.66 4.45 2.66.93 0 1.04-.21 1.04-.56v-1.3c0-.4.1-.49.38-.49.2 0 .56.11 1.4.91.95.95 1.1 1.44 1.64 1.44h1.5c.42 0 .63-.21.51-.62-.13-.42-.59-1.02-1.2-1.74-.33-.39-.83-.81-.98-1.02-.21-.27-.15-.39 0-.63 0 0 1.74-2.45 1.92-3.28z"/></svg><span>VK</span></button>
+          <button class="ag-prov full" type="button"><svg class="pg" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.5 15 4 v4.4 C15 12 12.5 14.8 9 16 5.5 14.8 3 12 3 8.4 V4 Z"/><path d="M6.6 9 8.2 10.6 11.4 7"/></svg><span>SSO · Authentik</span></button>
+        </div>
+      </div>
+      <div class="meta"><span class="name">.ag-prov / .ag-prov.full · PROVIDER_MARK{}</span><span class="use">data-driven · добавь провайдера → кнопка появится</span></div>
+      <pre class="code"><span class="k">AUTH_PROVIDERS</span>.map(p =&gt; `&lt;button class="<span class="k">ag-prov</span>${p.full?' full':''}" data-prov="${p.id}"&gt;
+  ${<span class="k">PROVIDER_MARK</span>[p.id]}&lt;span&gt;${p.name}&lt;/span&gt;&lt;/button&gt;`)
+<span class="s">// wiring → window.location = OAUTH_START[id] (см. PLAYBOOK §3.2)</span></pre>
+    </div>
+  </section>
+
+  <!-- OVERLAYS -->
+  <section class="group" id="overlays">
+    <h2>Overlays</h2>
+    <p class="gd">Не катай свои оверлеи — переиспользуй <span class="mono">openModal()</span>, <span class="mono">toast()</span>, <span class="mono">confirmModal()</span>.</p>
+    <div class="spec">
+      <div class="demo" style="align-items:flex-start">
+        <div class="modal-demo">
+          <h3>Отключить legacy-вход?</h3>
+          <div class="mb">Останется только вход через OAuth. Запасной вход по ключу станет недоступен.</div>
+          <div class="mf"><button class="tbtn">Отмена</button><button class="tbtn primary">Подтвердить</button></div>
+        </div>
+        <div class="toast-demo">Вход выполнен · Google</div>
+      </div>
+      <div class="meta"><span class="name">openModal() · confirmModal() · toast()</span><span class="use">единые примитивы оверлеев</span></div>
+      <pre class="code"><span class="k">confirmModal</span>('Отключить legacy-вход?', 'Останется только OAuth…', onOk);
+<span class="k">toast</span>('Вход выполнен · Google');</pre>
+    </div>
+  </section>
+
+  <div class="note" style="margin-top:40px"><b>Полный список и порядок миграции</b> mock → live — в <span class="mono">DEVELOPER-PLAYBOOK.md</span>. Эта галерея — витрина; контракт — это <span class="mono">index.html</span>.</div>
+</div>
+
+<script>
+  const b=document.getElementById('themeBtn');
+  b.onclick=()=>{ const r=document.documentElement; r.dataset.theme = r.dataset.theme==='dark'?'light':'dark'; };
+</script>
+</body>
+</html>

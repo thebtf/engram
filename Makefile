@@ -23,7 +23,7 @@ BUILD_TAGS := -tags "fts5"
 
 .PHONY: all build clean test install lint \
         worker engram stop-worker start-worker restart-worker \
-        dashboard operator-web smoke-operator-web website dev-website \
+        dashboard operator-console smoke-operator-console website dev-website \
         setup-libs proto rebaseline-v6 \
         build-all build-linux build-darwin build-windows \
         test-coverage bench fmt deps dev help
@@ -82,15 +82,6 @@ dashboard:
 	@touch internal/worker/static/placeholder.html
 	@cp -r ui/dist/* internal/worker/static/
 
-# Growth-oriented operator web app — separate Nuxt artifact.
-operator-web:
-	@echo "Building operator web..."
-	@cd apps/operator-web && npm install --silent && npm run build
-
-smoke-operator-web:
-	@echo "Running operator-web smoke..."
-	pwsh -NoProfile -File scripts/smoke-operator-web.ps1
-
 # Server binary — exposes HTTP REST + gRPC + embedded dashboard on :37777.
 worker:
 	@echo "Building worker..."
@@ -104,6 +95,15 @@ engram:
 	@echo "Building MCP client..."
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BUILD_DIR)/engram ./cmd/engram
+
+# Promoted Nuxt operator console — separate deployable browser host.
+operator-console:
+	@echo "Checking promoted operator console..."
+	@cd apps/operator-console && npm ci --silent && npm run parity && npm run build
+
+smoke-operator-console:
+	@echo "Running local promoted operator-console smoke..."
+	@pwsh -NoProfile -File scripts/smoke-operator-console.ps1
 
 # Cross-platform builds (CI / release verification)
 build-all: build-linux build-darwin build-windows
@@ -253,7 +253,8 @@ help:
 	@echo "Usage:"
 	@echo "  make build          Build all binaries"
 	@echo "  make worker         Build server only"
-	@echo "  make operator-web   Build the separate Nuxt control-plane app"
+	@echo "  make operator-console Build and validate promoted operator console"
+	@echo "  make smoke-operator-console Run local promoted operator-console smoke"
 	@echo "  make build-all      Build for all platforms"
 	@echo "  make install        Install to Claude plugins directory (restarts worker)"
 	@echo "  make uninstall      Remove from Claude plugins directory"

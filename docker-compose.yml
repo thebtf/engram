@@ -1,10 +1,6 @@
-# Engram — Runtime Stack
+# Engram — Server Stack
 #
-# Provides:
-# - PostgreSQL + pgvector
-# - Engram Server (API + MCP/gRPC authority)
-# - Operator Web (Nuxt control-plane app proxying /api/* to the server)
-#
+# Provides: PostgreSQL + pgvector, Engram Server (API + MCP SSE on single port)
 # Client (hooks + MCP proxy) runs locally on each workstation.
 #
 # Usage:
@@ -50,6 +46,7 @@ services:
       ENGRAM_WORKER_HOST: "0.0.0.0"
       ENGRAM_WORKER_PORT: "37777"
       ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
+      ENGRAM_AUTH_DISABLED: "${ENGRAM_AUTH_DISABLED:-false}"
       ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
       # Embedding (semantic memory). Empty URL = embedding disabled (FTS-only recall).
       ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
@@ -65,18 +62,18 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  operator-web:
-    image: ghcr.io/thebtf/engram-operator-web:main
+  operator-console:
+    image: ghcr.io/thebtf/engram-operator-console:main
+    # To build locally instead: docker compose build operator-console
     build:
       context: .
-      target: operator-web
+      target: operator-console
     ports:
-      - "${OPERATOR_WEB_PORT:-3000}:3000"
+      - "${OPERATOR_CONSOLE_PORT:-3000}:3000"
     environment:
-      NITRO_HOST: "0.0.0.0"
-      NITRO_PORT: "3000"
+      NUXT_OPERATOR_API_TARGET: "http://server:37777"
       NUXT_PUBLIC_API_BASE: "/api"
-      NUXT_ENGRAM_API_TARGET: "http://server:37777"
+      NUXT_PUBLIC_API_DISPLAY_HOST: "${OPERATOR_CONSOLE_API_DISPLAY_HOST:-}"
     depends_on:
       server:
         condition: service_started

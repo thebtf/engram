@@ -1,0 +1,73 @@
+{
+  "_note": "ZH (Simplified Chinese, zh-Hans) — third launch locale. Keys mirror ru.json exactly. A missing key falls back to ru (the contract) via i18n.config fallbackLocale, so a partial translation still renders. Chinese has ONE grammatical number form, so plural keys have a single slot (no pipes); the built-in plural rule handles it.",
+
+  "common": {
+    "show": "显示",
+    "hide": "隐藏",
+    "copy": "复制",
+    "change": "修改",
+    "enabled": "已启用",
+    "admin": "管理员"
+  },
+
+  "shell": {
+    "brandHome": "返回首页 — 概览",
+    "searchPlaceholder": "在控制台中搜索…",
+    "densityComfortable": "宽松",
+    "densityCompact": "紧凑",
+    "themeToLight": "浅色主题",
+    "themeToDark": "深色主题",
+    "language": "语言",
+    "statusDegradation": "降级",
+    "statusNoise": "噪声"
+  },
+
+  "nav": {
+    "groups": {
+      "workspace": "工作区",
+      "memoryProduct": "记忆与产品",
+      "behaviorWork": "行为与工作",
+      "storage": "存储",
+      "administration": "管理"
+    },
+    "items": {
+      "overview": "概览",
+      "search": "搜索",
+      "memory": "记忆",
+      "queue": "待审核",
+      "noise": "噪声与价值",
+      "graph": "知识关联",
+      "books": "上下文书籍",
+      "rules": "行为规则",
+      "issues": "任务",
+      "projects": "项目与会话",
+      "secrets": "密钥",
+      "documents": "文档",
+      "collections": "旧集合",
+      "access": "访问控制",
+      "settings": "设置",
+      "health": "状态"
+    },
+    "evidence": {
+      "booksPipeline": "处理流水线"
+    }
+  },
+
+  "secrets": {
+    "title": "密钥",
+    "subtitle": "密钥与凭据：列表中不显示具体值，需显式操作才能查看。",
+    "vaultState": "保险库状态",
+    "encryption": "加密",
+    "fingerprint": "密钥指纹",
+    "count": "密钥数",
+    "countPlural": "没有密钥 | {n} 个密钥",
+    "nSecrets": "{n} 个密钥",
+    "fingerprintMasked": "•••• •••• •••• ••••",
+    "colKey": "密钥",
+    "colProject": "项目",
+    "colScope": "范围",
+    "colCreated": "创建时间",
+    "colActions": "操作",
+    "reveal": "👁 显示"
+  }
+}

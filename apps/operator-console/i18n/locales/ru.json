@@ -1,0 +1,73 @@
+{
+  "_note": "RU is the contract language — these strings mirror the .od/index.html mockup verbatim. This file is the localization seam (the i18n analogue of useMockData.ts): every visible string has a key here, components read it via t(). When the mockup changes a string, change it here and mark the section drifted in PARITY.json. Key convention: [area].[element], areas mirror nav section ids.",
+
+  "common": {
+    "show": "Показать",
+    "hide": "Скрыть",
+    "copy": "Скопировать",
+    "change": "Изменить",
+    "enabled": "включено",
+    "admin": "admin"
+  },
+
+  "shell": {
+    "brandHome": "На главную — Обзор",
+    "searchPlaceholder": "Поиск по консоли…",
+    "densityComfortable": "Комфорт",
+    "densityCompact": "Компактно",
+    "themeToLight": "Светлая тема",
+    "themeToDark": "Тёмная тема",
+    "language": "Язык",
+    "statusDegradation": "деградация",
+    "statusNoise": "шум"
+  },
+
+  "nav": {
+    "groups": {
+      "workspace": "Рабочее место",
+      "memoryProduct": "Память, продукт",
+      "behaviorWork": "Поведение и работа",
+      "storage": "Хранилище",
+      "administration": "Администрирование"
+    },
+    "items": {
+      "overview": "Обзор",
+      "search": "Поиск",
+      "memory": "Память",
+      "queue": "На проверку",
+      "noise": "Шум и польза",
+      "graph": "Связи знаний",
+      "books": "Книги-контекст",
+      "rules": "Правила поведения",
+      "issues": "Задачи",
+      "projects": "Проекты и сессии",
+      "secrets": "Секреты",
+      "documents": "Документы",
+      "collections": "Старые коллекции",
+      "access": "Доступ",
+      "settings": "Настройки",
+      "health": "Состояние"
+    },
+    "evidence": {
+      "booksPipeline": "конвейер обработки"
+    }
+  },
+
+  "secrets": {
+    "title": "Секреты",
+    "subtitle": "Ключи и доступы: значения не показываются в списке, раскрытие — явным действием.",
+    "vaultState": "Состояние vault",
+    "encryption": "Шифрование",
+    "fingerprint": "Отпечаток ключа",
+    "count": "Секретов",
+    "countPlural": "нет секретов | {n} секрет | {n} секрета | {n} секретов",
+    "nSecrets": "{n} секрет | {n} секрета | {n} секретов",
+    "fingerprintMasked": "•••• •••• •••• ••••",
+    "colKey": "Ключ",
+    "colProject": "Проект",
+    "colScope": "Область",
+    "colCreated": "Создан",
+    "colActions": "Действия",
+    "reveal": "👁 Показать"
+  }
+}

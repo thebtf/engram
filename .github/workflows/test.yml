@@ -76,19 +76,12 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Setup Node.js (operator-web)
+      - name: Operator console parity + build
         if: runner.os == 'Linux'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: 'apps/operator-web/package-lock.json'
-
-      - name: Build operator-web
-        if: runner.os == 'Linux'
+        working-directory: apps/operator-console
         run: |
-          cd apps/operator-web
           npm ci
+          npm run parity
           npm run build
 
       - name: Vet
@@ -246,16 +239,3 @@ jobs:
             bash scripts/safety-gate_test.sh
             echo "safety-gate_test.sh: all tests passed"
           fi
-
-  operator-web-runtime-smoke:
-    name: operator-web runtime smoke
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run operator-web runtime smoke
-        shell: pwsh
-        run: |
-          ./scripts/smoke-operator-web.ps1

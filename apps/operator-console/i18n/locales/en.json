@@ -1,0 +1,73 @@
+{
+  "_note": "EN is the first translation target. Keys mirror ru.json exactly. A missing key here falls back to the RU string (i18n.config fallbackLocale), so a partial translation still renders a coherent console. This file is the worked example of 'translate a screen' — the developer extends it screen by screen as pages are keyed.",
+
+  "common": {
+    "show": "Show",
+    "hide": "Hide",
+    "copy": "Copy",
+    "change": "Change",
+    "enabled": "enabled",
+    "admin": "admin"
+  },
+
+  "shell": {
+    "brandHome": "Home — Overview",
+    "searchPlaceholder": "Search the console…",
+    "densityComfortable": "Comfort",
+    "densityCompact": "Compact",
+    "themeToLight": "Light theme",
+    "themeToDark": "Dark theme",
+    "language": "Language",
+    "statusDegradation": "degradation",
+    "statusNoise": "noise"
+  },
+
+  "nav": {
+    "groups": {
+      "workspace": "Workspace",
+      "memoryProduct": "Memory & product",
+      "behaviorWork": "Behavior & work",
+      "storage": "Storage",
+      "administration": "Administration"
+    },
+    "items": {
+      "overview": "Overview",
+      "search": "Search",
+      "memory": "Memory",
+      "queue": "Review queue",
+      "noise": "Noise & value",
+      "graph": "Knowledge links",
+      "books": "Context books",
+      "rules": "Behavior rules",
+      "issues": "Issues",
+      "projects": "Projects & sessions",
+      "secrets": "Secrets",
+      "documents": "Documents",
+      "collections": "Legacy collections",
+      "access": "Access",
+      "settings": "Settings",
+      "health": "Health"
+    },
+    "evidence": {
+      "booksPipeline": "processing pipeline"
+    }
+  },
+
+  "secrets": {
+    "title": "Secrets",
+    "subtitle": "Keys and credentials: values are hidden in the list, revealing is an explicit action.",
+    "vaultState": "Vault state",
+    "encryption": "Encryption",
+    "fingerprint": "Key fingerprint",
+    "count": "Secrets",
+    "countPlural": "no secrets | {n} secret | {n} secrets",
+    "nSecrets": "{n} secret | {n} secrets",
+    "fingerprintMasked": "•••• •••• •••• ••••",
+    "colKey": "Key",
+    "colProject": "Project",
+    "colScope": "Scope",
+    "colCreated": "Created",
+    "colActions": "Actions",
+    "reveal": "👁 Show"
+  }
+}
