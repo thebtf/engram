@@ -30,6 +30,11 @@ export default defineNuxtConfig({
     defaultLocale: 'ru',
     lazy: true,
     langDir: 'locales',
+    experimental: {
+      // Prevent locale metadata in the generated client config from exposing
+      // absolute build-container filesystem paths like /workspace/... .
+      generatedLocaleFilePathFormat: 'relative',
+    },
     locales: [
       { code: 'ru', name: 'Русский',  language: 'ru-RU',      file: 'ru.json' },
       { code: 'en', name: 'English',  language: 'en-US',      file: 'en.json' },
