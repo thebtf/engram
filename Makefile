@@ -23,7 +23,7 @@ BUILD_TAGS := -tags "fts5"
 
 .PHONY: all build clean test install lint \
         worker engram stop-worker start-worker restart-worker \
-        dashboard website dev-website \
+        dashboard operator-web smoke-operator-web website dev-website \
         setup-libs proto rebaseline-v6 \
         build-all build-linux build-darwin build-windows \
         test-coverage bench fmt deps dev help
@@ -81,6 +81,15 @@ dashboard:
 	@mkdir -p internal/worker/static
 	@touch internal/worker/static/placeholder.html
 	@cp -r ui/dist/* internal/worker/static/
+
+# Growth-oriented operator web app — separate Nuxt artifact.
+operator-web:
+	@echo "Building operator web..."
+	@cd apps/operator-web && npm install --silent && npm run build
+
+smoke-operator-web:
+	@echo "Running operator-web smoke..."
+	pwsh -NoProfile -File scripts/smoke-operator-web.ps1
 
 # Server binary — exposes HTTP REST + gRPC + embedded dashboard on :37777.
 worker:
@@ -244,6 +253,7 @@ help:
 	@echo "Usage:"
 	@echo "  make build          Build all binaries"
 	@echo "  make worker         Build server only"
+	@echo "  make operator-web   Build the separate Nuxt control-plane app"
 	@echo "  make build-all      Build for all platforms"
 	@echo "  make install        Install to Claude plugins directory (restarts worker)"
 	@echo "  make uninstall      Remove from Claude plugins directory"

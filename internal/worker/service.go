@@ -1402,6 +1402,8 @@ func (s *Service) setupRoutes() {
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Behavioral rules management
+		r.Get("/api/rules", s.handleListBehavioralRules)
+		r.Post("/api/rules", s.handleCreateBehavioralRule)
 		r.Patch("/api/rules/{id}", s.handleUpdateBehavioralRule)
 		r.Delete("/api/rules/{id}", s.handleDeleteBehavioralRule)
 

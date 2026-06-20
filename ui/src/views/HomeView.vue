@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useStats } from '@/composables'
 import { useHealth } from '@/composables'
+import { useUiI18n } from '@/composables/useUiI18n'
 import { fetchIssues, type Issue } from '@/utils/api'
 import { formatUptime, formatRelativeTime, truncate } from '@/utils/formatters'
 import { cn } from '@/lib/utils'
@@ -24,6 +25,7 @@ import { Activity, Users, Search, Zap, ArrowRight, Circle } from 'lucide-vue-nex
 const router = useRouter()
 const { stats } = useStats()
 const { health } = useHealth()
+const { locale, t } = useUiI18n()
 
 // Recent issues — fetched once on mount (top 5 open)
 const recentIssues = ref<Issue[]>([])
@@ -89,7 +91,7 @@ function navigateToIssue(id: number) {
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <!-- Left: title + version -->
           <div class="flex items-center gap-3">
-            <span class="text-2xl font-bold tracking-tight text-foreground">engram</span>
+            <span class="text-2xl font-bold tracking-tight text-foreground">{{ t.home.productName }}</span>
             <Badge variant="outline" class="text-xs font-mono">{{ versionDisplay }}</Badge>
           </div>
           <!-- Right: status + uptime -->
@@ -99,11 +101,11 @@ function navigateToIssue(id: number) {
                 :class="cn('size-3 fill-current', statusColor(overallStatus))"
               />
               <span :class="cn('text-sm font-medium capitalize', statusColor(overallStatus))">
-                {{ overallStatus ?? 'loading' }}
+                {{ overallStatus ?? t.home.loading }}
               </span>
             </div>
             <div class="text-sm text-muted-foreground">
-              Uptime: <span class="font-medium text-foreground">{{ uptimeDisplay }}</span>
+              {{ t.home.metrics.uptime }}: <span class="font-medium text-foreground">{{ uptimeDisplay }}</span>
             </div>
           </div>
         </div>
@@ -117,7 +119,7 @@ function navigateToIssue(id: number) {
         <CardHeader class="pb-2">
           <div class="flex items-center gap-2 text-muted-foreground">
             <Activity class="size-4" />
-            <span class="text-xs font-medium uppercase tracking-wide">Sessions Today</span>
+            <span class="text-xs font-medium uppercase tracking-wide">{{ t.home.metrics.sessionsToday }}</span>
           </div>
         </CardHeader>
         <CardContent>
@@ -132,7 +134,7 @@ function navigateToIssue(id: number) {
         <CardHeader class="pb-2">
           <div class="flex items-center gap-2 text-muted-foreground">
             <Users class="size-4" />
-            <span class="text-xs font-medium uppercase tracking-wide">Connected Clients</span>
+            <span class="text-xs font-medium uppercase tracking-wide">{{ t.home.metrics.connectedClients }}</span>
           </div>
         </CardHeader>
         <CardContent>
@@ -147,7 +149,7 @@ function navigateToIssue(id: number) {
         <CardHeader class="pb-2">
           <div class="flex items-center gap-2 text-muted-foreground">
             <Search class="size-4" />
-            <span class="text-xs font-medium uppercase tracking-wide">Retrieval Requests</span>
+            <span class="text-xs font-medium uppercase tracking-wide">{{ t.home.metrics.retrievalRequests }}</span>
           </div>
         </CardHeader>
         <CardContent>
@@ -162,7 +164,7 @@ function navigateToIssue(id: number) {
         <CardHeader class="pb-2">
           <div class="flex items-center gap-2 text-muted-foreground">
             <Zap class="size-4" />
-            <span class="text-xs font-medium uppercase tracking-wide">Context Injections</span>
+            <span class="text-xs font-medium uppercase tracking-wide">{{ t.home.metrics.contextInjections }}</span>
           </div>
         </CardHeader>
         <CardContent>
@@ -176,7 +178,7 @@ function navigateToIssue(id: number) {
     <!-- Section 3: System Health -->
     <Card>
       <CardHeader>
-        <CardTitle>System Health</CardTitle>
+        <CardTitle>{{ t.home.systemHealth }}</CardTitle>
       </CardHeader>
       <CardContent>
         <div
@@ -195,10 +197,10 @@ function navigateToIssue(id: number) {
           </div>
         </div>
         <div v-else-if="!health" class="text-sm text-muted-foreground">
-          Loading health data...
+          {{ t.home.loading }}
         </div>
         <div v-else class="text-sm text-muted-foreground">
-          No health components reported.
+          {{ t.home.noHealth }}
         </div>
       </CardContent>
     </Card>
@@ -207,10 +209,10 @@ function navigateToIssue(id: number) {
     <Card>
       <CardHeader>
         <div class="flex items-center justify-between">
-          <CardTitle>Recent Issues</CardTitle>
+          <CardTitle>{{ t.home.recentIssues }}</CardTitle>
           <Button variant="ghost" size="sm" as-child>
             <router-link to="/issues" class="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-              View all
+              {{ t.home.viewAll }}
               <ArrowRight class="size-4" />
             </router-link>
           </Button>
@@ -218,19 +220,19 @@ function navigateToIssue(id: number) {
       </CardHeader>
       <CardContent>
         <div v-if="issuesLoading" class="text-sm text-muted-foreground py-4 text-center">
-          Loading issues...
+          {{ t.home.loading }}
         </div>
         <div v-else-if="recentIssues.length === 0" class="text-sm text-muted-foreground py-8 text-center">
-          No open issues.
+          {{ t.home.noOpenIssues }}
         </div>
         <Table v-else>
           <TableHeader>
             <TableRow>
               <TableHead class="w-16">ID</TableHead>
-              <TableHead class="w-24">Priority</TableHead>
-              <TableHead class="w-28">Type</TableHead>
-              <TableHead>Title</TableHead>
-              <TableHead class="w-28 text-right">Created</TableHead>
+              <TableHead class="w-24">{{ t.issues.table.priority }}</TableHead>
+              <TableHead class="w-28">{{ t.issues.table.type }}</TableHead>
+              <TableHead>{{ t.issues.table.title }}</TableHead>
+              <TableHead class="w-28 text-right">{{ t.issues.table.created }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -255,7 +257,7 @@ function navigateToIssue(id: number) {
                 {{ truncate(issue.title, 60) }}
               </TableCell>
               <TableCell class="text-xs text-muted-foreground text-right">
-                {{ formatRelativeTime(issue.created_at) }}
+                {{ formatRelativeTime(issue.created_at, locale) }}
               </TableCell>
             </TableRow>
           </TableBody>

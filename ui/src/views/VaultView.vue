@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
+import { useUiI18n } from '@/composables/useUiI18n'
 import { useVault } from '@/composables/useVault'
 import { safeAbsoluteDate } from '@/utils/formatters'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -51,6 +52,7 @@ const {
   hideCredential,
   removeCredential,
 } = useVault()
+const { t } = useUiI18n()
 
 const deleteTarget = ref<{ name: string; project?: string } | null>(null)
 const showDeleteConfirm = ref(false)
@@ -126,40 +128,40 @@ async function handleDelete() {
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <Key class="text-primary size-5" />
-        <h1 class="text-2xl font-bold">Vault</h1>
+        <h1 class="text-2xl font-bold">{{ t.vault.title }}</h1>
       </div>
       <Button variant="outline" size="sm" :disabled="loading" @click="loadCredentials()">
         <RefreshCw :class="['size-4', loading && 'animate-spin']" />
-        Refresh
+        {{ t.vault.refresh }}
       </Button>
     </div>
 
     <!-- Vault Status Card -->
     <Card v-if="vaultStatus">
       <CardHeader class="pb-2">
-        <CardTitle class="text-sm font-medium text-muted-foreground">Vault Status</CardTitle>
+        <CardTitle class="text-sm font-medium text-muted-foreground">{{ t.vault.statusTitle }}</CardTitle>
       </CardHeader>
       <CardContent>
         <div class="grid grid-cols-3 gap-6">
           <div class="space-y-1">
-            <p class="text-xs text-muted-foreground">Encryption</p>
+            <p class="text-xs text-muted-foreground">{{ t.vault.fields.encryption }}</p>
             <div class="flex items-center gap-2">
               <Badge :variant="vaultStatus.encrypted ? 'default' : 'destructive'">
                 <Lock v-if="vaultStatus.encrypted" class="size-3" />
                 <LockOpen v-else class="size-3" />
-                {{ vaultStatus.encrypted ? 'Enabled' : 'Disabled' }}
+                {{ vaultStatus.encrypted ? t.vault.encryptionEnabled : t.vault.encryptionDisabled }}
               </Badge>
             </div>
             <p v-if="!vaultStatus.encrypted" class="text-xs text-amber-500 mt-2">
-              To enable: set <code class="bg-muted px-1 rounded text-xs">ENGRAM_VAULT_KEY</code> env var
+              {{ t.vault.enableHint }}
             </p>
           </div>
           <div class="space-y-1">
-            <p class="text-xs text-muted-foreground">Key Fingerprint</p>
-            <p class="text-sm font-mono">{{ vaultStatus.key_fingerprint || 'N/A' }}</p>
+            <p class="text-xs text-muted-foreground">{{ t.vault.fields.keyFingerprint }}</p>
+            <p class="text-sm font-mono">{{ vaultStatus.key_fingerprint || t.vault.notAvailable }}</p>
           </div>
           <div class="space-y-1">
-            <p class="text-xs text-muted-foreground">Credentials</p>
+            <p class="text-xs text-muted-foreground">{{ t.vault.fields.credentials }}</p>
             <p class="text-sm font-mono">{{ vaultStatus.credential_count }}</p>
           </div>
         </div>
@@ -177,15 +179,15 @@ async function handleDelete() {
     <div v-else-if="error" class="flex flex-col items-center justify-center py-16 gap-3">
       <AlertTriangle class="size-8 text-destructive" />
       <p class="text-destructive text-sm">{{ error }}</p>
-      <Button variant="ghost" size="sm" @click="loadCredentials()">Try again</Button>
+      <Button variant="ghost" size="sm" @click="loadCredentials()">{{ t.vault.tryAgain }}</Button>
     </div>
 
     <!-- Empty State -->
     <EmptyState
       v-else-if="credentials.length === 0 && !loading"
       icon="fa-vault"
-      title="No credentials stored"
-      description="Credentials will appear here when stored via MCP tools."
+      :title="t.vault.emptyTitle"
+      :description="t.vault.emptyDescription"
     />
 
     <!-- Credentials Table -->
@@ -200,11 +202,11 @@ async function handleDelete() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Project</TableHead>
-              <TableHead>Scope</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead class="text-right">Actions</TableHead>
+              <TableHead>{{ t.vault.fields.name }}</TableHead>
+              <TableHead>{{ t.vault.fields.project }}</TableHead>
+              <TableHead>{{ t.vault.fields.scope }}</TableHead>
+              <TableHead>{{ t.vault.fields.created }}</TableHead>
+              <TableHead class="text-right">{{ t.vault.fields.actions }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -220,12 +222,12 @@ async function handleDelete() {
                     {{ revealedValues[cred.name].value }}
                   </code>
                   <span class="text-[10px] text-amber-500 whitespace-nowrap">
-                    Hides in {{ remainingSeconds(cred.name) }}s
+                    {{ t.vault.hidesIn.replace('{seconds}', String(remainingSeconds(cred.name))) }}
                   </span>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    :title="copyFeedback === cred.name ? 'Copied!' : 'Copy'"
+                    :title="copyFeedback === cred.name ? t.vault.copied : t.vault.copy"
                     @click="copyValue(revealedValues[cred.name].value, cred.name)"
                   >
                     <Check v-if="copyFeedback === cred.name" class="size-3.5 text-green-500" />
@@ -234,7 +236,7 @@ async function handleDelete() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    title="Hide"
+                    :title="t.vault.hide"
                     @click="hideCredential(cred.name)"
                   >
                     <EyeOff class="size-3.5" />
@@ -242,7 +244,7 @@ async function handleDelete() {
                 </div>
               </TableCell>
               <TableCell class="text-xs text-muted-foreground font-mono">
-                {{ cred.project || '—' }}
+                {{ cred.project || t.common.none }}
               </TableCell>
               <TableCell>
                 <Badge variant="secondary" class="text-[10px]">{{ cred.scope }}</Badge>
@@ -259,13 +261,13 @@ async function handleDelete() {
                     @click="revealCredential(cred.name, cred.project)"
                   >
                     <Eye class="size-3.5" />
-                    Reveal
+                    {{ t.vault.reveal }}
                   </Button>
                   <Button
                     variant="ghost"
                     size="icon-sm"
                     class="text-muted-foreground hover:text-destructive"
-                    title="Delete"
+                    :title="t.vault.delete"
                     @click="confirmDelete(cred.name, cred.project)"
                   >
                     <Trash2 class="size-3.5" />
@@ -282,18 +284,18 @@ async function handleDelete() {
     <AlertDialog :open="showDeleteConfirm" @update:open="showDeleteConfirm = $event">
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete Credential</AlertDialogTitle>
+          <AlertDialogTitle>{{ t.vault.deleteTitle }}</AlertDialogTitle>
           <AlertDialogDescription>
-            Are you sure you want to delete <strong>{{ deleteTarget?.name }}</strong>? This action cannot be undone.
+            {{ t.vault.deleteDescription }}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel @click="showDeleteConfirm = false">Cancel</AlertDialogCancel>
+          <AlertDialogCancel @click="showDeleteConfirm = false">{{ t.issues.dialog.cancel }}</AlertDialogCancel>
           <AlertDialogAction
             class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             @click="handleDelete"
           >
-            Delete
+            {{ t.vault.delete }}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

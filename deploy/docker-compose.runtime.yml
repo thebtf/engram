@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: engram
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-engram}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engram -d engram"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  server:
+    image: ghcr.io/thebtf/engram:main
+    ports:
+      - "${WORKER_PORT:-37777}:37777"
+    environment:
+      DATABASE_DSN: "${DATABASE_DSN:-postgres://engram:${POSTGRES_PASSWORD:-engram}@postgres:5432/engram?sslmode=disable}"
+      ENGRAM_WORKER_HOST: "0.0.0.0"
+      ENGRAM_WORKER_PORT: "37777"
+      ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
+      ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
+      ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
+      ENGRAM_EMBEDDING_MODEL: "${ENGRAM_EMBEDDING_MODEL:-text-embedding}"
+      ENGRAM_EMBEDDING_API_KEY: "${ENGRAM_EMBEDDING_API_KEY:-}"
+      ENGRAM_LLM_URL: "${ENGRAM_LLM_URL:-}"
+      ENGRAM_LLM_MODEL: "${ENGRAM_LLM_MODEL:-chat-default}"
+      ENGRAM_LLM_API_KEY: "${ENGRAM_LLM_API_KEY:-}"
+      ENGRAM_VNEXT_ENABLED: "${ENGRAM_VNEXT_ENABLED:-false}"
+      ENGRAM_LIFECYCLE_ENABLED: "${ENGRAM_LIFECYCLE_ENABLED:-false}"
+      ENGRAM_VNEXT_F_ENABLED: "${ENGRAM_VNEXT_F_ENABLED:-false}"
+      ENGRAM_CRYSTALLIZATION_ENABLED: "${ENGRAM_CRYSTALLIZATION_ENABLED:-false}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  operator-web:
+    image: ghcr.io/thebtf/engram-operator-web:main
+    ports:
+      - "${OPERATOR_WEB_PORT:-3000}:3000"
+    environment:
+      NITRO_HOST: "0.0.0.0"
+      NITRO_PORT: "3000"
+      NUXT_PUBLIC_API_BASE: "/api"
+      NUXT_ENGRAM_API_TARGET: "http://server:37777"
+    depends_on:
+      server:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:

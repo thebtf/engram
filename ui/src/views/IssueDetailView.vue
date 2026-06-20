@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useUiI18n } from '@/composables/useUiI18n'
 import {
   ArrowLeft,
   Pencil,
@@ -39,6 +40,21 @@ import { cn } from '@/lib/utils'
 
 const route = useRoute()
 const router = useRouter()
+const { locale, t } = useUiI18n()
+const statusLabels = computed<Record<string, string>>(() => ({
+  open: t.value.issues.filters.open,
+  acknowledged: t.value.issues.filters.acknowledged,
+  resolved: t.value.issues.filters.resolved,
+  reopened: t.value.issues.filters.reopened,
+  closed: t.value.issues.filters.closed,
+  rejected: t.value.issues.filters.rejected,
+}))
+const typeLabels = computed<Record<string, string>>(() => ({
+  task: t.value.issues.filters.task,
+  bug: t.value.issues.filters.bug,
+  feature: t.value.issues.filters.feature,
+  improvement: t.value.issues.filters.improvement,
+}))
 
 const issue = ref<Issue | null>(null)
 const comments = ref<IssueComment[]>([])
@@ -200,9 +216,13 @@ function timelineBadgeClass(type: string): string {
   }
 }
 
+function timelineTypeLabel(type: TimelineEvent['type']): string {
+  return t.value.issueDetail.timelineTypes[type]
+}
+
 async function loadIssue() {
   const id = Number(route.params.id)
-  if (!id) { error.value = 'Invalid issue ID'; loading.value = false; return }
+  if (!id) { error.value = t.value.issueDetail.invalidId; loading.value = false; return }
 
   try {
     const result = await fetchIssue(id)
@@ -211,7 +231,7 @@ async function loadIssue() {
     sourceProjectDisplayName.value = result.source_project_display_name ?? null
     targetProjectDisplayName.value = result.target_project_display_name ?? null
   } catch (err: any) {
-    error.value = err.message || 'Failed to load issue'
+    error.value = err.message || t.value.issueDetail.loadFailed
   } finally {
     loading.value = false
   }
@@ -241,7 +261,7 @@ async function saveEdit() {
     editing.value = false
     await loadIssue()
   } catch (err: any) {
-    error.value = err.message
+    error.value = err.message || t.value.issueDetail.loadFailed
   } finally {
     actionLoading.value = false
   }
@@ -258,7 +278,7 @@ async function changeStatus(newStatus: string) {
     })
     await loadIssue()
   } catch (err: any) {
-    error.value = err.message
+    error.value = err.message || t.value.issueDetail.loadFailed
   } finally {
     actionLoading.value = false
   }
@@ -276,7 +296,7 @@ async function submitComment() {
     newComment.value = ''
     await loadIssue()
   } catch (err: any) {
-    error.value = err.message
+    error.value = err.message || t.value.issueDetail.loadFailed
   } finally {
     commenting.value = false
   }
@@ -289,7 +309,7 @@ async function confirmDelete() {
     await deleteIssue(issue.value.id)
     router.push('/issues')
   } catch (err: any) {
-    error.value = err.message
+    error.value = err.message || t.value.issueDetail.loadFailed
   } finally {
     actionLoading.value = false
     showDeleteConfirm.value = false
@@ -310,7 +330,7 @@ async function confirmReject() {
     rejectReason.value = ''
     await loadIssue()
   } catch (err: any) {
-    error.value = err.message
+    error.value = err.message || t.value.issueDetail.loadFailed
   } finally {
     actionLoading.value = false
   }
@@ -324,13 +344,13 @@ onMounted(loadIssue)
     <!-- Back button -->
     <Button variant="ghost" size="sm" @click="router.push('/issues')" class="-ml-2">
       <ArrowLeft class="w-4 h-4 mr-1" />
-      Back to Issues
+      {{ t.issueDetail.back }}
     </Button>
 
     <!-- Loading -->
     <div v-if="loading" class="flex items-center justify-center py-8 text-muted-foreground gap-2">
       <Loader2 class="w-4 h-4 animate-spin" />
-      <span>Loading issue...</span>
+      <span>{{ t.issueDetail.loading }}</span>
     </div>
 
     <!-- Error -->
@@ -348,14 +368,14 @@ onMounted(loadIssue)
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2 mb-2 flex-wrap">
                   <span class="text-muted-foreground text-sm font-mono">#{{ issue.id }}</span>
-                  <Badge v-if="issue.type" :class="typeBadgeClass(issue.type)">{{ issue.type }}</Badge>
+                  <Badge v-if="issue.type" :class="typeBadgeClass(issue.type)">{{ typeLabels[issue.type] || issue.type }}</Badge>
                   <Badge :class="priorityBadgeClass(issue.priority)" class="uppercase">{{ issue.priority }}</Badge>
-                  <Badge :class="statusBadgeClass(issue.status)">{{ issue.status }}</Badge>
+                  <Badge :class="statusBadgeClass(issue.status)">{{ statusLabels[issue.status] || issue.status }}</Badge>
                 </div>
                 <h1 class="text-lg font-semibold">{{ issue.title }}</h1>
                 <p class="text-sm text-muted-foreground mt-1">
                   {{ shortProject(issue.source_project) }} &rarr; {{ shortProject(issue.target_project) }}
-                  &middot; Created {{ formatRelativeTime(issue.created_at) }}
+                  &middot; {{ t.issueDetail.created }} {{ formatRelativeTime(issue.created_at, locale) }}
                 </p>
               </div>
 
@@ -363,7 +383,7 @@ onMounted(loadIssue)
               <div class="flex items-center gap-2 shrink-0">
                 <Button variant="secondary" size="sm" @click="startEdit">
                   <Pencil class="w-3.5 h-3.5 mr-1" />
-                  Edit
+                  {{ t.issueDetail.edit }}
                 </Button>
                 <Button
                   variant="outline"
@@ -372,7 +392,7 @@ onMounted(loadIssue)
                   @click="showRejectDialog = true"
                 >
                   <Ban class="w-3.5 h-3.5 mr-1" />
-                  Reject
+                  {{ t.issueDetail.reject }}
                 </Button>
                 <Button
                   variant="outline"
@@ -381,27 +401,27 @@ onMounted(loadIssue)
                   @click="showDeleteConfirm = true"
                 >
                   <Trash2 class="w-3.5 h-3.5 mr-1" />
-                  Delete
+                  {{ t.issueDetail.delete }}
                 </Button>
               </div>
             </div>
 
             <!-- Status override -->
             <div class="mt-3 flex items-center gap-2">
-              <span class="text-xs text-muted-foreground">Status override:</span>
-              <Select
-                :model-value="issue.status"
-                :disabled="actionLoading"
-                @update:model-value="changeStatus($event as string)"
-              >
-                <SelectTrigger class="h-7 w-40 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem v-for="s in allStatuses" :key="s" :value="s">{{ s }}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+              <span class="text-xs text-muted-foreground">{{ t.issueDetail.statusOverride }}</span>
+                <Select
+                  :model-value="issue.status"
+                  :disabled="actionLoading"
+                  @update:model-value="changeStatus($event as string)"
+                >
+                  <SelectTrigger class="h-7 w-40 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem v-for="s in allStatuses" :key="s" :value="s">{{ statusLabels[s] || s }}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
           </template>
 
           <!-- Edit mode -->
@@ -412,7 +432,7 @@ onMounted(loadIssue)
               <div class="flex gap-3">
                 <Select v-model="editPriority" class="flex-1">
                   <SelectTrigger>
-                    <SelectValue placeholder="Priority" />
+                    <SelectValue :placeholder="t.issueDetail.placeholders.priority" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem v-for="p in ['critical', 'high', 'medium', 'low']" :key="p" :value="p">{{ p }}</SelectItem>
@@ -420,22 +440,22 @@ onMounted(loadIssue)
                 </Select>
                 <Select v-model="editType" class="flex-1">
                   <SelectTrigger>
-                    <SelectValue placeholder="Type" />
+                    <SelectValue :placeholder="t.issueDetail.placeholders.type" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="task">Task</SelectItem>
-                    <SelectItem value="bug">Bug</SelectItem>
-                    <SelectItem value="feature">Feature</SelectItem>
-                    <SelectItem value="improvement">Improvement</SelectItem>
+                    <SelectItem value="task">{{ t.issues.filters.task }}</SelectItem>
+                    <SelectItem value="bug">{{ t.issues.filters.bug }}</SelectItem>
+                    <SelectItem value="feature">{{ t.issues.filters.feature }}</SelectItem>
+                    <SelectItem value="improvement">{{ t.issues.filters.improvement }}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div class="flex gap-2">
                 <Button size="sm" @click="saveEdit" :disabled="actionLoading">
                   <Loader2 v-if="actionLoading" class="w-3.5 h-3.5 mr-1 animate-spin" />
-                  Save
+                  {{ t.issueDetail.save }}
                 </Button>
-                <Button variant="secondary" size="sm" @click="editing = false">Cancel</Button>
+                <Button variant="secondary" size="sm" @click="editing = false">{{ t.issueDetail.cancel }}</Button>
               </div>
             </div>
           </template>
@@ -456,18 +476,18 @@ onMounted(loadIssue)
       <!-- Comment form -->
       <Card>
         <CardContent class="pt-4">
-          <h3 class="text-sm font-medium mb-2">Add Comment (as operator)</h3>
+          <h3 class="text-sm font-medium mb-2">{{ t.issueDetail.addComment }}</h3>
           <div class="flex flex-col gap-2">
             <Textarea
               v-model="newComment"
               @keydown.ctrl.enter="submitComment"
               @keydown.meta.enter="submitComment"
-              placeholder="Write a comment... (Ctrl+Enter to send)"
+              :placeholder="t.issueDetail.commentPlaceholder"
               class="min-h-[80px] max-h-[400px] resize-y font-mono text-sm"
             />
             <div class="flex items-center justify-between">
               <span class="text-xs text-muted-foreground">
-                Markdown supported: **bold**, *italic*, `code`, ```blocks```, - lists
+                {{ t.issueDetail.markdownHint }}
               </span>
               <Button
                 size="sm"
@@ -475,7 +495,7 @@ onMounted(loadIssue)
                 :disabled="commenting || !newComment.trim()"
               >
                 <Loader2 v-if="commenting" class="w-3.5 h-3.5 mr-1 animate-spin" />
-                {{ commenting ? 'Sending...' : 'Send' }}
+                {{ commenting ? t.issueDetail.sending : t.issueDetail.send }}
               </Button>
             </div>
           </div>
@@ -484,7 +504,7 @@ onMounted(loadIssue)
 
       <!-- Timeline -->
       <div class="space-y-3">
-        <h2 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Timeline</h2>
+        <h2 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">{{ t.issueDetail.timeline }}</h2>
 
         <div v-for="(event, idx) in timeline" :key="idx" class="flex gap-3">
           <div class="flex flex-col items-center">
@@ -494,10 +514,10 @@ onMounted(loadIssue)
 
           <div class="pb-4 flex-1 min-w-0">
             <div class="flex items-center gap-2 text-sm flex-wrap">
-              <Badge :class="timelineBadgeClass(event.type)" class="capitalize">{{ event.type }}</Badge>
-              <span v-if="event.project" class="text-muted-foreground text-xs">by {{ shortProject(event.project) }}</span>
+              <Badge :class="timelineBadgeClass(event.type)" class="capitalize">{{ timelineTypeLabel(event.type) }}</Badge>
+              <span v-if="event.project" class="text-muted-foreground text-xs">{{ t.issueDetail.by }} {{ shortProject(event.project) }}</span>
               <span v-if="event.agent" class="text-muted-foreground text-xs">({{ event.agent }})</span>
-              <span class="text-muted-foreground text-xs">{{ formatRelativeTime(event.date) }}</span>
+              <span class="text-muted-foreground text-xs">{{ formatRelativeTime(event.date, locale) }}</span>
             </div>
             <div
               v-if="event.body"
@@ -514,16 +534,16 @@ onMounted(loadIssue)
   <Dialog :open="showDeleteConfirm" @update:open="showDeleteConfirm = $event">
     <DialogContent class="max-w-sm">
       <DialogHeader>
-        <DialogTitle>Delete Issue #{{ issue?.id }}?</DialogTitle>
+        <DialogTitle>{{ t.issueDetail.deleteDialogTitle.replace('{id}', String(issue?.id ?? '')) }}</DialogTitle>
         <DialogDescription>
-          This permanently deletes the issue and all comments. Cannot be undone.
+          {{ t.issueDetail.deleteDialogDescription }}
         </DialogDescription>
       </DialogHeader>
       <DialogFooter>
-        <Button variant="secondary" @click="showDeleteConfirm = false">Cancel</Button>
+        <Button variant="secondary" @click="showDeleteConfirm = false">{{ t.issueDetail.cancel }}</Button>
         <Button variant="destructive" @click="confirmDelete" :disabled="actionLoading">
           <Loader2 v-if="actionLoading" class="w-4 h-4 mr-2 animate-spin" />
-          Delete
+          {{ t.issueDetail.delete }}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -533,27 +553,27 @@ onMounted(loadIssue)
   <Dialog :open="showRejectDialog" @update:open="showRejectDialog = $event; if (!$event) rejectReason = ''">
     <DialogContent class="max-w-sm">
       <DialogHeader>
-        <DialogTitle>Reject Issue #{{ issue?.id }}</DialogTitle>
+        <DialogTitle>{{ t.issueDetail.rejectDialogTitle.replace('{id}', String(issue?.id ?? '')) }}</DialogTitle>
         <DialogDescription>
-          Rejected issues are hidden from all agent sessions. Provide a reason:
+          {{ t.issueDetail.rejectDialogDescription }}
         </DialogDescription>
       </DialogHeader>
       <div class="py-2">
         <Textarea
           v-model="rejectReason"
-          placeholder="Rejection reason (required)..."
+          :placeholder="t.issueDetail.rejectPlaceholder"
           class="min-h-[80px] resize-y"
         />
       </div>
       <DialogFooter>
-        <Button variant="secondary" @click="showRejectDialog = false; rejectReason = ''">Cancel</Button>
+        <Button variant="secondary" @click="showRejectDialog = false; rejectReason = ''">{{ t.issueDetail.cancel }}</Button>
         <Button
           class="bg-orange-600 text-white hover:bg-orange-500"
           @click="confirmReject"
           :disabled="actionLoading || !rejectReason.trim()"
         >
           <Loader2 v-if="actionLoading" class="w-4 h-4 mr-2 animate-spin" />
-          Reject
+          {{ t.issueDetail.reject }}
         </Button>
       </DialogFooter>
     </DialogContent>
