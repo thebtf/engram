@@ -48,6 +48,7 @@ services:
       ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
       ENGRAM_AUTH_DISABLED: "${ENGRAM_AUTH_DISABLED:-false}"
       ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
+      ENGRAM_OPERATOR_CONSOLE_URL: "${ENGRAM_OPERATOR_CONSOLE_URL:-http://operator-console:3000}"
       # Embedding (semantic memory). Empty URL = embedding disabled (FTS-only recall).
       ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
       ENGRAM_EMBEDDING_MODEL: "${ENGRAM_EMBEDDING_MODEL:-text-embedding}"
