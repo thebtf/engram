@@ -4,10 +4,12 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	pathpkg "path"
 	"strings"
 	"sync"
 
@@ -126,11 +128,21 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch {
-	case strings.HasSuffix(path, ".js"):
-		w.Header().Set("Content-Type", "application/javascript")
-	case strings.HasSuffix(path, ".css"):
-		w.Header().Set("Content-Type", "text/css")
+	contentType := mime.TypeByExtension(pathpkg.Ext(path))
+	if contentType == "" {
+		switch pathpkg.Ext(path) {
+		case ".json":
+			contentType = "application/json"
+		case ".js":
+			contentType = "application/javascript"
+		case ".css":
+			contentType = "text/css"
+		case ".svg":
+			contentType = "image/svg+xml"
+		}
+	}
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
 	}
 
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
