@@ -99,6 +99,10 @@ This script:
 - checks the browser host and `/api` proxy
 - validates issue mutation flow through the promoted host path
 
+For remote verification, use `scripts/smoke-operator-console-remote.ps1` with an
+explicit `-BaseUrl` for the actual deployed browser surface. Do not assume the
+local compose default `:3000` is the live public address on every server.
+
 ### Option B: Unraid
 
 1. **PostgreSQL**: Install `pgvector/pgvector:pg17` from Community Applications (or use existing PostgreSQL instance). Create database `engram` with user `engram`.
