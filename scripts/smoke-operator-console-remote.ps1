@@ -1,11 +1,11 @@
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$BaseUrl,
+  [string]$BaseUrl = "http://unleashed.lan:37777",
   [string]$WorkerBaseUrl = "http://unleashed.lan:37777",
   [string]$ExpectedTitle = "engram · консоль оператора",
   [ValidateSet("disabled", "token", "anonymous")]
   [string]$Mode = "anonymous",
-  [string]$AdminToken = ""
+  [string]$AdminToken = "",
+  [switch]$ValidateOnly
 )
 
 Set-StrictMode -Version Latest
@@ -14,6 +14,33 @@ $ErrorActionPreference = "Stop"
 function Write-Step {
   param([string]$Message)
   Write-Host "[operator-console-remote-smoke] $Message"
+}
+
+function Assert-RemoteSmokeBaseUrl {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Value,
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    throw "$Name must not be blank. Expected http://unleashed.lan:37777."
+  }
+
+  $uri = $null
+  if (-not [uri]::TryCreate($Value, [uriKind]::Absolute, [ref]$uri)) {
+    throw "$Name must be an absolute URL. Expected http://unleashed.lan:37777, got '$Value'."
+  }
+
+  if ($uri.Port -eq 3000) {
+    throw "$Name points at :3000, which is the old/dev target. Use http://unleashed.lan:37777."
+  }
+
+  $normalized = $uri.AbsoluteUri.TrimEnd("/")
+  if ($normalized -ne "http://unleashed.lan:37777") {
+    throw "$Name must be http://unleashed.lan:37777 for OC-1 remote proof. Got '$normalized'."
+  }
 }
 
 function Invoke-Http {
@@ -214,6 +241,9 @@ function Assert-LocaleAsset {
   }
 }
 
+Assert-RemoteSmokeBaseUrl -Value $BaseUrl -Name "BaseUrl"
+Assert-RemoteSmokeBaseUrl -Value $WorkerBaseUrl -Name "WorkerBaseUrl"
+
 $normalizedBaseUrl = $BaseUrl.TrimEnd("/")
 $normalizedWorkerBaseUrl = $WorkerBaseUrl.TrimEnd("/")
 $rootUrl = "$normalizedBaseUrl/"
@@ -225,6 +255,14 @@ $statsVnextUrl = "$normalizedBaseUrl/api/stats/vnext"
 $workerHealthUrl = "$normalizedWorkerBaseUrl/health"
 
 $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+
+if ($ValidateOnly) {
+  Write-Step "ValidateOnly requested; target contract is valid and no remote request was sent"
+  Write-Host ("BASE_URL=" + $normalizedBaseUrl)
+  Write-Host ("WORKER_BASE_URL=" + $normalizedWorkerBaseUrl)
+  Write-Host "REMOTE_TARGET_STATUS=validated"
+  return
+}
 
 Write-Step "Checking public operator-console root"
 $rootResponse = Invoke-Http -Method GET -Url $rootUrl

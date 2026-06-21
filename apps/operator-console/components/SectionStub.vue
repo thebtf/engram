@@ -3,7 +3,14 @@
  *  Renders the classification + evidence and an empty-state with a concrete next step —
  *  never an inert operable control on a must-build surface (DESIGN.md Don't). */
 import type { HonestyClass } from '../composables/useHonesty'
+const { t } = useI18n()
 defineProps<{ title: string; lead: string; cls: HonestyClass; evidence?: string; next?: string }>()
+const stateKeys: Record<HonestyClass, string> = {
+  live: 'sectionStub.state.live',
+  dormant: 'sectionStub.state.dormant',
+  stale: 'sectionStub.state.stale',
+  mustbuild: 'sectionStub.state.mustbuild',
+}
 </script>
 
 <template>
@@ -13,7 +20,7 @@ defineProps<{ title: string; lead: string; cls: HonestyClass; evidence?: string;
       <p>{{ lead }}</p>
     </header>
     <div class="empty" :data-cls="cls">
-      <p class="big">{{ cls === 'mustbuild' ? 'Раздел нужно построить.' : cls === 'dormant' ? 'Функция выключена флагом.' : cls === 'stale' ? 'Поверхность отключена (надгробие).' : 'Пока пусто.' }}</p>
+      <p class="big">{{ t(stateKeys[cls]) }}</p>
       <p v-if="next" class="next">{{ next }}</p>
     </div>
   </div>

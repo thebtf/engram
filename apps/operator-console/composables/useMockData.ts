@@ -10,6 +10,8 @@
  *   this exact UI contract.
  */
 
+import { operatorApiBase, operatorApiUrl } from './useOperatorApi'
+
 export interface Memory {
   id: string
   content: string
@@ -98,6 +100,44 @@ export interface HealthSnapshot {
   }
   hasEmbedding: boolean
 }
+
+export const OPERATOR_DATA_AREAS = {
+  memory: {
+    owner: 'OC-1-CR-005 memory page lane',
+    exports: ['Memory', 'useMemories'],
+    source: 'useMockData.ts memory ownership section',
+  },
+  issues: {
+    owner: 'OC-1-CR-007 issues page lane',
+    exports: ['Issue', 'useIssues'],
+    source: 'useMockData.ts issues ownership section',
+  },
+  vault: {
+    owner: 'OC-1-CR-008 secrets page lane',
+    exports: ['Cred', 'useCreds', 'useVaultStatus'],
+    source: 'useMockData.ts vault ownership section',
+  },
+  rules: {
+    owner: 'OC-1-CR-006 rules page lane',
+    exports: ['RuleRow', 'RuleCreateInput', 'RuleUpdateInput', 'useRules'],
+    source: 'useMockData.ts rules ownership section',
+  },
+  projects: {
+    owner: 'OC-1-CR-009 projects page lane',
+    exports: ['ProjectSummary', 'useProjects'],
+    source: 'useMockData.ts projects ownership section',
+  },
+  health: {
+    owner: 'OC-1-CR-010 health/settings lane',
+    exports: ['HealthSnapshot', 'ServerConfigSnapshot', 'useHealthSnapshot', 'useServerConfigSnapshot'],
+    source: 'useMockData.ts health/settings ownership section',
+  },
+  serverInfo: {
+    owner: 'OC-1-CR-003 shell/overview lane',
+    exports: ['useServerInfo', 'useModels'],
+    source: 'useMockData.ts server-info/model ownership section',
+  },
+} as const
 
 interface ApiMemory {
   id: number | string
@@ -205,11 +245,8 @@ interface ApiConfig {
   }
 }
 
-const DEFAULT_API_BASE = '/api'
-
 function apiBase(): string {
-  const configured = useRuntimeConfig().public.apiBase as string | undefined
-  return configured && configured.trim() ? configured : DEFAULT_API_BASE
+  return operatorApiBase()
 }
 
 function displayHost(base: string, configuredHost?: string): string {
@@ -249,7 +286,7 @@ function startOnce(key: string, run: () => Promise<void>) {
 }
 
 async function fetchApi(path: string, init: RequestInit = {}): Promise<Response> {
-  const response = await fetch(`${apiBase()}${path}`, {
+  const response = await fetch(operatorApiUrl(path, apiBase()), {
     credentials: 'include',
     ...init,
   })

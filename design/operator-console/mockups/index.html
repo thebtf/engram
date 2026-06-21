@@ -36,7 +36,7 @@
   --heat-cited:#16a34a; --heat-uncited:#9aa3b0; --secret-tint:#fdf6ec;
   --reveal-key:#16a34a; --reveal-timer:#d97706;
   --r-sm:6px; --r-md:10px; --r-lg:14px;
-  --nav-w:236px; --detail-w:384px; --row-y:11px; --row-gap:11px;
+  --nav-w:236px; --nav-rail-w:60px; --detail-w:384px; --row-y:11px; --row-gap:11px;
 }
 /* ===== Dark variant (default for a control room) ===== */
 [data-theme="dark"] {
@@ -73,15 +73,24 @@ a:hover { text-decoration:underline; }
 .tbtn:active, .act:active, .fchip:active, .rowmenu:active, .subtab:active, .seg button:active { transform: translateY(1px); }
 
 /* ===== App grid: topbar / [nav | content] / statusbar ===== */
-.app { display:grid; grid-template-rows:48px 1fr 26px; height:100vh; }
+.app { position:relative; display:grid; grid-template-columns:var(--nav-w) 1fr; grid-template-rows:48px 1fr 26px;
+  grid-template-areas:"nav topbar" "nav content" "nav statusbar"; height:100vh;
+  transition:grid-template-columns var(--motion-base) var(--ease-standard); }
+.app.nav-collapsed { grid-template-columns:var(--nav-rail-w) 1fr; }
+.app > .topbar { grid-area:topbar; } .app > .content { grid-area:content; } .app > .statusbar { grid-area:statusbar; }
+/* nav is absolutely positioned over the reserved left grid track, so the ONLY thing that
+   animates is its width — no position swap, no jump. The grid column reserves the strip
+   (full or rail) and animates in lockstep, so content slides smoothly as the rail shrinks. */
+.app > .nav { grid-area:nav; position:absolute; top:0; bottom:0; left:0; width:var(--nav-w); z-index:30;
+  transition:width var(--motion-base) var(--ease-standard); }
+.app.nav-collapsed > .nav { width:var(--nav-rail-w); }
+/* peek = hover-reveal while collapsed: nav width grows back to full and floats over content
+   (grid column stays at rail, so content does NOT move). Managed by JS .nav-peek class. */
+.app.nav-collapsed.nav-peek > .nav { width:var(--nav-w); z-index:55; box-shadow:var(--elev-raised); }
 
-/* ===== Topbar (window chrome row) ===== */
+/* ===== Topbar (over content only — nav is a separate full-height column) ===== */
 .topbar { display:flex; align-items:center; gap:var(--space-3); padding:0 var(--space-4);
   background:var(--surface); border-bottom:1px solid var(--border); }
-.brand { display:flex; align-items:center; gap:8px; font-weight:700; letter-spacing:-0.02em; font-size:var(--text-base); color:var(--fg); background:transparent; border:0; padding:4px 6px; margin-left:-6px; border-radius:var(--r-sm); cursor:pointer; }
-.brand:hover { background:var(--surface-warm); }
-.brand .glyph { width:24px; height:24px; border-radius:6px; display:grid; place-items:center; color:var(--accent-on); font-weight:800; font-size:12px;
-  background:var(--accent); box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--accent-on),transparent 80%); }
 .tspacer { flex:1; }
 .health-pill { display:inline-flex; align-items:center; gap:7px; padding:5px 11px 5px 9px; border-radius:var(--radius-pill);
   font-size:var(--text-xs); font-weight:600; border:1px solid transparent; cursor:default; }
@@ -102,7 +111,7 @@ a:hover { text-decoration:underline; }
 .gsearch:focus-within { background:var(--surface); border-color:var(--accent); box-shadow:var(--focus-ring); }
 .gsearch input { border:0; background:transparent; color:var(--fg); font-size:var(--text-sm); width:100%; outline:none; }
 .gsearch kbd { font-family:var(--font-mono); font-size:10px; border:1px solid var(--border); border-radius:4px; padding:1px 5px; color:var(--muted); }
-.search-pop { position:absolute; right:0; top:calc(100% + 8px); width:min(560px, calc(100vw - 32px)); max-height:min(640px, calc(100vh - 92px)); overflow:auto; z-index:76;
+.search-pop { position:absolute; left:0; top:calc(100% + 8px); width:min(560px, calc(100vw - 32px)); max-height:min(640px, calc(100vh - 92px)); overflow:auto; z-index:76;
   display:none; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--elev-raised); padding:var(--space-3); }
 .search-pop.show { display:block; }
 .search-head { display:flex; justify-content:space-between; gap:var(--space-3); align-items:flex-start; padding:var(--space-2) var(--space-2) var(--space-3); border-bottom:1px solid var(--border-soft); }
@@ -252,11 +261,53 @@ a:hover { text-decoration:underline; }
 .psession .ps-meta span { font-size:var(--text-xs); color:var(--muted); font-family:var(--font-mono); }
 .psession .ps-cur { font-size:10px; font-weight:800; color:var(--success); text-transform:uppercase; letter-spacing:.05em; }
 
-/* ===== Body row ===== */
-.body { display:grid; grid-template-columns:var(--nav-w) 1fr; min-height:0; }
-.nav { background:var(--surface); border-right:1px solid var(--border); overflow-y:auto; padding:var(--space-3) var(--space-2) var(--space-6); }
+/* ===== Nav = full-height left column (Gemini layout). The .app grid sizes its width;
+   the panel just fills its grid cell. Logo + collapse button share the header row. ===== */
+.nav { background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; min-height:0; min-width:0; overflow:hidden; }
+/* header row: brand glyph+wordmark on the left, collapse button pinned right (NOT a corner) */
+.navhead { display:flex; align-items:center; gap:6px; flex:none; height:48px; padding:0 8px 0 14px; border-bottom:1px solid var(--border); }
+.navbrand { display:flex; align-items:center; gap:9px; flex:1; min-width:0; border:0; background:transparent; cursor:pointer; padding:5px 6px; border-radius:var(--r-sm);
+  color:var(--fg); font-weight:700; letter-spacing:-.02em; font-size:var(--text-base); white-space:nowrap; overflow:hidden; }
+.navbrand:hover { background:var(--surface-warm); }
+.navbrand .glyph { width:26px; height:26px; border-radius:7px; display:grid; place-items:center; flex:none; color:var(--accent-on); font-weight:800; font-size:13px;
+  background:var(--accent); box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--accent-on),transparent 80%); }
+.navbrand-wm { transition:opacity var(--motion-fast) var(--ease-standard); overflow:hidden; }
+.navcollapse { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; flex:none;
+  border:1px solid transparent; border-radius:var(--r-sm); background:transparent; color:var(--fg-2); cursor:pointer;
+  transition:color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
+.navcollapse:hover { background:var(--surface-warm); color:var(--fg); }
+.navcollapse svg line { transition:opacity var(--motion-fast) var(--ease-standard); }
+.app.nav-collapsed .navcollapse { color:var(--accent); }
+.app.nav-collapsed .navcollapse svg line { opacity:.35; }
+.nav-scroll { flex:1; min-height:0; overflow-y:auto; padding:var(--space-3) var(--space-2) var(--space-6); }
 .nav-grp { margin-bottom:var(--space-4); }
-.nav-grp .gl { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted); font-weight:700; padding:4px 10px 6px; }
+.nav-grp .gl { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted); font-weight:700; padding:4px 10px 6px; white-space:nowrap; }
+
+/* ===== Collapsed = ICON RAIL (not gone). Icons larger, labels/counts/group-titles hidden,
+   colored status dots kept as a corner badge. Hovering the rail temporarily expands the
+   panel to full width OVER the content (Gemini-style), without shifting the layout.
+   "rail" state = collapsed AND not peeking; .nav-peek (set by JS on hover) restores full. ===== */
+/* text bits fade with the width animation rather than popping (overflow clips them as the
+   rail narrows; opacity makes the fade graceful) */
+.nav-item .lbl, .nav-item .cnt, .nav-item .flag, .nav-item .lock,
+.navbrand-wm, .nav-grp .gl { transition:opacity var(--motion-fast) var(--ease-standard); }
+/* rail header: wordmark hides, collapse button centers under the glyph row */
+.app.nav-collapsed:not(.nav-peek) > .nav .navhead { padding:0 10px 0 0; justify-content:flex-end; }
+.app.nav-collapsed:not(.nav-peek) > .nav .navbrand { flex:none; justify-content:center; padding:5px 0; }
+.app.nav-collapsed:not(.nav-peek) > .nav .navbrand-wm { opacity:0; width:0; }
+.app.nav-collapsed:not(.nav-peek) > .nav .navcollapse { display:none; }
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-grp .gl { height:0; padding:0; margin:0; opacity:0; overflow:hidden; }
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item { justify-content:flex-end; padding:9px 10px 9px 0; gap:6px; }
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item .lbl,
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item .cnt,
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item .flag,
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item .lock { opacity:0; width:0; padding:0; margin:0; overflow:hidden; pointer-events:none; }
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item .nav-ico { width:19px; height:19px; opacity:.78; }
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item[aria-current="page"] .nav-ico { opacity:1; }
+/* status dot stays inline, to the LEFT of the icon (its natural flow) — dot + icon center as a
+   group. No absolute positioning: that detached the dots into a column and broke the rail. */
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item .ndot { width:6px; height:6px; }
+.app.nav-collapsed:not(.nav-peek) > .nav .nav-item.sub { padding-left:0; }
 .nav-item { display:flex; align-items:center; gap:9px; width:100%; text-align:left; border:0; background:transparent; color:var(--fg-2);
   font-size:var(--text-sm); font-weight:500; padding:7px 10px; border-radius:var(--r-sm); }
 .nav-item:hover { background:var(--surface-warm); color:var(--fg); }
@@ -404,7 +455,7 @@ a:hover { text-decoration:underline; }
 [data-density="compact"] .erow { padding:6px 12px; }
 [data-density="compact"] .erow .emeta { display:none; }
 [data-density="compact"] .epreview { font-size:12px; }
-[data-density="compact"] .nav { padding:8px 6px 18px; }
+[data-density="compact"] .nav-scroll { padding:8px 6px 18px; }
 [data-density="compact"] .nav-item { padding:5px 8px; gap:7px; }
 [data-density="compact"] .nav-item.sub { padding-left:20px; }
 [data-density="compact"] .pane { padding:12px 14px 72px; }
@@ -1144,11 +1195,14 @@ a:hover { text-decoration:underline; }
 .toast .undo { color:var(--accent); margin-left:12px; cursor:pointer; }
 
 @media (max-width:980px){
-  .body { grid-template-columns:1fr; }
+  /* Below the breakpoint the nav becomes a slide-in overlay; the shell collapses to one
+     column (topbar / content / statusbar stacked). The rail/hover model is neutralized. */
+  .app, .app.nav-collapsed { grid-template-columns:1fr; grid-template-areas:"topbar" "content" "statusbar"; }
   .mobile-menu-button { display:inline-flex; }
   .gsearch { min-width:0; width:min(360px,48vw); }
-  .nav { position:fixed; top:48px; bottom:26px; width:236px; transform:translateX(-100%); transition:transform var(--motion-base); z-index:50; }
-  .nav.open { transform:none; }
+  .app > .nav { position:fixed; top:0; bottom:0; left:0; width:236px; transform:translateX(-100%); transition:transform var(--motion-base); z-index:60; }
+  .app > .nav.open { transform:none; }
+  .navcollapse { display:none; }
   .area-body.with-detail { grid-template-columns:1fr; }
   .detail { display:none; }
   .area-body.with-detail.detail-open .detail { display:block; position:fixed; right:0; top:48px; bottom:26px; width:340px; z-index:40; }
@@ -1273,15 +1327,27 @@ a:hover { text-decoration:underline; }
 <body>
 <div class="app">
 
-  <!-- TOPBAR -->
+  <!-- NAV (full-height left column) -->
+  <nav class="nav" id="nav">
+    <div class="navhead">
+      <button class="navbrand" id="brandHome" title="На главную — Обзор"><span class="glyph">e</span><span class="navbrand-wm">engram</span></button>
+      <button class="navcollapse" id="navCollapse" aria-label="Свернуть меню" aria-pressed="false" title="Свернуть меню">
+        <svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+          <rect x="1.5" y="2.5" width="13" height="11" rx="2"></rect><line x1="6" y1="2.5" x2="6" y2="13.5"></line>
+        </svg>
+      </button>
+    </div>
+    <div class="nav-scroll" id="navScroll"></div>
+  </nav>
+
+  <!-- TOPBAR (over content only) -->
   <header class="topbar">
     <button class="tbtn mobile-menu-button" id="navToggle" aria-label="Меню">☰</button>
-    <button class="brand" id="brandHome" title="На главную — Обзор"><span class="glyph">e</span> engram</button>
-    <div class="tspacer"></div>
     <div class="gsearch-wrap">
       <div class="gsearch"><span>⌕</span><input id="gsearch" placeholder="Поиск по консоли…"><kbd>/</kbd></div>
       <div class="search-pop" id="searchSuggest" role="listbox" aria-label="Быстрый поиск"></div>
     </div>
+    <div class="tspacer"></div>
     <div class="seg" role="group" aria-label="Плотность">
       <button id="dComfort" aria-pressed="false">Комфорт</button>
       <button id="dCompact" aria-pressed="true">Компактно</button>
@@ -1290,11 +1356,8 @@ a:hover { text-decoration:underline; }
     <button class="identity" id="identityChip" aria-haspopup="menu" aria-expanded="false"></button>
   </header>
 
-  <!-- BODY -->
-  <div class="body">
-    <nav class="nav" id="nav"></nav>
-    <section class="content" id="content"></section>
-  </div>
+  <!-- CONTENT -->
+  <section class="content" id="content"></section>
 
   <!-- STATUS BAR -->
   <footer class="statusbar">
@@ -1952,12 +2015,13 @@ const NAV_ICONS = {
 };
 function navIcon(id){ const p=NAV_ICONS[id]; if(!p) return ''; return `<svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`; }
 function renderNav(){
-  const nav=$('#nav'); nav.innerHTML='';
+  const nav=$('#navScroll'); nav.innerHTML='';
   NAV.forEach(g=>{
     const grp=el('div','nav-grp'); if(g.grp) grp.appendChild(el('div','gl',g.grp));
     g.items.forEach(it=>{
       const b=el('button','nav-item'+(it.sub?' sub':'')+(it.tomb?' tomb':''));
       if(it.id===current) b.setAttribute('aria-current','page');
+      b.title=it.label;   // tooltip when collapsed to the icon rail
       const st=navStateFor(it);
       b.innerHTML=`<span class="ndot" data-s="${st}"></span>${navIcon(it.id)}<span class="lbl">${it.label}</span>`+
         (it.flag&&!flags[it.flag]?'<span class="flag">флаг</span>':'')+
@@ -4725,6 +4789,30 @@ $('#noiseChip').onclick=()=>{ current='noise'; sub=null; renderNav(); renderArea
 $('#serverId').onclick=()=>openSettingsModal(settingsSub);
 $('#brandHome').onclick=()=>goArea('overview');
 $('#navToggle').onclick=()=>$('#nav').classList.toggle('open');
+
+/* Left-rail collapse (desktop) — persists across refresh, like detail width.
+   Collapsed nav shows an icon rail; hovering it "peeks" the full panel back over content.
+   The peek is JS-managed (not :hover) so that clicking "collapse" — which leaves the cursor
+   sitting on the nav — does NOT instantly re-expand it: peek is suppressed until the pointer
+   actually leaves the rail once. */
+const NAV_COLLAPSE_KEY='engram.console.navCollapsed';
+const appEl=document.querySelector('.app'), navEl=$('#nav');
+let peekSuppressed=false;
+function setNavCollapsed(on){
+  appEl.classList.toggle('nav-collapsed', on);
+  if(!on){ appEl.classList.remove('nav-peek'); peekSuppressed=false; }
+  const btn=$('#navCollapse');
+  if(btn){ btn.setAttribute('aria-pressed', on?'true':'false'); btn.title = on?'Развернуть меню':'Свернуть меню'; btn.setAttribute('aria-label', btn.title); }
+  try{ localStorage.setItem(NAV_COLLAPSE_KEY, on?'1':'0'); }catch(_){}
+}
+$('#navCollapse').onclick=()=>{
+  const collapsing=!appEl.classList.contains('nav-collapsed');
+  if(collapsing) peekSuppressed=true;   // cursor stays on nav after the click — don't peek until it leaves
+  setNavCollapsed(collapsing);
+};
+navEl.addEventListener('pointerenter',()=>{ if(appEl.classList.contains('nav-collapsed') && !peekSuppressed) appEl.classList.add('nav-peek'); });
+navEl.addEventListener('pointerleave',()=>{ appEl.classList.remove('nav-peek'); peekSuppressed=false; });
+try{ if(localStorage.getItem(NAV_COLLAPSE_KEY)==='1') setNavCollapsed(true); }catch(_){}
 $('#gsearch').onfocus=openSearchSuggest;
 $('#gsearch').oninput=openSearchSuggest;
 $('#gsearch').onkeydown=e=>{

@@ -1,5 +1,13 @@
+<script setup lang="ts">
+const { t } = useI18n()
+</script>
+
 <template>
-  <SectionStub cls="stale" title="Старые коллекции"
-    lead="Наследие до v5: показывается как отключённая поверхность, чтобы не принять за рабочий поиск."
-    next="search_collection возвращает депрекейшн-строку (removed v5). Listing работает, поиск отключён — это надгробие, не баг." />
+  <SectionStub
+    cls="stale"
+    :title="t('deferred.collections.title')"
+    evidence="search_collection"
+    :lead="t('deferred.collections.lead')"
+    :next="t('deferred.collections.next')"
+  />
 </template>

@@ -10,16 +10,17 @@
  */
 defineProps<{ count: number; verbs: string[]; note?: string }>()
 const emit = defineEmits<{ act: [string]; clear: [] }>()
+const { t } = useI18n()
 </script>
 
 <template>
   <Transition name="bb">
     <div v-if="count > 0" class="bulkbar">
-      <span class="bc">{{ count }} выбрано</span>
+      <span class="bc">{{ t('common.selectedCount', { count }) }}</span>
       <span class="bsp" />
       <button v-for="v in verbs" :key="v" class="act" @click="emit('act', v)">{{ v }}</button>
       <span v-if="note" class="note">{{ note }}</span>
-      <button class="tbtn" @click="emit('clear')">Снять выбор</button>
+      <button class="tbtn" @click="emit('clear')">{{ t('common.clearSelection') }}</button>
     </div>
   </Transition>
 </template>

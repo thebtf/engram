@@ -15,6 +15,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 
 const props = withDefaults(defineProps<{ value: string; seconds?: number }>(), { seconds: 30 })
 const emit = defineEmits<{ hide: []; copy: [] }>()
+const { t } = useI18n()
 
 const left = ref(props.seconds)
 const copied = ref(false)
@@ -35,13 +36,13 @@ async function copy() {
 
 <template>
   <div class="reveal">
-    <code class="rv-key" title="Одноразовый показ — значение не сохраняется">{{ value }}</code>
-    <span class="rv-timer">Скроется через {{ left }} с</span>
-    <button class="rv-ic" aria-label="Скопировать" @click="copy">
+    <code class="rv-key" :title="t('secrets.revealTitle')">{{ value }}</code>
+    <span class="rv-timer">{{ t('secrets.revealTimer', { seconds: left }) }}</span>
+    <button class="rv-ic" :aria-label="t('secrets.copySecret')" @click="copy">
       <svg v-if="!copied" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
       <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--reveal-key)"><path d="M20 6 9 17l-5-5"/></svg>
     </button>
-    <button class="rv-ic" aria-label="Скрыть" @click="hide">
+    <button class="rv-ic" :aria-label="t('secrets.hideSecret')" @click="hide">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.7 5.1a10.7 10.7 0 0 1 11.2 6.6 1 1 0 0 1 0 .7 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14 14.2a3 3 0 0 1-4.2-4.3"/><path d="M17.5 17.5A10.8 10.8 0 0 1 2 12.3a1 1 0 0 1 0-.7 10.8 10.8 0 0 1 4.4-5.1"/><path d="m2 2 20 20"/></svg>
     </button>
   </div>
