@@ -189,8 +189,11 @@
     },
     "rowState": {
       "active": "working",
+      "flagged": "review",
       "noise": "noise",
-      "stale": "needs review"
+      "stale": "needs review",
+      "superseded": "replaced",
+      "archived": "archived"
     },
     "empty": {
       "title": "Memory is empty",
@@ -217,6 +220,7 @@
       "tags": "Tags",
       "utility": "Value and noise",
       "utilityHelp": "cited / shown · confidence {confidence}",
+      "utilityUnknown": "The server did not return usage counters for this record, so the UI does not present it as proven 0/0.",
       "noiseWarning": "Looks noisy: agents saw this record often, but never used it in an answer.",
       "audit": "Audit",
       "auditBody": "Memory audit log",
@@ -226,6 +230,8 @@
         "hideNoise": "Hide as noise",
         "editText": "Edit text",
         "replace": "Replace with new version",
+        "promote": "Promote importance",
+        "lifecycleRequired": "requires lifecycle",
         "flag": "Flag"
       }
     },

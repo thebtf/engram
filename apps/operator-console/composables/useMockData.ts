@@ -17,13 +17,19 @@ export interface Memory {
   id: string
   content: string
   tags: string[]
+  status: 'active' | 'flagged' | 'superseded' | 'archived'
   tier: 'semantic' | 'episodic' | 'procedural'
   type: string
   project: string
   conf: number
+  confidenceKnown: boolean
   cite: number
   inj: number
+  utilityKnown: boolean
   age: string
+  ageDays: number | null
+  supersededBy?: string
+  sourceSessions: string[]
   noise?: boolean
 }
 

@@ -27,6 +27,8 @@ interface ApiMemory {
   updated_at?: string
   created_at?: string
   status?: string
+  superseded_by?: number | string | null
+  source_sessions?: string[]
 }
 
 export interface StoreMemoryInput {
@@ -61,6 +63,15 @@ function compactAge(timestamp?: string): string {
   return `${Math.floor(seconds / 86400)}d`
 }
 
+function ageDays(timestamp?: string): number | null {
+  if (!timestamp) return null
+
+  const value = Date.parse(timestamp)
+  if (Number.isNaN(value)) return null
+
+  return Math.max(0, Math.floor((Date.now() - value) / 86_400_000))
+}
+
 function mapTier(value?: string): Memory['tier'] {
   if (value === 'semantic' || value === 'episodic' || value === 'procedural') {
     return value
@@ -69,23 +80,49 @@ function mapTier(value?: string): Memory['tier'] {
   return 'procedural'
 }
 
+function mapStatus(row: ApiMemory): Memory['status'] {
+  const normalized = String(row.status || '').trim().toLowerCase()
+  if (normalized === 'active' || normalized === 'flagged' || normalized === 'superseded' || normalized === 'archived') {
+    return normalized
+  }
+  if (normalized === 'noise' || normalized === 'suppressed') {
+    return 'flagged'
+  }
+  if (row.superseded_by !== undefined && row.superseded_by !== null && String(row.superseded_by).trim()) {
+    return 'superseded'
+  }
+
+  return 'active'
+}
+
 function isNoiseStatus(value?: string): boolean {
   const normalized = String(value || '').trim().toLowerCase()
   return normalized === 'noise' || normalized === 'flagged' || normalized === 'suppressed'
 }
 
 function mapMemoryRow(row: ApiMemory): Memory {
+  const updatedAt = row.updated_at || row.created_at
+  const hasConfidence = typeof row.confidence === 'number'
+  const hasCitationCount = Object.prototype.hasOwnProperty.call(row, 'citation_count')
+  const hasInjectionCount = Object.prototype.hasOwnProperty.call(row, 'injection_count')
+
   return {
     id: String(row.id),
     content: row.content || '-',
     tags: Array.isArray(row.tags) ? row.tags : [],
+    status: mapStatus(row),
     tier: mapTier(row.tier),
     type: row.epistemic_type || 'note',
     project: row.project || 'global',
-    conf: typeof row.confidence === 'number' ? row.confidence : 0,
+    conf: hasConfidence ? row.confidence as number : 1,
+    confidenceKnown: hasConfidence,
     cite: typeof row.citation_count === 'number' ? row.citation_count : 0,
     inj: typeof row.injection_count === 'number' ? row.injection_count : 0,
-    age: compactAge(row.updated_at || row.created_at),
+    utilityKnown: hasCitationCount || hasInjectionCount,
+    age: compactAge(updatedAt),
+    ageDays: ageDays(updatedAt),
+    supersededBy: row.superseded_by === undefined || row.superseded_by === null ? undefined : String(row.superseded_by),
+    sourceSessions: Array.isArray(row.source_sessions) ? row.source_sessions : [],
     noise: isNoiseStatus(row.status),
   }
 }
