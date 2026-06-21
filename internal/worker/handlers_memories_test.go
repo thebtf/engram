@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -130,6 +131,34 @@ func TestHandleListMemories_EmptyProjectReturnsJSONArray(t *testing.T) {
 	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
 	require.NotEmpty(t, w.Body.String())
 	assert.JSONEq(t, "[]", w.Body.String())
+}
+
+func TestHandleListMemories_NonFiniteScoresReturnJSON(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{{
+		ID:         42,
+		Project:    "score-project",
+		Content:    "memory with non-finite score",
+		Tags:       []string{"score"},
+		Confidence: math.NaN(),
+		Stability:  math.Inf(1),
+	}}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=score-project&limit=50", nil)
+	w := httptest.NewRecorder()
+
+	service.handleListMemories(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, float64(42), rows[0]["id"])
+	assert.Equal(t, "memory with non-finite score", rows[0]["content"])
+	assert.NotContains(t, rows[0], "confidence")
+	assert.NotContains(t, rows[0], "stability")
 }
 
 func TestHandleDeleteMemoryByID_RoundTrip(t *testing.T) {

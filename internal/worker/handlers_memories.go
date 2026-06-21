@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -198,7 +199,36 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, mems)
+	writeJSON(w, jsonSafeMemories(mems))
+}
+
+func jsonSafeMemories(mems []*models.Memory) []*models.Memory {
+	safe := make([]*models.Memory, 0, len(mems))
+	for _, mem := range mems {
+		if mem == nil {
+			safe = append(safe, nil)
+			continue
+		}
+
+		copy := *mem
+		copy.ImportanceBase = finiteOrZero(copy.ImportanceBase)
+		copy.TsAlpha = finiteOrZero(copy.TsAlpha)
+		copy.TsBeta = finiteOrZero(copy.TsBeta)
+		copy.Confidence = finiteOrZero(copy.Confidence)
+		copy.Stability = finiteOrZero(copy.Stability)
+		copy.Retrievability = finiteOrZero(copy.Retrievability)
+		safe = append(safe, &copy)
+	}
+
+	return safe
+}
+
+func finiteOrZero(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+
+	return value
 }
 
 // listVisibleMemoriesREST returns up to `limit` memories from the given
