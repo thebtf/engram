@@ -189,8 +189,11 @@
     },
     "rowState": {
       "active": "工作中",
+      "flagged": "待检查",
       "noise": "噪声",
-      "stale": "需要审核"
+      "stale": "需要审核",
+      "superseded": "已替换",
+      "archived": "已归档"
     },
     "empty": {
       "title": "记忆为空",
@@ -217,6 +220,7 @@
       "tags": "标签",
       "utility": "价值和噪声",
       "utilityHelp": "引用 / 展示 · 置信度 {confidence}",
+      "utilityUnknown": "服务器没有返回此记录的使用计数，因此界面不会把它显示为确认的 0/0。",
       "noiseWarning": "看起来像噪声：代理经常看到这条记录，但从未在回答中使用。",
       "audit": "审计",
       "auditBody": "记忆审计日志",
@@ -226,6 +230,8 @@
         "hideNoise": "作为噪声隐藏",
         "editText": "编辑文本",
         "replace": "替换为新版本",
+        "promote": "提升重要性",
+        "lifecycleRequired": "需要 lifecycle",
         "flag": "标记"
       }
     },

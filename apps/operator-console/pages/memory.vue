@@ -10,8 +10,6 @@ const {
   pending,
   error,
   refresh,
-  storeMemory,
-  deleteMemory,
   auditGap,
   provenanceGap,
 } = useOperatorMemoryLab()
@@ -36,11 +34,11 @@ const activeFilterCount = computed(() => Object.values(filters.value).filter(Boo
 
 function hasFilter(memory: Memory, key: MemoryFilter) {
   switch (key) {
-    case 'active': return !memory.noise
-    case 'flagged': return Boolean(memory.noise) || memory.conf < 0.8
-    case 'stale': return memory.cite === 0 && memory.inj > 0
-    case 'low': return memory.conf < 0.85
-    case 'chain': return memory.tags.some((tag) => ['superseded', 'replace', 'replacement'].includes(tag))
+    case 'active': return memory.status === 'active'
+    case 'flagged': return memory.status === 'flagged' || Boolean(memory.noise)
+    case 'stale': return memory.status === 'superseded' || memory.status === 'archived' || (memory.ageDays !== null && memory.ageDays >= 30 && (!memory.utilityKnown || memory.cite === 0))
+    case 'low': return memory.confidenceKnown && memory.conf < 0.85
+    case 'chain': return memory.status === 'superseded' || Boolean(memory.supersededBy) || memory.tags.some((tag) => ['superseded', 'replace', 'replacement'].includes(tag))
     default: return true
   }
 }
@@ -61,8 +59,9 @@ const selectedIds = computed(() => Object.entries(selected.value).filter(([, val
 const selectedCount = computed(() => selectedIds.value.length)
 const opened = computed(() => all.find((memory) => memory.id === openId.value) || null)
 const noiseRatio = computed(() => {
-  if (!all.length) return '—'
-  return (all.filter((memory) => memory.noise).length / all.length).toFixed(2)
+  const measured = all.filter((memory) => memory.utilityKnown)
+  if (!measured.length) return '—'
+  return (all.filter((memory) => memory.noise || (memory.utilityKnown && memory.inj >= 10 && memory.cite === 0)).length / measured.length).toFixed(2)
 })
 
 watch([filtered, pageSize], () => {
@@ -95,15 +94,16 @@ function toggleSelected(id: string) {
 }
 
 function rowState(memory: Memory) {
-  if (memory.noise) return 'noise'
-  if (memory.conf < 0.8) return 'stale'
+  if (memory.status === 'flagged' || memory.noise) return 'flagged'
+  if (memory.status === 'superseded') return 'superseded'
+  if (memory.status === 'archived') return 'archived'
   return 'active'
 }
 
 function rowStateClass(memory: Memory) {
   const state = rowState(memory)
-  if (state === 'noise') return 'warn'
-  if (state === 'stale') return 'stale'
+  if (state === 'flagged') return 'warn'
+  if (state === 'superseded' || state === 'archived') return 'stale'
   return 'live'
 }
 
@@ -112,24 +112,20 @@ function rowStateLabel(memory: Memory) {
 }
 
 function formatConfidence(memory: Memory) {
+  if (!memory.confidenceKnown) return '—'
   return `${Math.round(memory.conf * 100)}%`
 }
 
-async function deleteOpened() {
-  if (!opened.value) return
-  const id = opened.value.id
-  openId.value = null
-  selected.value = { ...selected.value, [id]: false }
-  await deleteMemory(id)
+function confidenceWidth(memory: Memory) {
+  return memory.confidenceKnown ? `${Math.round(memory.conf * 100)}%` : '0%'
 }
 
-async function storeCopy() {
-  if (!opened.value) return
-  await storeMemory({
-    project: opened.value.project,
-    content: opened.value.content,
-    tags: opened.value.tags,
-  })
+function utilityText(memory: Memory) {
+  return memory.utilityKnown ? `${memory.cite} / ${memory.inj}` : '— / —'
+}
+
+function isNoisyUtility(memory: Memory) {
+  return memory.utilityKnown && memory.inj >= 10 && memory.cite === 0
 }
 </script>
 
@@ -217,7 +213,10 @@ async function storeCopy() {
               <span>{{ memory.tier }}</span>
             </span>
           </span>
-          <span class="heat" :class="{ noisy: memory.noise }"><b>{{ memory.cite }}</b><span>/</span>{{ memory.inj }}</span>
+          <span class="heat" :class="{ noisy: memory.noise || isNoisyUtility(memory), unknown: !memory.utilityKnown }">
+            <template v-if="memory.utilityKnown"><b>{{ memory.cite }}</b><span>/</span>{{ memory.inj }}</template>
+            <template v-else>—</template>
+          </span>
           <span class="rowmenu" aria-hidden="true">…</span>
         </button>
 
@@ -259,11 +258,12 @@ async function storeCopy() {
         <section class="dsection">
           <div class="dsh">{{ t('memory.detail.utility') }}</div>
           <div class="gauge-mini">
-            <span class="gv">{{ opened.cite }}/{{ opened.inj }}</span>
-            <div class="confbar"><i :style="{ width: formatConfidence(opened) }" /></div>
+            <span class="gv">{{ utilityText(opened) }}</span>
+            <div class="confbar"><i :style="{ width: confidenceWidth(opened) }" /></div>
             <span class="plain-help">{{ t('memory.detail.utilityHelp', { confidence: formatConfidence(opened) }) }}</span>
           </div>
-          <div v-if="opened.inj >= 10 && opened.cite === 0" class="callout danger">{{ t('memory.detail.noiseWarning') }}</div>
+          <div v-if="isNoisyUtility(opened)" class="callout danger">{{ t('memory.detail.noiseWarning') }}</div>
+          <div v-else-if="!opened.utilityKnown" class="callout muted">{{ t('memory.detail.utilityUnknown') }}</div>
         </section>
 
         <section class="dsection">
@@ -276,11 +276,10 @@ async function storeCopy() {
         </section>
 
         <div class="dactions">
-          <button class="act" @click="storeCopy">{{ t('memory.detail.actions.storeCopy') }}</button>
-          <button class="act danger" @click="deleteOpened">{{ t('memory.detail.actions.delete') }}</button>
           <button class="act" disabled>{{ t('memory.detail.actions.hideNoise') }} <span class="mbp">{{ t('overview.badges.mustBuild') }}</span></button>
           <button class="act" disabled>{{ t('memory.detail.actions.editText') }} <span class="mbp">{{ t('overview.badges.mustBuild') }}</span></button>
           <button class="act" disabled>{{ t('memory.detail.actions.replace') }} <span class="mbp">{{ t('overview.badges.mustBuild') }}</span></button>
+          <button class="act" disabled>{{ t('memory.detail.actions.promote') }} <span class="mbp">{{ t('memory.detail.actions.lifecycleRequired') }}</span></button>
           <button class="act" disabled>{{ t('memory.detail.actions.flag') }} <span class="mbp">{{ t('overview.badges.mustBuild') }}</span></button>
         </div>
       </aside>
@@ -344,6 +343,7 @@ async function storeCopy() {
 .heat b { color:var(--class-live); }
 .heat.noisy { border-color:color-mix(in oklab,var(--state-warn),transparent 55%); }
 .heat.noisy b { color:var(--state-warn); }
+.heat.unknown { color:var(--muted); border-style:dashed; }
 .rowmenu { color:var(--muted); text-align:center; font-size:18px; }
 .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; min-height:220px; color:var(--muted); }
 .empty b { color:var(--fg-2); font-size:var(--text-lg); }
@@ -369,6 +369,7 @@ async function storeCopy() {
 .plain-help { grid-column:1 / -1; color:var(--muted); font-size:var(--text-xs); }
 .callout { margin-top:9px; padding:9px 11px; border-radius:var(--r-sm); font-size:var(--text-xs); }
 .callout.danger { color:var(--state-warn); border:1px solid color-mix(in oklab,var(--state-warn),transparent 55%); background:color-mix(in oklab,var(--state-warn),transparent 90%); }
+.callout.muted { color:var(--muted); border:1px solid var(--border); background:var(--surface-warm); }
 .mb-card { padding:12px; border-radius:var(--r-sm); border:1px solid color-mix(in oklab,var(--class-mustbuild),transparent 55%); background:color-mix(in oklab,var(--class-mustbuild),transparent 91%); color:var(--fg-2); font-size:var(--text-sm); }
 .mb-card .mid { margin-top:4px; color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); }
 .dactions { display:flex; gap:8px; flex-wrap:wrap; margin-top:15px; }
