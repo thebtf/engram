@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import {
   useOperatorIssues,
@@ -66,6 +66,7 @@ const hoverIssue = ref<OperatorIssue | null>(null)
 const hoverStyle = ref<Record<string, string>>({})
 let hoverOpenTimer: ReturnType<typeof setTimeout> | null = null
 let hoverCloseTimer: ReturnType<typeof setTimeout> | null = null
+const ISSUE_HOVER_VIEWPORT_MARGIN = 12
 
 const createTitle = ref('')
 const createBody = ref('')
@@ -349,20 +350,34 @@ function showIssueHover(issue: OperatorIssue, event: MouseEvent) {
   const row = event.currentTarget as HTMLElement
   hoverOpenTimer = setTimeout(() => {
     hoverIssue.value = issue
-    requestAnimationFrame(() => {
-      const rect = row.getBoundingClientRect()
-      const width = Math.min(440, window.innerWidth - 24)
-      let left = rect.right + 12
-      if (left + width > window.innerWidth - 12) {
-        left = Math.max(12, rect.left - width - 12)
-      }
-      hoverStyle.value = {
-        width: `${width}px`,
-        left: `${left}px`,
-        top: `${Math.max(12, Math.min(rect.top, window.innerHeight - 120))}px`,
-      }
+    const rowRect = row.getBoundingClientRect()
+    const width = Math.min(440, window.innerWidth - ISSUE_HOVER_VIEWPORT_MARGIN * 2)
+    let left = rowRect.right + ISSUE_HOVER_VIEWPORT_MARGIN
+    if (left + width > window.innerWidth - ISSUE_HOVER_VIEWPORT_MARGIN) {
+      left = Math.max(ISSUE_HOVER_VIEWPORT_MARGIN, rowRect.left - width - ISSUE_HOVER_VIEWPORT_MARGIN)
+    }
+    hoverStyle.value = {
+      width: `${width}px`,
+      left: `${left}px`,
+      top: `${clampIssueHoverTop(rowRect.top)}px`,
+    }
+    void nextTick().then(() => {
+      requestAnimationFrame(() => {
+        const hover = document.querySelector<HTMLElement>('.issue-hover')
+        if (!hover || hoverIssue.value?.id !== issue.id) return
+        hoverStyle.value = {
+          ...hoverStyle.value,
+          top: `${clampIssueHoverTop(rowRect.top, hover.getBoundingClientRect().height)}px`,
+        }
+      })
     })
   }, 280)
+}
+
+function clampIssueHoverTop(anchorTop: number, measuredHeight = Math.min(560, window.innerHeight - ISSUE_HOVER_VIEWPORT_MARGIN * 2)) {
+  const safeHeight = Math.min(measuredHeight, window.innerHeight - ISSUE_HOVER_VIEWPORT_MARGIN * 2)
+  const maxTop = Math.max(ISSUE_HOVER_VIEWPORT_MARGIN, window.innerHeight - safeHeight - ISSUE_HOVER_VIEWPORT_MARGIN)
+  return Math.max(ISSUE_HOVER_VIEWPORT_MARGIN, Math.min(anchorTop, maxTop))
 }
 
 function cancelIssueHoverClose() {

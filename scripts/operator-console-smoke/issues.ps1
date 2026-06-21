@@ -9,6 +9,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $root = Join-Path $repoRoot $AppRoot
 $issuesPath = Join-Path $root "pages\issues.vue"
 $issuesComposablePath = Join-Path $root "composables\useOperatorIssues.ts"
+$issuesMockupPath = Join-Path $repoRoot "design\operator-console\mockups\index.html"
 
 function Assert-Contains {
   param(
@@ -43,9 +44,11 @@ function Assert-File {
 
 Assert-File $issuesPath
 Assert-File $issuesComposablePath
+Assert-File $issuesMockupPath
 
 $issues = Get-Content -LiteralPath $issuesPath -Raw
 $issuesComposable = Get-Content -LiteralPath $issuesComposablePath -Raw
+$issuesMockup = Get-Content -LiteralPath $issuesMockupPath -Raw
 
 Assert-Contains $issues "useOperatorIssues" "issues live adapter"
 Assert-Contains $issues "loadState" "load-state binding"
@@ -74,6 +77,8 @@ Assert-Contains $issues "thread-actions" "design-contract thread action bar"
 Assert-Contains $issues "showIssueHover" "design-contract hover preview"
 Assert-Contains $issues "scheduleIssueHoverHide" "delayed hover preview close"
 Assert-Contains $issues "cancelIssueHoverClose" "hover preview keeps open over popover"
+Assert-Contains $issues "clampIssueHoverTop" "viewport-clamped hover preview position"
+Assert-Contains $issues "getBoundingClientRect().height" "measured hover preview height"
 Assert-Contains $issues "@mouseenter=`"cancelIssueHoverClose`"" "interactive hover preview mouse enter"
 Assert-Contains $issues "pointer-events:auto" "interactive hover preview pointer events"
 Assert-Contains $issues "registryTotal" "server registry total binding"
@@ -83,6 +88,8 @@ Assert-Contains $issues "issues.list.allRows" "design-contract all rows option"
 Assert-Contains $issues "md-toolbar" "markdown toolbar"
 Assert-Contains $issues "createSourceProject" "create source project control"
 Assert-Contains $issues "issues.thread.mustBuildEvidence" "honest thread mustbuild evidence"
+Assert-Contains $issuesMockup "clampIssueHoverTop" "mockup viewport-clamped hover preview position"
+Assert-Contains $issuesMockup "pointer-events:auto" "mockup interactive hover preview pointer events"
 
 Assert-Contains $issuesComposable "loadOperatorJson<ApiIssueList>('/api/issues?limit=100'" "issue list endpoint"
 Assert-Contains $issuesComposable "registryTotal" "server total computed"
