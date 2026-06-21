@@ -147,7 +147,8 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 // @Failure 500 {string} string "internal error"
 // @Router /api/memories [get]
 func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
-	if s.memoryStore == nil {
+	store := s.memListStore()
+	if store == nil {
 		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -184,7 +185,7 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	// scope-invisible newest rows do not truncate the visible result set
 	// before the requested limit is reached. Flag-OFF path preserves the
 	// original single-call List shape for v6.4.x byte-identity (RI-F1).
-	mems, err := listVisibleMemoriesREST(r.Context(), s.memoryStore, project, limit)
+	mems, err := listVisibleMemoriesREST(r.Context(), store, project, limit)
 	if err != nil {
 		log.Error().Err(err).Str("project", project).Msg("list memories failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -192,8 +193,9 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return an empty array rather than null when there are no results.
-	if mems == nil {
-		mems = []*models.Memory{}
+	if len(mems) == 0 {
+		writeJSON(w, make([]*models.Memory, 0))
+		return
 	}
 
 	writeJSON(w, mems)

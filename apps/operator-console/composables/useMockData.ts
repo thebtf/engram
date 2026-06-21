@@ -292,7 +292,9 @@ async function fetchApi(path: string, init: RequestInit = {}): Promise<Response>
   })
 
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText} for ${path}`)
+    const text = await response.text()
+    const detail = text.trim() ? `: ${text.trim().slice(0, 240)}` : ''
+    throw new Error(`${response.status} ${response.statusText} for ${path}${detail}`)
   }
 
   return response
@@ -303,7 +305,23 @@ async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 204) {
     return undefined as T
   }
-  return response.json() as Promise<T>
+
+  const text = await response.text()
+  if (!text.trim()) {
+    return undefined as T
+  }
+
+  const contentType = response.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) {
+    return text as T
+  }
+
+  try {
+    return JSON.parse(text) as T
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`Invalid JSON from ${path}: ${detail}: ${text.trim().slice(0, 240)}`)
+  }
 }
 
 async function fetchText(path: string): Promise<string> {

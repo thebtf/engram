@@ -122,7 +122,7 @@ function startOnce(key: string, run: () => Promise<void>) {
 async function loadMemoryRows(): Promise<Memory[]> {
   const projectState = await loadOperatorJson<string[]>('/api/projects', {
     source: 'memory-projects',
-    empty: (rows) => !rows.length,
+    empty: (rows) => !Array.isArray(rows) || !rows.length,
   })
 
   if (projectState.kind === 'error') {
@@ -130,7 +130,7 @@ async function loadMemoryRows(): Promise<Memory[]> {
   }
 
   const projects = projectState.kind === 'live' || projectState.kind === 'empty'
-    ? projectState.data
+    ? projectState.data || []
     : []
   const combined: Memory[] = []
 

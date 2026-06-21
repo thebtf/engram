@@ -117,6 +117,21 @@ func TestHandleStoreMemoryExplicit_ValidationErrors(t *testing.T) {
 	}
 }
 
+func TestHandleListMemories_EmptyProjectReturnsJSONArray(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=empty-project&limit=50", nil)
+	w := httptest.NewRecorder()
+
+	service.handleListMemories(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+	require.NotEmpty(t, w.Body.String())
+	assert.JSONEq(t, "[]", w.Body.String())
+}
+
 func TestHandleDeleteMemoryByID_RoundTrip(t *testing.T) {
 	project := "test-memory-handler-delete-" + uuid.NewString()
 	service := newMemoryTestService(t, project)

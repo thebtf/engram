@@ -15,7 +15,26 @@ function read(path) {
 function functionBody(source, name) {
   const start = source.indexOf(`function ${name}`)
   assert.notEqual(start, -1, `${name} must be declared as a function`)
-  const open = source.indexOf('{', start)
+
+  const paramsOpen = source.indexOf('(', start)
+  assert.notEqual(paramsOpen, -1, `${name} must declare parameters`)
+
+  let parenDepth = 0
+  let paramsClose = -1
+  for (let index = paramsOpen; index < source.length; index += 1) {
+    const char = source[index]
+    if (char === '(') parenDepth += 1
+    if (char === ')') {
+      parenDepth -= 1
+      if (parenDepth === 0) {
+        paramsClose = index
+        break
+      }
+    }
+  }
+
+  assert.notEqual(paramsClose, -1, `${name} parameter list is not balanced`)
+  const open = source.indexOf('{', paramsClose)
   assert.notEqual(open, -1, `${name} must have a body`)
 
   let depth = 0
@@ -57,6 +76,29 @@ test('fetch seam uses runtime config, same-origin default, retryable source erro
   assert.match(source, /status:\s*response\.status/, 'HTTP status must be captured')
   assert.match(source, /source:/, 'source metadata must be carried')
   assert.match(source, /retry/, 'retry metadata must be carried')
+})
+
+test('fetch seam reads bodies safely instead of throwing browser-native JSON parse errors', () => {
+  const source = read(seamPath)
+  const compatibility = read(compatibilityPath)
+  const operatorBody = functionBody(source, 'operatorFetchJson')
+  const responseReaderBody = functionBody(source, 'readOperatorResponseText')
+  const compatibilityBody = functionBody(compatibility, 'fetchJson')
+
+  for (const [label, body] of [['useMockData fetchJson', compatibilityBody]]) {
+    assert.match(body, /response\.text\(\)/, `${label} must read response body as text before parsing`)
+    assert.match(body, /if\s*\(\s*!text\.trim\(\)\s*\)/, `${label} must tolerate empty 200 JSON bodies`)
+    assert.match(body, /JSON\.parse\(text\)/, `${label} must parse JSON after the empty-body guard`)
+    assert.doesNotMatch(body, /response\.json\(\)/, `${label} must not throw native Response.json parse errors`)
+  }
+
+  assert.match(operatorBody, /readOperatorResponseText\(response, path, source, method\)/, 'operatorFetchJson must read body through the safe reader')
+  assert.match(responseReaderBody, /response\.text\(\)/, 'safe response reader must use response.text()')
+  assert.match(operatorBody, /if\s*\(\s*!text\.trim\(\)\s*\)/, 'operatorFetchJson must tolerate empty 200 JSON bodies')
+  assert.match(operatorBody, /JSON\.parse\(text\)/, 'operatorFetchJson must parse JSON after the empty-body guard')
+  assert.doesNotMatch(operatorBody, /response\.json\(\)/, 'operatorFetchJson must not throw native Response.json parse errors')
+  assert.match(operatorBody, /bodyDetail\(text\)/, 'HTTP errors must include response body details when present')
+  assert.match(operatorBody, /Invalid JSON from/, 'invalid JSON must be reported with endpoint context')
 })
 
 test('mutation seam supports success, rollback, refresh, and honest mustbuild unsupported actions', () => {
