@@ -137,6 +137,16 @@ test('useMockData remains an import-compatible ownership map for page CRs', () =
   }
 })
 
+test('memory compatibility export uses the Memory Lab live state seam', () => {
+  const source = read(compatibilityPath)
+  const memoryExport = source.match(/export const useMemories = \(\) => \{[\s\S]*?\n\}/)
+
+  assert.ok(memoryExport, 'useMemories compatibility export must exist')
+  assert.match(source, /useOperatorMemoryLab/, 'useMockData must import the Memory Lab live seam')
+  assert.match(memoryExport[0], /useOperatorMemoryLab\(\)\.rows/, 'useMemories must delegate to Memory Lab rows')
+  assert.doesNotMatch(memoryExport[0], /live:memories/, 'useMemories must not maintain a separate stale memory cache')
+})
+
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
   const source = read(nuxtConfigPath)
 
