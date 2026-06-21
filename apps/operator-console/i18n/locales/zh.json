@@ -173,6 +173,7 @@
     },
     "countInFilter": "当前过滤中 {shown} / {total}",
     "rowsLabel": "行数",
+    "allRows": "全部",
     "pageRange": "{from}–{to} / {total}",
     "filters": {
       "allProjects": "所有项目",
@@ -398,6 +399,7 @@
       "count": "{count} 个任务",
       "countInFilter": "当前过滤中 {shown} / {total}",
       "rows": "行数",
+      "allRows": "全部",
       "pageRange": "{from}–{to} / {total}",
       "filteredTotal": "显示 {shown} · 登记 {total}"
     },

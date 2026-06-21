@@ -173,6 +173,7 @@
     },
     "countInFilter": "{shown} of {total} in current filter",
     "rowsLabel": "Rows",
+    "allRows": "All",
     "pageRange": "{from}–{to} of {total}",
     "filters": {
       "allProjects": "All projects",
@@ -398,6 +399,7 @@
       "count": "{count} issue | {count} issues",
       "countInFilter": "{shown} of {total} in current filter",
       "rows": "Rows",
+      "allRows": "All",
       "pageRange": "{from}–{to} of {total}",
       "filteredTotal": "{shown} shown · {total} in registry"
     },
