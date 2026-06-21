@@ -19,6 +19,7 @@ const {
   rows,
   comments,
   trackedProjects,
+  registryTotal,
   detail,
   loadState,
   detailState,
@@ -91,12 +92,16 @@ const activeIssue = computed(() => {
 const selectedIdSet = computed(() => new Set(selectedIds.value))
 const selectedRows = computed(() => rows.filter((issue) => selectedIdSet.value.has(issue.id)))
 const selectedCount = computed(() => selectedIds.value.length)
+const hasLoadedRows = computed(() => rows.length > 0 || (Array.isArray(loadState.value.data) && loadState.value.data.length > 0))
+const showInitialPending = computed(() => pending.value && !hasLoadedRows.value)
+const showStatebar = computed(() => Boolean(notice.value || showInitialPending.value || error.value || loadState.value.kind === 'empty'))
+const statebarKind = computed(() => error.value ? 'error' : showInitialPending.value ? 'pending' : loadState.value.kind)
 
 const stats = computed(() => ({
   open: rows.filter((issue) => issue.status === 'open').length,
   work: rows.filter((issue) => issue.status === 'acknowledged' || issue.status === 'reopened').length,
   done: rows.filter((issue) => issue.status === 'resolved' || issue.status === 'closed').length,
-  total: rows.length,
+  total: registryTotal.value,
 }))
 
 const filteredRows = computed(() => {
@@ -550,9 +555,9 @@ function renderMarkdown(value: string) {
       <p>{{ pageSubtitle }}</p>
     </header>
 
-    <section v-if="notice || pending || error || loadState.kind === 'empty'" class="statebar" :data-state="error ? 'error' : loadState.kind">
+    <section v-if="showStatebar" class="statebar" :data-state="statebarKind">
       <span v-if="notice">{{ notice }}</span>
-      <span v-else-if="pending">{{ t('issues.state.pending') }}</span>
+      <span v-else-if="showInitialPending">{{ t('issues.state.pending') }}</span>
       <span v-else-if="error">{{ t('issues.state.error', { message: error }) }}</span>
       <span v-else-if="loadState.kind === 'empty'">{{ t('issues.state.empty') }}</span>
       <button v-if="error" class="tbtn" @click="refresh">{{ t('issues.state.retry') }}</button>
@@ -609,7 +614,7 @@ function renderMarkdown(value: string) {
           >
             {{ t(`issues.filters.${item}`) }}
           </button>
-          <span class="fcount">{{ t('issues.list.filteredTotal', { shown: filteredRows.length, total: rows.length }) }}</span>
+          <span class="fcount">{{ t('issues.list.filteredTotal', { shown: filteredRows.length, total: registryTotal }) }}</span>
         </div>
 
         <div class="grid issues-grid">

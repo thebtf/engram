@@ -257,6 +257,7 @@ export function useOperatorIssues(): {
   comments: OperatorIssueComment[]
   projectNames: Record<string, string>
   trackedProjects: ComputedRef<string[]>
+  registryTotal: ComputedRef<number>
   detail: ComputedRef<OperatorIssue | null>
   loadState: ComputedRef<OperatorLoadState<OperatorIssue[]>>
   detailState: ComputedRef<OperatorLoadState<OperatorIssue | null>>
@@ -280,6 +281,7 @@ export function useOperatorIssues(): {
   const commentsState = useState<OperatorIssueComment[]>('live:issues-page:comments', () => [])
   const projectNamesState = useState<Record<string, string>>('live:issues-page:project-names', () => ({}))
   const trackedProjectsState = useState<string[]>('live:issues-page:tracked-projects', () => ['engram'])
+  const totalCountState = useState<number>('live:issues-page:total', () => 0)
   const detailStateValue = useState<OperatorIssue | null>('live:issues-page:detail', () => null)
   const state = useState<OperatorLoadState<OperatorIssue[]>>('live:issues-page:state', () => pendingState(listEvidence, rowsState.value))
   const detailLoadState = useState<OperatorLoadState<OperatorIssue | null>>('live:issues-page:detail-state', () => emptyState(detailEvidence, null))
@@ -288,6 +290,7 @@ export function useOperatorIssues(): {
   const detailState = computed(() => detailLoadState.value)
   const detail = computed(() => detailStateValue.value)
   const trackedProjects = computed(() => uniqueProjects(rowsState.value, trackedProjectsState.value))
+  const registryTotal = computed(() => Math.max(totalCountState.value, rowsState.value.length))
   const pending = computed(() => state.value.kind === 'pending')
   const error = computed(() => state.value.kind === 'error' ? state.value.error.message : null)
   const routeChangeAction = unsupportedOperatorAction(
@@ -318,6 +321,7 @@ export function useOperatorIssues(): {
       replaceRecord(projectNamesState.value, result.data.project_names || {})
       const nextRows = sortIssues((result.data.issues || []).map((row) => mapIssue(row, row.comment_count, projectNamesState.value)))
       replaceArray(rowsState.value, nextRows)
+      totalCountState.value = typeof result.data.total === 'number' ? result.data.total : nextRows.length
       await loadTrackedProjects()
       state.value = nextRows.length
         ? liveState(listEvidence, rowsState.value)
@@ -545,6 +549,7 @@ export function useOperatorIssues(): {
     comments: commentsState.value,
     projectNames: projectNamesState.value,
     trackedProjects,
+    registryTotal,
     detail,
     loadState,
     detailState,
