@@ -51,11 +51,12 @@ func decodeBehavioralRuleRequest(r *http.Request) (*behavioralRuleRequest, error
 
 // handleListBehavioralRules godoc
 // @Summary List behavioral rules
-// @Description Returns active behavioral rules. When project is set, returns project-scoped and global rules; otherwise returns global rules only.
+// @Description Returns active behavioral rules. When project is set, returns project-scoped and global rules; otherwise returns global rules only. Set all=true for the operator-console all-scope registry view.
 // @Tags Rules
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string false "Project slug (optional)"
+// @Param all query bool false "Return all active rules across scopes"
 // @Param limit query int false "Maximum rows (default 50)"
 // @Success 200 {array} models.BehavioralRule
 // @Failure 400 {string} string "invalid limit"
@@ -78,7 +79,15 @@ func (s *Service) handleListBehavioralRules(w http.ResponseWriter, r *http.Reque
 		limit = parsed
 	}
 
-	rules, err := s.behavioralRulesStore.List(r.Context(), normalizedOptionalString(ptrString(r.URL.Query().Get("project"))), limit)
+	var (
+		rules []*models.BehavioralRule
+		err   error
+	)
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("all")), "true") {
+		rules, err = s.behavioralRulesStore.ListAll(r.Context(), limit)
+	} else {
+		rules, err = s.behavioralRulesStore.List(r.Context(), normalizedOptionalString(ptrString(r.URL.Query().Get("project"))), limit)
+	}
 	if err != nil {
 		log.Error().Err(err).Msg("list behavioral rules failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)

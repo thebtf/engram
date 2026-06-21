@@ -240,44 +240,78 @@
 
   "rules": {
     "title": "Правила поведения",
-    "subtitle": "Always-inject директивы, которые попадают в контекст агента. Приоритет задаёт порядок применения.",
+    "subtitle": "Правила попадают в контекст каждой новой сессии сверху вниз. Порядок задаёте перетаскиванием — что выше, то применяется раньше.",
     "state": {
       "pending": "Загружаем правила с сервера…",
       "error": "Не удалось загрузить правила: {message}",
       "empty": "На сервере пока нет правил поведения.",
       "retry": "Повторить"
     },
+    "tabs": {
+      "label": "Разделы правил поведения",
+      "rules": "Правила",
+      "instincts": "Старые инстинкты",
+      "instinctsEvidence": "legacy instincts are pre-v5/stale and stay inert"
+    },
+    "reorder": {
+      "note": "Порядок задаётся перетаскиванием строки или стрелками на ручке. Числовой priority пересчитывает система — оператор его не вводит.",
+      "liveCallout": "Список и порядок правил подключены к серверу:",
+      "gripLabel": "Переместить правило {position} из {total}",
+      "gripTitle": "Перетащите строку или нажмите стрелки вверх/вниз",
+      "rankTitle": "Позиция правила в порядке применения"
+    },
+    "scope": {
+      "filter": "Область",
+      "all": "Все области",
+      "global": "global",
+      "changeMustBuild": "смена области — must-build"
+    },
+    "actions": {
+      "refresh": "Обновить"
+    },
     "create": {
       "title": "Новое правило",
-      "subtitle": "Создаёт live rule через POST /api/rules; глобальное правило применяется ко всем проектам.",
+      "subtitle": "Создаёт live rule через POST /api/rules; priority будет вычислен по текущему порядку.",
+      "open": "+ Новое правило",
       "contentPlaceholder": "Например: prod read-only без явного грант-токена.",
-      "project": "Проект",
+      "project": "Область",
       "global": "global",
-      "priority": "Приоритет",
+      "priority": "Вычисленный priority",
+      "priorityHelp": "чем выше строка, тем раньше правило применяется",
       "submit": "Создать правило"
     },
     "list": {
       "title": "Активные директивы",
-      "count": "{count} правило | {count} правила | {count} правил"
+      "count": "{count} правило | {count} правила | {count} правил",
+      "header": "Порядок · правило · область · аудит",
+      "shown": "{shown} из {total} в текущем фильтре"
     },
     "meta": {
       "priority": "приоритет {priority}",
       "project": "проект {project}",
+      "scope": "область {scope}",
+      "priorityAuto": "priority {priority}",
+      "version": "версия {version}",
+      "position": "позиция {position}",
       "updated": "обновлено {updated}"
     },
     "empty": {
       "title": "Правил нет",
-      "body": "Добавьте первую директиву через форму выше."
+      "body": "Добавьте первую директиву через кнопку «Новое правило».",
+      "scopeBody": "В области {scope} пока нет правил."
     },
     "detail": {
       "title": "Правило #{id}",
       "content": "Текст правила",
-      "project": "Проект",
+      "project": "Область",
       "priority": "Приоритет",
       "enableTitle": "Включение / отключение",
       "enableBody": "На текущем сервере у behavioral rule нет поля enabled, поэтому toggle не делаем operable.",
+      "edit": "Править",
+      "cancel": "Отмена",
       "save": "Сохранить",
       "delete": "Удалить",
+      "confirmDelete": "Подтвердить",
       "enable": "Переключить"
     }
   },

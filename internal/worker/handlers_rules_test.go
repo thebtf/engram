@@ -190,6 +190,57 @@ func TestHandleListBehavioralRules_ProjectScope(t *testing.T) {
 	assert.Equal(t, globalRule.ID, rows[1].ID)
 }
 
+func TestHandleListBehavioralRules_AllScopes(t *testing.T) {
+	project := "test-rules-handler-list-all-scope"
+	svc, brs := newRulesTestService(t, project)
+
+	globalRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Content:  "handler test: global all-scope rule",
+		Priority: 5,
+	})
+	require.NoError(t, err)
+
+	projectPtr := project
+	projectRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: project all-scope rule",
+		Priority: 10,
+	})
+	require.NoError(t, err)
+
+	otherProject := project + "-other"
+	otherProjectPtr := otherProject
+	otherRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &otherProjectPtr,
+		Content:  "handler test: other project all-scope rule",
+		Priority: 20,
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		require.NoError(t, brs.Delete(context.Background(), globalRule.ID))
+		require.NoError(t, storeDeleteRuleByProject(context.Background(), brs, otherProject))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/rules?all=true&limit=100", nil)
+	w := httptest.NewRecorder()
+	svc.handleListBehavioralRules(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var rows []models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	require.GreaterOrEqual(t, len(rows), 3)
+
+	ids := map[int64]bool{}
+	for _, row := range rows {
+		ids[row.ID] = true
+	}
+	assert.True(t, ids[globalRule.ID], "all=true must include global rules")
+	assert.True(t, ids[projectRule.ID], "all=true must include selected project-scoped rules")
+	assert.True(t, ids[otherRule.ID], "all=true must include other project-scoped rules")
+}
+
 func TestHandleCreateBehavioralRule_Success(t *testing.T) {
 	project := "test-rules-handler-create-success"
 	svc, brs := newRulesTestService(t, project)
