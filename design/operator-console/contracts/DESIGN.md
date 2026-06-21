@@ -4,8 +4,10 @@ description: >-
   Single-operator admin surface for persistent shared-memory infrastructure.
   Dark-first product UI with committed density, single accent, honesty contract
   over polish.
-design_version: "2026.06.20"   # contract stamp — bump on any token/component/screen change;
+design_version: "2026.06.21"   # contract stamp — bump on any token/component/screen change;
                                # PARITY.json records which port pages are synced to which stamp.
+                               # 2026.06.21: app shell redesigned — full-height nav column,
+                               # collapse/icon-rail, brand moved into nav, breadcrumb removed.
 colors:
   neutral-bg: "#0b0d10"
   surface: "#14171c"
@@ -219,8 +221,9 @@ components:
 - **surface-card**: `--surface`, 1px `--border`, `--rounded-md`, `--space-4` padding.
 
 ### Navigation
-- **nav**: `236px` (comfortable) / `216px` (compact) ширина. `8px` внутренний отступ. Группа заголовков (`12px`, `0.08em` spacing, `--muted`), `nav-item` (10px height, transparent — `--surface-warm` hover). Подпункты класса `.sub` с `padding-left`.
-- **topbar**: `48px` высота. Brand glyph (23px, 800 weight). Density seg. Theme button. Global search.
+- **nav**: левая колонка **во всю высоту** (`236px` развёрнуто / `60px` свёрнуто — icon-rail), `1px --border` справа. Шапка панели `navhead` (`48px`): brand glyph + wordmark слева, кнопка-сворачивания **справа** (НЕ в левом верхнем углу). Группа заголовков (`10px`, `0.08em` spacing, `--muted`), `nav-item` со статус-точкой слева от иконки. Подпункты класса `.sub`.
+- **collapse (icon-rail)**: панель сворачивается до `60px` — только иконки (крупнее) + цветная статус-точка как бейдж слева; лейблы/счётчики/заголовки групп скрыты. Состояние персистится в `localStorage`. Наведение на свёрнутый rail временно разворачивает панель поверх контента (Gemini-стиль), лейаут не сдвигается. Анимируется только `width` (плавно, без рывка). Логотип и кнопка-сворачивания живут в шапке nav, не в топбаре.
+- **topbar**: `48px` высота, **над контентом** (не во всю ширину — слева от него полновысотный nav). Global search (левый край выровнен по границе nav/контент). Density seg. Language switch. Theme button. Identity chip. Без brand (переехал в nav) и без хлебной крошки (дублировала `h1` страницы).
 - **statusbar**: `26px` высота. `--surface` фон + `--border` top border. Mono 11px текст.
 
 ### Modals & Overlays

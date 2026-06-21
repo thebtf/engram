@@ -8,7 +8,8 @@
     "build": "node scripts/copy-static-i18n.mjs && nuxt build && node scripts/copy-static-i18n.mjs",
     "generate": "node scripts/copy-static-i18n.mjs && nuxt generate && node scripts/copy-static-i18n.mjs",
     "preview": "nuxt preview",
-    "parity": "node scripts/parity-check.repo.mjs"
+    "parity": "node scripts/parity-check.repo.mjs",
+    "test:seam": "node --test scripts/seam-contract.test.mjs"
   },
   "devDependencies": {
     "nuxt": "^3.13.0",

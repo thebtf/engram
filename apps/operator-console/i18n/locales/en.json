@@ -7,19 +7,39 @@
     "copy": "Copy",
     "change": "Change",
     "enabled": "enabled",
-    "admin": "admin"
+    "admin": "admin",
+    "selectedCount": "{count} selected",
+    "clearSelection": "Clear selection"
   },
 
   "shell": {
     "brandHome": "Home — Overview",
+    "collapseNav": "Collapse navigation",
+    "expandNav": "Expand navigation",
+    "mobileMenu": "Menu",
     "searchPlaceholder": "Search the console…",
+    "density": "Density",
     "densityComfortable": "Comfort",
     "densityCompact": "Compact",
     "themeToLight": "Light theme",
     "themeToDark": "Dark theme",
     "language": "Language",
+    "flag": "flag",
+    "identityTitle": "Current operator",
+    "identityInitials": "OD",
+    "identityName": "Oleg Dobryakov",
+    "identityProvider": "Google",
+    "authDisabled": "auth disabled",
+    "authAuthenticated": "session active",
+    "authLocked": "login required",
+    "authUnknown": "session unknown",
+    "online": "online",
+    "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "degradation",
-    "statusNoise": "noise"
+    "statusNoise": "noise",
+    "records": "{count} record | {count} records",
+    "reviewQueue": "{count} in review | {count} in review",
+    "uptime": "running {value}"
   },
 
   "nav": {
@@ -53,6 +73,273 @@
     }
   },
 
+  "overview": {
+    "pageTitle": "Overview",
+    "pageSubtitle": "Summary across memory, product, and service. Cards lead to their sections.",
+    "heroTitle": "engram · overview",
+    "uptimePrefix": "running",
+    "attentionTitle": "Needs attention",
+    "attention": {
+      "model": "Model “fallback/gpt-4-1-mini” is degraded",
+      "search": "Similarity search — subsystem degradation",
+      "queue": "{n} candidate(s) waiting for review (behind VNEXT_F)",
+      "queueGated": "Review queue is off (behind {flag})",
+      "books": "Context books — processing pipeline is not on the server yet",
+      "noise": "Memory noise {noise} — {n} record(s) marked as noise",
+      "stateLink": "Health →",
+      "queueLink": "Review queue →",
+      "booksLink": "Books →",
+      "noiseLink": "Noise & value →"
+    },
+    "tasks": {
+      "open": "Open",
+      "work": "In progress",
+      "resolved": "Resolved",
+      "closed": "Closed"
+    },
+    "viz": {
+      "memoryComposition": "Memory composition",
+      "tasksByStatus": "Issues by status",
+      "modelHealth": "Model health",
+      "memoryTrend": "Memory growth over time needs a daily-history endpoint",
+      "modelTrend": "Availability and cost by day —"
+    },
+    "recordsCount": "{n} records",
+    "total": "total",
+    "totalIssues": "{n} total",
+    "snapshotOnly": "snapshot only for now",
+    "badges": {
+      "vnext": "behind VNEXT_F",
+      "aboveNorm": "above norm",
+      "mustBuild": "must build",
+      "mustBuildParen": "(must-build)",
+      "semanticCount": "semantic {n}",
+      "episodicCount": "episodic {n}",
+      "vaultLive": "vault ok"
+    },
+    "groups": {
+      "memoryProduct": "Memory & product",
+      "behaviorWork": "Behavior & work",
+      "service": "Service"
+    },
+    "cards": {
+      "memory": { "sub": "{active} active · {noise} in noise" },
+      "queue": { "sub": "memory candidates waiting for a decision" },
+      "noise": { "sub": "share of noisy injections" },
+      "graph": { "sub": "concept graph and transitions" },
+      "books": { "sub": "author-domain and terminology ingest" },
+      "rules": { "sub": "operator always-inject directives" },
+      "issues": {
+        "sub": "{open} open · {work} in progress · {total} total",
+        "openBadge": "{n} open"
+      },
+      "projects": { "sub": "{n} active session(s)" },
+      "health": { "sub": "{ok} model(s) ok · {degraded} degraded" },
+      "secrets": { "sub": "keys in vault · encryption enabled" },
+      "access": { "sub": "users, login providers, roles" }
+    }
+  },
+
+  "memory": {
+    "title": "Memory",
+    "subtitle": "Engram knowledge working list: what to use in answers, what to verify, what to remove as noise.",
+    "legend": {
+      "active": "working",
+      "dormant": "off (behind flag)",
+      "stale": "stale (do not touch)",
+      "mustBuild": "must build",
+      "used": "used",
+      "shownUnused": "shown, but not used"
+    },
+    "actions": {
+      "selectAll": "Select all",
+      "clearSelection": "Clear selection",
+      "resetFilter": "Reset filter"
+    },
+    "countInFilter": "{shown} of {total} in current filter",
+    "rowsLabel": "Rows",
+    "pageRange": "{from}–{to} of {total}",
+    "filters": {
+      "allProjects": "All projects",
+      "active": "Working",
+      "flagged": "Review",
+      "stale": "30 days unused",
+      "low": "Low confidence",
+      "chain": "Replacement chain"
+    },
+    "filterSummary": "{count} records · noise {noise}",
+    "table": {
+      "record": "Record · purpose · project · age",
+      "value": "Value / shown"
+    },
+    "rowState": {
+      "active": "working",
+      "noise": "noise",
+      "stale": "needs review"
+    },
+    "empty": {
+      "title": "Memory is empty",
+      "filtered": "No record matches the current filters.",
+      "noRows": "The selected project has no saved memory notes yet."
+    },
+    "state": {
+      "pending": "Loading memory from the server…",
+      "error": "Could not load memory: {message}",
+      "empty": "The server has no memory records for the current surface.",
+      "gated": "This section is disabled by {flag}.",
+      "retry": "Retry"
+    },
+    "detail": {
+      "title": "Memory card",
+      "operatorQuestion": "Operator decides:",
+      "operatorText": "keep this record in prompts, downgrade it to context, send it to review, or replace it with a newer version.",
+      "state": "state",
+      "tier": "how to use",
+      "type": "category",
+      "project": "project",
+      "age": "age",
+      "confidence": "confidence",
+      "tags": "Tags",
+      "utility": "Value and noise",
+      "utilityHelp": "cited / shown · confidence {confidence}",
+      "noiseWarning": "Looks noisy: agents saw this record often, but never used it in an answer.",
+      "audit": "Audit",
+      "auditBody": "Memory audit log",
+      "actions": {
+        "storeCopy": "Save copy",
+        "delete": "Delete record",
+        "hideNoise": "Hide as noise",
+        "editText": "Edit text",
+        "replace": "Replace with new version",
+        "flag": "Flag"
+      }
+    },
+    "bulk": {
+      "hideNoise": "Hide as noise",
+      "replace": "Replace version",
+      "moveProject": "Move project…",
+      "note": "snapshot first · then apply",
+      "mustBuildNote": "bulk actions are waiting for server endpoints; selected records can be cleared"
+    }
+  },
+
+  "rules": {
+    "title": "Behavior rules",
+    "subtitle": "Always-inject directives that enter every agent context. Priority controls application order.",
+    "state": {
+      "pending": "Loading rules from the server…",
+      "error": "Could not load rules: {message}",
+      "empty": "The server has no behavior rules yet.",
+      "retry": "Retry"
+    },
+    "create": {
+      "title": "New rule",
+      "subtitle": "Creates a live rule through POST /api/rules; a global rule applies to every project.",
+      "contentPlaceholder": "Example: prod is read-only without an explicit grant token.",
+      "project": "Project",
+      "global": "global",
+      "priority": "Priority",
+      "submit": "Create rule"
+    },
+    "list": {
+      "title": "Active directives",
+      "count": "{count} rule | {count} rules"
+    },
+    "meta": {
+      "priority": "priority {priority}",
+      "project": "project {project}",
+      "updated": "updated {updated}"
+    },
+    "empty": {
+      "title": "No rules",
+      "body": "Add the first directive through the form above."
+    },
+    "detail": {
+      "title": "Rule #{id}",
+      "content": "Rule text",
+      "project": "Project",
+      "priority": "Priority",
+      "enableTitle": "Enable / disable",
+      "enableBody": "The current server model has no enabled field for behavioral rules, so the toggle is not operable.",
+      "save": "Save",
+      "delete": "Delete",
+      "enable": "Toggle"
+    }
+  },
+
+  "issues": {
+    "title": "Issues",
+    "subtitle": "Cross-project journal for bugs, features, and handoffs between agents.",
+    "state": {
+      "pending": "Loading issues from the server…",
+      "error": "Could not load issues: {message}",
+      "empty": "The server registry has no issues yet.",
+      "retry": "Retry"
+    },
+    "stats": {
+      "open": "open",
+      "work": "in progress",
+      "done": "closed",
+      "total": "in registry"
+    },
+    "create": {
+      "title": "New issue",
+      "subtitle": "Creates an issue through POST /api/issues with operator source_project.",
+      "titlePlaceholder": "Short issue topic",
+      "bodyPlaceholder": "Context, acceptance criteria, links",
+      "targetProject": "Project",
+      "priority": "Priority",
+      "type": "Type",
+      "submit": "Create issue"
+    },
+    "list": {
+      "title": "Issue journal",
+      "count": "{count} issue | {count} issues"
+    },
+    "meta": {
+      "comments": "{count} comments"
+    },
+    "empty": {
+      "title": "No issues",
+      "body": "Create the first issue through the form above."
+    },
+    "detail": {
+      "title": "Issue #{id}",
+      "loading": "Loading detail card…",
+      "error": "Could not load detail; editing uses the list row.",
+      "issueTitle": "Title",
+      "body": "Body",
+      "status": "Status",
+      "priority": "Priority",
+      "type": "Type",
+      "operatorComment": "operator-console update",
+      "save": "Save",
+      "acknowledge": "Acknowledge",
+      "delete": "Delete",
+      "confirmDelete": "Confirm delete"
+    },
+    "status": {
+      "open": "open",
+      "acknowledged": "in progress",
+      "reopened": "reopened",
+      "resolved": "resolved",
+      "closed": "closed",
+      "rejected": "rejected"
+    },
+    "priority": {
+      "critical": "critical",
+      "high": "high",
+      "medium": "medium",
+      "low": "low"
+    },
+    "type": {
+      "bug": "bug",
+      "feature": "feature",
+      "improvement": "improvement",
+      "task": "task"
+    }
+  },
+
   "secrets": {
     "title": "Secrets",
     "subtitle": "Keys and credentials: values are hidden in the list, revealing is an explicit action.",
@@ -68,89 +355,290 @@
     "colScope": "Scope",
     "colCreated": "Created",
     "colActions": "Actions",
-    "reveal": "👁 Show"
-  },
-
-  "rules": {
-    "title": "Behavior Rules",
-    "subtitle": "Always-inject directives that enter every agent context. This surface now reads the real rules REST bridge.",
-    "quickAddTitle": "Quick add rule",
-    "quickAddPlaceholder": "For example: do not pretend a surface is live when no backend endpoint exists.",
-    "quickAddNote": "This MVP quick-add creates global rules only. Scope editing and the richer editor are still pending.",
-    "priorityLabel": "Priority",
-    "priorityMeta": "priority {n}",
-    "updatedMeta": "updated {value}",
-    "scopeGlobal": "global",
-    "loading": "Loading rules…",
-    "empty": "No active rules yet.",
-    "errors": {
-      "contentRequired": "Rule content is required."
+    "reveal": "👁 Show",
+    "delete": "Delete",
+    "confirmDelete": "Confirm",
+    "vaultDisabled": "vault off",
+    "state": {
+      "pending": "Loading vault from the server…",
+      "error": "Could not load vault: {message}",
+      "empty": "The vault has no saved keys yet.",
+      "retry": "Retry",
+      "vaultError": "Vault status is unavailable."
     },
-    "actions": {
-      "create": "Add",
-      "creating": "Saving…",
-      "delete": "Delete",
-      "deleting": "Deleting…"
-    }
+    "create": {
+      "title": "New secret",
+      "subtitle": "The value is sent directly to POST /api/vault/credentials and is not kept in the interface.",
+      "name": "Key",
+      "project": "Project",
+      "value": "Value",
+      "submit": "Store"
+    },
+    "rotation": {
+      "title": "Vault key rotation",
+      "body": "The current server has no endpoint for safe rotation, so no operable modal is shown.",
+      "action": "Rotate key",
+      "cleanup": "Delete orphaned"
+    },
+    "revealTitle": "One-shot reveal — value is not stored",
+    "revealTimer": "Hides in {seconds}s",
+    "copySecret": "Copy",
+    "hideSecret": "Hide"
   },
 
   "projects": {
-    "title": "Projects & Sessions",
-    "subtitle": "Projects on this server and their recent session activity.",
-    "loading": "Loading projects and sessions…",
-    "empty": "No projects found yet.",
-    "sessionsCount": "no sessions | {n} session | {n} sessions",
-    "lastActivity": "activity {value}"
-  },
-
-  "settings": {
-    "title": "Settings",
-    "subtitle": "Read live config through /api/config. Runtime flag edits and model settings stay honest must-build until dedicated endpoints exist.",
-    "loading": "Loading configuration…",
-    "runtimeTitle": "Observed runtime toggles",
-    "snapshotTitle": "Configuration snapshot",
-    "mustBuildTitle": "What is still missing",
-    "mustBuildBody": "True runtime-flag editing and model settings still need dedicated endpoints: at minimum /api/flags and /api/settings/model. Until then this surface stays read-only instead of pretending to be operable.",
-    "rows": {
-      "injectUnified": {
-        "title": "Unified injection",
-        "desc": "Memory injection flows through the unified path instead of older split branches."
-      },
-      "telemetry": {
-        "title": "Telemetry enabled",
-        "desc": "The server records search and retrieval telemetry when the runtime enables it."
-      },
-      "enforceSourceProject": {
-        "title": "Enforce source project",
-        "desc": "Request source must stay within the allowed project boundary."
-      }
+    "title": "Projects & sessions",
+    "subtitle": "Projects on this server, recent working sessions, and honest boundaries for what can be opened now.",
+    "actions": {
+      "refresh": "Refresh",
+      "delete": "Delete",
+      "confirmDelete": "Confirm"
     },
-    "facts": {
-      "contextObservations": "Context observations",
-      "contextMaxTokens": "Context max tokens",
-      "contextSessionCount": "Context session count",
-      "vectorStrategy": "Vector strategy",
-      "databaseMaxConns": "Database max conns",
-      "logBufferSize": "Log buffer size"
+    "state": {
+      "pending": "Loading projects and sessions from the server…",
+      "error": "Could not load projects or sessions: {message}",
+      "emptyProjects": "The server has no projects yet.",
+      "emptySessions": "The selected project has no sessions in the current slice.",
+      "retry": "Retry",
+      "source": "Source"
+    },
+    "summary": {
+      "projects": "Projects",
+      "selected": "Selected",
+      "sessions": "Sessions in slice",
+      "active": "Active"
+    },
+    "list": {
+      "title": "Projects",
+      "count": "{count} project | {count} projects"
+    },
+    "meta": {
+      "sessions": "{count} sessions",
+      "active": "{count} active",
+      "last": "activity {value}",
+      "prompts": "{count} prompt(s)"
+    },
+    "sessions": {
+      "title": "Selected project sessions",
+      "emptyTitle": "No sessions",
+      "emptyBody": "Select another project or refresh the list."
+    },
+    "sessionsCount": "no sessions | {n} session | {n} sessions",
+    "detail": {
+      "title": "Session detail",
+      "loading": "Loading session detail…",
+      "emptyTitle": "No session selected",
+      "emptyBody": "Select a session row to open the server card.",
+      "project": "Project",
+      "status": "Status",
+      "prompts": "Prompts",
+      "worker": "Worker port",
+      "strategy": "Strategy",
+      "outcome": "Outcome"
+    },
+    "gaps": {
+      "transcript": "Transcript readback is not exposed through a REST endpoint yet.",
+      "strategy": "Route and strategy remain server-side must-build.",
+      "codeIntel": "Code-intelligence summary is still available only through the tool surface."
     }
   },
 
   "health": {
     "title": "Health",
-    "subtitle": "Server health: selfcheck, embedding coverage, and honestly marked must-build zones.",
-    "loading": "Loading health snapshot…",
-    "embeddingTitle": "Embedding coverage",
-    "servicesTitle": "Services",
-    "modelsTitle": "Models",
-    "overall": "Overall status",
-    "modelsNote": "Model rows remain mock-backed for now: this exact surface still lacks a direct truthful model-health endpoint.",
-    "migrationsTitle": "Migrations",
-    "migrationsBody": "A GET /api/migrations endpoint is still needed for truthful schema-status rendering.",
-    "embedding": {
-      "chunkCount": "chunks",
-      "withVectors": "memories with vectors",
-      "dimension": "dimension",
-      "coverage": "coverage"
+    "subtitle": "Live server snapshot: readiness, selfcheck, vectors, vNext metrics, and update channel.",
+    "refresh": "Refresh",
+    "overall": "Overall",
+    "version": "Version",
+    "uptime": "Uptime",
+    "ready": "Readiness",
+    "readyOk": "ready",
+    "readyError": "not ready",
+    "components": "Components",
+    "embedding": "Embedding coverage",
+    "vector": "pgvector",
+    "update": "Update channel",
+    "updateState": "Update state",
+    "updateAvailable": "Update available",
+    "noise": "Noise",
+    "emptyComponents": "Selfcheck components are not loaded yet.",
+    "state": {
+      "pending": "Loading server health…",
+      "error": "Could not load health: {message}",
+      "notLoaded": "Data is not loaded yet."
+    },
+    "metrics": {
+      "chunk_count": "Chunks",
+      "with_vectors": "With vectors",
+      "dimension": "Dimension",
+      "coverage": "Coverage",
+      "noise_ratio": "Noise",
+      "model": "Model"
+    }
+  },
+
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Read-only runtime config and actions that require explicit operator confirmation.",
+    "refresh": "Refresh",
+    "runtime": "Runtime flags",
+    "configSnapshot": "Config snapshot",
+    "state": {
+      "pending": "Loading server settings…",
+      "error": "Could not load settings: {message}",
+      "restartRequired": "A change is waiting for restart: it is not applied yet."
+    },
+    "switches": {
+      "injectUnified": {
+        "title": "Unified memory injection",
+        "desc": "Current value from /api/config; changing it needs a server save endpoint."
+      },
+      "telemetry": {
+        "title": "Telemetry",
+        "desc": "Current telemetry_enabled value from runtime config."
+      },
+      "sourceProject": {
+        "title": "Enforce source project",
+        "desc": "Current enforce_source_project value; do not call it applied without a restart receipt."
+      }
+    },
+    "gaps": {
+      "configSave": "Runtime config saving has no endpoint with a restart-required receipt yet.",
+      "flags": "The full feature-flag map is not exposed by the server yet."
+    },
+    "restart": {
+      "title": "Restart / update",
+      "body": "Both actions affect the live process, so they require a second confirmation click.",
+      "action": "Restart server",
+      "confirm": "Confirm restart",
+      "updateAction": "Restart after update",
+      "confirmUpdate": "Confirm update restart",
+      "updateState": "update state",
+      "updateAvailable": "available"
+    }
+  },
+
+  "searchPage": {
+    "title": "Search",
+    "subtitle": "Live context search over Engram server observations, with recent/analytics telemetry and an honest tombstone for old collection search.",
+    "placeholder": "Enter a context query…",
+    "actions": {
+      "refresh": "Refresh",
+      "search": "Search"
+    },
+    "form": {
+      "project": "Project",
+      "query": "Query",
+      "noProjects": "No projects"
+    },
+    "state": {
+      "pending": "Loading search data…",
+      "error": "Could not load search: {message}"
+    },
+    "results": {
+      "title": "Context search results",
+      "source": "Source: /api/context/search",
+      "emptyTitle": "Enter a query",
+      "emptyBody": "Select a project and run search to see server observations.",
+      "staleTitle": "Source is stale",
+      "noBody": "The response did not include a description."
+    },
+    "recent": {
+      "title": "Recent queries",
+      "empty": "No recent queries yet."
+    },
+    "analytics": {
+      "title": "Search analytics",
+      "total": "Total",
+      "zeroRate": "Zero-result rate"
+    },
+    "tombstone": {
+      "title": "Collection search tombstone",
+      "body": "Legacy search_collection is not wired as a working UI search; it is a removed/stale surface kept only as evidence."
+    }
+  },
+
+  "noisePage": {
+    "title": "Noise & usefulness",
+    "subtitle": "Live retrieval/search telemetry: what agents saw, what they used, and where data is sparse or unrecorded.",
+    "refresh": "Refresh",
+    "state": {
+      "pending": "Loading retrieval telemetry…",
+      "error": "Could not load telemetry: {message}"
+    },
+    "gauge": {
+      "label": "noise ratio"
+    },
+    "metrics": {
+      "noiseRatio": "Noise",
+      "shown": "Shown",
+      "used": "Used",
+      "unused": "Unused",
+      "searchRequests": "Search",
+      "unrecorded": "No outcome"
+    },
+    "analytics": {
+      "title": "Search analytics",
+      "total": "Total",
+      "today": "Today",
+      "latency": "Latency ms",
+      "errors": "Errors"
+    },
+    "retrieval": {
+      "title": "Retrieval stats",
+      "requests": "Requests",
+      "served": "Served",
+      "stale": "Stale excluded",
+      "duplicates": "Duplicates"
+    },
+    "unrecorded": {
+      "title": "Sparse outcome state",
+      "body": "A high unrecorded outcome share means outcome weighting is mostly running neutral."
+    },
+    "trend": {
+      "title": "Trend",
+      "body": "The server exposes a snapshot today, but no time-series endpoint for the noise trend chart yet."
+    }
+  },
+
+  "sectionStub": {
+    "state": {
+      "live": "This section is connected but has no expanded view yet.",
+      "dormant": "This feature is disabled by a flag.",
+      "stale": "This surface is disabled as a tombstone.",
+      "mustbuild": "This section needs to be built."
+    }
+  },
+
+  "deferred": {
+    "queue": {
+      "title": "Review queue",
+      "lead": "Memory candidates should wait for the operator decision: keep, defer, or reject.",
+      "next": "The queue requires the VNEXT_F server flag; until then this section remains dormant."
+    },
+    "graph": {
+      "title": "Knowledge graph",
+      "lead": "Concept and memory-link graphing is planned as a separate interactive component.",
+      "next": "REST endpoint GET /api/graph does not exist yet, so the map does not pretend to be working."
+    },
+    "books": {
+      "title": "Books as context",
+      "lead": "Author domains, terms, and links should enter memory through a dedicated server pipeline.",
+      "next": "POST /api/books/ingest is needed with import processing, status, and errors."
+    },
+    "documents": {
+      "title": "Documents",
+      "lead": "Operator documents and versions need a REST surface separate from MCP docs tools.",
+      "next": "GET /api/documents is not available yet, so the section stays must-build instead of fake-live."
+    },
+    "collections": {
+      "title": "Old collections",
+      "lead": "Pre-v5 legacy is shown as a disabled surface so it is not mistaken for working search.",
+      "next": "search_collection remains stale evidence; working UI search uses context search."
+    },
+    "access": {
+      "title": "Access",
+      "lead": "Users, login providers, and roles belong to the future control-plane surface.",
+      "next": "GET /api/access/users does not exist yet, so fake users and roles are not rendered."
     }
   }
 }

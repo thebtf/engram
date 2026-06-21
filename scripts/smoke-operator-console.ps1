@@ -5,6 +5,8 @@ param(
   [int]$PostgresPort = 55434,
   [int]$WorkerPort = 47779,
   [int]$OperatorConsolePort = 43002,
+  [switch]$ParityOnly,
+  [switch]$PageSmokesOnly,
   [switch]$KeepStackUp
 )
 
@@ -12,11 +14,60 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$operatorConsoleRoot = Join-Path $repoRoot "apps\operator-console"
+$operatorConsoleSmokeRoot = Join-Path $repoRoot "scripts\operator-console-smoke"
 $composeProject = "engram-operator-console-smoke"
+$requiredOperatorConsoleSmokeHelpers = @(
+  "shell.ps1",
+  "overview.ps1",
+  "memory.ps1",
+  "rules.ps1",
+  "issues.ps1",
+  "secrets.ps1",
+  "projects.ps1",
+  "health-settings.ps1",
+  "search-noise.ps1",
+  "deferred.ps1"
+)
 
 function Write-Step {
   param([string]$Message)
   Write-Host "[operator-console-smoke] $Message"
+}
+
+function Invoke-OperatorConsoleParity {
+  Write-Step "Running operator-console parity gate"
+  Push-Location $operatorConsoleRoot
+  try {
+    & npm run parity
+    if ($LASTEXITCODE -ne 0) {
+      throw "operator-console parity failed with exit code $LASTEXITCODE"
+    }
+  }
+  finally {
+    Pop-Location
+  }
+
+  Write-Host "PARITY_STATUS=passed"
+}
+
+function Invoke-OperatorConsolePageSmokes {
+  Write-Step "Running operator-console page smoke helper coverage"
+
+  foreach ($helper in $requiredOperatorConsoleSmokeHelpers) {
+    $helperPath = Join-Path $operatorConsoleSmokeRoot $helper
+    if (-not (Test-Path -LiteralPath $helperPath)) {
+      throw "Required operator-console smoke helper is missing: $helperPath"
+    }
+
+    Write-Step "Running helper $helper"
+    & $helperPath
+    if ($LASTEXITCODE -ne 0) {
+      throw "operator-console smoke helper $helper failed with exit code $LASTEXITCODE"
+    }
+  }
+
+  Write-Host "SMOKE_HELPERS_STATUS=passed"
 }
 
 function Invoke-Compose {
@@ -326,6 +377,18 @@ $smokeRunId = [guid]::NewGuid().ToString("N")
 $smokeComment = "operator-console smoke resolved mutation $smokeRunId"
 
 try {
+  Invoke-OperatorConsoleParity
+  if ($ParityOnly) {
+    Write-Step "ParityOnly requested; skipping Docker smoke stack"
+    return
+  }
+
+  Invoke-OperatorConsolePageSmokes
+  if ($PageSmokesOnly) {
+    Write-Step "PageSmokesOnly requested; skipping Docker smoke stack"
+    return
+  }
+
   Write-Step "Building current-source server + operator-console images"
   Invoke-Compose -Arguments @("build", "server", "operator-console")
 
@@ -607,7 +670,10 @@ finally {
     }
   }
 
-  if (-not $KeepStackUp) {
+  if ($ParityOnly -or $PageSmokesOnly) {
+    Write-Step "Local-only smoke completed; no Docker stack teardown needed"
+  }
+  elseif (-not $KeepStackUp) {
     Write-Step "Tearing down stack"
     try {
       Invoke-Compose -Arguments @("down", "-v")

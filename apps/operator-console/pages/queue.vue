@@ -1,5 +1,13 @@
+<script setup lang="ts">
+const { t } = useI18n()
+</script>
+
 <template>
-  <SectionStub cls="dormant" title="На проверку" evidence="VNEXT_F"
-    lead="Кандидаты в память, ждут решения оператора: сохранить, отложить, отклонить."
-    next="Включите флаг ENGRAM_VNEXT_F, чтобы активировать очередь кристаллизации." />
+  <SectionStub
+    cls="dormant"
+    :title="t('deferred.queue.title')"
+    evidence="VNEXT_F"
+    :lead="t('deferred.queue.lead')"
+    :next="t('deferred.queue.next')"
+  />
 </template>

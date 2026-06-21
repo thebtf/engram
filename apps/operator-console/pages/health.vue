@@ -1,115 +1,142 @@
 <script setup lang="ts">
-/** Health — server health snapshot. Seam: /api/selfcheck, /api/stats/vnext, mock-only models. */
-import { computed } from 'vue'
-import { useHealthSnapshot, useModels, useServerInfo } from '../composables/useMockData'
-
 const { t } = useI18n()
-const models = useModels()
-const info = useServerInfo()
-const health = useHealthSnapshot()
+const {
+  selfcheckState,
+  readyState,
+  vnextState,
+  vectorState,
+  updateStatusState,
+  updateCheckState,
+  components,
+  embeddingMetrics,
+  pending,
+  error,
+  refresh,
+} = useOperatorHealthSettings()
 
-const dot: Record<string, string> = {
-  healthy: 'var(--class-live)',
-  degraded: 'var(--state-warn)',
-  unhealthy: 'var(--state-danger)',
-}
-
-const hcls: Record<string, 'live' | 'dormant' | 'stale'> = {
-  ok: 'live',
-  standby: 'live',
-  degraded: 'dormant',
-}
-
-const overallCls = computed<'live' | 'dormant' | 'stale'>(() => {
-  if (health.snapshot.value.overall === 'healthy') return 'live'
-  if (health.snapshot.value.overall === 'degraded') return 'dormant'
+function statusClass(status?: string): 'live' | 'dormant' | 'stale' {
+  if (status === 'healthy' || status === 'ok' || status === 'ready') return 'live'
+  if (status === 'degraded' || status === 'initializing') return 'dormant'
   return 'stale'
-})
+}
 </script>
 
 <template>
-  <div>
+  <div class="health-page">
     <header class="head">
-      <h1>{{ t('health.title') }}</h1>
-      <p>{{ t('health.subtitle') }}</p>
+      <div>
+        <h1>{{ t('health.title') }}</h1>
+        <p>{{ t('health.subtitle') }}</p>
+      </div>
+      <button class="btn" type="button" :disabled="pending" @click="refresh">{{ t('health.refresh') }}</button>
     </header>
 
-    <p v-if="health.error" class="msg err">{{ health.error }}</p>
-    <p v-else-if="health.pending" class="msg note">{{ t('health.loading') }}</p>
+    <div v-if="pending" class="state pending">{{ t('health.state.pending') }}</div>
+    <div v-if="error" class="state error">{{ t('health.state.error', { message: error }) }}</div>
 
-    <div class="cards">
-      <div class="card">
-        <h3>{{ t('health.embeddingTitle') }} <span class="src">/api/stats/vnext</span></h3>
-        <div class="figs">
-          <div class="fig"><div class="fn">{{ health.snapshot.embedding.chunkCount }}</div><div class="fl">{{ t('health.embedding.chunkCount') }}</div></div>
-          <div class="fig"><div class="fn" style="color:var(--class-live)">{{ health.snapshot.embedding.withVectors }}</div><div class="fl">{{ t('health.embedding.withVectors') }}</div></div>
-          <div class="fig"><div class="fn">{{ health.snapshot.embedding.dimension }}</div><div class="fl">{{ t('health.embedding.dimension') }}</div></div>
-        </div>
-        <div class="coverage">
-          <span>{{ t('health.embedding.coverage') }}</span>
-          <strong>{{ health.snapshot.embedding.coverage }}</strong>
-        </div>
+    <section class="hero">
+      <div>
+        <span>{{ t('health.overall') }}</span>
+        <strong>{{ selfcheckState.kind === 'live' ? selfcheckState.data.overall : '—' }}</strong>
       </div>
-
-      <div class="card">
-        <h3>{{ t('health.servicesTitle') }} <span class="src">/api/selfcheck</span></h3>
-        <div class="svc-overall">
-          <span>{{ t('health.overall') }}</span>
-          <HonestyBadge :cls="overallCls" :label="health.snapshot.overall" />
-        </div>
-        <div class="subsys">
-          <span v-for="component in health.snapshot.components" :key="component.name" class="s">
-            <i :style="{ background: dot[component.status] || 'var(--muted)' }" />
-            {{ component.name }}
-          </span>
-        </div>
+      <div>
+        <span>{{ t('health.version') }}</span>
+        <strong>{{ selfcheckState.kind === 'live' ? selfcheckState.data.version : '—' }}</strong>
       </div>
-
-      <div class="card">
-        <h3>{{ t('health.modelsTitle') }} <span class="src">{{ info.version }}</span></h3>
-        <div v-for="model in models" :key="model.id" class="mrow">
-          <code>{{ model.id }}</code>
-          <HonestyBadge :cls="hcls[model.health]" :evidence="model.health === 'degraded' ? 'degraded' : undefined" />
-          <span class="cost">{{ model.costs }}</span>
-        </div>
-        <p class="note">{{ t('health.modelsNote') }}</p>
+      <div>
+        <span>{{ t('health.uptime') }}</span>
+        <strong>{{ selfcheckState.kind === 'live' ? selfcheckState.data.uptime : '—' }}</strong>
       </div>
+      <div>
+        <span>{{ t('health.ready') }}</span>
+        <strong>{{ readyState.kind === 'live' ? t('health.readyOk') : readyState.kind === 'error' ? t('health.readyError') : '—' }}</strong>
+      </div>
+    </section>
 
-      <div class="card mb">
+    <section class="grid">
+      <article class="card">
         <div class="card-head">
-          <h3>{{ t('health.migrationsTitle') }}</h3>
-          <HonestyBadge cls="mustbuild" evidence="GET /api/migrations" />
+          <h2>{{ t('health.components') }}</h2>
+          <code>/api/selfcheck</code>
         </div>
-        <p class="mid">{{ t('health.migrationsBody') }}</p>
-      </div>
-    </div>
+        <div v-if="!components.length" class="empty">{{ t('health.emptyComponents') }}</div>
+        <div v-else class="rows">
+          <div v-for="component in components" :key="component.name" class="row">
+            <span>{{ component.name }}</span>
+            <HonestyBadge :cls="statusClass(component.status)" :evidence="statusClass(component.status) !== 'live' ? component.status : undefined" />
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2>{{ t('health.embedding') }}</h2>
+          <code>/api/stats/vnext</code>
+        </div>
+        <div class="metrics">
+          <div v-for="metric in embeddingMetrics" :key="metric.label">
+            <span>{{ t(`health.metrics.${metric.label}`) }}</span>
+            <strong>{{ metric.value }}</strong>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2>{{ t('health.vector') }}</h2>
+          <code>/api/vector/metrics</code>
+        </div>
+        <p class="message">{{ vectorState.kind === 'live' ? vectorState.data.message : t('health.state.notLoaded') }}</p>
+        <HonestyBadge :cls="vectorState.kind === 'live' && vectorState.data.enabled ? 'live' : 'dormant'" :evidence="vectorState.kind === 'live' && vectorState.data.enabled ? undefined : 'vector unavailable'" />
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2>{{ t('health.update') }}</h2>
+          <code>/api/update/status</code>
+        </div>
+        <div class="metrics">
+          <div>
+            <span>{{ t('health.updateState') }}</span>
+            <strong>{{ updateStatusState.kind === 'live' ? updateStatusState.data.state || 'idle' : '—' }}</strong>
+          </div>
+          <div>
+            <span>{{ t('health.updateAvailable') }}</span>
+            <strong>{{ updateCheckState.kind === 'live' ? String(Boolean(updateCheckState.data.available)) : '—' }}</strong>
+          </div>
+          <div>
+            <span>{{ t('health.noise') }}</span>
+            <strong>{{ vnextState.kind === 'live' ? vnextState.data.noise_ratio ?? '—' : '—' }}</strong>
+          </div>
+        </div>
+      </article>
+    </section>
   </div>
 </template>
 
 <style scoped>
+.health-page { display:grid; gap:16px; }
+.head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 .head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:700; }
-.head p { margin:0 0 16px; font-size:var(--text-sm); color:var(--muted); }
-.msg { margin:0 0 14px; font-size:var(--text-sm); }
-.msg.note { color:var(--muted); }
-.msg.err { color:var(--state-danger); }
-.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; }
-.card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px 20px; }
-.card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.card h3 { margin:0 0 14px; font-size:var(--text-sm); font-weight:600; display:flex; }
-.card h3 .src { margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--muted); font-weight:500; }
-.figs { display:flex; gap:28px; margin-bottom:14px; }
-.fig .fn { font-family:var(--font-mono); font-weight:700; font-size:var(--text-2xl); }
-.fig .fl { font-size:11px; color:var(--muted); margin-top:4px; }
-.coverage { display:flex; align-items:center; gap:10px; font-size:var(--text-sm); color:var(--fg-2); }
-.coverage strong { font-family:var(--font-mono); color:var(--fg); }
-.svc-overall { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; font-size:var(--text-sm); color:var(--fg-2); }
-.subsys { display:flex; flex-wrap:wrap; gap:10px; }
-.subsys .s { display:inline-flex; align-items:center; gap:6px; font-size:var(--text-xs); color:var(--fg-2); }
-.subsys .s i { width:7px; height:7px; border-radius:50%; }
-.mrow { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--border-soft); font-size:var(--text-sm); }
-.mrow code { font-family:var(--font-mono); font-size:var(--text-xs); }
-.mrow .cost { margin-left:auto; font-family:var(--font-mono); font-size:11px; color:var(--muted); }
-.note { margin:12px 0 0; font-size:var(--text-xs); color:var(--muted); }
-.card.mb { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 55%); }
-.mid { font-size:var(--text-sm); color:var(--fg-2); margin:0; }
+.head p { margin:0; font-size:var(--text-sm); color:var(--muted); }
+.btn { border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:9px 14px; font:inherit; font-weight:700; cursor:pointer; }
+.btn:disabled { opacity:.55; cursor:wait; }
+.state { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:10px 12px; color:var(--fg-2); font-size:var(--text-sm); }
+.state.pending { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
+.state.error { color:var(--state-warn); border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
+.hero { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }
+.hero div, .card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
+.hero div { padding:14px 16px; }
+.hero span, .metrics span { display:block; color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
+.hero strong, .metrics strong { display:block; margin-top:7px; font-family:var(--font-mono); font-size:var(--text-xl); color:var(--fg); overflow:hidden; text-overflow:ellipsis; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; }
+.card { padding:16px; }
+.card-head { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.card-head h2 { margin:0; font-size:var(--text-sm); font-weight:800; }
+.card-head code { margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--muted); }
+.rows { display:grid; gap:8px; }
+.row { display:flex; align-items:center; justify-content:space-between; gap:10px; border-bottom:1px solid var(--border-soft); padding:8px 0; color:var(--fg-2); }
+.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
+.message, .empty { color:var(--muted); font-size:var(--text-sm); margin:0 0 12px; }
+@media (max-width: 720px) { .head { display:grid; } }
 </style>

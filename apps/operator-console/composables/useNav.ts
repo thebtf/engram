@@ -54,6 +54,34 @@ export const NAV: NavGroup[] = [
   ] },
 ]
 
+/** Static structure with i18n KEYS. Use when you resolve labels yourself, or need the raw
+ *  shape (routes, honesty class, ids) without a translation context. */
 export function useNav() {
   return { NAV, flat: NAV.flatMap(g => g.items) }
+}
+
+/**
+ * RESOLVED nav — call inside <script setup>. Returns the same tree but with `.label`
+ * (and group `.label`, item `.evidence`) already translated to display strings via t().
+ *
+ * WHY THIS EXISTS: `useNav()` carries i18n keys, not text. A consumer that builds cards or
+ * a sidebar by reading `item.label` off the static list gets `undefined` (the field is
+ * `labelKey` now) — which renders as an EMPTY card, a silent porting bug. `useNavTree()`
+ * restores `.label` as a real, translated string, so `item.label` / `group.label` just work.
+ * Rule of thumb: building UI from nav? use `useNavTree()`. Need only routes/ids/honesty? `useNav()`.
+ */
+export interface NavItemResolved extends NavItem { label: string }
+export interface NavGroupResolved { grpKey: string; label: string; items: NavItemResolved[] }
+export function useNavTree(): { groups: NavGroupResolved[]; flat: NavItemResolved[] } {
+  const { t } = useI18n()
+  const groups: NavGroupResolved[] = NAV.map(g => ({
+    grpKey: g.grpKey,
+    label: t(`nav.groups.${g.grpKey}`),
+    items: g.items.map(it => ({
+      ...it,
+      label: t(`nav.items.${it.labelKey}`),
+      evidence: it.evidenceKey ? t(`nav.evidence.${it.evidenceKey}`) : it.evidence,
+    })),
+  }))
+  return { groups, flat: groups.flatMap(g => g.items) }
 }

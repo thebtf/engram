@@ -1,106 +1,174 @@
 <script setup lang="ts">
-/** Settings — read truth from GET /api/config; writes stay honest until /api/flags exists. */
-import { computed } from 'vue'
-import { useServerConfigSnapshot } from '../composables/useMockData'
-
 const { t } = useI18n()
-const config = useServerConfigSnapshot()
+const {
+  configState,
+  updateStatusState,
+  updateCheckState,
+  configMetrics,
+  restartRequired,
+  pending,
+  error,
+  refresh,
+  restartServer,
+  restartAfterUpdate,
+  configSaveGap,
+  flagsGap,
+} = useOperatorHealthSettings()
 
-const injectUnified = computed({
-  get: () => config.snapshot.value.injectUnified,
-  set: () => {},
-})
+const restartConfirm = ref(false)
+const updateRestartConfirm = ref(false)
 
-const telemetryEnabled = computed({
-  get: () => config.snapshot.value.telemetryEnabled,
-  set: () => {},
-})
+const config = computed(() => configState.value.kind === 'live' ? configState.value.data : {})
+const switches = computed(() => [
+  {
+    key: 'injectUnified',
+    title: t('settings.switches.injectUnified.title'),
+    desc: t('settings.switches.injectUnified.desc'),
+    value: Boolean(config.value.memory?.inject_unified),
+    evidence: 'memory.inject_unified',
+    reload: true,
+  },
+  {
+    key: 'telemetry',
+    title: t('settings.switches.telemetry.title'),
+    desc: t('settings.switches.telemetry.desc'),
+    value: Boolean(config.value.features?.telemetry_enabled),
+    evidence: 'features.telemetry_enabled',
+    reload: false,
+  },
+  {
+    key: 'sourceProject',
+    title: t('settings.switches.sourceProject.title'),
+    desc: t('settings.switches.sourceProject.desc'),
+    value: Boolean(config.value.features?.enforce_source_project),
+    evidence: 'features.enforce_source_project',
+    reload: true,
+  },
+])
 
-const enforceSourceProject = computed({
-  get: () => config.snapshot.value.enforceSourceProject,
-  set: () => {},
-})
+async function confirmRestartServer() {
+  if (!restartConfirm.value) {
+    restartConfirm.value = true
+    return
+  }
+  await restartServer()
+  restartConfirm.value = false
+}
+
+async function confirmUpdateRestart() {
+  if (!updateRestartConfirm.value) {
+    updateRestartConfirm.value = true
+    return
+  }
+  await restartAfterUpdate()
+  updateRestartConfirm.value = false
+}
 </script>
 
 <template>
-  <div class="wrap">
+  <div class="settings-page">
     <header class="head">
-      <h1>{{ t('settings.title') }}</h1>
-      <p>{{ t('settings.subtitle') }}</p>
+      <div>
+        <h1>{{ t('settings.title') }}</h1>
+        <p>{{ t('settings.subtitle') }}</p>
+      </div>
+      <button class="btn" type="button" :disabled="pending" @click="refresh">{{ t('settings.refresh') }}</button>
     </header>
 
-    <p v-if="config.error" class="msg err">{{ config.error }}</p>
-    <p v-else-if="config.pending" class="msg note">{{ t('settings.loading') }}</p>
+    <div v-if="pending" class="state pending">{{ t('settings.state.pending') }}</div>
+    <div v-if="error" class="state error">{{ t('settings.state.error', { message: error }) }}</div>
+    <div v-if="restartRequired" class="state restart">{{ t('settings.state.restartRequired') }}</div>
 
     <section class="card">
       <div class="card-head">
-        <h3 class="card-t">{{ t('settings.runtimeTitle') }}</h3>
-        <HonestyBadge cls="live" evidence="GET /api/config" />
+        <h2>{{ t('settings.runtime') }}</h2>
+        <code>/api/config</code>
       </div>
-
-      <SwitchRow
-        v-model="injectUnified"
-        cls="live"
-        :title="t('settings.rows.injectUnified.title')"
-        :desc="t('settings.rows.injectUnified.desc')"
-        evidence="memory.inject_unified"
-        disabled
-      />
-      <SwitchRow
-        v-model="telemetryEnabled"
-        cls="live"
-        :title="t('settings.rows.telemetry.title')"
-        :desc="t('settings.rows.telemetry.desc')"
-        evidence="features.telemetry_enabled"
-        disabled
-      />
-      <SwitchRow
-        v-model="enforceSourceProject"
-        cls="live"
-        :title="t('settings.rows.enforceSourceProject.title')"
-        :desc="t('settings.rows.enforceSourceProject.desc')"
-        evidence="features.enforce_source_project"
-        disabled
-      />
+      <div class="switches">
+        <SwitchRow
+          v-for="item in switches"
+          :key="item.key"
+          :model-value="item.value"
+          cls="live"
+          :title="item.title"
+          :desc="item.desc"
+          :evidence="item.evidence"
+          :reload="item.reload"
+          disabled
+        />
+      </div>
+      <div class="gaps">
+        <div class="gap">
+          <HonestyBadge cls="mustbuild" :evidence="configSaveGap.evidence.endpoint" />
+          <span>{{ t('settings.gaps.configSave') }}</span>
+        </div>
+        <div class="gap">
+          <HonestyBadge cls="mustbuild" :evidence="flagsGap.evidence.endpoint" />
+          <span>{{ t('settings.gaps.flags') }}</span>
+        </div>
+      </div>
     </section>
 
-    <section class="card facts">
-      <h3 class="card-t">{{ t('settings.snapshotTitle') }}</h3>
-      <dl class="fact-grid">
-        <div class="fact"><dt>{{ t('settings.facts.contextObservations') }}</dt><dd>{{ config.snapshot.contextObservations }}</dd></div>
-        <div class="fact"><dt>{{ t('settings.facts.contextMaxTokens') }}</dt><dd>{{ config.snapshot.contextMaxTokens }}</dd></div>
-        <div class="fact"><dt>{{ t('settings.facts.contextSessionCount') }}</dt><dd>{{ config.snapshot.contextSessionCount }}</dd></div>
-        <div class="fact"><dt>{{ t('settings.facts.vectorStrategy') }}</dt><dd>{{ config.snapshot.vectorStrategy }}</dd></div>
-        <div class="fact"><dt>{{ t('settings.facts.databaseMaxConns') }}</dt><dd>{{ config.snapshot.databaseMaxConns }}</dd></div>
-        <div class="fact"><dt>{{ t('settings.facts.logBufferSize') }}</dt><dd>{{ config.snapshot.logBufferSize }}</dd></div>
-      </dl>
-    </section>
-
-    <section class="card mb">
+    <section class="card">
       <div class="card-head">
-        <h3 class="card-t">{{ t('settings.mustBuildTitle') }}</h3>
-        <HonestyBadge cls="mustbuild" evidence="GET /api/flags" />
+        <h2>{{ t('settings.configSnapshot') }}</h2>
+        <code>/api/config</code>
       </div>
-      <p class="mbody">{{ t('settings.mustBuildBody') }}</p>
+      <div class="metrics">
+        <div v-for="metric in configMetrics" :key="metric.label">
+          <span>{{ metric.label }}</span>
+          <strong>{{ metric.value }}</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>{{ t('settings.restart.title') }}</h2>
+        <code>/api/restart</code>
+      </div>
+      <p>{{ t('settings.restart.body') }}</p>
+      <div class="actions">
+        <button class="danger" type="button" @click="confirmRestartServer">
+          {{ restartConfirm ? t('settings.restart.confirm') : t('settings.restart.action') }}
+        </button>
+        <button class="btn" type="button" :disabled="updateStatusState.kind === 'live' && updateStatusState.data.state !== 'done'" @click="confirmUpdateRestart">
+          {{ updateRestartConfirm ? t('settings.restart.confirmUpdate') : t('settings.restart.updateAction') }}
+        </button>
+      </div>
+      <p class="muted">
+        {{ t('settings.restart.updateState') }}:
+        <code>{{ updateStatusState.kind === 'live' ? updateStatusState.data.state || 'idle' : '—' }}</code>
+        · {{ t('settings.restart.updateAvailable') }}:
+        <code>{{ updateCheckState.kind === 'live' ? String(Boolean(updateCheckState.data.available)) : '—' }}</code>
+      </p>
     </section>
   </div>
 </template>
 
 <style scoped>
-.wrap { max-width:920px; }
+.settings-page { max-width:960px; display:grid; gap:16px; }
+.head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 .head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:700; }
-.head p { margin:0 0 16px; font-size:var(--text-sm); color:var(--muted); }
-.msg { margin:0 0 14px; font-size:var(--text-sm); }
-.msg.note { color:var(--muted); }
-.msg.err { color:var(--state-danger); }
-.card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:12px 20px 16px; margin-bottom:14px; }
-.card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:6px; }
-.card-t { margin:0; font-size:var(--text-sm); font-weight:700; color:var(--fg); }
-.facts { padding-top:16px; }
-.fact-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 16px; margin:0; }
-.fact { border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:12px 14px; background:var(--bg); }
-.fact dt { margin:0 0 6px; font-size:var(--text-xs); color:var(--muted); }
-.fact dd { margin:0; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--fg); }
-.mb { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 55%); }
-.mbody { margin:0; font-size:var(--text-sm); color:var(--fg-2); line-height:1.5; }
+.head p { margin:0; font-size:var(--text-sm); color:var(--muted); }
+.btn, .danger { border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:9px 14px; font:inherit; font-weight:700; cursor:pointer; }
+.btn:disabled { opacity:.55; cursor:not-allowed; }
+.danger { border-color:color-mix(in oklab,var(--state-danger),transparent 55%); color:var(--state-danger); }
+.state { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:10px 12px; color:var(--fg-2); font-size:var(--text-sm); }
+.state.pending { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
+.state.error, .state.restart { color:var(--state-warn); border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
+.card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px; }
+.card-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+.card-head h2 { margin:0; font-size:var(--text-sm); font-weight:800; }
+.card-head code { margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--muted); }
+.switches { padding:0 4px; }
+.gaps { display:grid; gap:10px; margin-top:14px; }
+.gap { display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px dashed var(--border); border-radius:var(--r-sm); padding:10px 12px; color:var(--muted); font-size:var(--text-xs); }
+.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }
+.metrics div { border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:10px; }
+.metrics span { display:block; color:var(--muted); font-size:var(--text-xs); }
+.metrics strong { display:block; margin-top:6px; font-family:var(--font-mono); color:var(--fg); }
+.actions { display:flex; flex-wrap:wrap; gap:10px; }
+.muted, .card p { color:var(--muted); font-size:var(--text-sm); }
+@media (max-width: 720px) { .head { display:grid; } }
 </style>

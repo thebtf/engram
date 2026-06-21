@@ -1,5 +1,13 @@
+<script setup lang="ts">
+const { t } = useI18n()
+</script>
+
 <template>
-  <SectionStub cls="live" title="Документы"
-    lead="Версионированные документы и операторские материалы, отдельно от секретов."
-    next="Список документов с историей версий. Комментарии и сравнение версий — отдельная mustbuild-поверхность." />
+  <SectionStub
+    cls="mustbuild"
+    :title="t('deferred.documents.title')"
+    evidence="GET /api/documents"
+    :lead="t('deferred.documents.lead')"
+    :next="t('deferred.documents.next')"
+  />
 </template>

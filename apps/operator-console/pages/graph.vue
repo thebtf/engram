@@ -1,5 +1,13 @@
+<script setup lang="ts">
+const { t } = useI18n()
+</script>
+
 <template>
-  <SectionStub cls="live" title="Связи знаний" evidence="ENGRAM_GRAPH"
-    lead="Граф концептов и переходов между записями памяти."
-    next="Визуализация графа — отдельный компонент; здесь будет интерактивная карта узлов и рёбер." />
+  <SectionStub
+    cls="mustbuild"
+    :title="t('deferred.graph.title')"
+    evidence="GET /api/graph"
+    :lead="t('deferred.graph.lead')"
+    :next="t('deferred.graph.next')"
+  />
 </template>
