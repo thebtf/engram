@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -159,6 +160,45 @@ func TestHandleListMemories_NonFiniteScoresReturnJSON(t *testing.T) {
 	assert.Equal(t, "memory with non-finite score", rows[0]["content"])
 	assert.NotContains(t, rows[0], "confidence")
 	assert.NotContains(t, rows[0], "stability")
+}
+
+func TestHandleListMemories_OutOfRangeTimestampsReturnJSON(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	outOfRange := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{{
+		ID:              43,
+		Project:         "time-project",
+		Content:         "memory with out-of-range timestamp",
+		Tags:            []string{"time"},
+		CreatedAt:       outOfRange,
+		UpdatedAt:       outOfRange,
+		LastRetrievedAt: &outOfRange,
+		LastConfirmed:   &outOfRange,
+		ReviewAfter:     &outOfRange,
+		ValidFrom:       &outOfRange,
+		ValidUntil:      &outOfRange,
+	}}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=time-project&limit=50", nil)
+	w := httptest.NewRecorder()
+
+	service.handleListMemories(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, float64(43), rows[0]["id"])
+	assert.Equal(t, "memory with out-of-range timestamp", rows[0]["content"])
+	assert.NotContains(t, rows[0], "last_retrieved_at")
+	assert.NotContains(t, rows[0], "last_confirmed")
+	assert.NotContains(t, rows[0], "review_after")
+	assert.NotContains(t, rows[0], "valid_from")
+	assert.NotContains(t, rows[0], "valid_until")
+	assert.NotEqual(t, "+10000-01-01T00:00:00Z", rows[0]["created_at"])
+	assert.NotEqual(t, "+10000-01-01T00:00:00Z", rows[0]["updated_at"])
 }
 
 func TestHandleDeleteMemoryByID_RoundTrip(t *testing.T) {
