@@ -185,7 +185,7 @@ function goSearch() {
       <form class="gsearch-wrap" @submit.prevent="goSearch">
         <div class="gsearch">
           <span>⌕</span>
-          <input v-model="search" :placeholder="t('shell.searchPlaceholder')" />
+          <input v-model="search" name="operator-console-search" :placeholder="t('shell.searchPlaceholder')" />
           <kbd>/</kbd>
         </div>
       </form>
