@@ -87,6 +87,68 @@ function Assert-Status {
   }
 }
 
+function Assert-JsonContent {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$Response,
+    [Parameter(Mandatory = $true)]
+    [string]$Step
+  )
+
+  $contentType = @($Response.Headers['Content-Type']) -join ','
+  if ($contentType -notmatch 'application/json') {
+    throw "$Step returned unexpected content-type '$contentType'."
+  }
+
+  $content = [string]$Response.Content
+  if ([string]::IsNullOrWhiteSpace($content)) {
+    throw "$Step returned an empty body where JSON is required."
+  }
+
+  if ($content.TrimStart().StartsWith('<!DOCTYPE html>')) {
+    throw "$Step returned the SPA shell instead of JSON."
+  }
+
+  try {
+    $content | ConvertFrom-Json
+  }
+  catch {
+    throw "$Step returned invalid JSON: $($_.Exception.Message). Body prefix: $($content.Substring(0, [Math]::Min(240, $content.Length)))"
+  }
+}
+
+function Assert-JsonArray {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$Response,
+    [Parameter(Mandatory = $true)]
+    [string]$Step
+  )
+
+  $trimmed = ([string]$Response.Content).TrimStart()
+  if (-not $trimmed.StartsWith('[')) {
+    throw "$Step returned JSON, but not an array. Body prefix: $($trimmed.Substring(0, [Math]::Min(240, $trimmed.Length)))"
+  }
+
+  @(Assert-JsonContent -Response $Response -Step $Step)
+}
+
+function Assert-JsonObject {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$Response,
+    [Parameter(Mandatory = $true)]
+    [string]$Step
+  )
+
+  $trimmed = ([string]$Response.Content).TrimStart()
+  if (-not $trimmed.StartsWith('{')) {
+    throw "$Step returned JSON, but not an object. Body prefix: $($trimmed.Substring(0, [Math]::Min(240, $trimmed.Length)))"
+  }
+
+  Assert-JsonContent -Response $Response -Step $Step
+}
+
 function Get-Title {
   param(
     [Parameter(Mandatory = $true)]
@@ -252,6 +314,11 @@ $authLoginUrl = "$normalizedBaseUrl/api/auth/login"
 $selfcheckUrl = "$normalizedBaseUrl/api/selfcheck"
 $statsUrl = "$normalizedBaseUrl/api/stats"
 $statsVnextUrl = "$normalizedBaseUrl/api/stats/vnext"
+$projectsUrl = "$normalizedBaseUrl/api/projects"
+$rulesUrl = "$normalizedBaseUrl/api/rules?limit=5"
+$issuesUrl = "$normalizedBaseUrl/api/issues?limit=5"
+$vaultStatusUrl = "$normalizedBaseUrl/api/vault/status"
+$configUrl = "$normalizedBaseUrl/api/config"
 $workerHealthUrl = "$normalizedWorkerBaseUrl/health"
 
 $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
@@ -280,8 +347,67 @@ $localeResponse = Assert-LocaleAsset -Origin $normalizedBaseUrl -LocalePath $loc
 Write-Step "Checking proxied stats endpoints"
 $statsResponse = Invoke-Http -Method GET -Url $statsUrl -Session $session
 Assert-Status -Response $statsResponse -ExpectedStatus @(200) -Step "stats"
+$statsJson = Assert-JsonObject -Response $statsResponse -Step "stats"
 $statsVnextResponse = Invoke-Http -Method GET -Url $statsVnextUrl -Session $session
 Assert-Status -Response $statsVnextResponse -ExpectedStatus @(200) -Step "stats/vnext"
+$statsVnextJson = Assert-JsonObject -Response $statsVnextResponse -Step "stats/vnext"
+
+Write-Step "Checking read-only operator-console data endpoints"
+$projectsResponse = Invoke-Http -Method GET -Url $projectsUrl -Session $session
+Assert-Status -Response $projectsResponse -ExpectedStatus @(200) -Step "projects"
+$projects = Assert-JsonArray -Response $projectsResponse -Step "projects"
+if ($projects.Count -eq 0) {
+  throw "projects returned an empty array; memory and projects pages cannot prove live data."
+}
+
+$memoryProjectCount = 0
+$memoryRowCount = 0
+foreach ($project in $projects) {
+  $projectName = [string]$project
+  if ([string]::IsNullOrWhiteSpace($projectName)) {
+    continue
+  }
+
+  $encodedProject = [uri]::EscapeDataString($projectName)
+  $memoryResponse = Invoke-Http -Method GET -Url "$normalizedBaseUrl/api/memories?project=$encodedProject&limit=200" -Session $session
+  Assert-Status -Response $memoryResponse -ExpectedStatus @(200) -Step "memories[$projectName]"
+  $memoryRows = Assert-JsonArray -Response $memoryResponse -Step "memories[$projectName]"
+  $memoryProjectCount += 1
+  $memoryRowCount += @($memoryRows).Count
+}
+
+if ($memoryProjectCount -eq 0) {
+  throw "No non-empty project names were available for memory endpoint smoke."
+}
+
+$rulesResponse = Invoke-Http -Method GET -Url $rulesUrl -Session $session
+Assert-Status -Response $rulesResponse -ExpectedStatus @(200) -Step "rules"
+$rulesJson = Assert-JsonArray -Response $rulesResponse -Step "rules"
+
+$issuesResponse = Invoke-Http -Method GET -Url $issuesUrl -Session $session
+Assert-Status -Response $issuesResponse -ExpectedStatus @(200) -Step "issues"
+$issuesJson = Assert-JsonObject -Response $issuesResponse -Step "issues"
+if (-not $issuesJson.PSObject.Properties.Name.Contains('issues')) {
+  throw "issues response is missing required 'issues' array."
+}
+
+$vaultStatusResponse = Invoke-Http -Method GET -Url $vaultStatusUrl -Session $session
+Assert-Status -Response $vaultStatusResponse -ExpectedStatus @(200) -Step "vault/status"
+$vaultStatusJson = Assert-JsonObject -Response $vaultStatusResponse -Step "vault/status"
+foreach ($field in @('credential_count', 'key_configured')) {
+  if (-not $vaultStatusJson.PSObject.Properties.Name.Contains($field)) {
+    throw "vault/status response is missing required '$field'."
+  }
+}
+
+$configResponse = Invoke-Http -Method GET -Url $configUrl -Session $session
+Assert-Status -Response $configResponse -ExpectedStatus @(200) -Step "config"
+$configJson = Assert-JsonObject -Response $configResponse -Step "config"
+foreach ($field in @('features', 'memory', 'storage')) {
+  if (-not $configJson.PSObject.Properties.Name.Contains($field)) {
+    throw "config response is missing required '$field'."
+  }
+}
 
 Write-Step "Checking worker health endpoint"
 $workerHealthResponse = Invoke-Http -Method GET -Url $workerHealthUrl
@@ -330,6 +456,17 @@ Write-Host ("LOCALE_ASSET_STATUS=" + $localeResponse.StatusCode)
 Write-Host ("LOCALE_ASSET_CONTENT_TYPE=" + $localeResponse.ContentType)
 Write-Host ("STATS_STATUS=" + $statsResponse.StatusCode)
 Write-Host ("STATS_VNEXT_STATUS=" + $statsVnextResponse.StatusCode)
+Write-Host ("PROJECTS_STATUS=" + $projectsResponse.StatusCode)
+Write-Host ("PROJECTS_COUNT=" + $projects.Count)
+Write-Host ("MEMORY_PROJECTS_CHECKED=" + $memoryProjectCount)
+Write-Host ("MEMORY_ROWS_CHECKED=" + $memoryRowCount)
+Write-Host ("RULES_STATUS=" + $rulesResponse.StatusCode)
+Write-Host ("RULES_SAMPLE_COUNT=" + @($rulesJson).Count)
+Write-Host ("ISSUES_STATUS=" + $issuesResponse.StatusCode)
+Write-Host ("ISSUES_SAMPLE_COUNT=" + @($issuesJson.issues).Count)
+Write-Host ("VAULT_STATUS=" + $vaultStatusResponse.StatusCode)
+Write-Host ("VAULT_CREDENTIAL_COUNT=" + $vaultStatusJson.credential_count)
+Write-Host ("CONFIG_STATUS=" + $configResponse.StatusCode)
 Write-Host ("WORKER_HEALTH_STATUS=" + $workerHealthResponse.StatusCode)
 Write-Host ("AUTH_ME_STATUS=" + $authMeResponse.StatusCode)
 Write-Host ("AUTH_ME_BODY=" + $authMeResponse.Content)
