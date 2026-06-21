@@ -5,7 +5,7 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-06-01',
   devtools: { enabled: true },
   modules: ['@nuxt/ui', '@nuxtjs/color-mode', '@nuxtjs/i18n'],
-  css: ['~/assets/tokens.css'],
+  css: ['~/assets/tokens.css', '~/assets/base.css'],
   runtimeConfig: {
     operatorApiTarget: process.env.NUXT_OPERATOR_API_TARGET || 'http://unleashed.lan:37777',
     public: {
