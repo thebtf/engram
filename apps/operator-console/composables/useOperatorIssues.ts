@@ -51,6 +51,7 @@ export interface IssueCreateInput {
   body?: string
   priority: OperatorIssuePriority
   type: OperatorIssueType
+  sourceProject?: string
   targetProject: string
   labels?: string[]
 }
@@ -385,7 +386,7 @@ export function useOperatorIssues(): {
         body: input.body || '',
         priority: input.priority,
         type: input.type,
-        source_project: 'operator-console',
+        source_project: input.sourceProject || 'operator-console',
         target_project: input.targetProject,
         source_agent: 'operator-console',
         labels: input.labels || [],

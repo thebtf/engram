@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import {
   useOperatorIssues,
+  type IssueUpdateInput,
   type OperatorIssue,
   type OperatorIssuePriority,
   type OperatorIssueStatus,
@@ -54,6 +55,14 @@ const showBulkReject = ref(false)
 const showBulkField = ref(false)
 const showBulkLabels = ref(false)
 const notice = ref('')
+const createBodyInput = ref<HTMLTextAreaElement | null>(null)
+const commentInput = ref<HTMLTextAreaElement | null>(null)
+const activeTemplate = ref<CreateTemplate>('bug')
+const createSourceProject = ref('operator')
+const selectedCommentKeys = ref<string[]>([])
+const hoverIssue = ref<OperatorIssue | null>(null)
+const hoverStyle = ref<Record<string, string>>({})
+let hoverTimer: ReturnType<typeof setTimeout> | null = null
 
 const createTitle = ref('')
 const createBody = ref('')
@@ -62,8 +71,6 @@ const createPriority = ref<OperatorIssuePriority>('high')
 const createType = ref<OperatorIssueType>('bug')
 const createLabels = ref<string[]>(['operator-created'])
 
-const titleDraft = ref('')
-const bodyDraft = ref('')
 const statusDraft = ref<OperatorIssueStatus>('open')
 const priorityDraft = ref<OperatorIssuePriority>('medium')
 const typeDraft = ref<OperatorIssueType>('task')
@@ -113,11 +120,12 @@ const pageRange = computed(() => {
 })
 const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
 const canCreate = computed(() => createTitle.value.trim().length > 0 && createTargetProject.value.trim().length > 0 && !pending.value)
-const canSave = computed(() => Boolean(activeIssue.value) && titleDraft.value.trim().length > 0 && !pending.value)
 const canComment = computed(() => Boolean(activeIssue.value) && commentDraft.value.trim().length > 0 && !pending.value)
 const canReject = computed(() => Boolean(activeIssue.value) && rejectComment.value.trim().length > 0 && !pending.value)
 const canBulkReject = computed(() => selectedCount.value > 0 && bulkRejectComment.value.trim().length > 0 && !pending.value)
 const projectOptions = computed(() => trackedProjects.value.length ? trackedProjects.value : ['engram'])
+const pageTitle = computed(() => activeIssue.value ? t('issues.detail.title', { id: activeIssue.value.id }) : t('issues.title'))
+const pageSubtitle = computed(() => activeIssue.value ? t('issues.detail.subtitle') : t('issues.subtitle'))
 const labelOptions = computed(() => {
   const labels = new Set(['operator-created', 'bug', 'feature', 'handoff', 'evidence', 'must-build'])
   for (const issue of rows) {
@@ -126,6 +134,19 @@ const labelOptions = computed(() => {
     }
   }
   return [...labels].sort((left, right) => left.localeCompare(right))
+})
+const selectedCommentSet = computed(() => new Set(selectedCommentKeys.value))
+const selectedThreadCount = computed(() => selectedCommentKeys.value.length)
+const hoverThreadStats = computed(() => {
+  const issue = hoverIssue.value
+  if (!issue) return null
+  const activeComments = detail.value?.id === issue.id ? comments : []
+  return {
+    count: issue.comments || activeComments.length,
+    participants: new Set(activeComments.map((comment) => comment.authorProject || comment.authorAgent)).size,
+    last: activeComments[activeComments.length - 1]?.age || issue.age || '—',
+    hasThread: Boolean(issue.comments || activeComments.length),
+  }
 })
 
 watch(filter, () => {
@@ -139,14 +160,14 @@ watch(filteredRows, () => {
 })
 
 watch(activeIssue, (issue) => {
-  titleDraft.value = issue?.title || ''
-  bodyDraft.value = issue?.body || ''
   statusDraft.value = issue?.status || 'open'
   priorityDraft.value = issue?.priority || 'medium'
   typeDraft.value = issue?.type || 'task'
   labelDraft.value = issue ? [...issue.labels] : []
   commentDraft.value = ''
   rejectComment.value = ''
+  selectedCommentKeys.value = []
+  hideIssueHover()
   showReject.value = false
   showDelete.value = false
 })
@@ -154,10 +175,12 @@ watch(activeIssue, (issue) => {
 function resetCreate() {
   createTitle.value = ''
   createBody.value = ''
+  createSourceProject.value = 'operator'
   createTargetProject.value = projectOptions.value.includes('engram') ? 'engram' : projectOptions.value[0] || 'engram'
   createPriority.value = 'high'
   createType.value = 'bug'
   createLabels.value = ['operator-created']
+  activeTemplate.value = 'bug'
 }
 
 function setNotice(key: string, params: Record<string, unknown> = {}) {
@@ -230,16 +253,109 @@ function toggleCreateLabel(label: string) {
     : [...createLabels.value, label]
 }
 
-function toggleDraftLabel(label: string) {
-  labelDraft.value = labelDraft.value.includes(label)
-    ? labelDraft.value.filter((item) => item !== label)
-    : [...labelDraft.value, label]
-}
-
 function applyTemplate(kind: CreateTemplate) {
+  activeTemplate.value = kind
   createType.value = kind === 'improvement' ? 'improvement' : kind === 'handoff' ? 'task' : kind === 'question' ? 'task' : 'bug'
   createPriority.value = kind === 'bug' ? 'high' : 'medium'
   createBody.value = t(`issues.create.templates.${kind}.body`)
+}
+
+function insertMarkdown(target: 'create' | 'comment', before: string, after = '', fallback = '') {
+  const area = target === 'create' ? createBodyInput.value : commentInput.value
+  const valueRef = target === 'create' ? createBody : commentDraft
+  const value = valueRef.value
+  const start = area?.selectionStart ?? value.length
+  const end = area?.selectionEnd ?? value.length
+  const selected = value.slice(start, end) || fallback
+  valueRef.value = `${value.slice(0, start)}${before}${selected}${after}${value.slice(end)}`
+  requestAnimationFrame(() => {
+    area?.focus()
+    const cursor = start + before.length + selected.length + after.length
+    area?.setSelectionRange(cursor, cursor)
+  })
+}
+
+function commentKey(comment: { id?: number }, index: number) {
+  return comment.id ? `comment:${comment.id}` : `comment:${activeIssue.value?.id || 'active'}:${index}`
+}
+
+function isCommentSelected(comment: { id?: number }, index: number) {
+  return selectedCommentSet.value.has(commentKey(comment, index))
+}
+
+function toggleCommentSelection(comment: { id?: number }, index: number) {
+  const key = commentKey(comment, index)
+  selectedCommentKeys.value = selectedCommentSet.value.has(key)
+    ? selectedCommentKeys.value.filter((item) => item !== key)
+    : [...selectedCommentKeys.value, key]
+}
+
+function selectAllThread() {
+  selectedCommentKeys.value = comments.map((comment, index) => commentKey(comment, index))
+}
+
+function clearThreadSelection() {
+  selectedCommentKeys.value = []
+}
+
+async function updateCurrentField(field: 'status' | 'priority' | 'type', value: string) {
+  if (!activeIssue.value || pending.value) return
+  const patch: IssueUpdateInput =
+    field === 'status'
+      ? { status: value as OperatorIssueStatus }
+      : field === 'priority'
+        ? { priority: value as OperatorIssuePriority }
+        : { type: value as OperatorIssueType }
+  const result = await updateIssue(activeIssue.value.id, {
+    ...patch,
+    comment: t('issues.detail.fieldChangeComment', { field: t(`issues.detail.${field}`) }),
+  })
+  setNotice(mutationOk(result) ? 'issues.notice.saved' : 'issues.notice.error', {
+    message: mutationError(result) || t('issues.notice.unknownError'),
+  })
+}
+
+async function toggleIssueLabel(label: string) {
+  if (!activeIssue.value || pending.value) return
+  const labels = labelDraft.value.includes(label)
+    ? labelDraft.value.filter((item) => item !== label)
+    : [...labelDraft.value, label]
+  labelDraft.value = labels
+  const result = await updateIssue(activeIssue.value.id, {
+    labels,
+    comment: t('issues.detail.labelsComment'),
+  })
+  setNotice(mutationOk(result) ? 'issues.notice.saved' : 'issues.notice.error', {
+    message: mutationError(result) || t('issues.notice.unknownError'),
+  })
+}
+
+function showIssueHover(issue: OperatorIssue, event: MouseEvent) {
+  if (activeIssue.value || !import.meta.client || window.matchMedia('(pointer: coarse)').matches) return
+  if (hoverTimer) clearTimeout(hoverTimer)
+  const row = event.currentTarget as HTMLElement
+  hoverTimer = setTimeout(() => {
+    hoverIssue.value = issue
+    requestAnimationFrame(() => {
+      const rect = row.getBoundingClientRect()
+      const width = Math.min(440, window.innerWidth - 24)
+      let left = rect.right + 12
+      if (left + width > window.innerWidth - 12) {
+        left = Math.max(12, rect.left - width - 12)
+      }
+      hoverStyle.value = {
+        width: `${width}px`,
+        left: `${left}px`,
+        top: `${Math.max(12, Math.min(rect.top, window.innerHeight - 120))}px`,
+      }
+    })
+  }, 280)
+}
+
+function hideIssueHover() {
+  if (hoverTimer) clearTimeout(hoverTimer)
+  hoverTimer = null
+  hoverIssue.value = null
 }
 
 async function createNewIssue() {
@@ -249,6 +365,7 @@ async function createNewIssue() {
     body: createBody.value.trim(),
     priority: createPriority.value,
     type: createType.value,
+    sourceProject: createSourceProject.value.trim() || 'operator',
     targetProject: createTargetProject.value.trim(),
     labels: createLabels.value,
   })
@@ -266,22 +383,6 @@ async function createNewIssue() {
   }
 
   setNotice('issues.notice.error', { message: mutationError(result) || t('issues.notice.unknownError') })
-}
-
-async function saveIssue() {
-  if (!activeIssue.value || !canSave.value) return
-  const result = await updateIssue(activeIssue.value.id, {
-    title: titleDraft.value.trim(),
-    body: bodyDraft.value.trim(),
-    priority: priorityDraft.value,
-    type: typeDraft.value,
-    status: statusDraft.value,
-    labels: labelDraft.value,
-    comment: t('issues.detail.saveComment'),
-  })
-  setNotice(mutationOk(result) ? 'issues.notice.saved' : 'issues.notice.error', {
-    message: mutationError(result) || t('issues.notice.unknownError'),
-  })
 }
 
 async function acknowledgeCurrent() {
@@ -445,8 +546,8 @@ function renderMarkdown(value: string) {
 <template>
   <div class="issues-page">
     <header class="head">
-      <h1>{{ t('issues.title') }}</h1>
-      <p>{{ t('issues.subtitle') }}</p>
+      <h1>{{ pageTitle }}</h1>
+      <p>{{ pageSubtitle }}</p>
     </header>
 
     <section v-if="notice || pending || error || loadState.kind === 'empty'" class="statebar" :data-state="error ? 'error' : loadState.kind">
@@ -532,6 +633,10 @@ function renderMarkdown(value: string) {
             :data-status="issue.status"
             type="button"
             @click="selectIssue(issue)"
+            @mouseenter="showIssueHover(issue, $event)"
+            @mouseleave="hideIssueHover"
+            @focus="showIssueHover(issue, $event)"
+            @blur="hideIssueHover"
           >
             <span
               class="echk issue-row-check"
@@ -612,9 +717,31 @@ function renderMarkdown(value: string) {
               <div class="dsh">{{ t('issues.thread.title') }}</div>
               <span class="count">{{ t('issues.thread.count', comments.length, { count: comments.length }) }}</span>
             </div>
+            <div class="thread-actions">
+              <div class="left">
+                <button class="act" :disabled="!comments.length" @click="selectAllThread">{{ t('issues.thread.selectAll') }}</button>
+                <button class="act" :disabled="!selectedThreadCount" @click="clearThreadSelection">{{ t('issues.thread.clear') }}</button>
+                <span class="issue-chip subtle">{{ t('issues.thread.selected', selectedThreadCount, { count: selectedThreadCount }) }}</span>
+              </div>
+              <div class="dactions">
+                <span class="issue-chip" data-tone="handoff">{{ t('issues.thread.mustBuild') }}</span>
+                <button class="act" disabled :title="t('issues.thread.mustBuildEvidence')">{{ t('issues.thread.export') }}</button>
+                <button class="act" disabled :title="t('issues.thread.mustBuildEvidence')">{{ t('issues.thread.pin') }}</button>
+              </div>
+            </div>
             <div class="thread">
-              <article v-for="comment in comments" :key="comment.id || comment.createdAt" class="comment">
+              <article
+                v-for="(comment, index) in comments"
+                :key="comment.id || comment.createdAt"
+                class="comment"
+                :class="{ selected: isCommentSelected(comment, index) }"
+              >
                 <div class="cm">
+                  <span
+                    class="echk issue-row-check"
+                    :class="{ on: isCommentSelected(comment, index) }"
+                    @click.stop="toggleCommentSelection(comment, index)"
+                  >{{ isCommentSelected(comment, index) ? '✓' : '' }}</span>
                   <span class="agent">{{ comment.authorProject }}</span>
                   <span>{{ comment.authorAgent }}</span>
                   <span>{{ comment.age }}</span>
@@ -625,7 +752,22 @@ function renderMarkdown(value: string) {
             </div>
             <div class="composer">
               <div class="dsh">{{ t('issues.thread.operatorReply') }}</div>
-              <textarea v-model="commentDraft" class="txt" name="issue-comment" :placeholder="t('issues.thread.placeholder')" />
+              <label class="field comment-kind">
+                <span>{{ t('issues.thread.kind') }}</span>
+                <select class="txt" disabled :title="t('issues.thread.kindEvidence')">
+                  <option>{{ t('issues.thread.kindOperatorNote') }}</option>
+                </select>
+              </label>
+              <div class="md-editor">
+                <div class="md-toolbar">
+                  <button type="button" @click="insertMarkdown('comment', '**', '**', t('issues.markdown.boldFallback'))">{{ t('issues.markdown.bold') }}</button>
+                  <button type="button" @click="insertMarkdown('comment', '*', '*', t('issues.markdown.italicFallback'))">{{ t('issues.markdown.italic') }}</button>
+                  <button type="button" @click="insertMarkdown('comment', '> ', '', t('issues.markdown.quoteFallback'))">{{ t('issues.markdown.quote') }}</button>
+                  <button type="button" @click="insertMarkdown('comment', '`', '`', t('issues.markdown.codeFallback'))">{{ t('issues.markdown.code') }}</button>
+                  <button type="button" @click="insertMarkdown('comment', '- ', '', t('issues.markdown.listFallback'))">{{ t('issues.markdown.list') }}</button>
+                </div>
+                <textarea ref="commentInput" v-model="commentDraft" class="txt" name="issue-comment" :placeholder="t('issues.thread.placeholder')" />
+              </div>
               <div class="dactions">
                 <button class="act primary" :disabled="!canComment" @click="addComment">{{ t('issues.thread.submit') }}</button>
               </div>
@@ -636,30 +778,22 @@ function renderMarkdown(value: string) {
         <aside class="issue-rail">
           <div class="issue-card">
             <div class="dsh">{{ t('issues.detail.fields') }}</div>
-            <label class="edit-field span2">
-              <span>{{ t('issues.detail.issueTitle') }}</span>
-              <input v-model="titleDraft" class="txt" name="issue-title" />
-            </label>
-            <label class="edit-field span2">
-              <span>{{ t('issues.detail.body') }}</span>
-              <textarea v-model="bodyDraft" class="txt body-edit" name="issue-body" />
-            </label>
             <div class="edit-grid">
               <label class="edit-field">
                 <span>{{ t('issues.detail.status') }}</span>
-                <select v-model="statusDraft" class="txt edit-select" name="issue-status">
+                <select v-model="statusDraft" class="txt edit-select" name="issue-status" :disabled="pending" @change="updateCurrentField('status', statusDraft)">
                   <option v-for="status in statusOptions" :key="status" :value="status">{{ t(`issues.status.${status}`) }}</option>
                 </select>
               </label>
               <label class="edit-field">
                 <span>{{ t('issues.detail.priority') }}</span>
-                <select v-model="priorityDraft" class="txt edit-select" name="issue-priority">
+                <select v-model="priorityDraft" class="txt edit-select" name="issue-priority" :disabled="pending" @change="updateCurrentField('priority', priorityDraft)">
                   <option v-for="priority in priorityOptions" :key="priority" :value="priority">{{ t(`issues.priority.${priority}`) }}</option>
                 </select>
               </label>
               <label class="edit-field">
                 <span>{{ t('issues.detail.type') }}</span>
-                <select v-model="typeDraft" class="txt edit-select" name="issue-type">
+                <select v-model="typeDraft" class="txt edit-select" name="issue-type" :disabled="pending" @change="updateCurrentField('type', typeDraft)">
                   <option v-for="kind in typeOptions" :key="kind" :value="kind">{{ t(`issues.type.${kind}`) }}</option>
                 </select>
               </label>
@@ -678,13 +812,13 @@ function renderMarkdown(value: string) {
                 type="button"
                 class="tag-option"
                 :class="{ on: labelDraft.includes(label) }"
-                @click="toggleDraftLabel(label)"
+                :disabled="pending"
+                @click="toggleIssueLabel(label)"
               >
                 {{ label }}
               </button>
             </div>
             <div class="dactions">
-              <button class="act primary" :disabled="!canSave" @click="saveIssue">{{ t('issues.detail.save') }}</button>
               <button class="act" :disabled="pending" @click="acknowledgeCurrent">{{ t('issues.detail.acknowledge') }}</button>
             </div>
           </div>
@@ -722,6 +856,7 @@ function renderMarkdown(value: string) {
                   :key="template"
                   type="button"
                   class="issue-template"
+                  :aria-pressed="activeTemplate === template"
                   @click="applyTemplate(template)"
                 >
                   <b>{{ t(`issues.create.templates.${template}.title`) }}</b>
@@ -732,8 +867,15 @@ function renderMarkdown(value: string) {
             <div class="issue-draft-card">
               <h3>{{ t('issues.create.description') }}</h3>
               <p>{{ t('issues.create.descriptionHelp') }}</p>
-              <div class="md-editor">
-                <textarea v-model="createBody" class="txt" name="new-issue-body" :placeholder="t('issues.create.bodyPlaceholder')" />
+              <div class="md-editor issue-create-editor">
+                <div class="md-toolbar">
+                  <button type="button" @click="insertMarkdown('create', '**', '**', t('issues.markdown.boldFallback'))">{{ t('issues.markdown.bold') }}</button>
+                  <button type="button" @click="insertMarkdown('create', '*', '*', t('issues.markdown.italicFallback'))">{{ t('issues.markdown.italic') }}</button>
+                  <button type="button" @click="insertMarkdown('create', '> ', '', t('issues.markdown.quoteFallback'))">{{ t('issues.markdown.quote') }}</button>
+                  <button type="button" @click="insertMarkdown('create', '`', '`', t('issues.markdown.codeFallback'))">{{ t('issues.markdown.code') }}</button>
+                  <button type="button" @click="insertMarkdown('create', '- ', '', t('issues.markdown.listFallback'))">{{ t('issues.markdown.list') }}</button>
+                </div>
+                <textarea ref="createBodyInput" v-model="createBody" class="txt" name="new-issue-body" :placeholder="t('issues.create.bodyPlaceholder')" />
                 <div class="md-preview md" v-html="renderMarkdown(createBody || t('issues.create.previewEmpty'))"></div>
               </div>
             </div>
@@ -743,6 +885,10 @@ function renderMarkdown(value: string) {
               <h3>{{ t('issues.create.route') }}</h3>
               <p>{{ t('issues.create.routeHelp') }}</p>
               <div class="issue-route-grid">
+                <label class="field">
+                  <span>{{ t('issues.create.sourceProject') }}</span>
+                  <input v-model="createSourceProject" class="txt" name="new-issue-source-project" :placeholder="t('issues.create.sourcePlaceholder')" />
+                </label>
                 <label class="field">
                   <span>{{ t('issues.create.targetProject') }}</span>
                   <select v-model="createTargetProject" class="txt" name="new-issue-target-project">
@@ -797,6 +943,28 @@ function renderMarkdown(value: string) {
           </div>
         </div>
       </section>
+    </div>
+
+    <div v-if="hoverIssue" class="issue-hover show" :style="hoverStyle">
+      <div class="ih-head">
+        <span class="ih-id">#{{ hoverIssue.id }}</span>
+        <span class="ih-title">{{ hoverIssue.title }}</span>
+      </div>
+      <div class="ih-meta">
+        <span class="issue-chip" :data-tone="hoverIssue.priority">{{ t(`issues.priority.${hoverIssue.priority}`) }}</span>
+        <span class="issue-chip" :data-tone="hoverIssue.type">{{ t(`issues.type.${hoverIssue.type}`) }}</span>
+        <span class="issue-chip" :data-tone="hoverIssue.status">{{ t(`issues.status.${hoverIssue.status}`) }}</span>
+        <span class="ih-route">{{ rowRoute(hoverIssue) }} · {{ hoverIssue.age }}</span>
+      </div>
+      <div class="ih-body md" v-html="renderMarkdown(hoverIssue.body || t('issues.detail.emptyBody'))"></div>
+      <div v-if="hoverThreadStats" class="ih-stats">
+        <div class="ih-stats-grid">
+          <div class="ih-stat"><div class="k">{{ t('issues.hover.messages') }}</div><div class="v">{{ hoverThreadStats.count }}</div></div>
+          <div class="ih-stat"><div class="k">{{ t('issues.hover.participants') }}</div><div class="v">{{ hoverThreadStats.participants || '—' }}</div></div>
+          <div class="ih-stat"><div class="k">{{ t('issues.hover.last') }}</div><div class="v">{{ hoverThreadStats.last }}</div></div>
+        </div>
+        <div v-if="!hoverThreadStats.hasThread" class="ih-empty">{{ t('issues.hover.noThread') }}</div>
+      </div>
     </div>
 
     <div v-if="showReject" class="overlay show">
@@ -909,19 +1077,21 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
 .danger-fill { background:var(--state-warn); border-color:var(--state-warn); color:var(--bg); }
 .tbtn:disabled, .act:disabled, .pager:disabled { opacity:.45; cursor:not-allowed; }
 .fcount { color:var(--muted); font-size:var(--text-sm); }
-.instr-band { display:grid; grid-template-columns:minmax(160px,.65fr) 1.8fr; gap:14px; padding:16px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
+.instr-band { display:flex; align-items:center; gap:var(--space-6); flex-wrap:wrap; padding:14px 18px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); margin-bottom:14px; }
 .lead .ln, .bfig .bn { font-family:var(--font-mono); font-size:34px; line-height:1; color:var(--fg); font-weight:800; }
 .lead .ll, .bfig .bl { margin-top:4px; color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.06em; font-weight:800; }
-.bfigs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.lead { display:flex; flex-direction:column; gap:3px; padding-right:var(--space-6); border-right:1px solid var(--border-soft); }
+.bfigs { display:flex; gap:var(--space-6); flex-wrap:wrap; }
 .bfig { padding-left:14px; border-left:3px solid var(--border); }
 .bfig.warn { border-color:var(--state-warn); }
 .bfig.good { border-color:var(--success); }
 .filterbar { align-items:center; }
 .fchip { border:1px solid var(--border); border-radius:var(--radius-pill); background:var(--surface); color:var(--fg-2); padding:7px 12px; font-weight:900; cursor:pointer; }
 .fchip[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:var(--accent-on); }
-.issues-grid { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); overflow:hidden; }
+.issues-grid { border:0; border-radius:0; background:transparent; overflow:visible; }
 .issues-grid .grid-h, .issue-row { display:grid; grid-template-columns:22px 44px 88px 112px minmax(242px,1fr) 112px minmax(116px,150px) 74px 42px; gap:10px; align-items:center; }
-.issues-grid .grid-h { padding:8px; border-bottom:1px solid var(--border); color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.06em; font-weight:800; }
+.issues-grid .grid-h { padding:7px 8px 8px; border:0; border-bottom:1px solid var(--border); background:transparent; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.06em; font-weight:800; }
+.issues-grid .grid-h > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .issue-row { width:100%; min-height:46px; padding:7px 8px; border:0; border-bottom:1px solid var(--border-soft); border-radius:0; background:transparent; color:inherit; text-align:left; cursor:pointer; position:relative; }
 .issue-row:hover { background:var(--surface-warm); }
 .issue-row.sel { background:color-mix(in oklab,var(--accent),transparent 92%); }
@@ -957,7 +1127,7 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
 .bc { font-family:var(--font-mono); color:var(--fg); font-weight:800; }
 .bsp { flex:1; }
 .bulk-note { color:var(--muted); font-family:var(--font-mono); font-size:11px; }
-.issue-workspace { display:block; min-width:0; padding-bottom:72px; }
+.issue-workspace { display:block; overflow-y:auto; min-width:0; padding:var(--space-5) var(--space-6) 96px; }
 .issue-open-head { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--space-4); margin-bottom:var(--space-4); }
 .issue-open-left { display:flex; align-items:flex-start; gap:var(--space-3); min-width:0; }
 .issue-open-title { min-width:0; }
@@ -972,9 +1142,12 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
 .issue-body { color:var(--fg-2); line-height:1.52; border:1px solid var(--border-soft); border-radius:var(--r-sm); background:var(--surface); padding:var(--space-3); }
 .issue-thread-head { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); margin-bottom:var(--space-2); }
 .issue-thread-head .count { font-family:var(--font-mono); color:var(--muted); font-size:var(--text-xs); }
+.thread-actions { display:flex; flex-wrap:wrap; gap:var(--space-2); align-items:center; justify-content:space-between; padding:8px 10px; border:1px solid var(--border-soft); border-radius:var(--r-sm); background:var(--surface-warm); margin-bottom:var(--space-2); }
+.thread-actions .left { display:flex; gap:var(--space-2); align-items:center; flex-wrap:wrap; }
 .thread { display:flex; flex-direction:column; gap:0; margin-top:var(--space-3); border-left:1px solid var(--border); padding-left:14px; }
 .comment { border:0; background:transparent; border-radius:0; padding:4px 0 13px 12px; position:relative; }
 .comment::before { content:""; position:absolute; left:-20px; top:11px; width:9px; height:9px; border-radius:50%; background:var(--muted); box-shadow:0 0 0 3px var(--bg); }
+.comment.selected { background:color-mix(in oklab,var(--accent),transparent 94%); }
 .comment .cm { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:var(--text-xs); margin-bottom:6px; }
 .comment .cm .agent { color:var(--fg); font-weight:700; }
 .comment .body { display:block; font-size:var(--text-sm); line-height:1.52; color:var(--fg-2); }
@@ -1009,14 +1182,38 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
 .issue-draft-card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:var(--space-4); }
 .issue-template-row { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:12px; }
 .issue-template { border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); color:var(--fg-2); padding:10px; text-align:left; cursor:pointer; }
+.issue-template:hover, .issue-template[aria-pressed="true"] { border-color:var(--accent); background:color-mix(in oklab,var(--accent),transparent 90%); }
 .issue-template b { display:block; color:var(--fg); }
 .issue-template span { display:block; margin-top:4px; color:var(--muted); font-size:var(--text-xs); line-height:1.35; }
 .md-editor { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(300px,.9fr); gap:10px; align-items:stretch; }
+.composer .md-editor { display:flex; flex-direction:column; gap:8px; }
+.composer .md-toolbar { grid-column:auto; }
+.md-toolbar { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.md-toolbar button { border:1px solid var(--border); background:var(--surface); color:var(--fg-2); border-radius:var(--r-sm); padding:5px 8px; font-weight:700; font-size:var(--text-xs); cursor:pointer; }
+.md-toolbar button:hover { border-color:var(--accent); color:var(--fg); }
 .md-preview { border:1px solid var(--border-soft); border-radius:var(--r-sm); background:var(--surface-warm); padding:10px 12px; min-height:160px; overflow:auto; }
+.issue-create-editor { grid-template-rows:auto minmax(360px,1fr); }
+.issue-create-editor textarea.txt { min-height:360px; height:100%; resize:vertical; font-family:var(--font-mono); line-height:1.55; }
+.issue-create-editor .md-preview { min-height:360px; }
 .issue-route-grid { display:grid; grid-template-columns:1fr; gap:10px; }
 .issue-quality { display:flex; flex-direction:column; gap:8px; }
 .qitem { display:flex; align-items:flex-start; gap:8px; color:var(--fg-2); font-size:var(--text-sm); }
 .qdot { display:inline-grid; place-items:center; flex:0 0 auto; width:20px; height:20px; border-radius:50%; background:var(--surface-warm); border:1px solid var(--border); font-family:var(--font-mono); font-size:11px; color:var(--muted); }
+.issue-hover { position:fixed; z-index:72; max-height:min(560px, calc(100vh - 24px)); overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md); box-shadow:var(--elev-raised); padding:14px 16px; pointer-events:none; opacity:0; transform:translateY(4px); transition:opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard); }
+.issue-hover.show { opacity:1; transform:none; }
+.issue-hover .ih-head { display:flex; align-items:flex-start; gap:8px; }
+.issue-hover .ih-id { font-family:var(--font-mono); font-size:var(--text-xs); color:var(--muted); flex:none; padding-top:2px; }
+.issue-hover .ih-title { font-size:var(--text-base); font-weight:700; line-height:1.32; color:var(--fg); }
+.issue-hover .ih-meta { display:flex; flex-wrap:wrap; gap:6px; margin:9px 0 4px; align-items:center; }
+.issue-hover .ih-route { font-family:var(--font-mono); font-size:var(--text-xs); color:var(--muted); }
+.issue-hover .ih-body { border-top:1px solid var(--border-soft); margin-top:11px; padding-top:11px; }
+.issue-hover .ih-body.md { font-size:var(--text-sm); color:var(--fg-2); }
+.issue-hover .ih-stats { border-top:1px solid var(--border-soft); margin-top:11px; padding-top:11px; }
+.issue-hover .ih-stats-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px 12px; }
+.issue-hover .ih-stat .k { font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+.issue-hover .ih-stat .v { font-family:var(--font-mono); font-size:var(--text-base); font-weight:700; font-variant-numeric:tabular-nums; color:var(--fg); }
+.issue-hover .ih-empty { font-size:var(--text-xs); color:var(--muted); margin-top:10px; }
+@media (pointer:coarse){ .issue-hover { display:none !important; } }
 .hint { color:var(--muted); font-size:var(--text-xs); line-height:1.35; }
 .confirm-input { margin-top:14px; min-height:110px; }
 .mf { justify-content:flex-end; margin-top:14px; }
@@ -1028,9 +1225,14 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
   .issue-open-head { flex-direction:column; }
   .issue-template-row { grid-template-columns:1fr 1fr; }
   .md-editor { grid-template-columns:1fr; }
+  .md-toolbar, .md-preview { grid-column:auto; }
+  .issue-create-editor { grid-template-rows:auto minmax(280px,42vh) minmax(180px,auto); }
+  .issue-create-editor textarea.txt { min-height:280px; }
+  .issue-create-editor .md-preview { min-height:180px; }
 }
 @media (max-width:720px) {
-  .instr-band, .bfigs { grid-template-columns:1fr; }
+  .instr-band, .bfigs { display:grid; grid-template-columns:1fr; }
+  .lead { padding-right:0; border-right:0; }
   .issue-template-row { grid-template-columns:1fr; }
   .modal.issue-create-modal { width:calc(100vw - 24px); height:calc(100vh - 24px); }
 }
