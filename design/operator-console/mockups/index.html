@@ -1163,7 +1163,7 @@ a:hover { text-decoration:underline; }
   background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md); box-shadow:var(--elev-raised);
   padding:14px 16px; display:none; pointer-events:none; opacity:0; transform:translateY(4px);
   transition:opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard); }
-.issue-hover.show { display:block; opacity:1; transform:none; }
+.issue-hover.show { display:block; opacity:1; transform:none; pointer-events:auto; }
 .issue-hover .ih-head { display:flex; align-items:flex-start; gap:8px; }
 .issue-hover .ih-id { font-family:var(--font-mono); font-size:var(--text-xs); color:var(--muted); flex:none; padding-top:2px; }
 .issue-hover .ih-title { font-size:var(--text-base); font-weight:700; line-height:1.32; color:var(--fg); }
@@ -3065,10 +3065,15 @@ function showIssueHover(rowEl, is){
   const h=getIssueHover();
   h.innerHTML=buildIssueHover(is);
   h.classList.add('show');
-  const r=rowEl.getBoundingClientRect(), hw=Math.min(440, innerWidth-24), hh=h.offsetHeight;
+  const r=rowEl.getBoundingClientRect(), hw=Math.min(440, innerWidth-24), hh=h.getBoundingClientRect().height;
   let left=r.right+12; if(left+hw>innerWidth-12) left=Math.max(12, r.left-hw-12);
-  let top=r.top; if(top+hh>innerHeight-12) top=Math.max(12, innerHeight-hh-12);
+  let top=clampIssueHoverTop(r.top, hh);
   h.style.left=left+'px'; h.style.top=top+'px';
+}
+function clampIssueHoverTop(anchorTop, measuredHeight=Math.min(560, innerHeight-24)){
+  const safeHeight=Math.min(measuredHeight, innerHeight-24);
+  const maxTop=Math.max(12, innerHeight-safeHeight-12);
+  return Math.max(12, Math.min(anchorTop, maxTop));
 }
 function hideIssueHover(){ if(issueHoverEl) issueHoverEl.classList.remove('show'); }
 
