@@ -87,7 +87,7 @@ function statusClass(status?: string): 'live' | 'dormant' | 'stale' {
           <code>/api/vector/metrics</code>
         </div>
         <p class="message">{{ vectorState.kind === 'live' ? vectorState.data.message : t('health.state.notLoaded') }}</p>
-        <HonestyBadge :cls="vectorState.kind === 'live' && vectorState.data.enabled ? 'live' : 'dormant'" :evidence="vectorState.kind === 'live' && vectorState.data.enabled ? undefined : 'vector unavailable'" />
+        <HonestyBadge :cls="vectorState.kind === 'live' && vectorState.data.enabled ? 'live' : 'dormant'" :evidence="vectorState.kind === 'live' && vectorState.data.enabled ? undefined : t('health.vectorUnavailable')" />
       </article>
 
       <article class="card">
@@ -98,11 +98,11 @@ function statusClass(status?: string): 'live' | 'dormant' | 'stale' {
         <div class="metrics">
           <div>
             <span>{{ t('health.updateState') }}</span>
-            <strong>{{ updateStatusState.kind === 'live' ? updateStatusState.data.state || 'idle' : '—' }}</strong>
+            <strong>{{ updateStatusState.kind === 'live' ? updateStatusState.data.state || t('health.idle') : '—' }}</strong>
           </div>
           <div>
             <span>{{ t('health.updateAvailable') }}</span>
-            <strong>{{ updateCheckState.kind === 'live' ? String(Boolean(updateCheckState.data.available)) : '—' }}</strong>
+            <strong>{{ updateCheckState.kind === 'live' ? (updateCheckState.data.available ? t('common.yes') : t('common.no')) : '—' }}</strong>
           </div>
           <div>
             <span>{{ t('health.noise') }}</span>

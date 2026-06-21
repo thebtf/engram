@@ -15,8 +15,8 @@ export interface HonestyMeta {
   cls: HonestyClass
   /** CSS var name for the colour, e.g. var(--class-live) */
   color: string
-  /** Russian operator-facing label */
-  label: string
+  /** i18n key for the operator-facing label */
+  labelKey: string
   /** does this class REQUIRE an evidence string (endpoint/flag) shown beside it? */
   needsEvidence: boolean
   /** is the surface allowed to expose an operable control? stale never is. */
@@ -24,10 +24,10 @@ export interface HonestyMeta {
 }
 
 const TABLE: Record<HonestyClass, Omit<HonestyMeta, 'cls'>> = {
-  live:      { color: 'var(--class-live)',      label: 'работает',       needsEvidence: false, operable: true },
-  dormant:   { color: 'var(--class-dormant)',   label: 'за флагом',      needsEvidence: true,  operable: true },
-  stale:     { color: 'var(--class-stale)',     label: 'надгробие',      needsEvidence: false, operable: false },
-  mustbuild: { color: 'var(--class-mustbuild)', label: 'нужно построить', needsEvidence: true, operable: false },
+  live:      { color: 'var(--class-live)',      labelKey: 'honesty.live',      needsEvidence: false, operable: true },
+  dormant:   { color: 'var(--class-dormant)',   labelKey: 'honesty.dormant',   needsEvidence: true,  operable: true },
+  stale:     { color: 'var(--class-stale)',     labelKey: 'honesty.stale',     needsEvidence: false, operable: false },
+  mustbuild: { color: 'var(--class-mustbuild)', labelKey: 'honesty.mustbuild', needsEvidence: true, operable: false },
 }
 
 export function useHonesty(cls: HonestyClass): HonestyMeta {

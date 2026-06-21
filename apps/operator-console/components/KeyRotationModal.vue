@@ -14,8 +14,7 @@
 import { ref, computed } from 'vue'
 
 // i18n plural exemplar: t(key, n) selects the right Russian form via the Slavic pluralRule
-// in i18n/i18n.config.ts. "5 секретов" not "5 секрет(ов)". (Other strings in this modal are
-// still hardcoded — keying the whole component is tracked as the secrets-row i18n gap.)
+// in i18n/i18n.config.ts. "5 секретов" not "5 секрет(ов)".
 const { t } = useI18n()
 const props = defineProps<{ secretCount: number; currentFp: string }>()
 const emit = defineEmits<{ rotate: [{ current: string; next: string }]; close: [] }>()
@@ -32,33 +31,39 @@ function rotate() {
 <template>
   <div class="overlay" @click.self="emit('close')">
     <div class="modal" role="dialog" aria-modal="true">
-      <h2>Ротация ключа vault</h2>
+      <h2>{{ t('secrets.rotationModal.title') }}</h2>
       <div class="mb">
         <div class="warn">
           <span class="ic">⚠</span>
-          <p><b>Опасное действие.</b> Отпечаток — производная от мастер-ключа, его нельзя «вписать». Смена перешифровывает <b>все {{ t('secrets.nSecrets', secretCount) }}</b>: каждый расшифровывается текущим ключом и заново шифруется новым. Неверный текущий ключ → расшифровка невозможна, секреты потеряны.</p>
+          <p>
+            <b>{{ t('secrets.rotationModal.warningTitle') }}</b>
+            {{ t('secrets.rotationModal.warningBeforeCount') }}
+            <b>{{ t('secrets.rotationModal.allSecrets', { count: t('secrets.nSecrets', secretCount) }) }}</b>{{ t('secrets.rotationModal.warningAfterCount') }}
+          </p>
         </div>
         <ol class="steps">
-          <li>Текущий ключ расшифровывает каждый секрет.</li>
-          <li>Каждый секрет заново шифруется новым ключом.</li>
-          <li>Новый отпечаток вычисляется из нового ключа (не вводится).</li>
-          <li>Старый ключ уничтожается, операция пишется в Журнал.</li>
+          <li>{{ t('secrets.rotationModal.steps.decrypt') }}</li>
+          <li>{{ t('secrets.rotationModal.steps.encrypt') }}</li>
+          <li>{{ t('secrets.rotationModal.steps.fingerprint') }}</li>
+          <li>{{ t('secrets.rotationModal.steps.audit') }}</li>
         </ol>
-        <p class="fpline">текущий отпечаток · <span>{{ showCur ? currentFp : 'скрыт' }}</span>
-          <button class="lnk" @click="showCur = !showCur">{{ showCur ? 'скрыть' : 'показать' }}</button></p>
+        <p class="fpline">
+          {{ t('secrets.rotationModal.currentFingerprint') }} · <span>{{ showCur ? currentFp : t('secrets.rotationModal.hidden') }}</span>
+          <button class="lnk" @click="showCur = !showCur">{{ showCur ? t('common.hide') : t('common.show') }}</button>
+        </p>
 
-        <label class="field"><span>Текущий ключ vault (для расшифровки)</span>
-          <input v-model="cur" type="password" placeholder="ENGRAM_VAULT_KEY — текущее значение" /></label>
-        <label class="field"><span>Новый ключ vault</span>
-          <input v-model="next" type="password" placeholder="новый мастер-ключ" /></label>
-        <label class="field"><span>Повторите новый ключ</span>
-          <input v-model="next2" type="password" placeholder="ещё раз, для сверки" /></label>
+        <label class="field"><span>{{ t('secrets.rotationModal.currentKey') }}</span>
+          <input v-model="cur" type="password" :placeholder="t('secrets.rotationModal.currentKeyPlaceholder')" /></label>
+        <label class="field"><span>{{ t('secrets.rotationModal.newKey') }}</span>
+          <input v-model="next" type="password" :placeholder="t('secrets.rotationModal.newKeyPlaceholder')" /></label>
+        <label class="field"><span>{{ t('secrets.rotationModal.repeatKey') }}</span>
+          <input v-model="next2" type="password" :placeholder="t('secrets.rotationModal.repeatKeyPlaceholder')" /></label>
         <label class="check"><input v-model="ack" type="checkbox" />
-          <span>Понимаю, что все {{ t('secrets.nSecrets', secretCount) }} будут перешифрованы, и подтверждаю наличие резервной копии текущего ключа.</span></label>
+          <span>{{ t('secrets.rotationModal.ack', { count: t('secrets.nSecrets', secretCount) }) }}</span></label>
       </div>
       <div class="mf">
-        <button class="tbtn" @click="emit('close')">Отмена</button>
-        <button class="tbtn danger" :disabled="!valid" @click="rotate">Перешифровать и сменить ключ</button>
+        <button class="tbtn" @click="emit('close')">{{ t('secrets.rotationModal.cancel') }}</button>
+        <button class="tbtn danger" :disabled="!valid" @click="rotate">{{ t('secrets.rotationModal.rotate') }}</button>
       </div>
     </div>
   </div>

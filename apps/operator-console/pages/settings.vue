@@ -138,9 +138,9 @@ async function confirmUpdateRestart() {
       </div>
       <p class="muted">
         {{ t('settings.restart.updateState') }}:
-        <code>{{ updateStatusState.kind === 'live' ? updateStatusState.data.state || 'idle' : '—' }}</code>
+        <code>{{ updateStatusState.kind === 'live' ? updateStatusState.data.state || t('health.idle') : '—' }}</code>
         · {{ t('settings.restart.updateAvailable') }}:
-        <code>{{ updateCheckState.kind === 'live' ? String(Boolean(updateCheckState.data.available)) : '—' }}</code>
+        <code>{{ updateCheckState.kind === 'live' ? (updateCheckState.data.available ? t('common.yes') : t('common.no')) : '—' }}</code>
       </p>
     </section>
   </div>

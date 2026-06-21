@@ -7,10 +7,23 @@
     "copy": "复制",
     "change": "修改",
     "enabled": "已启用",
+    "yes": "是",
+    "no": "否",
     "admin": "管理员",
     "selectedCount": "已选择 {count} 项",
     "clearSelection": "清除选择",
     "loadingShort": "…"
+  },
+
+  "honesty": {
+    "live": "运行中",
+    "dormant": "受 flag 控制",
+    "stale": "tombstone",
+    "mustbuild": "需要构建"
+  },
+
+  "switchRow": {
+    "restartRequired": "restart"
   },
 
   "shell": {
@@ -531,6 +544,30 @@
       "action": "轮换密钥",
       "cleanup": "删除 orphaned"
     },
+    "rotationModal": {
+      "title": "vault 密钥轮换",
+      "warningTitle": "危险操作。",
+      "warningBeforeCount": "指纹由主密钥派生，不能手动填写。轮换会重新加密",
+      "allSecrets": "全部 {count}",
+      "warningAfterCount": "：每个密钥都会先用当前密钥解密，再用新密钥加密。当前密钥错误会导致无法解密，密钥将丢失。",
+      "steps": {
+        "decrypt": "当前密钥会解密每个密钥。",
+        "encrypt": "每个密钥会用新密钥重新加密。",
+        "fingerprint": "新指纹由新密钥计算，不由用户输入。",
+        "audit": "旧密钥会被销毁，操作会写入日志。"
+      },
+      "currentFingerprint": "当前指纹",
+      "hidden": "已隐藏",
+      "currentKey": "当前 vault 密钥（用于解密）",
+      "currentKeyPlaceholder": "ENGRAM_VAULT_KEY — 当前值",
+      "newKey": "新 vault 密钥",
+      "newKeyPlaceholder": "新的主密钥",
+      "repeatKey": "重复新密钥",
+      "repeatKeyPlaceholder": "再次输入以校验",
+      "ack": "我理解全部 {count} 都会被重新加密，并确认已经备份当前密钥。",
+      "cancel": "取消",
+      "rotate": "重新加密并轮换密钥"
+    },
     "revealTitle": "一次性显示 — 值不会保存",
     "revealTimer": "{seconds} 秒后隐藏",
     "copySecret": "复制",
@@ -610,6 +647,8 @@
     "update": "Update channel",
     "updateState": "Update 状态",
     "updateAvailable": "有可用更新",
+    "idle": "空闲",
+    "vectorUnavailable": "向量层不可用",
     "noise": "噪声",
     "emptyComponents": "selfcheck 组件尚未加载。",
     "state": {
