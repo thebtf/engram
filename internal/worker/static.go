@@ -163,6 +163,10 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 			contentType = "text/css"
 		case ".svg":
 			contentType = "image/svg+xml"
+		case ".woff":
+			contentType = "font/woff"
+		case ".woff2":
+			contentType = "font/woff2"
 		}
 	}
 	if contentType != "" {

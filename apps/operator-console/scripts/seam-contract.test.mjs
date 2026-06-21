@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+const nuxtConfigPath = join(root, 'nuxt.config.ts')
 const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
 
@@ -134,4 +135,11 @@ test('useMockData remains an import-compatible ownership map for page CRs', () =
   ]) {
     assert.match(source, new RegExp(`export const ${exportedName}\\b`), `${exportedName} compatibility export must remain`)
   }
+})
+
+test('Nuxt UI color-mode auto-registration stays disabled', () => {
+  const source = read(nuxtConfigPath)
+
+  assert.match(source, /ui:\s*{[\s\S]*colorMode:\s*false/, 'Nuxt UI color-mode auto-registration must remain disabled')
+  assert.match(source, /@nuxtjs\/color-mode/, 'the app still owns theme classes through @nuxtjs/color-mode')
 })

@@ -68,8 +68,11 @@ func TestOperatorConsoleHTMLSecurityHeadersAllowNuxtInlineBootstrap(t *testing.T
 	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
 		t.Fatalf("operator console CSP must not allow arbitrary inline scripts, got %q", csp)
 	}
-	if got := strings.Count(csp, "'sha256-"); got != 2 {
-		t.Fatalf("operator console CSP must hash the 2 inline Nuxt scripts, got %d hash source(s) in %q", got, csp)
+	if got := strings.Count(csp, "'sha256-"); got != 3 {
+		t.Fatalf("operator console CSP must hash the 2 inline Nuxt scripts plus Nuxt UI colors helper, got %d hash source(s) in %q", got, csp)
+	}
+	if want := inlineScriptHashSource([]byte(nuxtUIColorCleanupScript)); !strings.Contains(csp, want) {
+		t.Fatalf("operator console CSP must allow the Nuxt UI colors cleanup helper by hash %s, got %q", want, csp)
 	}
 }
 
