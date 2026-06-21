@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useNav } from '../composables/useNav'
-import { useMemories } from '../composables/useMockData'
+import { useOperatorMemoryLab } from '../composables/useOperatorMemoryLab'
 import { useOperatorShellStatus } from '../composables/useOperatorShell'
 
 const { NAV } = useNav()
 const shell = useOperatorShellStatus()
 const info = shell.info
-const memories = useMemories()
+const memoryLab = useOperatorMemoryLab()
+const memories = memoryLab.rows
 const route = useRoute()
 const router = useRouter()
 const colorMode = useColorMode()
@@ -46,7 +47,11 @@ const currentArea = computed(() => {
   const current = flatNav.value.find((item) => normalizePath(item.to) === currentPath)
   return current ? t(`nav.items.${current.labelKey}`) : t('nav.items.overview')
 })
-const memoryCount = computed(() => memories.length)
+const memoryRecordsLabel = computed(() => (
+  memoryLab.pending.value && memories.length === 0
+    ? t('shell.recordsLoading')
+    : t('shell.records', memories.length)
+))
 const authPostureLabel = computed(() => {
   switch (info.value.authPosture) {
     case 'auth-disabled':
@@ -212,7 +217,7 @@ function goSearch() {
       <span class="si">{{ currentArea }}</span>
       <span class="ssp" />
       <NuxtLink to="/health" class="si warn"><span class="dot" />{{ t('shell.statusDegradation') }} <strong>{{ info.health }}</strong></NuxtLink>
-      <span class="si">{{ t('shell.records', memoryCount) }}</span>
+      <span class="si">{{ memoryRecordsLabel }}</span>
       <NuxtLink to="/noise" class="si warn"><span class="dot" />{{ t('shell.statusNoise') }} <strong>{{ info.noise }}</strong></NuxtLink>
       <NuxtLink to="/queue" class="si">{{ t('shell.reviewQueue', 7) }}</NuxtLink>
       <span class="si">{{ t('shell.uptime', { value: info.uptime }) }}</span>

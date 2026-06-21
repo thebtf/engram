@@ -39,6 +39,7 @@
     "statusDegradation": "деградация",
     "statusNoise": "шум",
     "records": "{count} запись | {count} записи | {count} записей",
+    "recordsLoading": "… записей",
     "reviewQueue": "на проверку {count} | на проверку {count} | на проверку {count}",
     "uptime": "работает {value}"
   },

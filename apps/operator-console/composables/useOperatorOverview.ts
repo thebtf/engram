@@ -1,13 +1,14 @@
 import { computed } from 'vue'
 import { endpointEvidence, unsupportedOperatorAction } from './useOperatorApi'
-import { useCreds, useIssues, useProjects, useRules } from './useMockData'
+import { useCreds, useIssuesState, useProjects, useRules } from './useMockData'
 import { useOperatorMemoryLab } from './useOperatorMemoryLab'
 import { useOperatorShellStatus } from './useOperatorShell'
 
 export function useOperatorOverview() {
   const memoryLab = useOperatorMemoryLab()
   const memories = memoryLab.rows
-  const issues = useIssues()
+  const issuesState = useIssuesState()
+  const issues = issuesState.rows
   const creds = useCreds()
   const rules = useRules()
   const projects = useProjects()
@@ -22,6 +23,7 @@ export function useOperatorOverview() {
   const ruleCount = computed(() => rules.rows.value.length)
   const projectCount = computed(() => projects.rows.value.length)
   const memoryPending = computed(() => memoryLab.pending.value && memories.length === 0)
+  const issuesPending = computed(() => issuesState.pending.value && issues.length === 0)
   const rulesPending = computed(() => rules.pending.value && rules.rows.value.length === 0)
   const projectsPending = computed(() => projects.pending.value && projects.rows.value.length === 0)
 
@@ -61,6 +63,7 @@ export function useOperatorOverview() {
     ruleCount,
     projectCount,
     memoryPending,
+    issuesPending,
     rulesPending,
     projectsPending,
     modelHealthGap,

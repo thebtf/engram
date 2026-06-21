@@ -39,6 +39,7 @@
     "statusDegradation": "degradation",
     "statusNoise": "noise",
     "records": "{count} record | {count} records",
+    "recordsLoading": "… records",
     "reviewQueue": "{count} in review | {count} in review",
     "uptime": "running {value}"
   },
