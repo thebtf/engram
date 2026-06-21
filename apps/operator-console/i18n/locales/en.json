@@ -7,10 +7,23 @@
     "copy": "Copy",
     "change": "Change",
     "enabled": "enabled",
+    "yes": "yes",
+    "no": "no",
     "admin": "admin",
     "selectedCount": "{count} selected",
     "clearSelection": "Clear selection",
     "loadingShort": "…"
+  },
+
+  "honesty": {
+    "live": "live",
+    "dormant": "behind flag",
+    "stale": "tombstone",
+    "mustbuild": "must build"
+  },
+
+  "switchRow": {
+    "restartRequired": "restart"
   },
 
   "shell": {
@@ -531,6 +544,30 @@
       "action": "Rotate key",
       "cleanup": "Delete orphaned"
     },
+    "rotationModal": {
+      "title": "Vault key rotation",
+      "warningTitle": "Dangerous action.",
+      "warningBeforeCount": "The fingerprint is derived from the master key; it cannot be typed in. Rotation re-encrypts",
+      "allSecrets": "all {count}",
+      "warningAfterCount": ": each secret is decrypted with the current key and encrypted again with the new one. A wrong current key means decryption is impossible and secrets are lost.",
+      "steps": {
+        "decrypt": "The current key decrypts every secret.",
+        "encrypt": "Every secret is encrypted again with the new key.",
+        "fingerprint": "The new fingerprint is derived from the new key; it is not typed.",
+        "audit": "The old key is destroyed and the operation is written to the log."
+      },
+      "currentFingerprint": "current fingerprint",
+      "hidden": "hidden",
+      "currentKey": "Current vault key (for decryption)",
+      "currentKeyPlaceholder": "ENGRAM_VAULT_KEY — current value",
+      "newKey": "New vault key",
+      "newKeyPlaceholder": "new master key",
+      "repeatKey": "Repeat new key",
+      "repeatKeyPlaceholder": "again, for verification",
+      "ack": "I understand that all {count} will be re-encrypted and confirm I have a backup of the current key.",
+      "cancel": "Cancel",
+      "rotate": "Re-encrypt and rotate key"
+    },
     "revealTitle": "One-shot reveal — value is not stored",
     "revealTimer": "Hides in {seconds}s",
     "copySecret": "Copy",
@@ -610,6 +647,8 @@
     "update": "Update channel",
     "updateState": "Update state",
     "updateAvailable": "Update available",
+    "idle": "idle",
+    "vectorUnavailable": "vector unavailable",
     "noise": "Noise",
     "emptyComponents": "Selfcheck components are not loaded yet.",
     "state": {

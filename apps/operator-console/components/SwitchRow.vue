@@ -13,6 +13,7 @@
  */
 import { useHonesty, type HonestyClass } from '../composables/useHonesty'
 
+const { t } = useI18n()
 const model = defineModel<boolean>({ default: false })
 const props = defineProps<{
   title: string
@@ -33,7 +34,7 @@ function toggle() { if (!props.disabled && (meta?.operable ?? true)) model.value
       <div class="sw-head">
         <span v-if="meta" class="sw-dot" :style="{ background: cls === 'stale' ? 'transparent' : meta.color, border: cls === 'stale' ? `1.5px solid ${meta.color}` : '0' }" />
         <b class="sw-title">{{ title }}</b>
-        <span v-if="reload" class="rbadge restart">restart</span>
+        <span v-if="reload" class="rbadge restart">{{ t('switchRow.restartRequired') }}</span>
       </div>
       <p v-if="desc" class="sw-desc">{{ desc }}</p>
       <code v-if="evidence" class="sw-ev">{{ evidence }}</code>

@@ -106,7 +106,7 @@ export interface OperatorHealthMetric {
 function display(value: unknown): string {
   if (value === undefined || value === null || value === '') return '-'
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(3)
-  if (typeof value === 'boolean') return value ? 'on' : 'off'
+  if (typeof value === 'boolean') return String(value)
   return String(value)
 }
 

@@ -7,10 +7,23 @@
     "copy": "Скопировать",
     "change": "Изменить",
     "enabled": "включено",
+    "yes": "да",
+    "no": "нет",
     "admin": "admin",
     "selectedCount": "{count} выбрано",
     "clearSelection": "Снять выбор",
     "loadingShort": "…"
+  },
+
+  "honesty": {
+    "live": "работает",
+    "dormant": "за флагом",
+    "stale": "надгробие",
+    "mustbuild": "нужно построить"
+  },
+
+  "switchRow": {
+    "restartRequired": "restart"
   },
 
   "shell": {
@@ -531,6 +544,30 @@
       "action": "Сменить ключ",
       "cleanup": "Удалить orphaned"
     },
+    "rotationModal": {
+      "title": "Ротация ключа vault",
+      "warningTitle": "Опасное действие.",
+      "warningBeforeCount": "Отпечаток — производная от мастер-ключа, его нельзя «вписать». Смена перешифровывает",
+      "allSecrets": "все {count}",
+      "warningAfterCount": ": каждый расшифровывается текущим ключом и заново шифруется новым. Неверный текущий ключ → расшифровка невозможна, секреты потеряны.",
+      "steps": {
+        "decrypt": "Текущий ключ расшифровывает каждый секрет.",
+        "encrypt": "Каждый секрет заново шифруется новым ключом.",
+        "fingerprint": "Новый отпечаток вычисляется из нового ключа (не вводится).",
+        "audit": "Старый ключ уничтожается, операция пишется в Журнал."
+      },
+      "currentFingerprint": "текущий отпечаток",
+      "hidden": "скрыт",
+      "currentKey": "Текущий ключ vault (для расшифровки)",
+      "currentKeyPlaceholder": "ENGRAM_VAULT_KEY — текущее значение",
+      "newKey": "Новый ключ vault",
+      "newKeyPlaceholder": "новый мастер-ключ",
+      "repeatKey": "Повторите новый ключ",
+      "repeatKeyPlaceholder": "ещё раз, для сверки",
+      "ack": "Понимаю, что все {count} будут перешифрованы, и подтверждаю наличие резервной копии текущего ключа.",
+      "cancel": "Отмена",
+      "rotate": "Перешифровать и сменить ключ"
+    },
     "revealTitle": "Одноразовый показ — значение не сохраняется",
     "revealTimer": "Скроется через {seconds} с",
     "copySecret": "Скопировать",
@@ -610,6 +647,8 @@
     "update": "Update channel",
     "updateState": "Статус update",
     "updateAvailable": "Доступно обновление",
+    "idle": "ожидание",
+    "vectorUnavailable": "векторный слой недоступен",
     "noise": "Шум",
     "emptyComponents": "Компоненты selfcheck пока не загружены.",
     "state": {

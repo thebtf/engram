@@ -11,6 +11,7 @@
 import { computed } from 'vue'
 import { useHonesty, assertEvidence, type HonestyClass } from '../composables/useHonesty'
 
+const { t } = useI18n()
 const props = defineProps<{ cls: HonestyClass; evidence?: string; label?: string }>()
 const meta = computed(() => useHonesty(props.cls))
 assertEvidence(props.cls, props.evidence)
@@ -20,7 +21,7 @@ assertEvidence(props.cls, props.evidence)
   <span class="hb" :data-cls="cls">
     <!-- stale is an OUTLINE ring, never filled (Classification Rule) -->
     <span class="hb-dot" :class="{ ring: cls === 'stale' }" :style="{ background: cls === 'stale' ? 'transparent' : meta.color, borderColor: meta.color }" />
-    <span class="hb-lbl">{{ label ?? meta.label }}</span>
+    <span class="hb-lbl">{{ label ?? t(meta.labelKey) }}</span>
     <code v-if="meta.needsEvidence && evidence" class="hb-ev">{{ evidence }}</code>
   </span>
 </template>
