@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import {
   useOperatorIssues,
   type IssueUpdateInput,
@@ -44,7 +45,7 @@ const statusOptions: OperatorIssueStatus[] = ['open', 'acknowledged', 'reopened'
 const filterOptions: IssueFilter[] = ['all', 'open', 'work', 'closed', 'rejected']
 const templateOptions: CreateTemplate[] = ['bug', 'handoff', 'question', 'improvement']
 
-const pageSize = ref(10)
+const { pageSize, pageSizeOptions } = usePersistentPageSize('issues', 10)
 const page = ref(1)
 const filter = ref<IssueFilter>('all')
 const selectedIds = ref<number[]>([])
@@ -63,7 +64,8 @@ const createSourceProject = ref('operator')
 const selectedCommentKeys = ref<string[]>([])
 const hoverIssue = ref<OperatorIssue | null>(null)
 const hoverStyle = ref<Record<string, string>>({})
-let hoverTimer: ReturnType<typeof setTimeout> | null = null
+let hoverOpenTimer: ReturnType<typeof setTimeout> | null = null
+let hoverCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 const createTitle = ref('')
 const createBody = ref('')
@@ -116,14 +118,15 @@ const filteredRows = computed(() => {
   return rows.filter((issue) => groups[filter.value].includes(issue.status))
 })
 
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / pageSize.value)))
+const effectivePageSize = computed(() => resolvePageSize(pageSize.value, filteredRows.value.length))
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / effectivePageSize.value)))
 const pageRange = computed(() => {
   if (!filteredRows.value.length) return { from: 0, to: 0 }
-  const from = (page.value - 1) * pageSize.value + 1
-  const to = Math.min(filteredRows.value.length, page.value * pageSize.value)
+  const from = (page.value - 1) * effectivePageSize.value + 1
+  const to = Math.min(filteredRows.value.length, page.value * effectivePageSize.value)
   return { from, to }
 })
-const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
+const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * effectivePageSize.value, page.value * effectivePageSize.value))
 const canCreate = computed(() => createTitle.value.trim().length > 0 && createTargetProject.value.trim().length > 0 && !pending.value)
 const canComment = computed(() => Boolean(activeIssue.value) && commentDraft.value.trim().length > 0 && !pending.value)
 const canReject = computed(() => Boolean(activeIssue.value) && rejectComment.value.trim().length > 0 && !pending.value)
@@ -155,6 +158,10 @@ const hoverThreadStats = computed(() => {
 })
 
 watch(filter, () => {
+  page.value = 1
+})
+
+watch(pageSize, () => {
   page.value = 1
 })
 
@@ -337,9 +344,10 @@ async function toggleIssueLabel(label: string) {
 
 function showIssueHover(issue: OperatorIssue, event: MouseEvent) {
   if (activeIssue.value || !import.meta.client || window.matchMedia('(pointer: coarse)').matches) return
-  if (hoverTimer) clearTimeout(hoverTimer)
+  cancelIssueHoverClose()
+  if (hoverOpenTimer) clearTimeout(hoverOpenTimer)
   const row = event.currentTarget as HTMLElement
-  hoverTimer = setTimeout(() => {
+  hoverOpenTimer = setTimeout(() => {
     hoverIssue.value = issue
     requestAnimationFrame(() => {
       const rect = row.getBoundingClientRect()
@@ -357,9 +365,25 @@ function showIssueHover(issue: OperatorIssue, event: MouseEvent) {
   }, 280)
 }
 
+function cancelIssueHoverClose() {
+  if (hoverCloseTimer) clearTimeout(hoverCloseTimer)
+  hoverCloseTimer = null
+}
+
+function scheduleIssueHoverHide() {
+  if (hoverOpenTimer) clearTimeout(hoverOpenTimer)
+  hoverOpenTimer = null
+  if (hoverCloseTimer) clearTimeout(hoverCloseTimer)
+  hoverCloseTimer = setTimeout(() => {
+    hideIssueHover()
+  }, 350)
+}
+
 function hideIssueHover() {
-  if (hoverTimer) clearTimeout(hoverTimer)
-  hoverTimer = null
+  if (hoverOpenTimer) clearTimeout(hoverOpenTimer)
+  if (hoverCloseTimer) clearTimeout(hoverCloseTimer)
+  hoverOpenTimer = null
+  hoverCloseTimer = null
   hoverIssue.value = null
 }
 
@@ -576,9 +600,9 @@ function renderMarkdown(value: string) {
             <label class="rows">
               <span>{{ t('issues.list.rows') }}</span>
               <select v-model.number="pageSize" class="select" name="issues-page-size">
-                <option :value="10">10</option>
-                <option :value="25">25</option>
-                <option :value="50">50</option>
+                <option v-for="size in pageSizeOptions" :key="size" :value="size">
+                  {{ size === 0 ? t('issues.list.allRows') : size }}
+                </option>
               </select>
             </label>
             <span class="fcount">{{ t('issues.list.pageRange', { from: pageRange.from, to: pageRange.to, total: filteredRows.length }) }}</span>
@@ -639,9 +663,9 @@ function renderMarkdown(value: string) {
             type="button"
             @click="selectIssue(issue)"
             @mouseenter="showIssueHover(issue, $event)"
-            @mouseleave="hideIssueHover"
+            @mouseleave="scheduleIssueHoverHide"
             @focus="showIssueHover(issue, $event)"
-            @blur="hideIssueHover"
+            @blur="scheduleIssueHoverHide"
           >
             <span
               class="echk issue-row-check"
@@ -950,7 +974,17 @@ function renderMarkdown(value: string) {
       </section>
     </div>
 
-    <div v-if="hoverIssue" class="issue-hover show" :style="hoverStyle">
+    <div
+      v-if="hoverIssue"
+      class="issue-hover show"
+      :style="hoverStyle"
+      role="tooltip"
+      tabindex="-1"
+      @mouseenter="cancelIssueHoverClose"
+      @mouseleave="scheduleIssueHoverHide"
+      @focusin="cancelIssueHoverClose"
+      @focusout="scheduleIssueHoverHide"
+    >
       <div class="ih-head">
         <span class="ih-id">#{{ hoverIssue.id }}</span>
         <span class="ih-title">{{ hoverIssue.title }}</span>
@@ -1205,7 +1239,7 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
 .qitem { display:flex; align-items:flex-start; gap:8px; color:var(--fg-2); font-size:var(--text-sm); }
 .qdot { display:inline-grid; place-items:center; flex:0 0 auto; width:20px; height:20px; border-radius:50%; background:var(--surface-warm); border:1px solid var(--border); font-family:var(--font-mono); font-size:11px; color:var(--muted); }
 .issue-hover { position:fixed; z-index:72; max-height:min(560px, calc(100vh - 24px)); overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md); box-shadow:var(--elev-raised); padding:14px 16px; pointer-events:none; opacity:0; transform:translateY(4px); transition:opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard); }
-.issue-hover.show { opacity:1; transform:none; }
+.issue-hover.show { opacity:1; transform:none; pointer-events:auto; }
 .issue-hover .ih-head { display:flex; align-items:flex-start; gap:8px; }
 .issue-hover .ih-id { font-family:var(--font-mono); font-size:var(--text-xs); color:var(--muted); flex:none; padding-top:2px; }
 .issue-hover .ih-title { font-size:var(--text-base); font-weight:700; line-height:1.32; color:var(--fg); }

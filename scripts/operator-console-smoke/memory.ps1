@@ -59,6 +59,9 @@ Assert-Contains $memory "memory.detail.actions.promote" "design-contract lifecyc
 Assert-Contains $memory "overview.badges.mustBuild" "honest unsupported action badge"
 Assert-Contains $memory "utilityKnown" "unknown utility guard"
 Assert-Contains $memory "confidenceKnown" "unknown confidence guard"
+Assert-Contains $memory "usePersistentPageSize('memories'" "persistent memory page size"
+Assert-Contains $memory "pageSizeOptions" "design-contract page-size options"
+Assert-Contains $memory "memory.allRows" "design-contract all rows option"
 Assert-NotContains $memory "deleteOpened" "non-contract destructive delete action"
 Assert-NotContains $memory "storeCopy" "non-contract store-copy action"
 

@@ -173,6 +173,7 @@
     },
     "countInFilter": "{shown} из {total} в текущем фильтре",
     "rowsLabel": "Строк",
+    "allRows": "Все",
     "pageRange": "{from}–{to} из {total}",
     "filters": {
       "allProjects": "Все проекты",
@@ -398,6 +399,7 @@
       "count": "{count} задача | {count} задачи | {count} задач",
       "countInFilter": "{shown} из {total} в текущем фильтре",
       "rows": "Строк",
+      "allRows": "Все",
       "pageRange": "{from}–{to} из {total}",
       "filteredTotal": "{shown} показано · {total} в реестре"
     },

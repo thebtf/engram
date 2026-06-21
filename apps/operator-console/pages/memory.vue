@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useOperatorMemoryLab } from '../composables/useOperatorMemoryLab'
+import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import type { Memory } from '../composables/useMockData'
 
 const { t } = useI18n()
@@ -27,7 +28,7 @@ const filters = ref<Record<MemoryFilter, boolean>>({
 const selected = ref<Record<string, boolean>>({})
 const openId = ref<string | null>(null)
 const page = ref(1)
-const pageSize = ref(10)
+const { pageSize, pageSizeOptions } = usePersistentPageSize('memories', 10)
 
 const projects = computed(() => [...new Set(all.map((memory) => memory.project).filter(Boolean))].sort())
 const activeFilterCount = computed(() => Object.values(filters.value).filter(Boolean).length + (project.value === 'all' ? 0 : 1))
@@ -50,10 +51,18 @@ const filtered = computed(() => all.filter((memory) => {
   return activeFilters.every((key) => hasFilter(memory, key))
 }))
 
-const pageCount = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize.value)))
+const effectivePageSize = computed(() => resolvePageSize(pageSize.value, filtered.value.length))
+const pageCount = computed(() => Math.max(1, Math.ceil(filtered.value.length / effectivePageSize.value)))
 const pageRows = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return filtered.value.slice(start, start + pageSize.value)
+  const start = (page.value - 1) * effectivePageSize.value
+  return filtered.value.slice(start, start + effectivePageSize.value)
+})
+const pageRange = computed(() => {
+  if (!filtered.value.length) return { from: 0, to: 0 }
+  return {
+    from: ((page.value - 1) * effectivePageSize.value) + 1,
+    to: Math.min(page.value * effectivePageSize.value, filtered.value.length),
+  }
 })
 const selectedIds = computed(() => Object.entries(selected.value).filter(([, value]) => value).map(([id]) => id))
 const selectedCount = computed(() => selectedIds.value.length)
@@ -66,6 +75,10 @@ const noiseRatio = computed(() => {
 
 watch([filtered, pageSize], () => {
   if (page.value > pageCount.value) page.value = pageCount.value
+})
+
+watch(pageSize, () => {
+  page.value = 1
 })
 
 function toggleFilter(key: MemoryFilter) {
@@ -157,13 +170,15 @@ function isNoisyUtility(memory: Memory) {
         <span class="cnt">{{ t('memory.countInFilter', { shown: filtered.length, total: all.length }) }}</span>
       </div>
       <div class="ops-right">
-        <label>{{ t('memory.rowsLabel') }}</label>
-        <select v-model.number="pageSize" class="select">
-          <option :value="10">10</option>
-          <option :value="25">25</option>
-          <option :value="50">50</option>
-        </select>
-        <span class="cnt">{{ t('memory.pageRange', { from: filtered.length ? ((page - 1) * pageSize) + 1 : 0, to: Math.min(page * pageSize, filtered.length), total: filtered.length }) }}</span>
+        <label class="rows">
+          <span>{{ t('memory.rowsLabel') }}</span>
+          <select id="memory-page-size" v-model.number="pageSize" class="select" name="memory-page-size">
+            <option v-for="size in pageSizeOptions" :key="size" :value="size">
+              {{ size === 0 ? t('memory.allRows') : size }}
+            </option>
+          </select>
+        </label>
+        <span class="cnt">{{ t('memory.pageRange', { from: pageRange.from, to: pageRange.to, total: filtered.length }) }}</span>
         <button class="pg" :disabled="page <= 1" @click="page = 1">«</button>
         <button class="pg" :disabled="page <= 1" @click="page--">‹</button>
         <button class="pg on">{{ page }}</button>
@@ -173,7 +188,7 @@ function isNoisyUtility(memory: Memory) {
     </section>
 
     <section class="filterbar">
-      <select v-model="project" class="fsel" @change="page = 1">
+      <select id="memory-project-filter" v-model="project" class="fsel" name="memory-project-filter" :aria-label="t('memory.filters.allProjects')" @change="page = 1">
         <option value="all">{{ t('memory.filters.allProjects') }}</option>
         <option v-for="item in projects" :key="item" :value="item">{{ item }}</option>
       </select>
