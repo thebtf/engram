@@ -6,6 +6,11 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   modules: ['@nuxt/ui', '@nuxtjs/color-mode', '@nuxtjs/i18n'],
   css: ['~/assets/tokens.css', '~/assets/base.css'],
+  ui: {
+    // We manage theme classes through @nuxtjs/color-mode below instead of
+    // letting Nuxt UI auto-register its color-mode integration.
+    colorMode: false,
+  },
   runtimeConfig: {
     operatorApiTarget: process.env.NUXT_OPERATOR_API_TARGET || 'http://unleashed.lan:37777',
     public: {

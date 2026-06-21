@@ -53,7 +53,14 @@ var allowedOrigins = map[string]bool{
 	"http://127.0.0.1:37777": true,
 }
 
-const strictContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
+const (
+	strictContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'"
+
+	// Nuxt UI 3.3.x injects this constant cleanup helper from its colors plugin
+	// during client hydration. Hash the exact script instead of opening script-src
+	// with unsafe-inline.
+	nuxtUIColorCleanupScript = "document.head.removeChild(document.querySelector('[data-nuxt-ui-colors]'))"
+)
 
 var inlineScriptPattern = regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script>`)
 
@@ -102,7 +109,9 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 func setOperatorConsoleHTMLSecurityHeaders(hdr http.Header, html []byte) {
 	scriptSrc := "script-src 'self'"
-	if hashSources := inlineScriptHashSources(html); len(hashSources) > 0 {
+	hashSources := inlineScriptHashSources(html)
+	hashSources = append(hashSources, inlineScriptHashSource([]byte(nuxtUIColorCleanupScript)))
+	if len(hashSources) > 0 {
 		scriptSrc += " " + strings.Join(hashSources, " ")
 	}
 
@@ -119,11 +128,15 @@ func inlineScriptHashSources(html []byte) []string {
 			continue
 		}
 
-		sum := sha256.Sum256(content)
-		hashSources = append(hashSources, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
+		hashSources = append(hashSources, inlineScriptHashSource(content))
 	}
 
 	return hashSources
+}
+
+func inlineScriptHashSource(content []byte) string {
+	sum := sha256.Sum256(content)
+	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 }
 
 // MaxBodySize guards against denial-of-service via oversized request bodies.
