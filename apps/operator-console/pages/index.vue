@@ -17,16 +17,29 @@ const {
   closedIssues,
   ruleCount,
   projectCount,
+  memoryPending,
+  rulesPending,
+  projectsPending,
   modelHealthGap,
   queueGap,
   accessGap,
 } = useOperatorOverview()
+
+function displayCount(value: number, pending = false) {
+  return pending ? t('common.loadingShort') : String(value)
+}
 
 const memoryTiers = computed(() => [
   { label: 'semantic', count: memories.filter((memory) => memory.tier === 'semantic').length, color: 'var(--accent)' },
   { label: 'procedural', count: memories.filter((memory) => memory.tier === 'procedural').length, color: 'var(--class-live)' },
   { label: 'episodic', count: memories.filter((memory) => memory.tier === 'episodic').length, color: 'var(--state-warn)' },
 ])
+
+const memoryCountDisplay = computed(() => displayCount(memories.length, memoryPending.value))
+const memoryActiveDisplay = computed(() => displayCount(memoryActive.value, memoryPending.value))
+const memoryNoiseDisplay = computed(() => displayCount(memoryNoise.value, memoryPending.value))
+const ruleCountDisplay = computed(() => displayCount(ruleCount.value, rulesPending.value))
+const projectCountDisplay = computed(() => displayCount(projectCount.value, projectsPending.value))
 
 const memoryStops = computed(() => {
   const total = Math.max(1, memories.length)
@@ -62,7 +75,7 @@ const attention = computed(() => [
   { color: 'var(--state-warn)', text: t('overview.attention.search'), to: '/health', label: t('overview.attention.stateLink') },
   { color: 'var(--class-dormant)', text: t('overview.attention.queueGated', { flag: queueGap.evidence.flag }), to: '/queue', label: t('overview.attention.queueLink') },
   { color: 'var(--class-mustbuild)', text: t('overview.attention.books'), to: '/books', label: t('overview.attention.booksLink') },
-  { color: 'var(--state-warn)', text: t('overview.attention.noise', { noise: info.value.noise, n: memoryNoise.value }), to: '/noise', label: t('overview.attention.noiseLink') },
+  { color: 'var(--state-warn)', text: t('overview.attention.noise', { noise: info.value.noise, n: memoryNoiseDisplay.value }), to: '/noise', label: t('overview.attention.noiseLink') },
 ])
 
 const memoryCards = computed(() => [
@@ -70,11 +83,11 @@ const memoryCards = computed(() => [
     to: '/memory',
     icon: 'memory',
     name: t('nav.items.memory'),
-    big: String(memories.length),
-    sub: t('overview.cards.memory.sub', { active: memoryActive.value, noise: memoryNoise.value }),
+    big: memoryCountDisplay.value,
+    sub: t('overview.cards.memory.sub', { active: memoryActiveDisplay.value, noise: memoryNoiseDisplay.value }),
     meta: [
-      { cls: 'live', text: t('overview.badges.semanticCount', { n: memoryTiers.value[0]?.count ?? 0 }) },
-      { cls: 'status', text: t('overview.badges.episodicCount', { n: memoryTiers.value[2]?.count ?? 0 }) },
+      { cls: 'live', text: t('overview.badges.semanticCount', { n: displayCount(memoryTiers.value[0]?.count ?? 0, memoryPending.value) }) },
+      { cls: 'status', text: t('overview.badges.episodicCount', { n: displayCount(memoryTiers.value[2]?.count ?? 0, memoryPending.value) }) },
     ],
   },
   {
@@ -116,7 +129,7 @@ const workCards = computed(() => [
     to: '/rules',
     icon: 'rules',
     name: t('nav.items.rules'),
-    big: String(ruleCount.value),
+    big: ruleCountDisplay.value,
     sub: t('overview.cards.rules.sub'),
     meta: [],
   },
@@ -132,8 +145,8 @@ const workCards = computed(() => [
     to: '/projects',
     icon: 'projects',
     name: t('nav.items.projects'),
-    big: String(projectCount.value),
-    sub: t('overview.cards.projects.sub', { n: projectCount.value }),
+    big: projectCountDisplay.value,
+    sub: t('overview.cards.projects.sub', { n: projectCountDisplay.value }),
     meta: [],
   },
 ])
@@ -219,20 +232,20 @@ function iconPath(icon: string) {
 
     <section class="ov-viz">
       <div class="vz">
-        <h4>{{ t('overview.viz.memoryComposition') }}<span class="src">{{ t('overview.recordsCount', { n: memories.length }) }}</span></h4>
+        <h4>{{ t('overview.viz.memoryComposition') }}<span class="src">{{ t('overview.recordsCount', { n: memoryCountDisplay }) }}</span></h4>
         <div class="donut-row">
           <div
             class="donut"
             :style="`--c1:${memoryTiers[0].color};--s1:${memoryStops[0]};--c2:${memoryTiers[1].color};--s2:${memoryStops[1]};--c3:${memoryTiers[2].color};--s3:${memoryStops[2]};--c4:var(--muted)`"
           >
-            <span class="dn">{{ memories.length }}</span>
+            <span class="dn">{{ memoryCountDisplay }}</span>
             <span class="dl">{{ t('overview.total') }}</span>
           </div>
           <div class="donut-legend">
             <div v-for="tier in memoryTiers" :key="tier.label" class="dlg">
               <span class="sw" :style="{ background: tier.color }" />
               <span class="dn2">{{ tier.label }}</span>
-              <span class="dv">{{ tier.count }}</span>
+              <span class="dv">{{ displayCount(tier.count, memoryPending) }}</span>
             </div>
           </div>
         </div>

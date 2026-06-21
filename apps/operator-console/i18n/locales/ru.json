@@ -9,7 +9,8 @@
     "enabled": "включено",
     "admin": "admin",
     "selectedCount": "{count} выбрано",
-    "clearSelection": "Снять выбор"
+    "clearSelection": "Снять выбор",
+    "loadingShort": "…"
   },
 
   "shell": {
