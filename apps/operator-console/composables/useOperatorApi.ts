@@ -173,6 +173,37 @@ export function toOperatorSourceError(
   }
 }
 
+function bodyDetail(text: string): string {
+  const trimmed = text.trim()
+  if (!trimmed) {
+    return ''
+  }
+
+  return `: ${trimmed.slice(0, 240)}`
+}
+
+async function readOperatorResponseText(
+  response: Response,
+  path: string,
+  source: string,
+  method: string,
+): Promise<string> {
+  try {
+    return await response.text()
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const message = `Failed to read response from ${path}: ${detail}`
+    throw new OperatorFetchError(message, {
+      message,
+      status: response.status,
+      source,
+      path,
+      method,
+      retryable: true,
+    })
+  }
+}
+
 export async function operatorFetchJson<T>(
   path: string,
   init: RequestInit = {},
@@ -191,9 +222,12 @@ export async function operatorFetchJson<T>(
     throw new OperatorFetchError(mapped.message, mapped)
   }
 
+  const text = await readOperatorResponseText(response, path, source, method)
+
   if (!response.ok) {
-    throw new OperatorFetchError(`${response.status} ${response.statusText} for ${path}`, {
-      message: `${response.status} ${response.statusText} for ${path}`,
+    const message = `${response.status} ${response.statusText} for ${path}${bodyDetail(text)}`
+    throw new OperatorFetchError(message, {
+      message,
       status: response.status,
       source,
       path,
@@ -206,12 +240,29 @@ export async function operatorFetchJson<T>(
     return undefined as T
   }
 
-  const contentType = response.headers.get('content-type') || ''
-  if (!contentType.includes('application/json')) {
-    return (await response.text()) as T
+  if (!text.trim()) {
+    return undefined as T
   }
 
-  return response.json() as Promise<T>
+  const contentType = response.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) {
+    return text as T
+  }
+
+  try {
+    return JSON.parse(text) as T
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const message = `Invalid JSON from ${path}: ${detail}${bodyDetail(text)}`
+    throw new OperatorFetchError(message, {
+      message,
+      status: response.status,
+      source,
+      path,
+      method,
+      retryable: false,
+    })
+  }
 }
 
 export function pendingState<T>(evidence: OperatorEndpointEvidence, data?: T): OperatorLoadState<T> {
