@@ -56,6 +56,7 @@ export interface RuleRow {
   content: string
   project: string
   priority: number
+  version: number
   updated: string
 }
 

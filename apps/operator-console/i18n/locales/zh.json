@@ -240,44 +240,78 @@
 
   "rules": {
     "title": "行为规则",
-    "subtitle": "会注入到每个代理上下文的 always-inject 指令。优先级决定应用顺序。",
+    "subtitle": "规则会从上到下注入每个新会话上下文。通过拖拽设置顺序：越靠上越早应用。",
     "state": {
       "pending": "正在从服务器加载规则…",
       "error": "无法加载规则：{message}",
       "empty": "服务器上还没有行为规则。",
       "retry": "重试"
     },
+    "tabs": {
+      "label": "行为规则分区",
+      "rules": "规则",
+      "instincts": "旧 instinct",
+      "instinctsEvidence": "legacy instincts are pre-v5/stale and stay inert"
+    },
+    "reorder": {
+      "note": "通过拖拽行或使用手柄上的上下箭头设置顺序。数字 priority 由系统重新计算，操作员不手动输入。",
+      "liveCallout": "规则列表和排序已连接服务器：",
+      "gripLabel": "移动第 {position} / {total} 条规则",
+      "gripTitle": "拖拽此行或按上下箭头",
+      "rankTitle": "规则在应用顺序中的位置"
+    },
+    "scope": {
+      "filter": "范围",
+      "all": "所有范围",
+      "global": "global",
+      "changeMustBuild": "范围修改仍是 must-build"
+    },
+    "actions": {
+      "refresh": "刷新"
+    },
     "create": {
       "title": "新规则",
-      "subtitle": "通过 POST /api/rules 创建 live rule；global 规则应用到所有项目。",
+      "subtitle": "通过 POST /api/rules 创建 live rule；priority 会按当前顺序计算。",
+      "open": "+ 新规则",
       "contentPlaceholder": "例如：prod 没有明确 grant token 时只读。",
-      "project": "项目",
+      "project": "范围",
       "global": "global",
-      "priority": "优先级",
+      "priority": "计算出的 priority",
+      "priorityHelp": "越靠上的规则越早应用",
       "submit": "创建规则"
     },
     "list": {
       "title": "活跃指令",
-      "count": "{count} 条规则"
+      "count": "{count} 条规则",
+      "header": "顺序 · 规则 · 范围 · 审计",
+      "shown": "当前过滤中 {shown} / {total}"
     },
     "meta": {
       "priority": "优先级 {priority}",
       "project": "项目 {project}",
+      "scope": "范围 {scope}",
+      "priorityAuto": "priority {priority}",
+      "version": "版本 {version}",
+      "position": "位置 {position}",
       "updated": "更新于 {updated}"
     },
     "empty": {
       "title": "没有规则",
-      "body": "通过上方表单添加第一条指令。"
+      "body": "点击“新规则”添加第一条指令。",
+      "scopeBody": "{scope} 范围下还没有规则。"
     },
     "detail": {
       "title": "规则 #{id}",
       "content": "规则文本",
-      "project": "项目",
+      "project": "范围",
       "priority": "优先级",
       "enableTitle": "启用 / 禁用",
       "enableBody": "当前服务器模型没有 behavioral rule 的 enabled 字段，因此 toggle 不可操作。",
+      "edit": "编辑",
+      "cancel": "取消",
       "save": "保存",
       "delete": "删除",
+      "confirmDelete": "确认",
       "enable": "切换"
     }
   },

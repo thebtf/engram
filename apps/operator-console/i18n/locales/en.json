@@ -240,44 +240,78 @@
 
   "rules": {
     "title": "Behavior rules",
-    "subtitle": "Always-inject directives that enter every agent context. Priority controls application order.",
+    "subtitle": "Rules enter every new session context from top to bottom. Set the order by dragging — higher rules apply earlier.",
     "state": {
       "pending": "Loading rules from the server…",
       "error": "Could not load rules: {message}",
       "empty": "The server has no behavior rules yet.",
       "retry": "Retry"
     },
+    "tabs": {
+      "label": "Behavior-rule sections",
+      "rules": "Rules",
+      "instincts": "Old instincts",
+      "instinctsEvidence": "legacy instincts are pre-v5/stale and stay inert"
+    },
+    "reorder": {
+      "note": "Order is set by dragging a row or using the arrows on the grip. Numeric priority is recalculated by the system; the operator does not type it.",
+      "liveCallout": "Rule list and ordering are connected to the server:",
+      "gripLabel": "Move rule {position} of {total}",
+      "gripTitle": "Drag the row or press arrow up/down",
+      "rankTitle": "Rule position in application order"
+    },
+    "scope": {
+      "filter": "Scope",
+      "all": "All scopes",
+      "global": "global",
+      "changeMustBuild": "scope change is must-build"
+    },
+    "actions": {
+      "refresh": "Refresh"
+    },
     "create": {
       "title": "New rule",
-      "subtitle": "Creates a live rule through POST /api/rules; a global rule applies to every project.",
+      "subtitle": "Creates a live rule through POST /api/rules; priority is computed from the current order.",
+      "open": "+ New rule",
       "contentPlaceholder": "Example: prod is read-only without an explicit grant token.",
-      "project": "Project",
+      "project": "Scope",
       "global": "global",
-      "priority": "Priority",
+      "priority": "Computed priority",
+      "priorityHelp": "higher rows apply earlier",
       "submit": "Create rule"
     },
     "list": {
       "title": "Active directives",
-      "count": "{count} rule | {count} rules"
+      "count": "{count} rule | {count} rules",
+      "header": "Order · rule · scope · audit",
+      "shown": "{shown} of {total} in current filter"
     },
     "meta": {
       "priority": "priority {priority}",
       "project": "project {project}",
+      "scope": "scope {scope}",
+      "priorityAuto": "priority {priority}",
+      "version": "version {version}",
+      "position": "position {position}",
       "updated": "updated {updated}"
     },
     "empty": {
       "title": "No rules",
-      "body": "Add the first directive through the form above."
+      "body": "Add the first directive with the New rule button.",
+      "scopeBody": "Scope {scope} has no rules yet."
     },
     "detail": {
       "title": "Rule #{id}",
       "content": "Rule text",
-      "project": "Project",
+      "project": "Scope",
       "priority": "Priority",
       "enableTitle": "Enable / disable",
       "enableBody": "The current server model has no enabled field for behavioral rules, so the toggle is not operable.",
+      "edit": "Edit",
+      "cancel": "Cancel",
       "save": "Save",
       "delete": "Delete",
+      "confirmDelete": "Confirm",
       "enable": "Toggle"
     }
   },

@@ -18,6 +18,7 @@ interface ApiRuleRow {
   project?: string
   content?: string
   priority?: number
+  version?: number
   edited_by?: string
   created_at?: string
   updated_at?: string
@@ -59,6 +60,7 @@ function mapRuleRow(row: ApiRuleRow): RuleRow {
     content: row.content || '-',
     project: normalizeProject(row.project),
     priority: typeof row.priority === 'number' ? row.priority : 0,
+    version: typeof row.version === 'number' ? row.version : 1,
     updated: compactAge(row.updated_at || row.created_at),
   }
 }
@@ -86,26 +88,44 @@ function startOnce(key: string, run: () => Promise<void>) {
 
 export function useOperatorRules(): {
   rows: RuleRow[]
+  scopeOptions: ComputedRef<string[]>
   loadState: ComputedRef<OperatorLoadState<RuleRow[]>>
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
   createRule: (input: RuleCreateInput) => Promise<unknown>
   updateRule: (id: number, input: RuleUpdateInput) => Promise<unknown>
+  reorderRules: (orderedRows: RuleRow[]) => Promise<unknown>
   deleteRule: (id: number) => Promise<unknown>
   enableGap: ReturnType<typeof unsupportedOperatorAction>
+  scopeChangeGap: ReturnType<typeof unsupportedOperatorAction>
 } {
-  const evidence = endpointEvidence('/api/rules?limit=100', 'rules-list')
+  const evidence = endpointEvidence('/api/rules?all=true&limit=200', 'rules-list')
   const rowsState = useState<RuleRow[]>('live:rules-page:rows', () => [])
+  const projectOptions = useState<string[]>('live:rules-page:project-options', () => [])
   const state = useState<OperatorLoadState<RuleRow[]>>('live:rules-page:state', () => pendingState(evidence, rowsState.value))
 
   const loadState = computed(() => state.value)
+  const scopeOptions = computed(() => ['global', ...projectOptions.value])
   const pending = computed(() => state.value.kind === 'pending')
   const error = computed(() => state.value.kind === 'error' ? state.value.error.message : null)
 
+  async function refreshProjects() {
+    const result = await loadOperatorJson<string[]>('/api/projects', {
+      source: 'rules-projects',
+      empty: (rows) => !rows.length,
+    })
+    if (result.kind === 'live' || result.kind === 'empty') {
+      replaceArray(projectOptions.value, [...new Set(result.data.filter((project) => project.trim()))].sort())
+    } else if (result.kind === 'error' && import.meta.dev) {
+      console.warn('[useOperatorRules] project options unavailable', result.error.message)
+    }
+  }
+
   async function refresh() {
     state.value = pendingState(evidence, rowsState.value)
-    const result = await loadOperatorJson<ApiRuleRow[]>('/api/rules?limit=100', {
+    await refreshProjects()
+    const result = await loadOperatorJson<ApiRuleRow[]>('/api/rules?all=true&limit=200', {
       source: 'rules-list',
       empty: (rows) => !rows.length,
     })
@@ -177,6 +197,34 @@ export function useOperatorRules(): {
     })
   }
 
+  async function reorderRules(orderedRows: RuleRow[]) {
+    const nextRows = orderedRows.map((row, index) => ({
+      ...row,
+      priority: (orderedRows.length - index) * 10,
+    }))
+    const changed = nextRows.filter((row) => rowsState.value.find((current) => current.id === row.id)?.priority !== row.priority)
+
+    return runOperatorMutation({
+      action: 'rule-reorder',
+      evidence: endpointEvidence('/api/rules/{id}', 'rules-reorder'),
+      snapshot: () => [...rowsState.value],
+      optimistic: () => {
+        const byId = new Map(nextRows.map((row) => [row.id, row]))
+        const untouched = rowsState.value.filter((row) => !byId.has(row.id))
+        replaceArray(rowsState.value, sortRules([...nextRows, ...untouched]))
+      },
+      run: async () => {
+        await Promise.all(changed.map((row) => operatorFetchJson<ApiRuleRow>(`/api/rules/${row.id}`, jsonInit('PATCH', {
+          priority: row.priority,
+          edited_by: 'operator-console',
+        }), 'rules-reorder')))
+        return nextRows
+      },
+      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
+      refresh,
+    })
+  }
+
   async function deleteRule(id: number) {
     return runOperatorMutation({
       action: 'rule-delete',
@@ -196,18 +244,26 @@ export function useOperatorRules(): {
     'PATCH /api/rules/{id}/enabled',
     'Behavioral rules do not expose an enabled/disabled field in the current server model.',
   )
+  const scopeChangeGap = unsupportedOperatorAction(
+    'rule-scope-change',
+    'PATCH /api/rules/{id}/project',
+    'Behavioral rule scope changes are intentionally not accepted by the current update endpoint.',
+  )
 
   startOnce('rules-page', refresh)
 
   return {
     rows: rowsState.value,
+    scopeOptions,
     loadState,
     pending,
     error,
     refresh,
     createRule,
     updateRule,
+    reorderRules,
     deleteRule,
     enableGap,
+    scopeChangeGap,
   }
 }
