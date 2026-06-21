@@ -271,54 +271,203 @@
 
   "issues": {
     "title": "任务",
-    "subtitle": "跨项目日志：bug、功能和代理之间的交接。",
+    "subtitle": "带优先级、类型、状态、路由和评论数的任务日志。",
     "state": {
       "pending": "正在从服务器加载任务…",
       "error": "无法加载任务：{message}",
       "empty": "服务器登记表中还没有任务。",
       "retry": "重试"
     },
+    "actions": {
+      "selectAll": "全选",
+      "clearSelection": "清除选择",
+      "resetFilter": "重置过滤"
+    },
     "stats": {
-      "open": "打开",
-      "work": "进行中",
-      "done": "已关闭",
+      "open": "打开任务",
+      "work": "进行中 · 重新打开",
+      "done": "已关闭 · 已解决",
       "total": "登记总数"
     },
     "create": {
       "title": "新任务",
       "subtitle": "通过 POST /api/issues 创建任务，并带 operator source_project。",
+      "open": "+ 新任务",
+      "modalTitle": "创建任务",
+      "modalSubtitle": "把问题写清楚，让下一个代理不看聊天记录也能理解上下文、负责人和关闭标准。",
+      "whatHappened": "发生了什么",
+      "templateGroup": "任务模板",
+      "description": "描述",
+      "descriptionHelp": "Markdown 用来记录 evidence、检查清单和简短 handoff。只填写能消除不确定性的内容。",
+      "previewEmpty": "输入描述后会显示预览。",
+      "route": "路由",
+      "routeHelp": "这些字段决定工作会落到哪里。",
       "titlePlaceholder": "简短任务主题",
       "bodyPlaceholder": "上下文、验收标准、链接",
       "targetProject": "项目",
       "priority": "优先级",
       "type": "类型",
+      "labels": "标签",
+      "labelsHelp": "只选择有助于排序队列的标签。多余标签比没有更糟。",
+      "qualityTitle": "创建前检查",
+      "qualityTitleClear": "标题能说明什么坏了或需要做什么。",
+      "qualityOwner": "有负责人：项目、团队或下一个代理。",
+      "qualityEvidence": "正文包含 evidence，或诚实说明缺少什么。",
+      "footerHint": "创建后任务会立即打开，方便补充 thread 或修改字段。",
+      "templates": {
+        "bug": {
+          "title": "错误",
+          "hint": "坏在哪里、evidence、如何验证",
+          "body": "### 上下文\n\n- [ ] 问题在哪里可见\n- [ ] 附带了什么 evidence\n\n### 期望行为\n\n- [ ] 应该发生什么\n\n### 关闭标准\n\n- [ ] 哪个验证通过后可以关闭任务"
+        },
+        "handoff": {
+          "title": "交接",
+          "hint": "谁继续、已经做了什么",
+          "body": "### 已完成\n\n- [ ] \n\n### 继续处理\n\n- [ ] \n\n### Evidence\n\n- 链接或简短摘录"
+        },
+        "question": {
+          "title": "问题",
+          "hint": "缺少哪个决策",
+          "body": "### 缺少的决策\n\n- [ ] \n\n### 选项\n\n1. \n2. \n\n> 需要操作员或项目负责人选择。"
+        },
+        "improvement": {
+          "title": "改进",
+          "hint": "改进什么以及为什么重要",
+          "body": "### 改进内容\n\n- [ ] \n\n### 为什么对操作员重要\n\n- \n\n### 如何判断变好\n\n- [ ] "
+        }
+      },
       "submit": "创建任务"
     },
     "list": {
       "title": "任务日志",
-      "count": "{count} 个任务"
+      "count": "{count} 个任务",
+      "countInFilter": "当前过滤中 {shown} / {total}",
+      "rows": "行数",
+      "pageRange": "{from}–{to} / {total}",
+      "filteredTotal": "显示 {shown} · 登记 {total}"
+    },
+    "filters": {
+      "all": "全部",
+      "open": "打开",
+      "work": "进行中",
+      "closed": "已关闭",
+      "rejected": "已拒绝"
+    },
+    "table": {
+      "priority": "优先级",
+      "type": "类型",
+      "topic": "主题",
+      "status": "状态",
+      "route": "路由",
+      "date": "日期",
+      "comments": "评论"
     },
     "meta": {
       "comments": "{count} 条评论"
     },
     "empty": {
       "title": "没有任务",
-      "body": "通过上方表单创建第一项任务。"
+      "body": "当前过滤下没有任务。"
+    },
+    "modal": {
+      "close": "关闭",
+      "cancel": "取消"
+    },
+    "notice": {
+      "created": "任务 #{id} 已创建",
+      "saved": "任务已保存",
+      "acknowledged": "任务已接手",
+      "resolved": "任务已标记为解决",
+      "rejected": "任务已拒绝",
+      "deleted": "任务 #{id} 已删除",
+      "commented": "评论已添加",
+      "bulkUpdated": "已更新所选任务",
+      "bulkRejected": "已拒绝所选任务",
+      "linkCopied": "任务链接已复制",
+      "linkCopyFailed": "无法复制链接",
+      "error": "操作失败：{message}",
+      "unknownError": "未知错误"
     },
     "detail": {
       "title": "任务 #{id}",
+      "back": "← 返回列表",
       "loading": "正在加载详情卡片…",
       "error": "无法加载详情；编辑将使用列表行。",
+      "bodyMarkdown": "正文 · Markdown",
+      "emptyBody": "任务正文为空。",
+      "fields": "任务字段",
       "issueTitle": "标题",
       "body": "正文",
       "status": "状态",
       "priority": "优先级",
       "type": "类型",
+      "route": "发送到",
+      "routeMustBuild": "修改已有任务路由需要服务器 endpoint {endpoint}；字段真实显示，但不可操作。",
       "operatorComment": "operator-console update",
+      "saveComment": "operator-console: task fields updated",
+      "resolveComment": "operator-console: task marked resolved",
       "save": "保存",
       "acknowledge": "接手",
+      "resolve": "关闭",
+      "reject": "拒绝",
+      "actions": "操作",
+      "copyLink": "复制链接",
       "delete": "删除",
       "confirmDelete": "确认删除"
+    },
+    "thread": {
+      "title": "内部 thread · Markdown",
+      "count": "{count} 条记录",
+      "empty": "暂无 thread，只有任务正文。",
+      "operatorReply": "操作员回复 · Markdown",
+      "placeholder": "新的操作员备注。支持 Markdown、检查清单、引用和 evidence…",
+      "submit": "添加评论"
+    },
+    "reject": {
+      "title": "拒绝 #{id}",
+      "body": "拒绝需要操作员评论。输入文本后按钮才会启用。",
+      "placeholder": "为什么拒绝？",
+      "submit": "拒绝"
+    },
+    "delete": {
+      "title": "删除 #{id}",
+      "body": "删除会移除任务及其评论。这是不可逆的操作员动作。",
+      "submit": "删除任务"
+    },
+    "bulk": {
+      "selected": "已选择 {count} 项",
+      "status": "状态…",
+      "priority": "优先级…",
+      "type": "类型…",
+      "route": "发送到…",
+      "labels": "标签…",
+      "reject": "拒绝所选",
+      "note": "批量编辑任务 · 拒绝必须填写评论",
+      "cancel": "取消"
+    },
+    "bulkReject": {
+      "title": "拒绝所选任务",
+      "body": "拒绝 {count} 个所选任务需要操作员评论。",
+      "placeholder": "为什么拒绝所选任务？",
+      "submit": "拒绝所选"
+    },
+    "bulkField": {
+      "title": "批量修改字段",
+      "body": "修改 {count} 个所选任务的字段。",
+      "status": "状态",
+      "priority": "优先级",
+      "type": "工作类型",
+      "submit": "应用"
+    },
+    "bulkLabels": {
+      "title": "批量修改标签",
+      "body": "给 {count} 个所选任务添加、移除或替换标签。",
+      "mode": "操作",
+      "label": "标签",
+      "add": "添加",
+      "remove": "移除",
+      "replace": "替换为唯一标签",
+      "submit": "应用"
     },
     "status": {
       "open": "打开",

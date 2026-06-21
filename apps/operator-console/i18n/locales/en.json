@@ -271,54 +271,203 @@
 
   "issues": {
     "title": "Issues",
-    "subtitle": "Cross-project journal for bugs, features, and handoffs between agents.",
+    "subtitle": "Issue journal with priority, type, status, route, and comment count.",
     "state": {
       "pending": "Loading issues from the server…",
       "error": "Could not load issues: {message}",
       "empty": "The server registry has no issues yet.",
       "retry": "Retry"
     },
+    "actions": {
+      "selectAll": "Select all",
+      "clearSelection": "Clear selection",
+      "resetFilter": "Reset filter"
+    },
     "stats": {
-      "open": "open",
-      "work": "in progress",
-      "done": "closed",
-      "total": "in registry"
+      "open": "open issues",
+      "work": "in progress · reopened",
+      "done": "closed · resolved",
+      "total": "total in registry"
     },
     "create": {
       "title": "New issue",
       "subtitle": "Creates an issue through POST /api/issues with operator source_project.",
+      "open": "+ New issue",
+      "modalTitle": "Create issue",
+      "modalSubtitle": "Write the problem so the next agent understands context, owner, and close criteria without chat archaeology.",
+      "whatHappened": "What happened",
+      "templateGroup": "Issue template",
+      "description": "Description",
+      "descriptionHelp": "Markdown carries evidence, checklists, and short handoffs. Fill only what removes ambiguity.",
+      "previewEmpty": "Preview appears after you write a description.",
+      "route": "Route",
+      "routeHelp": "These fields decide where the work lands.",
       "titlePlaceholder": "Short issue topic",
       "bodyPlaceholder": "Context, acceptance criteria, links",
       "targetProject": "Project",
       "priority": "Priority",
       "type": "Type",
+      "labels": "Labels",
+      "labelsHelp": "Choose only labels that help sort the queue. Extra labels are worse than none.",
+      "qualityTitle": "Pre-create check",
+      "qualityTitleClear": "The title says what is broken or what needs doing.",
+      "qualityOwner": "There is an owner: project, team, or next agent.",
+      "qualityEvidence": "The body has evidence or honestly says what is missing.",
+      "footerHint": "The issue opens immediately after creation so you can add thread notes or adjust fields.",
+      "templates": {
+        "bug": {
+          "title": "Bug",
+          "hint": "what broke, evidence, how to verify",
+          "body": "### Context\n\n- [ ] where the problem is visible\n- [ ] what evidence is attached\n\n### Expected behavior\n\n- [ ] what should happen instead\n\n### Close criteria\n\n- [ ] verification that allows closing the issue"
+        },
+        "handoff": {
+          "title": "Handoff",
+          "hint": "who continues and what is already done",
+          "body": "### Already done\n\n- [ ] \n\n### Continue with\n\n- [ ] \n\n### Evidence\n\n- link or short excerpt"
+        },
+        "question": {
+          "title": "Question",
+          "hint": "which decision is missing",
+          "body": "### Missing decision\n\n- [ ] \n\n### Options\n\n1. \n2. \n\n> Needs operator or project-owner choice."
+        },
+        "improvement": {
+          "title": "Improvement",
+          "hint": "what to improve and why it matters",
+          "body": "### Improvement\n\n- [ ] \n\n### Why it matters to the operator\n\n- \n\n### Better means\n\n- [ ] "
+        }
+      },
       "submit": "Create issue"
     },
     "list": {
       "title": "Issue journal",
-      "count": "{count} issue | {count} issues"
+      "count": "{count} issue | {count} issues",
+      "countInFilter": "{shown} of {total} in current filter",
+      "rows": "Rows",
+      "pageRange": "{from}–{to} of {total}",
+      "filteredTotal": "{shown} shown · {total} in registry"
+    },
+    "filters": {
+      "all": "All",
+      "open": "Open",
+      "work": "In progress",
+      "closed": "Closed",
+      "rejected": "Rejected"
+    },
+    "table": {
+      "priority": "priority",
+      "type": "type",
+      "topic": "topic",
+      "status": "status",
+      "route": "route",
+      "date": "date",
+      "comments": "comm."
     },
     "meta": {
-      "comments": "{count} comments"
+      "comments": "{count} comment | {count} comments"
     },
     "empty": {
       "title": "No issues",
-      "body": "Create the first issue through the form above."
+      "body": "No issue matches the current filter."
+    },
+    "modal": {
+      "close": "Close",
+      "cancel": "Cancel"
+    },
+    "notice": {
+      "created": "Issue #{id} created",
+      "saved": "Issue saved",
+      "acknowledged": "Issue acknowledged",
+      "resolved": "Issue marked resolved",
+      "rejected": "Issue rejected",
+      "deleted": "Issue #{id} deleted",
+      "commented": "Comment added",
+      "bulkUpdated": "Selected issues updated",
+      "bulkRejected": "Selected issues rejected",
+      "linkCopied": "Issue link copied",
+      "linkCopyFailed": "Could not copy link",
+      "error": "Operation failed: {message}",
+      "unknownError": "unknown error"
     },
     "detail": {
       "title": "Issue #{id}",
+      "back": "← Back to list",
       "loading": "Loading detail card…",
       "error": "Could not load detail; editing uses the list row.",
+      "bodyMarkdown": "Body · Markdown",
+      "emptyBody": "Issue body is empty.",
+      "fields": "Issue fields",
       "issueTitle": "Title",
       "body": "Body",
       "status": "Status",
       "priority": "Priority",
       "type": "Type",
+      "route": "Route to",
+      "routeMustBuild": "Changing an existing issue route needs server endpoint {endpoint}; the field is shown honestly, but is not operable.",
       "operatorComment": "operator-console update",
+      "saveComment": "operator-console: issue fields updated",
+      "resolveComment": "operator-console: issue marked resolved",
       "save": "Save",
       "acknowledge": "Acknowledge",
+      "resolve": "Close",
+      "reject": "Reject",
+      "actions": "Actions",
+      "copyLink": "Copy link",
       "delete": "Delete",
       "confirmDelete": "Confirm delete"
+    },
+    "thread": {
+      "title": "Internal thread · Markdown",
+      "count": "{count} entry | {count} entries",
+      "empty": "No thread yet — only the issue body exists.",
+      "operatorReply": "Operator reply · Markdown",
+      "placeholder": "New operator note. Markdown, checklists, quotes, and evidence are welcome…",
+      "submit": "Add comment"
+    },
+    "reject": {
+      "title": "Reject #{id}",
+      "body": "Rejecting requires an operator comment. The button is enabled only after text is entered.",
+      "placeholder": "Why reject this?",
+      "submit": "Reject"
+    },
+    "delete": {
+      "title": "Delete #{id}",
+      "body": "Deletion removes the issue and its comments. This operator action is irreversible.",
+      "submit": "Delete issue"
+    },
+    "bulk": {
+      "selected": "{count} selected | {count} selected",
+      "status": "Status…",
+      "priority": "Priority…",
+      "type": "Type…",
+      "route": "Route to…",
+      "labels": "Labels…",
+      "reject": "Reject selected",
+      "note": "bulk issue edit · comment required for rejection",
+      "cancel": "Cancel"
+    },
+    "bulkReject": {
+      "title": "Reject selected issues",
+      "body": "Rejecting {count} selected issues requires an operator comment.",
+      "placeholder": "Why reject the selected issues?",
+      "submit": "Reject selected"
+    },
+    "bulkField": {
+      "title": "Bulk field change",
+      "body": "Change a field for {count} selected issues.",
+      "status": "status",
+      "priority": "priority",
+      "type": "work type",
+      "submit": "Apply"
+    },
+    "bulkLabels": {
+      "title": "Bulk label change",
+      "body": "Add, remove, or replace a label on {count} selected issues.",
+      "mode": "Operation",
+      "label": "Label",
+      "add": "Add",
+      "remove": "Remove",
+      "replace": "Replace with only this",
+      "submit": "Apply"
     },
     "status": {
       "open": "open",
