@@ -18,6 +18,7 @@ const {
   ruleCount,
   projectCount,
   memoryPending,
+  issuesPending,
   rulesPending,
   projectsPending,
   modelHealthGap,
@@ -38,6 +39,11 @@ const memoryTiers = computed(() => [
 const memoryCountDisplay = computed(() => displayCount(memories.length, memoryPending.value))
 const memoryActiveDisplay = computed(() => displayCount(memoryActive.value, memoryPending.value))
 const memoryNoiseDisplay = computed(() => displayCount(memoryNoise.value, memoryPending.value))
+const issueCountDisplay = computed(() => displayCount(issues.length, issuesPending.value))
+const openIssuesDisplay = computed(() => displayCount(openIssues.value, issuesPending.value))
+const workIssuesDisplay = computed(() => displayCount(workIssues.value, issuesPending.value))
+const resolvedIssuesDisplay = computed(() => displayCount(resolvedIssues.value, issuesPending.value))
+const closedIssuesDisplay = computed(() => displayCount(closedIssues.value, issuesPending.value))
 const ruleCountDisplay = computed(() => displayCount(ruleCount.value, rulesPending.value))
 const projectCountDisplay = computed(() => displayCount(projectCount.value, projectsPending.value))
 
@@ -52,10 +58,10 @@ const memoryStops = computed(() => {
 
 const taskBars = computed(() => {
   const rows = [
-    { label: t('overview.tasks.open'), count: openIssues.value, color: 'var(--state-warn)' },
-    { label: t('overview.tasks.work'), count: workIssues.value, color: 'var(--accent)' },
-    { label: t('overview.tasks.resolved'), count: resolvedIssues.value, color: 'var(--class-live)' },
-    { label: t('overview.tasks.closed'), count: closedIssues.value, color: 'var(--muted)' },
+    { label: t('overview.tasks.open'), count: openIssues.value, display: openIssuesDisplay.value, color: 'var(--state-warn)' },
+    { label: t('overview.tasks.work'), count: workIssues.value, display: workIssuesDisplay.value, color: 'var(--accent)' },
+    { label: t('overview.tasks.resolved'), count: resolvedIssues.value, display: resolvedIssuesDisplay.value, color: 'var(--class-live)' },
+    { label: t('overview.tasks.closed'), count: closedIssues.value, display: closedIssuesDisplay.value, color: 'var(--muted)' },
   ]
   const max = Math.max(1, ...rows.map((row) => row.count))
   return rows.map((row) => ({ ...row, width: Math.round((row.count / max) * 100) }))
@@ -137,9 +143,9 @@ const workCards = computed(() => [
     to: '/issues',
     icon: 'issues',
     name: t('nav.items.issues'),
-    big: String(openIssues.value),
-    sub: t('overview.cards.issues.sub', { open: openIssues.value, work: workIssues.value, total: issues.length }),
-    meta: [{ cls: 'pri-high', text: t('overview.cards.issues.openBadge', { n: openIssues.value }) }],
+    big: openIssuesDisplay.value,
+    sub: t('overview.cards.issues.sub', { open: openIssuesDisplay.value, work: workIssuesDisplay.value, total: issueCountDisplay.value }),
+    meta: [{ cls: 'pri-high', text: t('overview.cards.issues.openBadge', { n: openIssuesDisplay.value }) }],
   },
   {
     to: '/projects',
@@ -256,12 +262,12 @@ function iconPath(icon: string) {
       </div>
 
       <div class="vz">
-        <h4>{{ t('overview.viz.tasksByStatus') }}<span class="src">{{ t('overview.totalIssues', { n: issues.length }) }}</span></h4>
+        <h4>{{ t('overview.viz.tasksByStatus') }}<span class="src">{{ t('overview.totalIssues', { n: issueCountDisplay }) }}</span></h4>
         <div class="hbars">
           <div v-for="bar in taskBars" :key="bar.label" class="hbar">
             <span class="hl">{{ bar.label }}</span>
             <span class="ht"><i :style="{ width: `${bar.width}%`, background: bar.color }" /></span>
-            <span class="hv">{{ bar.count }}</span>
+            <span class="hv">{{ bar.display }}</span>
           </div>
         </div>
       </div>

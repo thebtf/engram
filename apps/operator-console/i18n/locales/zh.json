@@ -39,6 +39,7 @@
     "statusDegradation": "降级",
     "statusNoise": "噪声",
     "records": "{count} 条记录",
+    "recordsLoading": "… 条记录",
     "reviewQueue": "{count} 项待审核",
     "uptime": "已运行 {value}"
   },

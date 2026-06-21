@@ -444,26 +444,40 @@ export const useMemories = () => {
   return useOperatorMemoryLab().rows
 }
 
-export const useIssues = () => {
+export const useIssuesState = () => {
   const state = useState<Issue[]>('live:issues', () => [])
   const rows = state.value
+  const pending = useState<boolean>('live:issues:pending', () => false)
+  const error = useState<string | null>('live:issues:error', () => null)
 
-  startOnce('issues', async () => {
-    const payload = await fetchJson<ApiIssueList>('/api/issues?limit=50')
-    const liveRows = (payload.issues || []).map((issue) => ({
-      id: issue.id,
-      title: issue.title,
-      status: issue.status,
-      priority: issue.priority,
-      type: issue.type,
-      age: compactAge(issue.created_at),
-      comments: issue.comment_count ?? 0,
-    }))
-    replaceArray(rows, liveRows)
-  })
+  async function refresh() {
+    pending.value = true
+    error.value = null
+    try {
+      const payload = await fetchJson<ApiIssueList>('/api/issues?limit=50')
+      const liveRows = (payload.issues || []).map((issue) => ({
+        id: issue.id,
+        title: issue.title,
+        status: issue.status,
+        priority: issue.priority,
+        type: issue.type,
+        age: compactAge(issue.created_at),
+        comments: issue.comment_count ?? 0,
+      }))
+      replaceArray(rows, liveRows)
+    } catch (nextError) {
+      error.value = errorMessage(nextError)
+    } finally {
+      pending.value = false
+    }
+  }
 
-  return rows
+  startOnce('issues', refresh)
+
+  return { rows, pending, error, refresh }
 }
+
+export const useIssues = () => useIssuesState().rows
 
 export const useCreds = () => {
   const state = useState<Cred[]>('live:creds', () => [])
