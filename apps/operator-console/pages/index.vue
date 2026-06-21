@@ -89,7 +89,7 @@ const memoryCards = computed(() => [
     to: '/noise',
     icon: 'noise',
     name: t('nav.items.noise'),
-    big: String(info.noise),
+    big: String(info.value.noise),
     sub: t('overview.cards.noise.sub'),
     meta: [{ cls: 'gate', text: t('overview.badges.aboveNorm') }],
   },

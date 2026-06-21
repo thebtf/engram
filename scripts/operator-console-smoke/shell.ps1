@@ -27,6 +27,21 @@ function Assert-Contains {
   }
 }
 
+function Assert-NotContains {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Content,
+    [Parameter(Mandatory = $true)]
+    [string]$Needle,
+    [Parameter(Mandatory = $true)]
+    [string]$Label
+  )
+
+  if ($Content.Contains($Needle)) {
+    throw "SHELL_SMOKE_FAILED: forbidden $Label ($Needle)"
+  }
+}
+
 function Assert-File {
   param([Parameter(Mandatory = $true)][string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) {
@@ -59,6 +74,8 @@ Assert-Contains $shellComposable "loadOperatorJson<ApiSelfcheck>('/api/selfcheck
 Assert-Contains $shellComposable "loadOperatorJson<ApiStats>('/api/stats'" "stats endpoint seam"
 Assert-Contains $shellComposable "loadOperatorJson<ApiStatsVnext>('/api/stats/vnext'" "stats vnext endpoint seam"
 Assert-Contains $shellComposable "auth_disabled" "auth-disabled posture signal"
+Assert-Contains $shellComposable "preferKnownUptime(next.uptime, statsResult.value.data.uptime)" "stats uptime fallback guard"
+Assert-NotContains $shellComposable "next.uptime = statsResult.value.data.uptime || next.uptime" "raw stats uptime override"
 
 if ($layout.Contains("operator SESSION") -or $layout.Contains("Auth disabled")) {
   throw "SHELL_SMOKE_FAILED: legacy dashboard shell/auth literal is still present"

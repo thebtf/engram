@@ -69,6 +69,10 @@ function normalizeNoise(value?: number): string {
   return value.toFixed(2)
 }
 
+function preferKnownUptime(current: string, fallback?: string): string {
+  return current && current !== '-' ? current : fallback || current || '-'
+}
+
 function initials(name: string): string {
   const letters = name
     .split(/\s+/)
@@ -162,7 +166,7 @@ export function useOperatorShellStatus() {
     }
 
     if (statsResult.status === 'fulfilled' && isLive(statsResult.value)) {
-      next.uptime = statsResult.value.data.uptime || next.uptime
+      next.uptime = preferKnownUptime(next.uptime, statsResult.value.data.uptime)
     } else {
       failures.push('/api/stats')
     }
