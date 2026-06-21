@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -211,6 +212,14 @@ func jsonSafeMemories(mems []*models.Memory) []*models.Memory {
 		}
 
 		copy := *mem
+		copy.CreatedAt = jsonSafeTime(copy.CreatedAt)
+		copy.UpdatedAt = jsonSafeTime(copy.UpdatedAt)
+		copy.DeletedAt = jsonSafeTimePtr(copy.DeletedAt)
+		copy.LastRetrievedAt = jsonSafeTimePtr(copy.LastRetrievedAt)
+		copy.LastConfirmed = jsonSafeTimePtr(copy.LastConfirmed)
+		copy.ReviewAfter = jsonSafeTimePtr(copy.ReviewAfter)
+		copy.ValidFrom = jsonSafeTimePtr(copy.ValidFrom)
+		copy.ValidUntil = jsonSafeTimePtr(copy.ValidUntil)
 		copy.ImportanceBase = finiteOrZero(copy.ImportanceBase)
 		copy.TsAlpha = finiteOrZero(copy.TsAlpha)
 		copy.TsBeta = finiteOrZero(copy.TsBeta)
@@ -221,6 +230,28 @@ func jsonSafeMemories(mems []*models.Memory) []*models.Memory {
 	}
 
 	return safe
+}
+
+func jsonSafeTime(value time.Time) time.Time {
+	if !canMarshalJSONTime(value) {
+		return time.Time{}
+	}
+
+	return value
+}
+
+func jsonSafeTimePtr(value *time.Time) *time.Time {
+	if value == nil || !canMarshalJSONTime(*value) {
+		return nil
+	}
+
+	safe := *value
+	return &safe
+}
+
+func canMarshalJSONTime(value time.Time) bool {
+	_, err := value.MarshalJSON()
+	return err == nil
 }
 
 func finiteOrZero(value float64) float64 {
