@@ -83,6 +83,7 @@ test('fetch seam reads bodies safely instead of throwing browser-native JSON par
   const source = read(seamPath)
   const compatibility = read(compatibilityPath)
   const operatorBody = functionBody(source, 'operatorFetchJson')
+  const bodyDetailBody = functionBody(source, 'bodyDetail')
   const responseReaderBody = functionBody(source, 'readOperatorResponseText')
   const compatibilityBody = functionBody(compatibility, 'fetchJson')
 
@@ -99,6 +100,7 @@ test('fetch seam reads bodies safely instead of throwing browser-native JSON par
   assert.match(operatorBody, /JSON\.parse\(text\)/, 'operatorFetchJson must parse JSON after the empty-body guard')
   assert.doesNotMatch(operatorBody, /response\.json\(\)/, 'operatorFetchJson must not throw native Response.json parse errors')
   assert.match(operatorBody, /bodyDetail\(text\)/, 'HTTP errors must include response body details when present')
+  assert.match(bodyDetailBody, /HTML error response/, 'HTML error pages must be summarized instead of rendered into the operator UI')
   assert.match(operatorBody, /Invalid JSON from/, 'invalid JSON must be reported with endpoint context')
 })
 

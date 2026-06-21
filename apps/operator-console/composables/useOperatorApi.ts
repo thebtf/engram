@@ -179,7 +179,12 @@ function bodyDetail(text: string): string {
     return ''
   }
 
-  return `: ${trimmed.slice(0, 240)}`
+  const compact = trimmed.replace(/\s+/g, ' ')
+  if (/<(?:!doctype\s+html|html[\s>]|head[\s>]|body[\s>])/i.test(compact)) {
+    return ': HTML error response'
+  }
+
+  return `: ${compact.slice(0, 180)}${compact.length > 180 ? '...' : ''}`
 }
 
 async function readOperatorResponseText(
