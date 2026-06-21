@@ -11,6 +11,7 @@
  */
 
 import { operatorApiBase, operatorApiUrl } from './useOperatorApi'
+import { useOperatorMemoryLab } from './useOperatorMemoryLab'
 
 export interface Memory {
   id: string
@@ -138,21 +139,6 @@ export const OPERATOR_DATA_AREAS = {
     source: 'useMockData.ts server-info/model ownership section',
   },
 } as const
-
-interface ApiMemory {
-  id: number | string
-  project?: string
-  content?: string
-  tags?: string[]
-  tier?: string
-  epistemic_type?: string
-  confidence?: number
-  citation_count?: number
-  injection_count?: number
-  updated_at?: string
-  created_at?: string
-  status?: string
-}
 
 interface ApiIssueRow {
   id: number
@@ -324,11 +310,6 @@ async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 }
 
-async function fetchText(path: string): Promise<string> {
-  const response = await fetchApi(path)
-  return response.text()
-}
-
 function jsonInit(method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', body?: unknown): RequestInit {
   const init: RequestInit = { method }
   if (body !== undefined) {
@@ -353,19 +334,6 @@ function compactAge(timestamp?: string): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}м`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}ч`
   return `${Math.floor(seconds / 86400)}д`
-}
-
-function mapTier(value?: string): Memory['tier'] {
-  if (value === 'semantic' || value === 'episodic' || value === 'procedural') {
-    return value
-  }
-
-  return 'procedural'
-}
-
-function isNoiseStatus(value?: string): boolean {
-  const normalized = String(value || '').trim().toLowerCase()
-  return normalized === 'noise' || normalized === 'flagged' || normalized === 'suppressed'
 }
 
 function normalizeNoise(value?: number): string {
@@ -394,22 +362,6 @@ function percentValue(value?: number): string {
   return `${Math.round(value)}%`
 }
 
-function mapMemoryRow(row: ApiMemory): Memory {
-  return {
-    id: String(row.id),
-    content: row.content || '—',
-    tags: Array.isArray(row.tags) ? row.tags : [],
-    tier: mapTier(row.tier),
-    type: row.epistemic_type || 'note',
-    project: row.project || 'global',
-    conf: typeof row.confidence === 'number' ? row.confidence : 0,
-    cite: typeof row.citation_count === 'number' ? row.citation_count : 0,
-    inj: typeof row.injection_count === 'number' ? row.injection_count : 0,
-    age: compactAge(row.updated_at || row.created_at),
-    noise: isNoiseStatus(row.status),
-  }
-}
-
 function mapRuleRow(row: ApiRuleRow): RuleRow {
   return {
     id: row.id,
@@ -423,36 +375,6 @@ function mapRuleRow(row: ApiRuleRow): RuleRow {
 async function listProjects(): Promise<string[]> {
   const projects = await fetchJson<string[]>('/api/projects')
   return [...new Set((projects || []).filter((value) => typeof value === 'string' && value.trim()))]
-}
-
-async function loadAllMemories(): Promise<Memory[]> {
-  const projects = await listProjects()
-  const combined: Memory[] = []
-
-  for (const project of projects) {
-    const raw = (await fetchText(`/api/memories?project=${encodeURIComponent(project)}&limit=200`)).trim()
-    if (!raw) continue
-
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      continue
-    }
-
-    if (!Array.isArray(parsed)) continue
-
-    for (const row of parsed as ApiMemory[]) {
-      combined.push(mapMemoryRow(row))
-    }
-  }
-
-  const deduped = new Map<string, Memory>()
-  for (const row of combined) {
-    deduped.set(`${row.project}:${row.id}`, row)
-  }
-
-  return [...deduped.values()]
 }
 
 async function loadAllRules(): Promise<RuleRow[]> {
@@ -519,15 +441,7 @@ async function loadProjectSummaries(): Promise<ProjectSummary[]> {
 }
 
 export const useMemories = () => {
-  const state = useState<Memory[]>('live:memories', () => [])
-  const rows = state.value
-
-  startOnce('memories', async () => {
-    const liveRows = await loadAllMemories()
-    replaceArray(rows, liveRows)
-  })
-
-  return rows
+  return useOperatorMemoryLab().rows
 }
 
 export const useIssues = () => {

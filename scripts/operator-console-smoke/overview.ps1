@@ -9,6 +9,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $root = Join-Path $repoRoot $AppRoot
 $overviewPath = Join-Path $root "pages\index.vue"
 $overviewComposablePath = Join-Path $root "composables\useOperatorOverview.ts"
+$compatibilityPath = Join-Path $root "composables\useMockData.ts"
 
 function Assert-Contains {
   param(
@@ -49,9 +50,11 @@ function Assert-File {
 
 Assert-File $overviewPath
 Assert-File $overviewComposablePath
+Assert-File $compatibilityPath
 
 $overview = Get-Content -LiteralPath $overviewPath -Raw
 $overviewComposable = Get-Content -LiteralPath $overviewComposablePath -Raw
+$compatibility = Get-Content -LiteralPath $compatibilityPath -Raw
 
 Assert-Contains $overview "useOperatorOverview" "overview live-state composable"
 Assert-Contains $overview "modelHealthGap" "honest model-health gap binding"
@@ -67,6 +70,8 @@ Assert-Contains $overviewComposable "'model-health'" "model health mustbuild des
 Assert-Contains $overviewComposable "'access-summary'" "access mustbuild descriptor"
 Assert-Contains $overviewComposable "VNEXT_F" "queue gate evidence"
 Assert-Contains $overviewComposable "useOperatorShellStatus" "overview server status seam"
+Assert-Contains $compatibility "useOperatorMemoryLab" "shared memory live seam"
+Assert-Contains $compatibility "useOperatorMemoryLab().rows" "overview/layout memory count shares Memory Lab rows"
 
 Assert-NotContains $overview "useModels" "mock model rows"
 Assert-NotContains $overview "const queueCount = 7" "static queue count"
@@ -75,5 +80,6 @@ Assert-NotContains $overview "big: '4'" "static rules count"
 Assert-NotContains $overview "big: '3'" "static projects count"
 Assert-NotContains $overview "big: String(info.noise)" "ref object noise access"
 Assert-NotContains $overview "vault ok" "unkeyed vault status literal"
+Assert-NotContains $compatibility "live:memories" "separate overview/layout memory cache"
 
 Write-Host "OVERVIEW_SMOKE=passed"
