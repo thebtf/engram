@@ -9,7 +9,8 @@
     "enabled": "已启用",
     "admin": "管理员",
     "selectedCount": "已选择 {count} 项",
-    "clearSelection": "清除选择"
+    "clearSelection": "清除选择",
+    "loadingShort": "…"
   },
 
   "shell": {

@@ -9,7 +9,8 @@
     "enabled": "enabled",
     "admin": "admin",
     "selectedCount": "{count} selected",
-    "clearSelection": "Clear selection"
+    "clearSelection": "Clear selection",
+    "loadingShort": "…"
   },
 
   "shell": {
