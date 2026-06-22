@@ -48,6 +48,7 @@ type Server struct {
 	rerankClient            *reranking.Client
 	memoryStore             *gorm.MemoryStore
 	principalMemoryQuerySvc principalMemoryQueryService
+	domainRegistryService   domainRegistryService
 	behavioralRulesStore    *gorm.BehavioralRulesStore
 	promotionStore          *gorm.PromotionStore
 	graphStore              *graph.Store

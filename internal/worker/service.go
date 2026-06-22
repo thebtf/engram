@@ -765,6 +765,7 @@ func (s *Service) initializeAsync() {
 	// switched from observations to memories/behavioral_rules.
 	mcpServer.SetMemoryStore(memoryStore)
 	mcpServer.SetPrincipalMemoryQueryService(principalMemoryQuerySvc)
+	mcpServer.SetDomainRegistryService(domainRegistrySvc)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /

@@ -575,6 +575,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			if wlMem.PrivacyScope == "private" && wlMem.SourceWorkstationID == "" {
 				return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
 			}
+			domainDecision, err := s.checkDomainWriteMCP(ctx, wlMem, params.SessionID)
+			if err != nil {
+				return "", fmt.Errorf("domain registry check failed: %w", err)
+			}
 
 			scopedWLStore := s.scopedWriteLintMemoryStore(ctx, params.SessionID)
 			if scopedWLStore == nil {
@@ -608,8 +612,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				// fire here too — otherwise relative-time content that required conflict
 				// resolution commits without the nudge (Codex review). p2resp is a typed
 				// struct; round-trip it to a map to attach the advisory key when relevant.
-				if terms := staleness.DetectRelativeTime(params.Content); len(terms) > 0 {
-					out, marshalErr := marshalWithStaleAdvisory(p2resp, terms)
+				if terms := staleness.DetectRelativeTime(params.Content); len(terms) > 0 || (domainDecision != nil && domainDecision.Warning != nil) {
+					out, marshalErr := marshalStoreMemoryAugmented(p2resp, domainDecision, terms)
 					if marshalErr != nil {
 						return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
 					}
@@ -648,6 +652,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				"message":         "Memory stored successfully via write-lint (no conflicts detected)",
 			}
 			addPrincipalMemoryFields(wlResult, wlMem)
+			addDomainWriteDecisionFields(wlResult, domainDecision)
 			// Rank-3 staleness advisory must also fire on the write-lint success path —
 			// this is the primary store path when ENGRAM_VNEXT_F_ENABLED=true, the same
 			// config that activates the serve-time hint, so the advisory cannot be
@@ -944,6 +949,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if err := applyPrincipalMemoryMetadata(ctx, memory, params.AgentVisibility, params.Domain); err != nil {
 		return "", err
 	}
+	domainDecision, err := s.checkDomainWriteMCP(ctx, memory, params.SessionID)
+	if err != nil {
+		return "", fmt.Errorf("domain registry check failed: %w", err)
+	}
 
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
@@ -1060,6 +1069,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 	addPrincipalMemoryFields(result, created)
+	addDomainWriteDecisionFields(result, domainDecision)
 	if vnextEnabled {
 		result["quality_signals"] = map[string]any{
 			"gate_result":      gateResult.Decision,
