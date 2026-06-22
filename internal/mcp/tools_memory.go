@@ -96,13 +96,31 @@ func applyPrincipalMemoryMetadata(ctx context.Context, mem *models.Memory, agent
 		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
 	}
 
-	mem.Domain = strings.TrimSpace(domain)
+	normalizedDomain := strings.TrimSpace(domain)
+	var ownerPrincipal, ownerPrincipalKind string
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		if principal, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
-			mem.OwnerPrincipal = principal
-			mem.OwnerPrincipalKind = principalKind
+			ownerPrincipal = principal
+			ownerPrincipalKind = principalKind
 		}
 	}
+	caller := scope.KeycardContext{
+		Principal:     ownerPrincipal,
+		PrincipalKind: ownerPrincipalKind,
+	}
+	decision := scope.DomainOwnershipPolicy{}.Decide(caller, scope.DomainPolicyRequest{
+		Operation:          scope.DomainOperationWrite,
+		Domain:             normalizedDomain,
+		OwnerPrincipal:     ownerPrincipal,
+		OwnerPrincipalKind: ownerPrincipalKind,
+	})
+	if !decision.Allowed {
+		return fmt.Errorf("invalid_domain: %s", decision.Reason)
+	}
+
+	mem.Domain = normalizedDomain
+	mem.OwnerPrincipal = ownerPrincipal
+	mem.OwnerPrincipalKind = ownerPrincipalKind
 	if visibility != "" {
 		if mem.OwnerPrincipal == "" {
 			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
@@ -169,6 +187,16 @@ func writeLintVisibilityOptions() scope.MemoryVisibilityOptions {
 	return scope.MemoryVisibilityOptions{
 		ApplyPrivacyScope: vnextFEnabled(),
 	}
+}
+
+func (s *Server) scopedWriteLintMemoryStore(ctx context.Context, sessionID string) writelint.MemoryStoreInterface {
+	var base writelint.MemoryStoreInterface
+	if s.memoryStore != nil {
+		base = s.memoryStore
+	} else if s.writeLint != nil {
+		base = s.writeLint.MemoryStore()
+	}
+	return newScopedWriteLintMemoryStore(base, writeLintVisibilityCaller(ctx, sessionID), writeLintVisibilityOptions())
 }
 
 func (s *scopedWriteLintMemoryStore) List(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
@@ -532,13 +560,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
 			}
 
-			var scopedWLStore writelint.MemoryStoreInterface
-			if s.memoryStore != nil {
-				scopedWLStore = newScopedWriteLintMemoryStore(
-					s.memoryStore,
-					writeLintVisibilityCaller(ctx, params.SessionID),
-					writeLintVisibilityOptions(),
-				)
+			scopedWLStore := s.scopedWriteLintMemoryStore(ctx, params.SessionID)
+			if scopedWLStore == nil {
+				return "", fmt.Errorf("write_lint memory store not available")
 			}
 
 			if wlResolutionToken != "" {
@@ -559,13 +583,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 						p2req.TargetMemoryID = &tid64
 					}
 				}
-				var p2resp *writelint.Phase2Response
-				var p2err error
-				if scopedWLStore != nil {
-					p2resp, p2err = s.writeLint.Phase2WithMemoryStore(ctx, p2req, scopedWLStore)
-				} else {
-					p2resp, p2err = s.writeLint.Phase2(ctx, p2req)
-				}
+				p2resp, p2err := s.writeLint.Phase2WithMemoryStore(ctx, p2req, scopedWLStore)
 				if p2err != nil {
 					return "", fmt.Errorf("write_lint_phase2: %w", p2err)
 				}
@@ -589,13 +607,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			}
 
 			// Phase1: inspect for duplicates/conflicts/supersessions.
-			var p1resp *writelint.Phase1Response
-			var p1err error
-			if scopedWLStore != nil {
-				p1resp, p1err = s.writeLint.Phase1WithMemoryStore(ctx, wlMem, wlActor, scopedWLStore)
-			} else {
-				p1resp, p1err = s.writeLint.Phase1(ctx, wlMem, wlActor)
-			}
+			p1resp, p1err := s.writeLint.Phase1WithMemoryStore(ctx, wlMem, wlActor, scopedWLStore)
 			if p1err != nil {
 				return "", fmt.Errorf("write_lint_phase1: %w", p1err)
 			}
@@ -1218,6 +1230,63 @@ func truncateTitle(content string, maxLen int) string {
 	return truncated + "..."
 }
 
+func keepRecallMemory(mem *models.Memory, queryLower, obsType string, tagSet map[string]struct{}, caller scope.KeycardContext, visibilityOpts scope.MemoryVisibilityOptions, tierFilterSet map[string]bool, tg3Active bool, tg3ConfidenceMin float64) bool {
+	contentLower := strings.ToLower(mem.Content)
+	if queryLower != "" && !strings.Contains(contentLower, queryLower) {
+		matchedTag := false
+		for _, tag := range mem.Tags {
+			if strings.Contains(strings.ToLower(tag), queryLower) {
+				matchedTag = true
+				break
+			}
+		}
+		if !matchedTag {
+			return false
+		}
+	}
+	if obsType != "" {
+		typeTag := strings.ToLower("type:" + obsType)
+		typeMatched := false
+		for _, tag := range mem.Tags {
+			if strings.ToLower(tag) == typeTag {
+				typeMatched = true
+				break
+			}
+		}
+		if !typeMatched {
+			return false
+		}
+	}
+	if len(tagSet) > 0 {
+		tagMatched := false
+		for _, tag := range mem.Tags {
+			if _, ok := tagSet[strings.ToLower(tag)]; ok {
+				tagMatched = true
+				break
+			}
+		}
+		if !tagMatched {
+			return false
+		}
+	}
+	if !scope.ResolveMemory(caller, mem, visibilityOpts) {
+		return false
+	}
+	if len(tierFilterSet) > 0 {
+		tier := mem.Tier
+		if tier == "" {
+			tier = lifecycle.TierEpisodic
+		}
+		if !tierFilterSet[tier] {
+			return false
+		}
+	}
+	if tg3Active && tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
+		return false
+	}
+	return true
+}
+
 // handleRecallMemory retrieves memories from the v5 memories table.
 //
 // Flag-OFF (ENGRAM_VNEXT_ENABLED != "true"): byte-identical to the previous
@@ -1339,65 +1408,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// vNext-F scope filter to a single memory. Returns true when it should
 	// be included in the response.
 	keepMemory := func(mem *models.Memory) bool {
-		contentLower := strings.ToLower(mem.Content)
-		if queryLower != "" && !strings.Contains(contentLower, queryLower) {
-			matchedTag := false
-			for _, tag := range mem.Tags {
-				if strings.Contains(strings.ToLower(tag), queryLower) {
-					matchedTag = true
-					break
-				}
-			}
-			if !matchedTag {
-				return false
-			}
-		}
-		if obsType != "" {
-			typeTag := strings.ToLower("type:" + obsType)
-			typeMatched := false
-			for _, tag := range mem.Tags {
-				if strings.ToLower(tag) == typeTag {
-					typeMatched = true
-					break
-				}
-			}
-			if !typeMatched {
-				return false
-			}
-		}
-		if len(tagSet) > 0 {
-			tagMatched := false
-			for _, tag := range mem.Tags {
-				if _, ok := tagSet[strings.ToLower(tag)]; ok {
-					tagMatched = true
-					break
-				}
-			}
-			if !tagMatched {
-				return false
-			}
-		}
-		if !scope.ResolveMemory(caller, mem, visibilityOpts) {
-			return false
-		}
-		// B4 resolution: tier_filter (ENGRAM_LIFECYCLE_ENABLED path).
-		// Empty tierFilterSet means no tier restriction — all tiers pass.
-		if len(tierFilterSet) > 0 {
-			tier := mem.Tier
-			if tier == "" {
-				tier = lifecycle.TierEpisodic // treat unset as episodic (migration 131 default)
-			}
-			if !tierFilterSet[tier] {
-				return false
-			}
-		}
-		// T018 TG3 (MINOR fix): confidence floor applied in keepMemory so that
-		// the tg3Active+scopeEnabled batch-loop path honours confidence_min
-		// even when paging via ListWithOffset (which has no SQL confidence filter).
-		if tg3Active && tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
-			return false
-		}
-		return true
+		return keepRecallMemory(mem, queryLower, obsType, tagSet, caller, visibilityOpts, tierFilterSet, tg3Active, tg3ConfidenceMin)
 	}
 
 	filtered := make([]*models.Memory, 0, limit)

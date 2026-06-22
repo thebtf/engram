@@ -236,6 +236,97 @@ func TestWriteLint_PrincipalPrivateTargetHiddenFromPhase2(t *testing.T) {
 	require.Contains(t, err.Error(), "target memory 11 not found")
 }
 
+func TestWriteLint_DomainOwnedCandidateHiddenWithOrchestratorStoreFallback(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	ms := newStubWLMemStore(&models.Memory{
+		ID:                 20,
+		Project:            "testproj",
+		Content:            t035DupContent,
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	})
+	orch, closer := buildWLOrchestratorWithStore(ms)
+	defer closer()
+
+	srv := NewServer(ServerOptions{Version: "test-domain-wl"})
+	srv.SetWriteLintOrchestrator(orch)
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+	args, err := json.Marshal(map[string]any{
+		"content": t035DupContent,
+		"project": "testproj",
+		"domain":  "memory-lab",
+	})
+	require.NoError(t, err)
+
+	result, err := srv.handleStoreMemory(ctx, args)
+	require.NoError(t, err)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result), &resp))
+	require.Equal(t, true, resp["stored"], "orchestrator-owned raw store must still be scoped before Phase1")
+	require.Empty(t, resp["lint_signals"], "cross-principal domain-owned candidate must not produce Phase1 signals")
+}
+
+func TestWriteLint_DomainOwnedTargetHiddenWithOrchestratorStoreFallback(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	visible := nearDupMemory()
+	visible.ID = 21
+	visible.OwnerPrincipal = "agent/alice"
+	visible.OwnerPrincipalKind = "agent"
+	visible.AgentVisibility = models.AgentVisibilityShared
+	visible.Domain = "memory-lab"
+	hidden := &models.Memory{
+		ID:                 22,
+		Project:            "testproj",
+		Content:            "hidden bob domain target",
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	}
+	ms := newStubWLMemStore(visible, hidden)
+	orch, closer := buildWLOrchestratorWithStore(ms)
+	defer closer()
+
+	srv := NewServer(ServerOptions{Version: "test-domain-wl"})
+	srv.SetWriteLintOrchestrator(orch)
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+	p1args, err := json.Marshal(map[string]any{
+		"content": t035DupContent,
+		"project": "testproj",
+		"domain":  "memory-lab",
+	})
+	require.NoError(t, err)
+	p1result, err := srv.handleStoreMemory(ctx, p1args)
+	require.NoError(t, err)
+
+	var p1resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(p1result), &p1resp))
+	token, ok := p1resp["resolution_token"].(string)
+	require.True(t, ok, "visible duplicate should mint a Phase2 token")
+	require.NotEmpty(t, token)
+
+	p2args, err := json.Marshal(map[string]any{
+		"content":          t035DupContent,
+		"project":          "testproj",
+		"domain":           "memory-lab",
+		"resolution_token": token,
+		"option":           "merge_with",
+		"target_memory_id": hidden.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = srv.handleStoreMemory(ctx, p2args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "target memory 22 not found")
+}
+
 // TestWriteLint_T035_FlagOff_LegacyPath verifies that when ENGRAM_VNEXT_F_ENABLED
 // is not set, the handler follows the legacy path even if writeLint is wired.
 // With no memoryStore wired (nil), it should fail at the nil-store check, not

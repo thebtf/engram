@@ -188,6 +188,16 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{cfg: cfg}
 }
 
+// MemoryStore returns the orchestrator-owned memory store so transport
+// adapters can wrap it in request-scoped visibility filters without falling
+// back to raw Phase1/Phase2 calls.
+func (o *Orchestrator) MemoryStore() MemoryStoreInterface {
+	if o == nil {
+		return nil
+	}
+	return o.cfg.MemoryStore
+}
+
 // Phase1 runs quality detection on incoming content and either commits the
 // memory immediately (no signals → stored=true, no token) or returns signals
 // + resolution options + a minted token (stored=false).
