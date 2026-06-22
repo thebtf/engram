@@ -18,6 +18,7 @@ import (
 	gormlib "gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -172,6 +173,20 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	domainDecision, err := s.checkDomainWriteREST(r.Context(), mem, req.SessionID)
+	if err != nil {
+		if errors.Is(err, principalmemory.ErrDomainWriteRejected) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		log.Error().Err(err).Str("project", req.Project).Str("domain", mem.Domain).Msg("domain registry check failed")
+		http.Error(w, "domain registry check failed", http.StatusInternalServerError)
+		return
+	}
+	if domainDecision != nil && !domainDecision.Allowed {
+		http.Error(w, "domain write rejected", http.StatusForbidden)
+		return
+	}
 
 	created, err := s.memoryStore.Create(r.Context(), mem)
 	if err != nil {
@@ -181,7 +196,48 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, created)
+	writeStoreMemoryResponse(w, created, domainDecision)
+}
+
+func (s *Service) checkDomainWriteREST(ctx context.Context, mem *models.Memory, sourceSessionID string) (*principalmemory.DomainWriteDecision, error) {
+	if mem == nil || strings.TrimSpace(mem.Domain) == "" {
+		return nil, nil
+	}
+	svc := s.currentDomainRegistryService()
+	if svc == nil {
+		return nil, nil
+	}
+	return svc.CheckWrite(ctx, principalmemory.DomainWriteCheckRequest{
+		Project:         mem.Project,
+		Domain:          mem.Domain,
+		Writer:          principalmemory.PrincipalRef{Principal: mem.OwnerPrincipal, PrincipalKind: mem.OwnerPrincipalKind},
+		SourceSessionID: strings.TrimSpace(sourceSessionID),
+	})
+}
+
+func (s *Service) currentDomainRegistryService() domainRegistryService {
+	s.initMu.RLock()
+	svc := s.domainRegistryService
+	s.initMu.RUnlock()
+	return svc
+}
+
+func writeStoreMemoryResponse(w http.ResponseWriter, mem *models.Memory, decision *principalmemory.DomainWriteDecision) {
+	safe := jsonSafeMemory(mem)
+	if decision == nil || decision.Warning == nil {
+		writeJSON(w, safe)
+		return
+	}
+	resp := struct {
+		*models.Memory
+		DomainWarning     *principalmemory.DomainWriteWarning `json:"domain_warning,omitempty"`
+		DomainAuditStatus string                              `json:"domain_audit_status,omitempty"`
+	}{
+		Memory:            safe,
+		DomainWarning:     decision.Warning,
+		DomainAuditStatus: decision.AuditStatus,
+	}
+	writeJSON(w, resp)
 }
 
 // handleListMemories godoc
@@ -255,30 +311,33 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 func jsonSafeMemories(mems []*models.Memory) []*models.Memory {
 	safe := make([]*models.Memory, 0, len(mems))
 	for _, mem := range mems {
-		if mem == nil {
-			safe = append(safe, nil)
-			continue
-		}
-
-		copy := *mem
-		copy.CreatedAt = jsonSafeTime(copy.CreatedAt)
-		copy.UpdatedAt = jsonSafeTime(copy.UpdatedAt)
-		copy.DeletedAt = jsonSafeTimePtr(copy.DeletedAt)
-		copy.LastRetrievedAt = jsonSafeTimePtr(copy.LastRetrievedAt)
-		copy.LastConfirmed = jsonSafeTimePtr(copy.LastConfirmed)
-		copy.ReviewAfter = jsonSafeTimePtr(copy.ReviewAfter)
-		copy.ValidFrom = jsonSafeTimePtr(copy.ValidFrom)
-		copy.ValidUntil = jsonSafeTimePtr(copy.ValidUntil)
-		copy.ImportanceBase = finiteOrZero(copy.ImportanceBase)
-		copy.TsAlpha = finiteOrZero(copy.TsAlpha)
-		copy.TsBeta = finiteOrZero(copy.TsBeta)
-		copy.Confidence = finiteOrZero(copy.Confidence)
-		copy.Stability = finiteOrZero(copy.Stability)
-		copy.Retrievability = finiteOrZero(copy.Retrievability)
-		safe = append(safe, &copy)
+		safe = append(safe, jsonSafeMemory(mem))
 	}
 
 	return safe
+}
+
+func jsonSafeMemory(mem *models.Memory) *models.Memory {
+	if mem == nil {
+		return nil
+	}
+
+	copy := *mem
+	copy.CreatedAt = jsonSafeTime(copy.CreatedAt)
+	copy.UpdatedAt = jsonSafeTime(copy.UpdatedAt)
+	copy.DeletedAt = jsonSafeTimePtr(copy.DeletedAt)
+	copy.LastRetrievedAt = jsonSafeTimePtr(copy.LastRetrievedAt)
+	copy.LastConfirmed = jsonSafeTimePtr(copy.LastConfirmed)
+	copy.ReviewAfter = jsonSafeTimePtr(copy.ReviewAfter)
+	copy.ValidFrom = jsonSafeTimePtr(copy.ValidFrom)
+	copy.ValidUntil = jsonSafeTimePtr(copy.ValidUntil)
+	copy.ImportanceBase = finiteOrZero(copy.ImportanceBase)
+	copy.TsAlpha = finiteOrZero(copy.TsAlpha)
+	copy.TsBeta = finiteOrZero(copy.TsBeta)
+	copy.Confidence = finiteOrZero(copy.Confidence)
+	copy.Stability = finiteOrZero(copy.Stability)
+	copy.Retrievability = finiteOrZero(copy.Retrievability)
+	return &copy
 }
 
 func jsonSafeTime(value time.Time) time.Time {

@@ -303,6 +303,19 @@ type Memory struct {
 
 func (Memory) TableName() string { return "memories" }
 
+// DomainOwner is the operator-managed registry row that decides who owns a
+// memory domain and whether cross-owner writes are allowed, warned, or rejected.
+type DomainOwner struct {
+	CreatedAt          time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now()" json:"created_at"`
+	UpdatedAt          time.Time `gorm:"column:updated_at;type:timestamptz;not null;default:now()" json:"updated_at"`
+	Domain             string    `gorm:"column:domain;primaryKey;type:text" json:"domain"`
+	OwnerPrincipal     string    `gorm:"column:owner_principal;type:text;not null" json:"owner_principal"`
+	OwnerPrincipalKind string    `gorm:"column:owner_principal_kind;type:text;not null;default:'human'" json:"owner_principal_kind"`
+	Mode               string    `gorm:"column:mode;type:text;not null;default:'warn'" json:"mode"`
+}
+
+func (DomainOwner) TableName() string { return "memory_domain_owners" }
+
 // BehavioralRule is the GORM row struct for the behavioral_rules table (migration 089).
 // Project is a pointer because the column is NULLable: NULL = global rule.
 type BehavioralRule struct {

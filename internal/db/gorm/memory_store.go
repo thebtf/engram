@@ -380,6 +380,17 @@ type ListOptions struct {
 	// WHERE status IN ('active','superseded'). Default false means
 	// only 'active' rows are returned (same as legacy List).
 	IncludeSuperseded bool
+	// OwnerPrincipal, when non-empty, restricts rows to memories attributed to
+	// the named principal before LIMIT/OFFSET are applied.
+	OwnerPrincipal string
+	// OwnerPrincipalKind, when non-empty, restricts rows to human/agent/service
+	// ownership kind. Callers that set OwnerPrincipal should normally set this too.
+	OwnerPrincipalKind string
+	// AgentVisibility, when non-empty, restricts rows to private/shared agent
+	// visibility at SQL time.
+	AgentVisibility string
+	// Domain, when non-empty, restricts rows to a principal-memory domain.
+	Domain string
 	// Limit caps the number of returned rows. Values <= 0 default to 50.
 	Limit int
 	// Offset skips rows after SQL predicates are applied. Values < 0 default to
@@ -404,16 +415,67 @@ func (s *MemoryStore) ListWithFilters(ctx context.Context, project string, opts 
 	if project == "" {
 		return nil, fmt.Errorf("project: must not be empty")
 	}
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = 50
+
+	q := baseMemoryListQuery(s.db.WithContext(ctx)).
+		Where("project = ?", project)
+
+	result, err := findMemoryRows(q, opts)
+	if err != nil {
+		return nil, fmt.Errorf("list memories with filters for project %q: %w", project, err)
+	}
+	return result, nil
+}
+
+// ListPrincipalMemory returns rows using the principal-memory query seam.
+// Unlike ListWithFilters, project is optional so cross-project principal views
+// can be built without weakening the legacy ListWithFilters(project!="") guard.
+func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, opts ListOptions) ([]*models.Memory, error) {
+	owner := strings.TrimSpace(opts.OwnerPrincipal)
+	if strings.TrimSpace(project) == "" && owner == "" {
+		return nil, fmt.Errorf("owner_principal must not be empty when project is empty")
 	}
 
-	q := s.db.WithContext(ctx).
-		Where("project = ? AND deleted_at IS NULL", project).
+	q := baseMemoryListQuery(s.db.WithContext(ctx))
+	if project = strings.TrimSpace(project); project != "" {
+		q = q.Where("project = ?", project)
+	}
+
+	result, err := findMemoryRows(q, opts)
+	if err != nil {
+		if project == "" {
+			return nil, fmt.Errorf("list principal memories: %w", err)
+		}
+		return nil, fmt.Errorf("list principal memories for project %q: %w", project, err)
+	}
+	return result, nil
+}
+
+func baseMemoryListQuery(q *gorm.DB) *gorm.DB {
+	return q.
+		Where("deleted_at IS NULL").
 		Where("valid_from IS NULL OR valid_from <= NOW()").
 		Where("valid_until IS NULL OR valid_until >= NOW()")
+}
 
+func findMemoryRows(q *gorm.DB, opts ListOptions) ([]*models.Memory, error) {
+	q = applyMemoryListOptions(q, opts)
+
+	var rows []Memory
+	err := q.Order("created_at DESC, id DESC").
+		Limit(normalizeMemoryListLimit(opts.Limit)).
+		Offset(normalizeMemoryListOffset(opts.Offset)).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		result[i] = memoryRowToModel(&rows[i])
+	}
+	return result, nil
+}
+
+func applyMemoryListOptions(q *gorm.DB, opts ListOptions) *gorm.DB {
 	if opts.IncludeSuperseded {
 		q = q.Where("status IN ('active','superseded')")
 	} else {
@@ -425,23 +487,40 @@ func (s *MemoryStore) ListWithFilters(ctx context.Context, project string, opts 
 	if content := strings.TrimSpace(opts.ContentContains); content != "" {
 		q = q.Where("LOWER(content) LIKE ? ESCAPE '\\'", "%"+escapeSQLLike(strings.ToLower(content))+"%")
 	}
-	if opts.Offset < 0 {
-		opts.Offset = 0
+	if owner := strings.TrimSpace(opts.OwnerPrincipal); owner != "" {
+		q = q.Where("owner_principal = ?", owner)
 	}
+	if kind := strings.TrimSpace(strings.ToLower(opts.OwnerPrincipalKind)); kind != "" {
+		q = q.Where("owner_principal_kind = ?", kind)
+	}
+	if visibility := strings.TrimSpace(opts.AgentVisibility); visibility != "" {
+		q = q.Where("agent_visibility = ?", visibility)
+	}
+	if domain := strings.TrimSpace(opts.Domain); domain != "" {
+		q = q.Where("domain = ?", domain)
+	}
+	return q
+}
 
-	var rows []Memory
-	err := q.Order("created_at DESC, id DESC").
-		Limit(limit).
-		Offset(opts.Offset).
-		Find(&rows).Error
-	if err != nil {
-		return nil, fmt.Errorf("list memories with filters for project %q: %w", project, err)
+func normalizeMemoryListLimit(limit int) int {
+	const (
+		defaultMemoryListLimit = 50
+		maxMemoryListLimit     = 1000
+	)
+	if limit <= 0 {
+		return defaultMemoryListLimit
 	}
-	result := make([]*models.Memory, len(rows))
-	for i := range rows {
-		result[i] = memoryRowToModel(&rows[i])
+	if limit > maxMemoryListLimit {
+		return maxMemoryListLimit
 	}
-	return result, nil
+	return limit
+}
+
+func normalizeMemoryListOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func escapeSQLLike(value string) string {

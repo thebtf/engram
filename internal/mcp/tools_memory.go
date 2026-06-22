@@ -575,6 +575,10 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			if wlMem.PrivacyScope == "private" && wlMem.SourceWorkstationID == "" {
 				return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
 			}
+			domainDecision, err := s.checkDomainWriteMCP(ctx, wlMem, params.SessionID)
+			if err != nil {
+				return "", fmt.Errorf("domain registry check failed: %w", err)
+			}
 
 			scopedWLStore := s.scopedWriteLintMemoryStore(ctx, params.SessionID)
 			if scopedWLStore == nil {
@@ -608,8 +612,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				// fire here too — otherwise relative-time content that required conflict
 				// resolution commits without the nudge (Codex review). p2resp is a typed
 				// struct; round-trip it to a map to attach the advisory key when relevant.
-				if terms := staleness.DetectRelativeTime(params.Content); len(terms) > 0 {
-					out, marshalErr := marshalWithStaleAdvisory(p2resp, terms)
+				if terms := staleness.DetectRelativeTime(params.Content); len(terms) > 0 || (domainDecision != nil && domainDecision.Warning != nil) {
+					out, marshalErr := marshalStoreMemoryAugmented(p2resp, domainDecision, terms)
 					if marshalErr != nil {
 						return "", fmt.Errorf("write_lint_phase2: marshal: %w", marshalErr)
 					}
@@ -648,6 +652,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				"message":         "Memory stored successfully via write-lint (no conflicts detected)",
 			}
 			addPrincipalMemoryFields(wlResult, wlMem)
+			addDomainWriteDecisionFields(wlResult, domainDecision)
 			// Rank-3 staleness advisory must also fire on the write-lint success path —
 			// this is the primary store path when ENGRAM_VNEXT_F_ENABLED=true, the same
 			// config that activates the serve-time hint, so the advisory cannot be
@@ -843,10 +848,57 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
+	memory := &models.Memory{
+		Project:        params.Project,
+		Content:        params.Content,
+		Tags:           tags,
+		SourceAgent:    agentSource,
+		ImportanceBase: 0.5,
+	}
+
+	// T004 — vNext F TG1: populate the new lifecycle/identity fields when the
+	// flag is ON. PrivacyScope falls through to DB DEFAULT 'project' when
+	// flag is OFF (empty Go string lets the column default apply). Workstation
+	// id is derived from the caller's keycard via auth.Identity.WorkstationID
+	// added in T003b. SourceSessions is populated from the explicit session_id
+	// param when supplied — the MCP layer has no implicit session-id ctx key
+	// in v6.4.x, so callers (e.g., the engram client proxy) advertise their
+	// session via the param. When absent, SourceSessions stays empty and
+	// scope.Resolve falls back to the workstation-only-suffices branch per
+	// spec FR-F1 AMEND 2026-05-25.
+	if vnextFEnabled() {
+		memory.PrivacyScope = resolvedPrivacyScope
+		if id, ok := auth.IdentityFrom(ctx); ok {
+			memory.SourceWorkstationID = id.WorkstationID()
+		}
+		if params.SessionID != "" {
+			memory.SourceSessions = []string{params.SessionID}
+		}
+		// Codex P1 cycle-4 fix on 783c0be: reject private-scope writes when
+		// the caller has no non-empty workstation identity. scope.Resolve
+		// fail-closes private memories whose source_workstation_id is empty
+		// (`internal/scope/filter.go:85-87` — "if memorySource.WorkstationID
+		// == \"\" { return false }"), so persisting such a row would make
+		// it permanently unreadable to every caller including the writer
+		// itself. Master and bare-session sources cannot produce a
+		// non-empty WorkstationID (auth/identity.go:111-116 — returns
+		// KeycardID only when Source == SourceClient).
+		if resolvedPrivacyScope == "private" && memory.SourceWorkstationID == "" {
+			return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
+		}
+	}
+	if err := applyPrincipalMemoryMetadata(ctx, memory, params.AgentVisibility, params.Domain); err != nil {
+		return "", err
+	}
+	domainDecision, err := s.checkDomainWriteMCP(ctx, memory, params.SessionID)
+	if err != nil {
+		return "", fmt.Errorf("domain registry check failed: %w", err)
+	}
+
 	// --- Supersession: mark old memories and compute inherited importance ---
 	// importanceBase starts at 0.5. When superseding, it is raised to
 	// max(0.5, oldImportance * 0.7) based on the first superseded memory.
-	inheritedImportance := 0.5
+	inheritedImportance := memory.ImportanceBase
 	var primarySupersededID *int64
 	var supersededIDs []int64
 	for _, sid := range params.Supersedes {
@@ -884,6 +936,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			}
 		}
 	}
+	memory.ImportanceBase = inheritedImportance
+	memory.SupersedesID = primarySupersededID
 
 	// --- Write gate (vNext Phase A) ---
 	// When ENGRAM_VNEXT_ENABLED=true, evaluate novelty before creation.
@@ -899,50 +953,6 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			existing = filterVisibleWriteGateCandidates(ctx, params.SessionID, existing)
 			gateResult = writegate.Check(ctx, params.Content, existing)
 		}
-	}
-
-	memory := &models.Memory{
-		Project:        params.Project,
-		Content:        params.Content,
-		Tags:           tags,
-		SourceAgent:    agentSource,
-		ImportanceBase: inheritedImportance,
-		SupersedesID:   primarySupersededID,
-	}
-
-	// T004 — vNext F TG1: populate the new lifecycle/identity fields when the
-	// flag is ON. PrivacyScope falls through to DB DEFAULT 'project' when
-	// flag is OFF (empty Go string lets the column default apply). Workstation
-	// id is derived from the caller's keycard via auth.Identity.WorkstationID
-	// added in T003b. SourceSessions is populated from the explicit session_id
-	// param when supplied — the MCP layer has no implicit session-id ctx key
-	// in v6.4.x, so callers (e.g., the engram client proxy) advertise their
-	// session via the param. When absent, SourceSessions stays empty and
-	// scope.Resolve falls back to the workstation-only-suffices branch per
-	// spec FR-F1 AMEND 2026-05-25.
-	if vnextFEnabled() {
-		memory.PrivacyScope = resolvedPrivacyScope
-		if id, ok := auth.IdentityFrom(ctx); ok {
-			memory.SourceWorkstationID = id.WorkstationID()
-		}
-		if params.SessionID != "" {
-			memory.SourceSessions = []string{params.SessionID}
-		}
-		// Codex P1 cycle-4 fix on 783c0be: reject private-scope writes when
-		// the caller has no non-empty workstation identity. scope.Resolve
-		// fail-closes private memories whose source_workstation_id is empty
-		// (`internal/scope/filter.go:85-87` — "if memorySource.WorkstationID
-		// == \"\" { return false }"), so persisting such a row would make
-		// it permanently unreadable to every caller including the writer
-		// itself. Master and bare-session sources cannot produce a
-		// non-empty WorkstationID (auth/identity.go:111-116 — returns
-		// KeycardID only when Source == SourceClient).
-		if resolvedPrivacyScope == "private" && memory.SourceWorkstationID == "" {
-			return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
-		}
-	}
-	if err := applyPrincipalMemoryMetadata(ctx, memory, params.AgentVisibility, params.Domain); err != nil {
-		return "", err
 	}
 
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
@@ -1060,6 +1070,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 	addPrincipalMemoryFields(result, created)
+	addDomainWriteDecisionFields(result, domainDecision)
 	if vnextEnabled {
 		result["quality_signals"] = map[string]any{
 			"gate_result":      gateResult.Decision,
@@ -1257,6 +1268,16 @@ func truncateTitle(content string, maxLen int) string {
 }
 
 func keepRecallMemory(mem *models.Memory, queryLower, obsType string, tagSet map[string]struct{}, caller scope.KeycardContext, visibilityOpts scope.MemoryVisibilityOptions, tierFilterSet map[string]bool, tg3Active bool, tg3ConfidenceMin float64) bool {
+	if !keepRecallMemoryFilters(mem, queryLower, obsType, tagSet, tierFilterSet, tg3Active, tg3ConfidenceMin) {
+		return false
+	}
+	if !scope.ResolveMemory(caller, mem, visibilityOpts) {
+		return false
+	}
+	return true
+}
+
+func keepRecallMemoryFilters(mem *models.Memory, queryLower, obsType string, tagSet map[string]struct{}, tierFilterSet map[string]bool, tg3Active bool, tg3ConfidenceMin float64) bool {
 	contentLower := strings.ToLower(mem.Content)
 	if queryLower != "" && !strings.Contains(contentLower, queryLower) {
 		matchedTag := false
@@ -1294,9 +1315,6 @@ func keepRecallMemory(mem *models.Memory, queryLower, obsType string, tagSet map
 		if !tagMatched {
 			return false
 		}
-	}
-	if !scope.ResolveMemory(caller, mem, visibilityOpts) {
-		return false
 	}
 	if len(tierFilterSet) > 0 {
 		tier := mem.Tier
@@ -1398,6 +1416,10 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		ApplyPrivacyScope: scopeEnabled,
 		IncludeScopes:     includeScopes,
 	}
+	includePrincipals, includePrincipalsSet, err := parseRecallIncludedPrincipals(m["include_principals"])
+	if err != nil {
+		return "", err
+	}
 
 	// ── T018 (engram vNext Milestone F TG3) — new filter + rationale params ──
 	// Parsed unconditionally from the args map; gated on vnextFEnabled() at
@@ -1419,7 +1441,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// handleRecallMemoryHybrid so hybrid results are subject to the same
 	// predicate as the legacy List path below.
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
-	if vnextEnabled {
+	if vnextEnabled && !includePrincipalsSet {
 		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, visibilityOpts, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
 	}
 	// ── legacy List-based path with shared visibility filtering ─
@@ -1435,6 +1457,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// be included in the response.
 	keepMemory := func(mem *models.Memory) bool {
 		return keepRecallMemory(mem, queryLower, obsType, tagSet, caller, visibilityOpts, tierFilterSet, tg3Active, tg3ConfidenceMin)
+	}
+	keepIncludedPrincipalMemory := func(mem *models.Memory) bool {
+		return keepRecallMemoryFilters(mem, queryLower, obsType, tagSet, tierFilterSet, tg3Active, tg3ConfidenceMin)
 	}
 
 	filtered := make([]*models.Memory, 0, limit)
@@ -1496,6 +1521,12 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 			if len(batch) < batchSize {
 				break
 			}
+		}
+	}
+	if includePrincipalsSet {
+		filtered, err = s.appendRecallIncludedPrincipalMemories(ctx, filtered, includePrincipals, project, query, callerSessionID, limit, keepIncludedPrincipalMemory)
+		if err != nil {
+			return "", err
 		}
 	}
 
