@@ -32,6 +32,8 @@ interface ApiMemory {
   source_sessions?: string[]
 }
 
+const MEMORY_LIST_LIMIT = 500
+
 export interface StoreMemoryInput {
   project: string
   content: string
@@ -202,7 +204,7 @@ async function loadMemoryRows(): Promise<Memory[]> {
   const combined: Memory[] = []
 
   for (const project of projects) {
-    const path = `/api/memories?project=${encodeURIComponent(project)}&limit=200`
+    const path = `/api/memories?project=${encodeURIComponent(project)}&limit=${MEMORY_LIST_LIMIT}`
     const payload = await operatorFetchJson<unknown>(path, undefined, 'memory-list')
     for (const row of parseMemoryArray(payload, path)) {
       combined.push(mapMemoryRow(row))
@@ -228,7 +230,7 @@ export function useOperatorMemoryLab(): {
   auditGap: ReturnType<typeof unsupportedOperatorAction>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
 } {
-  const evidence = endpointEvidence('/api/memories?project={project}&limit=200', 'memory-list')
+  const evidence = endpointEvidence(`/api/memories?project={project}&limit=${MEMORY_LIST_LIMIT}`, 'memory-list')
   const rowsState = useState<Memory[]>('live:memory-lab:rows', () => [])
   const state = useState<OperatorLoadState<Memory[]>>('live:memory-lab:state', () => pendingState(evidence, rowsState.value))
 

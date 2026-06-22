@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useOperatorMemoryLab } from '../composables/useOperatorMemoryLab'
-import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
+import { MEMORY_PAGE_SIZE_STORAGE_KEY, resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import type { Memory } from '../composables/useMockData'
 
 const { t } = useI18n()
@@ -28,7 +28,7 @@ const filters = ref<Record<MemoryFilter, boolean>>({
 const selected = ref<Record<string, boolean>>({})
 const openId = ref<string | null>(null)
 const page = ref(1)
-const { pageSize, pageSizeOptions } = usePersistentPageSize('memories', 10)
+const { pageSize, pageSizeOptions } = usePersistentPageSize(MEMORY_PAGE_SIZE_STORAGE_KEY, 10)
 
 const projects = computed(() => [...new Set(all.map((memory) => memory.project).filter(Boolean))].sort())
 const activeFilterCount = computed(() => Object.values(filters.value).filter(Boolean).length + (project.value === 'all' ? 0 : 1))
@@ -172,9 +172,9 @@ function isNoisyUtility(memory: Memory) {
       <div class="ops-right">
         <label class="rows">
           <span>{{ t('memory.rowsLabel') }}</span>
-          <select id="memory-page-size" v-model.number="pageSize" class="select" name="memory-page-size">
+          <select id="memory-page-size" v-model="pageSize" class="select" name="memory-page-size">
             <option v-for="size in pageSizeOptions" :key="size" :value="size">
-              {{ size === 0 ? t('memory.allRows') : size }}
+              {{ size === 'all' ? t('memory.allRows') : size }}
             </option>
           </select>
         </label>

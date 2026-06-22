@@ -9,6 +9,8 @@ const nuxtConfigPath = join(root, 'nuxt.config.ts')
 const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
 const memoryLabPath = join(root, 'composables', 'useOperatorMemoryLab.ts')
+const memoryPagePath = join(root, 'pages', 'memory.vue')
+const pageSizePath = join(root, 'composables', 'usePersistentPageSize.ts')
 
 function read(path) {
   return readFileSync(path, 'utf8')
@@ -159,6 +161,22 @@ test('memory lab malformed project payloads are errors, not empty memory', () =>
   assert.match(loaderBody, /parseMemoryArray\(payload/, 'Memory Lab must validate every project payload before mapping rows')
   assert.match(parseBody, /throw\s+/, 'parseMemoryArray must throw on malformed or non-array payloads')
   assert.doesNotMatch(parseBody, /return\s+\[\]/, 'parseMemoryArray must not convert malformed payloads into an empty Memory page')
+})
+
+test('memory page-size contract offers persisted bounded all mode', () => {
+  const pageSizeSource = read(pageSizePath)
+  const memoryPageSource = read(memoryPagePath)
+  const memoryLabSource = read(memoryLabPath)
+
+  assert.match(pageSizeSource, /10\s*\|\s*25\s*\|\s*50\s*\|\s*['"]all['"]/, 'page-size type must use 10/25/50/all values')
+  assert.match(pageSizeSource, /\[10,\s*25,\s*50,\s*['"]all['"]\]/, 'page-size options must include all as a real value')
+  assert.match(pageSizeSource, /engram\.operatorConsole\.memory\.pageSize/, 'memory page-size preference must use the CR-006 storage key')
+  assert.doesNotMatch(pageSizeSource, /engram\.console\.pageSizes/, 'memory page-size preference must not be hidden in the legacy grouped key')
+  assert.match(pageSizeSource, /size\s*===\s*['"]all['"]/, 'all must resolve explicitly, not through numeric sentinel math')
+  assert.doesNotMatch(memoryPageSource, /v-model\.number="pageSize"/, 'page-size select must not coerce all into a number')
+  assert.match(memoryPageSource, /t\(['"]memory\.allRows['"]\)/, 'the all option label must be localized')
+  assert.match(memoryLabSource, /limit=500|MEMORY_LIST_LIMIT\s*=\s*500/, 'Memory Lab must request no more than the current server cap for all-mode readiness')
+  assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
 })
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
