@@ -1,6 +1,6 @@
 import type { ComputedRef } from 'vue'
 import type { Memory } from './useMockData'
-import type { OperatorLoadState } from './useOperatorApi'
+import type { OperatorLoadState, OperatorUnsupportedAction } from './useOperatorApi'
 import {
   emptyState,
   endpointEvidence,
@@ -39,6 +39,59 @@ export interface StoreMemoryInput {
   content: string
   tags?: string[]
 }
+
+export interface MemoryActionGap extends OperatorUnsupportedAction {
+  labelKey: string
+  badgeKey: string
+}
+
+function memoryActionGap(
+  action: string,
+  endpoint: string,
+  reason: string,
+  labelKey: string,
+  badgeKey = 'overview.badges.mustBuild',
+): MemoryActionGap {
+  return {
+    ...unsupportedOperatorAction(action, endpoint, reason),
+    labelKey,
+    badgeKey,
+  }
+}
+
+const memoryActionGaps: MemoryActionGap[] = [
+  memoryActionGap(
+    'memory-hide-noise',
+    'MCP memory.suppress',
+    'Memory suppression is not exposed by the current browser REST API.',
+    'memory.detail.actions.hideNoise',
+  ),
+  memoryActionGap(
+    'memory-edit-text',
+    'MCP memory.edit',
+    'Memory text editing is not exposed by the current browser REST API.',
+    'memory.detail.actions.editText',
+  ),
+  memoryActionGap(
+    'memory-replace',
+    'MCP memory.supersede',
+    'Memory replacement is not exposed by the current browser REST API.',
+    'memory.detail.actions.replace',
+  ),
+  memoryActionGap(
+    'memory-promote',
+    'ENGRAM_LIFECYCLE_ENABLED',
+    'Memory lifecycle promotion requires the lifecycle backend surface.',
+    'memory.detail.actions.promote',
+    'memory.detail.actions.lifecycleRequired',
+  ),
+  memoryActionGap(
+    'memory-flag',
+    'POST /api/memories/{id}/flag',
+    'Memory flagging is not exposed by the current server API.',
+    'memory.detail.actions.flag',
+  ),
+]
 
 function jsonInit(method: 'POST' | 'DELETE', body?: unknown): RequestInit {
   const init: RequestInit = { method }
@@ -229,6 +282,7 @@ export function useOperatorMemoryLab(): {
   deleteMemory: (id: string) => Promise<unknown>
   auditGap: ReturnType<typeof unsupportedOperatorAction>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
+  actionGaps: MemoryActionGap[]
 } {
   const evidence = endpointEvidence(`/api/memories?project={project}&limit=${MEMORY_LIST_LIMIT}`, 'memory-list')
   const rowsState = useState<Memory[]>('live:memory-lab:rows', () => [])
@@ -322,5 +376,6 @@ export function useOperatorMemoryLab(): {
     deleteMemory,
     auditGap,
     provenanceGap,
+    actionGaps: memoryActionGaps,
   }
 }

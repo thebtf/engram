@@ -13,6 +13,7 @@ const {
   refresh,
   auditGap,
   provenanceGap,
+  actionGaps,
 } = useOperatorMemoryLab()
 
 type MemoryFilter = 'active' | 'flagged' | 'stale' | 'low' | 'chain'
@@ -291,11 +292,9 @@ function isNoisyUtility(memory: Memory) {
         </section>
 
         <div class="dactions">
-          <button class="act" disabled>{{ t('memory.detail.actions.hideNoise') }} <span class="mbp">{{ t('overview.badges.mustBuild') }}</span></button>
-          <button class="act" disabled>{{ t('memory.detail.actions.editText') }} <span class="mbp">{{ t('overview.badges.mustBuild') }}</span></button>
-          <button class="act" disabled>{{ t('memory.detail.actions.replace') }} <span class="mbp">{{ t('overview.badges.mustBuild') }}</span></button>
-          <button class="act" disabled>{{ t('memory.detail.actions.promote') }} <span class="mbp">{{ t('memory.detail.actions.lifecycleRequired') }}</span></button>
-          <button class="act" disabled>{{ t('memory.detail.actions.flag') }} <span class="mbp">{{ t('overview.badges.mustBuild') }}</span></button>
+          <button v-for="action in actionGaps" :key="action.action" class="act" disabled :title="action.evidence.endpoint">
+            {{ t(action.labelKey) }} <span class="mbp">{{ t(action.badgeKey) }}</span>
+          </button>
         </div>
       </aside>
     </div>

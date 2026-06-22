@@ -179,6 +179,18 @@ test('memory page-size contract offers persisted bounded all mode', () => {
   assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
 })
 
+test('memory detail actions are data-backed mustbuild capabilities, not hardcoded fake-live controls', () => {
+  const memoryPageSource = read(memoryPagePath)
+  const memoryLabSource = read(memoryLabPath)
+
+  assert.doesNotMatch(memoryPageSource, /storeCopy|deleteOpened/, 'uncontracted store/delete controls must not be visible in Memory detail')
+  assert.match(memoryLabSource, /memoryActionGaps|actionGaps/, 'Memory Lab must expose action capability descriptors')
+  assert.match(memoryLabSource, /unsupportedOperatorAction\(/, 'Memory actions without browser endpoints must use unsupported action descriptors')
+  assert.match(memoryPageSource, /v-for="action in actionGaps"/, 'Memory detail buttons must render from action capability data')
+  assert.match(memoryPageSource, /:title="action\.evidence\.endpoint"/, 'Memory detail actions must carry endpoint/tool evidence')
+  assert.doesNotMatch(memoryPageSource, /<button class="act" disabled>\{\{ t\('memory\.detail\.actions\.hideNoise'\) \}\}/, 'mustbuild action buttons must not be duplicated as hardcoded literals')
+})
+
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
   const source = read(nuxtConfigPath)
 
