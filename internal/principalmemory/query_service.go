@@ -83,13 +83,41 @@ type PrincipalMemoryQueryItem struct {
 	Project            string    `json:"project"`
 	Content            string    `json:"content"`
 	Tags               []string  `json:"tags"`
+	Status             string    `json:"status,omitempty"`
 	Tier               string    `json:"tier,omitempty"`
+	SourceAgent        string    `json:"source_agent,omitempty"`
 	OwnerPrincipal     string    `json:"owner_principal"`
 	OwnerPrincipalKind string    `json:"owner_principal_kind"`
 	AgentVisibility    string    `json:"agent_visibility"`
 	Domain             string    `json:"domain"`
 	Confidence         float64   `json:"confidence"`
 	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	Version            int       `json:"version"`
+	memory             *models.Memory
+}
+
+func (item PrincipalMemoryQueryItem) Memory() *models.Memory {
+	if item.memory != nil {
+		return cloneMemory(item.memory)
+	}
+	return &models.Memory{
+		ID:                 item.ID,
+		Project:            item.Project,
+		Content:            item.Content,
+		Tags:               models.JSONStringArray(append([]string(nil), item.Tags...)),
+		Status:             item.Status,
+		Tier:               item.Tier,
+		SourceAgent:        item.SourceAgent,
+		OwnerPrincipal:     item.OwnerPrincipal,
+		OwnerPrincipalKind: item.OwnerPrincipalKind,
+		AgentVisibility:    item.AgentVisibility,
+		Domain:             item.Domain,
+		Confidence:         item.Confidence,
+		CreatedAt:          item.CreatedAt,
+		UpdatedAt:          item.UpdatedAt,
+		Version:            item.Version,
+	}
 }
 
 func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMemoryQueryRequest) (*PrincipalMemoryQueryResult, error) {
@@ -220,14 +248,44 @@ func principalMemoryQueryItem(mem *models.Memory) PrincipalMemoryQueryItem {
 		Project:            mem.Project,
 		Content:            mem.Content,
 		Tags:               append([]string(nil), mem.Tags...),
+		Status:             mem.Status,
 		Tier:               mem.Tier,
+		SourceAgent:        mem.SourceAgent,
 		OwnerPrincipal:     mem.OwnerPrincipal,
 		OwnerPrincipalKind: mem.OwnerPrincipalKind,
 		AgentVisibility:    mem.AgentVisibility,
 		Domain:             mem.Domain,
 		Confidence:         mem.Confidence,
 		CreatedAt:          mem.CreatedAt,
+		UpdatedAt:          mem.UpdatedAt,
+		Version:            mem.Version,
+		memory:             cloneMemory(mem),
 	}
+}
+
+func cloneMemory(mem *models.Memory) *models.Memory {
+	if mem == nil {
+		return nil
+	}
+	clone := *mem
+	clone.Tags = append(mem.Tags[:0:0], mem.Tags...)
+	clone.SourceSessions = append(mem.SourceSessions[:0:0], mem.SourceSessions...)
+	sanitizeTimePtr := func(value **time.Time) {
+		if *value == nil {
+			return
+		}
+		year := (*value).Year()
+		if year < 0 || year > 9999 {
+			*value = nil
+		}
+	}
+	sanitizeTimePtr(&clone.DeletedAt)
+	sanitizeTimePtr(&clone.LastRetrievedAt)
+	sanitizeTimePtr(&clone.LastConfirmed)
+	sanitizeTimePtr(&clone.ReviewAfter)
+	sanitizeTimePtr(&clone.ValidFrom)
+	sanitizeTimePtr(&clone.ValidUntil)
+	return &clone
 }
 
 func principalMemoryQueryResult(req PrincipalMemoryQueryRequest, limit int) *PrincipalMemoryQueryResult {

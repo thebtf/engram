@@ -217,19 +217,7 @@ func (s *Server) appendRecallIncludedPrincipalMemories(ctx context.Context, filt
 }
 
 func recallPrincipalQueryItemToMemory(item principalmemory.PrincipalMemoryQueryItem) *models.Memory {
-	return &models.Memory{
-		ID:                 item.ID,
-		Project:            item.Project,
-		Content:            item.Content,
-		Tags:               append([]string(nil), item.Tags...),
-		Tier:               item.Tier,
-		OwnerPrincipal:     item.OwnerPrincipal,
-		OwnerPrincipalKind: item.OwnerPrincipalKind,
-		AgentVisibility:    item.AgentVisibility,
-		Domain:             item.Domain,
-		Confidence:         item.Confidence,
-		CreatedAt:          item.CreatedAt,
-	}
+	return item.Memory()
 }
 
 // handleRecallSearch performs trivial SQL-based memory retrieval.

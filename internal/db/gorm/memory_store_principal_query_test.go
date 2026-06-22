@@ -15,7 +15,8 @@ func TestMemoryStore_PrincipalQueryFetchLimitCap(t *testing.T) {
 	assert.Equal(t, 50, normalizeMemoryListLimit(0))
 	assert.Equal(t, 500, normalizeMemoryListLimit(500))
 	assert.Equal(t, 550, normalizeMemoryListLimit(550), "principal query over-fetch must not be truncated below its probe budget")
-	assert.Equal(t, 550, normalizeMemoryListLimit(551))
+	assert.Equal(t, 1000, normalizeMemoryListLimit(1000), "ordinary memory list callers use 1000-row batches")
+	assert.Equal(t, 1000, normalizeMemoryListLimit(1001))
 }
 
 func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {

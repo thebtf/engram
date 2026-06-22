@@ -247,6 +247,34 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 		rows := decodeRecallItems(t, out)
 		require.Len(t, rows, 1)
 		require.Equal(t, "bob widen marker private decision", rows[0]["content"])
+		require.Equal(t, []any{"type:fact", "decision"}, rows[0]["tags"])
+		require.Equal(t, "fact", rows[0]["type"])
+		require.Equal(t, "review-agent", rows[0]["source_agent"])
+
+		detailed, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "detailed",
+			"tags":    []string{"decision"},
+			"limit":   5,
+			"include_principals": []map[string]any{
+				{"principal": "agent/bob", "principal_kind": "agent"},
+			},
+		}))
+		require.NoError(t, err)
+		detailedRows := decodeRecallItems(t, detailed)
+		require.Len(t, detailedRows, 1)
+		require.Equal(t, "active", detailedRows[0]["status"])
+		require.Equal(t, "semantic", detailedRows[0]["tier"])
+		require.Equal(t, "review-agent", detailedRows[0]["source_agent"])
+		require.Equal(t, "decision", detailedRows[0]["epistemic_type"])
+		require.Equal(t, "fast", detailedRows[0]["defeasibility"])
+		require.Equal(t, "procedural", detailedRows[0]["promotion_target"])
+		require.InDelta(t, 0.91, detailedRows[0]["confidence"], 0.0001)
+		require.InDelta(t, 42.5, detailedRows[0]["stability"], 0.0001)
+		require.InDelta(t, 0.77, detailedRows[0]["retrievability"], 0.0001)
+		require.Equal(t, float64(7), detailedRows[0]["version"])
+		require.Equal(t, float64(3), detailedRows[0]["citation_count"])
 	})
 }
 
@@ -278,10 +306,16 @@ func insertPrincipalMemoryWithTags(t *testing.T, env principalRecallEnv, content
 	t.Helper()
 	var id int64
 	require.NoError(t, env.store.DB.Raw(
-		`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, created_at)
-			VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, now())
+		`INSERT INTO memories (
+				project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility,
+				source_agent, status, tier, epistemic_type, defeasibility, promotion_target,
+				confidence, stability, retrievability, version, citation_count, created_at, updated_at
+			)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
 			RETURNING id`,
 		env.project, content, tagsJSON, "project", principal, principalKind, visibility,
+		"review-agent", "active", "semantic", "decision", "fast", "procedural",
+		0.91, 42.5, 0.77, 7, 3,
 	).Scan(&id).Error)
 	require.NotZero(t, id)
 	return id
