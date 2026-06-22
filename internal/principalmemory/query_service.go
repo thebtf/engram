@@ -2,6 +2,7 @@ package principalmemory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,6 +14,8 @@ const (
 	AuditStatusNotRequired = "not_required"
 	AuditStatusWritten     = "written"
 )
+
+var ErrCrossPrincipalPrivateDenied = errors.New("include_private for another principal requires admin")
 
 // PrincipalMemoryStore is the storage seam used by the query service.
 type PrincipalMemoryStore interface {
@@ -44,7 +47,9 @@ type PrincipalMemoryQueryRequest struct {
 	CallerIsAdmin      bool
 	OwnerPrincipal     string
 	OwnerPrincipalKind string
+	Query              string
 	AgentVisibility    string
+	IncludePrivate     bool
 	Domain             string
 	Limit              int
 	Offset             int
@@ -52,19 +57,19 @@ type PrincipalMemoryQueryRequest struct {
 }
 
 type PrincipalMemoryQueryResult struct {
-	Items       []PrincipalMemoryQueryItem
-	HiddenCount int
-	AuditStatus string
+	Items       []PrincipalMemoryQueryItem `json:"items"`
+	HiddenCount int                        `json:"hidden_count"`
+	AuditStatus string                     `json:"audit_status"`
 }
 
 type PrincipalMemoryQueryItem struct {
-	ID                 int64
-	Project            string
-	Content            string
-	OwnerPrincipal     string
-	OwnerPrincipalKind string
-	AgentVisibility    string
-	Domain             string
+	ID                 int64  `json:"id"`
+	Project            string `json:"project"`
+	Content            string `json:"content"`
+	OwnerPrincipal     string `json:"owner_principal"`
+	OwnerPrincipalKind string `json:"owner_principal_kind"`
+	AgentVisibility    string `json:"agent_visibility"`
+	Domain             string `json:"domain"`
 }
 
 func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMemoryQueryRequest) (*PrincipalMemoryQueryResult, error) {
@@ -73,9 +78,25 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 	}
 
 	limit := normalizePrincipalQueryLimit(req.Limit)
+	if req.IncludePrivate {
+		decision := s.policy.Decide(PrincipalAccessRequest{
+			Caller:        req.Caller,
+			Target:        PrincipalRef{Principal: req.OwnerPrincipal, PrincipalKind: req.OwnerPrincipalKind},
+			Visibility:    models.AgentVisibilityPrivate,
+			CallerIsAdmin: req.CallerIsAdmin,
+		})
+		if !decision.Allowed {
+			if decision.Reason == ReasonCrossPrincipalPrivateDenied {
+				return nil, ErrCrossPrincipalPrivateDenied
+			}
+			return nil, fmt.Errorf("include_private denied: %s", decision.Reason)
+		}
+	}
+
 	rows, err := s.store.ListPrincipalMemory(ctx, strings.TrimSpace(req.Project), gormdb.ListOptions{
 		OwnerPrincipal:     strings.TrimSpace(req.OwnerPrincipal),
 		OwnerPrincipalKind: strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
+		ContentContains:    strings.TrimSpace(req.Query),
 		AgentVisibility:    strings.TrimSpace(req.AgentVisibility),
 		Domain:             strings.TrimSpace(req.Domain),
 		Limit:              principalQueryFetchLimit(limit),

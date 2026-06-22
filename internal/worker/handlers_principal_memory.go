@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -81,24 +82,25 @@ func (s *Service) handlePrincipalMemoryQuery(w http.ResponseWriter, r *http.Requ
 	}
 
 	caller, callerIsAdmin := principalQueryCaller(r.Context())
-	if includePrivate && !callerIsAdmin && !samePrincipal(caller, principalmemory.PrincipalRef{Principal: ownerPrincipal, PrincipalKind: ownerPrincipalKind}) {
-		http.Error(w, "include_private for another principal requires admin", http.StatusForbidden)
-		return
-	}
-
 	result, err := queryService.Query(r.Context(), principalmemory.PrincipalMemoryQueryRequest{
 		Project:            strings.TrimSpace(q.Get("project")),
 		Caller:             caller,
 		CallerIsAdmin:      callerIsAdmin,
 		OwnerPrincipal:     ownerPrincipal,
 		OwnerPrincipalKind: ownerPrincipalKind,
+		Query:              strings.TrimSpace(q.Get("q")),
 		AgentVisibility:    visibility,
+		IncludePrivate:     includePrivate,
 		Domain:             strings.TrimSpace(q.Get("domain")),
 		Limit:              limit,
 		Offset:             offset,
 		SourceSessionID:    strings.TrimSpace(q.Get("session_id")),
 	})
 	if err != nil {
+		if errors.Is(err, principalmemory.ErrCrossPrincipalPrivateDenied) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
 		http.Error(w, "principal memory query failed", http.StatusInternalServerError)
 		return
 	}
@@ -122,12 +124,6 @@ func principalQueryCaller(ctx context.Context) (principalmemory.PrincipalRef, bo
 		return principalmemory.PrincipalRef{}, id.IsAdmin()
 	}
 	return principalmemory.PrincipalRef{Principal: principal, PrincipalKind: kind}, id.IsAdmin()
-}
-
-func samePrincipal(a, b principalmemory.PrincipalRef) bool {
-	return strings.TrimSpace(a.Principal) != "" &&
-		strings.TrimSpace(a.Principal) == strings.TrimSpace(b.Principal) &&
-		strings.TrimSpace(strings.ToLower(a.PrincipalKind)) == strings.TrimSpace(strings.ToLower(b.PrincipalKind))
 }
 
 func parsePrincipalQueryLimit(raw string) (int, error) {

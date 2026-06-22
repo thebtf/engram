@@ -137,13 +137,33 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningFailsClosedOnAuditError
 	assert.Nil(t, result, "private widening must fail closed when durable audit cannot be written")
 }
 
+func TestPrincipalMemoryQueryService_IncludePrivateNonAdminCrossPrincipalFailsBeforeStore(t *testing.T) {
+	store := &fakePrincipalMemoryStore{}
+	svc := NewPrincipalMemoryQueryService(store, &fakeAuditLogger{})
+
+	result, err := svc.Query(context.Background(), PrincipalMemoryQueryRequest{
+		Project:            "project-a",
+		Caller:             PrincipalRef{Principal: "agent/bob", PrincipalKind: "agent"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		IncludePrivate:     true,
+		Limit:              1,
+	})
+
+	require.ErrorIs(t, err, ErrCrossPrincipalPrivateDenied)
+	assert.Nil(t, result)
+	assert.False(t, store.called, "include_private denial must happen before the store query")
+}
+
 type fakePrincipalMemoryStore struct {
 	rows    []*models.Memory
 	project string
 	opts    gormdb.ListOptions
+	called  bool
 }
 
 func (f *fakePrincipalMemoryStore) ListPrincipalMemory(ctx context.Context, project string, opts gormdb.ListOptions) ([]*models.Memory, error) {
+	f.called = true
 	f.project = project
 	f.opts = opts
 	return f.rows, nil

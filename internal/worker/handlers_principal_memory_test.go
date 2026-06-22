@@ -39,7 +39,7 @@ func TestHandlePrincipalMemoryQuery_ResponseAndValidation(t *testing.T) {
 		}
 		service := &Service{principalMemoryQueryService: querySvc}
 		id := auth.ClientWithPrincipal("read-write", "keycard-bob", "agent/bob", auth.PrincipalKindAgent)
-		req := httptest.NewRequest(http.MethodGet, "/api/memories/principal?project=project-a&principal=agent/alice&principal_kind=agent&domain=operator-console&visibility=shared&limit=2", nil).
+		req := httptest.NewRequest(http.MethodGet, "/api/memories/principal?project=project-a&principal=agent/alice&principal_kind=agent&domain=operator-console&q=shared+alice&visibility=shared&limit=2", nil).
 			WithContext(auth.WithIdentity(context.Background(), id))
 		w := httptest.NewRecorder()
 
@@ -62,6 +62,7 @@ func TestHandlePrincipalMemoryQuery_ResponseAndValidation(t *testing.T) {
 		assert.Equal(t, "agent/alice", querySvc.request.OwnerPrincipal)
 		assert.Equal(t, "agent", querySvc.request.OwnerPrincipalKind)
 		assert.Equal(t, "operator-console", querySvc.request.Domain)
+		assert.Equal(t, "shared alice", querySvc.request.Query)
 		assert.Equal(t, "shared", querySvc.request.AgentVisibility)
 		assert.Equal(t, 2, querySvc.request.Limit)
 		assert.Equal(t, "agent/bob", querySvc.request.Caller.Principal)
@@ -100,7 +101,7 @@ func TestHandlePrincipalMemoryQuery_ResponseAndValidation(t *testing.T) {
 	})
 
 	t.Run("rejects non-admin cross-principal private widening", func(t *testing.T) {
-		querySvc := &fakePrincipalMemoryQueryService{result: &principalmemory.PrincipalMemoryQueryResult{}}
+		querySvc := &fakePrincipalMemoryQueryService{err: principalmemory.ErrCrossPrincipalPrivateDenied}
 		service := &Service{principalMemoryQueryService: querySvc}
 		id := auth.ClientWithPrincipal("read-write", "keycard-bob", "agent/bob", auth.PrincipalKindAgent)
 		req := httptest.NewRequest(http.MethodGet, "/api/memories/principal?principal=agent/alice&principal_kind=agent&include_private=true", nil).
@@ -110,7 +111,8 @@ func TestHandlePrincipalMemoryQuery_ResponseAndValidation(t *testing.T) {
 		service.handlePrincipalMemoryQuery(w, req)
 
 		require.Equal(t, http.StatusForbidden, w.Code)
-		assert.False(t, querySvc.called)
+		assert.True(t, querySvc.called)
+		assert.True(t, querySvc.request.IncludePrivate)
 	})
 }
 

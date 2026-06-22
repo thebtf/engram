@@ -47,6 +47,7 @@ type Server struct {
 	embeddingStore          *embedding.Store
 	rerankClient            *reranking.Client
 	memoryStore             *gorm.MemoryStore
+	principalMemoryQuerySvc principalMemoryQueryService
 	behavioralRulesStore    *gorm.BehavioralRulesStore
 	promotionStore          *gorm.PromotionStore
 	graphStore              *graph.Store
@@ -1069,6 +1070,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		)
 	}
+	if s.principalMemoryQuerySvc != nil {
+		tools = append(tools, principalMemoryQueryTool())
+	}
 
 	// Session outcome tool — only advertise when session store is available
 	if s.sessionStore != nil {
@@ -1673,6 +1677,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleStoreMemory(ctx, args)
 	case "recall_memory":
 		return s.handleRecallMemory(ctx, args)
+	case "query_principal_memory":
+		return s.handleQueryPrincipalMemory(ctx, args)
 	case "rate_memory":
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":

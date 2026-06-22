@@ -758,6 +758,7 @@ func (s *Service) initializeAsync() {
 	// will be used by Commit E when handleStoreMemory / handleRecall are
 	// switched from observations to memories/behavioral_rules.
 	mcpServer.SetMemoryStore(memoryStore)
+	mcpServer.SetPrincipalMemoryQueryService(principalMemoryQuerySvc)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
