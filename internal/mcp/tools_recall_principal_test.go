@@ -225,6 +225,29 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 			Count(&after).Error)
 		require.Greater(t, after, before, "admin widening must write durable audit evidence before returning private data")
 	})
+
+	t.Run("admin cross-private include reapplies recall filters", func(t *testing.T) {
+		env := newPrincipalRecallEnv(t, "pmq-recall-include-filter-"+uuid.NewString())
+		insertPrincipalMemoryWithTags(t, env, "bob widen marker private plain", "agent/bob", "agent", "private", `["type:fact"]`)
+		insertPrincipalMemoryWithTags(t, env, "bob widen marker private decision", "agent/bob", "agent", "private", `["type:fact","decision"]`)
+		ctx := auth.WithIdentity(context.Background(), auth.Admin())
+
+		out, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "items",
+			"tags":    []string{"decision"},
+			"limit":   5,
+			"include_principals": []map[string]any{
+				{"principal": "agent/bob", "principal_kind": "agent"},
+			},
+		}))
+		require.NoError(t, err)
+
+		rows := decodeRecallItems(t, out)
+		require.Len(t, rows, 1)
+		require.Equal(t, "bob widen marker private decision", rows[0]["content"])
+	})
 }
 
 type principalRecallEnv struct {
@@ -248,12 +271,17 @@ func newPrincipalRecallEnv(t *testing.T, project string) principalRecallEnv {
 
 func insertPrincipalMemory(t *testing.T, env principalRecallEnv, content, principal, principalKind, visibility string) int64 {
 	t.Helper()
+	return insertPrincipalMemoryWithTags(t, env, content, principal, principalKind, visibility, `["type:fact"]`)
+}
+
+func insertPrincipalMemoryWithTags(t *testing.T, env principalRecallEnv, content, principal, principalKind, visibility, tagsJSON string) int64 {
+	t.Helper()
 	var id int64
 	require.NoError(t, env.store.DB.Raw(
 		`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, created_at)
 			VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, now())
 			RETURNING id`,
-		env.project, content, `["type:fact"]`, "project", principal, principalKind, visibility,
+		env.project, content, tagsJSON, "project", principal, principalKind, visibility,
 	).Scan(&id).Error)
 	require.NotZero(t, id)
 	return id

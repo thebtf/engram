@@ -159,7 +159,7 @@ func parseRecallIncludedPrincipals(raw any) ([]recallIncludedPrincipal, bool, er
 	return included, true, nil
 }
 
-func (s *Server) appendRecallIncludedPrincipalMemories(ctx context.Context, filtered []*models.Memory, included []recallIncludedPrincipal, project, query, sourceSessionID string, limit int) ([]*models.Memory, error) {
+func (s *Server) appendRecallIncludedPrincipalMemories(ctx context.Context, filtered []*models.Memory, included []recallIncludedPrincipal, project, query, sourceSessionID string, limit int, keep func(*models.Memory) bool) ([]*models.Memory, error) {
 	if len(included) == 0 {
 		return filtered, nil
 	}
@@ -197,13 +197,17 @@ func (s *Server) appendRecallIncludedPrincipalMemories(ctx context.Context, filt
 			continue
 		}
 		for _, item := range result.Items {
-			if item.ID != 0 {
+			mem := recallPrincipalQueryItemToMemory(item)
+			if keep != nil && !keep(mem) {
+				continue
+			}
+			if mem.ID != 0 {
 				if _, exists := seen[item.ID]; exists {
 					continue
 				}
-				seen[item.ID] = struct{}{}
+				seen[mem.ID] = struct{}{}
 			}
-			filtered = append(filtered, recallPrincipalQueryItemToMemory(item))
+			filtered = append(filtered, mem)
 			if len(filtered) >= limit {
 				break
 			}
@@ -217,10 +221,14 @@ func recallPrincipalQueryItemToMemory(item principalmemory.PrincipalMemoryQueryI
 		ID:                 item.ID,
 		Project:            item.Project,
 		Content:            item.Content,
+		Tags:               append([]string(nil), item.Tags...),
+		Tier:               item.Tier,
 		OwnerPrincipal:     item.OwnerPrincipal,
 		OwnerPrincipalKind: item.OwnerPrincipalKind,
 		AgentVisibility:    item.AgentVisibility,
 		Domain:             item.Domain,
+		Confidence:         item.Confidence,
+		CreatedAt:          item.CreatedAt,
 	}
 }
 

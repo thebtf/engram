@@ -82,6 +82,7 @@ type PrincipalMemoryQueryItem struct {
 	Project            string    `json:"project"`
 	Content            string    `json:"content"`
 	Tags               []string  `json:"tags"`
+	Tier               string    `json:"tier,omitempty"`
 	OwnerPrincipal     string    `json:"owner_principal"`
 	OwnerPrincipalKind string    `json:"owner_principal_kind"`
 	AgentVisibility    string    `json:"agent_visibility"`
@@ -185,6 +186,7 @@ func principalMemoryQueryItem(mem *models.Memory) PrincipalMemoryQueryItem {
 		Project:            mem.Project,
 		Content:            mem.Content,
 		Tags:               append([]string(nil), mem.Tags...),
+		Tier:               mem.Tier,
 		OwnerPrincipal:     mem.OwnerPrincipal,
 		OwnerPrincipalKind: mem.OwnerPrincipalKind,
 		AgentVisibility:    mem.AgentVisibility,

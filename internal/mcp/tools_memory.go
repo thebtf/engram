@@ -1267,6 +1267,16 @@ func truncateTitle(content string, maxLen int) string {
 }
 
 func keepRecallMemory(mem *models.Memory, queryLower, obsType string, tagSet map[string]struct{}, caller scope.KeycardContext, visibilityOpts scope.MemoryVisibilityOptions, tierFilterSet map[string]bool, tg3Active bool, tg3ConfidenceMin float64) bool {
+	if !keepRecallMemoryFilters(mem, queryLower, obsType, tagSet, tierFilterSet, tg3Active, tg3ConfidenceMin) {
+		return false
+	}
+	if !scope.ResolveMemory(caller, mem, visibilityOpts) {
+		return false
+	}
+	return true
+}
+
+func keepRecallMemoryFilters(mem *models.Memory, queryLower, obsType string, tagSet map[string]struct{}, tierFilterSet map[string]bool, tg3Active bool, tg3ConfidenceMin float64) bool {
 	contentLower := strings.ToLower(mem.Content)
 	if queryLower != "" && !strings.Contains(contentLower, queryLower) {
 		matchedTag := false
@@ -1304,9 +1314,6 @@ func keepRecallMemory(mem *models.Memory, queryLower, obsType string, tagSet map
 		if !tagMatched {
 			return false
 		}
-	}
-	if !scope.ResolveMemory(caller, mem, visibilityOpts) {
-		return false
 	}
 	if len(tierFilterSet) > 0 {
 		tier := mem.Tier
@@ -1450,6 +1457,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	keepMemory := func(mem *models.Memory) bool {
 		return keepRecallMemory(mem, queryLower, obsType, tagSet, caller, visibilityOpts, tierFilterSet, tg3Active, tg3ConfidenceMin)
 	}
+	keepIncludedPrincipalMemory := func(mem *models.Memory) bool {
+		return keepRecallMemoryFilters(mem, queryLower, obsType, tagSet, tierFilterSet, tg3Active, tg3ConfidenceMin)
+	}
 
 	filtered := make([]*models.Memory, 0, limit)
 	if tg3Active {
@@ -1513,7 +1523,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		}
 	}
 	if includePrincipalsSet {
-		filtered, err = s.appendRecallIncludedPrincipalMemories(ctx, filtered, includePrincipals, project, query, callerSessionID, limit)
+		filtered, err = s.appendRecallIncludedPrincipalMemories(ctx, filtered, includePrincipals, project, query, callerSessionID, limit, keepIncludedPrincipalMemory)
 		if err != nil {
 			return "", err
 		}
