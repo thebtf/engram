@@ -848,71 +848,12 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
-	// --- Supersession: mark old memories and compute inherited importance ---
-	// importanceBase starts at 0.5. When superseding, it is raised to
-	// max(0.5, oldImportance * 0.7) based on the first superseded memory.
-	inheritedImportance := 0.5
-	var primarySupersededID *int64
-	var supersededIDs []int64
-	for _, sid := range params.Supersedes {
-		if sid <= 0 {
-			continue
-		}
-		// Read before-state for audit before calling Supersede (which mutates the row).
-		var beforeMem *models.Memory
-		if bm, getErr := s.memoryStore.Get(ctx, sid); getErr == nil {
-			beforeMem = bm
-		} else {
-			log.Warn().Err(getErr).Int64("superseded_id", sid).Msg("store_memory: supersede target not found")
-			continue
-		}
-		if !domainManageAllowed(ctx, beforeMem) {
-			return "", fmt.Errorf("store_memory: memory %d not found", sid)
-		}
-		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
-		if supErr != nil {
-			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store_memory: supersede failed")
-			continue
-		}
-		// Audit: fire-and-forget supersede event.
-		if beforeMem == nil {
-			tmp := &models.Memory{ID: sid}
-			beforeMem = tmp
-		}
-		logAuditSupersede(ctx, s, beforeMem, actorFromContext(ctx))
-		supersededIDs = append(supersededIDs, sid)
-		if primarySupersededID == nil {
-			primarySupersededID = &sid
-			inherited := oldImportance * 0.7
-			if inherited > inheritedImportance {
-				inheritedImportance = inherited
-			}
-		}
-	}
-
-	// --- Write gate (vNext Phase A) ---
-	// When ENGRAM_VNEXT_ENABLED=true, evaluate novelty before creation.
-	// Low-novelty memories are stored with Status="flagged" so callers can
-	// detect duplicates; the quality_signals key is added to the response.
-	var gateResult writegate.GateResult
-	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
-	if vnextEnabled && params.Project != "" {
-		existing, listErr := s.memoryStore.List(ctx, params.Project, 100)
-		if listErr != nil {
-			log.Warn().Err(listErr).Msg("store_memory: write gate could not load existing memories, skipping gate")
-		} else {
-			existing = filterVisibleWriteGateCandidates(ctx, params.SessionID, existing)
-			gateResult = writegate.Check(ctx, params.Content, existing)
-		}
-	}
-
 	memory := &models.Memory{
 		Project:        params.Project,
 		Content:        params.Content,
 		Tags:           tags,
 		SourceAgent:    agentSource,
-		ImportanceBase: inheritedImportance,
-		SupersedesID:   primarySupersededID,
+		ImportanceBase: 0.5,
 	}
 
 	// T004 — vNext F TG1: populate the new lifecycle/identity fields when the
@@ -952,6 +893,66 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	domainDecision, err := s.checkDomainWriteMCP(ctx, memory, params.SessionID)
 	if err != nil {
 		return "", fmt.Errorf("domain registry check failed: %w", err)
+	}
+
+	// --- Supersession: mark old memories and compute inherited importance ---
+	// importanceBase starts at 0.5. When superseding, it is raised to
+	// max(0.5, oldImportance * 0.7) based on the first superseded memory.
+	inheritedImportance := memory.ImportanceBase
+	var primarySupersededID *int64
+	var supersededIDs []int64
+	for _, sid := range params.Supersedes {
+		if sid <= 0 {
+			continue
+		}
+		// Read before-state for audit before calling Supersede (which mutates the row).
+		var beforeMem *models.Memory
+		if bm, getErr := s.memoryStore.Get(ctx, sid); getErr == nil {
+			beforeMem = bm
+		} else {
+			log.Warn().Err(getErr).Int64("superseded_id", sid).Msg("store_memory: supersede target not found")
+			continue
+		}
+		if !domainManageAllowed(ctx, beforeMem) {
+			return "", fmt.Errorf("store_memory: memory %d not found", sid)
+		}
+		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
+		if supErr != nil {
+			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store_memory: supersede failed")
+			continue
+		}
+		// Audit: fire-and-forget supersede event.
+		if beforeMem == nil {
+			tmp := &models.Memory{ID: sid}
+			beforeMem = tmp
+		}
+		logAuditSupersede(ctx, s, beforeMem, actorFromContext(ctx))
+		supersededIDs = append(supersededIDs, sid)
+		if primarySupersededID == nil {
+			primarySupersededID = &sid
+			inherited := oldImportance * 0.7
+			if inherited > inheritedImportance {
+				inheritedImportance = inherited
+			}
+		}
+	}
+	memory.ImportanceBase = inheritedImportance
+	memory.SupersedesID = primarySupersededID
+
+	// --- Write gate (vNext Phase A) ---
+	// When ENGRAM_VNEXT_ENABLED=true, evaluate novelty before creation.
+	// Low-novelty memories are stored with Status="flagged" so callers can
+	// detect duplicates; the quality_signals key is added to the response.
+	var gateResult writegate.GateResult
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	if vnextEnabled && params.Project != "" {
+		existing, listErr := s.memoryStore.List(ctx, params.Project, 100)
+		if listErr != nil {
+			log.Warn().Err(listErr).Msg("store_memory: write gate could not load existing memories, skipping gate")
+		} else {
+			existing = filterVisibleWriteGateCandidates(ctx, params.SessionID, existing)
+			gateResult = writegate.Check(ctx, params.Content, existing)
+		}
 	}
 
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled

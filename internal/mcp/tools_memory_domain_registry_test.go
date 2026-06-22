@@ -116,6 +116,44 @@ func TestStoreMemoryDomainRegistry_AuditFailureBlocksBeforePersistence(t *testin
 	assert.Equal(t, int64(0), countMCPMemoriesByDomain(t, env.store, project, domain))
 }
 
+func TestStoreMemoryDomainRegistry_RejectionRunsBeforeSupersedeMutation(t *testing.T) {
+	project := "test-mcp-domain-registry-supersede-" + uuid.NewString()
+	env := newMCPDomainWriteTestEnv(t, project)
+	domains := dbgorm.NewDomainOwnerStore(env.store)
+
+	oldOut, err := storeMCPMemoryWithDomain(t, env.srv, project, "", "agent/bob")
+	require.NoError(t, err)
+	oldID := storedMemoryIDFromMCPResult(t, oldOut)
+
+	domain := "test-mcp-domain-reject-supersede-" + uuid.NewString()
+	_, err = domains.Upsert(context.Background(), &dbgorm.DomainOwner{
+		Domain:             domain,
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Mode:               dbgorm.DomainOwnerModeReject,
+	})
+	require.NoError(t, err)
+
+	args := mustJSON(t, map[string]any{
+		"content":    "domain governed replacement",
+		"project":    project,
+		"domain":     domain,
+		"supersedes": []int64{oldID},
+	})
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-domain-test", "agent/bob", auth.PrincipalKindAgent))
+
+	_, err = env.srv.handleStoreMemory(ctx, args)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, principalmemory.ErrDomainWriteRejected)
+	assert.Equal(t, int64(0), countMCPMemoriesByDomain(t, env.store, project, domain))
+
+	var oldRow dbgorm.Memory
+	require.NoError(t, env.store.DB.WithContext(context.Background()).Where("id = ?", oldID).First(&oldRow).Error)
+	assert.Equal(t, "active", oldRow.Status, "domain rejection must happen before superseding existing memories")
+}
+
 func TestStoreMemoryDomainRegistry_InvalidWriterKindRejectsBeforePersistence(t *testing.T) {
 	project := "test-mcp-domain-registry-kind-" + uuid.NewString()
 	env := newMCPDomainWriteTestEnv(t, project)
@@ -160,6 +198,15 @@ func storeMCPMemoryWithDomain(t *testing.T, srv *Server, project, domain, princi
 	id := auth.ClientWithPrincipal("read-write", "keycard-domain-test", principal, auth.PrincipalKindAgent)
 	ctx := auth.WithIdentity(context.Background(), id)
 	return srv.handleStoreMemory(ctx, args)
+}
+
+func storedMemoryIDFromMCPResult(t *testing.T, out string) int64 {
+	t.Helper()
+	var body map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &body))
+	id, ok := body["id"].(float64)
+	require.True(t, ok, "store_memory response must include numeric id")
+	return int64(id)
 }
 
 func countMCPMemoriesByDomain(t *testing.T, store *dbgorm.Store, project, domain string) int64 {
