@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ const (
 	DomainOwnerModeWarn   = "warn"
 	DomainOwnerModeReject = "reject"
 )
+
+var ErrDomainOwnerConflict = errors.New("domain owner conflict")
 
 // DomainOwnerListOptions filters operator-managed domain ownership rows.
 type DomainOwnerListOptions struct {
@@ -63,6 +66,39 @@ func (s *DomainOwnerStore) Upsert(ctx context.Context, in *DomainOwner) (*Domain
 	}).Create(&row).Error
 	if err != nil {
 		return nil, fmt.Errorf("upsert domain owner %q: %w", row.Domain, err)
+	}
+	return s.Get(ctx, row.Domain)
+}
+
+// UpdateIfUnchanged updates one domain row only when the caller's expected
+// updated_at still matches the database row. It is the narrow compare/update
+// seam used by operator surfaces that need deterministic conflict reporting.
+func (s *DomainOwnerStore) UpdateIfUnchanged(ctx context.Context, in *DomainOwner, expectedUpdatedAt time.Time) (*DomainOwner, error) {
+	row, err := normalizeDomainOwner(in)
+	if err != nil {
+		return nil, err
+	}
+	if expectedUpdatedAt.IsZero() {
+		return nil, fmt.Errorf("expected_updated_at must not be zero")
+	}
+
+	now := time.Now().UTC()
+	res := s.db.WithContext(ctx).Model(&DomainOwner{}).
+		Where("domain = ? AND updated_at = ?", row.Domain, expectedUpdatedAt.UTC()).
+		Updates(map[string]any{
+			"owner_principal":      row.OwnerPrincipal,
+			"owner_principal_kind": row.OwnerPrincipalKind,
+			"mode":                 row.Mode,
+			"updated_at":           now,
+		})
+	if res.Error != nil {
+		return nil, fmt.Errorf("update domain owner %q: %w", row.Domain, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		if _, getErr := s.Get(ctx, row.Domain); getErr != nil {
+			return nil, getErr
+		}
+		return nil, fmt.Errorf("update domain owner %q: %w", row.Domain, ErrDomainOwnerConflict)
 	}
 	return s.Get(ctx, row.Domain)
 }

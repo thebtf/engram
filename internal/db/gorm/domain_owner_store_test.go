@@ -2,7 +2,9 @@ package gorm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -144,4 +146,75 @@ func TestDomainOwnerStore(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestDomainOwnerStoreRaceAndConflict(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	store := NewDomainOwnerStore(&Store{DB: db})
+	domain := fmt.Sprintf("zz-test-domain-race-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM memory_domain_owners WHERE domain LIKE ?`, domain+"%").Error
+	})
+
+	initial, err := store.Upsert(ctx, &DomainOwner{
+		Domain:             domain,
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Mode:               DomainOwnerModeWarn,
+	})
+	require.NoError(t, err)
+
+	updated, err := store.UpdateIfUnchanged(ctx, &DomainOwner{
+		Domain:             domain,
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		Mode:               DomainOwnerModeReject,
+	}, initial.UpdatedAt)
+	require.NoError(t, err)
+	require.Equal(t, "agent/bob", updated.OwnerPrincipal)
+	require.Equal(t, DomainOwnerModeReject, updated.Mode)
+
+	_, err = store.UpdateIfUnchanged(ctx, &DomainOwner{
+		Domain:             domain,
+		OwnerPrincipal:     "agent/charlie",
+		OwnerPrincipalKind: "agent",
+		Mode:               DomainOwnerModeOff,
+	}, initial.UpdatedAt)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrDomainOwnerConflict), "stale compare/update must return a stable conflict error: %v", err)
+
+	got, err := store.Get(ctx, domain)
+	require.NoError(t, err)
+	require.Equal(t, "agent/bob", got.OwnerPrincipal, "stale conflict must not partially update owner")
+	require.Equal(t, DomainOwnerModeReject, got.Mode, "stale conflict must not partially update mode")
+
+	raceDomain := domain + "-concurrent"
+	contenders := []*DomainOwner{
+		{Domain: raceDomain, OwnerPrincipal: "agent/delta", OwnerPrincipalKind: "agent", Mode: DomainOwnerModeWarn},
+		{Domain: raceDomain, OwnerPrincipal: "service/echo", OwnerPrincipalKind: "service", Mode: DomainOwnerModeReject},
+		{Domain: raceDomain, OwnerPrincipal: "human/frank", OwnerPrincipalKind: "human", Mode: DomainOwnerModeOff},
+	}
+	allowed := make(map[string]string, len(contenders))
+	var wg sync.WaitGroup
+	for i := 0; i < 30; i++ {
+		row := contenders[i%len(contenders)]
+		allowed[row.OwnerPrincipal+"|"+row.OwnerPrincipalKind] = row.Mode
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, upsertErr := store.Upsert(ctx, row)
+			assert.NoError(t, upsertErr)
+		}()
+	}
+	wg.Wait()
+
+	final, err := store.Get(ctx, raceDomain)
+	require.NoError(t, err)
+	mode, ok := allowed[final.OwnerPrincipal+"|"+final.OwnerPrincipalKind]
+	require.True(t, ok, "final owner/kind must be one complete contender, got %s/%s", final.OwnerPrincipal, final.OwnerPrincipalKind)
+	require.Equal(t, mode, final.Mode, "final mode must match the same contender, not a half-updated row")
+	require.False(t, final.UpdatedAt.IsZero())
 }
