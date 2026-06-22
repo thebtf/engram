@@ -130,6 +130,9 @@ func parseRecallIncludedPrincipals(raw any) ([]recallIncludedPrincipal, bool, er
 	if !ok {
 		return nil, true, fmt.Errorf("include_principals must be an array of objects")
 	}
+	if len(values) == 0 {
+		return nil, false, nil
+	}
 
 	included := make([]recallIncludedPrincipal, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -179,6 +182,7 @@ func (s *Server) appendRecallIncludedPrincipalMemories(ctx context.Context, filt
 		if len(filtered) >= limit {
 			break
 		}
+		includePrivate := callerIsAdmin || recallIncludeTargetMatchesCaller(caller, target)
 		result, err := s.principalMemoryQuerySvc.Query(ctx, principalmemory.PrincipalMemoryQueryRequest{
 			Project:            project,
 			Caller:             caller,
@@ -186,7 +190,7 @@ func (s *Server) appendRecallIncludedPrincipalMemories(ctx context.Context, filt
 			OwnerPrincipal:     target.Principal,
 			OwnerPrincipalKind: target.PrincipalKind,
 			Query:              query,
-			IncludePrivate:     true,
+			IncludePrivate:     includePrivate,
 			Limit:              limit,
 			SourceSessionID:    sourceSessionID,
 		})
@@ -214,6 +218,14 @@ func (s *Server) appendRecallIncludedPrincipalMemories(ctx context.Context, filt
 		}
 	}
 	return filtered, nil
+}
+
+func recallIncludeTargetMatchesCaller(caller principalmemory.PrincipalRef, target recallIncludedPrincipal) bool {
+	callerPrincipal := strings.TrimSpace(caller.Principal)
+	callerKind := strings.TrimSpace(strings.ToLower(caller.PrincipalKind))
+	targetPrincipal := strings.TrimSpace(target.Principal)
+	targetKind := strings.TrimSpace(strings.ToLower(target.PrincipalKind))
+	return callerPrincipal != "" && callerPrincipal == targetPrincipal && callerKind != "" && callerKind == targetKind
 }
 
 func recallPrincipalQueryItemToMemory(item principalmemory.PrincipalMemoryQueryItem) *models.Memory {

@@ -151,6 +151,13 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 		require.Contains(t, invalidKindErr.Error(), "principal_kind must be one of")
 	})
 
+	t.Run("empty include list is treated as absent", func(t *testing.T) {
+		included, set, err := parseRecallIncludedPrincipals([]any{})
+		require.NoError(t, err)
+		require.False(t, set)
+		require.Empty(t, included)
+	})
+
 	t.Run("self include is allowed and deduplicated", func(t *testing.T) {
 		env := newPrincipalRecallEnv(t, "pmq-recall-include-self-"+uuid.NewString())
 		insertPrincipalMemory(t, env, "alice widen marker private self", "agent/alice", "agent", "private")
@@ -173,13 +180,13 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 		require.Equal(t, "private", rows[0]["agent_visibility"])
 	})
 
-	t.Run("non-admin cross-private include is denied", func(t *testing.T) {
+	t.Run("non-admin cross-principal include skips private rows", func(t *testing.T) {
 		env := newPrincipalRecallEnv(t, "pmq-recall-include-nonadmin-"+uuid.NewString())
-		insertPrincipalMemory(t, env, "bob widen marker private denied", "agent/bob", "agent", "private")
+		insertPrincipalMemory(t, env, "bob widen marker private hidden", "agent/bob", "agent", "private")
 		ctx := auth.WithIdentity(context.Background(),
 			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
 
-		_, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+		out, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
 			"query":   "widen marker",
 			"project": env.project,
 			"format":  "items",
@@ -187,9 +194,34 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 				{"principal": "agent/bob", "principal_kind": "agent"},
 			},
 		}))
+		require.NoError(t, err)
 
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "include_private for another principal requires admin")
+		rows := decodeRecallItems(t, out)
+		require.Empty(t, rows)
+	})
+
+	t.Run("non-admin cross-principal include appends shared rows", func(t *testing.T) {
+		env := newPrincipalRecallEnv(t, "pmq-recall-include-shared-"+uuid.NewString())
+		insertPrincipalMemory(t, env, "bob widen marker shared visible", "agent/bob", "agent", "shared")
+		insertPrincipalMemory(t, env, "bob widen marker private hidden", "agent/bob", "agent", "private")
+		ctx := auth.WithIdentity(context.Background(),
+			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+		out, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "items",
+			"include_principals": []map[string]any{
+				{"principal": "agent/bob", "principal_kind": "agent"},
+			},
+		}))
+		require.NoError(t, err)
+
+		rows := decodeRecallItems(t, out)
+		require.Len(t, rows, 1)
+		require.Equal(t, "bob widen marker shared visible", rows[0]["content"])
+		require.Equal(t, "agent/bob", rows[0]["owner_principal"])
+		require.Equal(t, "shared", rows[0]["agent_visibility"])
 	})
 
 	t.Run("admin cross-private include writes durable audit before returning private row", func(t *testing.T) {
