@@ -59,7 +59,7 @@ function memoryActionGap(
   }
 }
 
-const memoryActionGaps: MemoryActionGap[] = [
+export const memoryActionGaps: MemoryActionGap[] = [
   memoryActionGap(
     'memory-hide-noise',
     'MCP memory.suppress',

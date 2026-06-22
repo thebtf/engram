@@ -191,6 +191,25 @@ test('memory detail actions are data-backed mustbuild capabilities, not hardcode
   assert.doesNotMatch(memoryPageSource, /<button class="act" disabled>\{\{ t\('memory\.detail\.actions\.hideNoise'\) \}\}/, 'mustbuild action buttons must not be duplicated as hardcoded literals')
 })
 
+test('memory capability evidence is an exported reusable typed data contract', () => {
+  const seamSource = read(seamPath)
+  const memoryPageSource = read(memoryPagePath)
+  const memoryLabSource = read(memoryLabPath)
+  const unsupportedType = seamSource.match(/export interface OperatorUnsupportedAction \{[\s\S]*?\n\}/)
+
+  assert.ok(unsupportedType, 'OperatorUnsupportedAction must remain exported as the reusable capability base')
+  assert.match(unsupportedType[0], /kind:\s*['"]mustbuild['"]/, 'unsupported capability base must carry the honesty class')
+  assert.match(unsupportedType[0], /operable:\s*false/, 'unsupported capability base must be non-operable by construction')
+  assert.match(unsupportedType[0], /evidence:\s*OperatorEndpointEvidence/, 'unsupported capability base must carry endpoint/tool evidence')
+  assert.match(memoryLabSource, /export interface MemoryActionGap extends OperatorUnsupportedAction/, 'Memory action descriptors must extend the reusable capability base')
+  assert.match(memoryLabSource, /export const memoryActionGaps:\s*MemoryActionGap\[\]/, 'Memory action descriptors must be exported typed data')
+  assert.match(memoryLabSource, /actionGaps:\s*MemoryActionGap\[\]/, 'Memory Lab return type must expose capability descriptors')
+  assert.match(memoryLabSource, /actionGaps:\s*memoryActionGaps/, 'Memory Lab must return the exported descriptor data')
+  assert.match(memoryPageSource, /action\.labelKey/, 'Memory page must consume descriptor labels rather than duplicating copy')
+  assert.match(memoryPageSource, /action\.badgeKey/, 'Memory page must consume descriptor badge labels rather than duplicating copy')
+  assert.match(memoryPageSource, /action\.evidence\.endpoint/, 'Memory page must consume descriptor evidence rather than duplicating endpoints')
+})
+
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
   const source = read(nuxtConfigPath)
 
