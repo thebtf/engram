@@ -140,6 +140,94 @@ func TestHandlePrincipalMemoryQuery_RouteRegistered(t *testing.T) {
 	assert.True(t, querySvc.called)
 }
 
+func TestHandlePrincipalMemoryQuery_AuditMetadataAndFailure(t *testing.T) {
+	t.Run("admin private query returns audit metadata from service", func(t *testing.T) {
+		querySvc := &fakePrincipalMemoryQueryService{
+			result: &principalmemory.PrincipalMemoryQueryResult{
+				Items: []principalmemory.PrincipalMemoryQueryItem{
+					{
+						ID:                 77,
+						Project:            "project-a",
+						Content:            "private alice audited memory",
+						OwnerPrincipal:     "agent/alice",
+						OwnerPrincipalKind: "agent",
+						AgentVisibility:    "private",
+						Domain:             "operator-console",
+					},
+				},
+				AuditStatus: principalmemory.AuditStatusWritten,
+			},
+		}
+		service := &Service{principalMemoryQueryService: querySvc}
+		req := httptest.NewRequest(http.MethodGet, "/api/memories/principal?project=project-a&principal=agent/alice&principal_kind=agent&include_private=true&session_id=session-77", nil).
+			WithContext(auth.WithIdentity(context.Background(), auth.Admin()))
+		w := httptest.NewRecorder()
+
+		service.handlePrincipalMemoryQuery(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		require.Equal(t, principalmemory.AuditStatusWritten, body["audit_status"])
+		items := body["items"].([]any)
+		require.Len(t, items, 1)
+		first := items[0].(map[string]any)
+		require.Equal(t, "private alice audited memory", first["content"])
+		require.True(t, querySvc.request.CallerIsAdmin)
+		require.True(t, querySvc.request.IncludePrivate)
+		require.Equal(t, "session-77", querySvc.request.SourceSessionID)
+	})
+
+	t.Run("audit failure returns 500 before private data is emitted", func(t *testing.T) {
+		querySvc := &fakePrincipalMemoryQueryService{
+			err: errors.New("principal private widening audit: audit unavailable for private alice memory"),
+		}
+		service := &Service{principalMemoryQueryService: querySvc}
+		req := httptest.NewRequest(http.MethodGet, "/api/memories/principal?project=project-a&principal=agent/alice&principal_kind=agent&include_private=true", nil).
+			WithContext(auth.WithIdentity(context.Background(), auth.Admin()))
+		w := httptest.NewRecorder()
+
+		service.handlePrincipalMemoryQuery(w, req)
+
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+		require.NotContains(t, w.Body.String(), "private alice memory")
+		require.Contains(t, w.Body.String(), "principal memory query failed")
+		require.True(t, querySvc.called)
+	})
+
+	t.Run("self private query can succeed without admin audit metadata", func(t *testing.T) {
+		querySvc := &fakePrincipalMemoryQueryService{
+			result: &principalmemory.PrincipalMemoryQueryResult{
+				Items: []principalmemory.PrincipalMemoryQueryItem{
+					{
+						ID:                 88,
+						Project:            "project-a",
+						Content:            "own private alice memory",
+						OwnerPrincipal:     "agent/alice",
+						OwnerPrincipalKind: "agent",
+						AgentVisibility:    "private",
+					},
+				},
+				AuditStatus: principalmemory.AuditStatusNotRequired,
+			},
+		}
+		service := &Service{principalMemoryQueryService: querySvc}
+		id := auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent)
+		req := httptest.NewRequest(http.MethodGet, "/api/memories/principal?project=project-a&principal=agent/alice&principal_kind=agent&include_private=true", nil).
+			WithContext(auth.WithIdentity(context.Background(), id))
+		w := httptest.NewRecorder()
+
+		service.handlePrincipalMemoryQuery(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		require.Equal(t, principalmemory.AuditStatusNotRequired, body["audit_status"])
+		require.False(t, querySvc.request.CallerIsAdmin)
+		require.Equal(t, "agent/alice", querySvc.request.Caller.Principal)
+	})
+}
+
 type fakePrincipalMemoryQueryService struct {
 	result  *principalmemory.PrincipalMemoryQueryResult
 	err     error
