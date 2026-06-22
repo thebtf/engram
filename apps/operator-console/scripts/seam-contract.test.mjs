@@ -10,6 +10,7 @@ const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
 const memoryLabPath = join(root, 'composables', 'useOperatorMemoryLab.ts')
 const memoryPagePath = join(root, 'pages', 'memory.vue')
+const issuesPagePath = join(root, 'pages', 'issues.vue')
 const pageSizePath = join(root, 'composables', 'usePersistentPageSize.ts')
 
 function read(path) {
@@ -171,6 +172,7 @@ test('memory lab malformed project payloads are errors, not empty memory', () =>
 test('memory page-size contract offers persisted bounded all mode', () => {
   const pageSizeSource = read(pageSizePath)
   const memoryPageSource = read(memoryPagePath)
+  const issuesPageSource = read(issuesPagePath)
   const memoryLabSource = read(memoryLabPath)
 
   assert.match(pageSizeSource, /10\s*\|\s*25\s*\|\s*50\s*\|\s*['"]all['"]/, 'page-size type must use 10/25/50/all values')
@@ -182,6 +184,9 @@ test('memory page-size contract offers persisted bounded all mode', () => {
   assert.match(pageSizeSource, /size\s*===\s*['"]all['"]/, 'all must resolve explicitly, not through numeric sentinel math')
   assert.doesNotMatch(memoryPageSource, /v-model\.number="pageSize"/, 'page-size select must not coerce all into a number')
   assert.match(memoryPageSource, /t\(['"]memory\.allRows['"]\)/, 'the all option label must be localized')
+  assert.doesNotMatch(issuesPageSource, /v-model\.number="pageSize"/, 'shared page-size consumers must not coerce all into a number')
+  assert.doesNotMatch(issuesPageSource, /size\s*===\s*0/, 'shared page-size consumers must not keep the old numeric all sentinel')
+  assert.match(issuesPageSource, /size\s*===\s*['"]all['"]\s*\?\s*t\(['"]issues\.list\.allRows['"]\)/, 'Issues all option label must be localized for the shared all sentinel')
   assert.match(memoryLabSource, /limit=500|MEMORY_LIST_LIMIT\s*=\s*500/, 'Memory Lab must request no more than the current server cap for all-mode readiness')
   assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
 })
