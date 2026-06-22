@@ -8,6 +8,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const nuxtConfigPath = join(root, 'nuxt.config.ts')
 const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
+const memoryLabPath = join(root, 'composables', 'useOperatorMemoryLab.ts')
+const memoryPagePath = join(root, 'pages', 'memory.vue')
+const issuesPagePath = join(root, 'pages', 'issues.vue')
+const pageSizePath = join(root, 'composables', 'usePersistentPageSize.ts')
 
 function read(path) {
   return readFileSync(path, 'utf8')
@@ -147,6 +151,75 @@ test('memory compatibility export uses the Memory Lab live state seam', () => {
   assert.match(source, /useOperatorMemoryLab/, 'useMockData must import the Memory Lab live seam')
   assert.match(memoryExport[0], /useOperatorMemoryLab\(\)\.rows/, 'useMemories must delegate to Memory Lab rows')
   assert.doesNotMatch(memoryExport[0], /live:memories/, 'useMemories must not maintain a separate stale memory cache')
+})
+
+test('memory lab malformed project payloads are errors, not empty memory', () => {
+  const source = read(memoryLabPath)
+  const previewBody = functionBody(source, 'payloadPreview')
+  const parseBody = functionBody(source, 'parseMemoryArray')
+  const loaderBody = functionBody(source, 'loadMemoryRows')
+
+  assert.match(loaderBody, /operatorFetchJson<unknown>/, 'Memory Lab must fetch project memory payloads through the operator API seam')
+  assert.match(loaderBody, /parseMemoryArray\(payload/, 'Memory Lab must validate every project payload before mapping rows')
+  assert.match(loaderBody, /Promise\.all\(projects\.map/, 'Memory Lab must fetch per-project memory payloads concurrently')
+  assert.match(parseBody, /throw\s+/, 'parseMemoryArray must throw on malformed or non-array payloads')
+  assert.match(parseBody, /let parsed: unknown/, 'parseMemoryArray must keep JSON.parse try scope narrow')
+  assert.doesNotMatch(parseBody, /return\s+\[\]/, 'parseMemoryArray must not convert malformed payloads into an empty Memory page')
+  assert.match(previewBody, /JSON\.stringify\(payload\)/, 'payload preview must serialize object payloads with useful bounded JSON')
+  assert.doesNotMatch(previewBody, /Object\.prototype\.toString\.call\(payload\)/, 'payload preview must not degrade objects to [object Object]')
+})
+
+test('memory page-size contract offers persisted bounded all mode', () => {
+  const pageSizeSource = read(pageSizePath)
+  const memoryPageSource = read(memoryPagePath)
+  const issuesPageSource = read(issuesPagePath)
+  const memoryLabSource = read(memoryLabPath)
+
+  assert.match(pageSizeSource, /10\s*\|\s*25\s*\|\s*50\s*\|\s*['"]all['"]/, 'page-size type must use 10/25/50/all values')
+  assert.match(pageSizeSource, /\[10,\s*25,\s*50,\s*['"]all['"]\]/, 'page-size options must include all as a real value')
+  assert.match(pageSizeSource, /engram\.operatorConsole\.memory\.pageSize/, 'memory page-size preference must use the CR-006 storage key')
+  assert.doesNotMatch(pageSizeSource, /engram\.console\.pageSizes/, 'memory page-size preference must not be hidden in the legacy grouped key')
+  assert.match(pageSizeSource, /export function usePersistentPageSize\(key: string, initial: OperatorPageSize = 10\)/, 'page-size helper must require an explicit storage key for future pages')
+  assert.doesNotMatch(pageSizeSource, /function isOperatorPageSize/, 'page-size helper must not keep unused local validator aliases')
+  assert.match(pageSizeSource, /size\s*===\s*['"]all['"]/, 'all must resolve explicitly, not through numeric sentinel math')
+  assert.doesNotMatch(memoryPageSource, /v-model\.number="pageSize"/, 'page-size select must not coerce all into a number')
+  assert.match(memoryPageSource, /t\(['"]memory\.allRows['"]\)/, 'the all option label must be localized')
+  assert.doesNotMatch(issuesPageSource, /v-model\.number="pageSize"/, 'shared page-size consumers must not coerce all into a number')
+  assert.doesNotMatch(issuesPageSource, /size\s*===\s*0/, 'shared page-size consumers must not keep the old numeric all sentinel')
+  assert.match(issuesPageSource, /size\s*===\s*['"]all['"]\s*\?\s*t\(['"]issues\.list\.allRows['"]\)/, 'Issues all option label must be localized for the shared all sentinel')
+  assert.match(memoryLabSource, /limit=500|MEMORY_LIST_LIMIT\s*=\s*500/, 'Memory Lab must request no more than the current server cap for all-mode readiness')
+  assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
+})
+
+test('memory detail actions are data-backed mustbuild capabilities, not hardcoded fake-live controls', () => {
+  const memoryPageSource = read(memoryPagePath)
+  const memoryLabSource = read(memoryLabPath)
+
+  assert.doesNotMatch(memoryPageSource, /storeCopy|deleteOpened/, 'uncontracted store/delete controls must not be visible in Memory detail')
+  assert.match(memoryLabSource, /memoryActionGaps|actionGaps/, 'Memory Lab must expose action capability descriptors')
+  assert.match(memoryLabSource, /unsupportedOperatorAction\(/, 'Memory actions without browser endpoints must use unsupported action descriptors')
+  assert.match(memoryPageSource, /v-for="action in actionGaps"/, 'Memory detail buttons must render from action capability data')
+  assert.match(memoryPageSource, /:title="action\.evidence\.endpoint"/, 'Memory detail actions must carry endpoint/tool evidence')
+  assert.doesNotMatch(memoryPageSource, /<button class="act" disabled>\{\{ t\('memory\.detail\.actions\.hideNoise'\) \}\}/, 'mustbuild action buttons must not be duplicated as hardcoded literals')
+})
+
+test('memory capability evidence is an exported reusable typed data contract', () => {
+  const seamSource = read(seamPath)
+  const memoryPageSource = read(memoryPagePath)
+  const memoryLabSource = read(memoryLabPath)
+  const unsupportedType = seamSource.match(/export interface OperatorUnsupportedAction \{[\s\S]*?\n\}/)
+
+  assert.ok(unsupportedType, 'OperatorUnsupportedAction must remain exported as the reusable capability base')
+  assert.match(unsupportedType[0], /kind:\s*['"]mustbuild['"]/, 'unsupported capability base must carry the honesty class')
+  assert.match(unsupportedType[0], /operable:\s*false/, 'unsupported capability base must be non-operable by construction')
+  assert.match(unsupportedType[0], /evidence:\s*OperatorEndpointEvidence/, 'unsupported capability base must carry endpoint/tool evidence')
+  assert.match(memoryLabSource, /export interface MemoryActionGap extends OperatorUnsupportedAction/, 'Memory action descriptors must extend the reusable capability base')
+  assert.match(memoryLabSource, /export const memoryActionGaps:\s*readonly MemoryActionGap\[\]/, 'Memory action descriptors must be exported readonly typed data')
+  assert.match(memoryLabSource, /actionGaps:\s*readonly MemoryActionGap\[\]/, 'Memory Lab return type must expose capability descriptors')
+  assert.match(memoryLabSource, /actionGaps:\s*memoryActionGaps/, 'Memory Lab must return the exported descriptor data')
+  assert.match(memoryPageSource, /action\.labelKey/, 'Memory page must consume descriptor labels rather than duplicating copy')
+  assert.match(memoryPageSource, /action\.badgeKey/, 'Memory page must consume descriptor badge labels rather than duplicating copy')
+  assert.match(memoryPageSource, /action\.evidence\.endpoint/, 'Memory page must consume descriptor evidence rather than duplicating endpoints')
 })
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {

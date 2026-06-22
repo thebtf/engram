@@ -1,12 +1,13 @@
 import type { ComputedRef } from 'vue'
 import type { Memory } from './useMockData'
-import type { OperatorLoadState } from './useOperatorApi'
+import type { OperatorLoadState, OperatorUnsupportedAction } from './useOperatorApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   loadOperatorJson,
+  OperatorFetchError,
   operatorFetchJson,
   pendingState,
   runOperatorMutation,
@@ -31,11 +32,67 @@ interface ApiMemory {
   source_sessions?: string[]
 }
 
+// Per-project fetch cap; matches the server-side /api/memories maximum limit.
+const MEMORY_LIST_LIMIT = 500
+
 export interface StoreMemoryInput {
   project: string
   content: string
   tags?: string[]
 }
+
+export interface MemoryActionGap extends OperatorUnsupportedAction {
+  labelKey: string
+  badgeKey: string
+}
+
+function memoryActionGap(
+  action: string,
+  endpoint: string,
+  reason: string,
+  labelKey: string,
+  badgeKey = 'overview.badges.mustBuild',
+): MemoryActionGap {
+  return {
+    ...unsupportedOperatorAction(action, endpoint, reason),
+    labelKey,
+    badgeKey,
+  }
+}
+
+export const memoryActionGaps: readonly MemoryActionGap[] = [
+  memoryActionGap(
+    'memory-hide-noise',
+    'MCP memory.suppress',
+    'Memory suppression is not exposed by the current browser REST API.',
+    'memory.detail.actions.hideNoise',
+  ),
+  memoryActionGap(
+    'memory-edit-text',
+    'MCP memory.edit',
+    'Memory text editing is not exposed by the current browser REST API.',
+    'memory.detail.actions.editText',
+  ),
+  memoryActionGap(
+    'memory-replace',
+    'MCP memory.supersede',
+    'Memory replacement is not exposed by the current browser REST API.',
+    'memory.detail.actions.replace',
+  ),
+  memoryActionGap(
+    'memory-promote',
+    'ENGRAM_LIFECYCLE_ENABLED',
+    'Memory lifecycle promotion requires the lifecycle backend surface.',
+    'memory.detail.actions.promote',
+    'memory.detail.actions.lifecycleRequired',
+  ),
+  memoryActionGap(
+    'memory-flag',
+    'POST /api/memories/{id}/flag',
+    'Memory flagging is not exposed by the current server API.',
+    'memory.detail.actions.flag',
+  ),
+]
 
 function jsonInit(method: 'POST' | 'DELETE', body?: unknown): RequestInit {
   const init: RequestInit = { method }
@@ -127,21 +184,55 @@ function mapMemoryRow(row: ApiMemory): Memory {
   }
 }
 
-function parseMemoryArray(payload: unknown): ApiMemory[] {
+function payloadPreview(payload: unknown): string {
+  if (typeof payload === 'string') {
+    const compact = payload.trim().replace(/\s+/g, ' ')
+    return compact ? `: ${compact.slice(0, 120)}${compact.length > 120 ? '...' : ''}` : ''
+  }
+  if (payload === undefined || payload === null) {
+    return ''
+  }
+  try {
+    const compact = JSON.stringify(payload).replace(/\s+/g, ' ')
+    return compact ? `: ${compact.slice(0, 120)}${compact.length > 120 ? '...' : ''}` : ''
+  } catch {
+    return `: [unserializable ${typeof payload}]`
+  }
+}
+
+function memoryPayloadError(path: string, detail: string, payload: unknown): OperatorFetchError {
+  const message = `Invalid memory payload from ${path}: ${detail}${payloadPreview(payload)}`
+  return new OperatorFetchError(message, {
+    message,
+    source: 'memory-list',
+    path,
+    method: 'GET',
+    retryable: false,
+  })
+}
+
+function parseMemoryArray(payload: unknown, path: string): ApiMemory[] {
   if (Array.isArray(payload)) {
     return payload as ApiMemory[]
   }
 
   if (typeof payload === 'string' && payload.trim()) {
+    let parsed: unknown
     try {
-      const parsed = JSON.parse(payload)
-      return Array.isArray(parsed) ? parsed as ApiMemory[] : []
-    } catch {
-      return []
+      parsed = JSON.parse(payload)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw memoryPayloadError(path, `invalid JSON (${detail})`, payload)
     }
+
+    if (Array.isArray(parsed)) {
+      return parsed as ApiMemory[]
+    }
+
+    throw memoryPayloadError(path, 'expected a JSON array', parsed)
   }
 
-  return []
+  throw memoryPayloadError(path, 'expected a JSON array', payload)
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
@@ -169,18 +260,12 @@ async function loadMemoryRows(): Promise<Memory[]> {
   const projects = projectState.kind === 'live' || projectState.kind === 'empty'
     ? projectState.data || []
     : []
-  const combined: Memory[] = []
-
-  for (const project of projects) {
-    const payload = await operatorFetchJson<unknown>(
-      `/api/memories?project=${encodeURIComponent(project)}&limit=200`,
-      undefined,
-      'memory-list',
-    )
-    for (const row of parseMemoryArray(payload)) {
-      combined.push(mapMemoryRow(row))
-    }
-  }
+  const projectRows = await Promise.all(projects.map(async (project) => {
+    const path = `/api/memories?project=${encodeURIComponent(project)}&limit=${MEMORY_LIST_LIMIT}`
+    const payload = await operatorFetchJson<unknown>(path, undefined, 'memory-list')
+    return parseMemoryArray(payload, path).map(mapMemoryRow)
+  }))
+  const combined = projectRows.flat()
 
   const deduped = new Map<string, Memory>()
   for (const row of combined) {
@@ -200,8 +285,9 @@ export function useOperatorMemoryLab(): {
   deleteMemory: (id: string) => Promise<unknown>
   auditGap: ReturnType<typeof unsupportedOperatorAction>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
+  actionGaps: readonly MemoryActionGap[]
 } {
-  const evidence = endpointEvidence('/api/memories?project={project}&limit=200', 'memory-list')
+  const evidence = endpointEvidence(`/api/memories?project={project}&limit=${MEMORY_LIST_LIMIT}`, 'memory-list')
   const rowsState = useState<Memory[]>('live:memory-lab:rows', () => [])
   const state = useState<OperatorLoadState<Memory[]>>('live:memory-lab:state', () => pendingState(evidence, rowsState.value))
 
@@ -293,5 +379,6 @@ export function useOperatorMemoryLab(): {
     deleteMemory,
     auditGap,
     provenanceGap,
+    actionGaps: memoryActionGaps,
   }
 }

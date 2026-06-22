@@ -614,9 +614,9 @@ function renderMarkdown(value: string) {
           <div class="op-right">
             <label class="rows">
               <span>{{ t('issues.list.rows') }}</span>
-              <select v-model.number="pageSize" class="select" name="issues-page-size">
+              <select v-model="pageSize" class="select" name="issues-page-size">
                 <option v-for="size in pageSizeOptions" :key="size" :value="size">
-                  {{ size === 0 ? t('issues.list.allRows') : size }}
+                  {{ size === 'all' ? t('issues.list.allRows') : size }}
                 </option>
               </select>
             </label>
