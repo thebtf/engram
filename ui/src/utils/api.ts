@@ -222,6 +222,10 @@ export interface Memory {
   tier?: string
   epistemic_type?: string
   privacy_scope?: string
+  owner_principal?: string
+  owner_principal_kind?: 'human' | 'agent' | 'service'
+  agent_visibility?: 'private' | 'shared'
+  domain?: string
   confidence?: number
   citation_count?: number
   injection_count?: number
@@ -394,6 +398,8 @@ export interface ApiToken {
   name: string
   token_prefix: string
   scope: string
+  principal: string
+  principal_kind: 'human' | 'agent' | 'service'
   created_at: string
   last_used_at?: string
   request_count: number
@@ -403,10 +409,19 @@ export interface ApiToken {
 }
 
 export interface CreateTokenResponse {
+  id: string
   token: string
   name: string
+  scope: string
+  token_prefix: string
   prefix: string
+  principal: string
+  principal_kind: 'human' | 'agent' | 'service'
 }
+
+export type CreateTokenParams =
+  | { name: string; scope: string; principal: string; principal_kind?: 'human' | 'agent' | 'service' }
+  | { name: string; scope: string; principal?: undefined; principal_kind?: undefined }
 
 export async function fetchTokens(signal?: AbortSignal): Promise<ApiToken[]> {
   const response = await fetchWithRetry<{ tokens: ApiToken[] }>(`${API_BASE}/auth/tokens`, { signal })
@@ -414,7 +429,7 @@ export async function fetchTokens(signal?: AbortSignal): Promise<ApiToken[]> {
 }
 
 export async function createToken(
-  params: { name: string; scope: string },
+  params: CreateTokenParams,
   signal?: AbortSignal
 ): Promise<CreateTokenResponse> {
   return postJson<CreateTokenResponse>(`${API_BASE}/auth/tokens`, params, { signal })

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,12 +30,14 @@ import (
 // (Go's encoding/json silently drops unknown fields by default, and the
 // existing fields are unchanged).
 type storeMemoryRequest struct {
-	Project      string   `json:"project"`
-	Content      string   `json:"content"`
-	Tags         []string `json:"tags,omitempty"`
-	SourceAgent  string   `json:"source_agent,omitempty"`
-	PrivacyScope string   `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
-	SessionID    string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
+	Project         string   `json:"project"`
+	Content         string   `json:"content"`
+	Tags            []string `json:"tags,omitempty"`
+	SourceAgent     string   `json:"source_agent,omitempty"`
+	PrivacyScope    string   `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
+	SessionID       string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
+	AgentVisibility string   `json:"agent_visibility,omitempty" enums:"private,shared"`
+	Domain          string   `json:"domain,omitempty"`
 }
 
 // isValidPrivacyScopeREST mirrors the migration 125 CHECK constraint enum.
@@ -47,6 +50,30 @@ func isValidPrivacyScopeREST(s string) bool {
 	default:
 		return false
 	}
+}
+
+func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, agentVisibility, domain string) error {
+	visibility := strings.TrimSpace(agentVisibility)
+	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
+		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
+	}
+
+	mem.Domain = strings.TrimSpace(domain)
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		if principal, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
+			mem.OwnerPrincipal = principal
+			mem.OwnerPrincipalKind = principalKind
+		}
+	}
+	if visibility != "" {
+		if mem.OwnerPrincipal == "" {
+			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
+		}
+		mem.AgentVisibility = visibility
+	} else if mem.OwnerPrincipal != "" {
+		mem.AgentVisibility = models.AgentVisibilityShared
+	}
+	return nil
 }
 
 // handleStoreMemoryExplicit godoc
@@ -122,6 +149,10 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "invalid privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)", http.StatusBadRequest)
 			return
 		}
+	}
+	if err := applyPrincipalMemoryMetadataREST(r.Context(), mem, req.AgentVisibility, req.Domain); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	created, err := s.memoryStore.Create(r.Context(), mem)
@@ -262,26 +293,33 @@ func finiteOrZero(value float64) float64 {
 	return value
 }
 
-// listVisibleMemoriesREST returns up to `limit` memories from the given
-// project that are visible to the caller. Behavior is gated by
-// ENGRAM_VNEXT_F_ENABLED:
-//
-//	flag OFF — single-call s.memoryStore.List(project, limit), preserving
-//	           v6.4.x byte-identity per RI-F1.
-//	flag ON  — ListWithOffset batch-loop (batchSize=500) accumulating up to
-//	           `limit` visible rows; scope-invisible rows are skipped without
-//	           truncating the visible result set. Mirrors the cycle-3
-//	           handleRecallSearch fix and the cycle-6 handleRecallMemory
-//	           fix so all three surfaces share identical visibility
-//	           semantics.
-func listVisibleMemoriesREST(ctx context.Context, store memoryListStore, project string, limit int) ([]*models.Memory, error) {
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
-		return store.List(ctx, project, limit)
-	}
-	var caller scope.KeycardContext
+func memoryVisibilityCaller(ctx context.Context, sessionID string) scope.KeycardContext {
+	caller := scope.KeycardContext{SessionID: sessionID}
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		caller.WorkstationID = id.WorkstationID()
+		caller.Principal = id.Principal
+		if _, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
+			caller.PrincipalKind = principalKind
+		} else {
+			caller.PrincipalKind = string(id.PrincipalKind)
+		}
 	}
+	return caller
+}
+
+func memoryVisibilityOptions() scope.MemoryVisibilityOptions {
+	return scope.MemoryVisibilityOptions{
+		ApplyPrivacyScope: os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true",
+	}
+}
+
+// listVisibleMemoriesREST returns up to `limit` memories from the given project
+// that are visible to the caller. It always pages with ListWithOffset so
+// invisible principal-private rows cannot truncate visible results; the
+// ENGRAM_VNEXT_F_ENABLED flag gates only the legacy privacy_scope layer.
+func listVisibleMemoriesREST(ctx context.Context, store memoryListStore, project string, limit int) ([]*models.Memory, error) {
+	caller := memoryVisibilityCaller(ctx, "")
+	opts := memoryVisibilityOptions()
 	visible := make([]*models.Memory, 0, limit)
 	const batchSize = 500
 	offset := 0
@@ -294,15 +332,7 @@ func listVisibleMemoriesREST(ctx context.Context, store memoryListStore, project
 			break
 		}
 		for _, mem := range batch {
-			memScope := mem.PrivacyScope
-			if memScope == "" {
-				memScope = "project"
-			}
-			meta := scope.SourceMeta{
-				WorkstationID: mem.SourceWorkstationID,
-				Sessions:      mem.SourceSessions,
-			}
-			if !scope.Resolve(caller, memScope, meta) {
+			if !scope.ResolveMemory(caller, mem, opts) {
 				continue
 			}
 			visible = append(visible, mem)
@@ -334,41 +364,25 @@ type injectionCandidateStore interface {
 	ListForInjection(ctx context.Context, project string, limit int) ([]*models.Memory, error)
 }
 
-// listVisibleForInjection fetches injection candidates and, when
-// ENGRAM_VNEXT_F_ENABLED=true, removes rows that the caller cannot see per
-// scope.Resolve. Mirrors the visibility-filter logic of listVisibleMemoriesREST
-// but operates on the injection candidate set (importance-ordered, topK*3
-// pre-inflated by the caller).
+// listVisibleForInjection fetches injection candidates and removes rows that
+// the caller cannot see per scope.ResolveMemory. It operates on the injection
+// candidate set (importance-ordered, topK*3 pre-inflated by the caller).
 //
 // T004 (codex P1 PR #221): ListForInjection previously returned every active
-// row for the project without checking privacy_scope, so a private memory
-// written by workstation A could be injected into context for workstation B in
-// the same project (handlers_context.go vnext path, handlers_reinject.go, and
-// mcp/tools_brief.go handleGetMemoryBrief). This helper closes that gap at the
-// worker/mcp boundary without adding auth/scope imports to the db/gorm layer.
+// row for the project without checking visibility, so a private memory written
+// by workstation or principal A could be injected into context for caller B in
+// the same project. This helper closes that gap at the worker/mcp boundary
+// without adding auth/scope imports to the db/gorm layer.
 func listVisibleForInjection(ctx context.Context, store injectionCandidateStore, project string, limit int) ([]*models.Memory, error) {
 	candidates, err := store.ListForInjection(ctx, project, limit)
 	if err != nil {
 		return nil, err
 	}
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
-		return candidates, nil
-	}
-	var caller scope.KeycardContext
-	if id, ok := auth.IdentityFrom(ctx); ok {
-		caller.WorkstationID = id.WorkstationID()
-	}
+	caller := memoryVisibilityCaller(ctx, "")
+	opts := memoryVisibilityOptions()
 	visible := make([]*models.Memory, 0, len(candidates))
 	for _, mem := range candidates {
-		memScope := mem.PrivacyScope
-		if memScope == "" {
-			memScope = "project"
-		}
-		meta := scope.SourceMeta{
-			WorkstationID: mem.SourceWorkstationID,
-			Sessions:      mem.SourceSessions,
-		}
-		if scope.Resolve(caller, memScope, meta) {
+		if scope.ResolveMemory(caller, mem, opts) {
 			visible = append(visible, mem)
 		}
 	}

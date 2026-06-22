@@ -43,6 +43,28 @@ const (
 	RoleReadOnly Role = "read-only"
 )
 
+// PrincipalKind describes the class of actor bound to a dashboard-issued
+// keycard. Principal identity is orthogonal to Role and Source: two callers may
+// both be read-write client keycards while still being distinct principals.
+type PrincipalKind string
+
+const (
+	PrincipalKindHuman   PrincipalKind = "human"
+	PrincipalKindAgent   PrincipalKind = "agent"
+	PrincipalKindService PrincipalKind = "service"
+)
+
+// IsValidPrincipalKind reports whether kind is one of the values the database
+// constraint and validator accept.
+func IsValidPrincipalKind(kind PrincipalKind) bool {
+	switch kind {
+	case PrincipalKindHuman, PrincipalKindAgent, PrincipalKindService:
+		return true
+	default:
+		return false
+	}
+}
+
 // Identity is the immutable result of a successful token validation. It is a
 // value type — passed by value, never mutated after construction.
 type Identity struct {
@@ -57,6 +79,14 @@ type Identity struct {
 	// KeycardID is the api_tokens.id (UUID) when Source == SourceClient.
 	// Empty string for SourceMaster and SourceSession.
 	KeycardID string
+
+	// Principal is the named actor bound to a SourceClient keycard. Empty string
+	// preserves legacy keycard behavior where no principal has been assigned yet.
+	Principal string
+
+	// PrincipalKind classifies Principal when Principal is non-empty. Empty when
+	// no principal is assigned.
+	PrincipalKind PrincipalKind
 }
 
 // Admin returns an Identity for a successful master-token match.
@@ -68,7 +98,25 @@ func Admin() Identity {
 // the api_tokens.scope value ("read-write" or "read-only"); keycardID is the
 // api_tokens.id used by audit logs and revocation lookup.
 func Client(scope string, keycardID string) Identity {
-	return Identity{Role: Role(scope), Source: SourceClient, KeycardID: keycardID}
+	return ClientWithPrincipal(scope, keycardID, "", "")
+}
+
+// ClientWithPrincipal returns an Identity for a successful client-keycard match
+// with optional principal metadata. Empty principal keeps the legacy identity
+// shape; non-empty principal with an empty kind defaults to "human".
+func ClientWithPrincipal(scope string, keycardID string, principal string, principalKind PrincipalKind) Identity {
+	if principal == "" {
+		principalKind = ""
+	} else if principalKind == "" {
+		principalKind = PrincipalKindHuman
+	}
+	return Identity{
+		Role:          Role(scope),
+		Source:        SourceClient,
+		KeycardID:     keycardID,
+		Principal:     principal,
+		PrincipalKind: principalKind,
+	}
 }
 
 // Session returns an Identity for a successful session-cookie authentication.
@@ -114,4 +162,17 @@ func (i Identity) WorkstationID() string {
 		return i.KeycardID
 	}
 	return ""
+}
+
+// MemoryOwner returns the trusted principal metadata for memory ownership.
+// Empty-principal identities keep legacy unowned memory behavior.
+func (i Identity) MemoryOwner() (principal string, principalKind string, ok bool) {
+	if i.Principal == "" {
+		return "", "", false
+	}
+	kind := i.PrincipalKind
+	if kind == "" {
+		kind = PrincipalKindHuman
+	}
+	return i.Principal, string(kind), true
 }

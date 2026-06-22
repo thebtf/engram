@@ -3,6 +3,26 @@ package models
 
 import "time"
 
+const (
+	// AgentVisibilityPrivate means only the owning principal should see the
+	// memory once principal-aware recall filtering is enabled.
+	AgentVisibilityPrivate = "private"
+	// AgentVisibilityShared preserves the current team-readable default while
+	// still attributing the writer.
+	AgentVisibilityShared = "shared"
+)
+
+// IsValidAgentVisibility reports whether v is an accepted principal-memory
+// visibility value. Empty is handled by callers as "not specified".
+func IsValidAgentVisibility(v string) bool {
+	switch v {
+	case AgentVisibilityPrivate, AgentVisibilityShared:
+		return true
+	default:
+		return false
+	}
+}
+
 // Memory represents a user-facing persistent note stored in the memories table.
 // Memories are project-scoped and support full-text search via a GENERATED tsvector column
 // (search_vector) that is NOT exposed here — it is a read-only computed column managed by
@@ -34,7 +54,7 @@ type Memory struct {
 	// Backward-compat: see spec.md §FR-F1 REVISE — the legacy `scope:*` tag + MCP
 	// response synthesis surface remains active for 2 minor versions (until v6.7.0)
 	// per RI-F2.
-	PrivacyScope string   `json:"privacy_scope,omitempty"`
+	PrivacyScope string   `json:"privacy_scope,omitempty" enums:"private,project,shared,global"`
 	Tags         []string `json:"tags"`
 	// SourceSessions lists every session_id that wrote or confirmed this memory.
 	// Added by migration 125 (TG1 / T001+T002) as TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[].
@@ -47,7 +67,13 @@ type Memory struct {
 	// workstation" sentinel — pre-existing rows + flag-OFF writes carry empty.
 	// Consumed by scope.Resolve ScopePrivate for the keycard identity
 	// invariant per spec §FR-F1 AMEND 2026-05-25 decision tree.
-	SourceWorkstationID      string  `json:"source_workstation_id,omitempty"`
+	SourceWorkstationID string `json:"source_workstation_id,omitempty"`
+	// OwnerPrincipal is server-derived from the authenticated identity, never
+	// from caller-supplied payload fields.
+	OwnerPrincipal           string  `json:"owner_principal,omitempty"`
+	OwnerPrincipalKind       string  `json:"owner_principal_kind,omitempty" enums:"human,agent,service"`
+	AgentVisibility          string  `json:"agent_visibility,omitempty" enums:"private,shared"`
+	Domain                   string  `json:"domain,omitempty"`
 	ID                       int64   `json:"id"`
 	SupersedesID             *int64  `json:"supersedes_id,omitempty"`
 	SupersededBy             *int64  `json:"superseded_by,omitempty"`

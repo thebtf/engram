@@ -628,13 +628,15 @@ func storeMemoryTool() Tool {
 		"scope":      map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
 		// privacy_scope and session_id are unconditional in schema (clients discover them at all
 		// times); the runtime handler ignores them when ENGRAM_VNEXT_F_ENABLED=false (RI-F1).
-		"privacy_scope": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
-		"session_id":    map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
-		"project":       map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
-		"ttl_days":      map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
-		"always_inject": map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
-		"agent_source":  map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
-		"supersedes":    map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
+		"privacy_scope":    map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
+		"session_id":       map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
+		"agent_visibility": map[string]any{"type": "string", "enum": []string{"private", "shared"}, "description": "Principal-memory visibility. private requires an authenticated principal; shared is the default for owned writes. Owner fields are server-derived from auth.Identity and are not accepted as tool arguments."},
+		"domain":           map[string]any{"type": "string", "description": "Optional memory domain for later ownership policy and operator filtering. Does not grant ownership by itself."},
+		"project":          map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
+		"ttl_days":         map[string]any{"type": "integer", "minimum": 1, "description": "TTL in days for verified facts. Auto-computed from tags if not provided. Only applies to observations with 'verified' tag."},
+		"always_inject":    map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
+		"agent_source":     map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
+		"supersedes":       map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
 	}
 	// dry_run and write-lint phase fields are only advertised when the flag is on.
 	// Advertising them unconditionally would imply they work on flag-off servers.

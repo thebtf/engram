@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
-	engramgorm "github.com/thebtf/engram/internal/db/gorm"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
@@ -90,6 +90,178 @@ func deriveLegacyScopeFromPrivacy(privacy string) string {
 	}
 }
 
+func applyPrincipalMemoryMetadata(ctx context.Context, mem *models.Memory, agentVisibility, domain string) error {
+	visibility := strings.TrimSpace(agentVisibility)
+	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
+		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
+	}
+
+	mem.Domain = strings.TrimSpace(domain)
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		if principal, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
+			mem.OwnerPrincipal = principal
+			mem.OwnerPrincipalKind = principalKind
+		}
+	}
+	if visibility != "" {
+		if mem.OwnerPrincipal == "" {
+			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
+		}
+		mem.AgentVisibility = visibility
+	} else if mem.OwnerPrincipal != "" {
+		mem.AgentVisibility = models.AgentVisibilityShared
+	}
+	return nil
+}
+
+func addPrincipalMemoryFields(result map[string]any, mem *models.Memory) {
+	if mem.OwnerPrincipal != "" {
+		result["owner_principal"] = mem.OwnerPrincipal
+	}
+	if mem.OwnerPrincipalKind != "" {
+		result["owner_principal_kind"] = mem.OwnerPrincipalKind
+	}
+	if mem.AgentVisibility != "" {
+		result["agent_visibility"] = mem.AgentVisibility
+	}
+	if mem.Domain != "" {
+		result["domain"] = mem.Domain
+	}
+}
+
+type writeLintOffsetLister interface {
+	ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error)
+}
+
+type scopedWriteLintMemoryStore struct {
+	base   writelint.MemoryStoreInterface
+	pager  writeLintOffsetLister
+	caller scope.KeycardContext
+	opts   scope.MemoryVisibilityOptions
+}
+
+func newScopedWriteLintMemoryStore(base writelint.MemoryStoreInterface, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) writelint.MemoryStoreInterface {
+	if base == nil {
+		return nil
+	}
+	scoped := &scopedWriteLintMemoryStore{base: base, caller: caller, opts: opts}
+	if pager, ok := base.(writeLintOffsetLister); ok {
+		scoped.pager = pager
+	}
+	return scoped
+}
+
+func writeLintVisibilityCaller(ctx context.Context, sessionID string) scope.KeycardContext {
+	caller := scope.KeycardContext{SessionID: strings.TrimSpace(sessionID)}
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+		caller.Principal = id.Principal
+		if _, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
+			caller.PrincipalKind = principalKind
+		} else {
+			caller.PrincipalKind = string(id.PrincipalKind)
+		}
+	}
+	return caller
+}
+
+func writeLintVisibilityOptions() scope.MemoryVisibilityOptions {
+	return scope.MemoryVisibilityOptions{
+		ApplyPrivacyScope: vnextFEnabled(),
+	}
+}
+
+func (s *scopedWriteLintMemoryStore) List(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	visible := make([]*models.Memory, 0, limit)
+	if s.pager == nil {
+		raw, err := s.base.List(ctx, project, writeLintVisibilityFetchLimit(limit))
+		if err != nil {
+			return nil, err
+		}
+		for _, mem := range raw {
+			if scope.ResolveMemory(s.caller, mem, s.opts) {
+				visible = append(visible, mem)
+				if len(visible) == limit {
+					break
+				}
+			}
+		}
+		return visible, nil
+	}
+
+	const batchSize = 500
+	budget := writeLintVisibilityFetchLimit(limit)
+	for offset := 0; len(visible) < limit && offset < budget; {
+		currentLimit := batchSize
+		if remaining := budget - offset; remaining < currentLimit {
+			currentLimit = remaining
+		}
+		if currentLimit <= 0 {
+			break
+		}
+		batch, err := s.pager.ListWithOffset(ctx, project, currentLimit, offset)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, mem := range batch {
+			if scope.ResolveMemory(s.caller, mem, s.opts) {
+				visible = append(visible, mem)
+				if len(visible) == limit {
+					break
+				}
+			}
+		}
+		offset += len(batch)
+		if len(batch) < currentLimit {
+			break
+		}
+	}
+	return visible, nil
+}
+
+func writeLintVisibilityFetchLimit(limit int) int {
+	if limit <= 0 {
+		limit = 200
+	}
+	budget := limit * 10
+	if budget < 500 {
+		budget = 500
+	}
+	if budget > 5000 {
+		budget = 5000
+	}
+	return budget
+}
+
+func (s *scopedWriteLintMemoryStore) Get(ctx context.Context, id int64) (*models.Memory, error) {
+	mem, err := s.base.Get(ctx, id)
+	if err != nil || mem == nil {
+		return mem, err
+	}
+	if !scope.ResolveMemory(s.caller, mem, s.opts) {
+		return nil, nil
+	}
+	return mem, nil
+}
+
+func (s *scopedWriteLintMemoryStore) Create(ctx context.Context, m *models.Memory) (*models.Memory, error) {
+	return s.base.Create(ctx, m)
+}
+
+func (s *scopedWriteLintMemoryStore) Update(ctx context.Context, m *models.Memory) (*models.Memory, error) {
+	return s.base.Update(ctx, m)
+}
+
+func (s *scopedWriteLintMemoryStore) MarkSuperseded(ctx context.Context, olderID, newID int64) error {
+	return s.base.MarkSuperseded(ctx, olderID, newID)
+}
+
 // memoryEditor is the minimal interface over *gorm.MemoryStore that
 // handleEditMemory uses. Kept narrow so tests can inject a mock without
 // wiring a full database (mirrors the auditWriter test-injection pattern).
@@ -148,21 +320,23 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 
 	var params struct {
-		Tags         []string
-		Rejected     []string
-		Supersedes   []int64
-		Content      string
-		Title        string
-		Type         string
-		Scope        string
-		PrivacyScope string // T004 — vNext F, 4-tier enum
-		SessionID    string // T004 — vNext F, caller's session for SourceSessions
-		Project      string
-		AgentSource  string
-		Importance   *float64
-		TtlDays      *int
-		AlwaysInject bool
-		DryRun       bool // T044 — FR-F6.b dry-run preview
+		Tags            []string
+		Rejected        []string
+		Supersedes      []int64
+		Content         string
+		Title           string
+		Type            string
+		Scope           string
+		PrivacyScope    string // T004 — vNext F, 4-tier enum
+		SessionID       string // T004 — vNext F, caller's session for SourceSessions
+		AgentVisibility string
+		Domain          string
+		Project         string
+		AgentSource     string
+		Importance      *float64
+		TtlDays         *int
+		AlwaysInject    bool
+		DryRun          bool // T044 — FR-F6.b dry-run preview
 	}
 	params.Tags = coerceStringSlice(m["tags"])
 	params.Rejected = coerceStringSlice(m["rejected"])
@@ -173,6 +347,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	params.Scope = coerceString(m["scope"], "")
 	params.PrivacyScope = coerceString(m["privacy_scope"], "")
 	params.SessionID = coerceString(m["session_id"], "")
+	params.AgentVisibility = coerceString(m["agent_visibility"], "")
+	params.Domain = coerceString(m["domain"], "")
 	params.AgentSource = coerceString(m["agent_source"], "")
 	if config.Get().EnforceSourceProject {
 		params.Project = projectFromContext(ctx)
@@ -248,6 +424,11 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		params.Content = scrubbed
 	}
 
+	principalPreview := &models.Memory{}
+	if err := applyPrincipalMemoryMetadata(ctx, principalPreview, params.AgentVisibility, params.Domain); err != nil {
+		return "", err
+	}
+
 	// T044 dry-run return (FR-F6.b): after content size limits AND redaction so
 	// would_store reflects the post-redacted content (honest preview per ADR-F-004).
 	//
@@ -278,6 +459,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			"write_lint":  writeLintEnabled,
 			"note":        dryRunNote,
 		}
+		addPrincipalMemoryFields(preview, principalPreview)
 		out, jsonErr := json.MarshalIndent(preview, "", "  ")
 		if jsonErr != nil {
 			return "", fmt.Errorf("store_memory dry_run marshal: %w", jsonErr)
@@ -333,6 +515,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			if id, ok := auth.IdentityFrom(ctx); ok {
 				wlMem.SourceWorkstationID = id.WorkstationID()
 			}
+			if err := applyPrincipalMemoryMetadata(ctx, wlMem, params.AgentVisibility, params.Domain); err != nil {
+				return "", err
+			}
 
 			// round-4 finding 2 fix: reject private-scope writes that lack a
 			// workstation identity before reaching Phase1/Phase2. The legacy
@@ -345,6 +530,15 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			// unreadable — including to the writer itself.
 			if wlMem.PrivacyScope == "private" && wlMem.SourceWorkstationID == "" {
 				return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
+			}
+
+			var scopedWLStore writelint.MemoryStoreInterface
+			if s.memoryStore != nil {
+				scopedWLStore = newScopedWriteLintMemoryStore(
+					s.memoryStore,
+					writeLintVisibilityCaller(ctx, params.SessionID),
+					writeLintVisibilityOptions(),
+				)
 			}
 
 			if wlResolutionToken != "" {
@@ -365,7 +559,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 						p2req.TargetMemoryID = &tid64
 					}
 				}
-				p2resp, p2err := s.writeLint.Phase2(ctx, p2req)
+				var p2resp *writelint.Phase2Response
+				var p2err error
+				if scopedWLStore != nil {
+					p2resp, p2err = s.writeLint.Phase2WithMemoryStore(ctx, p2req, scopedWLStore)
+				} else {
+					p2resp, p2err = s.writeLint.Phase2(ctx, p2req)
+				}
 				if p2err != nil {
 					return "", fmt.Errorf("write_lint_phase2: %w", p2err)
 				}
@@ -389,7 +589,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			}
 
 			// Phase1: inspect for duplicates/conflicts/supersessions.
-			p1resp, p1err := s.writeLint.Phase1(ctx, wlMem, wlActor)
+			var p1resp *writelint.Phase1Response
+			var p1err error
+			if scopedWLStore != nil {
+				p1resp, p1err = s.writeLint.Phase1WithMemoryStore(ctx, wlMem, wlActor, scopedWLStore)
+			} else {
+				p1resp, p1err = s.writeLint.Phase1(ctx, wlMem, wlActor)
+			}
 			if p1err != nil {
 				return "", fmt.Errorf("write_lint_phase1: %w", p1err)
 			}
@@ -413,6 +619,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				"quality_signals": []any{},
 				"message":         "Memory stored successfully via write-lint (no conflicts detected)",
 			}
+			addPrincipalMemoryFields(wlResult, wlMem)
 			// Rank-3 staleness advisory must also fire on the write-lint success path —
 			// this is the primary store path when ENGRAM_VNEXT_F_ENABLED=true, the same
 			// config that activates the serve-time hint, so the advisory cannot be
@@ -699,6 +906,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
 		}
 	}
+	if err := applyPrincipalMemoryMetadata(ctx, memory, params.AgentVisibility, params.Domain); err != nil {
+		return "", err
+	}
 
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
@@ -814,6 +1024,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			result["source_sessions"] = created.SourceSessions
 		}
 	}
+	addPrincipalMemoryFields(result, created)
 	if vnextEnabled {
 		result["quality_signals"] = map[string]any{
 			"gate_result":      gateResult.Decision,
@@ -1065,13 +1276,10 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("project is required for recall_memory in v5")
 	}
 
-	// ── Scope params — parsed unconditionally so both hybrid and legacy paths
-	// can enforce privacy_scope visibility (T004+T005 / F-TG1 / d9eea82 contract).
-	// The hybrid path passes caller+scopeEnabled+includeScopes into
-	// handleRecallMemoryHybrid so HybridSearch results get the SAME scope
-	// predicate the legacy batch-loop applies below. Without this wiring the
-	// hybrid path would bypass scope.Resolve and re-introduce the cross-
-	// workstation privacy leak fixed in d9eea82.
+	// ── Visibility params — parsed unconditionally so both hybrid and legacy
+	// paths enforce the same memory visibility contract. ENGRAM_VNEXT_F_ENABLED
+	// gates legacy privacy_scope only; CR-004 principal-private rows are always
+	// filtered fail-safe.
 	callerSessionID := strings.TrimSpace(coerceString(m["session_id"], ""))
 	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
 	includeScopes := make(map[string]bool)
@@ -1085,12 +1293,15 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 			}
 		}
 	}
-	var caller scope.KeycardContext
-	if scopeEnabled {
-		caller.SessionID = callerSessionID
-		if id, ok := auth.IdentityFrom(ctx); ok {
-			caller.WorkstationID = id.WorkstationID()
-		}
+	caller := scope.KeycardContext{SessionID: callerSessionID}
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+		caller.Principal = id.Principal
+		caller.PrincipalKind = string(id.PrincipalKind)
+	}
+	visibilityOpts := scope.MemoryVisibilityOptions{
+		ApplyPrivacyScope: scopeEnabled,
+		IncludeScopes:     includeScopes,
 	}
 
 	// ── T018 (engram vNext Milestone F TG3) — new filter + rationale params ──
@@ -1109,15 +1320,14 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	tg3Active := vnextFEnabled() && (tg3ConfidenceMin > 0 || tg3IncludeSuperseded || tg3IncludeRationale)
 
 	// ── vnext hybrid path ───────────────────────────────────────────────────
-	// Caller identity + scope context are fully built above; pass them into
+	// Caller identity + visibility context are fully built above; pass them into
 	// handleRecallMemoryHybrid so hybrid results are subject to the same
-	// privacy_scope visibility predicate as the legacy List path below.
+	// predicate as the legacy List path below.
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 	if vnextEnabled {
-		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, scopeEnabled, includeScopes, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
+		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, visibilityOpts, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
 	}
-	// ── legacy List-based path (flag-OFF; byte-identical behaviour when both
-	// flags are OFF; scope-aware batch-loop when ENGRAM_VNEXT_F_ENABLED=true) ─
+	// ── legacy List-based path with shared visibility filtering ─
 
 	queryLower := strings.ToLower(query)
 	tagSet := make(map[string]struct{}, len(tags))
@@ -1167,21 +1377,8 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				return false
 			}
 		}
-		if scopeEnabled {
-			memScope := mem.PrivacyScope
-			if memScope == "" {
-				memScope = "project"
-			}
-			if len(includeScopes) > 0 && !includeScopes[memScope] {
-				return false
-			}
-			meta := scope.SourceMeta{
-				WorkstationID: mem.SourceWorkstationID,
-				Sessions:      mem.SourceSessions,
-			}
-			if !scope.Resolve(caller, memScope, meta) {
-				return false
-			}
+		if !scope.ResolveMemory(caller, mem, visibilityOpts) {
+			return false
 		}
 		// B4 resolution: tier_filter (ENGRAM_LIFECYCLE_ENABLED path).
 		// Empty tierFilterSet means no tier restriction — all tiers pass.
@@ -1205,77 +1402,25 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 
 	filtered := make([]*models.Memory, 0, limit)
 	if tg3Active {
-		// T018 (Milestone F TG3) + MINOR fix (review hardening): when any
-		// non-default TG3 filter is set AND scope is enabled, use the same
-		// batch-loop pattern as the scopeEnabled-only branch so that
-		// scope-invisible rows do not truncate visible recall before older
-		// eligible rows reach the requested limit.
-		//
-		// When scope is NOT enabled, a single-fetch candidate pool is safe
-		// (no invisible rows), so we keep the efficient over-fetch path.
-		if scopeEnabled {
-			// T018 MAJOR fix (review hardening): include_superseded cannot be
-			// honoured by the scoped batch-loop because ListWithOffset is
-			// hardcoded to status='active'. Silently returning only active rows
-			// when the caller requested superseded rows is the same degradation
-			// fixed in the hybrid path (line ~1274). Return a structured error
-			// so the caller knows to use the non-scope path or omit the flag.
-			//
-			// Design choice: structured error > silent no-op (option B from
-			// coderabbit MAJOR review; mirrors hybrid-path treatment).
-			if tg3IncludeSuperseded {
-				return "", fmt.Errorf("include_superseded is not supported with scope-enabled recall; omit include_superseded or disable ENGRAM_VNEXT_F_ENABLED scope")
-			}
-			// Batch-loop: scope-invisible rows must not truncate visible recall
-			// (same guarantee as the scopeEnabled-only branch below).
-			// keepMemory applies all in-memory predicates including the TG3
-			// confidence floor (added in keepMemory above). SQL-layer push of
-			// confidence_min is an optimisation reserved for the non-scope path
-			// where ListWithFilters can be used without offset.
-			const batchSize = 500
-			offset := 0
-			for len(filtered) < limit {
-				batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
-				if err != nil {
-					return "", fmt.Errorf("recall_memory: %w", err)
-				}
-				if len(batch) == 0 {
-					break
-				}
-				for _, mem := range batch {
-					if keepMemory(mem) {
-						filtered = append(filtered, mem)
-						if len(filtered) >= limit {
-							break
-						}
-					}
-				}
-				offset += len(batch)
-				if len(batch) < batchSize {
-					break
-				}
-			}
-		} else {
-			// Non-scope path: single over-fetch via ListWithFilters (SQL-layer
-			// confidence_min + include_superseded push; no invisible rows).
-			const (
-				tg3CandidateMultiplier = 10
-				tg3MinPool             = 1000
-			)
-			fetchLimit := limit * tg3CandidateMultiplier
-			if fetchLimit < tg3MinPool {
-				fetchLimit = tg3MinPool
-			}
-			tg3Opts := engramgorm.ListOptions{
+		// Batch-loop through ListWithFilters so include_superseded and
+		// confidence_min stay SQL-backed while visibility filtering can still
+		// backfill past invisible rows before the final limit is applied.
+		const batchSize = 500
+		offset := 0
+		for len(filtered) < limit {
+			batch, err := s.memoryStore.ListWithFilters(ctx, project, gormdb.ListOptions{
 				ConfidenceMin:     tg3ConfidenceMin,
 				IncludeSuperseded: tg3IncludeSuperseded,
-				Limit:             fetchLimit,
-			}
-			candidates, err := s.memoryStore.ListWithFilters(ctx, project, tg3Opts)
+				Limit:             batchSize,
+				Offset:            offset,
+			})
 			if err != nil {
 				return "", fmt.Errorf("recall_memory: %w", err)
 			}
-			for _, mem := range candidates {
+			if len(batch) == 0 {
+				break
+			}
+			for _, mem := range batch {
 				if keepMemory(mem) {
 					filtered = append(filtered, mem)
 					if len(filtered) >= limit {
@@ -1283,11 +1428,15 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 					}
 				}
 			}
+			offset += len(batch)
+			if len(batch) < batchSize {
+				break
+			}
 		}
-	} else if scopeEnabled {
+	} else {
 		// Batch-loop via ListWithOffset (codex P1 cycle-3 + cycle-4 pattern)
-		// so scope-invisible newest rows do not truncate visible recall
-		// before older eligible rows reach the requested limit.
+		// so invisible newest rows do not truncate visible recall before older
+		// eligible rows reach the requested limit.
 		const batchSize = 500
 		offset := 0
 		for len(filtered) < limit {
@@ -1309,30 +1458,6 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 			offset += len(batch)
 			if len(batch) < batchSize {
 				break
-			}
-		}
-	} else {
-		// Flag-OFF — original single-fetch shape preserves v6.4.x
-		// byte-identity for legacy callers using the recall_memory tool.
-		fetchLimit := limit
-		if query != "" || obsType != "" || len(tags) > 0 {
-			const candidateMultiplier = 10
-			const minCandidatePool = 1000
-			fetchLimit = limit * candidateMultiplier
-			if fetchLimit < minCandidatePool {
-				fetchLimit = minCandidatePool
-			}
-		}
-		memories, err := s.memoryStore.List(ctx, project, fetchLimit)
-		if err != nil {
-			return "", fmt.Errorf("recall_memory: %w", err)
-		}
-		for _, mem := range memories {
-			if keepMemory(mem) {
-				filtered = append(filtered, mem)
-				if len(filtered) >= limit {
-					break
-				}
 			}
 		}
 	}
@@ -1409,13 +1534,17 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	switch format {
 	case "items":
 		type item struct {
-			Tags        []string `json:"tags,omitempty"`
-			Title       string   `json:"title"`
-			Type        string   `json:"type,omitempty"`
-			Content     string   `json:"content"`
-			SourceAgent string   `json:"source_agent,omitempty"`
-			Project     string   `json:"project"`
-			ID          int64    `json:"id"`
+			Tags               []string `json:"tags,omitempty"`
+			Title              string   `json:"title"`
+			Type               string   `json:"type,omitempty"`
+			Content            string   `json:"content"`
+			SourceAgent        string   `json:"source_agent,omitempty"`
+			OwnerPrincipal     string   `json:"owner_principal,omitempty"`
+			OwnerPrincipalKind string   `json:"owner_principal_kind,omitempty"`
+			AgentVisibility    string   `json:"agent_visibility,omitempty"`
+			Domain             string   `json:"domain,omitempty"`
+			Project            string   `json:"project"`
+			ID                 int64    `json:"id"`
 		}
 		items := make([]item, 0, len(filtered))
 		for _, mem := range filtered {
@@ -1427,13 +1556,17 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 				}
 			}
 			items = append(items, item{
-				ID:          mem.ID,
-				Title:       truncateTitle(mem.Content, 80),
-				Type:        memoryType,
-				Content:     mem.Content,
-				Tags:        mem.Tags,
-				SourceAgent: mem.SourceAgent,
-				Project:     mem.Project,
+				ID:                 mem.ID,
+				Title:              truncateTitle(mem.Content, 80),
+				Type:               memoryType,
+				Content:            mem.Content,
+				Tags:               mem.Tags,
+				SourceAgent:        mem.SourceAgent,
+				OwnerPrincipal:     mem.OwnerPrincipal,
+				OwnerPrincipalKind: mem.OwnerPrincipalKind,
+				AgentVisibility:    mem.AgentVisibility,
+				Domain:             mem.Domain,
+				Project:            mem.Project,
 			})
 		}
 		out, err := json.MarshalIndent(items, "", "  ")
@@ -1555,8 +1688,7 @@ func (s *Server) handleRecallMemoryHybrid(
 	obsType string,
 	tags []string,
 	caller scope.KeycardContext,
-	scopeEnabled bool,
-	includeScopes map[string]bool,
+	visibilityOpts scope.MemoryVisibilityOptions,
 	tg3Active bool,
 	tg3ConfidenceMin float64,
 	tg3IncludeSuperseded bool,
@@ -1594,7 +1726,7 @@ func (s *Server) handleRecallMemoryHybrid(
 	// memories to be included; silently dropping the flag returns a smaller,
 	// inconsistent result set with no indication of the gap. An error tells the
 	// caller to use the legacy path (ENGRAM_VNEXT_ENABLED=false) or omit the flag.
-	if tg3IncludeSuperseded {
+	if tg3Active && tg3IncludeSuperseded {
 		return "", fmt.Errorf("include_superseded is not supported with ENGRAM_VNEXT_ENABLED hybrid retrieval; disable ENGRAM_VNEXT_ENABLED or omit include_superseded")
 	}
 
@@ -1625,17 +1757,13 @@ func (s *Server) handleRecallMemoryHybrid(
 		opts.Reranker = rerankAdapter{client: s.rerankClient}
 	}
 
-	// When type/tag filters are active, request a wider candidate pool so that
-	// post-filter truncation does not hide matching memories. The pool is capped
-	// at limit*4 to bound over-fetching while ensuring filters have material to
-	// work with. HybridSearch respects this as its hard limit, then we filter below.
-	fetchLimit := limit
-	if obsType != "" || len(tags) > 0 {
-		const filterCandidateMultiplier = 4
-		fetchLimit = limit * filterCandidateMultiplier
-		if fetchLimit > 200 {
-			fetchLimit = 200
-		}
+	// Request a wider candidate pool because type/tag/visibility filters all run
+	// after HybridSearch. Without over-fetching, private rows from other
+	// principals can consume the top-N and underfill otherwise-visible results.
+	const filterCandidateMultiplier = 4
+	fetchLimit := limit * filterCandidateMultiplier
+	if fetchLimit > 200 {
+		fetchLimit = 200
 	}
 
 	scored, explanations, err := retrieval.HybridSearch(
@@ -1667,6 +1795,10 @@ func (s *Server) handleRecallMemoryHybrid(
 		Type               string                        `json:"type,omitempty"`
 		Content            string                        `json:"content"`
 		SourceAgent        string                        `json:"source_agent,omitempty"`
+		OwnerPrincipal     string                        `json:"owner_principal,omitempty"`
+		OwnerPrincipalKind string                        `json:"owner_principal_kind,omitempty"`
+		AgentVisibility    string                        `json:"agent_visibility,omitempty"`
+		Domain             string                        `json:"domain,omitempty"`
 		Project            string                        `json:"project"`
 		ID                 int64                         `json:"id"`
 		Score              float64                       `json:"score"`
@@ -1715,21 +1847,8 @@ func (s *Server) handleRecallMemoryHybrid(
 		// memories visible to the caller — same semantics as the legacy
 		// batch-loop in handleRecallMemory. Without this check the hybrid path
 		// would re-introduce the cross-workstation leak that d9eea82 fixed.
-		if scopeEnabled {
-			memScope := mem.PrivacyScope
-			if memScope == "" {
-				memScope = "project"
-			}
-			if len(includeScopes) > 0 && !includeScopes[memScope] {
-				continue
-			}
-			meta := scope.SourceMeta{
-				WorkstationID: mem.SourceWorkstationID,
-				Sessions:      mem.SourceSessions,
-			}
-			if !scope.Resolve(caller, memScope, meta) {
-				continue
-			}
+		if !scope.ResolveMemory(caller, mem, visibilityOpts) {
+			continue
 		}
 
 		// ── TG3 confidence_min post-fetch filter ──────────────────────────────
@@ -1753,14 +1872,18 @@ func (s *Server) handleRecallMemoryHybrid(
 		}
 
 		r := hybridResult{
-			ID:          mem.ID,
-			Title:       truncateTitle(mem.Content, 80),
-			Type:        memoryType,
-			Content:     mem.Content,
-			Tags:        mem.Tags,
-			SourceAgent: mem.SourceAgent,
-			Project:     mem.Project,
-			Score:       sm.Score,
+			ID:                 mem.ID,
+			Title:              truncateTitle(mem.Content, 80),
+			Type:               memoryType,
+			Content:            mem.Content,
+			Tags:               mem.Tags,
+			SourceAgent:        mem.SourceAgent,
+			OwnerPrincipal:     mem.OwnerPrincipal,
+			OwnerPrincipalKind: mem.OwnerPrincipalKind,
+			AgentVisibility:    mem.AgentVisibility,
+			Domain:             mem.Domain,
+			Project:            mem.Project,
+			Score:              sm.Score,
 		}
 		if explain {
 			if e, ok := explByID[mem.ID]; ok {
@@ -1829,21 +1952,8 @@ func (s *Server) handleRecallMemoryHybrid(
 					continue
 				}
 			}
-			if scopeEnabled {
-				memScope := mem.PrivacyScope
-				if memScope == "" {
-					memScope = "project"
-				}
-				if len(includeScopes) > 0 && !includeScopes[memScope] {
-					continue
-				}
-				meta := scope.SourceMeta{
-					WorkstationID: mem.SourceWorkstationID,
-					Sessions:      mem.SourceSessions,
-				}
-				if !scope.Resolve(caller, memScope, meta) {
-					continue
-				}
+			if !scope.ResolveMemory(caller, mem, visibilityOpts) {
+				continue
 			}
 			// TG3 confidence_min post-fetch filter (Tier0 fall-through path).
 			if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
@@ -1857,14 +1967,18 @@ func (s *Server) handleRecallMemoryHybrid(
 				}
 			}
 			r := hybridResult{
-				ID:          mem.ID,
-				Title:       truncateTitle(mem.Content, 80),
-				Type:        memoryType,
-				Content:     mem.Content,
-				Tags:        mem.Tags,
-				SourceAgent: mem.SourceAgent,
-				Project:     mem.Project,
-				Score:       sm.Score,
+				ID:                 mem.ID,
+				Title:              truncateTitle(mem.Content, 80),
+				Type:               memoryType,
+				Content:            mem.Content,
+				Tags:               mem.Tags,
+				SourceAgent:        mem.SourceAgent,
+				OwnerPrincipal:     mem.OwnerPrincipal,
+				OwnerPrincipalKind: mem.OwnerPrincipalKind,
+				AgentVisibility:    mem.AgentVisibility,
+				Domain:             mem.Domain,
+				Project:            mem.Project,
+				Score:              sm.Score,
 			}
 			if explain {
 				if e, ok := explByID[mem.ID]; ok {
@@ -1944,6 +2058,10 @@ func (s *Server) handleRecallMemoryHybrid(
 			Type               string                        `json:"type,omitempty"`
 			Content            string                        `json:"content"`
 			SourceAgent        string                        `json:"source_agent,omitempty"`
+			OwnerPrincipal     string                        `json:"owner_principal,omitempty"`
+			OwnerPrincipalKind string                        `json:"owner_principal_kind,omitempty"`
+			AgentVisibility    string                        `json:"agent_visibility,omitempty"`
+			Domain             string                        `json:"domain,omitempty"`
 			Project            string                        `json:"project"`
 			ID                 int64                         `json:"id"`
 			Score              float64                       `json:"score"`
@@ -1957,15 +2075,19 @@ func (s *Server) handleRecallMemoryHybrid(
 			contentMatched := strings.Contains(strings.ToLower(sm.Memory.Content), queryLower)
 			rat := retrieval.AssembleRationale(sm.Memory, query, contentMatched, filterDescs)
 			r := hybridRationaleResult{
-				ID:               item.ID,
-				Title:            item.Title,
-				Type:             item.Type,
-				Content:          item.Content,
-				Tags:             item.Tags,
-				SourceAgent:      item.SourceAgent,
-				Project:          item.Project,
-				Score:            item.Score,
-				RankingRationale: &rat,
+				ID:                 item.ID,
+				Title:              item.Title,
+				Type:               item.Type,
+				Content:            item.Content,
+				Tags:               item.Tags,
+				SourceAgent:        item.SourceAgent,
+				OwnerPrincipal:     item.OwnerPrincipal,
+				OwnerPrincipalKind: item.OwnerPrincipalKind,
+				AgentVisibility:    item.AgentVisibility,
+				Domain:             item.Domain,
+				Project:            item.Project,
+				Score:              item.Score,
+				RankingRationale:   &rat,
 			}
 			if explain {
 				if e, ok := explByID[item.ID]; ok {

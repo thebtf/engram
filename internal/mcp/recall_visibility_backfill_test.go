@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -131,4 +133,166 @@ func TestRecall_ScopeInvisibleNewestDoNotTruncate_CodexP1Cycle3(t *testing.T) {
 	}
 	require.True(t, visibleContents["older project row A"], "older project row A must be returned")
 	require.True(t, visibleContents["older project row B"], "older project row B must be returned")
+}
+
+func TestRecall_PrincipalPrivateInvisibleNewestDoNotTruncate_FlagOff(t *testing.T) {
+	project := "pim-recall-backfill-" + uuid.NewString()
+	env := newMemoryServerForT007(t, project)
+	db := env.store.DB
+
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, privacy_scope, created_at)
+			VALUES (?, ?, ?::jsonb, ?, now() - interval '5 minutes')`,
+		project, "older visible row A", `[]`, "private",
+	).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, privacy_scope, created_at)
+			VALUES (?, ?, ?::jsonb, ?, now() - interval '4 minutes')`,
+		project, "older visible row B", `[]`, "project",
+	).Error)
+
+	for i := 1; i <= 3; i++ {
+		require.NoError(t, db.Exec(
+			`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, created_at)
+				VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, now() - (?::int * interval '1 minute'))`,
+			project, "newest principal-private row "+string(rune('0'+i)), `[]`, "project", "agent/bob", "agent", "private", i,
+		).Error)
+	}
+
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+	args, err := json.Marshal(map[string]any{
+		"action":  "search",
+		"project": project,
+		"limit":   2,
+	})
+	require.NoError(t, err)
+
+	out, err := env.srv.handleRecall(ctx, args)
+	require.NoError(t, err)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &resp))
+	require.Equal(t, 2, int(resp["count"].(float64)))
+
+	mems := resp["memories"].([]any)
+	contents := map[string]bool{}
+	for _, raw := range mems {
+		row := raw.(map[string]any)
+		content := row["content"].(string)
+		require.False(t, strings.Contains(content, "principal-private"),
+			"cross-principal private row leaked through recall(action=search)")
+		contents[content] = true
+	}
+	require.True(t, contents["older visible row A"])
+	require.True(t, contents["older visible row B"])
+}
+
+func TestRecallMemory_PrincipalPrivateInvisibleAndSharedAttributed_FlagOff(t *testing.T) {
+	project := "pim-recall-memory-" + uuid.NewString()
+	env := newMemoryServerForT007(t, project)
+	db := env.store.DB
+
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, now() - interval '2 minutes')`,
+		project, "shared team memory", `["type:fact"]`, "project", "agent/bob", "agent", "shared",
+	).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, now() - interval '1 minute')`,
+		project, "private bob memory", `["type:fact"]`, "project", "agent/bob", "agent", "private",
+	).Error)
+
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+	args, err := json.Marshal(map[string]any{
+		"query":   "memory",
+		"project": project,
+		"format":  "items",
+		"limit":   5,
+	})
+	require.NoError(t, err)
+
+	out, err := env.srv.handleRecallMemory(ctx, args)
+	require.NoError(t, err)
+
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &rows))
+	require.Len(t, rows, 1)
+	require.Equal(t, "shared team memory", rows[0]["content"])
+	require.Equal(t, "agent/bob", rows[0]["owner_principal"])
+	require.Equal(t, "agent", rows[0]["owner_principal_kind"])
+	require.Equal(t, "shared", rows[0]["agent_visibility"])
+}
+
+func TestRecallMemory_TG3IncludeSupersededLegacyPath(t *testing.T) {
+	project := "pim-recall-superseded-" + uuid.NewString()
+	env := newMemoryServerForT007(t, project)
+	db := env.store.DB
+
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, status, confidence, privacy_scope, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, now() - interval '2 minutes')`,
+		project, "active contract memory", `["type:fact"]`, "active", 0.9, "project",
+	).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, status, confidence, privacy_scope, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, now() - interval '1 minute')`,
+		project, "superseded contract memory", `["type:fact"]`, "superseded", 0.8, "project",
+	).Error)
+
+	args, err := json.Marshal(map[string]any{
+		"query":              "contract memory",
+		"project":            project,
+		"format":             "items",
+		"limit":              5,
+		"include_superseded": true,
+		"confidence_min":     0.7,
+	})
+	require.NoError(t, err)
+
+	out, err := env.srv.handleRecallMemory(context.Background(), args)
+	require.NoError(t, err)
+
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &rows))
+	require.Len(t, rows, 2)
+	contents := map[string]bool{}
+	for _, row := range rows {
+		contents[row["content"].(string)] = true
+	}
+	require.True(t, contents["active contract memory"])
+	require.True(t, contents["superseded contract memory"])
+}
+
+func TestRecallMemory_IncludeSupersededFlagOffIgnoredInHybrid(t *testing.T) {
+	if os.Getenv("DATABASE_DSN") == "" {
+		t.Skip("DATABASE_DSN not set, skipping hybrid DB-backed compatibility test")
+	}
+
+	project := "pim-recall-superseded-hybrid-flagoff-" + uuid.NewString()
+	env := newMemoryServerForT007(t, project)
+
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+
+	args, err := json.Marshal(map[string]any{
+		"query":              "missing",
+		"project":            project,
+		"format":             "items",
+		"include_superseded": true,
+	})
+	require.NoError(t, err)
+
+	_, err = env.srv.handleRecallMemory(context.Background(), args)
+	require.NoError(t, err, "flag-off TG3 params must be ignored even when hybrid retrieval is enabled")
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -79,6 +80,34 @@ func TestHandleStoreMemoryExplicit_RoundTrip(t *testing.T) {
 	require.Len(t, list, 1)
 	assert.Equal(t, created.Content, list[0].Content)
 	assert.Equal(t, created.Project, list[0].Project)
+}
+
+func TestHandleStoreMemoryExplicit_PrincipalOwnerDerivedFromIdentity(t *testing.T) {
+	project := "test-memory-handler-principal-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	body := []byte(`{
+		"project": "` + project + `",
+		"content": "REST principal-owned memory",
+		"owner_principal": "agent/spoofed",
+		"agent_visibility": "private",
+		"domain": "memory-lab"
+	}`)
+	id := auth.ClientWithPrincipal("read-write", "keycard-rest-principal", "agent/jeeves", auth.PrincipalKindAgent)
+	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader(body)).
+		WithContext(auth.WithIdentity(context.Background(), id))
+	storeW := httptest.NewRecorder()
+	service.handleStoreMemoryExplicit(storeW, storeReq)
+
+	require.Equal(t, http.StatusCreated, storeW.Code, storeW.Body.String())
+
+	var created models.Memory
+	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
+	require.Equal(t, "agent/jeeves", created.OwnerPrincipal)
+	require.Equal(t, "agent", created.OwnerPrincipalKind)
+	require.Equal(t, models.AgentVisibilityPrivate, created.AgentVisibility)
+	require.Equal(t, "memory-lab", created.Domain)
+	require.NotEqual(t, "agent/spoofed", created.OwnerPrincipal)
 }
 
 func TestHandleStoreMemoryExplicit_ValidationErrors(t *testing.T) {
@@ -160,6 +189,38 @@ func TestHandleListMemories_NonFiniteScoresReturnJSON(t *testing.T) {
 	assert.Equal(t, "memory with non-finite score", rows[0]["content"])
 	assert.NotContains(t, rows[0], "confidence")
 	assert.NotContains(t, rows[0], "stability")
+}
+
+func TestHandleListMemories_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	privateOther := &models.Memory{
+		ID:                 50,
+		Project:            "principal-list-project",
+		Content:            "private bob row",
+		AgentVisibility:    models.AgentVisibilityPrivate,
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+	}
+	visible := &models.Memory{
+		ID:      51,
+		Project: "principal-list-project",
+		Content: "visible legacy row",
+	}
+	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{privateOther, visible}}}
+	id := auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent)
+	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=principal-list-project&limit=50", nil).
+		WithContext(auth.WithIdentity(context.Background(), id))
+	w := httptest.NewRecorder()
+
+	service.handleListMemories(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, float64(51), rows[0]["id"])
+	assert.Equal(t, "visible legacy row", rows[0]["content"])
 }
 
 func TestHandleListMemories_OutOfRangeTimestampsReturnJSON(t *testing.T) {

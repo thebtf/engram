@@ -55,8 +55,10 @@ type loginRequest struct {
 
 // tokenCreateRequest is the JSON body for POST /api/auth/tokens.
 type tokenCreateRequest struct {
-	Name  string `json:"name"`
-	Scope string `json:"scope"`
+	Name          string `json:"name"`
+	Scope         string `json:"scope"`
+	Principal     string `json:"principal"`
+	PrincipalKind string `json:"principal_kind" enums:"human,agent,service"`
 }
 
 // handleAuthLogin godoc
@@ -258,31 +260,35 @@ func (s *Service) handleListTokens(w http.ResponseWriter, r *http.Request) {
 
 	// Exclude token_hash from response
 	type tokenResponse struct {
-		ID           string     `json:"id"`
-		Name         string     `json:"name"`
-		TokenPrefix  string     `json:"token_prefix"`
-		Scope        string     `json:"scope"`
-		CreatedAt    time.Time  `json:"created_at"`
-		LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
-		RequestCount int64      `json:"request_count"`
-		ErrorCount   int64      `json:"error_count"`
-		Revoked      bool       `json:"revoked"`
-		RevokedAt    *time.Time `json:"revoked_at,omitempty"`
+		ID            string     `json:"id"`
+		Name          string     `json:"name"`
+		TokenPrefix   string     `json:"token_prefix"`
+		Scope         string     `json:"scope"`
+		Principal     string     `json:"principal"`
+		PrincipalKind string     `json:"principal_kind"`
+		CreatedAt     time.Time  `json:"created_at"`
+		LastUsedAt    *time.Time `json:"last_used_at,omitempty"`
+		RequestCount  int64      `json:"request_count"`
+		ErrorCount    int64      `json:"error_count"`
+		Revoked       bool       `json:"revoked"`
+		RevokedAt     *time.Time `json:"revoked_at,omitempty"`
 	}
 
 	resp := make([]tokenResponse, len(tokens))
 	for i, t := range tokens {
 		resp[i] = tokenResponse{
-			ID:           t.ID,
-			Name:         t.Name,
-			TokenPrefix:  t.TokenPrefix,
-			Scope:        t.Scope,
-			CreatedAt:    t.CreatedAt,
-			LastUsedAt:   t.LastUsedAt,
-			RequestCount: t.RequestCount,
-			ErrorCount:   t.ErrorCount,
-			Revoked:      t.Revoked,
-			RevokedAt:    t.RevokedAt,
+			ID:            t.ID,
+			Name:          t.Name,
+			TokenPrefix:   t.TokenPrefix,
+			Scope:         t.Scope,
+			Principal:     t.Principal,
+			PrincipalKind: t.PrincipalKind,
+			CreatedAt:     t.CreatedAt,
+			LastUsedAt:    t.LastUsedAt,
+			RequestCount:  t.RequestCount,
+			ErrorCount:    t.ErrorCount,
+			Revoked:       t.Revoked,
+			RevokedAt:     t.RevokedAt,
 		}
 	}
 
@@ -366,7 +372,13 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate raw token: eng_ + 32 hex chars (16 random bytes)
+	principal, principalKind, err := normalizeTokenPrincipal(req.Principal, req.PrincipalKind)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Generate raw token: engram_ + 32 hex chars (16 random bytes)
 	randomBytes := make([]byte, 16)
 	if _, err := rand.Read(randomBytes); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -382,7 +394,7 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := tokenStore.Create(r.Context(), req.Name, string(hash), prefix, scope)
+	token, err := tokenStore.CreateWithPrincipal(r.Context(), req.Name, string(hash), prefix, scope, principal, principalKind)
 	if err != nil {
 		// Check for unique constraint violation (duplicate name)
 		if isDuplicateKeyError(err) {
@@ -395,10 +407,14 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{
-		"id":    token.ID,
-		"name":  token.Name,
-		"token": rawToken,
-		"scope": token.Scope,
+		"id":             token.ID,
+		"name":           token.Name,
+		"token":          rawToken,
+		"prefix":         token.TokenPrefix,
+		"token_prefix":   token.TokenPrefix,
+		"scope":          token.Scope,
+		"principal":      token.Principal,
+		"principal_kind": token.PrincipalKind,
 	})
 }
 
@@ -491,9 +507,37 @@ func (s *Service) handleGetTokenStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{
-		"request_count": token.RequestCount,
-		"last_used_at":  token.LastUsedAt,
+		"id":             token.ID,
+		"name":           token.Name,
+		"token_prefix":   token.TokenPrefix,
+		"scope":          token.Scope,
+		"principal":      token.Principal,
+		"principal_kind": token.PrincipalKind,
+		"request_count":  token.RequestCount,
+		"error_count":    token.ErrorCount,
+		"last_used_at":   token.LastUsedAt,
+		"revoked":        token.Revoked,
+		"revoked_at":     token.RevokedAt,
 	})
+}
+
+func normalizeTokenPrincipal(principal, principalKind string) (string, string, error) {
+	principal = strings.TrimSpace(principal)
+	principalKind = strings.TrimSpace(principalKind)
+
+	if principal == "" {
+		if principalKind != "" {
+			return "", "", errors.New("principal is required when principal_kind is set")
+		}
+		return "", string(authpkg.PrincipalKindHuman), nil
+	}
+	if principalKind == "" {
+		principalKind = string(authpkg.PrincipalKindHuman)
+	}
+	if !authpkg.IsValidPrincipalKind(authpkg.PrincipalKind(principalKind)) {
+		return "", "", errors.New("principal_kind must be 'human', 'agent', or 'service'")
+	}
+	return principal, principalKind, nil
 }
 
 // authRoleKey is the context key for the authenticated role.

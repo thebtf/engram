@@ -42,7 +42,43 @@ func validateMemoryForCreate(mem *models.Memory) error {
 	if mem.Content == "" {
 		return fmt.Errorf("memory.Content must not be empty")
 	}
+	if err := validateMemoryOwnershipForCreate(mem); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateMemoryOwnershipForCreate(mem *models.Memory) error {
+	owner := strings.TrimSpace(mem.OwnerPrincipal)
+	kind := strings.TrimSpace(mem.OwnerPrincipalKind)
+	visibility := strings.TrimSpace(mem.AgentVisibility)
+
+	if owner == "" {
+		if kind != "" {
+			return fmt.Errorf("memory.OwnerPrincipalKind requires memory.OwnerPrincipal")
+		}
+		if visibility != "" {
+			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
+		}
+		return nil
+	}
+
+	if kind != "" && !isValidMemoryOwnerPrincipalKind(kind) {
+		return fmt.Errorf("invalid_owner_principal_kind: %q must be one of human, agent, service", kind)
+	}
+	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
+		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
+	}
+	return nil
+}
+
+func isValidMemoryOwnerPrincipalKind(kind string) bool {
+	switch kind {
+	case "human", "agent", "service":
+		return true
+	default:
+		return false
+	}
 }
 
 func memoryRowForCreate(mem *models.Memory, now time.Time, includeLifecycle bool) *Memory {
@@ -114,6 +150,30 @@ func copyPrivacyFields(row *Memory, mem *models.Memory) {
 	}
 }
 
+func copyPrincipalMemoryFields(row *Memory, mem *models.Memory) {
+	row.Domain = strings.TrimSpace(mem.Domain)
+
+	owner := strings.TrimSpace(mem.OwnerPrincipal)
+	if owner == "" {
+		return
+	}
+
+	kind := strings.TrimSpace(mem.OwnerPrincipalKind)
+	if kind == "" {
+		kind = "human"
+	}
+	visibility := strings.TrimSpace(mem.AgentVisibility)
+	if visibility == "" {
+		// Preserve existing team-visible behavior for owned writes; CR-004 will
+		// add principal-aware recall filtering for explicit private memories.
+		visibility = models.AgentVisibilityShared
+	}
+
+	row.OwnerPrincipal = owner
+	row.OwnerPrincipalKind = kind
+	row.AgentVisibility = visibility
+}
+
 func advisoryLockKey(parts ...string) int64 {
 	h := sha256.New()
 	for _, part := range parts {
@@ -153,6 +213,7 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	// metadata into migration-125/130 columns. See copyPrivacyFields for
 	// the detailed rationale (codex P1 fix-forward on 3e4a4b1 / PR #221).
 	copyPrivacyFields(row, mem)
+	copyPrincipalMemoryFields(row, mem)
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
@@ -182,6 +243,7 @@ func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memor
 	// this path, causing privacy_scope to fall back to the DB default 'project'
 	// even when the caller set a non-project scope (codex P1 PR #221 fix).
 	copyPrivacyFields(row, mem)
+	copyPrincipalMemoryFields(row, mem)
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
@@ -199,6 +261,7 @@ func createMemoryWithLifecycleTx(ctx context.Context, tx *gorm.DB, mem *models.M
 	now := time.Now().UTC()
 	row := memoryRowForCreate(mem, now, true)
 	copyPrivacyFields(row, mem)
+	copyPrincipalMemoryFields(row, mem)
 	if err := tx.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle (tx) for project %q: %w", mem.Project, err)
 	}
@@ -254,6 +317,7 @@ func (s *MemoryStore) CreateWithLifecycleIfTagAbsent(
 		// T002 + T001b + T003b: persist privacy metadata (same fix as
 		// CreateWithLifecycle — codex P1 PR #221).
 		copyPrivacyFields(row, mem)
+		copyPrincipalMemoryFields(row, mem)
 		if err := tx.Create(row).Error; err != nil {
 			return fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 		}
@@ -287,8 +351,8 @@ func (s *MemoryStore) Get(ctx context.Context, id int64) (*models.Memory, error)
 // project must not be empty.
 //
 // T017a: List now delegates to ListWithFilters with zero-value opts so there
-// is a single WHERE-clause implementation path. Behavior is byte-identical to
-// the previous standalone implementation (status='active', no confidence floor).
+// is a single WHERE-clause implementation path. The default predicate remains
+// the legacy active-row predicate (status='active', no confidence floor).
 func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
 	result, err := s.ListWithFilters(ctx, project, ListOptions{Limit: limit})
 	if err != nil {
@@ -298,12 +362,17 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 }
 
 // ListOptions controls the optional filters applied by ListWithFilters.
-// Zero-value opts replicate the exact WHERE clause of the legacy List method
-// (status='active', no confidence floor), ensuring byte-identical behavior when
-// callers delegate from List to ListWithFilters with default opts.
+// Zero-value opts replicate the WHERE clause of the legacy List method
+// (status='active', no confidence floor), so callers delegate from List to
+// ListWithFilters with default opts.
 //
 // T017a (engram vNext Milestone F TG3): store-level extension prerequisite.
 type ListOptions struct {
+	// ContentContains, when non-empty, adds a case-insensitive content
+	// substring predicate. Callers may still apply richer tag/content matching in
+	// memory, but recall(action="search") can keep its content-only predicate in
+	// SQL instead of scanning every row.
+	ContentContains string
 	// ConfidenceMin, when > 0, adds WHERE confidence >= ConfidenceMin.
 	// Default 0.0 means no confidence filter applied.
 	ConfidenceMin float64
@@ -313,12 +382,16 @@ type ListOptions struct {
 	IncludeSuperseded bool
 	// Limit caps the number of returned rows. Values <= 0 default to 50.
 	Limit int
+	// Offset skips rows after SQL predicates are applied. Values < 0 default to
+	// 0. This lets callers combine ListWithFilters with visibility backfill loops
+	// without falling back to the active-only ListWithOffset seam.
+	Offset int
 }
 
 // ListWithFilters returns memories for the given project with optional filters
 // applied at the SQL layer. This is the TG3 store-level extension:
 //
-//   - IncludeSuperseded=false (default): WHERE status='active' — byte-identical to List.
+//   - IncludeSuperseded=false (default): WHERE status='active'.
 //   - IncludeSuperseded=true: WHERE status IN ('active','superseded').
 //   - ConfidenceMin > 0: AND confidence >= ConfidenceMin on the Memory.Confidence column.
 //
@@ -349,10 +422,17 @@ func (s *MemoryStore) ListWithFilters(ctx context.Context, project string, opts 
 	if opts.ConfidenceMin > 0 {
 		q = q.Where("confidence >= ?", opts.ConfidenceMin)
 	}
+	if content := strings.TrimSpace(opts.ContentContains); content != "" {
+		q = q.Where("LOWER(content) LIKE ? ESCAPE '\\'", "%"+escapeSQLLike(strings.ToLower(content))+"%")
+	}
+	if opts.Offset < 0 {
+		opts.Offset = 0
+	}
 
 	var rows []Memory
-	err := q.Order("created_at DESC").
+	err := q.Order("created_at DESC, id DESC").
 		Limit(limit).
+		Offset(opts.Offset).
 		Find(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("list memories with filters for project %q: %w", project, err)
@@ -362,6 +442,11 @@ func (s *MemoryStore) ListWithFilters(ctx context.Context, project string, opts 
 		result[i] = memoryRowToModel(&rows[i])
 	}
 	return result, nil
+}
+
+func escapeSQLLike(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
 }
 
 // ListWithOffset returns a page of active (non-soft-deleted) memories for the
@@ -744,6 +829,10 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		ReviewAfter:              row.ReviewAfter,
 		ValidFrom:                row.ValidFrom,
 		ValidUntil:               row.ValidUntil,
+		OwnerPrincipal:           row.OwnerPrincipal,
+		OwnerPrincipalKind:       row.OwnerPrincipalKind,
+		AgentVisibility:          row.AgentVisibility,
+		Domain:                   row.Domain,
 		SupersedesID:             row.SupersedesID,
 		SupersededBy:             row.SupersededBy,
 		ImportanceBase:           row.ImportanceBase,

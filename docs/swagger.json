@@ -1788,6 +1788,257 @@
                 }
             }
         },
+        "/api/rules": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns active behavioral rules. When project is set, returns project-scoped and global rules; otherwise returns global rules only. Set all=true for the operator-console all-scope registry view.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Rules"
+                ],
+                "summary": "List behavioral rules",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project slug (optional)",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Return all active rules across scopes",
+                        "name": "all",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum rows (default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid limit",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal server error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Creates an always-inject behavioral rule. Omit project to create a global rule.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Rules"
+                ],
+                "summary": "Create a behavioral rule",
+                "parameters": [
+                    {
+                        "description": "Rule create payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.behavioralRuleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule"
+                        }
+                    },
+                    "400": {
+                        "description": "content is required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal server error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rules/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Soft-deletes a behavioral rule by its numeric ID (sets deleted_at = now()).\nReturns 404 if the rule does not exist or has already been deleted.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Rules"
+                ],
+                "summary": "Delete a behavioral rule by ID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Rule ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer",
+                                "format": "int64"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid rule id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "rule not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal server error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Partially updates a behavioral rule by ID. Missing fields keep their current values.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Rules"
+                ],
+                "summary": "Update a behavioral rule",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Rule ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rule update payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.behavioralRuleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid rule id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "rule not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal server error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/search/analytics": {
             "get": {
                 "security": [
@@ -2351,7 +2602,7 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns injection/citation counts, noise ratio, and write-gate memory stats.",
+                "description": "Returns injection/citation counts, noise ratio, write-gate memory stats, and embedding telemetry.",
                 "produces": [
                     "application/json"
                 ],
@@ -3006,23 +3257,50 @@
         }
     },
     "definitions": {
-        "github_com_thebtf_engram_internal_embedding.EmbeddingStats": {
+        "github_com_thebtf_engram_internal_embedding.EmbedError": {
             "type": "object",
             "properties": {
-                "chunk_count": {
-                    "type": "integer"
-                },
-                "dimension": {
-                    "type": "integer"
-                },
-                "last_chunk_at": {
+                "at": {
                     "type": "string"
                 },
-                "memories_with_chunks": {
+                "message": {
+                    "description": "truncated to ≤200 chars",
+                    "type": "string"
+                },
+                "status_code": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_thebtf_engram_pkg_models.BehavioralRule": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "edited_by": {
+                    "type": "string"
+                },
+                "id": {
                     "type": "integer"
                 },
-                "model": {
+                "priority": {
+                    "type": "integer"
+                },
+                "project": {
                     "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
                 }
             }
         },
@@ -3031,6 +3309,13 @@
             "properties": {
                 "access_count": {
                     "type": "integer"
+                },
+                "agent_visibility": {
+                    "type": "string",
+                    "enum": [
+                        "private",
+                        "shared"
+                    ]
                 },
                 "citation_count": {
                     "type": "integer"
@@ -3051,6 +3336,9 @@
                     "type": "string"
                 },
                 "deleted_at": {
+                    "type": "string"
+                },
+                "domain": {
                     "type": "string"
                 },
                 "edited_by": {
@@ -3074,9 +3362,27 @@
                 "last_retrieved_at": {
                     "type": "string"
                 },
+                "owner_principal": {
+                    "description": "OwnerPrincipal is server-derived from the authenticated identity, never\nfrom caller-supplied payload fields.",
+                    "type": "string"
+                },
+                "owner_principal_kind": {
+                    "type": "string",
+                    "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                    ]
+                },
                 "privacy_scope": {
                     "description": "PrivacyScope is one of 'private' | 'project' | 'shared' | 'global'.\nAdded by migration 125 (TG1 / T001+T002). DEFAULT 'project' for legacy rows.\nBackward-compat: see spec.md §FR-F1 REVISE — the legacy `scope:*` tag + MCP\nresponse synthesis surface remains active for 2 minor versions (until v6.7.0)\nper RI-F2.",
-                    "type": "string"
+                    "type": "string",
+                    "enum": [
+                        "private",
+                        "project",
+                        "shared",
+                        "global"
+                    ]
                 },
                 "project": {
                     "type": "string"
@@ -3415,11 +3721,105 @@
                 }
             }
         },
+        "internal_worker.behavioralRuleRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "edited_by": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "integer"
+                },
+                "project": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.embeddingTelemetry": {
+            "type": "object",
+            "properties": {
+                "active_memory_count": {
+                    "type": "integer"
+                },
+                "chunk_count": {
+                    "type": "integer"
+                },
+                "dimension": {
+                    "type": "integer"
+                },
+                "embed_failure_count": {
+                    "type": "integer"
+                },
+                "embed_success_count": {
+                    "type": "integer"
+                },
+                "embedding_coverage": {
+                    "description": "fraction 0..1; 0 when no active memories",
+                    "type": "number"
+                },
+                "last_chunk_at": {
+                    "type": "string"
+                },
+                "last_embed_error": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_embedding.EmbedError"
+                },
+                "memories_with_chunks": {
+                    "type": "integer"
+                },
+                "model": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_worker.loginRequest": {
             "type": "object",
             "properties": {
                 "token": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_worker.outcomeTelemetry": {
+            "type": "object",
+            "properties": {
+                "by_outcome": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
+                "total_sessions": {
+                    "type": "integer"
+                },
+                "unrecorded_fraction": {
+                    "type": "number"
+                },
+                "unrecorded_sessions": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.projectCitationRate": {
+            "type": "object",
+            "properties": {
+                "citation_rate": {
+                    "type": "number"
+                },
+                "memory_count": {
+                    "type": "integer"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "total_citations": {
+                    "type": "integer"
+                },
+                "total_injections": {
+                    "type": "integer"
                 }
             }
         },
@@ -3492,7 +3892,17 @@
         "internal_worker.storeMemoryRequest": {
             "type": "object",
             "properties": {
+                "agent_visibility": {
+                    "type": "string",
+                    "enum": [
+                        "private",
+                        "shared"
+                    ]
+                },
                 "content": {
+                    "type": "string"
+                },
+                "domain": {
                     "type": "string"
                 },
                 "privacy_scope": {
@@ -3523,6 +3933,17 @@
                 "name": {
                     "type": "string"
                 },
+                "principal": {
+                    "type": "string"
+                },
+                "principal_kind": {
+                    "type": "string",
+                    "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                    ]
+                },
                 "scope": {
                     "type": "string"
                 }
@@ -3535,7 +3956,7 @@
                     "type": "integer"
                 },
                 "embedding": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_embedding.EmbeddingStats"
+                    "$ref": "#/definitions/internal_worker.embeddingTelemetry"
                 },
                 "generated_at": {
                     "type": "string"
@@ -3545,6 +3966,15 @@
                 },
                 "noise_ratio": {
                     "type": "number"
+                },
+                "outcomes": {
+                    "$ref": "#/definitions/internal_worker.outcomeTelemetry"
+                },
+                "project_citation_rates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_worker.projectCitationRate"
+                    }
                 },
                 "uncited_count": {
                     "type": "integer"

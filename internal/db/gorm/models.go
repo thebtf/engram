@@ -142,17 +142,19 @@ func (Project) TableName() string { return "projects" }
 // APIToken represents a client API token for agent authentication.
 // Tokens are stored as bcrypt hashes with a prefix for fast lookup.
 type APIToken struct {
-	ID           string     `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
-	Name         string     `gorm:"type:text;not null;uniqueIndex"`
-	TokenHash    string     `gorm:"type:text;not null"`
-	TokenPrefix  string     `gorm:"type:text;not null;index"`
-	Scope        string     `gorm:"type:text;not null;default:read-write"`
-	CreatedAt    time.Time  `gorm:"not null;default:now()"`
-	LastUsedAt   *time.Time `gorm:"column:last_used_at"`
-	RequestCount int64      `gorm:"not null;default:0"`
-	ErrorCount   int64      `gorm:"not null;default:0"`
-	Revoked      bool       `gorm:"not null;default:false"`
-	RevokedAt    *time.Time `gorm:"column:revoked_at"`
+	ID            string     `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	Name          string     `gorm:"type:text;not null;uniqueIndex"`
+	TokenHash     string     `gorm:"type:text;not null"`
+	TokenPrefix   string     `gorm:"type:text;not null;index"`
+	Scope         string     `gorm:"type:text;not null;default:read-write"`
+	Principal     string     `gorm:"type:text;not null;default:''" json:"principal"`
+	PrincipalKind string     `gorm:"type:text;not null;default:'human'" json:"principal_kind"`
+	CreatedAt     time.Time  `gorm:"not null;default:now()"`
+	LastUsedAt    *time.Time `gorm:"column:last_used_at"`
+	RequestCount  int64      `gorm:"not null;default:0"`
+	ErrorCount    int64      `gorm:"not null;default:0"`
+	Revoked       bool       `gorm:"not null;default:false"`
+	RevokedAt     *time.Time `gorm:"column:revoked_at"`
 }
 
 func (APIToken) TableName() string { return "api_tokens" }
@@ -270,6 +272,10 @@ type Memory struct {
 	PrivacyScope             string         `gorm:"type:text;not null;default:'project'" json:"privacy_scope"`
 	SourceWorkstationID      string         `gorm:"type:text;not null;default:''" json:"source_workstation_id"`
 	SourceSessions           pq.StringArray `gorm:"type:text[];not null;default:'{}'" json:"source_sessions"`
+	OwnerPrincipal           string         `gorm:"type:text;not null;default:''" json:"owner_principal"`
+	OwnerPrincipalKind       string         `gorm:"type:text;not null;default:''" json:"owner_principal_kind"`
+	AgentVisibility          string         `gorm:"type:text;not null;default:''" json:"agent_visibility"`
+	Domain                   string         `gorm:"type:text;not null;default:''" json:"domain"`
 	CreatedAt                time.Time      `gorm:"type:timestamptz;not null;default:now();index:idx_memories_project_created,priority:2,sort:desc" json:"created_at"`
 	UpdatedAt                time.Time      `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
 	DeletedAt                *time.Time     `gorm:"type:timestamptz" json:"deleted_at,omitempty"`
