@@ -58,13 +58,31 @@ func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, a
 		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
 	}
 
-	mem.Domain = strings.TrimSpace(domain)
+	normalizedDomain := strings.TrimSpace(domain)
+	var ownerPrincipal, ownerPrincipalKind string
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		if principal, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
-			mem.OwnerPrincipal = principal
-			mem.OwnerPrincipalKind = principalKind
+			ownerPrincipal = principal
+			ownerPrincipalKind = principalKind
 		}
 	}
+	caller := scope.KeycardContext{
+		Principal:     ownerPrincipal,
+		PrincipalKind: ownerPrincipalKind,
+	}
+	decision := scope.DomainOwnershipPolicy{}.Decide(caller, scope.DomainPolicyRequest{
+		Operation:          scope.DomainOperationWrite,
+		Domain:             normalizedDomain,
+		OwnerPrincipal:     ownerPrincipal,
+		OwnerPrincipalKind: ownerPrincipalKind,
+	})
+	if !decision.Allowed {
+		return fmt.Errorf("invalid_domain: %s", decision.Reason)
+	}
+
+	mem.Domain = normalizedDomain
+	mem.OwnerPrincipal = ownerPrincipal
+	mem.OwnerPrincipalKind = ownerPrincipalKind
 	if visibility != "" {
 		if mem.OwnerPrincipal == "" {
 			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")

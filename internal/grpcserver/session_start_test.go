@@ -114,6 +114,22 @@ func TestListVisibleSessionStartMemories_BackfillsBeforeScoring(t *testing.T) {
 	assert.Equal(t, int64(4), visible[1].ID)
 }
 
+func TestListVisibleSessionStartMemories_DomainOwnedCrossPrincipalInvisible(t *testing.T) {
+	t.Parallel()
+
+	pager := fakeSessionStartMemoryPager{rows: []*models.Memory{
+		{ID: 11, Project: "project", Content: "bob domain newest", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityShared, Domain: "memory-lab"},
+		{ID: 12, Project: "project", Content: "bob domain second", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityShared, Domain: "memory-lab"},
+		{ID: 13, Project: "project", Content: "alice domain visible", OwnerPrincipal: "agent/alice", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityShared, Domain: "memory-lab"},
+	}}
+	caller := scope.KeycardContext{Principal: "agent/alice", PrincipalKind: "agent"}
+
+	visible, err := listVisibleSessionStartMemories(context.Background(), pager, "project", 1, caller, scope.MemoryVisibilityOptions{}, 10)
+	require.NoError(t, err)
+	require.Len(t, visible, 1)
+	assert.Equal(t, int64(13), visible[0].ID)
+}
+
 func TestListVisibleSessionStartMemories_ReadBudgetUnderfills(t *testing.T) {
 	t.Parallel()
 
