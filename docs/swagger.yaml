@@ -45,6 +45,15 @@ definitions:
         type: string
       last_retrieved_at:
         type: string
+      owner_principal:
+        description: OwnerPrincipal is server-derived from the authenticated identity.
+        type: string
+      owner_principal_kind:
+        type: string
+      agent_visibility:
+        type: string
+      domain:
+        type: string
       privacy_scope:
         description: |-
           PrivacyScope is one of 'private' | 'project' | 'shared' | 'global'.
@@ -338,7 +347,11 @@ definitions:
     type: object
   internal_worker.storeMemoryRequest:
     properties:
+      agent_visibility:
+        type: string
       content:
+        type: string
+      domain:
         type: string
       privacy_scope:
         description: T004 — vNext F, 4-tier enum

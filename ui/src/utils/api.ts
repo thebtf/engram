@@ -222,6 +222,10 @@ export interface Memory {
   tier?: string
   epistemic_type?: string
   privacy_scope?: string
+  owner_principal?: string
+  owner_principal_kind?: 'human' | 'agent' | 'service'
+  agent_visibility?: 'private' | 'shared'
+  domain?: string
   confidence?: number
   citation_count?: number
   injection_count?: number

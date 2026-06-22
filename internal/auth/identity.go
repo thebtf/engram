@@ -163,3 +163,16 @@ func (i Identity) WorkstationID() string {
 	}
 	return ""
 }
+
+// MemoryOwner returns the trusted principal metadata for memory ownership.
+// Empty-principal identities keep legacy unowned memory behavior.
+func (i Identity) MemoryOwner() (principal string, principalKind string, ok bool) {
+	if i.Principal == "" {
+		return "", "", false
+	}
+	kind := i.PrincipalKind
+	if kind == "" {
+		kind = PrincipalKindHuman
+	}
+	return i.Principal, string(kind), true
+}

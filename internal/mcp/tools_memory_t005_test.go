@@ -52,6 +52,19 @@ func TestStoreMemoryToolSchema_T005(t *testing.T) {
 	require.True(t, ok, "store_memory schema must expose session_id property")
 	require.Equal(t, "string", sessionID["type"])
 
+	agentVisibility, ok := props["agent_visibility"].(map[string]any)
+	require.True(t, ok, "store_memory schema must expose agent_visibility property")
+	require.Equal(t, "string", agentVisibility["type"])
+	require.ElementsMatch(t,
+		[]string{"private", "shared"},
+		toStringSlice(agentVisibility["enum"]),
+		"agent_visibility enum must mirror migration 149 CHECK constraint")
+
+	domain, ok := props["domain"].(map[string]any)
+	require.True(t, ok, "store_memory schema must expose domain property")
+	require.Equal(t, "string", domain["type"])
+	require.NotContains(t, props, "owner_principal", "owner_principal must be server-derived, not a tool argument")
+
 	// Legacy scope still present + correct enum (RI-F2).
 	legacy, ok := props["scope"].(map[string]any)
 	require.True(t, ok, "store_memory schema must still expose legacy `scope` property (RI-F2)")
@@ -162,6 +175,10 @@ func TestStoreMemoryToolSchema_FlagOff_HasNewProperties_ButRuntimeIgnores(t *tes
 		"schema must advertise privacy_scope unconditionally; runtime decides honor")
 	require.Contains(t, props, "session_id",
 		"schema must advertise session_id unconditionally; runtime decides honor")
+	require.Contains(t, props, "agent_visibility",
+		"schema must advertise agent_visibility unconditionally; runtime decides owner derivation")
+	require.Contains(t, props, "domain",
+		"schema must advertise domain unconditionally; runtime decides owner derivation")
 
 	// Sanity: vnextFEnabled() is the runtime gate; the schema test cannot
 	// observe it but the helper must report false here.

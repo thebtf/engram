@@ -272,6 +272,10 @@ type Memory struct {
 	PrivacyScope             string         `gorm:"type:text;not null;default:'project'" json:"privacy_scope"`
 	SourceWorkstationID      string         `gorm:"type:text;not null;default:''" json:"source_workstation_id"`
 	SourceSessions           pq.StringArray `gorm:"type:text[];not null;default:'{}'" json:"source_sessions"`
+	OwnerPrincipal           string         `gorm:"type:text;not null;default:''" json:"owner_principal"`
+	OwnerPrincipalKind       string         `gorm:"type:text;not null;default:''" json:"owner_principal_kind"`
+	AgentVisibility          string         `gorm:"type:text;not null;default:''" json:"agent_visibility"`
+	Domain                   string         `gorm:"type:text;not null;default:''" json:"domain"`
 	CreatedAt                time.Time      `gorm:"type:timestamptz;not null;default:now();index:idx_memories_project_created,priority:2,sort:desc" json:"created_at"`
 	UpdatedAt                time.Time      `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
 	DeletedAt                *time.Time     `gorm:"type:timestamptz" json:"deleted_at,omitempty"`

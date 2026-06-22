@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -79,6 +80,34 @@ func TestHandleStoreMemoryExplicit_RoundTrip(t *testing.T) {
 	require.Len(t, list, 1)
 	assert.Equal(t, created.Content, list[0].Content)
 	assert.Equal(t, created.Project, list[0].Project)
+}
+
+func TestHandleStoreMemoryExplicit_PrincipalOwnerDerivedFromIdentity(t *testing.T) {
+	project := "test-memory-handler-principal-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	body := []byte(`{
+		"project": "` + project + `",
+		"content": "REST principal-owned memory",
+		"owner_principal": "agent/spoofed",
+		"agent_visibility": "private",
+		"domain": "memory-lab"
+	}`)
+	id := auth.ClientWithPrincipal("read-write", "keycard-rest-principal", "agent/jeeves", auth.PrincipalKindAgent)
+	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader(body)).
+		WithContext(auth.WithIdentity(context.Background(), id))
+	storeW := httptest.NewRecorder()
+	service.handleStoreMemoryExplicit(storeW, storeReq)
+
+	require.Equal(t, http.StatusCreated, storeW.Code, storeW.Body.String())
+
+	var created models.Memory
+	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
+	require.Equal(t, "agent/jeeves", created.OwnerPrincipal)
+	require.Equal(t, "agent", created.OwnerPrincipalKind)
+	require.Equal(t, models.AgentVisibilityPrivate, created.AgentVisibility)
+	require.Equal(t, "memory-lab", created.Domain)
+	require.NotEqual(t, "agent/spoofed", created.OwnerPrincipal)
 }
 
 func TestHandleStoreMemoryExplicit_ValidationErrors(t *testing.T) {

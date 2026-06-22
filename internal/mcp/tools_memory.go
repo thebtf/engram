@@ -90,6 +90,45 @@ func deriveLegacyScopeFromPrivacy(privacy string) string {
 	}
 }
 
+func applyPrincipalMemoryMetadata(ctx context.Context, mem *models.Memory, agentVisibility, domain string) error {
+	visibility := strings.TrimSpace(agentVisibility)
+	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
+		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
+	}
+
+	mem.Domain = strings.TrimSpace(domain)
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		if principal, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
+			mem.OwnerPrincipal = principal
+			mem.OwnerPrincipalKind = principalKind
+		}
+	}
+	if visibility != "" {
+		if mem.OwnerPrincipal == "" {
+			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
+		}
+		mem.AgentVisibility = visibility
+	} else if mem.OwnerPrincipal != "" {
+		mem.AgentVisibility = models.AgentVisibilityShared
+	}
+	return nil
+}
+
+func addPrincipalMemoryFields(result map[string]any, mem *models.Memory) {
+	if mem.OwnerPrincipal != "" {
+		result["owner_principal"] = mem.OwnerPrincipal
+	}
+	if mem.OwnerPrincipalKind != "" {
+		result["owner_principal_kind"] = mem.OwnerPrincipalKind
+	}
+	if mem.AgentVisibility != "" {
+		result["agent_visibility"] = mem.AgentVisibility
+	}
+	if mem.Domain != "" {
+		result["domain"] = mem.Domain
+	}
+}
+
 // memoryEditor is the minimal interface over *gorm.MemoryStore that
 // handleEditMemory uses. Kept narrow so tests can inject a mock without
 // wiring a full database (mirrors the auditWriter test-injection pattern).
@@ -148,21 +187,23 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 
 	var params struct {
-		Tags         []string
-		Rejected     []string
-		Supersedes   []int64
-		Content      string
-		Title        string
-		Type         string
-		Scope        string
-		PrivacyScope string // T004 — vNext F, 4-tier enum
-		SessionID    string // T004 — vNext F, caller's session for SourceSessions
-		Project      string
-		AgentSource  string
-		Importance   *float64
-		TtlDays      *int
-		AlwaysInject bool
-		DryRun       bool // T044 — FR-F6.b dry-run preview
+		Tags            []string
+		Rejected        []string
+		Supersedes      []int64
+		Content         string
+		Title           string
+		Type            string
+		Scope           string
+		PrivacyScope    string // T004 — vNext F, 4-tier enum
+		SessionID       string // T004 — vNext F, caller's session for SourceSessions
+		AgentVisibility string
+		Domain          string
+		Project         string
+		AgentSource     string
+		Importance      *float64
+		TtlDays         *int
+		AlwaysInject    bool
+		DryRun          bool // T044 — FR-F6.b dry-run preview
 	}
 	params.Tags = coerceStringSlice(m["tags"])
 	params.Rejected = coerceStringSlice(m["rejected"])
@@ -173,6 +214,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	params.Scope = coerceString(m["scope"], "")
 	params.PrivacyScope = coerceString(m["privacy_scope"], "")
 	params.SessionID = coerceString(m["session_id"], "")
+	params.AgentVisibility = coerceString(m["agent_visibility"], "")
+	params.Domain = coerceString(m["domain"], "")
 	params.AgentSource = coerceString(m["agent_source"], "")
 	if config.Get().EnforceSourceProject {
 		params.Project = projectFromContext(ctx)
@@ -333,6 +376,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			if id, ok := auth.IdentityFrom(ctx); ok {
 				wlMem.SourceWorkstationID = id.WorkstationID()
 			}
+			if err := applyPrincipalMemoryMetadata(ctx, wlMem, params.AgentVisibility, params.Domain); err != nil {
+				return "", err
+			}
 
 			// round-4 finding 2 fix: reject private-scope writes that lack a
 			// workstation identity before reaching Phase1/Phase2. The legacy
@@ -413,6 +459,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				"quality_signals": []any{},
 				"message":         "Memory stored successfully via write-lint (no conflicts detected)",
 			}
+			addPrincipalMemoryFields(wlResult, wlMem)
 			// Rank-3 staleness advisory must also fire on the write-lint success path —
 			// this is the primary store path when ENGRAM_VNEXT_F_ENABLED=true, the same
 			// config that activates the serve-time hint, so the advisory cannot be
@@ -699,6 +746,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
 		}
 	}
+	if err := applyPrincipalMemoryMetadata(ctx, memory, params.AgentVisibility, params.Domain); err != nil {
+		return "", err
+	}
 
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
 	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
@@ -814,6 +864,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			result["source_sessions"] = created.SourceSessions
 		}
 	}
+	addPrincipalMemoryFields(result, created)
 	if vnextEnabled {
 		result["quality_signals"] = map[string]any{
 			"gate_result":      gateResult.Decision,

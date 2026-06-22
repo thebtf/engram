@@ -42,7 +42,43 @@ func validateMemoryForCreate(mem *models.Memory) error {
 	if mem.Content == "" {
 		return fmt.Errorf("memory.Content must not be empty")
 	}
+	if err := validateMemoryOwnershipForCreate(mem); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateMemoryOwnershipForCreate(mem *models.Memory) error {
+	owner := strings.TrimSpace(mem.OwnerPrincipal)
+	kind := strings.TrimSpace(mem.OwnerPrincipalKind)
+	visibility := strings.TrimSpace(mem.AgentVisibility)
+
+	if owner == "" {
+		if kind != "" {
+			return fmt.Errorf("memory.OwnerPrincipalKind requires memory.OwnerPrincipal")
+		}
+		if visibility != "" {
+			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
+		}
+		return nil
+	}
+
+	if kind != "" && !isValidMemoryOwnerPrincipalKind(kind) {
+		return fmt.Errorf("invalid_owner_principal_kind: %q must be one of human, agent, service", kind)
+	}
+	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
+		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
+	}
+	return nil
+}
+
+func isValidMemoryOwnerPrincipalKind(kind string) bool {
+	switch kind {
+	case "human", "agent", "service":
+		return true
+	default:
+		return false
+	}
 }
 
 func memoryRowForCreate(mem *models.Memory, now time.Time, includeLifecycle bool) *Memory {
@@ -114,6 +150,30 @@ func copyPrivacyFields(row *Memory, mem *models.Memory) {
 	}
 }
 
+func copyPrincipalMemoryFields(row *Memory, mem *models.Memory) {
+	row.Domain = strings.TrimSpace(mem.Domain)
+
+	owner := strings.TrimSpace(mem.OwnerPrincipal)
+	if owner == "" {
+		return
+	}
+
+	kind := strings.TrimSpace(mem.OwnerPrincipalKind)
+	if kind == "" {
+		kind = "human"
+	}
+	visibility := strings.TrimSpace(mem.AgentVisibility)
+	if visibility == "" {
+		// Preserve existing team-visible behavior for owned writes; CR-004 will
+		// add principal-aware recall filtering for explicit private memories.
+		visibility = models.AgentVisibilityShared
+	}
+
+	row.OwnerPrincipal = owner
+	row.OwnerPrincipalKind = kind
+	row.AgentVisibility = visibility
+}
+
 func advisoryLockKey(parts ...string) int64 {
 	h := sha256.New()
 	for _, part := range parts {
@@ -153,6 +213,7 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	// metadata into migration-125/130 columns. See copyPrivacyFields for
 	// the detailed rationale (codex P1 fix-forward on 3e4a4b1 / PR #221).
 	copyPrivacyFields(row, mem)
+	copyPrincipalMemoryFields(row, mem)
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
@@ -182,6 +243,7 @@ func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memor
 	// this path, causing privacy_scope to fall back to the DB default 'project'
 	// even when the caller set a non-project scope (codex P1 PR #221 fix).
 	copyPrivacyFields(row, mem)
+	copyPrincipalMemoryFields(row, mem)
 
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
@@ -199,6 +261,7 @@ func createMemoryWithLifecycleTx(ctx context.Context, tx *gorm.DB, mem *models.M
 	now := time.Now().UTC()
 	row := memoryRowForCreate(mem, now, true)
 	copyPrivacyFields(row, mem)
+	copyPrincipalMemoryFields(row, mem)
 	if err := tx.WithContext(ctx).Create(row).Error; err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle (tx) for project %q: %w", mem.Project, err)
 	}
@@ -254,6 +317,7 @@ func (s *MemoryStore) CreateWithLifecycleIfTagAbsent(
 		// T002 + T001b + T003b: persist privacy metadata (same fix as
 		// CreateWithLifecycle — codex P1 PR #221).
 		copyPrivacyFields(row, mem)
+		copyPrincipalMemoryFields(row, mem)
 		if err := tx.Create(row).Error; err != nil {
 			return fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 		}
@@ -744,6 +808,10 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		ReviewAfter:              row.ReviewAfter,
 		ValidFrom:                row.ValidFrom,
 		ValidUntil:               row.ValidUntil,
+		OwnerPrincipal:           row.OwnerPrincipal,
+		OwnerPrincipalKind:       row.OwnerPrincipalKind,
+		AgentVisibility:          row.AgentVisibility,
+		Domain:                   row.Domain,
 		SupersedesID:             row.SupersedesID,
 		SupersededBy:             row.SupersededBy,
 		ImportanceBase:           row.ImportanceBase,

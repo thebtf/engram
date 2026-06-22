@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,12 +30,14 @@ import (
 // (Go's encoding/json silently drops unknown fields by default, and the
 // existing fields are unchanged).
 type storeMemoryRequest struct {
-	Project      string   `json:"project"`
-	Content      string   `json:"content"`
-	Tags         []string `json:"tags,omitempty"`
-	SourceAgent  string   `json:"source_agent,omitempty"`
-	PrivacyScope string   `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
-	SessionID    string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
+	Project         string   `json:"project"`
+	Content         string   `json:"content"`
+	Tags            []string `json:"tags,omitempty"`
+	SourceAgent     string   `json:"source_agent,omitempty"`
+	PrivacyScope    string   `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
+	SessionID       string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
+	AgentVisibility string   `json:"agent_visibility,omitempty"`
+	Domain          string   `json:"domain,omitempty"`
 }
 
 // isValidPrivacyScopeREST mirrors the migration 125 CHECK constraint enum.
@@ -47,6 +50,30 @@ func isValidPrivacyScopeREST(s string) bool {
 	default:
 		return false
 	}
+}
+
+func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, agentVisibility, domain string) error {
+	visibility := strings.TrimSpace(agentVisibility)
+	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
+		return fmt.Errorf("invalid agent_visibility: must be one of private, shared")
+	}
+
+	mem.Domain = strings.TrimSpace(domain)
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		if principal, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
+			mem.OwnerPrincipal = principal
+			mem.OwnerPrincipalKind = principalKind
+		}
+	}
+	if visibility != "" {
+		if mem.OwnerPrincipal == "" {
+			return fmt.Errorf("invalid agent_visibility: principal is required for agent_visibility")
+		}
+		mem.AgentVisibility = visibility
+	} else if mem.OwnerPrincipal != "" {
+		mem.AgentVisibility = models.AgentVisibilityShared
+	}
+	return nil
 }
 
 // handleStoreMemoryExplicit godoc
@@ -122,6 +149,10 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "invalid privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)", http.StatusBadRequest)
 			return
 		}
+	}
+	if err := applyPrincipalMemoryMetadataREST(r.Context(), mem, req.AgentVisibility, req.Domain); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	created, err := s.memoryStore.Create(r.Context(), mem)

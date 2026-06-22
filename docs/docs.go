@@ -3080,6 +3080,19 @@ const docTemplate = `{
                 "last_retrieved_at": {
                     "type": "string"
                 },
+                "owner_principal": {
+                    "description": "OwnerPrincipal is server-derived from the authenticated identity.",
+                    "type": "string"
+                },
+                "owner_principal_kind": {
+                    "type": "string"
+                },
+                "agent_visibility": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
                 "privacy_scope": {
                     "description": "PrivacyScope is one of 'private' | 'project' | 'shared' | 'global'.\nAdded by migration 125 (TG1 / T001+T002). DEFAULT 'project' for legacy rows.\nBackward-compat: see spec.md §FR-F1 REVISE — the legacy ` + "`" + `scope:*` + "`" + ` tag + MCP\nresponse synthesis surface remains active for 2 minor versions (until v6.7.0)\nper RI-F2.",
                     "type": "string"
@@ -3498,7 +3511,13 @@ const docTemplate = `{
         "internal_worker.storeMemoryRequest": {
             "type": "object",
             "properties": {
+                "agent_visibility": {
+                    "type": "string"
+                },
                 "content": {
+                    "type": "string"
+                },
+                "domain": {
                     "type": "string"
                 },
                 "privacy_scope": {
