@@ -167,6 +167,8 @@ type Service struct {
 	memoryStore                 *gorm.MemoryStore
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
 	principalMemoryQueryService principalMemoryQueryService
+	domainOwnerStore            domainOwnerStore
+	domainRegistryService       domainRegistryService
 	behavioralRulesStore        *gorm.BehavioralRulesStore
 	auditStore                  *gorm.AuditStore
 	purgeStore                  *gorm.PurgeStore
@@ -591,6 +593,8 @@ func (s *Service) initializeAsync() {
 	// Create audit store for Milestone D audit trail (FR-D2 / NFR-D4).
 	auditStore := gorm.NewAuditStore(store.GetDB())
 	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
+	domainOwnerStore := gorm.NewDomainOwnerStore(store)
+	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
 
 	// Create purge store for Milestone D project-level hard deletion (T008).
 	// Gated behind ENGRAM_VNEXT_ENABLED: purge_project is a vnext action (Milestone D).
@@ -616,6 +620,8 @@ func (s *Service) initializeAsync() {
 	s.credentialStore = credentialStore
 	s.memoryStore = memoryStore
 	s.principalMemoryQueryService = principalMemoryQuerySvc
+	s.domainOwnerStore = domainOwnerStore
+	s.domainRegistryService = domainRegistrySvc
 	s.behavioralRulesStore = behavioralRulesStore
 	s.feedbackUpdater = feedbackUpdater
 	s.auditStore = auditStore
@@ -1392,6 +1398,8 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/memories", s.handleStoreMemoryExplicit)
 		r.Get("/api/memories", s.handleListMemories)
 		r.Get("/api/memories/principal", s.handlePrincipalMemoryQuery)
+		r.Get("/api/memory-domains", s.handleListMemoryDomains)
+		r.Put("/api/memory-domains/{domain}", s.handleUpsertMemoryDomain)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Behavioral rules management
