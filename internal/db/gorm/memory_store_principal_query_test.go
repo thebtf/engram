@@ -11,6 +11,13 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+func TestMemoryStore_PrincipalQueryFetchLimitCap(t *testing.T) {
+	assert.Equal(t, 50, normalizeMemoryListLimit(0))
+	assert.Equal(t, 500, normalizeMemoryListLimit(500))
+	assert.Equal(t, 550, normalizeMemoryListLimit(550), "principal query over-fetch must not be truncated below its probe budget")
+	assert.Equal(t, 550, normalizeMemoryListLimit(551))
+}
+
 func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 	if testing.Short() {
 		t.Skip("principal memory query requires live PostgreSQL; skipped in short mode")

@@ -228,19 +228,16 @@ func writeStoreMemoryResponse(w http.ResponseWriter, mem *models.Memory, decisio
 		writeJSON(w, safe)
 		return
 	}
-	raw, err := json.Marshal(safe)
-	if err != nil {
-		writeJSON(w, safe)
-		return
+	resp := struct {
+		*models.Memory
+		DomainWarning     *principalmemory.DomainWriteWarning `json:"domain_warning,omitempty"`
+		DomainAuditStatus string                              `json:"domain_audit_status,omitempty"`
+	}{
+		Memory:            safe,
+		DomainWarning:     decision.Warning,
+		DomainAuditStatus: decision.AuditStatus,
 	}
-	var body map[string]any
-	if err := json.Unmarshal(raw, &body); err != nil {
-		writeJSON(w, safe)
-		return
-	}
-	body["domain_warning"] = decision.Warning
-	body["domain_audit_status"] = decision.AuditStatus
-	writeJSON(w, body)
+	writeJSON(w, resp)
 }
 
 // handleListMemories godoc

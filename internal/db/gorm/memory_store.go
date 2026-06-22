@@ -500,7 +500,7 @@ func applyMemoryListOptions(q *gorm.DB, opts ListOptions) *gorm.DB {
 func normalizeMemoryListLimit(limit int) int {
 	const (
 		defaultMemoryListLimit = 50
-		maxMemoryListLimit     = 200
+		maxMemoryListLimit     = 550
 	)
 	if limit <= 0 {
 		return defaultMemoryListLimit

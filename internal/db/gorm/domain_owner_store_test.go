@@ -115,6 +115,7 @@ func TestDomainOwnerStore(t *testing.T) {
 	require.True(t, !updated.UpdatedAt.Before(created.UpdatedAt))
 
 	listed, err := store.List(ctx, DomainOwnerListOptions{
+		Domain:             domain,
 		OwnerPrincipal:     "agent/alice",
 		OwnerPrincipalKind: "agent",
 		Mode:               "reject",

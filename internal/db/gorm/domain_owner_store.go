@@ -82,9 +82,9 @@ func (s *DomainOwnerStore) UpdateIfUnchanged(ctx context.Context, in *DomainOwne
 		return nil, fmt.Errorf("expected_updated_at must not be zero")
 	}
 
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	res := s.db.WithContext(ctx).Model(&DomainOwner{}).
-		Where("domain = ? AND updated_at = ?", row.Domain, expectedUpdatedAt.UTC()).
+		Where("domain = ? AND updated_at = ?", row.Domain, expectedUpdatedAt.UTC().Truncate(time.Microsecond)).
 		Updates(map[string]any{
 			"owner_principal":      row.OwnerPrincipal,
 			"owner_principal_kind": row.OwnerPrincipalKind,
