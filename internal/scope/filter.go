@@ -89,7 +89,15 @@ func ResolveMemory(caller KeycardContext, mem *models.Memory, opts MemoryVisibil
 			return false
 		}
 	}
-	return ResolvePrincipal(caller, mem)
+	if !ResolvePrincipal(caller, mem) {
+		return false
+	}
+	return DomainOwnershipPolicy{}.Decide(caller, DomainPolicyRequest{
+		Operation:          DomainOperationRead,
+		Domain:             mem.Domain,
+		OwnerPrincipal:     mem.OwnerPrincipal,
+		OwnerPrincipalKind: mem.OwnerPrincipalKind,
+	}).Allowed
 }
 
 // ResolvePrincipal returns whether principal ownership metadata permits caller
