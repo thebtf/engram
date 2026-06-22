@@ -18,6 +18,7 @@ import (
 	gormlib "gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -172,6 +173,20 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	domainDecision, err := s.checkDomainWriteREST(r.Context(), mem, req.SessionID)
+	if err != nil {
+		if errors.Is(err, principalmemory.ErrDomainWriteRejected) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		log.Error().Err(err).Str("project", req.Project).Str("domain", mem.Domain).Msg("domain registry check failed")
+		http.Error(w, "domain registry check failed", http.StatusInternalServerError)
+		return
+	}
+	if domainDecision != nil && !domainDecision.Allowed {
+		http.Error(w, "domain write rejected", http.StatusForbidden)
+		return
+	}
 
 	created, err := s.memoryStore.Create(r.Context(), mem)
 	if err != nil {
@@ -181,7 +196,51 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, jsonSafeMemory(created))
+	writeStoreMemoryResponse(w, created, domainDecision)
+}
+
+func (s *Service) checkDomainWriteREST(ctx context.Context, mem *models.Memory, sourceSessionID string) (*principalmemory.DomainWriteDecision, error) {
+	if mem == nil || strings.TrimSpace(mem.Domain) == "" {
+		return nil, nil
+	}
+	svc := s.currentDomainRegistryService()
+	if svc == nil {
+		return nil, nil
+	}
+	return svc.CheckWrite(ctx, principalmemory.DomainWriteCheckRequest{
+		Project:         mem.Project,
+		Domain:          mem.Domain,
+		Writer:          principalmemory.PrincipalRef{Principal: mem.OwnerPrincipal, PrincipalKind: mem.OwnerPrincipalKind},
+		SourceSessionID: strings.TrimSpace(sourceSessionID),
+	})
+}
+
+func (s *Service) currentDomainRegistryService() domainRegistryService {
+	s.initMu.RLock()
+	svc := s.domainRegistryService
+	s.initMu.RUnlock()
+	return svc
+}
+
+func writeStoreMemoryResponse(w http.ResponseWriter, mem *models.Memory, decision *principalmemory.DomainWriteDecision) {
+	safe := jsonSafeMemory(mem)
+	if decision == nil || decision.Warning == nil {
+		writeJSON(w, safe)
+		return
+	}
+	raw, err := json.Marshal(safe)
+	if err != nil {
+		writeJSON(w, safe)
+		return
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		writeJSON(w, safe)
+		return
+	}
+	body["domain_warning"] = decision.Warning
+	body["domain_audit_status"] = decision.AuditStatus
+	writeJSON(w, body)
 }
 
 // handleListMemories godoc

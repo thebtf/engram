@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -41,6 +43,35 @@ func newMemoryTestService(t *testing.T, project string) *Service {
 	})
 
 	return service
+}
+
+func newMemoryDomainWriteTestService(t *testing.T, project string) (*Service, *dbgorm.Store, func()) {
+	t.Helper()
+
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+
+	memoryStore := dbgorm.NewMemoryStore(store)
+	domainOwnerStore := dbgorm.NewDomainOwnerStore(store)
+	auditStore := dbgorm.NewAuditStore(store.GetDB())
+	service := &Service{
+		memoryStore:           memoryStore,
+		domainOwnerStore:      domainOwnerStore,
+		domainRegistryService: principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore),
+	}
+
+	cleanup := func() {
+		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM memories WHERE project = ?", project).Error)
+		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM memory_domain_owners WHERE domain LIKE 'test-domain-%'").Error)
+		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM audit_log WHERE action IN (?, ?)", principalmemory.AuditActionDomainWriteWarn, principalmemory.AuditActionDomainWriteReject).Error)
+		require.NoError(t, store.Close())
+	}
+	return service, store, cleanup
 }
 
 func TestHandleStoreMemoryExplicit_RoundTrip(t *testing.T) {
@@ -156,6 +187,126 @@ func TestHandleStoreMemoryExplicit_ValidationErrors(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, w.Code, "expected 400 for %s", tc.name)
 		})
 	}
+}
+
+func TestHandleStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T) {
+	project := "test-memory-domain-registry-" + uuid.NewString()
+	service, store, cleanup := newMemoryDomainWriteTestService(t, project)
+	defer cleanup()
+	domains := dbgorm.NewDomainOwnerStore(store)
+
+	t.Run("missing row preserves current behavior", func(t *testing.T) {
+		domain := "test-domain-missing-" + uuid.NewString()
+		w := postMemoryWithDomain(t, service, project, domain, "agent/bob")
+		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	})
+
+	t.Run("off allows cross owner", func(t *testing.T) {
+		domain := "test-domain-off-" + uuid.NewString()
+		_, err := domains.Upsert(context.Background(), &dbgorm.DomainOwner{
+			Domain:             domain,
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			Mode:               dbgorm.DomainOwnerModeOff,
+		})
+		require.NoError(t, err)
+		w := postMemoryWithDomain(t, service, project, domain, "agent/bob")
+		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	})
+
+	t.Run("same owner allows without warning", func(t *testing.T) {
+		domain := "test-domain-same-" + uuid.NewString()
+		_, err := domains.Upsert(context.Background(), &dbgorm.DomainOwner{
+			Domain:             domain,
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			Mode:               dbgorm.DomainOwnerModeWarn,
+		})
+		require.NoError(t, err)
+		w := postMemoryWithDomain(t, service, project, domain, "agent/alice")
+		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		assert.NotContains(t, body, "domain_warning")
+	})
+
+	t.Run("warn allows with structured warning", func(t *testing.T) {
+		domain := "test-domain-warn-" + uuid.NewString()
+		_, err := domains.Upsert(context.Background(), &dbgorm.DomainOwner{
+			Domain:             domain,
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			Mode:               dbgorm.DomainOwnerModeWarn,
+		})
+		require.NoError(t, err)
+		w := postMemoryWithDomain(t, service, project, domain, "agent/bob")
+		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		warning, ok := body["domain_warning"].(map[string]any)
+		require.True(t, ok, "warn mode response must include structured domain_warning")
+		assert.Equal(t, principalmemory.DomainWriteWarningCrossOwner, warning["code"])
+	})
+
+	t.Run("reject denies before persistence", func(t *testing.T) {
+		domain := "test-domain-reject-" + uuid.NewString()
+		_, err := domains.Upsert(context.Background(), &dbgorm.DomainOwner{
+			Domain:             domain,
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			Mode:               dbgorm.DomainOwnerModeReject,
+		})
+		require.NoError(t, err)
+		w := postMemoryWithDomain(t, service, project, domain, "agent/bob")
+		require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+		assert.Equal(t, int64(0), countMemoriesByDomain(t, store, project, domain))
+	})
+}
+
+func TestHandleStoreMemoryDomainRegistry_AuditFailureBlocksBeforePersistence(t *testing.T) {
+	project := "test-memory-domain-registry-audit-" + uuid.NewString()
+	service, store, cleanup := newMemoryDomainWriteTestService(t, project)
+	defer cleanup()
+	service.domainRegistryService = &fakeRESTDomainRegistryService{err: errors.New("domain write audit: unavailable")}
+
+	domain := "test-domain-audit-" + uuid.NewString()
+	w := postMemoryWithDomain(t, service, project, domain, "agent/bob")
+	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	assert.Equal(t, int64(0), countMemoriesByDomain(t, store, project, domain))
+}
+
+func postMemoryWithDomain(t *testing.T, service *Service, project, domain, principal string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := bytes.NewReader([]byte(`{"project":"` + project + `","content":"domain governed memory","domain":"` + domain + `"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/memories", body).
+		WithContext(auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-domain-test", principal, auth.PrincipalKindAgent)))
+	w := httptest.NewRecorder()
+	service.handleStoreMemoryExplicit(w, req)
+	return w
+}
+
+func countMemoriesByDomain(t *testing.T, store *dbgorm.Store, project, domain string) int64 {
+	t.Helper()
+	var count int64
+	require.NoError(t, store.DB.Model(&dbgorm.Memory{}).Where("project = ? AND domain = ? AND deleted_at IS NULL", project, domain).Count(&count).Error)
+	return count
+}
+
+type fakeRESTDomainRegistryService struct {
+	decision *principalmemory.DomainWriteDecision
+	err      error
+	calls    int
+}
+
+func (f *fakeRESTDomainRegistryService) CheckWrite(ctx context.Context, req principalmemory.DomainWriteCheckRequest) (*principalmemory.DomainWriteDecision, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.decision != nil {
+		return f.decision, nil
+	}
+	return &principalmemory.DomainWriteDecision{Allowed: true}, nil
 }
 
 func TestHandleListMemories_EmptyProjectReturnsJSONArray(t *testing.T) {
