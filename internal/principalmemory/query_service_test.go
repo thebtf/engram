@@ -105,6 +105,7 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningRequiresAudit(t *testin
 		CallerIsAdmin:      true,
 		OwnerPrincipal:     "agent/alice",
 		OwnerPrincipalKind: "agent",
+		IncludePrivate:     true,
 		Domain:             "operator-console",
 		Limit:              1,
 		SourceSessionID:    "session-42",
@@ -121,6 +122,51 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningRequiresAudit(t *testin
 	assert.Equal(t, "session-42", audit.entries[0].SourceSessionID)
 	require.NotNil(t, audit.entries[0].MemoryID)
 	assert.Equal(t, memID, *audit.entries[0].MemoryID)
+}
+
+func TestPrincipalMemoryQueryService_AdminPrivateWideningMustBeExplicit(t *testing.T) {
+	store := &fakePrincipalMemoryStore{
+		rows: []*models.Memory{
+			{
+				ID:                 251,
+				Project:            "project-a",
+				Content:            "private alice memory",
+				OwnerPrincipal:     "agent/alice",
+				OwnerPrincipalKind: "agent",
+				AgentVisibility:    models.AgentVisibilityPrivate,
+				Domain:             "operator-console",
+			},
+			{
+				ID:                 252,
+				Project:            "project-a",
+				Content:            "shared alice memory",
+				OwnerPrincipal:     "agent/alice",
+				OwnerPrincipalKind: "agent",
+				AgentVisibility:    models.AgentVisibilityShared,
+				Domain:             "operator-console",
+			},
+		},
+	}
+	audit := &fakeAuditLogger{}
+	svc := NewPrincipalMemoryQueryService(store, audit)
+
+	result, err := svc.Query(context.Background(), PrincipalMemoryQueryRequest{
+		Project:            "project-a",
+		Caller:             PrincipalRef{Principal: "operator/oleg", PrincipalKind: "human"},
+		CallerIsAdmin:      true,
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Domain:             "operator-console",
+		Limit:              2,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, int64(252), result.Items[0].ID)
+	assert.Equal(t, 1, result.HiddenCount)
+	assert.Equal(t, AuditStatusNotRequired, result.AuditStatus)
+	assert.False(t, result.Audit.Durable)
+	assert.Empty(t, audit.entries, "no durable private-read audit should be written when private widening was not explicitly requested")
 }
 
 func TestPrincipalMemoryQueryService_AdminPrivateWideningFailsClosedOnAuditError(t *testing.T) {
@@ -145,6 +191,7 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningFailsClosedOnAuditError
 		CallerIsAdmin:      true,
 		OwnerPrincipal:     "agent/alice",
 		OwnerPrincipalKind: "agent",
+		IncludePrivate:     true,
 		Domain:             "operator-console",
 		Limit:              1,
 	})

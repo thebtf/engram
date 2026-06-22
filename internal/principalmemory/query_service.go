@@ -140,6 +140,10 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 			continue
 		}
 		if decision.AuditRequired {
+			if !req.IncludePrivate {
+				result.HiddenCount++
+				continue
+			}
 			if err := s.logPrivateRead(ctx, req, mem); err != nil {
 				return nil, err
 			}
