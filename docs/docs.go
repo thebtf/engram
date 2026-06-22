@@ -3529,6 +3529,12 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "principal": {
+                    "type": "string"
+                },
+                "principal_kind": {
+                    "type": "string"
+                },
                 "scope": {
                     "type": "string"
                 }
