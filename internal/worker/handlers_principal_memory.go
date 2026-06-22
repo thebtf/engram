@@ -129,6 +129,9 @@ func principalQueryCaller(ctx context.Context) (principalmemory.PrincipalRef, bo
 	}
 	principal, kind, hasOwner := id.MemoryOwner()
 	if !hasOwner {
+		if id.IsAdmin() {
+			return principalmemory.PrincipalRef{Principal: "system", PrincipalKind: "service"}, true
+		}
 		return principalmemory.PrincipalRef{}, id.IsAdmin()
 	}
 	return principalmemory.PrincipalRef{Principal: principal, PrincipalKind: kind}, id.IsAdmin()

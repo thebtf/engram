@@ -23,7 +23,6 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 				OwnerPrincipal:     "agent/alice",
 				OwnerPrincipalKind: "agent",
 				AgentVisibility:    models.AgentVisibilityPrivate,
-				Domain:             "operator-console",
 			},
 			{
 				ID:                 102,
@@ -33,7 +32,6 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 				OwnerPrincipal:     "agent/alice",
 				OwnerPrincipalKind: "agent",
 				AgentVisibility:    models.AgentVisibilityShared,
-				Domain:             "operator-console",
 				Confidence:         0.8,
 				CreatedAt:          time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC),
 			},
@@ -41,7 +39,6 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 				ID:      103,
 				Project: "project-a",
 				Content: "legacy row without principal metadata",
-				Domain:  "operator-console",
 			},
 		},
 	}
@@ -52,7 +49,6 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 		Caller:             PrincipalRef{Principal: "agent/bob", PrincipalKind: "agent"},
 		OwnerPrincipal:     "agent/alice",
 		OwnerPrincipalKind: "agent",
-		Domain:             "operator-console",
 		Limit:              2,
 	})
 	require.NoError(t, err)
@@ -60,25 +56,99 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 	assert.Equal(t, "agent/alice", result.Principal)
 	assert.Equal(t, "agent", result.PrincipalKind)
 	assert.Equal(t, "project-a", result.Project)
-	assert.Equal(t, "operator-console", result.Domain)
+	assert.Empty(t, result.Domain)
 	assert.Equal(t, "principal_memory_query", result.Audit.Action)
 	assert.False(t, result.Audit.Durable)
-	require.Len(t, result.Items, 2, "visible output must be bounded by request limit")
-	assert.Equal(t, 1, result.HiddenCount)
+	require.Len(t, result.Items, 1, "visible output must be bounded by request limit")
+	assert.Equal(t, 2, result.HiddenCount)
 	assert.Equal(t, "not_required", result.AuditStatus)
 	assert.Equal(t, int64(102), result.Items[0].ID)
 	assert.Equal(t, "agent/alice", result.Items[0].OwnerPrincipal)
 	assert.Equal(t, []string{"semantic"}, result.Items[0].Tags)
 	assert.Equal(t, 0.8, result.Items[0].Confidence)
 	assert.Equal(t, time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC), result.Items[0].CreatedAt)
-	assert.Equal(t, int64(103), result.Items[1].ID)
-	assert.Equal(t, "", result.Items[1].OwnerPrincipal, "legacy no-principal rows stay visible")
 
 	assert.Equal(t, "project-a", store.project)
 	assert.Equal(t, "agent/alice", store.opts.OwnerPrincipal)
 	assert.Equal(t, "agent", store.opts.OwnerPrincipalKind)
-	assert.Equal(t, "operator-console", store.opts.Domain)
+	assert.Empty(t, store.opts.Domain)
 	assert.GreaterOrEqual(t, store.opts.Limit, 2, "service may over-fetch to compute hidden_count but must bound output")
+}
+
+func TestPrincipalMemoryQueryService_PagesPastHiddenRows(t *testing.T) {
+	hiddenRows := make([]*models.Memory, 0, 51)
+	for i := int64(0); i < 51; i++ {
+		hiddenRows = append(hiddenRows, &models.Memory{
+			ID:                 400 + i,
+			Project:            "project-a",
+			Content:            "private alice memory",
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			AgentVisibility:    models.AgentVisibilityPrivate,
+		})
+	}
+	store := &fakePrincipalMemoryStore{
+		batches: [][]*models.Memory{
+			hiddenRows,
+			{
+				{
+					ID:                 501,
+					Project:            "project-a",
+					Content:            "shared alice memory",
+					OwnerPrincipal:     "agent/alice",
+					OwnerPrincipalKind: "agent",
+					AgentVisibility:    models.AgentVisibilityShared,
+				},
+			},
+		},
+	}
+	svc := NewPrincipalMemoryQueryService(store, &fakeAuditLogger{})
+
+	result, err := svc.Query(context.Background(), PrincipalMemoryQueryRequest{
+		Project:            "project-a",
+		Caller:             PrincipalRef{Principal: "agent/bob", PrincipalKind: "agent"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Limit:              1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, int64(501), result.Items[0].ID)
+	assert.Equal(t, 51, result.HiddenCount)
+	require.Len(t, store.calls, 2, "service must continue paging when a full hidden batch does not fill the visible limit")
+	assert.Equal(t, 0, store.calls[0].Offset)
+	assert.Equal(t, 51, store.calls[1].Offset)
+}
+
+func TestPrincipalMemoryQueryService_HidesDomainOwnedRowsFromMismatchedCaller(t *testing.T) {
+	store := &fakePrincipalMemoryStore{
+		rows: []*models.Memory{
+			{
+				ID:                 601,
+				Project:            "project-a",
+				Content:            "shared bob domain memory",
+				OwnerPrincipal:     "agent/bob",
+				OwnerPrincipalKind: "agent",
+				AgentVisibility:    models.AgentVisibilityShared,
+				Domain:             "memory-lab",
+			},
+		},
+	}
+	svc := NewPrincipalMemoryQueryService(store, &fakeAuditLogger{})
+
+	result, err := svc.Query(context.Background(), PrincipalMemoryQueryRequest{
+		Project:            "project-a",
+		Caller:             PrincipalRef{Principal: "agent/alice", PrincipalKind: "agent"},
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		Domain:             "memory-lab",
+		Limit:              1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Empty(t, result.Items)
+	assert.Equal(t, 1, result.HiddenCount)
 }
 
 func TestPrincipalMemoryQueryService_AdminPrivateWideningRequiresAudit(t *testing.T) {
@@ -92,7 +162,6 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningRequiresAudit(t *testin
 				OwnerPrincipal:     "agent/alice",
 				OwnerPrincipalKind: "agent",
 				AgentVisibility:    models.AgentVisibilityPrivate,
-				Domain:             "operator-console",
 			},
 		},
 	}
@@ -106,7 +175,6 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningRequiresAudit(t *testin
 		OwnerPrincipal:     "agent/alice",
 		OwnerPrincipalKind: "agent",
 		IncludePrivate:     true,
-		Domain:             "operator-console",
 		Limit:              1,
 		SourceSessionID:    "session-42",
 	})
@@ -134,7 +202,6 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningMustBeExplicit(t *testi
 				OwnerPrincipal:     "agent/alice",
 				OwnerPrincipalKind: "agent",
 				AgentVisibility:    models.AgentVisibilityPrivate,
-				Domain:             "operator-console",
 			},
 			{
 				ID:                 252,
@@ -143,7 +210,6 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningMustBeExplicit(t *testi
 				OwnerPrincipal:     "agent/alice",
 				OwnerPrincipalKind: "agent",
 				AgentVisibility:    models.AgentVisibilityShared,
-				Domain:             "operator-console",
 			},
 		},
 	}
@@ -156,7 +222,6 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningMustBeExplicit(t *testi
 		CallerIsAdmin:      true,
 		OwnerPrincipal:     "agent/alice",
 		OwnerPrincipalKind: "agent",
-		Domain:             "operator-console",
 		Limit:              2,
 	})
 	require.NoError(t, err)
@@ -179,7 +244,6 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningFailsClosedOnAuditError
 				OwnerPrincipal:     "agent/alice",
 				OwnerPrincipalKind: "agent",
 				AgentVisibility:    models.AgentVisibilityPrivate,
-				Domain:             "operator-console",
 			},
 		},
 	}
@@ -192,7 +256,6 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningFailsClosedOnAuditError
 		OwnerPrincipal:     "agent/alice",
 		OwnerPrincipalKind: "agent",
 		IncludePrivate:     true,
-		Domain:             "operator-console",
 		Limit:              1,
 	})
 	require.Error(t, err)
@@ -219,8 +282,10 @@ func TestPrincipalMemoryQueryService_IncludePrivateNonAdminCrossPrincipalFailsBe
 
 type fakePrincipalMemoryStore struct {
 	rows    []*models.Memory
+	batches [][]*models.Memory
 	project string
 	opts    gormdb.ListOptions
+	calls   []gormdb.ListOptions
 	called  bool
 }
 
@@ -228,6 +293,14 @@ func (f *fakePrincipalMemoryStore) ListPrincipalMemory(ctx context.Context, proj
 	f.called = true
 	f.project = project
 	f.opts = opts
+	f.calls = append(f.calls, opts)
+	if len(f.batches) > 0 {
+		idx := len(f.calls) - 1
+		if idx >= len(f.batches) {
+			return nil, nil
+		}
+		return f.batches[idx], nil
+	}
 	return f.rows, nil
 }
 

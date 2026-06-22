@@ -129,6 +129,15 @@ func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 		require.Error(t, err, "ListWithFilters must keep its non-empty project contract")
 	})
 
+	t.Run("empty project requires owner principal", func(t *testing.T) {
+		_, err := ms.ListPrincipalMemory(ctx, "", ListOptions{
+			Domain: domain,
+			Limit:  10,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "owner_principal")
+	})
+
 	t.Run("legacy no-principal rows remain queryable without owner filter", func(t *testing.T) {
 		res, err := ms.ListPrincipalMemory(ctx, projectA, ListOptions{
 			Domain: domain,

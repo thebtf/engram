@@ -430,6 +430,11 @@ func (s *MemoryStore) ListWithFilters(ctx context.Context, project string, opts 
 // Unlike ListWithFilters, project is optional so cross-project principal views
 // can be built without weakening the legacy ListWithFilters(project!="") guard.
 func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, opts ListOptions) ([]*models.Memory, error) {
+	owner := strings.TrimSpace(opts.OwnerPrincipal)
+	if strings.TrimSpace(project) == "" && owner == "" {
+		return nil, fmt.Errorf("owner_principal must not be empty when project is empty")
+	}
+
 	q := baseMemoryListQuery(s.db.WithContext(ctx))
 	if project = strings.TrimSpace(project); project != "" {
 		q = q.Where("project = ?", project)

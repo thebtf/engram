@@ -33,20 +33,20 @@ type PrincipalAccessPolicy struct{}
 
 func (PrincipalAccessPolicy) Decide(req PrincipalAccessRequest) PrincipalAccessDecision {
 	target := normalizePrincipalRef(req.Target)
-	if target.PrincipalKind != "" && !isValidPrincipalKind(target.PrincipalKind) {
+	if target.PrincipalKind == "" || !isValidPrincipalKind(target.PrincipalKind) {
 		return deny(ReasonInvalidPrincipalKind)
 	}
 
 	caller := normalizePrincipalRef(req.Caller)
-	if caller.PrincipalKind != "" && !isValidPrincipalKind(caller.PrincipalKind) {
-		return deny(ReasonInvalidPrincipalKind)
-	}
 
 	visibility := strings.TrimSpace(strings.ToLower(req.Visibility))
 	switch visibility {
 	case "", "shared":
 		return PrincipalAccessDecision{Allowed: true}
 	case "private":
+		if caller.PrincipalKind == "" || !isValidPrincipalKind(caller.PrincipalKind) {
+			return deny(ReasonInvalidPrincipalKind)
+		}
 		if caller.matches(target) {
 			return PrincipalAccessDecision{Allowed: true}
 		}
@@ -70,6 +70,7 @@ func (ref PrincipalRef) matches(other PrincipalRef) bool {
 	ref = normalizePrincipalRef(ref)
 	other = normalizePrincipalRef(other)
 	return ref.Principal != "" &&
+		ref.PrincipalKind != "" &&
 		ref.Principal == other.Principal &&
 		ref.PrincipalKind == other.PrincipalKind
 }

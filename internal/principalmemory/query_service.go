@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -112,51 +113,84 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		}
 	}
 
-	rows, err := s.store.ListPrincipalMemory(ctx, strings.TrimSpace(req.Project), gormdb.ListOptions{
+	queryOpts := gormdb.ListOptions{
 		OwnerPrincipal:     strings.TrimSpace(req.OwnerPrincipal),
 		OwnerPrincipalKind: strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
 		ContentContains:    strings.TrimSpace(req.Query),
 		AgentVisibility:    strings.TrimSpace(req.AgentVisibility),
 		Domain:             strings.TrimSpace(req.Domain),
 		Limit:              principalQueryFetchLimit(limit),
-		Offset:             req.Offset,
-	})
-	if err != nil {
-		return nil, err
 	}
-
 	result := principalMemoryQueryResult(req, limit)
-	for _, mem := range rows {
-		if mem == nil {
-			continue
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	for len(result.Items) < limit {
+		queryOpts.Offset = offset
+		rows, err := s.store.ListPrincipalMemory(ctx, strings.TrimSpace(req.Project), queryOpts)
+		if err != nil {
+			return nil, err
 		}
-		decision := s.policy.Decide(PrincipalAccessRequest{
-			Caller:        req.Caller,
-			Target:        PrincipalRef{Principal: mem.OwnerPrincipal, PrincipalKind: mem.OwnerPrincipalKind},
-			Visibility:    mem.AgentVisibility,
-			CallerIsAdmin: req.CallerIsAdmin,
-		})
-		if !decision.Allowed {
-			result.HiddenCount++
-			continue
+		if len(rows) == 0 {
+			break
 		}
-		if decision.AuditRequired {
-			if !req.IncludePrivate {
+		for _, mem := range rows {
+			if mem == nil {
+				continue
+			}
+			decision := s.policy.Decide(PrincipalAccessRequest{
+				Caller:        req.Caller,
+				Target:        PrincipalRef{Principal: mem.OwnerPrincipal, PrincipalKind: mem.OwnerPrincipalKind},
+				Visibility:    mem.AgentVisibility,
+				CallerIsAdmin: req.CallerIsAdmin,
+			})
+			if !decision.Allowed {
 				result.HiddenCount++
 				continue
 			}
-			if err := s.logPrivateRead(ctx, req, mem); err != nil {
-				return nil, err
+			if !s.domainReadAllowed(req, mem) {
+				result.HiddenCount++
+				continue
 			}
-			result.AuditStatus = AuditStatusWritten
-			result.Audit.Durable = true
+			if decision.AuditRequired {
+				if !req.IncludePrivate {
+					result.HiddenCount++
+					continue
+				}
+				if err := s.logPrivateRead(ctx, req, mem); err != nil {
+					return nil, err
+				}
+				result.AuditStatus = AuditStatusWritten
+				result.Audit.Durable = true
+			}
+			result.Items = append(result.Items, principalMemoryQueryItem(mem))
+			if len(result.Items) >= limit {
+				break
+			}
 		}
-		result.Items = append(result.Items, principalMemoryQueryItem(mem))
-		if len(result.Items) >= limit {
+		offset += len(rows)
+		if len(rows) < queryOpts.Limit {
 			break
 		}
 	}
 	return result, nil
+}
+
+func (s *PrincipalMemoryQueryService) domainReadAllowed(req PrincipalMemoryQueryRequest, mem *models.Memory) bool {
+	if mem == nil {
+		return false
+	}
+	caller := normalizePrincipalRef(req.Caller)
+	return scope.DomainOwnershipPolicy{}.Decide(scope.KeycardContext{
+		Principal:     caller.Principal,
+		PrincipalKind: caller.PrincipalKind,
+	}, scope.DomainPolicyRequest{
+		Operation:          scope.DomainOperationRead,
+		Domain:             mem.Domain,
+		OwnerPrincipal:     mem.OwnerPrincipal,
+		OwnerPrincipalKind: mem.OwnerPrincipalKind,
+	}).Allowed
 }
 
 func (s *PrincipalMemoryQueryService) logPrivateRead(ctx context.Context, req PrincipalMemoryQueryRequest, mem *models.Memory) error {
