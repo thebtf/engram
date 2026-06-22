@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -204,6 +205,32 @@ func TestEditMemory_SameProjectAllowed(t *testing.T) {
 	_, err := srv.handleEditMemory(ctx, editArgs(20, "new content"))
 	require.NoError(t, err)
 	assert.Equal(t, "new content", mem.stored[20].Content)
+}
+
+func TestEditMemory_DomainOwnedCrossPrincipalDenied(t *testing.T) {
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
+	reloadConfig(t)
+
+	mem := newMockMemoryEditor()
+	mem.seed(&models.Memory{
+		ID:                 21,
+		Project:            "project-A",
+		Content:            "bob domain row",
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	})
+
+	srv := newEditServer(t, mem)
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+	_, err := srv.handleEditMemory(ctx, editArgs(21, "attempted override"))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+	assert.Equal(t, "bob domain row", mem.stored[21].Content)
 }
 
 // ---------------------------------------------------------------------------

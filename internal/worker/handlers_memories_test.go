@@ -270,6 +270,22 @@ func TestHandleListMemories_DomainOwnedCrossPrincipalInvisible_FlagOff(t *testin
 	assert.Equal(t, "visible alice domain row", rows[0]["content"])
 }
 
+func TestMemoryDomainManageAllowedREST_DomainOwnedCrossPrincipalDenied(t *testing.T) {
+	mem := &models.Memory{
+		ID:                 62,
+		Project:            "domain-delete-project",
+		Content:            "bob domain row",
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	}
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+	require.False(t, memoryDomainManageAllowedREST(ctx, mem))
+}
+
 func TestHandleListMemories_OutOfRangeTimestampsReturnJSON(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 

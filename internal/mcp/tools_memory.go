@@ -199,6 +199,22 @@ func (s *Server) scopedWriteLintMemoryStore(ctx context.Context, sessionID strin
 	return newScopedWriteLintMemoryStore(base, writeLintVisibilityCaller(ctx, sessionID), writeLintVisibilityOptions())
 }
 
+func filterVisibleWriteGateCandidates(ctx context.Context, sessionID string, existing []*models.Memory) []*models.Memory {
+	caller := writeLintVisibilityCaller(ctx, sessionID)
+	opts := writeLintVisibilityOptions()
+	visible := make([]*models.Memory, 0, len(existing))
+	for _, mem := range existing {
+		if scope.ResolveMemory(caller, mem, opts) {
+			visible = append(visible, mem)
+		}
+	}
+	return visible
+}
+
+func domainManageAllowed(ctx context.Context, mem *models.Memory) bool {
+	return scope.ResolveMemoryManage(writeLintVisibilityCaller(ctx, ""), mem)
+}
+
 func (s *scopedWriteLintMemoryStore) List(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
 	if limit <= 0 {
 		limit = 200
@@ -841,6 +857,12 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		var beforeMem *models.Memory
 		if bm, getErr := s.memoryStore.Get(ctx, sid); getErr == nil {
 			beforeMem = bm
+		} else {
+			log.Warn().Err(getErr).Int64("superseded_id", sid).Msg("store_memory: supersede target not found")
+			continue
+		}
+		if !domainManageAllowed(ctx, beforeMem) {
+			return "", fmt.Errorf("store_memory: memory %d not found", sid)
 		}
 		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
 		if supErr != nil {
@@ -874,6 +896,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		if listErr != nil {
 			log.Warn().Err(listErr).Msg("store_memory: write gate could not load existing memories, skipping gate")
 		} else {
+			existing = filterVisibleWriteGateCandidates(ctx, params.SessionID, existing)
 			gateResult = writegate.Check(ctx, params.Content, existing)
 		}
 	}
@@ -1114,6 +1137,9 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 		if ctxProject == "" || before.Project != ctxProject {
 			return "", fmt.Errorf("edit_memory: memory %d not found", id)
 		}
+	}
+	if !domainManageAllowed(ctx, before) {
+		return "", fmt.Errorf("edit_memory: memory %d not found", id)
 	}
 
 	// Build updated memory (preserve all existing fields, override only provided ones).
@@ -2236,10 +2262,16 @@ func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("id required")
 	}
 
-	// Read before-state for audit before deletion.
-	var beforeMem *models.Memory
-	if bm, getErr := s.memoryStore.Get(ctx, id); getErr == nil {
-		beforeMem = bm
+	// Read before-state for audit and authorization before deletion.
+	beforeMem, getErr := s.memoryStore.Get(ctx, id)
+	if getErr != nil {
+		if errors.Is(getErr, gormlib.ErrRecordNotFound) {
+			return "", fmt.Errorf("suppress_memory: memory %d not found", id)
+		}
+		return "", fmt.Errorf("suppress_memory: %w", getErr)
+	}
+	if !domainManageAllowed(ctx, beforeMem) {
+		return "", fmt.Errorf("suppress_memory: memory %d not found", id)
 	}
 
 	if err := s.memoryStore.Delete(ctx, id); err != nil {
@@ -2250,9 +2282,6 @@ func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage)
 	}
 
 	// Audit: fire-and-forget delete event.
-	if beforeMem == nil {
-		beforeMem = &models.Memory{ID: id}
-	}
 	logAuditDelete(ctx, s, beforeMem, actorFromContext(ctx))
 
 	return fmt.Sprintf("Memory %d suppressed", id), nil

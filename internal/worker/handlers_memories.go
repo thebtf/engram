@@ -366,6 +366,10 @@ func listVisibleMemoriesREST(ctx context.Context, store memoryListStore, project
 	return visible, nil
 }
 
+func memoryDomainManageAllowedREST(ctx context.Context, mem *models.Memory) bool {
+	return scope.ResolveMemoryManage(memoryVisibilityCaller(ctx, ""), mem)
+}
+
 // memoryListStore is the subset of the MemoryStore surface that
 // listVisibleMemoriesREST needs. Defined as a small interface so the
 // function can be unit-tested with a fake without pulling in the full
@@ -430,6 +434,21 @@ func (s *Service) handleDeleteMemoryByID(w http.ResponseWriter, r *http.Request)
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+
+	before, err := s.memoryStore.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("get memory before delete failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !memoryDomainManageAllowedREST(r.Context(), before) {
+		http.Error(w, "memory not found", http.StatusNotFound)
 		return
 	}
 

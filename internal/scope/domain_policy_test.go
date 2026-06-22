@@ -17,6 +17,16 @@ func TestDomainOwnershipPolicy_EmptyDomainAllowsLegacyBehavior(t *testing.T) {
 	require.Equal(t, DomainPolicyReasonEmptyDomain, decision.Reason)
 }
 
+func TestDomainOwnershipPolicy_EmptyDomainStillRejectsUnsupportedOperation(t *testing.T) {
+	t.Parallel()
+	policy := DomainOwnershipPolicy{}
+
+	decision := policy.Decide(KeycardContext{}, domainPolicyRequest(DomainOperation("archive"), "  ", "", ""))
+
+	require.False(t, decision.Allowed)
+	require.Equal(t, DomainPolicyReasonUnsupportedOperation, decision.Reason)
+}
+
 func TestDomainOwnershipPolicy_NonEmptyDomainAllowsSamePrincipal(t *testing.T) {
 	t.Parallel()
 	policy := DomainOwnershipPolicy{}
@@ -92,6 +102,15 @@ func TestDomainOwnershipPolicy_NonEmptyDomainReadRejectsInvalidOwnerKind(t *test
 
 	require.False(t, decision.Allowed)
 	require.Equal(t, DomainPolicyReasonInvalidPrincipalKind, decision.Reason)
+}
+
+func TestResolveMemoryManage_NonEmptyDomainRequiresOwnerMatch(t *testing.T) {
+	t.Parallel()
+	mem := principalMemory(203, "agent/bob", models.AgentVisibilityShared)
+	mem.Domain = "memory-lab"
+
+	require.False(t, ResolveMemoryManage(domainPolicyCaller("agent/alice"), mem))
+	require.True(t, ResolveMemoryManage(domainPolicyCaller("agent/bob"), mem))
 }
 
 func TestResolveMemory_NonEmptyDomainCannotBypassPrincipalPrivate(t *testing.T) {

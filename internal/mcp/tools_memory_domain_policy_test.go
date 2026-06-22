@@ -105,6 +105,34 @@ func TestWriteLintDomainPolicy_DomainOwnedTargetHidden(t *testing.T) {
 	require.Nil(t, target, "cross-principal domain-owned target must be treated as hidden")
 }
 
+func TestLegacyWriteGateDomainPolicy_DomainOwnedCandidateHidden(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+	candidates := []*models.Memory{{
+		ID:                 44,
+		Project:            "testproj",
+		Content:            t035DupContent,
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	}, {
+		ID:                 45,
+		Project:            "testproj",
+		Content:            "visible own domain row",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	}}
+
+	visible := filterVisibleWriteGateCandidates(ctx, "", candidates)
+
+	require.Len(t, visible, 1)
+	require.Equal(t, int64(45), visible[0].ID)
+}
+
 func TestRecallMemoryDomainPolicy_DomainOwnedRowHiddenFromMismatchedPrincipal(t *testing.T) {
 	t.Parallel()
 	caller := scope.KeycardContext{Principal: "agent/alice", PrincipalKind: "agent"}

@@ -43,6 +43,13 @@ type DomainPolicyDecision struct {
 type DomainOwnershipPolicy struct{}
 
 func (DomainOwnershipPolicy) Decide(caller KeycardContext, req DomainPolicyRequest) DomainPolicyDecision {
+	switch req.Operation {
+	case DomainOperationWrite, DomainOperationRead, DomainOperationManage:
+		// supported
+	default:
+		return DomainPolicyDecision{Allowed: false, Reason: DomainPolicyReasonUnsupportedOperation}
+	}
+
 	if strings.TrimSpace(req.Domain) == "" {
 		return DomainPolicyDecision{Allowed: true, Reason: DomainPolicyReasonEmptyDomain}
 	}
@@ -70,9 +77,9 @@ func (DomainOwnershipPolicy) Decide(caller KeycardContext, req DomainPolicyReque
 			return DomainPolicyDecision{Allowed: false, Reason: DomainPolicyReasonOwnerMismatch}
 		}
 		return DomainPolicyDecision{Allowed: true, Reason: DomainPolicyReasonAllowed}
-	default:
-		return DomainPolicyDecision{Allowed: false, Reason: DomainPolicyReasonUnsupportedOperation}
 	}
+
+	return DomainPolicyDecision{Allowed: false, Reason: DomainPolicyReasonUnsupportedOperation}
 }
 
 func hasPrincipal(principal, kind string) bool {
