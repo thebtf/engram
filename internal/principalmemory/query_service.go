@@ -44,6 +44,7 @@ type PrincipalMemoryQueryRequest struct {
 	CallerIsAdmin      bool
 	OwnerPrincipal     string
 	OwnerPrincipalKind string
+	AgentVisibility    string
 	Domain             string
 	Limit              int
 	Offset             int
@@ -75,6 +76,7 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 	rows, err := s.store.ListPrincipalMemory(ctx, strings.TrimSpace(req.Project), gormdb.ListOptions{
 		OwnerPrincipal:     strings.TrimSpace(req.OwnerPrincipal),
 		OwnerPrincipalKind: strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
+		AgentVisibility:    strings.TrimSpace(req.AgentVisibility),
 		Domain:             strings.TrimSpace(req.Domain),
 		Limit:              principalQueryFetchLimit(limit),
 		Offset:             req.Offset,

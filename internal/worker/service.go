@@ -41,6 +41,7 @@ import (
 	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/sessions"
@@ -145,42 +146,43 @@ type Service struct {
 	// transcriptStore in the handleSessionEnd persistence goroutine, letting unit
 	// tests assert the real handler path (redact → Create) without a live DB.
 	// Production code never sets this field.
-	transcriptCreatorOverride transcriptCreator
-	retrievalHooks            *retrievalHooks
-	authHandlers              *AuthHandlers
-	version                   string
-	recentQueriesBuf          [maxRecentQueries]RecentSearchQuery
-	wg                        sync.WaitGroup
-	recentQueriesLen          int
-	recentQueriesHead         int
-	statsCacheTTL             time.Duration
-	initMu                    sync.RWMutex
-	retrievalStatsMu          sync.RWMutex
-	recentQueriesMu           sync.RWMutex
-	cachedObsCountsMu         sync.RWMutex
-	staleQueueOnce            sync.Once
-	ready                     atomic.Bool
-	vault                     *crypto.Vault
-	issueStore                *gorm.IssueStore
-	credentialStore           *gorm.CredentialStore
-	memoryStore               *gorm.MemoryStore
-	memoryStoreSeam           memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
-	behavioralRulesStore      *gorm.BehavioralRulesStore
-	auditStore                *gorm.AuditStore
-	purgeStore                *gorm.PurgeStore
-	testAuditRetainer         auditRetainer // test-only override for retention unit tests
-	feedbackUpdater           *feedback.Updater
-	segmentStore              *gorm.SegmentStore
-	embeddingClient           *embedding.Client
-	embeddingStore            *embedding.Store
-	embeddingRecorder         *embedding.BackfillRecorder
-	promotionStore            *gorm.PromotionStore
-	graphStore                *graph.Store
-	vaultOnce                 sync.Once
-	vaultErr                  error
-	promptCache               sync.Map // map[int64]promptCacheEntry — last user prompt per session
-	eventBus                  *projectevents.Bus
-	projectReaper             *reaper.Reaper
+	transcriptCreatorOverride   transcriptCreator
+	retrievalHooks              *retrievalHooks
+	authHandlers                *AuthHandlers
+	version                     string
+	recentQueriesBuf            [maxRecentQueries]RecentSearchQuery
+	wg                          sync.WaitGroup
+	recentQueriesLen            int
+	recentQueriesHead           int
+	statsCacheTTL               time.Duration
+	initMu                      sync.RWMutex
+	retrievalStatsMu            sync.RWMutex
+	recentQueriesMu             sync.RWMutex
+	cachedObsCountsMu           sync.RWMutex
+	staleQueueOnce              sync.Once
+	ready                       atomic.Bool
+	vault                       *crypto.Vault
+	issueStore                  *gorm.IssueStore
+	credentialStore             *gorm.CredentialStore
+	memoryStore                 *gorm.MemoryStore
+	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
+	principalMemoryQueryService principalMemoryQueryService
+	behavioralRulesStore        *gorm.BehavioralRulesStore
+	auditStore                  *gorm.AuditStore
+	purgeStore                  *gorm.PurgeStore
+	testAuditRetainer           auditRetainer // test-only override for retention unit tests
+	feedbackUpdater             *feedback.Updater
+	segmentStore                *gorm.SegmentStore
+	embeddingClient             *embedding.Client
+	embeddingStore              *embedding.Store
+	embeddingRecorder           *embedding.BackfillRecorder
+	promotionStore              *gorm.PromotionStore
+	graphStore                  *graph.Store
+	vaultOnce                   sync.Once
+	vaultErr                    error
+	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
+	eventBus                    *projectevents.Bus
+	projectReaper               *reaper.Reaper
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
 	// requestActivityMiddleware on every request.
@@ -588,6 +590,7 @@ func (s *Service) initializeAsync() {
 
 	// Create audit store for Milestone D audit trail (FR-D2 / NFR-D4).
 	auditStore := gorm.NewAuditStore(store.GetDB())
+	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
 
 	// Create purge store for Milestone D project-level hard deletion (T008).
 	// Gated behind ENGRAM_VNEXT_ENABLED: purge_project is a vnext action (Milestone D).
@@ -612,6 +615,7 @@ func (s *Service) initializeAsync() {
 	s.issueStore = issueStore
 	s.credentialStore = credentialStore
 	s.memoryStore = memoryStore
+	s.principalMemoryQueryService = principalMemoryQuerySvc
 	s.behavioralRulesStore = behavioralRulesStore
 	s.feedbackUpdater = feedbackUpdater
 	s.auditStore = auditStore
@@ -1386,6 +1390,7 @@ func (s *Service) setupRoutes() {
 		// Memory routes (US3 Commit E — explicit user memories stored in memories table)
 		r.Post("/api/memories", s.handleStoreMemoryExplicit)
 		r.Get("/api/memories", s.handleListMemories)
+		r.Get("/api/memories/principal", s.handlePrincipalMemoryQuery)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Behavioral rules management
