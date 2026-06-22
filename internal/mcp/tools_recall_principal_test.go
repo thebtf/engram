@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/thebtf/engram/internal/auth"
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/principalmemory"
 )
 
 func TestRecallMemoryPrincipalDefault_OwnSharedLegacyVisibleOtherPrivateHidden(t *testing.T) {
@@ -84,4 +86,189 @@ func TestRecallMemoryPrincipalDefault_OwnSharedLegacyVisibleOtherPrivateHidden(t
 	require.Equal(t, "agent/bob", shared["owner_principal"])
 	require.Equal(t, "agent", shared["owner_principal_kind"])
 	require.Equal(t, "shared", shared["agent_visibility"])
+}
+
+func TestRecallMemoryIncludePrincipals_SchemaAdvertised(t *testing.T) {
+	tool := recallMemoryTool()
+	props := tool.InputSchema["properties"].(map[string]any)
+	raw, ok := props["include_principals"]
+	require.True(t, ok, "recall_memory schema must advertise explicit widening control")
+
+	includeSchema := raw.(map[string]any)
+	require.Equal(t, "array", includeSchema["type"])
+	itemSchema := includeSchema["items"].(map[string]any)
+	itemProps := itemSchema["properties"].(map[string]any)
+	require.Contains(t, itemProps, "principal")
+	require.Contains(t, itemProps, "principal_kind")
+	require.ElementsMatch(t, []string{"principal", "principal_kind"}, itemSchema["required"])
+}
+
+func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
+	t.Run("rejects duplicate principals", func(t *testing.T) {
+		env := newPrincipalRecallEnv(t, "pmq-recall-include-dup-"+uuid.NewString())
+		ctx := auth.WithIdentity(context.Background(),
+			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+		_, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "items",
+			"include_principals": []map[string]any{
+				{"principal": "agent/bob", "principal_kind": "agent"},
+				{"principal": " agent/bob ", "principal_kind": "AGENT"},
+			},
+		}))
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "duplicate include_principals")
+	})
+
+	t.Run("rejects blank and invalid principals clearly", func(t *testing.T) {
+		env := newPrincipalRecallEnv(t, "pmq-recall-include-invalid-"+uuid.NewString())
+		ctx := auth.WithIdentity(context.Background(),
+			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+		_, blankErr := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "items",
+			"include_principals": []map[string]any{
+				{"principal": " ", "principal_kind": "agent"},
+			},
+		}))
+		require.Error(t, blankErr)
+		require.Contains(t, blankErr.Error(), "principal is required")
+
+		_, invalidKindErr := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "items",
+			"include_principals": []map[string]any{
+				{"principal": "agent/bob", "principal_kind": "robot"},
+			},
+		}))
+		require.Error(t, invalidKindErr)
+		require.Contains(t, invalidKindErr.Error(), "principal_kind must be one of")
+	})
+
+	t.Run("self include is allowed and deduplicated", func(t *testing.T) {
+		env := newPrincipalRecallEnv(t, "pmq-recall-include-self-"+uuid.NewString())
+		insertPrincipalMemory(t, env, "alice widen marker private self", "agent/alice", "agent", "private")
+		ctx := auth.WithIdentity(context.Background(),
+			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+		out, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "items",
+			"include_principals": []map[string]any{
+				{"principal": "agent/alice", "principal_kind": "agent"},
+			},
+		}))
+		require.NoError(t, err)
+
+		rows := decodeRecallItems(t, out)
+		require.Len(t, rows, 1)
+		require.Equal(t, "agent/alice", rows[0]["owner_principal"])
+		require.Equal(t, "private", rows[0]["agent_visibility"])
+	})
+
+	t.Run("non-admin cross-private include is denied", func(t *testing.T) {
+		env := newPrincipalRecallEnv(t, "pmq-recall-include-nonadmin-"+uuid.NewString())
+		insertPrincipalMemory(t, env, "bob widen marker private denied", "agent/bob", "agent", "private")
+		ctx := auth.WithIdentity(context.Background(),
+			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+		_, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "items",
+			"include_principals": []map[string]any{
+				{"principal": "agent/bob", "principal_kind": "agent"},
+			},
+		}))
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "include_private for another principal requires admin")
+	})
+
+	t.Run("admin cross-private include writes durable audit before returning private row", func(t *testing.T) {
+		env := newPrincipalRecallEnv(t, "pmq-recall-include-admin-"+uuid.NewString())
+		bobID := insertPrincipalMemory(t, env, "bob widen marker private audited", "agent/bob", "agent", "private")
+		var before int64
+		require.NoError(t, env.store.DB.Model(&dbgorm.AuditLogEntry{}).
+			Where("memory_id = ? AND action = ?", bobID, "principal_memory_private_read").
+			Count(&before).Error)
+		ctx := auth.WithIdentity(context.Background(), auth.Admin())
+
+		out, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":      "widen marker",
+			"project":    env.project,
+			"format":     "items",
+			"limit":      5,
+			"session_id": "operator-session-1",
+			"include_principals": []map[string]any{
+				{"principal": "agent/bob", "principal_kind": "agent"},
+			},
+		}))
+		require.NoError(t, err)
+
+		rows := decodeRecallItems(t, out)
+		require.Len(t, rows, 1)
+		require.Equal(t, "bob widen marker private audited", rows[0]["content"])
+		require.Equal(t, "agent/bob", rows[0]["owner_principal"])
+		require.Equal(t, "private", rows[0]["agent_visibility"])
+
+		var after int64
+		require.NoError(t, env.store.DB.Model(&dbgorm.AuditLogEntry{}).
+			Where("memory_id = ? AND action = ?", bobID, "principal_memory_private_read").
+			Count(&after).Error)
+		require.Greater(t, after, before, "admin widening must write durable audit evidence before returning private data")
+	})
+}
+
+type principalRecallEnv struct {
+	t007TestEnv
+	project string
+}
+
+func newPrincipalRecallEnv(t *testing.T, project string) principalRecallEnv {
+	t.Helper()
+	env := newMemoryServerForT007(t, project)
+	env.srv.SetPrincipalMemoryQueryService(principalmemory.NewPrincipalMemoryQueryService(
+		dbgorm.NewMemoryStore(env.store),
+		dbgorm.NewAuditStore(env.store.DB),
+	))
+	t.Cleanup(func() {
+		_ = env.store.DB.WithContext(context.Background()).
+			Exec(`DELETE FROM audit_log WHERE action = 'principal_memory_private_read' AND reason = 'admin_private_widening'`).Error
+	})
+	return principalRecallEnv{t007TestEnv: env, project: project}
+}
+
+func insertPrincipalMemory(t *testing.T, env principalRecallEnv, content, principal, principalKind, visibility string) int64 {
+	t.Helper()
+	var id int64
+	require.NoError(t, env.store.DB.Raw(
+		`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, now())
+			RETURNING id`,
+		env.project, content, `["type:fact"]`, "project", principal, principalKind, visibility,
+	).Scan(&id).Error)
+	require.NotZero(t, id)
+	return id
+}
+
+func mustRecallJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	require.NoError(t, err)
+	return raw
+}
+
+func decodeRecallItems(t *testing.T, out string) []map[string]any {
+	t.Helper()
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &rows))
+	return rows
 }

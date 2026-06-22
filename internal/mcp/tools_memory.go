@@ -1398,6 +1398,10 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		ApplyPrivacyScope: scopeEnabled,
 		IncludeScopes:     includeScopes,
 	}
+	includePrincipals, includePrincipalsSet, err := parseRecallIncludedPrincipals(m["include_principals"])
+	if err != nil {
+		return "", err
+	}
 
 	// ── T018 (engram vNext Milestone F TG3) — new filter + rationale params ──
 	// Parsed unconditionally from the args map; gated on vnextFEnabled() at
@@ -1419,7 +1423,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// handleRecallMemoryHybrid so hybrid results are subject to the same
 	// predicate as the legacy List path below.
 	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
-	if vnextEnabled {
+	if vnextEnabled && !includePrincipalsSet {
 		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, visibilityOpts, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
 	}
 	// ── legacy List-based path with shared visibility filtering ─
@@ -1496,6 +1500,12 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 			if len(batch) < batchSize {
 				break
 			}
+		}
+	}
+	if includePrincipalsSet {
+		filtered, err = s.appendRecallIncludedPrincipalMemories(ctx, filtered, includePrincipals, project, query, callerSessionID, limit)
+		if err != nil {
+			return "", err
 		}
 	}
 

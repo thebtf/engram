@@ -17,6 +17,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -113,6 +114,113 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 			"unknown recall action: %q (valid: search)",
 			action,
 		)
+	}
+}
+
+type recallIncludedPrincipal struct {
+	Principal     string
+	PrincipalKind string
+}
+
+func parseRecallIncludedPrincipals(raw any) ([]recallIncludedPrincipal, bool, error) {
+	if raw == nil {
+		return nil, false, nil
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, true, fmt.Errorf("include_principals must be an array of objects")
+	}
+
+	included := make([]recallIncludedPrincipal, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for i, value := range values {
+		item, ok := value.(map[string]any)
+		if !ok {
+			return nil, true, fmt.Errorf("include_principals[%d] must be an object", i)
+		}
+		principal := strings.TrimSpace(coerceString(item["principal"], ""))
+		if principal == "" {
+			return nil, true, fmt.Errorf("include_principals[%d].principal is required", i)
+		}
+		principalKind := strings.TrimSpace(strings.ToLower(coerceString(item["principal_kind"], "")))
+		if principalKind == "" {
+			return nil, true, fmt.Errorf("include_principals[%d].principal_kind is required", i)
+		}
+		if !auth.IsValidPrincipalKind(auth.PrincipalKind(principalKind)) {
+			return nil, true, fmt.Errorf("principal_kind must be one of human, agent, service")
+		}
+		key := principalKind + "\x00" + principal
+		if _, exists := seen[key]; exists {
+			return nil, true, fmt.Errorf("duplicate include_principals entry for %s/%s", principalKind, principal)
+		}
+		seen[key] = struct{}{}
+		included = append(included, recallIncludedPrincipal{Principal: principal, PrincipalKind: principalKind})
+	}
+	return included, true, nil
+}
+
+func (s *Server) appendRecallIncludedPrincipalMemories(ctx context.Context, filtered []*models.Memory, included []recallIncludedPrincipal, project, query, sourceSessionID string, limit int) ([]*models.Memory, error) {
+	if len(included) == 0 {
+		return filtered, nil
+	}
+	if s.principalMemoryQuerySvc == nil {
+		return nil, fmt.Errorf("recall_memory include_principals requires principal memory query service")
+	}
+
+	seen := make(map[int64]struct{}, len(filtered))
+	for _, mem := range filtered {
+		if mem != nil && mem.ID != 0 {
+			seen[mem.ID] = struct{}{}
+		}
+	}
+
+	caller, callerIsAdmin := principalMemoryQueryCaller(ctx)
+	for _, target := range included {
+		if len(filtered) >= limit {
+			break
+		}
+		result, err := s.principalMemoryQuerySvc.Query(ctx, principalmemory.PrincipalMemoryQueryRequest{
+			Project:            project,
+			Caller:             caller,
+			CallerIsAdmin:      callerIsAdmin,
+			OwnerPrincipal:     target.Principal,
+			OwnerPrincipalKind: target.PrincipalKind,
+			Query:              query,
+			IncludePrivate:     true,
+			Limit:              limit,
+			SourceSessionID:    sourceSessionID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("recall_memory include_principals: %w", err)
+		}
+		if result == nil {
+			continue
+		}
+		for _, item := range result.Items {
+			if item.ID != 0 {
+				if _, exists := seen[item.ID]; exists {
+					continue
+				}
+				seen[item.ID] = struct{}{}
+			}
+			filtered = append(filtered, recallPrincipalQueryItemToMemory(item))
+			if len(filtered) >= limit {
+				break
+			}
+		}
+	}
+	return filtered, nil
+}
+
+func recallPrincipalQueryItemToMemory(item principalmemory.PrincipalMemoryQueryItem) *models.Memory {
+	return &models.Memory{
+		ID:                 item.ID,
+		Project:            item.Project,
+		Content:            item.Content,
+		OwnerPrincipal:     item.OwnerPrincipal,
+		OwnerPrincipalKind: item.OwnerPrincipalKind,
+		AgentVisibility:    item.AgentVisibility,
+		Domain:             item.Domain,
 	}
 }
 

@@ -691,6 +691,18 @@ func recallMemoryTool() Tool {
 			"items":       map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}},
 			"description": "Restrict returned memories to the named privacy_scope tiers. Empty/omitted means all 4 tiers are returned (subject to scope.Resolve visibility). Honored only when ENGRAM_VNEXT_F_ENABLED=true. Unknown enum values return 'invalid_include_scopes:' structured error.",
 		},
+		"include_principals": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type":     "object",
+				"required": []string{"principal", "principal_kind"},
+				"properties": map[string]any{
+					"principal":      map[string]any{"type": "string", "description": "Principal identifier to explicitly include, e.g. agent/alice."},
+					"principal_kind": map[string]any{"type": "string", "enum": []string{"human", "agent", "service"}, "description": "Principal kind."},
+				},
+			},
+			"description": "Explicit principal widening for recall. Self include is allowed; cross-principal private widening requires admin identity and durable audit.",
+		},
 		// T019 TG3: explainable rerank + missing filters (Milestone F TG3).
 		// Schema-unconditional (same pattern as session_id/include_scopes above):
 		// schema discovery is deterministic regardless of env; ENGRAM_VNEXT_F_ENABLED
