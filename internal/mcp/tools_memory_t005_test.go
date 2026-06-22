@@ -307,3 +307,18 @@ func TestRecallMemoryTierFilter_FlagOff_SchemaAbsent_B4(t *testing.T) {
 	require.False(t, present,
 		"recall_memory schema must NOT advertise tier_filter when ENGRAM_VNEXT_ENABLED=false (W3+W4 merged contract: tier_filter is a hybrid retrieval param, not the base schema)")
 }
+
+func TestStoreMemoryDryRunValidatesPrincipalMetadata(t *testing.T) {
+	s := NewServer(ServerOptions{Version: "test"})
+
+	args := mustJSON(t, map[string]any{
+		"content":          "preview only",
+		"project":          "test-project",
+		"dry_run":          true,
+		"agent_visibility": "private",
+	})
+
+	_, err := s.handleStoreMemory(context.Background(), args)
+	require.Error(t, err)
+	require.True(t, strings.HasPrefix(err.Error(), "invalid_agent_visibility:"), err.Error())
+}

@@ -419,13 +419,17 @@ export interface CreateTokenResponse {
   principal_kind: 'human' | 'agent' | 'service'
 }
 
+export type CreateTokenParams =
+  | { name: string; scope: string; principal: string; principal_kind?: 'human' | 'agent' | 'service' }
+  | { name: string; scope: string; principal?: undefined; principal_kind?: undefined }
+
 export async function fetchTokens(signal?: AbortSignal): Promise<ApiToken[]> {
   const response = await fetchWithRetry<{ tokens: ApiToken[] }>(`${API_BASE}/auth/tokens`, { signal })
   return response.tokens
 }
 
 export async function createToken(
-  params: { name: string; scope: string; principal?: string; principal_kind?: 'human' | 'agent' | 'service' },
+  params: CreateTokenParams,
   signal?: AbortSignal
 ): Promise<CreateTokenResponse> {
   return postJson<CreateTokenResponse>(`${API_BASE}/auth/tokens`, params, { signal })

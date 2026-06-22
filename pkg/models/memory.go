@@ -54,7 +54,7 @@ type Memory struct {
 	// Backward-compat: see spec.md §FR-F1 REVISE — the legacy `scope:*` tag + MCP
 	// response synthesis surface remains active for 2 minor versions (until v6.7.0)
 	// per RI-F2.
-	PrivacyScope string   `json:"privacy_scope,omitempty"`
+	PrivacyScope string   `json:"privacy_scope,omitempty" enums:"private,project,shared,global"`
 	Tags         []string `json:"tags"`
 	// SourceSessions lists every session_id that wrote or confirmed this memory.
 	// Added by migration 125 (TG1 / T001+T002) as TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[].
@@ -71,8 +71,8 @@ type Memory struct {
 	// OwnerPrincipal is server-derived from the authenticated identity, never
 	// from caller-supplied payload fields.
 	OwnerPrincipal           string  `json:"owner_principal,omitempty"`
-	OwnerPrincipalKind       string  `json:"owner_principal_kind,omitempty"`
-	AgentVisibility          string  `json:"agent_visibility,omitempty"`
+	OwnerPrincipalKind       string  `json:"owner_principal_kind,omitempty" enums:"human,agent,service"`
+	AgentVisibility          string  `json:"agent_visibility,omitempty" enums:"private,shared"`
 	Domain                   string  `json:"domain,omitempty"`
 	ID                       int64   `json:"id"`
 	SupersedesID             *int64  `json:"supersedes_id,omitempty"`

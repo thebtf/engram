@@ -58,7 +58,7 @@ type tokenCreateRequest struct {
 	Name          string `json:"name"`
 	Scope         string `json:"scope"`
 	Principal     string `json:"principal"`
-	PrincipalKind string `json:"principal_kind"`
+	PrincipalKind string `json:"principal_kind" enums:"human,agent,service"`
 }
 
 // handleAuthLogin godoc

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -262,21 +263,19 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 
 	results := make([]memoryResult, 0, limit)
 	if tg3Active {
-		// T018 MAJOR fix (review hardening): ListWithFilters cannot be used
-		// safely with always-on visibility because invisible rows at the head of
-		// the result set can truncate visible recall before older eligible rows
-		// are reached. Use the same ListWithOffset batch-loop as non-TG3 recall.
-		//
-		// include_superseded cannot be honoured by ListWithOffset (hardcoded
-		// status='active'). Return a structured error instead of pretending the
-		// flag was applied.
-		if tg3IncludeSuperseded {
-			return "", fmt.Errorf("include_superseded is not supported with visibility-filtered recall search; omit include_superseded")
-		}
+		// Use SQL predicates for TG3 content/status/confidence, then keep paging
+		// after visibility filtering so invisible rows cannot truncate visible
+		// recall before older eligible rows are reached.
 		const batchSize = 500
 		offset := 0
 		for len(results) < limit {
-			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+			batch, err := s.memoryStore.ListWithFilters(ctx, project, gormdb.ListOptions{
+				ContentContains:   query,
+				ConfidenceMin:     tg3ConfidenceMin,
+				IncludeSuperseded: tg3IncludeSuperseded,
+				Limit:             batchSize,
+				Offset:            offset,
+			})
 			if err != nil {
 				return "", fmt.Errorf("recall search tg3: %w", err)
 			}
@@ -315,7 +314,11 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		const batchSize = 500
 		offset := 0
 		for len(results) < limit {
-			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+			batch, err := s.memoryStore.ListWithFilters(ctx, project, gormdb.ListOptions{
+				ContentContains: query,
+				Limit:           batchSize,
+				Offset:          offset,
+			})
 			if err != nil {
 				return "", fmt.Errorf("recall search: %w", err)
 			}

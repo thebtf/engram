@@ -252,12 +252,32 @@ func (s *Service) searchFallbackObservations(ctx context.Context, query string, 
 			}
 			observations = append(observations, memoriesToObservations(visible)...)
 		} else {
-			memories, err := lister.List(ctx, scopeFilter.Project, fetchLimit)
-			if err != nil {
-				return nil, err
+			const batchSize = 500
+			offset := 0
+			var visible []*models.Memory
+			for len(visible) < fetchLimit {
+				batch, err := lister.ListWithOffset(ctx, scopeFilter.Project, batchSize, offset)
+				if err != nil {
+					return nil, err
+				}
+				if len(batch) == 0 {
+					break
+				}
+				for _, mem := range batch {
+					if !scope.ResolveMemory(callerCtx, mem, visibilityOpts) {
+						continue
+					}
+					visible = append(visible, mem)
+					if len(visible) >= fetchLimit {
+						break
+					}
+				}
+				offset += len(batch)
+				if len(batch) < batchSize {
+					break
+				}
 			}
-			memories = scope.FilterMemoriesWithOptions(callerCtx, memories, visibilityOpts)
-			observations = append(observations, memoriesToObservations(memories)...)
+			observations = append(observations, memoriesToObservations(visible)...)
 		}
 	}
 	if s.behavioralRulesStore != nil {

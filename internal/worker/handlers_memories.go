@@ -36,7 +36,7 @@ type storeMemoryRequest struct {
 	SourceAgent     string   `json:"source_agent,omitempty"`
 	PrivacyScope    string   `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
 	SessionID       string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
-	AgentVisibility string   `json:"agent_visibility,omitempty"`
+	AgentVisibility string   `json:"agent_visibility,omitempty" enums:"private,shared"`
 	Domain          string   `json:"domain,omitempty"`
 }
 
@@ -55,7 +55,7 @@ func isValidPrivacyScopeREST(s string) bool {
 func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, agentVisibility, domain string) error {
 	visibility := strings.TrimSpace(agentVisibility)
 	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
-		return fmt.Errorf("invalid agent_visibility: must be one of private, shared")
+		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
 	}
 
 	mem.Domain = strings.TrimSpace(domain)
@@ -67,7 +67,7 @@ func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, a
 	}
 	if visibility != "" {
 		if mem.OwnerPrincipal == "" {
-			return fmt.Errorf("invalid agent_visibility: principal is required for agent_visibility")
+			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
 		}
 		mem.AgentVisibility = visibility
 	} else if mem.OwnerPrincipal != "" {
@@ -298,7 +298,11 @@ func memoryVisibilityCaller(ctx context.Context, sessionID string) scope.Keycard
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		caller.WorkstationID = id.WorkstationID()
 		caller.Principal = id.Principal
-		caller.PrincipalKind = string(id.PrincipalKind)
+		if _, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
+			caller.PrincipalKind = principalKind
+		} else {
+			caller.PrincipalKind = string(id.PrincipalKind)
+		}
 	}
 	return caller
 }

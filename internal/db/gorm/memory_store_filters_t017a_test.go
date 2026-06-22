@@ -118,6 +118,17 @@ func TestMemoryStore_ListWithFilters_T017a(t *testing.T) {
 		assert.Contains(t, ids, idC, "superseded 0.8 passes both filters")
 		assert.NotContains(t, ids, idB, "active 0.4 excluded by ConfidenceMin=0.7")
 	})
+
+	t.Run("content_filter_and_offset", func(t *testing.T) {
+		res, err := ms.ListWithFilters(ctx, project, ListOptions{
+			ContentContains: "active",
+			Limit:           1,
+			Offset:          1,
+		})
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Contains(t, []int64{idA, idB}, res[0].ID, "offset must be applied after content predicate")
+	})
 }
 
 // collectIDs extracts the ID list from a memory slice for assertion convenience.

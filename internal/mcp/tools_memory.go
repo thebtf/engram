@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
 	"github.com/thebtf/engram/internal/privacy"
@@ -290,6 +291,11 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		params.Content = scrubbed
 	}
 
+	principalPreview := &models.Memory{}
+	if err := applyPrincipalMemoryMetadata(ctx, principalPreview, params.AgentVisibility, params.Domain); err != nil {
+		return "", err
+	}
+
 	// T044 dry-run return (FR-F6.b): after content size limits AND redaction so
 	// would_store reflects the post-redacted content (honest preview per ADR-F-004).
 	//
@@ -320,6 +326,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			"write_lint":  writeLintEnabled,
 			"note":        dryRunNote,
 		}
+		addPrincipalMemoryFields(preview, principalPreview)
 		out, jsonErr := json.MarshalIndent(preview, "", "  ")
 		if jsonErr != nil {
 			return "", fmt.Errorf("store_memory dry_run marshal: %w", jsonErr)
@@ -1241,22 +1248,18 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 
 	filtered := make([]*models.Memory, 0, limit)
 	if tg3Active {
-		// T018 MAJOR fix (review hardening): include_superseded cannot be
-		// honoured by the visibility-filtered batch-loop because ListWithOffset
-		// is hardcoded to status='active'. Silently returning only active rows
-		// when the caller requested superseded rows is the same degradation fixed
-		// in the hybrid path. Return a structured error instead of pretending the
-		// flag was applied.
-		if tg3IncludeSuperseded {
-			return "", fmt.Errorf("include_superseded is not supported with visibility-filtered recall; omit include_superseded")
-		}
-		// Batch-loop so invisible rows do not truncate visible recall before
-		// older eligible rows reach the requested limit. keepMemory applies all
-		// in-memory predicates including the TG3 confidence floor.
+		// Batch-loop through ListWithFilters so include_superseded and
+		// confidence_min stay SQL-backed while visibility filtering can still
+		// backfill past invisible rows before the final limit is applied.
 		const batchSize = 500
 		offset := 0
 		for len(filtered) < limit {
-			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+			batch, err := s.memoryStore.ListWithFilters(ctx, project, gormdb.ListOptions{
+				ConfidenceMin:     tg3ConfidenceMin,
+				IncludeSuperseded: tg3IncludeSuperseded,
+				Limit:             batchSize,
+				Offset:            offset,
+			})
 			if err != nil {
 				return "", fmt.Errorf("recall_memory: %w", err)
 			}
@@ -1569,7 +1572,7 @@ func (s *Server) handleRecallMemoryHybrid(
 	// memories to be included; silently dropping the flag returns a smaller,
 	// inconsistent result set with no indication of the gap. An error tells the
 	// caller to use the legacy path (ENGRAM_VNEXT_ENABLED=false) or omit the flag.
-	if tg3IncludeSuperseded {
+	if tg3Active && tg3IncludeSuperseded {
 		return "", fmt.Errorf("include_superseded is not supported with ENGRAM_VNEXT_ENABLED hybrid retrieval; disable ENGRAM_VNEXT_ENABLED or omit include_superseded")
 	}
 
@@ -1600,17 +1603,13 @@ func (s *Server) handleRecallMemoryHybrid(
 		opts.Reranker = rerankAdapter{client: s.rerankClient}
 	}
 
-	// When type/tag filters are active, request a wider candidate pool so that
-	// post-filter truncation does not hide matching memories. The pool is capped
-	// at limit*4 to bound over-fetching while ensuring filters have material to
-	// work with. HybridSearch respects this as its hard limit, then we filter below.
-	fetchLimit := limit
-	if obsType != "" || len(tags) > 0 {
-		const filterCandidateMultiplier = 4
-		fetchLimit = limit * filterCandidateMultiplier
-		if fetchLimit > 200 {
-			fetchLimit = 200
-		}
+	// Request a wider candidate pool because type/tag/visibility filters all run
+	// after HybridSearch. Without over-fetching, private rows from other
+	// principals can consume the top-N and underfill otherwise-visible results.
+	const filterCandidateMultiplier = 4
+	fetchLimit := limit * filterCandidateMultiplier
+	if fetchLimit > 200 {
+		fetchLimit = 200
 	}
 
 	scored, explanations, err := retrieval.HybridSearch(

@@ -1,22 +1,45 @@
 basePath: /
 definitions:
-  github_com_thebtf_engram_internal_embedding.EmbeddingStats:
+  github_com_thebtf_engram_internal_embedding.EmbedError:
     properties:
-      chunk_count:
-        type: integer
-      dimension:
-        type: integer
-      last_chunk_at:
+      at:
         type: string
-      memories_with_chunks:
-        type: integer
-      model:
+      message:
+        description: truncated to ≤200 chars
         type: string
+      status_code:
+        type: integer
+    type: object
+  github_com_thebtf_engram_pkg_models.BehavioralRule:
+    properties:
+      content:
+        type: string
+      created_at:
+        type: string
+      deleted_at:
+        type: string
+      edited_by:
+        type: string
+      id:
+        type: integer
+      priority:
+        type: integer
+      project:
+        type: string
+      updated_at:
+        type: string
+      version:
+        type: integer
     type: object
   github_com_thebtf_engram_pkg_models.Memory:
     properties:
       access_count:
         type: integer
+      agent_visibility:
+        enum:
+        - private
+        - shared
+        type: string
       citation_count:
         type: integer
       confidence:
@@ -30,6 +53,8 @@ definitions:
       defeasibility:
         type: string
       deleted_at:
+        type: string
+      domain:
         type: string
       edited_by:
         type: string
@@ -46,13 +71,15 @@ definitions:
       last_retrieved_at:
         type: string
       owner_principal:
-        description: OwnerPrincipal is server-derived from the authenticated identity.
+        description: |-
+          OwnerPrincipal is server-derived from the authenticated identity, never
+          from caller-supplied payload fields.
         type: string
       owner_principal_kind:
-        type: string
-      agent_visibility:
-        type: string
-      domain:
+        enum:
+        - human
+        - agent
+        - service
         type: string
       privacy_scope:
         description: |-
@@ -61,6 +88,11 @@ definitions:
           Backward-compat: see spec.md §FR-F1 REVISE — the legacy `scope:*` tag + MCP
           response synthesis surface remains active for 2 minor versions (until v6.7.0)
           per RI-F2.
+        enum:
+        - private
+        - project
+        - shared
+        - global
         type: string
       project:
         type: string
@@ -296,10 +328,72 @@ definitions:
       lastUserMessage:
         type: string
     type: object
+  internal_worker.behavioralRuleRequest:
+    properties:
+      content:
+        type: string
+      edited_by:
+        type: string
+      priority:
+        type: integer
+      project:
+        type: string
+    type: object
+  internal_worker.embeddingTelemetry:
+    properties:
+      active_memory_count:
+        type: integer
+      chunk_count:
+        type: integer
+      dimension:
+        type: integer
+      embed_failure_count:
+        type: integer
+      embed_success_count:
+        type: integer
+      embedding_coverage:
+        description: fraction 0..1; 0 when no active memories
+        type: number
+      last_chunk_at:
+        type: string
+      last_embed_error:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_embedding.EmbedError'
+      memories_with_chunks:
+        type: integer
+      model:
+        type: string
+    type: object
   internal_worker.loginRequest:
     properties:
       token:
         type: string
+    type: object
+  internal_worker.outcomeTelemetry:
+    properties:
+      by_outcome:
+        additionalProperties:
+          format: int64
+          type: integer
+        type: object
+      total_sessions:
+        type: integer
+      unrecorded_fraction:
+        type: number
+      unrecorded_sessions:
+        type: integer
+    type: object
+  internal_worker.projectCitationRate:
+    properties:
+      citation_rate:
+        type: number
+      memory_count:
+        type: integer
+      project:
+        type: string
+      total_citations:
+        type: integer
+      total_injections:
+        type: integer
     type: object
   internal_worker.sessionEndRequest:
     properties:
@@ -348,6 +442,9 @@ definitions:
   internal_worker.storeMemoryRequest:
     properties:
       agent_visibility:
+        enum:
+        - private
+        - shared
         type: string
       content:
         type: string
@@ -375,6 +472,10 @@ definitions:
       principal:
         type: string
       principal_kind:
+        enum:
+        - human
+        - agent
+        - service
         type: string
       scope:
         type: string
@@ -384,13 +485,19 @@ definitions:
       citation_count:
         type: integer
       embedding:
-        $ref: '#/definitions/github_com_thebtf_engram_internal_embedding.EmbeddingStats'
+        $ref: '#/definitions/internal_worker.embeddingTelemetry'
       generated_at:
         type: string
       injection_count:
         type: integer
       noise_ratio:
         type: number
+      outcomes:
+        $ref: '#/definitions/internal_worker.outcomeTelemetry'
+      project_citation_rates:
+        items:
+          $ref: '#/definitions/internal_worker.projectCitationRate'
+        type: array
       uncited_count:
         type: integer
       write_gate_stats:
@@ -1577,6 +1684,173 @@ paths:
       summary: Restart worker
       tags:
       - System
+  /api/rules:
+    get:
+      description: Returns active behavioral rules. When project is set, returns project-scoped
+        and global rules; otherwise returns global rules only. Set all=true for the
+        operator-console all-scope registry view.
+      parameters:
+      - description: Project slug (optional)
+        in: query
+        name: project
+        type: string
+      - description: Return all active rules across scopes
+        in: query
+        name: all
+        type: boolean
+      - description: Maximum rows (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule'
+            type: array
+        "400":
+          description: invalid limit
+          schema:
+            type: string
+        "500":
+          description: internal server error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List behavioral rules
+      tags:
+      - Rules
+    post:
+      consumes:
+      - application/json
+      description: Creates an always-inject behavioral rule. Omit project to create
+        a global rule.
+      parameters:
+      - description: Rule create payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.behavioralRuleRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule'
+        "400":
+          description: content is required
+          schema:
+            type: string
+        "500":
+          description: internal server error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Create a behavioral rule
+      tags:
+      - Rules
+  /api/rules/{id}:
+    delete:
+      description: |-
+        Soft-deletes a behavioral rule by its numeric ID (sets deleted_at = now()).
+        Returns 404 if the rule does not exist or has already been deleted.
+      parameters:
+      - description: Rule ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+        "400":
+          description: invalid rule id
+          schema:
+            type: string
+        "404":
+          description: rule not found
+          schema:
+            type: string
+        "500":
+          description: internal server error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Delete a behavioral rule by ID
+      tags:
+      - Rules
+    patch:
+      consumes:
+      - application/json
+      description: Partially updates a behavioral rule by ID. Missing fields keep
+        their current values.
+      parameters:
+      - description: Rule ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Rule update payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.behavioralRuleRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule'
+        "400":
+          description: invalid rule id
+          schema:
+            type: string
+        "404":
+          description: rule not found
+          schema:
+            type: string
+        "500":
+          description: internal server error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Update a behavioral rule
+      tags:
+      - Rules
   /api/search/analytics:
     get:
       description: Returns aggregated search analytics from the persistent search
@@ -1938,8 +2212,8 @@ paths:
       - Analytics
   /api/stats/vnext:
     get:
-      description: Returns injection/citation counts, noise ratio, and write-gate
-        memory stats.
+      description: Returns injection/citation counts, noise ratio, write-gate memory
+        stats, and embedding telemetry.
       produces:
       - application/json
       responses:

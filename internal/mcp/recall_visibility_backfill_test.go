@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -228,4 +229,70 @@ func TestRecallMemory_PrincipalPrivateInvisibleAndSharedAttributed_FlagOff(t *te
 	require.Equal(t, "agent/bob", rows[0]["owner_principal"])
 	require.Equal(t, "agent", rows[0]["owner_principal_kind"])
 	require.Equal(t, "shared", rows[0]["agent_visibility"])
+}
+
+func TestRecallMemory_TG3IncludeSupersededLegacyPath(t *testing.T) {
+	project := "pim-recall-superseded-" + uuid.NewString()
+	env := newMemoryServerForT007(t, project)
+	db := env.store.DB
+
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, status, confidence, privacy_scope, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, now() - interval '2 minutes')`,
+		project, "active contract memory", `["type:fact"]`, "active", 0.9, "project",
+	).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, status, confidence, privacy_scope, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, now() - interval '1 minute')`,
+		project, "superseded contract memory", `["type:fact"]`, "superseded", 0.8, "project",
+	).Error)
+
+	args, err := json.Marshal(map[string]any{
+		"query":              "contract memory",
+		"project":            project,
+		"format":             "items",
+		"limit":              5,
+		"include_superseded": true,
+		"confidence_min":     0.7,
+	})
+	require.NoError(t, err)
+
+	out, err := env.srv.handleRecallMemory(context.Background(), args)
+	require.NoError(t, err)
+
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &rows))
+	require.Len(t, rows, 2)
+	contents := map[string]bool{}
+	for _, row := range rows {
+		contents[row["content"].(string)] = true
+	}
+	require.True(t, contents["active contract memory"])
+	require.True(t, contents["superseded contract memory"])
+}
+
+func TestRecallMemory_IncludeSupersededFlagOffIgnoredInHybrid(t *testing.T) {
+	if os.Getenv("DATABASE_DSN") == "" {
+		t.Skip("DATABASE_DSN not set, skipping hybrid DB-backed compatibility test")
+	}
+
+	project := "pim-recall-superseded-hybrid-flagoff-" + uuid.NewString()
+	env := newMemoryServerForT007(t, project)
+
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+
+	args, err := json.Marshal(map[string]any{
+		"query":              "missing",
+		"project":            project,
+		"format":             "items",
+		"include_superseded": true,
+	})
+	require.NoError(t, err)
+
+	_, err = env.srv.handleRecallMemory(context.Background(), args)
+	require.NoError(t, err, "flag-off TG3 params must be ignored even when hybrid retrieval is enabled")
 }

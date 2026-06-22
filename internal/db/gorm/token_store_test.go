@@ -3,6 +3,7 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,4 +45,22 @@ func TestTokenStore_CreateWithPrincipalRoundTrip(t *testing.T) {
 		}
 	}
 	require.True(t, matched, "created token must be returned by prefix lookup")
+}
+
+func TestTokenStore_CreateWithPrincipalRejectsKindWithoutPrincipal(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	store := NewTokenStore(&Store{DB: db})
+	_, err := store.CreateWithPrincipal(
+		context.Background(),
+		"zz-test-invalid-principal-token",
+		"hash-invalid-principal",
+		"pim2bad1",
+		"read-write",
+		"",
+		"agent",
+	)
+	require.Error(t, err)
+	require.True(t, strings.HasPrefix(err.Error(), "invalid_principal:"), err.Error())
 }

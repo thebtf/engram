@@ -3,6 +3,8 @@ package gorm
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -26,6 +28,11 @@ func (s *TokenStore) Create(ctx context.Context, name, tokenHash, tokenPrefix, s
 // CreateWithPrincipal stores a new API token record with optional principal
 // metadata. Empty principal preserves legacy keycard semantics.
 func (s *TokenStore) CreateWithPrincipal(ctx context.Context, name, tokenHash, tokenPrefix, scope, principal, principalKind string) (*APIToken, error) {
+	principal = strings.TrimSpace(principal)
+	principalKind = strings.TrimSpace(principalKind)
+	if principal == "" && principalKind != "" {
+		return nil, fmt.Errorf("invalid_principal: principal is required when principal_kind is set")
+	}
 	if principalKind == "" {
 		principalKind = "human"
 	}
