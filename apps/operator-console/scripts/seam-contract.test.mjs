@@ -154,13 +154,18 @@ test('memory compatibility export uses the Memory Lab live state seam', () => {
 
 test('memory lab malformed project payloads are errors, not empty memory', () => {
   const source = read(memoryLabPath)
+  const previewBody = functionBody(source, 'payloadPreview')
   const parseBody = functionBody(source, 'parseMemoryArray')
   const loaderBody = functionBody(source, 'loadMemoryRows')
 
   assert.match(loaderBody, /operatorFetchJson<unknown>/, 'Memory Lab must fetch project memory payloads through the operator API seam')
   assert.match(loaderBody, /parseMemoryArray\(payload/, 'Memory Lab must validate every project payload before mapping rows')
+  assert.match(loaderBody, /Promise\.all\(projects\.map/, 'Memory Lab must fetch per-project memory payloads concurrently')
   assert.match(parseBody, /throw\s+/, 'parseMemoryArray must throw on malformed or non-array payloads')
+  assert.match(parseBody, /let parsed: unknown/, 'parseMemoryArray must keep JSON.parse try scope narrow')
   assert.doesNotMatch(parseBody, /return\s+\[\]/, 'parseMemoryArray must not convert malformed payloads into an empty Memory page')
+  assert.match(previewBody, /JSON\.stringify\(payload\)/, 'payload preview must serialize object payloads with useful bounded JSON')
+  assert.doesNotMatch(previewBody, /Object\.prototype\.toString\.call\(payload\)/, 'payload preview must not degrade objects to [object Object]')
 })
 
 test('memory page-size contract offers persisted bounded all mode', () => {
@@ -172,6 +177,8 @@ test('memory page-size contract offers persisted bounded all mode', () => {
   assert.match(pageSizeSource, /\[10,\s*25,\s*50,\s*['"]all['"]\]/, 'page-size options must include all as a real value')
   assert.match(pageSizeSource, /engram\.operatorConsole\.memory\.pageSize/, 'memory page-size preference must use the CR-006 storage key')
   assert.doesNotMatch(pageSizeSource, /engram\.console\.pageSizes/, 'memory page-size preference must not be hidden in the legacy grouped key')
+  assert.match(pageSizeSource, /export function usePersistentPageSize\(key: string, initial: OperatorPageSize = 10\)/, 'page-size helper must require an explicit storage key for future pages')
+  assert.doesNotMatch(pageSizeSource, /function isOperatorPageSize/, 'page-size helper must not keep unused local validator aliases')
   assert.match(pageSizeSource, /size\s*===\s*['"]all['"]/, 'all must resolve explicitly, not through numeric sentinel math')
   assert.doesNotMatch(memoryPageSource, /v-model\.number="pageSize"/, 'page-size select must not coerce all into a number')
   assert.match(memoryPageSource, /t\(['"]memory\.allRows['"]\)/, 'the all option label must be localized')
@@ -202,8 +209,8 @@ test('memory capability evidence is an exported reusable typed data contract', (
   assert.match(unsupportedType[0], /operable:\s*false/, 'unsupported capability base must be non-operable by construction')
   assert.match(unsupportedType[0], /evidence:\s*OperatorEndpointEvidence/, 'unsupported capability base must carry endpoint/tool evidence')
   assert.match(memoryLabSource, /export interface MemoryActionGap extends OperatorUnsupportedAction/, 'Memory action descriptors must extend the reusable capability base')
-  assert.match(memoryLabSource, /export const memoryActionGaps:\s*MemoryActionGap\[\]/, 'Memory action descriptors must be exported typed data')
-  assert.match(memoryLabSource, /actionGaps:\s*MemoryActionGap\[\]/, 'Memory Lab return type must expose capability descriptors')
+  assert.match(memoryLabSource, /export const memoryActionGaps:\s*readonly MemoryActionGap\[\]/, 'Memory action descriptors must be exported readonly typed data')
+  assert.match(memoryLabSource, /actionGaps:\s*readonly MemoryActionGap\[\]/, 'Memory Lab return type must expose capability descriptors')
   assert.match(memoryLabSource, /actionGaps:\s*memoryActionGaps/, 'Memory Lab must return the exported descriptor data')
   assert.match(memoryPageSource, /action\.labelKey/, 'Memory page must consume descriptor labels rather than duplicating copy')
   assert.match(memoryPageSource, /action\.badgeKey/, 'Memory page must consume descriptor badge labels rather than duplicating copy')

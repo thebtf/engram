@@ -14,10 +14,6 @@ function normalizePageSize(value: unknown): OperatorPageSize | null {
   return null
 }
 
-function isOperatorPageSize(value: unknown): value is OperatorPageSize {
-  return normalizePageSize(value) !== null
-}
-
 function readPageSize(key: string): OperatorPageSize | null {
   if (!import.meta.client) return null
 
@@ -42,7 +38,7 @@ export function resolvePageSize(size: OperatorPageSize, total: number) {
   return size === 'all' ? Math.max(total, 1) : size
 }
 
-export function usePersistentPageSize(key = MEMORY_PAGE_SIZE_STORAGE_KEY, initial: OperatorPageSize = 10) {
+export function usePersistentPageSize(key: string, initial: OperatorPageSize = 10) {
   const fallback = normalizePageSize(initial) || 10
   const pageSize = ref<OperatorPageSize>(fallback)
   const hydrated = ref(false)

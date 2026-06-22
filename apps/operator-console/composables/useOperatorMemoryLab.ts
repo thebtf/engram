@@ -32,6 +32,7 @@ interface ApiMemory {
   source_sessions?: string[]
 }
 
+// Per-project fetch cap; matches the server-side /api/memories maximum limit.
 const MEMORY_LIST_LIMIT = 500
 
 export interface StoreMemoryInput {
@@ -59,7 +60,7 @@ function memoryActionGap(
   }
 }
 
-export const memoryActionGaps: MemoryActionGap[] = [
+export const memoryActionGaps: readonly MemoryActionGap[] = [
   memoryActionGap(
     'memory-hide-noise',
     'MCP memory.suppress',
@@ -191,7 +192,12 @@ function payloadPreview(payload: unknown): string {
   if (payload === undefined || payload === null) {
     return ''
   }
-  return `: ${Object.prototype.toString.call(payload)}`
+  try {
+    const compact = JSON.stringify(payload).replace(/\s+/g, ' ')
+    return compact ? `: ${compact.slice(0, 120)}${compact.length > 120 ? '...' : ''}` : ''
+  } catch {
+    return `: [unserializable ${typeof payload}]`
+  }
 }
 
 function memoryPayloadError(path: string, detail: string, payload: unknown): OperatorFetchError {
@@ -211,19 +217,19 @@ function parseMemoryArray(payload: unknown, path: string): ApiMemory[] {
   }
 
   if (typeof payload === 'string' && payload.trim()) {
+    let parsed: unknown
     try {
-      const parsed = JSON.parse(payload)
-      if (Array.isArray(parsed)) {
-        return parsed as ApiMemory[]
-      }
-      throw memoryPayloadError(path, 'expected a JSON array', parsed)
+      parsed = JSON.parse(payload)
     } catch (error) {
-      if (error instanceof OperatorFetchError) {
-        throw error
-      }
       const detail = error instanceof Error ? error.message : String(error)
       throw memoryPayloadError(path, `invalid JSON (${detail})`, payload)
     }
+
+    if (Array.isArray(parsed)) {
+      return parsed as ApiMemory[]
+    }
+
+    throw memoryPayloadError(path, 'expected a JSON array', parsed)
   }
 
   throw memoryPayloadError(path, 'expected a JSON array', payload)
@@ -254,15 +260,12 @@ async function loadMemoryRows(): Promise<Memory[]> {
   const projects = projectState.kind === 'live' || projectState.kind === 'empty'
     ? projectState.data || []
     : []
-  const combined: Memory[] = []
-
-  for (const project of projects) {
+  const projectRows = await Promise.all(projects.map(async (project) => {
     const path = `/api/memories?project=${encodeURIComponent(project)}&limit=${MEMORY_LIST_LIMIT}`
     const payload = await operatorFetchJson<unknown>(path, undefined, 'memory-list')
-    for (const row of parseMemoryArray(payload, path)) {
-      combined.push(mapMemoryRow(row))
-    }
-  }
+    return parseMemoryArray(payload, path).map(mapMemoryRow)
+  }))
+  const combined = projectRows.flat()
 
   const deduped = new Map<string, Memory>()
   for (const row of combined) {
@@ -282,7 +285,7 @@ export function useOperatorMemoryLab(): {
   deleteMemory: (id: string) => Promise<unknown>
   auditGap: ReturnType<typeof unsupportedOperatorAction>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
-  actionGaps: MemoryActionGap[]
+  actionGaps: readonly MemoryActionGap[]
 } {
   const evidence = endpointEvidence(`/api/memories?project={project}&limit=${MEMORY_LIST_LIMIT}`, 'memory-list')
   const rowsState = useState<Memory[]>('live:memory-lab:rows', () => [])
