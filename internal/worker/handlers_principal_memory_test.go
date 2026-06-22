@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -27,19 +28,29 @@ func TestHandlePrincipalMemoryQuery_ResponseAndValidation(t *testing.T) {
 						ID:                 42,
 						Project:            "project-a",
 						Content:            "shared alice note",
+						Tags:               []string{"semantic"},
 						OwnerPrincipal:     "agent/alice",
-						OwnerPrincipalKind: "agent",
+						OwnerPrincipalKind: "human",
 						AgentVisibility:    "shared",
 						Domain:             "operator-console",
+						Confidence:         0.8,
+						CreatedAt:          time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC),
 					},
 				},
-				HiddenCount: 1,
-				AuditStatus: "not_required",
+				Principal:     "agent/alice",
+				PrincipalKind: "human",
+				Project:       "project-a",
+				Domain:        "operator-console",
+				HiddenCount:   1,
+				AuditStatus:   "not_required",
+				Audit: principalmemory.PrincipalMemoryQueryAudit{
+					Action: "principal_memory_query",
+				},
 			},
 		}
 		service := &Service{principalMemoryQueryService: querySvc}
 		id := auth.ClientWithPrincipal("read-write", "keycard-bob", "agent/bob", auth.PrincipalKindAgent)
-		req := httptest.NewRequest(http.MethodGet, "/api/memories/principal?project=project-a&principal=agent/alice&principal_kind=agent&domain=operator-console&q=shared+alice&visibility=shared&limit=2", nil).
+		req := httptest.NewRequest(http.MethodGet, "/api/memories/principal?project=project-a&principal=agent/alice&domain=operator-console&q=shared+alice&visibility=all&limit=2", nil).
 			WithContext(auth.WithIdentity(context.Background(), id))
 		w := httptest.NewRecorder()
 
@@ -48,22 +59,32 @@ func TestHandlePrincipalMemoryQuery_ResponseAndValidation(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		require.Equal(t, "agent/alice", body["principal"])
+		require.Equal(t, "human", body["principal_kind"])
+		require.Equal(t, "project-a", body["project"])
+		require.Equal(t, "operator-console", body["domain"])
 		require.Equal(t, float64(1), body["hidden_count"])
 		require.Equal(t, "not_required", body["audit_status"])
+		audit := body["audit"].(map[string]any)
+		require.Equal(t, "principal_memory_query", audit["action"])
+		require.Equal(t, false, audit["durable"])
 		items := body["items"].([]any)
 		require.Len(t, items, 1)
 		first := items[0].(map[string]any)
 		assert.Equal(t, float64(42), first["id"])
 		assert.Equal(t, "agent/alice", first["owner_principal"])
-		assert.Equal(t, "agent", first["owner_principal_kind"])
+		assert.Equal(t, "human", first["owner_principal_kind"])
 		assert.Equal(t, "operator-console", first["domain"])
+		assert.Equal(t, []any{"semantic"}, first["tags"])
+		assert.Equal(t, 0.8, first["confidence"])
+		assert.Equal(t, "2026-06-22T00:00:00Z", first["created_at"])
 
 		assert.Equal(t, "project-a", querySvc.request.Project)
 		assert.Equal(t, "agent/alice", querySvc.request.OwnerPrincipal)
-		assert.Equal(t, "agent", querySvc.request.OwnerPrincipalKind)
+		assert.Equal(t, "human", querySvc.request.OwnerPrincipalKind)
 		assert.Equal(t, "operator-console", querySvc.request.Domain)
 		assert.Equal(t, "shared alice", querySvc.request.Query)
-		assert.Equal(t, "shared", querySvc.request.AgentVisibility)
+		assert.Empty(t, querySvc.request.AgentVisibility)
 		assert.Equal(t, 2, querySvc.request.Limit)
 		assert.Equal(t, "agent/bob", querySvc.request.Caller.Principal)
 	})
@@ -97,7 +118,7 @@ func TestHandlePrincipalMemoryQuery_ResponseAndValidation(t *testing.T) {
 		service.handlePrincipalMemoryQuery(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		assert.Equal(t, 100, querySvc.request.Limit)
+		assert.Equal(t, 500, querySvc.request.Limit)
 	})
 
 	t.Run("rejects non-admin cross-principal private widening", func(t *testing.T) {

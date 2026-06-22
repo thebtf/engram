@@ -7,32 +7,41 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/pkg/models"
 )
 
-const principalMemoryQueryMaxLimit = 100
+const principalMemoryQueryMaxLimit = principalmemory.MaxPrincipalQueryLimit
 
 type principalMemoryQueryService interface {
 	Query(ctx context.Context, req principalmemory.PrincipalMemoryQueryRequest) (*principalmemory.PrincipalMemoryQueryResult, error)
 }
 
 type principalMemoryQueryResponse struct {
-	Items       []principalMemoryQueryItem `json:"items"`
-	HiddenCount int                        `json:"hidden_count"`
-	AuditStatus string                     `json:"audit_status"`
+	Principal     string                                    `json:"principal"`
+	PrincipalKind string                                    `json:"principal_kind"`
+	Project       string                                    `json:"project,omitempty"`
+	Domain        string                                    `json:"domain,omitempty"`
+	Items         []principalMemoryQueryItem                `json:"items"`
+	HiddenCount   int                                       `json:"hidden_count"`
+	Audit         principalmemory.PrincipalMemoryQueryAudit `json:"audit"`
+	AuditStatus   string                                    `json:"audit_status"`
 }
 
 type principalMemoryQueryItem struct {
-	ID                 int64  `json:"id"`
-	Project            string `json:"project"`
-	Content            string `json:"content"`
-	OwnerPrincipal     string `json:"owner_principal"`
-	OwnerPrincipalKind string `json:"owner_principal_kind"`
-	AgentVisibility    string `json:"agent_visibility"`
-	Domain             string `json:"domain"`
+	ID                 int64     `json:"id"`
+	Project            string    `json:"project"`
+	Content            string    `json:"content"`
+	Tags               []string  `json:"tags"`
+	OwnerPrincipal     string    `json:"owner_principal"`
+	OwnerPrincipalKind string    `json:"owner_principal_kind"`
+	AgentVisibility    string    `json:"agent_visibility"`
+	Domain             string    `json:"domain"`
+	Confidence         float64   `json:"confidence"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 func (s *Service) handlePrincipalMemoryQuery(w http.ResponseWriter, r *http.Request) {
@@ -51,17 +60,16 @@ func (s *Service) handlePrincipalMemoryQuery(w http.ResponseWriter, r *http.Requ
 
 	ownerPrincipalKind := strings.TrimSpace(strings.ToLower(q.Get("principal_kind")))
 	if ownerPrincipalKind == "" {
-		http.Error(w, "principal_kind is required", http.StatusBadRequest)
-		return
+		ownerPrincipalKind = "human"
 	}
 	if !auth.IsValidPrincipalKind(auth.PrincipalKind(ownerPrincipalKind)) {
 		http.Error(w, "principal_kind must be one of human, agent, service", http.StatusBadRequest)
 		return
 	}
 
-	visibility := strings.TrimSpace(q.Get("visibility"))
-	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
-		http.Error(w, "visibility must be one of private, shared", http.StatusBadRequest)
+	visibility, err := parsePrincipalQueryVisibility(q.Get("visibility"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -128,7 +136,7 @@ func principalQueryCaller(ctx context.Context) (principalmemory.PrincipalRef, bo
 
 func parsePrincipalQueryLimit(raw string) (int, error) {
 	if raw == "" {
-		return 10, nil
+		return principalmemory.DefaultPrincipalQueryLimit, nil
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
@@ -158,26 +166,52 @@ func parseOptionalBool(raw string) (bool, error) {
 	return strconv.ParseBool(raw)
 }
 
+func parsePrincipalQueryVisibility(raw string) (string, error) {
+	visibility := strings.TrimSpace(strings.ToLower(raw))
+	switch visibility {
+	case "", "all":
+		return "", nil
+	case models.AgentVisibilityPrivate, models.AgentVisibilityShared:
+		return visibility, nil
+	default:
+		return "", fmt.Errorf("visibility must be one of private, shared, all")
+	}
+}
+
 func principalMemoryQueryHTTPResponse(result *principalmemory.PrincipalMemoryQueryResult) principalMemoryQueryResponse {
 	resp := principalMemoryQueryResponse{
 		Items:       make([]principalMemoryQueryItem, 0),
 		AuditStatus: principalmemory.AuditStatusNotRequired,
+		Audit: principalmemory.PrincipalMemoryQueryAudit{
+			Action: principalmemory.AuditActionQuery,
+		},
 	}
 	if result == nil {
 		return resp
 	}
+	resp.Principal = result.Principal
+	resp.PrincipalKind = result.PrincipalKind
+	resp.Project = result.Project
+	resp.Domain = result.Domain
 	resp.HiddenCount = result.HiddenCount
 	resp.AuditStatus = result.AuditStatus
+	resp.Audit = result.Audit
+	if resp.Audit.Action == "" {
+		resp.Audit.Action = principalmemory.AuditActionQuery
+	}
 	resp.Items = make([]principalMemoryQueryItem, 0, len(result.Items))
 	for _, item := range result.Items {
 		resp.Items = append(resp.Items, principalMemoryQueryItem{
 			ID:                 item.ID,
 			Project:            item.Project,
 			Content:            item.Content,
+			Tags:               append([]string(nil), item.Tags...),
 			OwnerPrincipal:     item.OwnerPrincipal,
 			OwnerPrincipalKind: item.OwnerPrincipalKind,
 			AgentVisibility:    item.AgentVisibility,
 			Domain:             item.Domain,
+			Confidence:         item.Confidence,
+			CreatedAt:          item.CreatedAt,
 		})
 	}
 	return resp

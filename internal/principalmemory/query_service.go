@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
@@ -13,6 +14,10 @@ import (
 const (
 	AuditStatusNotRequired = "not_required"
 	AuditStatusWritten     = "written"
+	AuditActionQuery       = "principal_memory_query"
+
+	DefaultPrincipalQueryLimit = 50
+	MaxPrincipalQueryLimit     = 500
 )
 
 var ErrCrossPrincipalPrivateDenied = errors.New("include_private for another principal requires admin")
@@ -57,19 +62,32 @@ type PrincipalMemoryQueryRequest struct {
 }
 
 type PrincipalMemoryQueryResult struct {
-	Items       []PrincipalMemoryQueryItem `json:"items"`
-	HiddenCount int                        `json:"hidden_count"`
-	AuditStatus string                     `json:"audit_status"`
+	Principal     string                     `json:"principal"`
+	PrincipalKind string                     `json:"principal_kind"`
+	Project       string                     `json:"project,omitempty"`
+	Domain        string                     `json:"domain,omitempty"`
+	Items         []PrincipalMemoryQueryItem `json:"items"`
+	HiddenCount   int                        `json:"hidden_count"`
+	Audit         PrincipalMemoryQueryAudit  `json:"audit"`
+	AuditStatus   string                     `json:"audit_status"`
+}
+
+type PrincipalMemoryQueryAudit struct {
+	Durable bool   `json:"durable"`
+	Action  string `json:"action"`
 }
 
 type PrincipalMemoryQueryItem struct {
-	ID                 int64  `json:"id"`
-	Project            string `json:"project"`
-	Content            string `json:"content"`
-	OwnerPrincipal     string `json:"owner_principal"`
-	OwnerPrincipalKind string `json:"owner_principal_kind"`
-	AgentVisibility    string `json:"agent_visibility"`
-	Domain             string `json:"domain"`
+	ID                 int64     `json:"id"`
+	Project            string    `json:"project"`
+	Content            string    `json:"content"`
+	Tags               []string  `json:"tags"`
+	OwnerPrincipal     string    `json:"owner_principal"`
+	OwnerPrincipalKind string    `json:"owner_principal_kind"`
+	AgentVisibility    string    `json:"agent_visibility"`
+	Domain             string    `json:"domain"`
+	Confidence         float64   `json:"confidence"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMemoryQueryRequest) (*PrincipalMemoryQueryResult, error) {
@@ -106,10 +124,7 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		return nil, err
 	}
 
-	result := &PrincipalMemoryQueryResult{
-		Items:       make([]PrincipalMemoryQueryItem, 0, limit),
-		AuditStatus: AuditStatusNotRequired,
-	}
+	result := principalMemoryQueryResult(req, limit)
 	for _, mem := range rows {
 		if mem == nil {
 			continue
@@ -129,6 +144,7 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 				return nil, err
 			}
 			result.AuditStatus = AuditStatusWritten
+			result.Audit.Durable = true
 		}
 		result.Items = append(result.Items, principalMemoryQueryItem(mem))
 		if len(result.Items) >= limit {
@@ -164,23 +180,36 @@ func principalMemoryQueryItem(mem *models.Memory) PrincipalMemoryQueryItem {
 		ID:                 mem.ID,
 		Project:            mem.Project,
 		Content:            mem.Content,
+		Tags:               append([]string(nil), mem.Tags...),
 		OwnerPrincipal:     mem.OwnerPrincipal,
 		OwnerPrincipalKind: mem.OwnerPrincipalKind,
 		AgentVisibility:    mem.AgentVisibility,
 		Domain:             mem.Domain,
+		Confidence:         mem.Confidence,
+		CreatedAt:          mem.CreatedAt,
+	}
+}
+
+func principalMemoryQueryResult(req PrincipalMemoryQueryRequest, limit int) *PrincipalMemoryQueryResult {
+	return &PrincipalMemoryQueryResult{
+		Principal:     strings.TrimSpace(req.OwnerPrincipal),
+		PrincipalKind: strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
+		Project:       strings.TrimSpace(req.Project),
+		Domain:        strings.TrimSpace(req.Domain),
+		Items:         make([]PrincipalMemoryQueryItem, 0, limit),
+		AuditStatus:   AuditStatusNotRequired,
+		Audit: PrincipalMemoryQueryAudit{
+			Action: AuditActionQuery,
+		},
 	}
 }
 
 func normalizePrincipalQueryLimit(limit int) int {
-	const (
-		defaultPrincipalQueryLimit = 10
-		maxPrincipalQueryLimit     = 100
-	)
 	if limit <= 0 {
-		return defaultPrincipalQueryLimit
+		return DefaultPrincipalQueryLimit
 	}
-	if limit > maxPrincipalQueryLimit {
-		return maxPrincipalQueryLimit
+	if limit > MaxPrincipalQueryLimit {
+		return MaxPrincipalQueryLimit
 	}
 	return limit
 }

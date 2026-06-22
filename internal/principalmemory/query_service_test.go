@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,10 +29,13 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 				ID:                 102,
 				Project:            "project-a",
 				Content:            "shared alice note",
+				Tags:               []string{"semantic"},
 				OwnerPrincipal:     "agent/alice",
 				OwnerPrincipalKind: "agent",
 				AgentVisibility:    models.AgentVisibilityShared,
 				Domain:             "operator-console",
+				Confidence:         0.8,
+				CreatedAt:          time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC),
 			},
 			{
 				ID:      103,
@@ -53,11 +57,20 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	assert.Equal(t, "agent/alice", result.Principal)
+	assert.Equal(t, "agent", result.PrincipalKind)
+	assert.Equal(t, "project-a", result.Project)
+	assert.Equal(t, "operator-console", result.Domain)
+	assert.Equal(t, "principal_memory_query", result.Audit.Action)
+	assert.False(t, result.Audit.Durable)
 	require.Len(t, result.Items, 2, "visible output must be bounded by request limit")
 	assert.Equal(t, 1, result.HiddenCount)
 	assert.Equal(t, "not_required", result.AuditStatus)
 	assert.Equal(t, int64(102), result.Items[0].ID)
 	assert.Equal(t, "agent/alice", result.Items[0].OwnerPrincipal)
+	assert.Equal(t, []string{"semantic"}, result.Items[0].Tags)
+	assert.Equal(t, 0.8, result.Items[0].Confidence)
+	assert.Equal(t, time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC), result.Items[0].CreatedAt)
 	assert.Equal(t, int64(103), result.Items[1].ID)
 	assert.Equal(t, "", result.Items[1].OwnerPrincipal, "legacy no-principal rows stay visible")
 
@@ -100,6 +113,8 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningRequiresAudit(t *testin
 	require.NotNil(t, result)
 	require.Len(t, result.Items, 1)
 	assert.Equal(t, "written", result.AuditStatus)
+	assert.Equal(t, "principal_memory_query", result.Audit.Action)
+	assert.True(t, result.Audit.Durable)
 	require.Len(t, audit.entries, 1)
 	assert.Equal(t, "principal_memory_private_read", audit.entries[0].Action)
 	assert.Equal(t, "operator/oleg", audit.entries[0].Actor)

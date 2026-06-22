@@ -13,7 +13,7 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-const principalMemoryQueryMaxLimit = 100
+const principalMemoryQueryMaxLimit = principalmemory.MaxPrincipalQueryLimit
 
 type principalMemoryQueryService interface {
 	Query(ctx context.Context, req principalmemory.PrincipalMemoryQueryRequest) (*principalmemory.PrincipalMemoryQueryResult, error)
@@ -31,16 +31,17 @@ func principalMemoryQueryTool() Tool {
 		tier:        tierUseful,
 		InputSchema: map[string]any{
 			"type":     "object",
-			"required": []string{"principal", "principal_kind"},
+			"required": []string{"principal"},
 			"properties": map[string]any{
 				"principal":       map[string]any{"type": "string", "description": "Principal identifier to inspect, e.g. agent/alice or a human account id."},
-				"principal_kind":  map[string]any{"type": "string", "enum": []string{"human", "agent", "service"}, "description": "Principal kind."},
+				"principal_kind":  map[string]any{"type": "string", "enum": []string{"human", "agent", "service"}, "default": "human", "description": "Principal kind."},
 				"project":         map[string]any{"type": "string", "description": "Optional project filter."},
 				"domain":          map[string]any{"type": "string", "description": "Optional memory domain filter."},
 				"q":               map[string]any{"type": "string", "description": "Optional substring filter over memory content."},
-				"visibility":      map[string]any{"type": "string", "enum": []string{"private", "shared"}, "description": "Optional principal visibility filter."},
+				"query":           map[string]any{"type": "string", "description": "Optional substring filter over memory content. Preferred alias for q."},
+				"visibility":      map[string]any{"type": "string", "enum": []string{"private", "shared", "all"}, "description": "Optional principal visibility filter."},
 				"include_private": map[string]any{"type": "boolean", "description": "Request private rows. Cross-principal private widening requires admin identity and durable audit."},
-				"limit":           map[string]any{"type": "integer", "default": 10, "minimum": 1, "maximum": principalMemoryQueryMaxLimit},
+				"limit":           map[string]any{"type": "integer", "default": principalmemory.DefaultPrincipalQueryLimit, "minimum": 1, "maximum": principalMemoryQueryMaxLimit},
 				"offset":          map[string]any{"type": "integer", "default": 0, "minimum": 0},
 				"session_id":      map[string]any{"type": "string", "description": "Optional session id for audit provenance."},
 			},
@@ -63,15 +64,15 @@ func (s *Server) handleQueryPrincipalMemory(ctx context.Context, args json.RawMe
 	}
 	ownerPrincipalKind := strings.TrimSpace(strings.ToLower(coerceString(m["principal_kind"], "")))
 	if ownerPrincipalKind == "" {
-		return "", fmt.Errorf("principal_kind is required")
+		ownerPrincipalKind = "human"
 	}
 	if !auth.IsValidPrincipalKind(auth.PrincipalKind(ownerPrincipalKind)) {
 		return "", fmt.Errorf("principal_kind must be one of human, agent, service")
 	}
 
-	visibility := strings.TrimSpace(coerceString(m["visibility"], ""))
-	if visibility != "" && !models.IsValidAgentVisibility(visibility) {
-		return "", fmt.Errorf("visibility must be one of private, shared")
+	visibility, err := parsePrincipalMemoryQueryVisibility(m["visibility"])
+	if err != nil {
+		return "", err
 	}
 	limit, err := parsePrincipalMemoryQueryLimit(m["limit"])
 	if err != nil {
@@ -93,7 +94,7 @@ func (s *Server) handleQueryPrincipalMemory(ctx context.Context, args json.RawMe
 		CallerIsAdmin:      callerIsAdmin,
 		OwnerPrincipal:     ownerPrincipal,
 		OwnerPrincipalKind: ownerPrincipalKind,
-		Query:              strings.TrimSpace(coerceString(m["q"], "")),
+		Query:              principalMemoryQueryText(m),
 		AgentVisibility:    visibility,
 		IncludePrivate:     includePrivate,
 		Domain:             strings.TrimSpace(coerceString(m["domain"], "")),
@@ -109,6 +110,9 @@ func (s *Server) handleQueryPrincipalMemory(ctx context.Context, args json.RawMe
 		result = &principalmemory.PrincipalMemoryQueryResult{
 			Items:       []principalmemory.PrincipalMemoryQueryItem{},
 			AuditStatus: principalmemory.AuditStatusNotRequired,
+			Audit: principalmemory.PrincipalMemoryQueryAudit{
+				Action: principalmemory.AuditActionQuery,
+			},
 		}
 	}
 	if result.Items == nil {
@@ -116,6 +120,9 @@ func (s *Server) handleQueryPrincipalMemory(ctx context.Context, args json.RawMe
 	}
 	if result.AuditStatus == "" {
 		result.AuditStatus = principalmemory.AuditStatusNotRequired
+	}
+	if result.Audit.Action == "" {
+		result.Audit.Action = principalmemory.AuditActionQuery
 	}
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -138,13 +145,32 @@ func principalMemoryQueryCaller(ctx context.Context) (principalmemory.PrincipalR
 
 func parsePrincipalMemoryQueryLimit(raw any) (int, error) {
 	if raw == nil {
-		return 10, nil
+		return principalmemory.DefaultPrincipalQueryLimit, nil
 	}
 	n, err := parsePrincipalMemoryQueryInt(raw)
 	if err != nil || n < 1 || n > principalMemoryQueryMaxLimit {
-		return 0, fmt.Errorf("limit must be between 1 and 100")
+		return 0, fmt.Errorf("limit must be between 1 and 500")
 	}
 	return n, nil
+}
+
+func principalMemoryQueryText(m map[string]any) string {
+	if query := strings.TrimSpace(coerceString(m["query"], "")); query != "" {
+		return query
+	}
+	return strings.TrimSpace(coerceString(m["q"], ""))
+}
+
+func parsePrincipalMemoryQueryVisibility(raw any) (string, error) {
+	visibility := strings.TrimSpace(strings.ToLower(coerceString(raw, "")))
+	switch visibility {
+	case "", "all":
+		return "", nil
+	case models.AgentVisibilityPrivate, models.AgentVisibilityShared:
+		return visibility, nil
+	default:
+		return "", fmt.Errorf("visibility must be one of private, shared, all")
+	}
 }
 
 func parsePrincipalMemoryQueryOffset(raw any) (int, error) {
