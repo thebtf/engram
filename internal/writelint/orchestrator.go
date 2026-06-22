@@ -198,10 +198,24 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 // Content+Project (fixes metadata loss for Tags, PrivacyScope, etc.).
 // actor is the calling agent identifier used for audit logging.
 func (o *Orchestrator) Phase1(ctx context.Context, mem *models.Memory, actor string) (*Phase1Response, error) {
+	return o.phase1(ctx, mem, actor, o.cfg.MemoryStore)
+}
+
+// Phase1WithMemoryStore runs Phase1 through a request-scoped memory-store view.
+// The default orchestrator store remains unchanged; callers use this when
+// candidate visibility depends on the authenticated request.
+func (o *Orchestrator) Phase1WithMemoryStore(ctx context.Context, mem *models.Memory, actor string, memoryStore MemoryStoreInterface) (*Phase1Response, error) {
+	return o.phase1(ctx, mem, actor, memoryStore)
+}
+
+func (o *Orchestrator) phase1(ctx context.Context, mem *models.Memory, actor string, memoryStore MemoryStoreInterface) (*Phase1Response, error) {
+	if memoryStore == nil {
+		return nil, fmt.Errorf("writelint Phase1 memory store not configured")
+	}
 	content := mem.Content
 	project := mem.Project
 
-	existing, err := o.cfg.MemoryStore.List(ctx, project, o.cfg.MemoryListLimit)
+	existing, err := memoryStore.List(ctx, project, o.cfg.MemoryListLimit)
 	if err != nil {
 		return nil, fmt.Errorf("writelint Phase1 list: %w", err)
 	}
@@ -252,11 +266,11 @@ func (o *Orchestrator) Phase1(ctx context.Context, mem *models.Memory, actor str
 	// record the same fact, so we converge the corpus instead of accumulating a duplicate. Only
 	// the single best (highest-Jaccard) match is superseded.
 	if autoEnabled && bestAutoID != 0 {
-		created, err := o.cfg.MemoryStore.Create(ctx, mem)
+		created, err := memoryStore.Create(ctx, mem)
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase1 auto-supersede create: %w", err)
 		}
-		if err := o.cfg.MemoryStore.MarkSuperseded(ctx, bestAutoID, created.ID); err != nil {
+		if err := memoryStore.MarkSuperseded(ctx, bestAutoID, created.ID); err != nil {
 			// The new memory is already stored; a failed supersede just leaves the old one
 			// active (a duplicate), which is non-destructive. Log via audit, don't fail the write.
 			_ = o.cfg.AuditLogger.LogAudit(ctx, created.ID, "auto_supersede_mark_failed", actor)
@@ -344,7 +358,7 @@ func (o *Orchestrator) Phase1(ctx context.Context, mem *models.Memory, actor str
 
 	// No signals → commit immediately with full metadata.
 	if len(signals) == 0 {
-		created, err := o.cfg.MemoryStore.Create(ctx, mem)
+		created, err := memoryStore.Create(ctx, mem)
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase1 create: %w", err)
 		}
@@ -438,6 +452,20 @@ func (o *Orchestrator) memForCreate(req Phase2Request) *models.Memory {
 //   - resolution_token_not_found: token was never stored, already consumed
 //     by a previous Phase2 call, or has been purged by the janitor after expiry.
 func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Response, error) {
+	return o.phase2(ctx, req, o.cfg.MemoryStore)
+}
+
+// Phase2WithMemoryStore runs Phase2 through a request-scoped memory-store view.
+// It lets transport handlers enforce the same visibility model for target
+// memories that Phase1 used for candidate generation.
+func (o *Orchestrator) Phase2WithMemoryStore(ctx context.Context, req Phase2Request, memoryStore MemoryStoreInterface) (*Phase2Response, error) {
+	return o.phase2(ctx, req, memoryStore)
+}
+
+func (o *Orchestrator) phase2(ctx context.Context, req Phase2Request, memoryStore MemoryStoreInterface) (*Phase2Response, error) {
+	if memoryStore == nil {
+		return nil, fmt.Errorf("writelint Phase2 memory store not configured")
+	}
 	// Validate and atomically consume token (single-use guarantee per EC-F2).
 	// Consume is a single lock acquisition: Get+Delete. Concurrent Phase2 calls
 	// for the same token will see ok=false after the first Consume returns,
@@ -476,7 +504,7 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 
 	case "ignore_signals":
 		// Create with full metadata so privacy_scope, tags, etc. are persisted.
-		created, err := o.cfg.MemoryStore.Create(ctx, o.memForCreate(req))
+		created, err := memoryStore.Create(ctx, o.memForCreate(req))
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 ignore_signals create: %w", err)
 		}
@@ -494,7 +522,7 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		if req.TargetMemoryID == nil {
 			return nil, fmt.Errorf("merge_with: target_memory_id required")
 		}
-		target, err := o.cfg.MemoryStore.Get(ctx, *req.TargetMemoryID)
+		target, err := memoryStore.Get(ctx, *req.TargetMemoryID)
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 merge_with get: %w", err)
 		}
@@ -512,7 +540,7 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		}
 		// Merge: append new content to target (simple merge strategy)
 		target.Content = target.Content + "\n\n[merged] " + req.Content
-		updated, err := o.cfg.MemoryStore.Update(ctx, target)
+		updated, err := memoryStore.Update(ctx, target)
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 merge_with update: %w", err)
 		}
@@ -533,7 +561,7 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		// before marking it superseded. Without this check a token minted for project A
 		// could mark memories from project B as superseded while creating the replacement
 		// in project A (cross-project clobber attack).
-		supersedeTgt, err := o.cfg.MemoryStore.Get(ctx, *req.TargetMemoryID)
+		supersedeTgt, err := memoryStore.Get(ctx, *req.TargetMemoryID)
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 supersede get target: %w", err)
 		}
@@ -546,7 +574,7 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		}
 		// finding 5 fix: Create new memory first with full metadata; if that fails
 		// Phase2 fails (no partial write).
-		created, err := o.cfg.MemoryStore.Create(ctx, o.memForCreate(req))
+		created, err := memoryStore.Create(ctx, o.memForCreate(req))
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 supersede create: %w", err)
 		}
@@ -556,7 +584,7 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		// new memory is stored but the old one is not marked. MarkSuperseded
 		// atomically sets status="superseded" + superseded_by=created.ID, which
 		// Update(ctx, mem) cannot do (Update only writes content/tags/source_agent).
-		if msErr := o.cfg.MemoryStore.MarkSuperseded(ctx, *req.TargetMemoryID, created.ID); msErr != nil {
+		if msErr := memoryStore.MarkSuperseded(ctx, *req.TargetMemoryID, created.ID); msErr != nil {
 			return nil, fmt.Errorf("writelint Phase2 supersede mark-older %d: %w", *req.TargetMemoryID, msErr)
 		}
 		if err := o.cfg.AuditLogger.LogAudit(ctx, created.ID, "supersede_with_candidate", req.Actor); err != nil {
@@ -569,8 +597,21 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		}, nil
 
 	case "link_contradiction":
+		if req.TargetMemoryID != nil {
+			target, err := memoryStore.Get(ctx, *req.TargetMemoryID)
+			if err != nil {
+				return nil, fmt.Errorf("writelint Phase2 link_contradiction get target: %w", err)
+			}
+			if target == nil {
+				return nil, fmt.Errorf("link_contradiction: target memory %d not found", *req.TargetMemoryID)
+			}
+			if target.Project != req.Project {
+				return nil, fmt.Errorf("link_contradiction_project_mismatch: target memory %d belongs to project %q, token is for project %q",
+					*req.TargetMemoryID, target.Project, req.Project)
+			}
+		}
 		// Store new memory first with full metadata.
-		created, err := o.cfg.MemoryStore.Create(ctx, o.memForCreate(req))
+		created, err := memoryStore.Create(ctx, o.memForCreate(req))
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 link_contradiction create: %w", err)
 		}
@@ -615,7 +656,7 @@ func (o *Orchestrator) Phase2(ctx context.Context, req Phase2Request) (*Phase2Re
 		// Fallback: store as plain memory (candidateStore not wired); honest description.
 		fallbackMem := o.memForCreate(req)
 		fallbackMem.Content = fallbackMem.Content + "\n[mark_candidate: candidateStore not wired — stored as plain memory]"
-		created, err := o.cfg.MemoryStore.Create(ctx, fallbackMem)
+		created, err := memoryStore.Create(ctx, fallbackMem)
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 mark_candidate create: %w", err)
 		}

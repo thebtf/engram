@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -31,10 +32,10 @@ import (
 
 // stubMemoryStore satisfies writelint.MemoryStoreInterface for tests.
 type stubWriteLintMemStore struct {
-	mu       sync.Mutex
-	memories []*models.Memory
-	nextID   int64
-	listErr  error
+	mu        sync.Mutex
+	memories  []*models.Memory
+	nextID    int64
+	listErr   error
 	createErr error
 }
 
@@ -109,13 +110,19 @@ func (s *stubWriteLintMemStore) MarkSuperseded(_ context.Context, olderID, newID
 // stubAuditLoggerWL records audit calls.
 type stubAuditLoggerWL struct {
 	mu      sync.Mutex
-	entries []struct{ memID int64; action, actor string }
+	entries []struct {
+		memID         int64
+		action, actor string
+	}
 }
 
 func (s *stubAuditLoggerWL) LogAudit(_ context.Context, memoryID int64, action, actor string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries = append(s.entries, struct{ memID int64; action, actor string }{memoryID, action, actor})
+	s.entries = append(s.entries, struct {
+		memID         int64
+		action, actor string
+	}{memoryID, action, actor})
 	return nil
 }
 
@@ -157,9 +164,77 @@ func nearDupMemory() *models.Memory {
 	}
 }
 
+func buildWLOrchestratorWithStore(ms writelint.MemoryStoreInterface) (*writelint.Orchestrator, func()) {
+	tsCfg := writelint.DefaultTokenStoreConfig()
+	tsCfg.JanitorInterval = 50 * time.Millisecond
+	ts := writelint.NewTokenStore(tsCfg)
+	orch := writelint.NewOrchestrator(writelint.OrchestratorConfig{
+		MemoryStore:  ms,
+		AuditLogger:  &stubAuditLoggerWL{},
+		TokenStore:   ts,
+		DupThreshold: 0.85,
+	})
+	return orch, ts.Close
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+func TestWriteLint_PrincipalPrivateCandidatesHiddenFromPhase1(t *testing.T) {
+	ms := newStubWLMemStore(&models.Memory{
+		ID:                 10,
+		Project:            "testproj",
+		Content:            t035DupContent,
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityPrivate,
+	})
+	caller := scope.KeycardContext{Principal: "agent/alice", PrincipalKind: "agent"}
+	scopedStore := newScopedWriteLintMemoryStore(ms, caller, scope.MemoryVisibilityOptions{})
+	orch, closer := buildWLOrchestratorWithStore(ms)
+	defer closer()
+
+	resp, err := orch.Phase1WithMemoryStore(context.Background(), &models.Memory{Content: t035DupContent, Project: "testproj"}, "system", scopedStore)
+	require.NoError(t, err)
+	require.True(t, resp.Stored, "cross-principal private duplicate must not be exposed as a Phase1 signal")
+	require.Empty(t, resp.ResolutionOptions)
+}
+
+func TestWriteLint_PrincipalPrivateTargetHiddenFromPhase2(t *testing.T) {
+	visible := nearDupMemory()
+	visible.ID = 10
+	hidden := &models.Memory{
+		ID:                 11,
+		Project:            "testproj",
+		Content:            "hidden private target",
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityPrivate,
+	}
+	ms := newStubWLMemStore(visible, hidden)
+	caller := scope.KeycardContext{Principal: "agent/alice", PrincipalKind: "agent"}
+	scopedStore := newScopedWriteLintMemoryStore(ms, caller, scope.MemoryVisibilityOptions{})
+	orch, closer := buildWLOrchestratorWithStore(ms)
+	defer closer()
+
+	p1, err := orch.Phase1WithMemoryStore(context.Background(), &models.Memory{Content: t035DupContent, Project: "testproj"}, "system", scopedStore)
+	require.NoError(t, err)
+	require.False(t, p1.Stored)
+	require.NotEmpty(t, p1.ResolutionToken)
+
+	hiddenID := hidden.ID
+	_, err = orch.Phase2WithMemoryStore(context.Background(), writelint.Phase2Request{
+		Token:          p1.ResolutionToken,
+		Option:         "merge_with",
+		TargetMemoryID: &hiddenID,
+		Content:        t035DupContent,
+		Project:        "testproj",
+		Actor:          "system",
+	}, scopedStore)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "target memory 11 not found")
+}
 
 // TestWriteLint_T035_FlagOff_LegacyPath verifies that when ENGRAM_VNEXT_F_ENABLED
 // is not set, the handler follows the legacy path even if writeLint is wired.

@@ -129,6 +129,139 @@ func addPrincipalMemoryFields(result map[string]any, mem *models.Memory) {
 	}
 }
 
+type writeLintOffsetLister interface {
+	ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error)
+}
+
+type scopedWriteLintMemoryStore struct {
+	base   writelint.MemoryStoreInterface
+	pager  writeLintOffsetLister
+	caller scope.KeycardContext
+	opts   scope.MemoryVisibilityOptions
+}
+
+func newScopedWriteLintMemoryStore(base writelint.MemoryStoreInterface, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) writelint.MemoryStoreInterface {
+	if base == nil {
+		return nil
+	}
+	scoped := &scopedWriteLintMemoryStore{base: base, caller: caller, opts: opts}
+	if pager, ok := base.(writeLintOffsetLister); ok {
+		scoped.pager = pager
+	}
+	return scoped
+}
+
+func writeLintVisibilityCaller(ctx context.Context, sessionID string) scope.KeycardContext {
+	caller := scope.KeycardContext{SessionID: strings.TrimSpace(sessionID)}
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+		caller.Principal = id.Principal
+		if _, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
+			caller.PrincipalKind = principalKind
+		} else {
+			caller.PrincipalKind = string(id.PrincipalKind)
+		}
+	}
+	return caller
+}
+
+func writeLintVisibilityOptions() scope.MemoryVisibilityOptions {
+	return scope.MemoryVisibilityOptions{
+		ApplyPrivacyScope: vnextFEnabled(),
+	}
+}
+
+func (s *scopedWriteLintMemoryStore) List(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	visible := make([]*models.Memory, 0, limit)
+	if s.pager == nil {
+		raw, err := s.base.List(ctx, project, writeLintVisibilityFetchLimit(limit))
+		if err != nil {
+			return nil, err
+		}
+		for _, mem := range raw {
+			if scope.ResolveMemory(s.caller, mem, s.opts) {
+				visible = append(visible, mem)
+				if len(visible) == limit {
+					break
+				}
+			}
+		}
+		return visible, nil
+	}
+
+	const batchSize = 500
+	budget := writeLintVisibilityFetchLimit(limit)
+	for offset := 0; len(visible) < limit && offset < budget; {
+		currentLimit := batchSize
+		if remaining := budget - offset; remaining < currentLimit {
+			currentLimit = remaining
+		}
+		if currentLimit <= 0 {
+			break
+		}
+		batch, err := s.pager.ListWithOffset(ctx, project, currentLimit, offset)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, mem := range batch {
+			if scope.ResolveMemory(s.caller, mem, s.opts) {
+				visible = append(visible, mem)
+				if len(visible) == limit {
+					break
+				}
+			}
+		}
+		offset += len(batch)
+		if len(batch) < currentLimit {
+			break
+		}
+	}
+	return visible, nil
+}
+
+func writeLintVisibilityFetchLimit(limit int) int {
+	if limit <= 0 {
+		limit = 200
+	}
+	budget := limit * 10
+	if budget < 500 {
+		budget = 500
+	}
+	if budget > 5000 {
+		budget = 5000
+	}
+	return budget
+}
+
+func (s *scopedWriteLintMemoryStore) Get(ctx context.Context, id int64) (*models.Memory, error) {
+	mem, err := s.base.Get(ctx, id)
+	if err != nil || mem == nil {
+		return mem, err
+	}
+	if !scope.ResolveMemory(s.caller, mem, s.opts) {
+		return nil, nil
+	}
+	return mem, nil
+}
+
+func (s *scopedWriteLintMemoryStore) Create(ctx context.Context, m *models.Memory) (*models.Memory, error) {
+	return s.base.Create(ctx, m)
+}
+
+func (s *scopedWriteLintMemoryStore) Update(ctx context.Context, m *models.Memory) (*models.Memory, error) {
+	return s.base.Update(ctx, m)
+}
+
+func (s *scopedWriteLintMemoryStore) MarkSuperseded(ctx context.Context, olderID, newID int64) error {
+	return s.base.MarkSuperseded(ctx, olderID, newID)
+}
+
 // memoryEditor is the minimal interface over *gorm.MemoryStore that
 // handleEditMemory uses. Kept narrow so tests can inject a mock without
 // wiring a full database (mirrors the auditWriter test-injection pattern).
@@ -399,6 +532,15 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
 			}
 
+			var scopedWLStore writelint.MemoryStoreInterface
+			if s.memoryStore != nil {
+				scopedWLStore = newScopedWriteLintMemoryStore(
+					s.memoryStore,
+					writeLintVisibilityCaller(ctx, params.SessionID),
+					writeLintVisibilityOptions(),
+				)
+			}
+
 			if wlResolutionToken != "" {
 				// Phase2: caller is committing with a previously minted token.
 				p2req := writelint.Phase2Request{
@@ -417,7 +559,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 						p2req.TargetMemoryID = &tid64
 					}
 				}
-				p2resp, p2err := s.writeLint.Phase2(ctx, p2req)
+				var p2resp *writelint.Phase2Response
+				var p2err error
+				if scopedWLStore != nil {
+					p2resp, p2err = s.writeLint.Phase2WithMemoryStore(ctx, p2req, scopedWLStore)
+				} else {
+					p2resp, p2err = s.writeLint.Phase2(ctx, p2req)
+				}
 				if p2err != nil {
 					return "", fmt.Errorf("write_lint_phase2: %w", p2err)
 				}
@@ -441,7 +589,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			}
 
 			// Phase1: inspect for duplicates/conflicts/supersessions.
-			p1resp, p1err := s.writeLint.Phase1(ctx, wlMem, wlActor)
+			var p1resp *writelint.Phase1Response
+			var p1err error
+			if scopedWLStore != nil {
+				p1resp, p1err = s.writeLint.Phase1WithMemoryStore(ctx, wlMem, wlActor, scopedWLStore)
+			} else {
+				p1resp, p1err = s.writeLint.Phase1(ctx, wlMem, wlActor)
+			}
 			if p1err != nil {
 				return "", fmt.Errorf("write_lint_phase1: %w", p1err)
 			}

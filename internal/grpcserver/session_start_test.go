@@ -14,6 +14,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
 	localgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc/codes"
@@ -78,6 +79,54 @@ func TestGetSessionStartContext_InvalidArgument(t *testing.T) {
 	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: "proj", IssuesLimit: maxSessionStartIssuesLimit + 1})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+type fakeSessionStartMemoryPager struct {
+	rows []*models.Memory
+}
+
+func (f fakeSessionStartMemoryPager) ListWithOffset(_ context.Context, _ string, limit int, offset int) ([]*models.Memory, error) {
+	if offset >= len(f.rows) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(f.rows) {
+		end = len(f.rows)
+	}
+	return f.rows[offset:end], nil
+}
+
+func TestListVisibleSessionStartMemories_BackfillsBeforeScoring(t *testing.T) {
+	t.Parallel()
+
+	pager := fakeSessionStartMemoryPager{rows: []*models.Memory{
+		{ID: 1, Project: "project", Content: "private bob newest", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityPrivate},
+		{ID: 2, Project: "project", Content: "private bob second", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityPrivate},
+		{ID: 3, Project: "project", Content: "shared visible", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityShared},
+		{ID: 4, Project: "project", Content: "alice private visible", OwnerPrincipal: "agent/alice", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityPrivate},
+	}}
+	caller := scope.KeycardContext{Principal: "agent/alice", PrincipalKind: "agent"}
+
+	visible, err := listVisibleSessionStartMemories(context.Background(), pager, "project", 2, caller, scope.MemoryVisibilityOptions{}, 10)
+	require.NoError(t, err)
+	require.Len(t, visible, 2)
+	assert.Equal(t, int64(3), visible[0].ID)
+	assert.Equal(t, int64(4), visible[1].ID)
+}
+
+func TestListVisibleSessionStartMemories_ReadBudgetUnderfills(t *testing.T) {
+	t.Parallel()
+
+	pager := fakeSessionStartMemoryPager{rows: []*models.Memory{
+		{ID: 1, Project: "project", Content: "private bob newest", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityPrivate},
+		{ID: 2, Project: "project", Content: "private bob second", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityPrivate},
+		{ID: 3, Project: "project", Content: "shared visible", AgentVisibility: models.AgentVisibilityShared},
+	}}
+	caller := scope.KeycardContext{Principal: "agent/alice", PrincipalKind: "agent"}
+
+	visible, err := listVisibleSessionStartMemories(context.Background(), pager, "project", 1, caller, scope.MemoryVisibilityOptions{}, 2)
+	require.NoError(t, err)
+	require.Empty(t, visible, "explicit read budget must stop the scan instead of walking the whole project")
 }
 
 func TestGetSessionStartContext_HappyPath(t *testing.T) {
