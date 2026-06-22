@@ -58,13 +58,31 @@ func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, a
 		return fmt.Errorf("invalid_agent_visibility: %q must be one of private, shared", visibility)
 	}
 
-	mem.Domain = strings.TrimSpace(domain)
+	normalizedDomain := strings.TrimSpace(domain)
+	var ownerPrincipal, ownerPrincipalKind string
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		if principal, principalKind, hasOwner := id.MemoryOwner(); hasOwner {
-			mem.OwnerPrincipal = principal
-			mem.OwnerPrincipalKind = principalKind
+			ownerPrincipal = principal
+			ownerPrincipalKind = principalKind
 		}
 	}
+	caller := scope.KeycardContext{
+		Principal:     ownerPrincipal,
+		PrincipalKind: ownerPrincipalKind,
+	}
+	decision := scope.DomainOwnershipPolicy{}.Decide(caller, scope.DomainPolicyRequest{
+		Operation:          scope.DomainOperationWrite,
+		Domain:             normalizedDomain,
+		OwnerPrincipal:     ownerPrincipal,
+		OwnerPrincipalKind: ownerPrincipalKind,
+	})
+	if !decision.Allowed {
+		return fmt.Errorf("invalid_domain: %s", decision.Reason)
+	}
+
+	mem.Domain = normalizedDomain
+	mem.OwnerPrincipal = ownerPrincipal
+	mem.OwnerPrincipalKind = ownerPrincipalKind
 	if visibility != "" {
 		if mem.OwnerPrincipal == "" {
 			return fmt.Errorf("invalid_agent_visibility: principal is required for agent_visibility")
@@ -348,6 +366,10 @@ func listVisibleMemoriesREST(ctx context.Context, store memoryListStore, project
 	return visible, nil
 }
 
+func memoryDomainManageAllowedREST(ctx context.Context, mem *models.Memory) bool {
+	return scope.ResolveMemoryManage(memoryVisibilityCaller(ctx, ""), mem)
+}
+
 // memoryListStore is the subset of the MemoryStore surface that
 // listVisibleMemoriesREST needs. Defined as a small interface so the
 // function can be unit-tested with a fake without pulling in the full
@@ -412,6 +434,21 @@ func (s *Service) handleDeleteMemoryByID(w http.ResponseWriter, r *http.Request)
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+
+	before, err := s.memoryStore.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("get memory before delete failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !memoryDomainManageAllowedREST(r.Context(), before) {
+		http.Error(w, "memory not found", http.StatusNotFound)
 		return
 	}
 

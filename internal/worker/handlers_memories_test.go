@@ -110,6 +110,16 @@ func TestHandleStoreMemoryExplicit_PrincipalOwnerDerivedFromIdentity(t *testing.
 	require.NotEqual(t, "agent/spoofed", created.OwnerPrincipal)
 }
 
+func TestApplyPrincipalMemoryMetadataREST_NonEmptyDomainRequiresPrincipal(t *testing.T) {
+	mem := &models.Memory{}
+
+	err := applyPrincipalMemoryMetadataREST(context.Background(), mem, "", "memory-lab")
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid_domain")
+	require.Empty(t, mem.Domain, "denied domain writes must not leave partial metadata on the memory")
+}
+
 func TestHandleStoreMemoryExplicit_ValidationErrors(t *testing.T) {
 	project := "test-memory-handler-validation-" + uuid.NewString()
 	service := newMemoryTestService(t, project)
@@ -221,6 +231,59 @@ func TestHandleListMemories_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *t
 	require.Len(t, rows, 1)
 	assert.Equal(t, float64(51), rows[0]["id"])
 	assert.Equal(t, "visible legacy row", rows[0]["content"])
+}
+
+func TestHandleListMemories_DomainOwnedCrossPrincipalInvisible_FlagOff(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	hiddenOther := &models.Memory{
+		ID:                 60,
+		Project:            "domain-list-project",
+		Content:            "hidden bob domain row",
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	}
+	visibleOwn := &models.Memory{
+		ID:                 61,
+		Project:            "domain-list-project",
+		Content:            "visible alice domain row",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	}
+	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{hiddenOther, visibleOwn}}}
+	id := auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent)
+	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=domain-list-project&limit=50", nil).
+		WithContext(auth.WithIdentity(context.Background(), id))
+	w := httptest.NewRecorder()
+
+	service.handleListMemories(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, float64(61), rows[0]["id"])
+	assert.Equal(t, "visible alice domain row", rows[0]["content"])
+}
+
+func TestMemoryDomainManageAllowedREST_DomainOwnedCrossPrincipalDenied(t *testing.T) {
+	mem := &models.Memory{
+		ID:                 62,
+		Project:            "domain-delete-project",
+		Content:            "bob domain row",
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "memory-lab",
+	}
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+
+	require.False(t, memoryDomainManageAllowedREST(ctx, mem))
 }
 
 func TestHandleListMemories_OutOfRangeTimestampsReturnJSON(t *testing.T) {

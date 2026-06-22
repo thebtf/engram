@@ -231,6 +231,64 @@ func TestRecallMemory_PrincipalPrivateInvisibleAndSharedAttributed_FlagOff(t *te
 	require.Equal(t, "shared", rows[0]["agent_visibility"])
 }
 
+func TestRecallMemory_DomainOwnedInvisibleNewestDoNotTruncate_FlagOff(t *testing.T) {
+	project := "pim-recall-domain-backfill-" + uuid.NewString()
+	env := newMemoryServerForT007(t, project)
+	db := env.store.DB
+
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, domain, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, ?, now() - interval '5 minutes')`,
+		project, "older alice domain memory A", `["type:fact"]`, "project", "agent/alice", "agent", "shared", "memory-lab",
+	).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, domain, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, ?, now() - interval '4 minutes')`,
+		project, "older alice domain memory B", `["type:fact"]`, "project", "agent/alice", "agent", "shared", "memory-lab",
+	).Error)
+
+	for i := 1; i <= 3; i++ {
+		require.NoError(t, db.Exec(
+			`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, domain, created_at)
+				VALUES (?, ?, ?::jsonb, ?, ?, ?, ?, ?, now() - (?::int * interval '1 minute'))`,
+			project, "newest bob domain memory "+string(rune('0'+i)), `["type:fact"]`, "project", "agent/bob", "agent", "shared", "memory-lab", i,
+		).Error)
+	}
+
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+	args, err := json.Marshal(map[string]any{
+		"query":   "domain memory",
+		"project": project,
+		"format":  "items",
+		"limit":   2,
+	})
+	require.NoError(t, err)
+
+	out, err := env.srv.handleRecallMemory(ctx, args)
+	require.NoError(t, err)
+
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &rows))
+	require.Len(t, rows, 2)
+
+	contents := map[string]bool{}
+	for _, row := range rows {
+		content := row["content"].(string)
+		require.False(t, strings.Contains(content, "bob domain memory"),
+			"cross-principal domain-owned row leaked through recall_memory")
+		require.Equal(t, "agent/alice", row["owner_principal"])
+		require.Equal(t, "agent", row["owner_principal_kind"])
+		require.Equal(t, "memory-lab", row["domain"])
+		contents[content] = true
+	}
+	require.True(t, contents["older alice domain memory A"])
+	require.True(t, contents["older alice domain memory B"])
+}
+
 func TestRecallMemory_TG3IncludeSupersededLegacyPath(t *testing.T) {
 	project := "pim-recall-superseded-" + uuid.NewString()
 	env := newMemoryServerForT007(t, project)

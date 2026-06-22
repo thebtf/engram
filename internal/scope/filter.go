@@ -89,7 +89,30 @@ func ResolveMemory(caller KeycardContext, mem *models.Memory, opts MemoryVisibil
 			return false
 		}
 	}
-	return ResolvePrincipal(caller, mem)
+	if !ResolvePrincipal(caller, mem) {
+		return false
+	}
+	return DomainOwnershipPolicy{}.Decide(caller, DomainPolicyRequest{
+		Operation:          DomainOperationRead,
+		Domain:             mem.Domain,
+		OwnerPrincipal:     mem.OwnerPrincipal,
+		OwnerPrincipalKind: mem.OwnerPrincipalKind,
+	}).Allowed
+}
+
+// ResolveMemoryManage returns whether caller may mutate an existing memory by
+// ID under the domain ownership policy. Empty-domain legacy rows remain
+// mutable by the caller's existing adapter/project checks.
+func ResolveMemoryManage(caller KeycardContext, mem *models.Memory) bool {
+	if mem == nil {
+		return false
+	}
+	return DomainOwnershipPolicy{}.Decide(caller, DomainPolicyRequest{
+		Operation:          DomainOperationManage,
+		Domain:             mem.Domain,
+		OwnerPrincipal:     mem.OwnerPrincipal,
+		OwnerPrincipalKind: mem.OwnerPrincipalKind,
+	}).Allowed
 }
 
 // ResolvePrincipal returns whether principal ownership metadata permits caller
