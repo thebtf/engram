@@ -181,7 +181,7 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, created)
+	writeJSON(w, jsonSafeMemory(created))
 }
 
 // handleListMemories godoc
@@ -255,30 +255,33 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 func jsonSafeMemories(mems []*models.Memory) []*models.Memory {
 	safe := make([]*models.Memory, 0, len(mems))
 	for _, mem := range mems {
-		if mem == nil {
-			safe = append(safe, nil)
-			continue
-		}
-
-		copy := *mem
-		copy.CreatedAt = jsonSafeTime(copy.CreatedAt)
-		copy.UpdatedAt = jsonSafeTime(copy.UpdatedAt)
-		copy.DeletedAt = jsonSafeTimePtr(copy.DeletedAt)
-		copy.LastRetrievedAt = jsonSafeTimePtr(copy.LastRetrievedAt)
-		copy.LastConfirmed = jsonSafeTimePtr(copy.LastConfirmed)
-		copy.ReviewAfter = jsonSafeTimePtr(copy.ReviewAfter)
-		copy.ValidFrom = jsonSafeTimePtr(copy.ValidFrom)
-		copy.ValidUntil = jsonSafeTimePtr(copy.ValidUntil)
-		copy.ImportanceBase = finiteOrZero(copy.ImportanceBase)
-		copy.TsAlpha = finiteOrZero(copy.TsAlpha)
-		copy.TsBeta = finiteOrZero(copy.TsBeta)
-		copy.Confidence = finiteOrZero(copy.Confidence)
-		copy.Stability = finiteOrZero(copy.Stability)
-		copy.Retrievability = finiteOrZero(copy.Retrievability)
-		safe = append(safe, &copy)
+		safe = append(safe, jsonSafeMemory(mem))
 	}
 
 	return safe
+}
+
+func jsonSafeMemory(mem *models.Memory) *models.Memory {
+	if mem == nil {
+		return nil
+	}
+
+	copy := *mem
+	copy.CreatedAt = jsonSafeTime(copy.CreatedAt)
+	copy.UpdatedAt = jsonSafeTime(copy.UpdatedAt)
+	copy.DeletedAt = jsonSafeTimePtr(copy.DeletedAt)
+	copy.LastRetrievedAt = jsonSafeTimePtr(copy.LastRetrievedAt)
+	copy.LastConfirmed = jsonSafeTimePtr(copy.LastConfirmed)
+	copy.ReviewAfter = jsonSafeTimePtr(copy.ReviewAfter)
+	copy.ValidFrom = jsonSafeTimePtr(copy.ValidFrom)
+	copy.ValidUntil = jsonSafeTimePtr(copy.ValidUntil)
+	copy.ImportanceBase = finiteOrZero(copy.ImportanceBase)
+	copy.TsAlpha = finiteOrZero(copy.TsAlpha)
+	copy.TsBeta = finiteOrZero(copy.TsBeta)
+	copy.Confidence = finiteOrZero(copy.Confidence)
+	copy.Stability = finiteOrZero(copy.Stability)
+	copy.Retrievability = finiteOrZero(copy.Retrievability)
+	return &copy
 }
 
 func jsonSafeTime(value time.Time) time.Time {
