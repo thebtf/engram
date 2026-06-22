@@ -12,7 +12,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -504,7 +503,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	// Fail fast here so initializeAsync never runs without a token unless explicitly disabled.
 	{
 		token := config.GetWorkerToken()
-		authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
+		authDisabled := authDisabledFromEnv()
 		if token == "" && !authDisabled {
 			cancel()
 			return nil, fmt.Errorf("ENGRAM_AUTH_ADMIN_TOKEN is not set — set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production)")
@@ -928,11 +927,11 @@ func (s *Service) initializeAsync() {
 	// then pass it to grpcserver.New. The same validator backs the HTTP
 	// middleware in Phase 3; until then HTTP keeps its inline check.
 	//
-	// Pass nil validator when ENGRAM_AUTH_DISABLED=true is the deliberate
+	// Pass nil validator when ENGRAM_AUTH_DISABLED is the deliberate
 	// operator choice (mirrors the empty-token branch the previous code took).
 	adapter := &mcpHandlerAdapter{mcpServer: mcpServer}
 	var grpcValidator *auth.Validator
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true") {
+	if !authDisabledFromEnv() {
 		grpcValidator = auth.NewValidator(config.GetWorkerToken(), tokenStore)
 	}
 	// Share the validator with the HTTP middleware (FR-2: symmetric validation).
@@ -1608,7 +1607,7 @@ func (s *Service) Start() error {
 
 	// Auth startup gate (ADR-0001): refuse to start without token unless explicitly disabled
 	token := config.GetWorkerToken()
-	authDisabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ENGRAM_AUTH_DISABLED")), "true")
+	authDisabled := authDisabledFromEnv()
 
 	if token == "" && !authDisabled {
 		log.Fatal().Msg("ENGRAM_AUTH_ADMIN_TOKEN is not set. Set it to secure your engram instance, or set ENGRAM_AUTH_DISABLED=true to explicitly run without authentication (NOT recommended for production).")
