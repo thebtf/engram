@@ -7,6 +7,7 @@ import {
   errorState,
   liveState,
   loadOperatorJson,
+  OperatorFetchError,
   operatorFetchJson,
   pendingState,
   runOperatorMutation,
@@ -127,7 +128,29 @@ function mapMemoryRow(row: ApiMemory): Memory {
   }
 }
 
-function parseMemoryArray(payload: unknown): ApiMemory[] {
+function payloadPreview(payload: unknown): string {
+  if (typeof payload === 'string') {
+    const compact = payload.trim().replace(/\s+/g, ' ')
+    return compact ? `: ${compact.slice(0, 120)}${compact.length > 120 ? '...' : ''}` : ''
+  }
+  if (payload === undefined || payload === null) {
+    return ''
+  }
+  return `: ${Object.prototype.toString.call(payload)}`
+}
+
+function memoryPayloadError(path: string, detail: string, payload: unknown): OperatorFetchError {
+  const message = `Invalid memory payload from ${path}: ${detail}${payloadPreview(payload)}`
+  return new OperatorFetchError(message, {
+    message,
+    source: 'memory-list',
+    path,
+    method: 'GET',
+    retryable: false,
+  })
+}
+
+function parseMemoryArray(payload: unknown, path: string): ApiMemory[] {
   if (Array.isArray(payload)) {
     return payload as ApiMemory[]
   }
@@ -135,13 +158,20 @@ function parseMemoryArray(payload: unknown): ApiMemory[] {
   if (typeof payload === 'string' && payload.trim()) {
     try {
       const parsed = JSON.parse(payload)
-      return Array.isArray(parsed) ? parsed as ApiMemory[] : []
-    } catch {
-      return []
+      if (Array.isArray(parsed)) {
+        return parsed as ApiMemory[]
+      }
+      throw memoryPayloadError(path, 'expected a JSON array', parsed)
+    } catch (error) {
+      if (error instanceof OperatorFetchError) {
+        throw error
+      }
+      const detail = error instanceof Error ? error.message : String(error)
+      throw memoryPayloadError(path, `invalid JSON (${detail})`, payload)
     }
   }
 
-  return []
+  throw memoryPayloadError(path, 'expected a JSON array', payload)
 }
 
 function startOnce(key: string, run: () => Promise<void>) {
@@ -172,12 +202,9 @@ async function loadMemoryRows(): Promise<Memory[]> {
   const combined: Memory[] = []
 
   for (const project of projects) {
-    const payload = await operatorFetchJson<unknown>(
-      `/api/memories?project=${encodeURIComponent(project)}&limit=200`,
-      undefined,
-      'memory-list',
-    )
-    for (const row of parseMemoryArray(payload)) {
+    const path = `/api/memories?project=${encodeURIComponent(project)}&limit=200`
+    const payload = await operatorFetchJson<unknown>(path, undefined, 'memory-list')
+    for (const row of parseMemoryArray(payload, path)) {
       combined.push(mapMemoryRow(row))
     }
   }

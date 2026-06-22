@@ -8,6 +8,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const nuxtConfigPath = join(root, 'nuxt.config.ts')
 const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
+const memoryLabPath = join(root, 'composables', 'useOperatorMemoryLab.ts')
 
 function read(path) {
   return readFileSync(path, 'utf8')
@@ -147,6 +148,17 @@ test('memory compatibility export uses the Memory Lab live state seam', () => {
   assert.match(source, /useOperatorMemoryLab/, 'useMockData must import the Memory Lab live seam')
   assert.match(memoryExport[0], /useOperatorMemoryLab\(\)\.rows/, 'useMemories must delegate to Memory Lab rows')
   assert.doesNotMatch(memoryExport[0], /live:memories/, 'useMemories must not maintain a separate stale memory cache')
+})
+
+test('memory lab malformed project payloads are errors, not empty memory', () => {
+  const source = read(memoryLabPath)
+  const parseBody = functionBody(source, 'parseMemoryArray')
+  const loaderBody = functionBody(source, 'loadMemoryRows')
+
+  assert.match(loaderBody, /operatorFetchJson<unknown>/, 'Memory Lab must fetch project memory payloads through the operator API seam')
+  assert.match(loaderBody, /parseMemoryArray\(payload/, 'Memory Lab must validate every project payload before mapping rows')
+  assert.match(parseBody, /throw\s+/, 'parseMemoryArray must throw on malformed or non-array payloads')
+  assert.doesNotMatch(parseBody, /return\s+\[\]/, 'parseMemoryArray must not convert malformed payloads into an empty Memory page')
 })
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
