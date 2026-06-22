@@ -4713,6 +4713,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 		},
 		ruleGovernanceSnapshotStatusesMigration147(),
+		apiTokenPrincipalsMigration148(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

@@ -170,7 +170,21 @@ func (v *Validator) Validate(ctx context.Context, raw string) (Identity, error) 
 			// Whitelist the two values issuance is allowed to write.
 			switch Role(candidates[i].Scope) {
 			case RoleReadWrite, RoleReadOnly:
-				return Client(candidates[i].Scope, candidates[i].ID), nil
+				principal := strings.TrimSpace(candidates[i].Principal)
+				principalKind := PrincipalKind(strings.TrimSpace(candidates[i].PrincipalKind))
+				if principal != "" {
+					if principalKind == "" {
+						principalKind = PrincipalKindHuman
+					}
+					if !IsValidPrincipalKind(principalKind) {
+						return Identity{}, fmt.Errorf(
+							"auth: keycard %s has unexpected principal_kind %q (allowed: %q, %q, %q)",
+							candidates[i].ID, candidates[i].PrincipalKind,
+							PrincipalKindHuman, PrincipalKindAgent, PrincipalKindService,
+						)
+					}
+				}
+				return ClientWithPrincipal(candidates[i].Scope, candidates[i].ID, principal, principalKind), nil
 			default:
 				return Identity{}, fmt.Errorf(
 					"auth: keycard %s has unexpected scope %q (allowed: %q, %q)",

@@ -883,3 +883,91 @@ func TestMigration147_RuleGovernanceSnapshotStatuses(t *testing.T) {
 		require.NoError(t, err, "status %q must be accepted after migration 147", status)
 	}
 }
+
+func TestMigration148_APITokenPrincipals(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+	require.NoError(t, runMigrations(db))
+
+	suffix := time.Now().UnixNano()
+	namePrefix := fmt.Sprintf("test-principal-%d", suffix)
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM api_tokens WHERE name LIKE ?`, namePrefix+"%").Error
+	})
+
+	type columnInfo struct {
+		DataType      string
+		IsNullable    string
+		ColumnDefault string
+	}
+	columns := map[string]columnInfo{}
+	rows, err := db.Raw(`
+		SELECT column_name, data_type, is_nullable, column_default
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'api_tokens'
+		  AND column_name IN ('principal', 'principal_kind')
+	`).Rows()
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var info columnInfo
+		require.NoError(t, rows.Scan(&name, &info.DataType, &info.IsNullable, &info.ColumnDefault))
+		columns[name] = info
+	}
+	require.Equal(t, "text", columns["principal"].DataType)
+	require.Equal(t, "NO", columns["principal"].IsNullable)
+	require.Contains(t, columns["principal"].ColumnDefault, "''")
+	require.Equal(t, "text", columns["principal_kind"].DataType)
+	require.Equal(t, "NO", columns["principal_kind"].IsNullable)
+	require.Contains(t, columns["principal_kind"].ColumnDefault, "'human'")
+
+	require.NoError(t, db.Exec(`
+		INSERT INTO api_tokens (name, token_hash, token_prefix, scope)
+		VALUES (?, 'hash-legacy', 'p148legc', 'read-write')
+	`, namePrefix+"-legacy").Error)
+
+	var principal, principalKind string
+	require.NoError(t, db.Raw(`
+		SELECT principal, principal_kind
+		FROM api_tokens
+		WHERE name = ?
+	`, namePrefix+"-legacy").Row().Scan(&principal, &principalKind))
+	require.Equal(t, "", principal)
+	require.Equal(t, "human", principalKind)
+
+	for _, kind := range []string{"human", "agent", "service"} {
+		err := db.Exec(`
+			INSERT INTO api_tokens (name, token_hash, token_prefix, scope, principal, principal_kind)
+			VALUES (?, ?, ?, 'read-write', ?, ?)
+		`, namePrefix+"-"+kind, "hash-"+kind, "p148"+kind, "principal/"+kind, kind).Error
+		require.NoError(t, err, "principal_kind %q must be accepted", kind)
+	}
+
+	invalidErr := db.Exec(`
+		INSERT INTO api_tokens (name, token_hash, token_prefix, scope, principal, principal_kind)
+		VALUES (?, 'hash-invalid', 'p148bad0', 'read-write', 'principal/bad', 'daemon')
+	`, namePrefix+"-invalid").Error
+	require.Error(t, invalidErr, "invalid principal_kind must be rejected by CHECK constraint")
+
+	var idxCount int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'api_tokens'
+		  AND indexname = 'idx_api_tokens_principal'
+	`).Scan(&idxCount).Error)
+	require.Equal(t, 1, idxCount, "idx_api_tokens_principal must exist")
+}

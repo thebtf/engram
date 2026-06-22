@@ -18,9 +18,9 @@ import (
 // for the absence-of-extra-IO assertion (NFR-2) and returns a fixed candidate
 // slice keyed by prefix.
 type stubStore struct {
-	byPrefix     map[string][]gormdb.APIToken
-	prefixCalls  int
-	returnErr    error
+	byPrefix    map[string][]gormdb.APIToken
+	prefixCalls int
+	returnErr   error
 }
 
 func (s *stubStore) FindByPrefix(_ context.Context, prefix string) ([]gormdb.APIToken, error) {
@@ -56,6 +56,34 @@ func makeKeycard(t *testing.T, id, raw, scope string, revoked bool) gormdb.APITo
 		Scope:       scope,
 		Revoked:     revoked,
 	}
+}
+
+func makePrincipalKeycard(t *testing.T, id, raw, scope, principal string, principalKind auth.PrincipalKind) gormdb.APIToken {
+	t.Helper()
+	token := makeKeycard(t, id, raw, scope, false)
+	token.Principal = principal
+	token.PrincipalKind = string(principalKind)
+	return token
+}
+
+func TestIdentity_ClientPrincipalKinds(t *testing.T) {
+	t.Parallel()
+
+	legacy := auth.Client("read-write", "uuid-legacy")
+	assert.Equal(t, "", legacy.Principal)
+	assert.Equal(t, auth.PrincipalKind(""), legacy.PrincipalKind)
+
+	humanDefault := auth.ClientWithPrincipal("read-write", "uuid-human", "olga", "")
+	assert.Equal(t, "olga", humanDefault.Principal)
+	assert.Equal(t, auth.PrincipalKindHuman, humanDefault.PrincipalKind)
+
+	agent := auth.ClientWithPrincipal("read-write", "uuid-agent", "agent/codex", auth.PrincipalKindAgent)
+	assert.Equal(t, "agent/codex", agent.Principal)
+	assert.Equal(t, auth.PrincipalKindAgent, agent.PrincipalKind)
+
+	service := auth.ClientWithPrincipal("read-only", "uuid-service", "service/ci", auth.PrincipalKindService)
+	assert.Equal(t, "service/ci", service.Principal)
+	assert.Equal(t, auth.PrincipalKindService, service.PrincipalKind)
 }
 
 func TestValidate_EmptyToken(t *testing.T) {
@@ -151,6 +179,8 @@ func TestValidate_ValidPrefix_NonRevokedMatch(t *testing.T) {
 	assert.Equal(t, auth.RoleReadWrite, id.Role)
 	assert.Equal(t, auth.SourceClient, id.Source)
 	assert.Equal(t, "uuid-1", id.KeycardID)
+	assert.Equal(t, "", id.Principal)
+	assert.Equal(t, auth.PrincipalKind(""), id.PrincipalKind)
 	assert.Equal(t, 1, store.prefixCalls,
 		"NFR-2: exactly one prefix lookup")
 }
@@ -190,6 +220,63 @@ func TestValidate_PrefixCollision_TwoCandidates_OneMatches(t *testing.T) {
 	assert.Equal(t, "uuid-a", idA.KeycardID)
 	assert.Equal(t, "uuid-b", idB.KeycardID)
 	assert.Equal(t, 2, store.prefixCalls)
+}
+
+func TestValidate_KeycardsWithSameRoleKeepDistinctPrincipals(t *testing.T) {
+	t.Parallel()
+	rawHuman := "engram_baadf00d000000000000000000000005"
+	rawAgent := "engram_baadf00d000000000000000000000006"
+	cardHuman := makePrincipalKeycard(t, "uuid-human", rawHuman, "read-write", "olga", auth.PrincipalKindHuman)
+	cardAgent := makePrincipalKeycard(t, "uuid-agent", rawAgent, "read-write", "agent/codex", auth.PrincipalKindAgent)
+	store := &stubStore{
+		byPrefix: map[string][]gormdb.APIToken{
+			"baadf00d": {cardHuman, cardAgent},
+		},
+	}
+	v := auth.NewValidator("master-secret", store)
+
+	idHuman, errHuman := v.Validate(context.Background(), rawHuman)
+	idAgent, errAgent := v.Validate(context.Background(), rawAgent)
+
+	require.NoError(t, errHuman)
+	require.NoError(t, errAgent)
+	assert.Equal(t, idHuman.Source, idAgent.Source)
+	assert.Equal(t, idHuman.Role, idAgent.Role)
+	assert.Equal(t, "olga", idHuman.Principal)
+	assert.Equal(t, auth.PrincipalKindHuman, idHuman.PrincipalKind)
+	assert.Equal(t, "agent/codex", idAgent.Principal)
+	assert.Equal(t, auth.PrincipalKindAgent, idAgent.PrincipalKind)
+	assert.NotEqual(t, idHuman.Principal, idAgent.Principal)
+}
+
+func TestValidate_KeycardPrincipalKindDefaultsToHuman(t *testing.T) {
+	t.Parallel()
+	raw := "engram_deafbeef000000000000000000000007"
+	keycard := makeKeycard(t, "uuid-default-human", raw, "read-write", false)
+	keycard.Principal = "oleg"
+	store := &stubStore{byPrefix: map[string][]gormdb.APIToken{"deafbeef": {keycard}}}
+	v := auth.NewValidator("master-secret", store)
+
+	id, err := v.Validate(context.Background(), raw)
+
+	require.NoError(t, err)
+	assert.Equal(t, "oleg", id.Principal)
+	assert.Equal(t, auth.PrincipalKindHuman, id.PrincipalKind)
+}
+
+func TestValidate_InvalidPrincipalKindFailsClosed(t *testing.T) {
+	t.Parallel()
+	raw := "engram_feedface000000000000000000000008"
+	keycard := makeKeycard(t, "uuid-invalid-kind", raw, "read-write", false)
+	keycard.Principal = "agent/unknown"
+	keycard.PrincipalKind = "daemon"
+	store := &stubStore{byPrefix: map[string][]gormdb.APIToken{"feedface": {keycard}}}
+	v := auth.NewValidator("master-secret", store)
+
+	_, err := v.Validate(context.Background(), raw)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected principal_kind")
 }
 
 func TestValidate_PrefixCollision_NeitherMatches(t *testing.T) {

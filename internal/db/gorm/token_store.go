@@ -20,11 +20,22 @@ func NewTokenStore(store *Store) *TokenStore {
 
 // Create stores a new API token record.
 func (s *TokenStore) Create(ctx context.Context, name, tokenHash, tokenPrefix, scope string) (*APIToken, error) {
+	return s.CreateWithPrincipal(ctx, name, tokenHash, tokenPrefix, scope, "", "")
+}
+
+// CreateWithPrincipal stores a new API token record with optional principal
+// metadata. Empty principal preserves legacy keycard semantics.
+func (s *TokenStore) CreateWithPrincipal(ctx context.Context, name, tokenHash, tokenPrefix, scope, principal, principalKind string) (*APIToken, error) {
+	if principalKind == "" {
+		principalKind = "human"
+	}
 	token := &APIToken{
-		Name:        name,
-		TokenHash:   tokenHash,
-		TokenPrefix: tokenPrefix,
-		Scope:       scope,
+		Name:          name,
+		TokenHash:     tokenHash,
+		TokenPrefix:   tokenPrefix,
+		Scope:         scope,
+		Principal:     principal,
+		PrincipalKind: principalKind,
 	}
 
 	if err := s.db.WithContext(ctx).Create(token).Error; err != nil {
