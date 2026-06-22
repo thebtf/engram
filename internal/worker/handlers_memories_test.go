@@ -191,6 +191,38 @@ func TestHandleListMemories_NonFiniteScoresReturnJSON(t *testing.T) {
 	assert.NotContains(t, rows[0], "stability")
 }
 
+func TestHandleListMemories_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	privateOther := &models.Memory{
+		ID:                 50,
+		Project:            "principal-list-project",
+		Content:            "private bob row",
+		AgentVisibility:    models.AgentVisibilityPrivate,
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+	}
+	visible := &models.Memory{
+		ID:      51,
+		Project: "principal-list-project",
+		Content: "visible legacy row",
+	}
+	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{privateOther, visible}}}
+	id := auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent)
+	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=principal-list-project&limit=50", nil).
+		WithContext(auth.WithIdentity(context.Background(), id))
+	w := httptest.NewRecorder()
+
+	service.handleListMemories(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, float64(51), rows[0]["id"])
+	assert.Equal(t, "visible legacy row", rows[0]["content"])
+}
+
 func TestHandleListMemories_OutOfRangeTimestampsReturnJSON(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 

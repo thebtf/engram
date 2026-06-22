@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/thebtf/engram/internal/auth"
-	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -187,18 +186,19 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	query = strings.TrimSpace(query)
 	queryLower := strings.ToLower(query)
 
-	// T004 — scope filter under vNext F flag. Build the caller KeycardContext
-	// once outside the loop; populate WorkstationID from auth.Identity (added
-	// in T003b). When the flag is OFF, scopeEnabled stays false and the
-	// filter helper below skips the Resolve call entirely — preserving
-	// byte-identical v6.4.x behavior.
+	// T004 — build the caller KeycardContext once outside the loop. The
+	// ENGRAM_VNEXT_F_ENABLED flag gates only legacy privacy_scope; CR-004
+	// principal-private visibility is always enforced.
 	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
-	var caller scope.KeycardContext
-	if scopeEnabled {
-		caller.SessionID = callerSessionID
-		if id, ok := auth.IdentityFrom(ctx); ok {
-			caller.WorkstationID = id.WorkstationID()
-		}
+	caller := scope.KeycardContext{SessionID: callerSessionID}
+	if id, ok := auth.IdentityFrom(ctx); ok {
+		caller.WorkstationID = id.WorkstationID()
+		caller.Principal = id.Principal
+		caller.PrincipalKind = string(id.PrincipalKind)
+	}
+	visibilityOpts := scope.MemoryVisibilityOptions{
+		ApplyPrivacyScope: scopeEnabled,
+		IncludeScopes:     includeScopes,
 	}
 
 	type memoryResult struct {
@@ -206,6 +206,10 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		Tags                []string                    `json:"tags,omitempty"`
 		Content             string                      `json:"content"`
 		SourceAgent         string                      `json:"source_agent,omitempty"`
+		OwnerPrincipal      string                      `json:"owner_principal,omitempty"`
+		OwnerPrincipalKind  string                      `json:"owner_principal_kind,omitempty"`
+		AgentVisibility     string                      `json:"agent_visibility,omitempty"`
+		Domain              string                      `json:"domain,omitempty"`
 		PrivacyScope        string                      `json:"privacy_scope,omitempty"`
 		SourceWorkstationID string                      `json:"source_workstation_id,omitempty"`
 		SourceSessions      []string                    `json:"source_sessions,omitempty"`
@@ -214,36 +218,15 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		Version             int                         `json:"version"`
 	}
 
-	// filterMemory applies the optional substring query filter AND the
-	// vNext-F scope filter to a single memory. Returns (rendered result,
-	// true) when the memory should be included in the response, (zero,
-	// false) when it must be skipped.
+	// filterMemory applies the optional substring query filter AND shared
+	// memory visibility. ENGRAM_VNEXT_F_ENABLED gates only legacy
+	// privacy_scope; principal-private rows are filtered fail-safe.
 	filterMemory := func(mem *models.Memory) (memoryResult, bool) {
 		if queryLower != "" && !strings.Contains(strings.ToLower(mem.Content), queryLower) {
 			return memoryResult{}, false
 		}
-		if scopeEnabled {
-			// Memory.PrivacyScope is empty on rows written before/under
-			// flag-OFF code; treat empty as the DB default 'project'
-			// (migration 125 column DEFAULT). scope.Resolve handles that
-			// case via the Project/Shared/Global branch — never private —
-			// so empty privacy_scope always passes the visibility filter.
-			memScope := mem.PrivacyScope
-			if memScope == "" {
-				memScope = "project"
-			}
-			// T005 — apply include_scopes filter BEFORE visibility check.
-			// Empty includeScopes (omitted/empty array) admits all tiers.
-			if len(includeScopes) > 0 && !includeScopes[memScope] {
-				return memoryResult{}, false
-			}
-			meta := scope.SourceMeta{
-				WorkstationID: mem.SourceWorkstationID,
-				Sessions:      mem.SourceSessions,
-			}
-			if !scope.Resolve(caller, memScope, meta) {
-				return memoryResult{}, false
-			}
+		if !scope.ResolveMemory(caller, mem, visibilityOpts) {
+			return memoryResult{}, false
 		}
 		mr := memoryResult{
 			ID:          mem.ID,
@@ -253,6 +236,10 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 			SourceAgent: mem.SourceAgent,
 			Version:     mem.Version,
 		}
+		mr.OwnerPrincipal = mem.OwnerPrincipal
+		mr.OwnerPrincipalKind = mem.OwnerPrincipalKind
+		mr.AgentVisibility = mem.AgentVisibility
+		mr.Domain = mem.Domain
 		if scopeEnabled {
 			mr.PrivacyScope = mem.PrivacyScope
 			mr.SourceWorkstationID = mem.SourceWorkstationID
@@ -275,78 +262,31 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 
 	results := make([]memoryResult, 0, limit)
 	if tg3Active {
-		if scopeEnabled {
-			// T018 MAJOR fix (review hardening): when both tg3Active and
-			// scopeEnabled are true, ListWithFilters cannot be used safely
-			// because scope-invisible rows at the head of the result set
-			// truncate visible recall before older eligible rows are reached
-			// (same truncation problem as the non-TG3 scope path — fixed by
-			// batch-looping via ListWithOffset).
-			//
-			// include_superseded cannot be honoured by ListWithOffset (hardcoded
-			// status='active'). Return a structured error so the caller knows to
-			// use the non-scope path or omit the flag — option B from coderabbit
-			// MAJOR review, matching hybrid-path and recall_memory treatment.
-			if tg3IncludeSuperseded {
-				return "", fmt.Errorf("include_superseded is not supported with scope-enabled recall search; omit include_superseded or disable ENGRAM_VNEXT_F_ENABLED scope")
-			}
-			// Batch-loop via ListWithOffset: scope-invisible rows must not
-			// truncate recall. confidence_min is applied in-memory below (SQL
-			// push is not available without ListWithFilters).
-			const batchSize = 500
-			offset := 0
-			for len(results) < limit {
-				batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
-				if err != nil {
-					return "", fmt.Errorf("recall search tg3 scoped: %w", err)
-				}
-				if len(batch) == 0 {
-					break
-				}
-				for _, mem := range batch {
-					if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
-						continue
-					}
-					mr, ok := filterMemory(mem)
-					if !ok {
-						continue
-					}
-					if tg3IncludeRationale {
-						contentMatched := queryLower != "" && strings.Contains(strings.ToLower(mem.Content), queryLower)
-						rat := retrieval.AssembleRationale(mem, query, contentMatched, tg3FilterDescs)
-						mr.RankingRationale = &rat
-					}
-					results = append(results, mr)
-					if len(results) >= limit {
-						break
-					}
-				}
-				offset += len(batch)
-				if len(batch) < batchSize {
-					break
-				}
-			}
-		} else {
-			// T018 TG3 fetch path (non-scoped): use ListWithFilters to apply
-			// confidence_min / include_superseded at the SQL layer. A generous
-			// candidate multiplier ensures the substring-query filter still
-			// sees enough rows. No scope-invisible rows exist here.
-			const tg3CandidateMultiplier = 10
-			const tg3MinPool = 1000
-			fetchLimit := limit * tg3CandidateMultiplier
-			if fetchLimit < tg3MinPool {
-				fetchLimit = tg3MinPool
-			}
-			tg3Opts := engramgorm.ListOptions{
-				ConfidenceMin:     tg3ConfidenceMin,
-				IncludeSuperseded: tg3IncludeSuperseded,
-				Limit:             fetchLimit,
-			}
-			candidates, err := s.memoryStore.ListWithFilters(ctx, project, tg3Opts)
+		// T018 MAJOR fix (review hardening): ListWithFilters cannot be used
+		// safely with always-on visibility because invisible rows at the head of
+		// the result set can truncate visible recall before older eligible rows
+		// are reached. Use the same ListWithOffset batch-loop as non-TG3 recall.
+		//
+		// include_superseded cannot be honoured by ListWithOffset (hardcoded
+		// status='active'). Return a structured error instead of pretending the
+		// flag was applied.
+		if tg3IncludeSuperseded {
+			return "", fmt.Errorf("include_superseded is not supported with visibility-filtered recall search; omit include_superseded")
+		}
+		const batchSize = 500
+		offset := 0
+		for len(results) < limit {
+			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
 			if err != nil {
 				return "", fmt.Errorf("recall search tg3: %w", err)
 			}
-			for _, mem := range candidates {
+			if len(batch) == 0 {
+				break
+			}
+			for _, mem := range batch {
+				if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
+					continue
+				}
 				mr, ok := filterMemory(mem)
 				if !ok {
 					continue
@@ -361,15 +301,17 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 					break
 				}
 			}
+			offset += len(batch)
+			if len(batch) < batchSize {
+				break
+			}
 		}
-	} else if scopeEnabled {
+	} else {
 		// Codex P1 cycle-3 fix on 4cb71be: batch-loop with offset paging so
-		// that scope-invisible newest rows do not truncate recall before
-		// older visible rows reach the requested limit. The previous
-		// single-call List(fetchLimit) path would fetch only up to
-		// fetchLimit rows; if all of them were private to other callers the
-		// loop returned zero results even when visible matches existed in
-		// the same project (T004 contract honesty bug).
+		// that invisible newest rows do not truncate recall before older
+		// visible rows reach the requested limit. ENGRAM_VNEXT_F_ENABLED gates
+		// legacy privacy_scope only; principal-private rows still require this
+		// backfill behavior when the flag is off.
 		const batchSize = 500
 		offset := 0
 		for len(results) < limit {
@@ -395,31 +337,6 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 				break
 			}
 		}
-	} else {
-		// Flag OFF — single-fetch path preserves v6.4.x byte-identity. The
-		// query-mode candidate-pool multiplier is the original behavior
-		// shipped with v6.2.x recall.
-		fetchLimit := limit
-		if query != "" {
-			const candidateMultiplier = 10
-			const minCandidatePool = 1000
-			fetchLimit = limit * candidateMultiplier
-			if fetchLimit < minCandidatePool {
-				fetchLimit = minCandidatePool
-			}
-		}
-		memories, err := s.memoryStore.List(ctx, project, fetchLimit)
-		if err != nil {
-			return "", fmt.Errorf("recall search: %w", err)
-		}
-		for _, mem := range memories {
-			if mr, ok := filterMemory(mem); ok {
-				results = append(results, mr)
-				if len(results) >= limit {
-					break
-				}
-			}
-		}
 	}
 
 	out := map[string]any{
@@ -436,4 +353,3 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	}
 	return string(output), nil
 }
-

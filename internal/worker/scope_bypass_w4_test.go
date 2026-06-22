@@ -35,6 +35,14 @@ func (f *fakeMemoryListStore) List(_ context.Context, _ string, _ int) ([]*model
 	return f.rows, nil
 }
 
+type fakeInjectionCandidateStore struct {
+	rows []*models.Memory
+}
+
+func (f *fakeInjectionCandidateStore) ListForInjection(_ context.Context, _ string, _ int) ([]*models.Memory, error) {
+	return f.rows, nil
+}
+
 func (f *fakeMemoryListStore) ListWithOffset(_ context.Context, _ string, limit int, offset int) ([]*models.Memory, error) {
 	if offset >= len(f.rows) {
 		return nil, nil
@@ -74,6 +82,14 @@ func scopeW4Memory(id int64, content, privacyScope, sourceWs string) *models.Mem
 	}
 }
 
+func principalPrivateMemory(id int64, content, owner string) *models.Memory {
+	mem := scopeW4Memory(id, content, "project", "")
+	mem.OwnerPrincipal = owner
+	mem.OwnerPrincipalKind = "agent"
+	mem.AgentVisibility = models.AgentVisibilityPrivate
+	return mem
+}
+
 // --- P3: searchFallbackObservations scope filter ---
 
 // TestEC_F1_P3_SearchFallback_FlagOff_ByteIdentity verifies that with
@@ -95,6 +111,44 @@ func TestEC_F1_P3_SearchFallback_FlagOff_ByteIdentity(t *testing.T) {
 
 	// Flag OFF: both memories returned unchanged.
 	assert.Len(t, obs, 2, "flag-OFF: all memories must be returned without scope filtering")
+}
+
+func TestPIM_SearchFallback_FlagOff_PrincipalPrivateCrossPrincipalInvisible(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	privateOther := principalPrivateMemory(30, "private bob", "agent/bob")
+	visible := scopeW4Memory(31, "visible legacy", "private", "ws-bob")
+	fake := &fakeMemoryListStore{rows: []*models.Memory{privateOther, visible}}
+	svc := buildScopeTestService(fake)
+
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "ws-alice", "agent/alice", auth.PrincipalKindAgent))
+
+	obs, err := svc.searchFallbackObservations(ctx, "", retrievalScope{Project: "test-project"}, 50)
+	require.NoError(t, err)
+
+	require.Len(t, obs, 1)
+	assert.Equal(t, "visible legacy", obs[0].Title.String,
+		"legacy privacy_scope remains flag-off visible, but principal-private row must be filtered")
+}
+
+func TestPIM_ListVisibleForInjection_PrincipalPrivateCrossPrincipalInvisible(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	privateOther := principalPrivateMemory(40, "private bob injection", "agent/bob")
+	sharedOther := scopeW4Memory(41, "shared bob injection", "project", "")
+	sharedOther.OwnerPrincipal = "agent/bob"
+	sharedOther.OwnerPrincipalKind = "agent"
+	sharedOther.AgentVisibility = models.AgentVisibilityShared
+	store := &fakeInjectionCandidateStore{rows: []*models.Memory{privateOther, sharedOther}}
+
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "ws-alice", "agent/alice", auth.PrincipalKindAgent))
+
+	got, err := listVisibleForInjection(ctx, store, "test-project", 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(41), got[0].ID)
 }
 
 // TestEC_F1_P3_SearchFallback_FlagOn_PrivateCrossWorkstationInvisible is the

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
 	localgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
@@ -224,6 +225,45 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	assert.Equal(t, "", resp.Rules[0].Project)
 	assert.Equal(t, projectRule.ID, resp.Rules[1].Id)
 	assert.Equal(t, project, resp.Rules[1].Project)
+}
+
+func TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *testing.T) {
+	db, cleanup := openSessionStartTestDB(t)
+	defer cleanup()
+
+	project := fmt.Sprintf("grpc-session-start-principal-%d", time.Now().UnixNano())
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+
+	memoryStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
+	_, err := memoryStore.Create(context.Background(), &models.Memory{
+		Project:            project,
+		Content:            "private bob startup memory",
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityPrivate,
+	})
+	require.NoError(t, err)
+	_, err = memoryStore.Create(context.Background(), &models.Memory{
+		Project:            project,
+		Content:            "shared bob startup memory",
+		OwnerPrincipal:     "agent/bob",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+	})
+	require.NoError(t, err)
+
+	srv := &Server{db: db}
+	caller := auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent)
+	resp, err := srv.GetSessionStartContext(
+		auth.WithIdentity(context.Background(), caller),
+		&pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 10},
+	)
+	require.NoError(t, err)
+
+	require.Len(t, resp.GetMemories(), 1)
+	assert.Equal(t, "shared bob startup memory", resp.GetMemories()[0].GetContent())
 }
 
 func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {

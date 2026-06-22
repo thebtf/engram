@@ -96,28 +96,22 @@ func (s *Server) handleGetMemoryBrief(ctx context.Context, args json.RawMessage)
 	})
 }
 
-// filterInjectionByScope applies scope.Resolve to a slice of injection
-// candidates. When ENGRAM_VNEXT_F_ENABLED is not set the slice is returned
-// unchanged (flag-off byte-identity contract).
+// filterInjectionByScope applies the shared memory visibility predicate to a
+// slice of injection candidates. ENGRAM_VNEXT_F_ENABLED gates only the legacy
+// privacy_scope layer; principal-private rows are filtered fail-safe.
 func filterInjectionByScope(ctx context.Context, mems []*models.Memory) []*models.Memory {
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
-		return mems
-	}
-	var caller scope.KeycardContext
+	caller := scope.KeycardContext{}
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		caller.WorkstationID = id.WorkstationID()
+		caller.Principal = id.Principal
+		caller.PrincipalKind = string(id.PrincipalKind)
+	}
+	opts := scope.MemoryVisibilityOptions{
+		ApplyPrivacyScope: os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true",
 	}
 	visible := make([]*models.Memory, 0, len(mems))
 	for _, mem := range mems {
-		memScope := mem.PrivacyScope
-		if memScope == "" {
-			memScope = "project"
-		}
-		meta := scope.SourceMeta{
-			WorkstationID: mem.SourceWorkstationID,
-			Sessions:      mem.SourceSessions,
-		}
-		if scope.Resolve(caller, memScope, meta) {
+		if scope.ResolveMemory(caller, mem, opts) {
 			visible = append(visible, mem)
 		}
 	}

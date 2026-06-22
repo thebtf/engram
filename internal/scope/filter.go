@@ -19,7 +19,11 @@
 // MemoryStore.List); Resolve trusts that filter and does not re-check project.
 package scope
 
-import "github.com/thebtf/engram/pkg/models"
+import (
+	"strings"
+
+	"github.com/thebtf/engram/pkg/models"
+)
 
 // PrivacyScope values recognised by Resolve. Mirror the CHECK constraint on
 // memories.privacy_scope added by migration 125 (T001).
@@ -41,6 +45,8 @@ const (
 type KeycardContext struct {
 	WorkstationID string
 	SessionID     string
+	Principal     string
+	PrincipalKind string
 }
 
 // SourceMeta identifies the memory's source for visibility checks.
@@ -51,6 +57,76 @@ type KeycardContext struct {
 type SourceMeta struct {
 	WorkstationID string
 	Sessions      []string
+}
+
+// MemoryVisibilityOptions controls which legacy visibility layers apply to a
+// memory read. Principal-private filtering is always applied by ResolveMemory;
+// ApplyPrivacyScope controls only the legacy privacy_scope layer.
+type MemoryVisibilityOptions struct {
+	IncludeScopes     map[string]bool
+	ApplyPrivacyScope bool
+}
+
+// ResolveMemory composes legacy privacy_scope visibility with principal-owned
+// memory visibility.
+//
+// ApplyPrivacyScope=false preserves old flag-off behavior for legacy unowned
+// rows, but never disables principal-private filtering for owned rows.
+func ResolveMemory(caller KeycardContext, mem *models.Memory, opts MemoryVisibilityOptions) bool {
+	if mem == nil {
+		return false
+	}
+	if opts.ApplyPrivacyScope {
+		memScope := NormalizePrivacyScope(mem.PrivacyScope)
+		if len(opts.IncludeScopes) > 0 && !opts.IncludeScopes[memScope] {
+			return false
+		}
+		meta := SourceMeta{
+			WorkstationID: mem.SourceWorkstationID,
+			Sessions:      mem.SourceSessions,
+		}
+		if !Resolve(caller, memScope, meta) {
+			return false
+		}
+	}
+	return ResolvePrincipal(caller, mem)
+}
+
+// ResolvePrincipal returns whether principal ownership metadata permits caller
+// visibility. Empty agent_visibility is legacy/team-visible; private rows fail
+// closed unless the caller principal exactly matches the owner.
+func ResolvePrincipal(caller KeycardContext, mem *models.Memory) bool {
+	if mem == nil {
+		return false
+	}
+	visibility := strings.TrimSpace(mem.AgentVisibility)
+	switch visibility {
+	case "":
+		return true
+	case models.AgentVisibilityShared:
+		return true
+	case models.AgentVisibilityPrivate:
+		owner := strings.TrimSpace(mem.OwnerPrincipal)
+		ownerKind := strings.TrimSpace(mem.OwnerPrincipalKind)
+		principal := strings.TrimSpace(caller.Principal)
+		principalKind := strings.TrimSpace(caller.PrincipalKind)
+		return owner != "" &&
+			ownerKind != "" &&
+			principal != "" &&
+			principalKind != "" &&
+			owner == principal &&
+			ownerKind == principalKind
+	default:
+		return false
+	}
+}
+
+// NormalizePrivacyScope applies the DB default used for legacy rows.
+func NormalizePrivacyScope(memoryScope string) string {
+	if memoryScope == "" {
+		return ScopeProject
+	}
+	return memoryScope
 }
 
 // FilterMemories returns the subset of mems that the caller may see per
@@ -67,20 +143,15 @@ type SourceMeta struct {
 // Anti-stub: returning mems unchanged fails private-scope cross-workstation
 // cases that expect the private row to be absent.
 func FilterMemories(caller KeycardContext, mems []*models.Memory) []*models.Memory {
+	return FilterMemoriesWithOptions(caller, mems, MemoryVisibilityOptions{ApplyPrivacyScope: true})
+}
+
+// FilterMemoriesWithOptions returns the subset of mems visible under
+// ResolveMemory and the supplied visibility options.
+func FilterMemoriesWithOptions(caller KeycardContext, mems []*models.Memory, opts MemoryVisibilityOptions) []*models.Memory {
 	out := make([]*models.Memory, 0, len(mems))
 	for _, mem := range mems {
-		if mem == nil {
-			continue
-		}
-		memScope := mem.PrivacyScope
-		if memScope == "" {
-			memScope = ScopeProject
-		}
-		meta := SourceMeta{
-			WorkstationID: mem.SourceWorkstationID,
-			Sessions:      mem.SourceSessions,
-		}
-		if Resolve(caller, memScope, meta) {
+		if ResolveMemory(caller, mem, opts) {
 			out = append(out, mem)
 		}
 	}
