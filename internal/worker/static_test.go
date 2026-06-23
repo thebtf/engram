@@ -83,7 +83,7 @@ func TestOperatorConsoleMissingNuxtJSChunkReturnsReloadModule(t *testing.T) {
 	if got := rec.Header().Get("Cache-Control"); got != "no-cache, no-store, must-revalidate" {
 		t.Fatalf("missing Nuxt JS chunk cache-control = %q, want no-cache, no-store, must-revalidate", got)
 	}
-	if got := rec.Body.String(); !strings.Contains(got, "window.location.reload()") || !strings.Contains(got, "window.location.replace(url.toString())") || !strings.Contains(got, "engram_chunk_reload") || !strings.Contains(got, "export default {}") {
+	if got := rec.Body.String(); strings.Contains(got, "window.location.reload()") || !strings.Contains(got, "window.location.replace(url.toString())") || !strings.Contains(got, "engram_chunk_reload") || !strings.Contains(got, "export default {}") {
 		t.Fatalf("missing Nuxt JS chunk fallback does not look like a reload module: %q", got)
 	}
 }

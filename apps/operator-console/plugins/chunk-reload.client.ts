@@ -1,4 +1,4 @@
-import { defineNuxtPlugin, reloadNuxtApp } from '#app'
+import { defineNuxtPlugin } from '#app'
 
 const RELOAD_KEY = 'engram:operator-console:chunk-error-reload'
 const RELOAD_TTL_MS = 30_000
@@ -8,6 +8,7 @@ const CHUNK_ERROR_PATTERNS = [
   'failed to fetch dynamically imported module',
   'error loading dynamically imported module',
   'importing a module script failed',
+  'failed to load module script',
   'chunkloaderror',
   'loading chunk',
 ]
@@ -34,7 +35,7 @@ function writeReloadState(state: { count: number; at: number }) {
   try {
     sessionStorage.setItem(RELOAD_KEY, JSON.stringify(state))
   } catch {
-    // Storage can be disabled; reload recovery is still safer than staying on the error page.
+    // Storage can be disabled; URL replacement below is still safer than staying on the error page.
   }
 }
 
@@ -55,15 +56,20 @@ function shouldReloadWithSessionStorage() {
   return false
 }
 
+function replaceWithFreshURL() {
+  const url = new URL(window.location.href)
+  url.searchParams.set(RELOAD_QUERY_PARAM, String(Date.now()))
+  window.location.replace(url.toString())
+}
+
 function reloadWithURLGuard(reason: unknown) {
   const url = new URL(window.location.href)
   if (url.searchParams.has(RELOAD_QUERY_PARAM)) {
-    console.error('Engram operator console chunk reload guard stopped a repeated reload without storage.', reason)
+    console.error('Engram operator console chunk recovery guard stopped a repeated URL replacement without storage.', reason)
     return
   }
 
-  url.searchParams.set(RELOAD_QUERY_PARAM, '1')
-  window.location.replace(url.toString())
+  replaceWithFreshURL()
 }
 
 function messageFromReason(reason: unknown) {
@@ -88,11 +94,11 @@ function reloadForChunkError(reason: unknown) {
   }
 
   if (!shouldReloadWithSessionStorage()) {
-    console.error('Engram operator console chunk reload guard stopped a repeated reload.', reason)
+    console.error('Engram operator console chunk recovery guard stopped a repeated URL replacement.', reason)
     return
   }
 
-  reloadNuxtApp({ ttl: RELOAD_TTL_MS })
+  replaceWithFreshURL()
 }
 
 export default defineNuxtPlugin((nuxtApp) => {
@@ -110,4 +116,11 @@ export default defineNuxtPlugin((nuxtApp) => {
     event.preventDefault()
     reloadForChunkError(event.reason)
   })
+
+  window.addEventListener('error', (event) => {
+    const reason = event.error || event.message || event.filename
+    if (!isChunkError(reason)) return
+    event.preventDefault()
+    reloadForChunkError(reason)
+  }, true)
 })
