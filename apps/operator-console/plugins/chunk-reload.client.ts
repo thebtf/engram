@@ -65,6 +65,7 @@ function replaceWithFreshURL() {
 function reloadWithURLGuard(reason: unknown) {
   const url = new URL(window.location.href)
   if (url.searchParams.has(RELOAD_QUERY_PARAM)) {
+    // Without sessionStorage we cannot bound retries by timestamp, so the URL marker is a one-shot loop guard.
     console.error('Engram operator console chunk recovery guard stopped a repeated URL replacement without storage.', reason)
     return
   }
@@ -85,6 +86,10 @@ function messageFromReason(reason: unknown) {
 function isChunkError(reason: unknown) {
   const message = messageFromReason(reason).toLowerCase()
   return CHUNK_ERROR_PATTERNS.some((pattern) => message.includes(pattern))
+}
+
+function isNuxtModuleScriptFailure(event: ErrorEvent) {
+  return event.error == null && typeof event.filename === 'string' && /\/_nuxt\/.+\.js(?:$|\?)/.test(event.filename)
 }
 
 function reloadForChunkError(reason: unknown) {
@@ -118,9 +123,10 @@ export default defineNuxtPlugin((nuxtApp) => {
   })
 
   window.addEventListener('error', (event) => {
-    const reason = event.error || event.message || event.filename
-    if (!isChunkError(reason)) return
+    const reason = event.error || event.message
+    const filenameOnlyChunkFailure = isNuxtModuleScriptFailure(event)
+    if (!filenameOnlyChunkFailure && !isChunkError(reason)) return
     event.preventDefault()
-    reloadForChunkError(reason)
+    reloadForChunkError(reason || event.filename || event)
   }, true)
 })
