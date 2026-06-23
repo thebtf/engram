@@ -61,6 +61,11 @@ export default defineNuxtConfig({
       title: 'engram · консоль оператора',
     },
   },
+  experimental: {
+    // A deploy can invalidate route chunks while an operator keeps the console open.
+    // Reload immediately instead of leaving the tab on Nuxt's chunk-load error page.
+    emitRouteChunkError: 'automatic-immediate',
+  },
   // No page-transition: DESIGN.md Don't — load into the task, not choreography.
   ssr: false,   // operator console is an authenticated SPA embedded in the Go binary
 })

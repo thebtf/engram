@@ -407,8 +407,10 @@ test('Nuxt UI color-mode auto-registration stays disabled', () => {
 })
 
 test('operator console recovers from stale Nuxt chunk errors after deploy', () => {
+  const configSource = read(nuxtConfigPath)
   const source = read(chunkReloadPluginPath)
 
+  assert.match(configSource, /emitRouteChunkError:\s*['"]automatic-immediate['"]/, 'Nuxt must immediately recover from route chunk failures after deploy')
   assert.match(source, /reloadNuxtApp/, 'chunk reload plugin must use Nuxt hard reload utility')
   assert.match(source, /app:chunkError/, 'Nuxt app chunk errors must be handled explicitly')
   assert.match(source, /vite:preloadError/, 'Vite preload errors must be handled explicitly')
