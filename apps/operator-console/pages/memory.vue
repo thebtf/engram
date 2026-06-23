@@ -136,7 +136,7 @@ async function deleteOpened() {
       deleteConfirmId.value = null
       notice.value = { kind: 'success', text: t('memory.notice.deleted', { id: memory.id }) }
     } else {
-      notice.value = { kind: 'error', text: t('memory.notice.error', { message: result.error.message || t('memory.notice.unknownError') }) }
+      notice.value = { kind: 'error', text: t('memory.notice.error', { message: result.error?.message || t('memory.notice.unknownError') }) }
     }
   } finally {
     deletePending.value = false

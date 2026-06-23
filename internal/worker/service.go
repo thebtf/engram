@@ -1015,11 +1015,15 @@ func (s *Service) startWatchers() {
 // call config.Get() per-request will pick up new values automatically.
 // Structural changes (port, token) log a warning — manual restart needed.
 func (s *Service) reloadConfig() {
-	_, changed, err := config.Reload()
+	newCfg, changed, err := config.Reload()
 	if err != nil {
 		log.Error().Err(err).Msg("Config reload failed — keeping current config")
 		return
 	}
+
+	s.initMu.Lock()
+	s.config = newCfg
+	s.initMu.Unlock()
 
 	if len(changed) == 0 {
 		log.Info().Msg("Config file changed but no values differ")
