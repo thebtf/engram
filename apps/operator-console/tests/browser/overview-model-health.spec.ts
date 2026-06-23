@@ -20,8 +20,9 @@ test('overview renders live model-health snapshot', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('h1', { hasText: /^Обзор$/ })).toBeVisible()
   await expect(page.getByText('/api/model-health')).toBeVisible()
-  await expect(page.getByText('ok · 1')).toBeVisible()
-  await expect(page.getByText('standby · 2')).toBeVisible()
+  const modelLegend = page.locator('.seg-legend')
+  await expect(modelLegend.getByText('ok · 0')).toBeVisible()
+  await expect(modelLegend.getByText('standby · 3')).toBeVisible()
   await expect(page.getByText('live endpoint').first()).toBeVisible()
 
   expect(failedRequests).toEqual([])

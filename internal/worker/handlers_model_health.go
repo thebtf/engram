@@ -87,7 +87,7 @@ func buildModelHealthResponse(settings []*models.ModelSetting, embeddingClient, 
 			SecretSetting: "embedder.api_key",
 			DefaultModel:  "text-embedding",
 			ActiveClient:  embeddingClient,
-			ActiveMsg:     "Embedding client is initialized; vector recall can use the configured endpoint.",
+			ActiveMsg:     "Embedding client is initialized, but this snapshot does not probe the endpoint.",
 			DisabledMsg:   "Embedding URL is not configured; recall falls back to non-vector paths.",
 			DegradedMsg:   "Embedding URL is configured, but the client is not initialized.",
 		}, rowsByKey),
@@ -104,7 +104,7 @@ func buildModelHealthResponse(settings []*models.ModelSetting, embeddingClient, 
 			SecretSetting: "reranker.api_key",
 			DefaultModel:  "bge-reranker",
 			ActiveClient:  rerankClient,
-			ActiveMsg:     "Reranker client is initialized; recall can reorder fused candidates.",
+			ActiveMsg:     "Reranker client is initialized, but this snapshot does not probe the endpoint.",
 			DisabledMsg:   "Reranker URL is not configured; recall keeps fusion order.",
 			DegradedMsg:   "Reranker URL is configured, but the client is not initialized.",
 		}, rowsByKey),
@@ -144,7 +144,6 @@ func buildConfiguredModelRow(input modelRowInput, rowsByKey map[string]*models.M
 	health := "standby"
 	message := input.DisabledMsg
 	if activeModel, active := activeModelName(input.ActiveClient); active {
-		health = "ok"
 		message = input.ActiveMsg
 		if activeModel != "" {
 			model = activeModel

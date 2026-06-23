@@ -36,13 +36,13 @@ func TestBuildModelHealthResponse_UsesSettingsAndRedactsSecrets(t *testing.T) {
 	}, fakeModelClient{model: "runtime-embedding"}, nil)
 
 	require.Len(t, response.Rows, 3)
-	assert.Equal(t, 1, response.Summary.OK)
-	assert.Equal(t, 2, response.Summary.Standby)
+	assert.Equal(t, 0, response.Summary.OK)
+	assert.Equal(t, 3, response.Summary.Standby)
 	assert.Equal(t, 1, response.Summary.Configured)
 
 	embedding := response.Rows[0]
 	assert.Equal(t, "recall/embedder", embedding.ID)
-	assert.Equal(t, "ok", embedding.Health)
+	assert.Equal(t, "standby", embedding.Health)
 	assert.Equal(t, "settings", embedding.Source)
 	assert.Equal(t, "runtime-embedding", embedding.Model)
 	assert.True(t, embedding.Configured)

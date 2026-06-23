@@ -378,10 +378,10 @@ const server = createServer(async (req, res) => {
             role: 'embedding',
             provider: 'OpenAI-compatible embeddings',
             model: 'smoke-embedding',
-            health: 'ok',
+            health: 'standby',
             source: 'settings',
             endpoint: '/v1/embeddings',
-            message: 'Embedding client is initialized; vector recall can use the configured endpoint.',
+            message: 'Embedding client is initialized, but this snapshot does not probe the endpoint.',
             evidence: ['model_settings.embedder.url', 'model_settings.embedder.model'],
             configured: true,
             secret_set: false,
@@ -413,7 +413,7 @@ const server = createServer(async (req, res) => {
             secret_set: false,
           },
         ],
-        summary: { total: 3, ok: 1, standby: 2, degraded: 0, configured: 1 },
+        summary: { total: 3, ok: 0, standby: 3, degraded: 0, configured: 1 },
       })
       return
     case '/api/vector/metrics':
