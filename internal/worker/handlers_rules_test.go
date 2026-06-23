@@ -362,6 +362,19 @@ func TestHandleSetBehavioralRuleEnabled_RequiresEnabled(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestHandleSetBehavioralRuleEnabled_NotFound(t *testing.T) {
+	project := "test-rules-handler-enabled-not-found"
+	svc, _ := newRulesTestService(t, project)
+
+	req := newCHIRequest(http.MethodPatch, "/api/rules/999999999/enabled", "id", "999999999")
+	req.Body = ioNopCloser(`{"enabled":false,"edited_by":"operator-console"}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleSetBehavioralRuleEnabled(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
 func TestHandleSetBehavioralRuleEnabled_OmittedEditedByPreservesAudit(t *testing.T) {
 	project := "test-rules-handler-enabled-preserve-edited-by"
 	svc, brs := newRulesTestService(t, project)
