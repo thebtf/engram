@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 type SettingsTabKind = 'general' | 'runtime' | 'actions' | 'client' | 'dead' | 'mustbuild'
 type SettingsTabClass = 'live' | 'mustbuild' | 'stale'
@@ -40,6 +40,8 @@ const {
 
 const restartConfirm = ref(false)
 const updateRestartConfirm = ref(false)
+const restartInFlight = ref(false)
+const updateRestartInFlight = ref(false)
 
 const tabs = computed<SettingsTab[]>(() => [
   { id: 'general', groupKey: 'basic', labelKey: 'general', titleKey: 'general', descKey: 'general', kind: 'general', cls: 'live' },
@@ -80,7 +82,7 @@ const switches = computed(() => [
     key: 'injectUnified',
     title: t('settings.switches.injectUnified.title'),
     desc: t('settings.switches.injectUnified.desc'),
-    value: Boolean(config.value.memory?.inject_unified),
+    value: Boolean(config.value?.memory?.inject_unified),
     evidence: 'memory.inject_unified',
     reload: true,
   },
@@ -88,7 +90,7 @@ const switches = computed(() => [
     key: 'telemetry',
     title: t('settings.switches.telemetry.title'),
     desc: t('settings.switches.telemetry.desc'),
-    value: Boolean(config.value.features?.telemetry_enabled),
+    value: Boolean(config.value?.features?.telemetry_enabled),
     evidence: 'features.telemetry_enabled',
     reload: false,
   },
@@ -96,7 +98,7 @@ const switches = computed(() => [
     key: 'sourceProject',
     title: t('settings.switches.sourceProject.title'),
     desc: t('settings.switches.sourceProject.desc'),
-    value: Boolean(config.value.features?.enforce_source_project),
+    value: Boolean(config.value?.features?.enforce_source_project),
     evidence: 'features.enforce_source_project',
     reload: true,
   },
@@ -121,30 +123,47 @@ function setTheme(value: 'dark' | 'light') {
 }
 
 async function confirmRestartServer() {
+  if (restartInFlight.value) return
   if (!restartConfirm.value) {
     restartConfirm.value = true
     return
   }
-  await restartServer()
-  restartConfirm.value = false
+  restartInFlight.value = true
+  try {
+    await restartServer()
+  } finally {
+    restartInFlight.value = false
+    restartConfirm.value = false
+  }
 }
 
 async function confirmUpdateRestart() {
+  if (updateRestartInFlight.value) return
   if (!updateRestartConfirm.value) {
     updateRestartConfirm.value = true
     return
   }
-  await restartAfterUpdate()
-  updateRestartConfirm.value = false
+  updateRestartInFlight.value = true
+  try {
+    await restartAfterUpdate()
+  } finally {
+    updateRestartInFlight.value = false
+    updateRestartConfirm.value = false
+  }
 }
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && open.value) closeModal()
 }
 
-onMounted(() => {
-  if (import.meta.client) window.addEventListener('keydown', onKeydown)
-})
+watch(open, (isOpen) => {
+  if (!import.meta.client) return
+  if (isOpen) {
+    window.addEventListener('keydown', onKeydown)
+  } else {
+    window.removeEventListener('keydown', onKeydown)
+  }
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   if (import.meta.client) window.removeEventListener('keydown', onKeydown)
@@ -307,10 +326,10 @@ onBeforeUnmount(() => {
                   <p class="plain-help">{{ t('settings.restart.body') }}</p>
                   <div class="settings-actions">
                     <div class="left">
-                      <button class="danger" type="button" @click="confirmRestartServer">
+                      <button class="danger" type="button" :disabled="restartInFlight" @click="confirmRestartServer">
                         {{ restartConfirm ? t('settings.restart.confirm') : t('settings.restart.action') }}
                       </button>
-                      <button class="tbtn" type="button" :disabled="updateStatusState.kind === 'live' && updateStatusState.data.state !== 'done'" @click="confirmUpdateRestart">
+                      <button class="tbtn" type="button" :disabled="updateRestartInFlight || (updateStatusState.kind === 'live' && updateStatusState.data?.state !== 'done')" @click="confirmUpdateRestart">
                         {{ updateRestartConfirm ? t('settings.restart.confirmUpdate') : t('settings.restart.updateAction') }}
                       </button>
                     </div>
@@ -318,9 +337,9 @@ onBeforeUnmount(() => {
                   </div>
                   <p class="muted">
                     {{ t('settings.restart.updateState') }}:
-                    <code>{{ updateStatusState.kind === 'live' ? updateStatusState.data.state || t('health.idle') : '—' }}</code>
+                    <code>{{ updateStatusState.kind === 'live' ? updateStatusState.data?.state || t('health.idle') : '—' }}</code>
                     · {{ t('settings.restart.updateAvailable') }}:
-                    <code>{{ updateCheckState.kind === 'live' ? (updateCheckState.data.available ? t('common.yes') : t('common.no')) : '—' }}</code>
+                    <code>{{ updateCheckState.kind === 'live' ? (updateCheckState.data?.available ? t('common.yes') : t('common.no')) : '—' }}</code>
                   </p>
                 </section>
               </template>

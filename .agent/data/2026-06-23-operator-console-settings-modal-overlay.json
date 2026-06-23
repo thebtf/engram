@@ -1,10 +1,9 @@
 {
   "id": "operator-console-settings-modal-overlay",
   "date": "2026-06-23",
-  "worktree": "D:\\Dev\\engram-wt\\operator-console-hardening",
   "branch": "work/operator-console-hardening",
   "design_contract": {
-    "source": "D:\\Dev\\engram\\.od\\index.html",
+    "source": ".od/index.html (private design workspace, not committed)",
     "settings_contract": "Settings is a launch card plus modal overlay with rail/tab/stage/body. The modal opens over the current section and must not fake-wire backend controls without endpoints."
   },
   "changes": [
@@ -25,6 +24,21 @@
     "seam": "PASS: npm run test:seam (11/11)",
     "build": "PASS: npm run build",
     "browser": {
+      "automated": {
+        "command": "npm run test:browser",
+        "cwd": "apps/operator-console",
+        "assertions": [
+          "Settings opens as role=dialog modal overlay from /settings.",
+          "Route remains /settings after Escape closes the overlay.",
+          "Runtime tab exposes live switch evidence and mustbuild PATCH /api/config plus GET /api/flags gaps.",
+          "Models tab exposes honest mustbuild placeholder with GET /api/models evidence.",
+          "consoleProblems=[], failedRequests=[], badResponses=[], pageErrors=[]."
+        ],
+        "artifacts": [
+          "apps/operator-console/test-results/",
+          "apps/operator-console/playwright-report/"
+        ]
+      },
       "runtime": "Nuxt preview from .output/server/index.mjs on port 37991",
       "route": "GET http://127.0.0.1:37991/settings -> 200",
       "devtools": [
@@ -40,8 +54,7 @@
   },
   "known_warnings": [
     "nuxt dev still fails in this environment with No entry found in rollupOptions.input; production build and preview are green.",
-    "npm run build still reports transitive DEP0155 warnings from @iconify/@vue dependency paths.",
-    "npm install previously reported one low-severity npm audit item; dependency hardening remains a separate roadmap item."
+    "npm run build still reports transitive DEP0155 warnings from @iconify/@vue dependency paths."
   ],
   "cleanup": [
     "Preview owner process for local port 37991 was stopped.",

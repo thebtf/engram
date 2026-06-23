@@ -154,7 +154,8 @@ const server = createServer((req, res) => {
       json(res, 200, [])
       return
     default:
-      json(res, 200, {})
+      json(res, 404, { error: 'not found' })
+      return
   }
 })
 

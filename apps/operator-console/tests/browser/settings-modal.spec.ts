@@ -3,6 +3,8 @@ import { expect, test } from '@playwright/test'
 test('settings opens as a modal overlay and keeps unwired controls honest', async ({ page }) => {
   const consoleProblems: string[] = []
   const failedRequests: string[] = []
+  const badResponses: string[] = []
+  const pageErrors: string[] = []
 
   page.on('console', (message) => {
     if (message.type() === 'error' || message.type() === 'warning') {
@@ -11,6 +13,14 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
   })
   page.on('requestfailed', (request) => {
     failedRequests.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || 'failed'}`)
+  })
+  page.on('response', (response) => {
+    if (response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`)
+    }
+  })
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message)
   })
 
   await page.goto('/settings')
@@ -41,4 +51,6 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
 
   expect(consoleProblems).toEqual([])
   expect(failedRequests).toEqual([])
+  expect(badResponses).toEqual([])
+  expect(pageErrors).toEqual([])
 })
