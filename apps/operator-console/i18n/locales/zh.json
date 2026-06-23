@@ -852,16 +852,24 @@
       "loading": "正在加载会话详情…",
       "emptyTitle": "未选择会话",
       "emptyBody": "选择一个会话行以打开服务器卡片。",
+      "id": "ID",
+      "claudeSessionId": "Claude 会话",
+      "sdkSessionId": "SDK 会话",
       "project": "项目",
       "status": "状态",
+      "startedAt": "开始时间",
+      "completedAt": "完成时间",
       "prompts": "Prompts",
       "worker": "Worker port",
       "strategy": "策略",
-      "outcome": "结果"
+      "outcome": "结果",
+      "outcomeReason": "结果原因",
+      "userPrompt": "User prompt",
+      "noValue": "—"
     },
     "gaps": {
       "transcript": "Transcript readback 尚未通过 REST endpoint 暴露。",
-      "strategy": "路由和 strategy 仍是服务器侧 must-build。",
+      "route": "路由决策 timeline 仍是服务器侧 must-build。",
       "codeIntel": "code-intel 摘要目前只能通过工具 surface 使用。"
     }
   },

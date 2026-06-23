@@ -32,7 +32,11 @@ test('projects and sessions expose live rows and safe project archive', async ({
   await expect(page.getByRole('heading', { name: 'Деталь сессии' })).toBeVisible()
   await expect(page.getByText('operator-console').last()).toBeVisible()
   await expect(page.getByText('balanced')).toBeVisible()
+  await expect(page.getByText('sdk-operator-1')).toBeVisible()
+  await expect(page.getByText('Wire the operator console project surface.')).toBeVisible()
   await expect(page.getByText('GET /api/sessions/{id}/transcript')).toBeVisible()
+  await expect(page.getByText('GET /api/sessions/{id}/route')).toBeVisible()
+  await expect(page.getByText('[object Object]')).toHaveCount(0)
 
   await page.getByTestId('project-archive-open-project-alpha').click()
   await expect(page.getByTestId('project-archive-confirm-project-alpha')).toBeVisible()

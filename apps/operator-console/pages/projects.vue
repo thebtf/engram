@@ -15,7 +15,7 @@ const {
   openSession,
   deleteProject,
   sessionDetailGap,
-  sessionStrategyGap,
+  sessionRouteGap,
   codeIntelGap,
 } = useOperatorProjects()
 
@@ -228,12 +228,22 @@ function projectArchiveEndpoint(project: string) {
         <span>{{ t('projects.detail.emptyBody') }}</span>
       </div>
       <div v-else class="detail-grid">
+        <div><span>{{ t('projects.detail.id') }}</span><strong>{{ selectedSession.id }}</strong></div>
+        <div><span>{{ t('projects.detail.claudeSessionId') }}</span><strong>{{ selectedSession.claudeSessionId || t('projects.detail.noValue') }}</strong></div>
+        <div><span>{{ t('projects.detail.sdkSessionId') }}</span><strong>{{ selectedSession.sdkSessionId }}</strong></div>
         <div><span>{{ t('projects.detail.project') }}</span><strong>{{ selectedSession.project }}</strong></div>
         <div><span>{{ t('projects.detail.status') }}</span><strong>{{ selectedSession.status }}</strong></div>
+        <div><span>{{ t('projects.detail.startedAt') }}</span><strong>{{ selectedSession.startedAt || t('projects.detail.noValue') }}</strong></div>
+        <div><span>{{ t('projects.detail.completedAt') }}</span><strong>{{ selectedSession.completedAt || t('projects.detail.noValue') }}</strong></div>
         <div><span>{{ t('projects.detail.prompts') }}</span><strong>{{ selectedSession.promptCounter }}</strong></div>
         <div><span>{{ t('projects.detail.worker') }}</span><strong>{{ selectedSession.workerPort }}</strong></div>
         <div><span>{{ t('projects.detail.strategy') }}</span><strong>{{ selectedSession.injectionStrategy }}</strong></div>
         <div><span>{{ t('projects.detail.outcome') }}</span><strong>{{ selectedSession.outcome }}</strong></div>
+        <div><span>{{ t('projects.detail.outcomeReason') }}</span><strong>{{ selectedSession.outcomeReason || t('projects.detail.noValue') }}</strong></div>
+      </div>
+      <div v-if="selectedSession" class="detail-note" data-testid="project-session-user-prompt">
+        <span>{{ t('projects.detail.userPrompt') }}</span>
+        <pre>{{ selectedSession.userPrompt || t('projects.detail.noValue') }}</pre>
       </div>
       <div class="gaps">
         <div class="gap">
@@ -241,8 +251,8 @@ function projectArchiveEndpoint(project: string) {
           <span>{{ t('projects.gaps.transcript') }}</span>
         </div>
         <div class="gap">
-          <HonestyBadge cls="mustbuild" :evidence="sessionStrategyGap.evidence.endpoint" />
-          <span>{{ t('projects.gaps.strategy') }}</span>
+          <HonestyBadge cls="mustbuild" :evidence="sessionRouteGap.evidence.endpoint" />
+          <span>{{ t('projects.gaps.route') }}</span>
         </div>
         <div class="gap">
           <HonestyBadge cls="mustbuild" :evidence="codeIntelGap.evidence.endpoint" />
@@ -324,6 +334,9 @@ function projectArchiveEndpoint(project: string) {
 .detail-grid div { border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:10px; }
 .detail-grid span { display:block; color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
 .detail-grid strong { display:block; margin-top:6px; color:var(--fg); font-family:var(--font-mono); overflow:hidden; text-overflow:ellipsis; }
+.detail-note { display:grid; gap:8px; margin:0 16px 16px; border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:12px; }
+.detail-note span { color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
+.detail-note pre { margin:0; max-height:150px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--fg-2); font:inherit; }
 .gaps { display:grid; gap:10px; padding:0 16px 16px; }
 .gap { display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px dashed var(--border); border-radius:var(--r-sm); padding:10px 12px; color:var(--muted); font-size:var(--text-xs); }
 @media (max-width: 860px) {
