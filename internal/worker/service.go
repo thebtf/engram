@@ -137,6 +137,7 @@ type Service struct {
 	injectionTracker         *injection.Tracker
 	injectionLogStore        *gorm.InjectionLogStore
 	candidateStore           *gorm.CandidateStore     // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	candidateQueueEnabled    bool                     // cached at startup; handlers must not read env per request
 	candidateReviewStoreSeam candidateReviewStore     // test seam for REST candidate queue handlers
 	snapshotStore            *gorm.SnapshotStore      // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	writelintTokenStore      writelint.TokenStore     // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
@@ -469,24 +470,25 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	// Assemble the service struct. Fields that require database access are left
 	// nil here and populated by initializeAsync under initMu before ready is set.
 	svc := &Service{
-		version:            version,
-		config:             cfg,
-		sseBroadcaster:     sseBroadcaster,
-		router:             router,
-		ctx:                ctx,
-		cancel:             cancel,
-		startTime:          time.Now(),
-		updater:            update.New(version, installDir),
-		retrievalStats:     make(map[string]*RetrievalStats),
-		rateLimiter:        rateLimiter,
-		tokenAuth:          tokenAuth,
-		expensiveOpLimiter: NewExpensiveOperationLimiter(),
-		logBuffer:          logBuffer,
-		backfillTracker:    newBackfillTracker(),
-		cachedObsCounts:    make(map[string]cachedCount),
-		statsCacheTTL:      time.Minute,
-		mcpHealth:          mcp.NewMCPHealth(),
-		eventBus:           &projectevents.Bus{},
+		version:               version,
+		config:                cfg,
+		sseBroadcaster:        sseBroadcaster,
+		router:                router,
+		ctx:                   ctx,
+		cancel:                cancel,
+		startTime:             time.Now(),
+		updater:               update.New(version, installDir),
+		retrievalStats:        make(map[string]*RetrievalStats),
+		rateLimiter:           rateLimiter,
+		tokenAuth:             tokenAuth,
+		expensiveOpLimiter:    NewExpensiveOperationLimiter(),
+		logBuffer:             logBuffer,
+		backfillTracker:       newBackfillTracker(),
+		cachedObsCounts:       make(map[string]cachedCount),
+		candidateQueueEnabled: candidateQueueEnabledFromEnv(),
+		statsCacheTTL:         time.Minute,
+		mcpHealth:             mcp.NewMCPHealth(),
+		eventBus:              &projectevents.Bus{},
 
 		cognitiveRegistry:       cRegistry,
 		cognitiveMeter:          cMeter,

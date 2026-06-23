@@ -110,7 +110,6 @@ func candidateActionRequest(method, path string, body []byte) (*httptest.Respons
 }
 
 func TestHandleListMemoryCandidates_GatedBeforeStore(t *testing.T) {
-	t.Setenv(candidateQueueFlag, "")
 	store := &fakeCandidateReviewStore{}
 	service := &Service{candidateReviewStoreSeam: store}
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/candidates?project=engram", nil)
@@ -124,7 +123,6 @@ func TestHandleListMemoryCandidates_GatedBeforeStore(t *testing.T) {
 }
 
 func TestHandleListMemoryCandidates_ReturnsProjectScopedPayload(t *testing.T) {
-	t.Setenv(candidateQueueFlag, "true")
 	reviewAfter := time.Date(2026, time.June, 24, 12, 0, 0, 0, time.UTC)
 	store := &fakeCandidateReviewStore{
 		listRows: []*models.CrystallizationCandidate{{
@@ -146,7 +144,7 @@ func TestHandleListMemoryCandidates_ReturnsProjectScopedPayload(t *testing.T) {
 			PrivacyScope:            "project",
 		}},
 	}
-	service := &Service{candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/candidates?project=engram&status=pending&limit=7", nil)
 	w := httptest.NewRecorder()
 
@@ -170,7 +168,6 @@ func TestHandleListMemoryCandidates_ReturnsProjectScopedPayload(t *testing.T) {
 }
 
 func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
-	t.Setenv(candidateQueueFlag, "true")
 	promotedMemoryID := int64(77)
 	store := &fakeCandidateReviewStore{
 		getRows: map[int64]*models.CrystallizationCandidate{
@@ -188,7 +185,7 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 		},
 		promotedMemory: &models.Memory{ID: promotedMemoryID},
 	}
-	service := &Service{candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/promote", nil)
 	router.Post("/api/memory/candidates/{id}/promote", service.handlePromoteMemoryCandidate)
 
@@ -213,9 +210,8 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 }
 
 func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testing.T) {
-	t.Setenv(candidateQueueFlag, "true")
 	store := &fakeCandidateReviewStore{rejectErr: fmt.Errorf("%w: promoted -> rejected", gormdb.ErrInvalidTransition)}
-	service := &Service{candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
 	body := []byte(`{"reason":"not durable enough"}`)
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", body)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
@@ -225,4 +221,28 @@ func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testi
 	require.Equal(t, http.StatusConflict, w.Code)
 	assert.Equal(t, int64(42), store.rejectID)
 	assert.Equal(t, "not durable enough", store.rejectReason)
+}
+
+func TestHandleRejectMemoryCandidate_ContextCanceledAsClientClosed(t *testing.T) {
+	store := &fakeCandidateReviewStore{rejectErr: context.Canceled}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", nil)
+	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, statusClientClosedRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "client closed request")
+}
+
+func TestHandleRejectMemoryCandidate_DeadlineExceededAsGatewayTimeout(t *testing.T) {
+	store := &fakeCandidateReviewStore{rejectErr: context.DeadlineExceeded}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", nil)
+	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusGatewayTimeout, w.Code)
+	assert.Contains(t, w.Body.String(), "candidate request deadline exceeded")
 }

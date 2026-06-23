@@ -20,6 +20,7 @@ import (
 )
 
 const candidateQueueFlag = "ENGRAM_VNEXT_F_ENABLED"
+const statusClientClosedRequest = 499
 
 type candidateReviewStore interface {
 	ListByStatus(ctx context.Context, project string, status models.CandidateStatus, limit int) ([]*models.CrystallizationCandidate, error)
@@ -69,8 +70,12 @@ type rejectCandidateRequest struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-func candidateQueueEnabled() bool {
+func candidateQueueEnabledFromEnv() bool {
 	return os.Getenv(candidateQueueFlag) == "true"
+}
+
+func (s *Service) candidateQueueActive() bool {
+	return s != nil && s.candidateQueueEnabled
 }
 
 func (s *Service) currentCandidateReviewStore() candidateReviewStore {
@@ -128,6 +133,9 @@ func candidateReviewItemFromDomain(candidate *models.CrystallizationCandidate) c
 }
 
 func writeCandidateStoreError(w http.ResponseWriter, action string, id int64, err error) {
+	if writeCandidateContextError(w, err) {
+		return
+	}
 	if errors.Is(err, gormlib.ErrRecordNotFound) {
 		http.Error(w, "candidate not found", http.StatusNotFound)
 		return
@@ -138,6 +146,18 @@ func writeCandidateStoreError(w http.ResponseWriter, action string, id int64, er
 	}
 	log.Error().Err(err).Str("action", action).Int64("candidate_id", id).Msg("candidate action failed")
 	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+func writeCandidateContextError(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, context.Canceled) {
+		http.Error(w, "client closed request", statusClientClosedRequest)
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		http.Error(w, "candidate request deadline exceeded", http.StatusGatewayTimeout)
+		return true
+	}
+	return false
 }
 
 func candidateIDFromRequest(r *http.Request) (int64, bool) {
@@ -194,7 +214,7 @@ func memoryFromCandidate(candidate *models.CrystallizationCandidate) *models.Mem
 // @Failure 500 {string} string "internal error"
 // @Router /api/memory/candidates [get]
 func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Request) {
-	if !candidateQueueEnabled() {
+	if !s.candidateQueueActive() {
 		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
 		return
 	}
@@ -236,6 +256,9 @@ func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Requ
 
 	candidates, err := store.ListByStatus(r.Context(), project, status, limit)
 	if err != nil {
+		if writeCandidateContextError(w, err) {
+			return
+		}
 		log.Error().Err(err).Str("project", project).Str("status", string(status)).Msg("list candidates failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -259,7 +282,7 @@ func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Request) {
-	if !candidateQueueEnabled() {
+	if !s.candidateQueueActive() {
 		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
 		return
 	}
@@ -309,7 +332,7 @@ func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Service) handleRejectMemoryCandidate(w http.ResponseWriter, r *http.Request) {
-	if !candidateQueueEnabled() {
+	if !s.candidateQueueActive() {
 		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
 		return
 	}
@@ -349,7 +372,7 @@ func (s *Service) handleRejectMemoryCandidate(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Service) handleSupersedeMemoryCandidate(w http.ResponseWriter, r *http.Request) {
-	if !candidateQueueEnabled() {
+	if !s.candidateQueueActive() {
 		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
 		return
 	}

@@ -24,7 +24,7 @@ const { pageSize, pageSizeOptions } = usePersistentPageSize('engram.operatorCons
 const openId = ref<string | null>(null)
 const selected = ref<Record<string, boolean>>({})
 const confirm = ref<{ id: string; action: CandidateAction } | null>(null)
-const busyAction = ref<{ id: string; action: CandidateAction } | null>(null)
+const busyActions = ref<Record<string, CandidateAction | undefined>>({})
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 
 const effectivePageSize = computed(() => resolvePageSize(pageSize.value, rows.length))
@@ -95,13 +95,33 @@ function compactDate(value?: string) {
 }
 
 function actionLabel(candidate: OperatorCandidate, action: CandidateAction) {
-  if (busyAction.value?.id === candidate.id && busyAction.value.action === action) {
+  if (busyActions.value[candidate.id] === action) {
     return t('queue.actions.running')
   }
   if (confirm.value?.id === candidate.id && confirm.value.action === action) {
     return t(`queue.actions.confirm.${action}`)
   }
   return t(`queue.actions.${action}`)
+}
+
+function isCandidateBusy(id: string) {
+  return Boolean(busyActions.value[id])
+}
+
+function setCandidateBusy(id: string, action: CandidateAction) {
+  busyActions.value = { ...busyActions.value, [id]: action }
+}
+
+function clearCandidateBusy(id: string) {
+  const next = { ...busyActions.value }
+  delete next[id]
+  busyActions.value = next
+}
+
+function clearMatchingConfirm(id: string, action: CandidateAction) {
+  if (confirm.value?.id === id && confirm.value.action === action) {
+    confirm.value = null
+  }
 }
 
 function mutationError(result: unknown) {
@@ -112,14 +132,14 @@ function mutationError(result: unknown) {
 }
 
 async function runAction(candidate: OperatorCandidate, action: CandidateAction) {
-  if (busyAction.value) return
+  if (isCandidateBusy(candidate.id)) return
   if (confirm.value?.id !== candidate.id || confirm.value.action !== action) {
     confirm.value = { id: candidate.id, action }
     notice.value = null
     return
   }
 
-  busyAction.value = { id: candidate.id, action }
+  setCandidateBusy(candidate.id, action)
   try {
     const result = action === 'promote'
       ? await promoteCandidate(candidate.id)
@@ -132,13 +152,14 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
       delete nextSelected[candidate.id]
       selected.value = nextSelected
       if (openId.value === candidate.id) openId.value = null
-      confirm.value = null
+      clearMatchingConfirm(candidate.id, action)
       notice.value = { kind: 'success', text: t(`queue.notice.${action}`, { id: candidate.id }) }
     } else {
+      clearMatchingConfirm(candidate.id, action)
       notice.value = { kind: 'error', text: t('queue.notice.error', { message: mutationError(result) || t('queue.notice.unknownError') }) }
     }
   } finally {
-    busyAction.value = null
+    clearCandidateBusy(candidate.id)
   }
 }
 </script>
@@ -237,7 +258,9 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
                 <span>{{ candidate.target }}</span>
                 <span>{{ candidate.tier }}</span>
                 <span>{{ candidate.affectedProjects.join(', ') || selectedProject }}</span>
-                <span>{{ compactDate(candidate.createdAt) }}</span>
+                <ClientOnly fallback="—">
+                  <span>{{ compactDate(candidate.createdAt) }}</span>
+                </ClientOnly>
               </span>
             </span>
           </button>
@@ -246,13 +269,13 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
             <span>{{ t('queue.meta.recurrence', { count: candidate.recurrenceCount }) }}</span>
           </div>
           <div class="qactions">
-            <button class="act primary" :data-testid="`queue-action-promote-${candidate.id}`" :disabled="Boolean(busyAction)" @click="runAction(candidate, 'promote')">
+            <button class="act primary" :data-testid="`queue-action-promote-${candidate.id}`" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'promote')">
               {{ actionLabel(candidate, 'promote') }}
             </button>
-            <button class="act" :data-testid="`queue-action-reject-${candidate.id}`" :disabled="Boolean(busyAction)" @click="runAction(candidate, 'reject')">
+            <button class="act" :data-testid="`queue-action-reject-${candidate.id}`" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'reject')">
               {{ actionLabel(candidate, 'reject') }}
             </button>
-            <button class="act muted" :data-testid="`queue-action-supersede-${candidate.id}`" :disabled="Boolean(busyAction)" @click="runAction(candidate, 'supersede')">
+            <button class="act muted" :data-testid="`queue-action-supersede-${candidate.id}`" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'supersede')">
               {{ actionLabel(candidate, 'supersede') }}
             </button>
           </div>
