@@ -1015,15 +1015,11 @@ func (s *Service) startWatchers() {
 // call config.Get() per-request will pick up new values automatically.
 // Structural changes (port, token) log a warning — manual restart needed.
 func (s *Service) reloadConfig() {
-	newCfg, changed, err := config.Reload()
+	_, changed, err := s.applyConfigReload()
 	if err != nil {
 		log.Error().Err(err).Msg("Config reload failed — keeping current config")
 		return
 	}
-
-	s.initMu.Lock()
-	s.config = newCfg
-	s.initMu.Unlock()
 
 	if len(changed) == 0 {
 		log.Info().Msg("Config file changed but no values differ")
@@ -1038,6 +1034,19 @@ func (s *Service) reloadConfig() {
 		"message": "Configuration reloaded",
 		"changed": changed,
 	})
+}
+
+func (s *Service) applyConfigReload() (*config.Config, []string, error) {
+	newCfg, changed, err := config.Reload()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s.initMu.Lock()
+	s.config = newCfg
+	s.initMu.Unlock()
+
+	return newCfg, changed, nil
 }
 
 // isCrystallizationEnabled reports whether the crystallization pipeline is
@@ -1421,6 +1430,7 @@ func (s *Service) setupRoutes() {
 
 		// Config
 		r.Get("/api/config", s.handleGetConfig)
+		r.Patch("/api/config", s.handlePatchConfig)
 	})
 
 	// Catch-all browser routes for the promoted operator-console surface.

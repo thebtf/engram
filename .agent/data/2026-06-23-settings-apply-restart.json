@@ -1,0 +1,62 @@
+{
+  "id": "settings-apply-restart",
+  "date": "2026-06-23",
+  "goal_slice": "Server Control Plane Completion / Operator Console Hardening",
+  "summary": "Promoted Settings config save from honest mustbuild placeholder to a narrow live PATCH /api/config seam for allowlisted config-backed fields, preserving env-controlled read-only semantics and restart-required receipts.",
+  "worktree": "D:/Dev/engram-wt/settings-apply-restart",
+  "branch": "work/settings-apply-restart",
+  "implemented": [
+    "Added config.SaveSettings to merge validated operator settings into settings.json.",
+    "Added JSON loading and reload change detection for ENGRAM_INJECT_UNIFIED.",
+    "Added admin-only PATCH /api/config with strict JSON decoding, unsupported-field rejection, env-controlled conflict responses, allowlisted settings persistence, hot reload, and restart_required_fields receipt.",
+    "Updated GET /api/flags apply metadata from mustbuild to live allowlisted PATCH /api/config evidence.",
+    "Updated Settings modal to edit memory.inject_unified and features.enforce_source_project through the live mutation seam while telemetry remains disabled/read-only.",
+    "Updated ru/en/zh i18n for config save action, receipt, rollback error, and honest settings descriptions.",
+    "Updated mock operator API, seam test, browser smoke, and UI surface ledger for the new live seam."
+  ],
+  "remaining_gaps": [
+    "Telemetry and most runtime settings remain read-only or mustbuild until backed by real server seams.",
+    "PATCH /api/config currently covers only features.enforce_source_project and memory.inject_unified.",
+    "Audit log for config changes is still not implemented.",
+    "Broader env-to-settings import/migration remains future server-control-plane work."
+  ],
+  "verification": [
+    {
+      "command": "go test ./internal/config -run \"TestConfigSuite/Test(SaveSettings_MergesOperatorUpdates|Reload_DetectsOperatorSettingsChanges)\" -count=1",
+      "result": "PASS"
+    },
+    {
+      "command": "go test ./internal/config ./internal/worker -count=1",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run test:seam",
+      "cwd": "apps/operator-console",
+      "result": "PASS: 13/13 seam-contract tests, including settings config save live allowlisted PATCH with restart receipt."
+    },
+    {
+      "command": "npm run build",
+      "cwd": "apps/operator-console",
+      "result": "PASS: Nuxt production build completed; non-blocking Node/Nuxt dependency deprecation warnings observed."
+    },
+    {
+      "command": "npm run test:browser",
+      "cwd": "apps/operator-console",
+      "result": "PASS: Settings modal browser smoke clicks memory.inject_unified, saves config, sees success receipt and restart-required field."
+    },
+    {
+      "command": "npm run parity",
+      "cwd": "apps/operator-console",
+      "result": "PASS: design_version 2026.06.21 synced, no drifted rows, every page has a parity row."
+    },
+    {
+      "command": "go test ./... -count=1",
+      "result": "PASS: full Go suite passed. Note: because npm ci had installed local node_modules for UI verification, Go also traversed an ignored flatted package under apps/operator-console/node_modules."
+    }
+  ],
+  "honesty_notes": [
+    "Env-controlled settings return HTTP 409 instead of pretending the UI changed the effective value.",
+    "Unsupported known fields, including features.telemetry_enabled, return HTTP 400 and remain non-operable in the UI.",
+    "memory.inject_unified returns restart_required_fields because the operator needs an explicit restart/apply signal."
+  ]
+}

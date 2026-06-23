@@ -194,6 +194,40 @@ func EnsureSettings() error {
 	return os.WriteFile(path, []byte(defaultSettings), 0600)
 }
 
+// SaveSettings merges validated operator-facing settings into settings.json.
+// Callers must keep secrets and env-only values out of updates before calling.
+func SaveSettings(updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	if err := EnsureDataDir(); err != nil {
+		return err
+	}
+
+	path := SettingsPath()
+	settings := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil && strings.TrimSpace(string(data)) != "" {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return err
+		}
+	}
+
+	for key, value := range updates {
+		settings[key] = value
+	}
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	return os.WriteFile(path, out, 0600)
+}
+
 // EnsureAll ensures all required directories and files exist.
 func EnsureAll() error {
 	if err := EnsureDataDir(); err != nil {
@@ -307,6 +341,9 @@ func Load() (*Config, error) {
 			}
 			if v, ok := settings["ENGRAM_ENFORCE_SOURCE_PROJECT"].(bool); ok {
 				cfg.EnforceSourceProject = v
+			}
+			if v, ok := settings["ENGRAM_INJECT_UNIFIED"].(bool); ok {
+				cfg.InjectUnified = v
 			}
 		}
 	}
@@ -509,6 +546,12 @@ func Reload() (*Config, []string, error) {
 		}
 		if old.ContextObservations != newCfg.ContextObservations {
 			changed = append(changed, "context_observations")
+		}
+		if old.EnforceSourceProject != newCfg.EnforceSourceProject {
+			changed = append(changed, "enforce_source_project")
+		}
+		if old.InjectUnified != newCfg.InjectUnified {
+			changed = append(changed, "inject_unified (requires restart)")
 		}
 		if old.WorkerPort != newCfg.WorkerPort {
 			changed = append(changed, "worker_port (requires restart)")

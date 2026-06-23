@@ -913,15 +913,15 @@
     "switches": {
       "injectUnified": {
         "title": "Единая инъекция памяти",
-        "desc": "Текущее значение из /api/config; изменение требует серверного save endpoint."
+        "desc": "Сохраняется через PATCH /api/config; effective только после restart receipt."
       },
       "telemetry": {
         "title": "Telemetry",
-        "desc": "Текущее состояние telemetry_enabled из runtime config."
+        "desc": "Текущее состояние telemetry_enabled из runtime config; writable seam пока не открыт."
       },
       "sourceProject": {
         "title": "Enforce source project",
-        "desc": "Текущее состояние enforce_source_project; изменение не считаем applied без restart receipt."
+        "desc": "Сохраняется через PATCH /api/config и применяется hot-reload без restart."
       }
     },
     "gaps": {
@@ -930,12 +930,21 @@
     },
     "flags": {
       "title": "Feature flags",
-      "body": "Read-only снимок текущего процесса из GET /api/flags. Изменение флагов всё ещё требует settings save endpoint и restart-required receipt.",
+      "body": "Read-only снимок текущего процесса из GET /api/flags. Writable только allowlisted config-backed поля; env/runtime flags остаются read-only.",
       "pending": "Загружаем feature flags…",
       "error": "Не удалось загрузить feature flags: {message}",
       "enabled": "включено",
       "disabled": "выключено",
       "restartRequired": "restart"
+    },
+    "save": {
+      "action": "Сохранить config",
+      "pending": "Сохраняем…",
+      "reset": "Сбросить",
+      "success": "Сохранено: {changed}. Restart required: {restart}.",
+      "restartFields": "Restart нужен для: {fields}.",
+      "error": "Не удалось сохранить config: {message}",
+      "noEffectiveChanges": "effective values unchanged"
     },
     "restart": {
       "title": "Restart / update",

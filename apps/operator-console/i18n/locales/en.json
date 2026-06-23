@@ -913,15 +913,15 @@
     "switches": {
       "injectUnified": {
         "title": "Unified memory injection",
-        "desc": "Current value from /api/config; changing it needs a server save endpoint."
+        "desc": "Saved through PATCH /api/config; effective only after a restart receipt."
       },
       "telemetry": {
         "title": "Telemetry",
-        "desc": "Current telemetry_enabled value from runtime config."
+        "desc": "Current telemetry_enabled value from runtime config; writable seam is not open yet."
       },
       "sourceProject": {
         "title": "Enforce source project",
-        "desc": "Current enforce_source_project value; do not call it applied without a restart receipt."
+        "desc": "Saved through PATCH /api/config and hot-reloaded without restart."
       }
     },
     "gaps": {
@@ -930,12 +930,21 @@
     },
     "flags": {
       "title": "Feature flags",
-      "body": "Read-only current-process snapshot from GET /api/flags. Changing flags still needs a settings save endpoint and restart-required receipt.",
+      "body": "Read-only current-process snapshot from GET /api/flags. Only allowlisted config-backed fields are writable; env/runtime flags stay read-only.",
       "pending": "Loading feature flags…",
       "error": "Could not load feature flags: {message}",
       "enabled": "enabled",
       "disabled": "disabled",
       "restartRequired": "restart"
+    },
+    "save": {
+      "action": "Save config",
+      "pending": "Saving…",
+      "reset": "Reset",
+      "success": "Saved: {changed}. Restart required: {restart}.",
+      "restartFields": "Restart is needed for: {fields}.",
+      "error": "Could not save config: {message}",
+      "noEffectiveChanges": "effective values unchanged"
     },
     "restart": {
       "title": "Restart / update",

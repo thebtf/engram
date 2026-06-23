@@ -393,6 +393,59 @@ func (s *ConfigSuite) TestLoad_JSONContextSettings() {
 	s.False(cfg.EnforceSourceProject)
 }
 
+func (s *ConfigSuite) TestSaveSettings_MergesOperatorUpdates() {
+	tempDir, err := os.MkdirTemp("", "config-save-settings-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(`{"ENGRAM_MODEL":"haiku"}`), 0600)
+	s.Require().NoError(err)
+
+	err = SaveSettings(map[string]any{
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": false,
+		"ENGRAM_INJECT_UNIFIED":         false,
+	})
+	s.Require().NoError(err)
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal("haiku", cfg.Model)
+	s.False(cfg.EnforceSourceProject)
+	s.False(cfg.InjectUnified)
+}
+
+func (s *ConfigSuite) TestReload_DetectsOperatorSettingsChanges() {
+	tempDir, err := os.MkdirTemp("", "config-reload-operator-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	_, _, err = Reload()
+	s.Require().NoError(err)
+
+	err = SaveSettings(map[string]any{
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": false,
+		"ENGRAM_INJECT_UNIFIED":         false,
+	})
+	s.Require().NoError(err)
+
+	cfg, changed, err := Reload()
+	s.Require().NoError(err)
+	s.False(cfg.EnforceSourceProject)
+	s.False(cfg.InjectUnified)
+	s.Contains(changed, "enforce_source_project")
+	s.Contains(changed, "inject_unified (requires restart)")
+}
+
 // TestLoad_DBPathFromJSON verifies ENGRAM_DB_PATH in JSON settings is applied.
 func (s *ConfigSuite) TestLoad_DBPathFromJSON() {
 	tempDir, err := os.MkdirTemp("", "config-test-dbpath-*")

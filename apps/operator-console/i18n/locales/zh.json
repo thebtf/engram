@@ -913,15 +913,15 @@
     "switches": {
       "injectUnified": {
         "title": "统一记忆注入",
-        "desc": "来自 /api/config 的当前值；修改需要服务器 save endpoint。"
+        "desc": "通过 PATCH /api/config 保存；只有拿到 restart receipt 后才算 effective。"
       },
       "telemetry": {
         "title": "Telemetry",
-        "desc": "runtime config 中 telemetry_enabled 的当前值。"
+        "desc": "runtime config 中 telemetry_enabled 的当前值；writable seam 尚未开放。"
       },
       "sourceProject": {
         "title": "Enforce source project",
-        "desc": "enforce_source_project 的当前值；没有 restart receipt 时不能视为 applied。"
+        "desc": "通过 PATCH /api/config 保存，并通过 hot-reload 生效，无需 restart。"
       }
     },
     "gaps": {
@@ -930,12 +930,21 @@
     },
     "flags": {
       "title": "Feature flags",
-      "body": "来自 GET /api/flags 的只读当前进程快照。修改 flags 仍需要 settings save endpoint 和 restart-required receipt。",
+      "body": "来自 GET /api/flags 的只读当前进程快照。只有 allowlisted config-backed 字段可写；env/runtime flags 保持 read-only。",
       "pending": "正在加载 feature flags…",
       "error": "无法加载 feature flags：{message}",
       "enabled": "已启用",
       "disabled": "已禁用",
       "restartRequired": "restart"
+    },
+    "save": {
+      "action": "保存 config",
+      "pending": "正在保存…",
+      "reset": "重置",
+      "success": "已保存：{changed}。需要 restart：{restart}。",
+      "restartFields": "需要 restart 的字段：{fields}。",
+      "error": "无法保存 config：{message}",
+      "noEffectiveChanges": "effective values unchanged"
     },
     "restart": {
       "title": "Restart / update",
