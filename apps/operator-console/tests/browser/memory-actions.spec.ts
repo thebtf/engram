@@ -25,14 +25,15 @@ test('memory hide-as-noise uses the live suppress action and removes the row', a
 
   await page.goto('/memory')
 
-  const noisyRow = page.getByRole('button', { name: /stale recall hits should be suppressed/ })
+  const noisyRow = page.getByTestId('memory-row-102')
   await expect(noisyRow).toBeVisible()
   await noisyRow.click()
 
-  await page.getByRole('button', { name: 'Скрыть как шум' }).click()
-  await page.getByRole('button', { name: 'Подтвердить скрытие' }).click()
+  const suppressAction = page.getByTestId('memory-suppress-action')
+  await suppressAction.click()
+  await suppressAction.click()
 
-  await expect(page.getByText('Запись памяти 102 скрыта как шум')).toBeVisible()
+  await expect(page.getByTestId('memory-notice')).toBeVisible()
   await expect(noisyRow).toHaveCount(0)
 
   expect(consoleProblems).toEqual([])

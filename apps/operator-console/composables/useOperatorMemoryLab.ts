@@ -379,19 +379,27 @@ export function useOperatorMemoryLab(): {
     const uniqueIds = [...new Set(ids)].filter(Boolean)
     return runOperatorMutation({
       action: 'memory-bulk-suppress',
-      evidence: endpointEvidence('/api/memories/{id}/suppress', 'memory-bulk-suppress', {
-        reason: 'Bulk suppression applies the same live row endpoint once per selected memory.',
+      evidence: endpointEvidence('/api/memories/suppress', 'memory-bulk-suppress', {
+        reason: 'Bulk suppression validates the selected memory IDs before applying soft-delete semantics.',
       }),
       snapshot: () => [...rowsState.value],
       optimistic: () => {
         const suppressed = new Set(uniqueIds)
         replaceArray(rowsState.value, rowsState.value.filter((row) => !suppressed.has(row.id)))
       },
-      run: async () => Promise.all(uniqueIds.map((id) => operatorFetchJson<MemoryActionReceipt>(
-        `/api/memories/${id}/suppress`,
-        jsonInit('POST', { reason }),
-        'memory-bulk-suppress',
-      ))),
+      run: () => {
+        const numericIds = uniqueIds.map((id) => Number.parseInt(id, 10))
+        if (numericIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+          throw new OperatorFetchError('Bulk suppression requires numeric memory IDs', {
+            message: 'Bulk suppression requires numeric memory IDs',
+            source: 'memory-bulk-suppress',
+            path: '/api/memories/suppress',
+            method: 'POST',
+            retryable: false,
+          })
+        }
+        return operatorFetchJson<MemoryActionReceipt[]>('/api/memories/suppress', jsonInit('POST', { ids: numericIds, reason }), 'memory-bulk-suppress')
+      },
       rollback: (snapshot) => {
         replaceArray(rowsState.value, snapshot || [])
       },

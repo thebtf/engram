@@ -1421,6 +1421,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/memory-domains", s.handleListMemoryDomains)
 		r.Put("/api/memory-domains/{domain}", s.handleUpsertMemoryDomain)
 		r.Delete("/api/memory-domains/{domain}", s.handleDeleteMemoryDomain)
+		r.Post("/api/memories/suppress", s.handleSuppressMemories)
 		r.Post("/api/memories/{id}/suppress", s.handleSuppressMemoryByID)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 

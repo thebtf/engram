@@ -307,7 +307,7 @@ function isNoisyUtility(memory: Memory) {
       <span class="fcount">{{ t('memory.filterSummary', { count: filtered.length, noise: noiseRatio }) }}</span>
     </section>
 
-    <section v-if="notice" class="statebar" :data-state="notice.kind === 'error' ? 'error' : 'live'">
+    <section v-if="notice" class="statebar" :data-state="notice.kind === 'error' ? 'error' : 'live'" data-testid="memory-notice">
       <span>{{ notice.text }}</span>
       <button class="tbtn" @click="notice = null">{{ t('common.hide') }}</button>
     </section>
@@ -327,7 +327,7 @@ function isNoisyUtility(memory: Memory) {
           <span>{{ t('memory.table.value') }}</span>
         </div>
 
-        <button v-for="memory in pageRows" :key="memory.id" class="mrow" :class="{ open: openId === memory.id }" @click="openId = openId === memory.id ? null : memory.id">
+        <button v-for="memory in pageRows" :key="memory.id" class="mrow" :class="{ open: openId === memory.id }" :data-testid="`memory-row-${memory.id}`" @click="openId = openId === memory.id ? null : memory.id">
           <span class="echk" :class="{ on: selected[memory.id] }" @click.stop="toggleSelected(memory.id)">{{ selected[memory.id] ? '✓' : '' }}</span>
           <span class="estate" :data-s="rowStateClass(memory)" />
           <span class="ebody">
@@ -403,7 +403,7 @@ function isNoisyUtility(memory: Memory) {
         </section>
 
         <div class="dactions">
-          <button class="act" :disabled="suppressPending" @click="suppressOpened">
+          <button class="act" data-testid="memory-suppress-action" :disabled="suppressPending" @click="suppressOpened">
             {{ suppressConfirmId === opened.id ? t('memory.detail.actions.confirmHideNoise') : t('memory.detail.actions.hideNoise') }}
           </button>
           <button class="act danger" :disabled="deletePending" @click="deleteOpened">

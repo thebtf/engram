@@ -251,6 +251,28 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && path === '/api/memories/suppress') {
+    try {
+      const body = await readRequestJson(req)
+      const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map((id) => Number(id)))] : []
+      if (!ids.length || ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+        json(res, 400, { error: 'invalid memory ids' })
+        return
+      }
+      const missing = ids.some((id) => !memoryRows.some((row) => row.id === id) || suppressedMemoryIds.has(String(id)))
+      if (missing) {
+        json(res, 404, { error: 'memory not found' })
+        return
+      }
+      const reason = typeof body.reason === 'string' ? body.reason.trim() : ''
+      ids.forEach((id) => suppressedMemoryIds.add(String(id)))
+      json(res, 200, ids.map((id) => ({ status: 'ok', action: 'suppress', id, reason })))
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
   const suppressMatch = path.match(/^\/api\/memories\/([^/]+)\/suppress$/)
   if (req.method === 'POST' && suppressMatch) {
     const id = suppressMatch[1]
