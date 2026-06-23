@@ -567,7 +567,7 @@ onBeforeUnmount(() => {
                   <p class="plain-help">{{ t('settings.domains.body') }}</p>
                   <div class="settings-actions domain-toolbar">
                     <div class="left">
-                      <span class="tag">{{ t('settings.domains.count', { count: domainCount }) }}</span>
+                      <span class="tag">{{ t('settings.domains.count', domainCount) }}</span>
                       <HonestyBadge cls="live" :evidence="domainListEvidence.endpoint" />
                       <code class="endpoint-pill">GET {{ domainListEvidence.endpoint }}</code>
                     </div>
@@ -666,7 +666,7 @@ onBeforeUnmount(() => {
                           class="danger"
                           type="button"
                           :data-testid="domainDeleteTestId(row.domain)"
-                          :disabled="domainDeleteInFlight === row.domain"
+                          :disabled="Boolean(domainDeleteInFlight)"
                           :aria-label="t('settings.domains.aria.delete', { domain: row.domain })"
                           @click="confirmDeleteDomain(row.domain)"
                         >
