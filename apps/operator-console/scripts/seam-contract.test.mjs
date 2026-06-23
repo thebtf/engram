@@ -427,7 +427,7 @@ test('operator console recovers from stale Nuxt chunk errors after deploy', () =
   assert.match(source, /app:chunkError/, 'Nuxt app chunk errors must be handled explicitly')
   assert.match(source, /vite:preloadError/, 'Vite preload errors must be handled explicitly')
   assert.match(source, /unhandledrejection/, 'dynamic-import promise rejections must be handled explicitly')
-  assert.match(source, /window\.addEventListener\(['"]error['"]/, 'module script error events must be handled before Nuxt renders a 500 page')
+  assert.match(source, /window\.addEventListener\(['"]error['"],[\s\S]*\}, true\)/, 'module script error events must be handled in capture phase before Nuxt renders a 500 page')
   assert.match(source, /failed to fetch dynamically imported module/, 'browser dynamic import error text must be recognized')
   assert.match(source, /failed to load module script/, 'Chrome module script failure text must be recognized')
   assert.match(source, /isNuxtModuleScriptFailure/, 'filename-only Nuxt module script failures must be handled separately from text-pattern matching')
