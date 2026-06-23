@@ -802,7 +802,20 @@
     "actions": {
       "refresh": "Refresh",
       "delete": "Delete",
-      "confirmDelete": "Confirm"
+      "confirmDelete": "Confirm",
+      "archive": "Archive",
+      "archiveProject": "Archive project {project}",
+      "confirmArchive": "Confirm archive",
+      "archiving": "Archiving…",
+      "cancel": "Cancel"
+    },
+    "archive": {
+      "title": "Archive project",
+      "body": "The server will soft-delete project {project}: it leaves the active console, but data is not physically deleted.",
+      "endpoint": "DELETE {endpoint}",
+      "inputLabel": "Type the project ID to confirm",
+      "inputPlaceholder": "Project ID",
+      "error": "Could not archive project: {message}"
     },
     "state": {
       "pending": "Loading projects and sessions from the server…",

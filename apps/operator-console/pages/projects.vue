@@ -19,7 +19,10 @@ const {
   codeIntelGap,
 } = useOperatorProjects()
 
-const deleteConfirm = ref('')
+const projectArchiveTarget = ref('')
+const projectArchiveInput = ref('')
+const projectArchivePending = ref('')
+const projectArchiveError = ref('')
 
 const selectedProjectRow = computed(() => projectRows.value.find((project) => project.id === selectedProject.value) || null)
 const sessionCountLabel = computed(() => t('projects.sessionsCount', sessions.length))
@@ -32,13 +35,40 @@ function openSessionRow(session: typeof sessions[number]) {
   void openSession(session)
 }
 
-async function confirmDeleteProject(project: string) {
-  if (deleteConfirm.value !== project) {
-    deleteConfirm.value = project
+async function confirmArchiveProject(project: string) {
+  if (projectArchivePending.value) return
+
+  if (projectArchiveTarget.value !== project) {
+    projectArchiveTarget.value = project
+    projectArchiveInput.value = ''
+    projectArchiveError.value = ''
     return
   }
-  await deleteProject(project)
-  deleteConfirm.value = ''
+
+  if (projectArchiveInput.value !== project) return
+
+  projectArchivePending.value = project
+  projectArchiveError.value = ''
+  const result = await deleteProject(project)
+  projectArchivePending.value = ''
+  if (result.kind === 'rollback') {
+    projectArchiveError.value = result.error.message
+    return
+  }
+
+  projectArchiveTarget.value = ''
+  projectArchiveInput.value = ''
+}
+
+function cancelArchiveProject() {
+  if (projectArchivePending.value) return
+  projectArchiveTarget.value = ''
+  projectArchiveInput.value = ''
+  projectArchiveError.value = ''
+}
+
+function projectArchiveEndpoint(project: string) {
+  return `/api/projects/${encodeURIComponent(project)}`
 }
 </script>
 
@@ -90,9 +120,9 @@ async function confirmDeleteProject(project: string) {
           <span>{{ t('projects.list.count', projectRows.length) }}</span>
         </div>
         <div class="rows">
+          <template v-for="project in projectRows" :key="project.id">
           <EntityRow
-            v-for="project in projectRows"
-            :key="project.id"
+            :data-testid="`project-row-${project.id}`"
             :open="project.id === selectedProject"
             status="live"
             :preview="project.id"
@@ -100,12 +130,58 @@ async function confirmDeleteProject(project: string) {
             @open="openProjectRow(project.id)"
           >
             <template #side>
-              <button class="mini" type="button" @click="confirmDeleteProject(project.id)">
-                {{ deleteConfirm === project.id ? t('projects.actions.confirmDelete') : t('projects.actions.delete') }}
+              <button
+                class="mini danger"
+                type="button"
+                :data-testid="`project-archive-open-${project.id}`"
+                :aria-expanded="projectArchiveTarget === project.id"
+                :aria-label="t('projects.actions.archiveProject', { project: project.id })"
+                :disabled="projectArchivePending === project.id"
+                @click="confirmArchiveProject(project.id)"
+              >
+                {{ projectArchivePending === project.id ? t('projects.actions.archiving') : t('projects.actions.archive') }}
               </button>
               <HonestyBadge cls="live" />
             </template>
           </EntityRow>
+          <div
+            v-if="projectArchiveTarget === project.id"
+            class="archive-confirm"
+            :data-testid="`project-archive-confirm-${project.id}`"
+          >
+            <div>
+              <strong>{{ t('projects.archive.title') }}</strong>
+              <p>{{ t('projects.archive.body', { project: project.id }) }}</p>
+              <code>{{ t('projects.archive.endpoint', { endpoint: projectArchiveEndpoint(project.id) }) }}</code>
+            </div>
+            <label>
+              <span>{{ t('projects.archive.inputLabel') }}</span>
+              <input
+                v-model="projectArchiveInput"
+                type="text"
+                :disabled="projectArchivePending === project.id"
+                :placeholder="t('projects.archive.inputPlaceholder')"
+                :data-testid="`project-archive-input-${project.id}`"
+                @keydown.enter.prevent="confirmArchiveProject(project.id)"
+              />
+            </label>
+            <div class="archive-actions">
+              <button class="mini" type="button" :disabled="Boolean(projectArchivePending)" @click="cancelArchiveProject">
+                {{ t('projects.actions.cancel') }}
+              </button>
+              <button
+                class="mini danger"
+                type="button"
+                :disabled="projectArchiveInput !== project.id || projectArchivePending === project.id"
+                :data-testid="`project-archive-confirm-button-${project.id}`"
+                @click="confirmArchiveProject(project.id)"
+              >
+                {{ projectArchivePending === project.id ? t('projects.actions.archiving') : t('projects.actions.confirmArchive') }}
+              </button>
+            </div>
+            <p v-if="projectArchiveError" class="archive-error">{{ t('projects.archive.error', { message: projectArchiveError }) }}</p>
+          </div>
+          </template>
         </div>
       </div>
 
@@ -124,6 +200,7 @@ async function confirmDeleteProject(project: string) {
             :key="session.id"
             type="button"
             class="session-row"
+            :data-testid="`project-session-${session.id}`"
             :class="{ open: selectedSession?.id === session.id }"
             @click="openSessionRow(session)"
           >
@@ -188,6 +265,8 @@ async function confirmDeleteProject(project: string) {
 .btn { padding:9px 14px; font-weight:700; }
 .btn:disabled { opacity:.55; cursor:wait; }
 .mini { padding:5px 9px; font-size:var(--text-xs); }
+.mini.danger { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
+.mini:disabled { opacity:.55; cursor:not-allowed; }
 .link { padding:3px 8px; color:var(--accent); }
 .state { display:flex; align-items:center; gap:10px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:10px 12px; font-size:var(--text-sm); color:var(--fg-2); }
 .state.pending { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
@@ -208,6 +287,28 @@ async function confirmDeleteProject(project: string) {
 .panel-head h2 { margin:0; font-size:var(--text-sm); font-weight:800; }
 .panel-head span { color:var(--muted); font-size:var(--text-xs); }
 .rows { max-height:440px; overflow:auto; }
+.archive-confirm {
+  display:grid;
+  gap:12px;
+  padding:14px;
+  border-bottom:1px solid var(--border-soft);
+  background:color-mix(in oklab,var(--state-warn),transparent 92%);
+}
+.archive-confirm strong { display:block; margin-bottom:4px; color:var(--fg); }
+.archive-confirm p { margin:0; color:var(--fg-2); font-size:var(--text-xs); }
+.archive-confirm code { display:inline-block; margin-top:8px; color:var(--muted); font-size:var(--text-xs); }
+.archive-confirm label { display:grid; gap:6px; color:var(--muted); font-size:var(--text-xs); }
+.archive-confirm input {
+  width:100%;
+  border:1px solid var(--border);
+  border-radius:var(--r-sm);
+  background:var(--bg);
+  color:var(--fg);
+  padding:8px 10px;
+  font:inherit;
+}
+.archive-actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
+.archive-error { color:var(--state-warn); }
 .sessions { display:grid; }
 .session-row { display:grid; grid-template-columns:minmax(0,1.8fr) .7fr .7fr 1fr; gap:12px; align-items:center; width:100%; border:0; border-bottom:1px solid var(--border-soft); background:transparent; color:var(--fg-2); padding:12px 16px; text-align:left; cursor:pointer; }
 .session-row:hover, .session-row.open { background:var(--surface-warm); color:var(--fg); }

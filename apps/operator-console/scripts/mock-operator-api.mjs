@@ -137,6 +137,41 @@ const memoryRows = [
 
 const suppressedMemoryIds = new Set()
 
+let projectIds = ['operator-console', 'project-alpha']
+
+let sessionRows = [
+  {
+    id: 501,
+    claude_session_id: 'sess-operator-1',
+    sdk_session_id: 'sdk-operator-1',
+    project: 'operator-console',
+    status: 'active',
+    started_at: '2026-06-23T08:00:00Z',
+    completed_at: '',
+    prompt_counter: 7,
+    injection_strategy: 'balanced',
+    outcome: 'running',
+    outcome_reason: '',
+    worker_port: 37777,
+    user_prompt: 'Wire the operator console project surface.',
+  },
+  {
+    id: 502,
+    claude_session_id: 'sess-alpha-1',
+    sdk_session_id: 'sdk-alpha-1',
+    project: 'project-alpha',
+    status: 'completed',
+    started_at: '2026-06-22T08:00:00Z',
+    completed_at: '2026-06-22T09:00:00Z',
+    prompt_counter: 3,
+    injection_strategy: 'quiet',
+    outcome: 'done',
+    outcome_reason: 'fixture complete',
+    worker_port: 37778,
+    user_prompt: 'Fixture project session.',
+  },
+]
+
 const candidateFixtureRows = [
   {
     id: 301,
@@ -587,6 +622,28 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  const projectDeleteMatch = path.match(/^\/api\/projects\/([^/]+)$/)
+  if (req.method === 'DELETE' && projectDeleteMatch) {
+    let project = ''
+    try {
+      project = decodeURIComponent(projectDeleteMatch[1]).trim()
+    } catch {
+      json(res, 400, { error: 'invalid project encoding' })
+      return
+    }
+
+    const index = projectIds.indexOf(project)
+    if (index < 0) {
+      json(res, 404, { error: 'project not found or already deleted' })
+      return
+    }
+
+    projectIds.splice(index, 1)
+    sessionRows = sessionRows.filter((row) => row.project !== project)
+    json(res, 200, { id: project, removed_at: new Date().toISOString() })
+    return
+  }
+
   if (req.method !== 'GET') {
     json(res, 405, { error: 'method not allowed' })
     return
@@ -727,13 +784,31 @@ const server = createServer(async (req, res) => {
       json(res, 200, { key_configured: true, fingerprint: 'abcddcba11223344', key_source: 'mock', credential_count: vaultCredentials.length })
       return
     case '/api/sessions/list':
-      json(res, 200, { sessions: [], total: 0 })
+      {
+        const project = url.searchParams.get('project') || ''
+        const limit = Number(url.searchParams.get('limit') || 100)
+        const rows = sessionRows
+          .filter((row) => !project || row.project === project)
+          .slice(0, Number.isFinite(limit) && limit > 0 ? limit : 100)
+        json(res, 200, { sessions: rows, total: rows.length, limit, offset: 0 })
+      }
+      return
+    case '/api/sessions':
+      {
+        const claudeSessionId = url.searchParams.get('claudeSessionId') || ''
+        const row = sessionRows.find((item) => item.claude_session_id === claudeSessionId)
+        if (!row) {
+          json(res, 404, { error: 'session not found' })
+          return
+        }
+        json(res, 200, row)
+      }
       return
     case '/api/rules':
       json(res, 200, [])
       return
     case '/api/projects':
-      json(res, 200, ['operator-console'])
+      json(res, 200, [...projectIds])
       return
     case '/api/memories':
       json(res, 200, memoryResponseForProject(url.searchParams.get('project') || 'operator-console'))
