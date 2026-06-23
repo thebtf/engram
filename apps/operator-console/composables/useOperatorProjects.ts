@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { OperatorLoadState } from './useOperatorApi'
+import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
 import {
   emptyState,
   endpointEvidence,
@@ -144,7 +144,7 @@ export function useOperatorProjects(): {
   refresh: () => Promise<void>
   openProject: (project: string) => Promise<void>
   openSession: (session: OperatorSessionRow) => Promise<void>
-  deleteProject: (project: string) => Promise<unknown>
+  deleteProject: (project: string) => Promise<OperatorMutationResult<unknown>>
   sessionDetailGap: ReturnType<typeof unsupportedOperatorAction>
   sessionStrategyGap: ReturnType<typeof unsupportedOperatorAction>
   codeIntelGap: ReturnType<typeof unsupportedOperatorAction>
@@ -288,9 +288,10 @@ export function useOperatorProjects(): {
   }
 
   async function deleteProject(project: string) {
+    const endpoint = `/api/projects/${encodeURIComponent(project)}`
     return runOperatorMutation({
-      action: 'project-delete',
-      evidence: endpointEvidence(`/api/projects/${project}`, 'projects-delete'),
+      action: 'project-archive',
+      evidence: endpointEvidence(endpoint, 'projects-delete'),
       snapshot: () => ({
         projects: [...projects.value],
         recentSessions: [...recentSessions.value],
@@ -306,7 +307,7 @@ export function useOperatorProjects(): {
           selectedSession.value = null
         }
       },
-      run: () => operatorFetchJson(`/api/projects/${encodeURIComponent(project)}`, jsonInit('DELETE'), 'projects-delete'),
+      run: () => operatorFetchJson(endpoint, jsonInit('DELETE'), 'projects-delete'),
       rollback: (snapshot) => {
         if (!snapshot) return
         replaceArray(projects.value, snapshot.projects)

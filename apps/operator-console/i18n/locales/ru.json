@@ -802,7 +802,20 @@
     "actions": {
       "refresh": "Обновить",
       "delete": "Удалить",
-      "confirmDelete": "Подтвердить"
+      "confirmDelete": "Подтвердить",
+      "archive": "Архивировать",
+      "archiveProject": "Архивировать проект {project}",
+      "confirmArchive": "Подтвердить архивирование",
+      "archiving": "Архивируем…",
+      "cancel": "Отмена"
+    },
+    "archive": {
+      "title": "Архивировать проект",
+      "body": "Сервер выполнит soft-delete проекта {project}: проект исчезнет из активной консоли, но данные не удаляются физически.",
+      "endpoint": "DELETE {endpoint}",
+      "inputLabel": "Введите ID проекта для подтверждения",
+      "inputPlaceholder": "ID проекта",
+      "error": "Не удалось архивировать проект: {message}"
     },
     "state": {
       "pending": "Загружаем проекты и сессии с сервера…",

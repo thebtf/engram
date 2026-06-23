@@ -802,7 +802,20 @@
     "actions": {
       "refresh": "刷新",
       "delete": "删除",
-      "confirmDelete": "确认"
+      "confirmDelete": "确认",
+      "archive": "归档",
+      "archiveProject": "归档项目 {project}",
+      "confirmArchive": "确认归档",
+      "archiving": "正在归档…",
+      "cancel": "取消"
+    },
+    "archive": {
+      "title": "归档项目",
+      "body": "服务器将对项目 {project} 执行 soft-delete：它会离开活动控制台，但数据不会被物理删除。",
+      "endpoint": "DELETE {endpoint}",
+      "inputLabel": "输入项目 ID 以确认",
+      "inputPlaceholder": "项目 ID",
+      "error": "无法归档项目：{message}"
     },
     "state": {
       "pending": "正在从服务器加载项目和会话…",
