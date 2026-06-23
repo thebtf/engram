@@ -143,7 +143,7 @@ const migrationMessage = computed(() => {
         <p v-if="flagsState.kind !== 'live'" class="message">{{ t('health.state.notLoaded') }}</p>
         <p v-else-if="!flagGroups.length" class="message">{{ t('health.flags.empty') }}</p>
         <div v-else class="rows">
-          <div v-for="flagGroup in flagGroups" :key="flagGroup.category || 'uncategorized'" class="row flag-row">
+          <div v-for="flagGroup in flagGroups" :key="flagGroup.category" class="row flag-row">
             <div>
               <span>{{ flagGroup.category || t('health.flags.uncategorized') }}</span>
               <small>{{ t('health.flags.summary', { enabled: flagGroup.enabled, disabled: flagGroup.disabled, restart: flagGroup.restartRequired }) }}</small>

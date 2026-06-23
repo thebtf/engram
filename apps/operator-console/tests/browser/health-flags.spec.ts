@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+test.use({ locale: 'ru' })
+
 test('health renders feature flags by area from the live endpoint', async ({ page }) => {
   const consoleProblems: string[] = []
   const failedRequests: string[] = []
