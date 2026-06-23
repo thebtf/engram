@@ -63,6 +63,7 @@ interface ApiConfigPatch {
 interface ApiConfigPatchReceipt {
   success?: boolean
   applied?: boolean
+  audit_logged?: boolean
   changed?: string[]
   restart_required?: boolean
   restart_required_fields?: string[]

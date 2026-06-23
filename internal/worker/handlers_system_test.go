@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/thebtf/engram/internal/auth"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/config"
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 )
 
 func TestHandleGetFlagsReturnsReadOnlyRuntimeSnapshot(t *testing.T) {
@@ -108,6 +111,7 @@ func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	assert.Equal(t, true, response["success"])
 	assert.Equal(t, true, response["applied"])
+	assert.Equal(t, false, response["audit_logged"])
 	assert.Equal(t, true, response["restart_required"])
 	assert.Contains(t, response["changed"], "enforce_source_project")
 	assert.Contains(t, response["changed"], "inject_unified (requires restart)")
@@ -122,6 +126,57 @@ func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	persisted, err := config.Load()
 	require.NoError(t, err)
 	assert.False(t, persisted.InjectUnified)
+}
+
+func TestHandlePatchConfig_AuditLogsWhenStoreAvailable(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+	require.NoError(t, config.SaveSettings(map[string]any{
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": true,
+	}))
+	cfg, _, err := config.Reload()
+	require.NoError(t, err)
+
+	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+
+	actorPrincipal := "settings-audit-test-" + uuid.NewString()
+	identity := auth.ClientWithPrincipal("admin", "keycard-"+uuid.NewString(), actorPrincipal, auth.PrincipalKindAgent)
+	auditStore := dbgorm.NewAuditStore(store.GetDB())
+	svc := &Service{config: cfg, auditStore: auditStore}
+	body := bytes.NewBufferString(`{"features":{"enforce_source_project":false}}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", body).
+		WithContext(auth.WithIdentity(context.Background(), identity))
+	w := httptest.NewRecorder()
+
+	t.Cleanup(func() {
+		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM audit_log WHERE action = ? AND actor = ?", "config.patch", "client:agent:"+actorPrincipal).Error)
+		require.NoError(t, store.Close())
+	})
+
+	svc.handlePatchConfig(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, true, response["audit_logged"])
+
+	var entry dbgorm.AuditLogEntry
+	require.NoError(t, store.DB.WithContext(context.Background()).
+		Where("action = ? AND actor = ?", "config.patch", "client:agent:"+actorPrincipal).
+		Order("id DESC").
+		First(&entry).Error)
+	assert.Equal(t, "PATCH /api/config", entry.Reason)
+	assert.Equal(t, identity.WorkstationID(), entry.SourceSessionID)
+	require.NotNil(t, entry.BeforeState)
+	require.NotNil(t, entry.AfterState)
+	assert.Contains(t, string(*entry.BeforeState), "enforce_source_project")
+	assert.Contains(t, string(*entry.AfterState), "requested_updates")
 }
 
 func TestHandlePatchConfig_RejectsTrailingJSON(t *testing.T) {
