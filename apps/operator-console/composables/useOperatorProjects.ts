@@ -13,21 +13,24 @@ import {
   unsupportedOperatorAction,
 } from './useOperatorApi'
 
+type ApiNullableString = string | { String?: string; Valid?: boolean } | null
+type ApiNullableInt = number | string | { Int64?: number | string | null; Valid?: boolean } | null
+
 interface ApiSessionRow {
   id?: number | string
   claude_session_id?: string
   claudeSessionId?: string
-  sdk_session_id?: string
+  sdk_session_id?: ApiNullableString
   project?: string
   status?: string
   started_at?: string
-  completed_at?: string
+  completed_at?: ApiNullableString
   prompt_counter?: number
-  injection_strategy?: string
-  outcome?: string
-  outcome_reason?: string
-  worker_port?: number | string
-  user_prompt?: string
+  injection_strategy?: ApiNullableString
+  outcome?: ApiNullableString
+  outcome_reason?: ApiNullableString
+  worker_port?: ApiNullableInt
+  user_prompt?: ApiNullableString
 }
 
 interface ApiSessionsList {
@@ -81,22 +84,34 @@ function compactAge(timestamp?: string): string {
   return `${Math.floor(seconds / 86400)}d`
 }
 
+function nullableString(value: ApiNullableString | undefined, fallback = ''): string {
+  if (typeof value === 'string') return value
+  if (!value || value.Valid === false) return fallback
+  return value.String || fallback
+}
+
+function nullableIntString(value: ApiNullableInt | undefined, fallback = '-'): string {
+  if (typeof value === 'number' || typeof value === 'string') return String(value)
+  if (!value || value.Valid === false) return fallback
+  return value.Int64 === undefined || value.Int64 === null ? fallback : String(value.Int64)
+}
+
 function mapSession(row: ApiSessionRow): OperatorSessionRow {
   const claudeSessionId = row.claude_session_id || row.claudeSessionId || ''
   return {
     id: String(row.id ?? (claudeSessionId || '-')),
     claudeSessionId,
-    sdkSessionId: row.sdk_session_id || '-',
+    sdkSessionId: nullableString(row.sdk_session_id, '-'),
     project: row.project || 'unknown',
     status: row.status || 'unknown',
     startedAt: row.started_at || '',
-    completedAt: row.completed_at || '',
+    completedAt: nullableString(row.completed_at),
     promptCounter: typeof row.prompt_counter === 'number' ? row.prompt_counter : 0,
-    injectionStrategy: row.injection_strategy || '-',
-    outcome: row.outcome || '-',
-    outcomeReason: row.outcome_reason || '-',
-    workerPort: row.worker_port === undefined ? '-' : String(row.worker_port),
-    userPrompt: row.user_prompt || '',
+    injectionStrategy: nullableString(row.injection_strategy, '-'),
+    outcome: nullableString(row.outcome, '-'),
+    outcomeReason: nullableString(row.outcome_reason),
+    workerPort: nullableIntString(row.worker_port),
+    userPrompt: nullableString(row.user_prompt),
   }
 }
 
@@ -146,7 +161,7 @@ export function useOperatorProjects(): {
   openSession: (session: OperatorSessionRow) => Promise<void>
   deleteProject: (project: string) => Promise<OperatorMutationResult<unknown>>
   sessionDetailGap: ReturnType<typeof unsupportedOperatorAction>
-  sessionStrategyGap: ReturnType<typeof unsupportedOperatorAction>
+  sessionRouteGap: ReturnType<typeof unsupportedOperatorAction>
   codeIntelGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const projectsEvidence = endpointEvidence('/api/projects', 'projects-list')
@@ -324,10 +339,10 @@ export function useOperatorProjects(): {
     'GET /api/sessions/{id}/transcript',
     'Session transcript readback is not exposed by the current server API.',
   )
-  const sessionStrategyGap = unsupportedOperatorAction(
-    'session-strategy',
-    'GET /api/sessions/{id}/strategy',
-    'Session strategy and route decisions are not exposed as a REST endpoint yet.',
+  const sessionRouteGap = unsupportedOperatorAction(
+    'session-route',
+    'GET /api/sessions/{id}/route',
+    'Session route decision timeline is not exposed as a REST endpoint yet.',
   )
   const codeIntelGap = unsupportedOperatorAction(
     'project-code-intel',
@@ -352,7 +367,7 @@ export function useOperatorProjects(): {
     openSession,
     deleteProject,
     sessionDetailGap,
-    sessionStrategyGap,
+    sessionRouteGap,
     codeIntelGap,
   }
 }

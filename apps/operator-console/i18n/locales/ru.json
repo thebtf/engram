@@ -852,16 +852,24 @@
       "loading": "Загружаем деталь сессии…",
       "emptyTitle": "Сессия не выбрана",
       "emptyBody": "Выберите строку сессии, чтобы открыть серверную карточку.",
+      "id": "ID",
+      "claudeSessionId": "Сессия Claude",
+      "sdkSessionId": "Сессия SDK",
       "project": "Проект",
       "status": "Статус",
-      "prompts": "Prompts",
-      "worker": "Worker port",
+      "startedAt": "Старт",
+      "completedAt": "Завершение",
+      "prompts": "Промпты",
+      "worker": "Порт воркера",
       "strategy": "Стратегия",
-      "outcome": "Итог"
+      "outcome": "Итог",
+      "outcomeReason": "Причина итога",
+      "userPrompt": "Промпт пользователя",
+      "noValue": "—"
     },
     "gaps": {
-      "transcript": "Transcript readback пока не отдан REST endpoint’ом.",
-      "strategy": "Маршрут и strategy остаются серверным must-build.",
+      "transcript": "Текст сессии пока не отдаётся REST endpoint’ом.",
+      "route": "Лента маршрутных решений ещё требует серверной реализации.",
       "codeIntel": "Сводка code-intel пока доступна только через инструментальную поверхность."
     }
   },

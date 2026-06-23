@@ -852,16 +852,24 @@
       "loading": "Loading session detail…",
       "emptyTitle": "No session selected",
       "emptyBody": "Select a session row to open the server card.",
+      "id": "ID",
+      "claudeSessionId": "Claude session",
+      "sdkSessionId": "SDK session",
       "project": "Project",
       "status": "Status",
+      "startedAt": "Started",
+      "completedAt": "Completed",
       "prompts": "Prompts",
       "worker": "Worker port",
       "strategy": "Strategy",
-      "outcome": "Outcome"
+      "outcome": "Outcome",
+      "outcomeReason": "Outcome reason",
+      "userPrompt": "User prompt",
+      "noValue": "—"
     },
     "gaps": {
       "transcript": "Transcript readback is not exposed through a REST endpoint yet.",
-      "strategy": "Route and strategy remain server-side must-build.",
+      "route": "Route decision timeline remains server-side must-build.",
       "codeIntel": "Code-intelligence summary is still available only through the tool surface."
     }
   },
