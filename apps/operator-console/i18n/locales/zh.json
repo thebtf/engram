@@ -101,6 +101,7 @@
       "modelHealthError": "模型健康不可用",
       "search": "相似搜索 — 子系统降级",
       "queue": "{n} 个候选等待审核（受 VNEXT_F 控制）",
+      "queueLive": "{n} 个候选等待操作员决策",
       "queueGated": "审核队列已关闭（受 {flag} 控制）",
       "books": "上下文书籍 — 服务器上还没有处理流水线",
       "noise": "记忆噪声 {noise} — {n} 条记录标记为噪声",
@@ -266,6 +267,94 @@
       "note": "先做快照 · 再应用",
       "confirmNote": "再次点击会将选中的记录作为噪声隐藏",
       "mustBuildNote": "批量操作等待服务器 endpoints；当前选择可以清除"
+    }
+  },
+
+  "queue": {
+    "title": "待审核",
+    "subtitle": "记忆候选项：提升有用知识，拒绝噪声，或标记为已被新记录替代。",
+    "brief": {
+      "title": "操作员决定每个候选项",
+      "body": "每个动作都会进入服务器状态机；当 VNEXT_F 关闭时，页面会诚实显示 gated 状态。"
+    },
+    "metrics": {
+      "pending": "等待决策",
+      "promotable": "可提升目标",
+      "lowConfidence": "低置信度"
+    },
+    "filters": {
+      "project": "队列项目",
+      "allProjects": "所有项目",
+      "unscoped": "未绑定项目"
+    },
+    "actions": {
+      "selectAll": "全选",
+      "clearSelection": "清除选择",
+      "refresh": "刷新",
+      "promote": "提升",
+      "reject": "拒绝",
+      "supersede": "已替代",
+      "running": "执行中…",
+      "confirm": {
+        "promote": "确认提升",
+        "reject": "确认拒绝",
+        "supersede": "确认替代"
+      }
+    },
+    "countInFilter": "{shown} 个候选项 · 已选择 {selected} 个",
+    "rowsLabel": "行数",
+  "allRows": "全部",
+  "pageRange": "{from}–{to} / {total}",
+  "pagination": {
+    "first": "转到第一页",
+    "previous": "转到上一页",
+    "current": "当前第 {page} 页",
+    "next": "转到下一页",
+    "last": "转到最后一页"
+  },
+  "aria": {
+    "toggleCandidate": "选择候选项 {id}",
+    "action": "{action}：候选项 {id}"
+  },
+  "table": {
+      "candidate": "候选项 · 目标 · 项目 · 时间",
+      "confidence": "置信度",
+      "actions": "决策"
+    },
+    "meta": {
+      "recurrence": "{count} 次重复"
+    },
+    "state": {
+      "pending": "正在加载候选队列…",
+      "error": "无法加载候选队列：{message}",
+      "empty": "所选项目没有等待审核的候选项。",
+      "gated": "队列被 flag {flag} 关闭。",
+      "retry": "重试"
+    },
+    "empty": {
+      "title": "队列为空",
+      "body": "当前所选项目没有候选项。"
+    },
+    "detail": {
+      "title": "候选项 #{id}",
+      "status": "状态",
+      "target": "提升目标",
+      "tier": "记忆层级",
+      "type": "知识类型",
+      "project": "项目",
+      "source": "来源会话",
+      "fingerprint": "fingerprint",
+      "reviewAfter": "审核时间",
+      "evidence": "证据",
+      "operatorQuestion": "操作员决策：",
+      "operatorText": "将候选项提升为记忆、作为噪声拒绝，或标记为已被更新知识替代。"
+    },
+    "notice": {
+      "promote": "候选项 {id} 已提升为记忆",
+      "reject": "候选项 {id} 已拒绝",
+      "supersede": "候选项 {id} 已标记为替代",
+      "error": "操作失败：{message}",
+      "unknownError": "未知错误"
     }
   },
 

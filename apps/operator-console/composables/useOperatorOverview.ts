@@ -1,7 +1,8 @@
 import { computed } from 'vue'
-import { endpointEvidence, unsupportedOperatorAction } from './useOperatorApi'
+import { unsupportedOperatorAction } from './useOperatorApi'
 import { useCreds, useIssuesState, useModelsState, useProjects, useRules } from './useMockData'
 import { useOperatorMemoryLab } from './useOperatorMemoryLab'
+import { useOperatorQueue } from './useOperatorQueue'
 import { useOperatorShellStatus } from './useOperatorShell'
 
 export function useOperatorOverview() {
@@ -14,6 +15,7 @@ export function useOperatorOverview() {
   const projects = useProjects()
   const modelsState = useModelsState()
   const models = computed(() => modelsState.rows.value)
+  const queue = useOperatorQueue()
   const shell = useOperatorShellStatus()
 
   const memoryActive = computed(() => memories.filter((memory) => !memory.noise).length)
@@ -29,6 +31,9 @@ export function useOperatorOverview() {
   const rulesPending = computed(() => rules.pending.value && rules.rows.value.length === 0)
   const projectsPending = computed(() => projects.pending.value && projects.rows.value.length === 0)
   const modelsPending = computed(() => modelsState.pending.value && models.value.length === 0)
+  const queuePending = computed(() => queue.pending.value && queue.rows.length === 0)
+  const queueGated = computed(() => queue.loadState.value.kind === 'gated')
+  const queueCount = computed(() => queue.rows.length)
   const modelsError = computed(() => modelsState.error.value)
   const modelOK = computed(() => models.value.filter((model) => model.health === 'ok').length)
   const modelStandby = computed(() => models.value.filter((model) => model.health === 'standby').length)
@@ -38,16 +43,6 @@ export function useOperatorOverview() {
     'GET /api/access/summary',
     'Single-user console does not have the future multi-user access module yet.',
   )
-  const queueGap = {
-    kind: 'dormant' as const,
-    action: 'memory-review-queue',
-    operable: false,
-    evidence: endpointEvidence('GET /api/memory/candidates', 'feature-flag', {
-      flag: 'VNEXT_F',
-      reason: 'Review queue is gated until the server-side candidate workflow is enabled.',
-    }),
-  }
-
   return {
     memories,
     issues,
@@ -55,6 +50,7 @@ export function useOperatorOverview() {
     rules,
     projects,
     models,
+    queue,
     info: shell.info,
     memoryActive,
     memoryNoise,
@@ -69,11 +65,13 @@ export function useOperatorOverview() {
     rulesPending,
     projectsPending,
     modelsPending,
+    queuePending,
+    queueGated,
+    queueCount,
     modelsError,
     modelOK,
     modelStandby,
     modelDegraded,
     accessGap,
-    queueGap,
   }
 }

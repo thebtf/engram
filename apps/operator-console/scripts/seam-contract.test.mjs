@@ -15,6 +15,8 @@ const overviewPagePath = join(root, 'pages', 'index.vue')
 const memoryPagePath = join(root, 'pages', 'memory.vue')
 const settingsModalPath = join(root, 'components', 'SettingsModal.vue')
 const issuesPagePath = join(root, 'pages', 'issues.vue')
+const queuePagePath = join(root, 'pages', 'queue.vue')
+const queueComposablePath = join(root, 'composables', 'useOperatorQueue.ts')
 const pageSizePath = join(root, 'composables', 'usePersistentPageSize.ts')
 
 function read(path) {
@@ -210,6 +212,29 @@ test('memory page-size contract offers persisted bounded all mode', () => {
   assert.match(issuesPageSource, /size\s*===\s*['"]all['"]\s*\?\s*t\(['"]issues\.list\.allRows['"]\)/, 'Issues all option label must be localized for the shared all sentinel')
   assert.match(memoryLabSource, /limit=500|MEMORY_LIST_LIMIT\s*=\s*500/, 'Memory Lab must request no more than the current server cap for all-mode readiness')
   assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
+})
+
+test('candidate review queue is a live gated surface, not a SectionStub', () => {
+  const queuePageSource = read(queuePagePath)
+  const queueComposableSource = read(queueComposablePath)
+  const overviewComposableSource = read(overviewComposablePath)
+  const overviewPageSource = read(overviewPagePath)
+
+  assert.doesNotMatch(queuePageSource, /<SectionStub\b/, 'Queue page must not remain an inert SectionStub after the REST bridge exists')
+  assert.match(queueComposableSource, /QUEUE_FLAG\s*=\s*['"]ENGRAM_VNEXT_F_ENABLED['"]/, 'Queue composable must name the vNext-F flag gate')
+  assert.match(queueComposableSource, /operatorFetchJson<ApiFlags>\('\/api\/flags'/, 'Queue composable must check flags before fetching candidates')
+  assert.match(queueComposableSource, /gatedState\(evidence,\s*QUEUE_FLAG/, 'Queue composable must represent flag-off as gated, not empty')
+  assert.match(queueComposableSource, /QUEUE_ALL_PROJECTS_API\s*=\s*['"]all['"]/, 'Queue composable must expose an all-project REST query for unscoped candidates')
+  assert.match(queueComposableSource, /selectedProject\.value\s*===\s*QUEUE_ALL_PROJECTS\s*\?\s*QUEUE_ALL_PROJECTS_API\s*:\s*selectedProject\.value/, 'Queue composable must translate the all-project UI sentinel before hitting the live endpoint')
+  assert.match(queueComposableSource, /\/api\/memory\/candidates\?project=\$\{encodeURIComponent\(apiProject\)\}&status=\$\{QUEUE_STATUS\}&limit=\$\{QUEUE_LIMIT\}/, 'Queue composable must fetch the live candidate list endpoint')
+  assert.match(queueComposableSource, /\/api\/memory\/candidates\/\$\{encodeURIComponent\(id\)\}\/\$\{action\}/, 'Queue actions must use live candidate action endpoints')
+  assert.match(queueComposableSource, /runOperatorMutation<CandidateActionReceipt>/, 'Queue actions must use the rollback-capable mutation seam')
+  assert.match(queuePageSource, /usePersistentPageSize\('engram\.operatorConsole\.queue\.pageSize'/, 'Queue page-size preference must be persisted under its own key')
+  assert.match(queuePageSource, /size === 'all' \? t\('queue\.allRows'\)/, 'Queue page must render the shared all page-size label through i18n')
+  assert.match(queuePageSource, /HonestyBadge/, 'Queue page must render design honesty classification evidence')
+  assert.match(overviewComposableSource, /useOperatorQueue/, 'Overview must consume the live queue seam after the endpoint exists')
+  assert.doesNotMatch(overviewComposableSource, /queueGap/, 'Overview must not keep the stale queueGap once the queue is wired')
+  assert.match(overviewPageSource, /overview\.attention\.queueLive/, 'Overview attention must distinguish live queue count from gated copy')
 })
 
 test('memory detail actions keep mustbuild descriptors while live delete is endpoint-backed', () => {
