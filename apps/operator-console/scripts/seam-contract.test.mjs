@@ -351,6 +351,24 @@ test('settings feature flags are live read-only data, not a mustbuild fake contr
   assert.doesNotMatch(settingsModalSource, /flagsGap/, 'Settings modal must not render GET /api/flags as a mustbuild gap')
 })
 
+test('health migrations state is live endpoint-backed and no longer mustbuild', () => {
+  const healthSettingsSource = read(healthSettingsPath)
+  const healthPageSource = read(join(root, 'pages', 'health.vue'))
+  const mockOperatorApiSource = read(mockOperatorApiPath)
+  const paritySource = read(join(root, 'PARITY.json'))
+
+  assert.match(healthSettingsSource, /interface ApiMigrationState/, 'Health seam must type the migration-state payload')
+  assert.match(healthSettingsSource, /endpointEvidence\('\/api\/migrations',\s*['"]migrations['"]\)/, 'Migration state must carry live endpoint evidence')
+  assert.match(healthSettingsSource, /loadOperatorJson<ApiMigrationState>\('\/api\/migrations'/, 'Health seam must fetch migration state from the real endpoint')
+  assert.match(healthSettingsSource, /migrationsState:\s*ComputedRef<OperatorLoadState<ApiMigrationState>>/, 'Migration state must be exposed to the Health page')
+  assert.match(healthSettingsSource, /migrationMetrics:\s*ComputedRef<OperatorHealthMetric\[\]>/, 'Health seam must expose migration metrics')
+  assert.match(healthPageSource, /health\.migrations/, 'Health page migration card title must be i18n-keyed')
+  assert.match(healthPageSource, /\/api\/migrations/, 'Health page must show the live migration endpoint evidence')
+  assert.match(healthPageSource, /migrationsState\.kind === 'live'/, 'Health page must classify migration state from live load state')
+  assert.match(mockOperatorApiSource, /case '\/api\/migrations':[\s\S]*json\(res,\s*200,\s*migrations\)/, 'Mock operator API must serve migration state for smoke')
+  assert.doesNotMatch(paritySource, /migrations \(mustbuild\)/, 'PARITY health row must not keep migrations as a mustbuild gap')
+})
+
 test('settings config save is live allowlisted PATCH with restart receipt', () => {
   const healthSettingsSource = read(healthSettingsPath)
   const settingsModalSource = read(settingsModalPath)

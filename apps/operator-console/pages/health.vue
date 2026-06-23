@@ -7,8 +7,10 @@ const {
   vectorState,
   updateStatusState,
   updateCheckState,
+  migrationsState,
   components,
   embeddingMetrics,
+  migrationMetrics,
   pending,
   error,
   refresh,
@@ -109,6 +111,23 @@ function statusClass(status?: string): 'live' | 'dormant' | 'stale' {
             <strong>{{ vnextState.kind === 'live' ? vnextState.data.noise_ratio ?? '—' : '—' }}</strong>
           </div>
         </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2>{{ t('health.migrations') }}</h2>
+          <code>/api/migrations</code>
+        </div>
+        <div class="metrics">
+          <div v-for="metric in migrationMetrics" :key="metric.label">
+            <span>{{ t(`health.migration.${metric.label}`) }}</span>
+            <strong>{{ metric.value }}</strong>
+          </div>
+        </div>
+        <p class="message">
+          {{ migrationsState.kind === 'live' && migrationsState.data.dirty_supported === false ? t('health.migration.dirtyUnsupported') : t('health.state.notLoaded') }}
+        </p>
+        <HonestyBadge :cls="migrationsState.kind === 'live' && migrationsState.data.current_version ? 'live' : 'dormant'" :evidence="migrationsState.kind === 'live' ? migrationsState.data.engine : t('health.state.notLoaded')" />
       </article>
     </section>
   </div>
