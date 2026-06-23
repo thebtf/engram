@@ -24,12 +24,10 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
   })
 
   await page.goto('/settings')
-  await expect(page.getByRole('heading', { name: 'Настройки сервера' })).toBeVisible()
-  await expect(page.getByText('не уводят оператора из задачи')).toBeVisible()
-
-  await page.getByRole('button', { name: 'Открыть настройки' }).click()
   const dialog = page.getByRole('dialog', { name: 'Настройки сервера' })
   await expect(dialog).toBeVisible()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(page.getByRole('button', { name: 'Открыть настройки' })).toHaveCount(0)
   await expect(dialog.getByRole('heading', { name: 'Общие' })).toBeVisible()
   await expect(dialog.getByText('модальное окно')).toBeVisible()
 
@@ -76,8 +74,29 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
 
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
-  await expect(page).toHaveURL(/\/settings$/)
-  await expect(page.getByRole('heading', { name: 'Настройки сервера' })).toBeVisible()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+
+  await page.getByRole('button', { name: 'Меню профиля' }).click()
+  await expect(page.getByRole('menu')).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Профиль и настройки' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Настройки консоли' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Выйти из консоли' })).toBeDisabled()
+  await expect(page.getByRole('menuitem', { name: 'Выйти из консоли' })).toHaveAttribute('title', /Auth отключена/)
+
+  await page.getByRole('menuitem', { name: 'Профиль и настройки' }).click()
+  const profileDialog = page.getByRole('dialog', { name: 'Профиль оператора' })
+  await expect(profileDialog).toBeVisible()
+  await expect(profileDialog.getByRole('heading', { name: 'admin' })).toBeVisible()
+  await expect(profileDialog.locator('.hb-ev', { hasText: 'PATCH /api/profile' })).toBeVisible()
+  await expect(profileDialog.locator('.hb-ev', { hasText: 'GET /api/auth/sessions' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(profileDialog).toBeHidden()
+
+  await page.getByRole('button', { name: 'Меню профиля' }).click()
+  await page.getByRole('menuitem', { name: 'Настройки консоли' }).click()
+  await expect(dialog).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
 
   expect(consoleProblems).toEqual([])
   expect(failedRequests).toEqual([])

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useNav, type NavItem } from '../composables/useNav'
+import { operatorFetchJson } from '../composables/useOperatorApi'
 import { useOperatorMemoryLab } from '../composables/useOperatorMemoryLab'
 import { useOperatorShellStatus } from '../composables/useOperatorShell'
 
@@ -22,6 +23,10 @@ const navPeek = ref(false)
 const peekSuppressed = ref(false)
 const mobileNavOpen = ref(false)
 const search = ref('')
+const identityMenuOpen = ref(false)
+const identityMenuRef = ref<HTMLElement | null>(null)
+const profileModalOpen = ref(false)
+const logoutInFlight = ref(false)
 
 const NAV_ICONS: Record<string, string> = {
   overview: '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>',
@@ -68,6 +73,22 @@ const authPostureLabel = computed(() => {
 
 onMounted(() => {
   navCollapsed.value = window.localStorage.getItem(NAV_COLLAPSE_KEY) === '1'
+  window.addEventListener('pointerdown', onDocumentPointerDown)
+  window.addEventListener('keydown', onDocumentKeydown)
+})
+const canLogout = computed(() => info.value.authenticated && !info.value.authDisabled)
+const logoutTitle = computed(() => {
+  if (logoutInFlight.value) return t('shell.profileMenuLogoutPending')
+  if (canLogout.value) return t('shell.profileMenuLogout')
+  if (info.value.authDisabled) return t('shell.profileMenuLogoutAuthDisabled')
+  if (info.value.authPosture === 'locked') return t('shell.profileMenuLogoutLocked')
+  return t('shell.profileMenuLogoutUnavailable')
+})
+
+onBeforeUnmount(() => {
+  if (!import.meta.client) return
+  window.removeEventListener('pointerdown', onDocumentPointerDown)
+  window.removeEventListener('keydown', onDocumentKeydown)
 })
 
 function navIcon(id: string) {
@@ -130,6 +151,46 @@ function handleNavItemClick(event: MouseEvent, item: NavItem) {
   if (item.id !== 'settings') return
   event.preventDefault()
   openSettingsModal('general')
+}
+
+function toggleIdentityMenu() {
+  identityMenuOpen.value = !identityMenuOpen.value
+}
+
+function closeIdentityMenu() {
+  identityMenuOpen.value = false
+}
+
+function openIdentitySettings() {
+  closeIdentityMenu()
+  openSettingsModal('general')
+}
+
+function openIdentityProfile() {
+  closeIdentityMenu()
+  profileModalOpen.value = true
+}
+
+async function logoutIdentity() {
+  if (!canLogout.value || logoutInFlight.value) return
+  logoutInFlight.value = true
+  closeIdentityMenu()
+  try {
+    await operatorFetchJson('/api/auth/logout', { method: 'POST' }, 'shell-auth-logout')
+    await shell.refresh()
+  } finally {
+    logoutInFlight.value = false
+  }
+}
+
+function onDocumentPointerDown(event: PointerEvent) {
+  const target = event.target
+  if (!identityMenuOpen.value || !(target instanceof Node)) return
+  if (!identityMenuRef.value?.contains(target)) closeIdentityMenu()
+}
+
+function onDocumentKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeIdentityMenu()
 }
 </script>
 
@@ -204,13 +265,56 @@ function handleNavItemClick(event: MouseEvent, item: NavItem) {
       </div>
       <button class="tbtn lang" :title="t('shell.language')" @click="cycleLocale">{{ String(locale).toUpperCase() }}</button>
       <button class="tbtn" @click="toggleTheme" :title="colorMode.value === 'dark' ? t('shell.themeToLight') : t('shell.themeToDark')">◐</button>
-      <div class="identity" role="status" :title="t('shell.identityTitle')" :data-auth="info.authPosture">
-        <span class="iav">{{ info.identityInitials }}</span>
-        <span class="iwho">
-          <span class="iname">{{ info.identityName }}</span>
-          <span class="imeta">{{ authPostureLabel }}</span>
-        </span>
-        <span class="icaret">⌄</span>
+      <div ref="identityMenuRef" class="identity-wrap">
+        <button
+          class="identity"
+          type="button"
+          :title="t('shell.identityTitle')"
+          :aria-label="t('shell.profileMenu')"
+          :aria-expanded="identityMenuOpen"
+          aria-haspopup="menu"
+          :data-auth="info.authPosture"
+          @click="toggleIdentityMenu"
+        >
+          <span class="iav">{{ info.identityInitials }}</span>
+          <span class="iwho">
+            <span class="iname">{{ info.identityName }}</span>
+            <span class="imeta">{{ authPostureLabel }}</span>
+          </span>
+          <span class="icaret">⌄</span>
+        </button>
+        <div v-if="identityMenuOpen" class="idmenu" role="menu">
+          <div class="idm-head">
+            <span class="iav">{{ info.identityInitials }}</span>
+            <span class="idm-id">
+              <b>{{ info.identityName }}</b>
+              <span>{{ info.identityProvider }}</span>
+              <span class="idm-via">{{ authPostureLabel }}</span>
+            </span>
+          </div>
+          <div class="idm-list">
+            <button class="idm-item" type="button" role="menuitem" @click="openIdentityProfile">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="5.5" r="2.6"/><path d="M3 13.4c0-2.5 2.2-4 5-4s5 1.5 5 4"/></svg>
+              <span>{{ t('shell.profileMenuProfile') }}</span>
+            </button>
+            <button class="idm-item" type="button" role="menuitem" @click="openIdentitySettings">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8V3.4M8 12.6v1.6M14.2 8h-1.6M3.4 8H1.8M12.4 3.6 11.3 4.7M4.7 11.3 3.6 12.4M12.4 12.4 11.3 11.3M4.7 4.7 3.6 3.6"/></svg>
+              <span>{{ t('shell.profileMenuSettings') }}</span>
+            </button>
+            <div class="idm-sep" />
+            <button
+              class="idm-item danger"
+              type="button"
+              role="menuitem"
+              :disabled="!canLogout || logoutInFlight"
+              :title="logoutTitle"
+              @click="logoutIdentity"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 11.5v1.4a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V3.1a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v1.4"/><path d="M7 8h7M11.6 5.4 14.2 8l-2.6 2.6"/></svg>
+              <span>{{ t('shell.profileMenuLogout') }}</span>
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -232,6 +336,7 @@ function handleNavItemClick(event: MouseEvent, item: NavItem) {
     </footer>
 
     <SettingsModal v-model:open="settingsModalOpen" v-model:active-tab="settingsModalTab" />
+    <ProfileModal v-model:open="profileModalOpen" :info="info" :auth-posture-label="authPostureLabel" />
   </div>
 </template>
 
@@ -337,12 +442,30 @@ function handleNavItemClick(event: MouseEvent, item: NavItem) {
 .tbtn:hover { border-color:var(--accent); color:var(--fg); }
 .tbtn.lang { font-family:var(--font-mono); letter-spacing:.04em; }
 .topbar .mobile-menu-button { display:none; }
-.identity { display:inline-flex; align-items:center; gap:8px; height:32px; padding:3px 10px 3px 3px; border-radius:var(--radius-pill); background:var(--surface-warm); border:1px solid var(--border); color:var(--fg); font-weight:600; font-size:var(--text-xs); max-width:230px; }
+.identity-wrap { position:relative; display:inline-flex; }
+.identity { display:inline-flex; align-items:center; gap:8px; height:32px; padding:3px 10px 3px 3px; border-radius:var(--radius-pill); background:var(--surface-warm); border:1px solid var(--border); color:var(--fg); font:inherit; font-weight:600; font-size:var(--text-xs); text-align:left; max-width:230px; cursor:pointer; }
+.identity:hover,
+.identity[aria-expanded="true"] { border-color:var(--accent); }
 .identity .iav { width:26px; height:26px; border-radius:50%; flex:none; display:grid; place-items:center; font-weight:800; font-size:11px; color:#fff; letter-spacing:-.02em; background:var(--accent); overflow:hidden; }
 .identity .iwho { display:flex; flex-direction:column; line-height:1.05; min-width:0; }
 .identity .iname { font-weight:700; color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .identity .imeta { font-size:9px; font-weight:600; color:var(--muted); font-family:var(--font-mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .identity .icaret { color:var(--muted); font-size:9px; flex:none; }
+.idmenu { position:absolute; right:0; top:38px; z-index:90; min-width:248px; padding:0; overflow:hidden; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); box-shadow:var(--elev-raised); }
+.idm-head { display:flex; gap:10px; align-items:center; padding:13px 14px; border-bottom:1px solid var(--border); }
+.idm-head .iav { width:38px; height:38px; border-radius:50%; display:grid; place-items:center; font-weight:800; font-size:14px; color:#fff; background:var(--accent); flex:none; overflow:hidden; }
+.idm-id { min-width:0; }
+.idm-id b { display:block; font-size:var(--text-sm); color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.idm-id > span:not(.idm-via) { font-size:var(--text-xs); color:var(--muted); font-family:var(--font-mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
+.idm-via { display:inline-flex; align-items:center; gap:5px; margin-top:4px; font-size:10px; font-weight:700; color:var(--fg-2); padding:2px 7px; border-radius:var(--radius-pill); background:var(--surface-warm); border:1px solid var(--border); }
+.idm-list { padding:6px; }
+.idm-item { display:flex; align-items:center; gap:9px; width:100%; text-align:left; border:0; background:transparent; color:var(--fg-2); padding:8px 9px; border-radius:var(--r-sm); font:inherit; font-size:var(--text-sm); font-weight:600; cursor:pointer; }
+.idm-item:hover:not(:disabled) { background:var(--surface-warm); color:var(--fg); }
+.idm-item:disabled { cursor:not-allowed; opacity:.58; }
+.idm-item.danger { color:var(--danger); }
+.idm-item.danger:hover:not(:disabled) { background:color-mix(in oklab,var(--danger),transparent 90%); }
+.idm-item svg { width:15px; height:15px; flex:none; }
+.idm-sep { height:1px; background:var(--border); margin:5px 0; }
 .content { min-width:0; overflow-y:auto; padding:22px 24px 90px; }
 .statusbar { display:flex; align-items:center; gap:var(--space-4); padding:0 var(--space-4); background:var(--surface); border-top:1px solid var(--border); font-size:11px; color:var(--muted); font-family:var(--font-mono); min-width:0; overflow:hidden; }
 .statusbar .si { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; color:var(--muted); text-decoration:none; }

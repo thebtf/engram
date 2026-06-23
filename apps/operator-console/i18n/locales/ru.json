@@ -43,6 +43,14 @@
     "identityInitials": "ОД",
     "identityName": "Олег Добряков",
     "identityProvider": "Google",
+    "profileMenu": "Меню профиля",
+    "profileMenuProfile": "Профиль и настройки",
+    "profileMenuSettings": "Настройки консоли",
+    "profileMenuLogout": "Выйти из консоли",
+    "profileMenuLogoutPending": "Завершаем текущую сессию…",
+    "profileMenuLogoutAuthDisabled": "Auth отключена: текущую сессию нельзя завершить из UI",
+    "profileMenuLogoutLocked": "Нет активной сессии для выхода",
+    "profileMenuLogoutUnavailable": "Состояние сессии неизвестно, выход недоступен",
     "authDisabled": "auth отключена",
     "authAuthenticated": "сессия активна",
     "authLocked": "требуется вход",
@@ -55,6 +63,24 @@
     "recordsLoading": "… записей",
     "reviewQueue": "на проверку {count} | на проверку {count} | на проверку {count}",
     "uptime": "работает {value}"
+  },
+
+  "profileModal": {
+    "aria": "Профиль оператора",
+    "close": "Закрыть профиль",
+    "via": "вход через {provider}",
+    "profileTitle": "Профиль",
+    "displayName": "Отображаемое имя",
+    "displayNameDesc": "Как оператор подписывается в задачах, тредах и аудите.",
+    "role": "Роль",
+    "roleDesc": "Права текущего пользователя в self-hosted инстансе.",
+    "profileMustBuildTitle": "Редактирование профиля ждёт backend seam",
+    "profileMustBuildBody": "Дизайн-контракт включает сохранение профиля, но текущий сервер пока не принимает PATCH /api/profile.",
+    "sessionsTitle": "Активные сессии",
+    "sessionsCount": "{count} сессия | {count} сессии | {count} сессий",
+    "currentSession": "Текущая рабочая станция",
+    "current": "текущая",
+    "sessionsMustBuildBody": "Полный список сессий и revoke-действия остаются mustbuild до появления auth sessions endpoint."
   },
 
   "nav": {

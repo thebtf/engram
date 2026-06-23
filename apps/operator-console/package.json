@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nuxt dev",
     "build": "node scripts/copy-static-i18n.mjs && nuxt build && node scripts/copy-static-i18n.mjs",
-    "generate": "node scripts/copy-static-i18n.mjs && nuxt generate && node scripts/copy-static-i18n.mjs",
+    "generate": "node scripts/copy-static-i18n.mjs && nuxt generate && node scripts/copy-static-i18n.mjs && node scripts/check-static-assets.mjs",
     "preview": "nuxt preview",
     "parity": "node scripts/parity-check.repo.mjs",
     "test:seam": "node --test scripts/seam-contract.test.mjs",
