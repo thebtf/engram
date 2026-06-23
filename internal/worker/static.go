@@ -19,7 +19,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-//go:embed static/*
+// Nuxt/Vite may emit chunk files whose basenames start with "_".
+// The plain directory-walk form excludes those files from embed.FS, so the
+// server image must use all:static to keep the generated asset graph intact.
+//
+//go:embed all:static
 var staticFS embed.FS
 
 // staticSubFS holds the rooted subtree used for all asset lookups.
