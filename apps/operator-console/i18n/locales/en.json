@@ -228,6 +228,7 @@
       "actions": {
         "storeCopy": "Save copy",
         "delete": "Delete record",
+        "confirmDelete": "Confirm delete",
         "hideNoise": "Hide as noise",
         "editText": "Edit text",
         "replace": "Replace with new version",
@@ -235,6 +236,11 @@
         "lifecycleRequired": "requires lifecycle",
         "flag": "Flag"
       }
+    },
+    "notice": {
+      "deleted": "Memory record {id} deleted",
+      "error": "Operation failed: {message}",
+      "unknownError": "unknown error"
     },
     "bulk": {
       "hideNoise": "Hide as noise",
@@ -921,6 +927,15 @@
     "gaps": {
       "configSave": "Runtime config saving has no endpoint with a restart-required receipt yet.",
       "flags": "The full feature-flag map is not exposed by the server yet."
+    },
+    "flags": {
+      "title": "Feature flags",
+      "body": "Read-only current-process snapshot from GET /api/flags. Changing flags still needs a settings save endpoint and restart-required receipt.",
+      "pending": "Loading feature flags…",
+      "error": "Could not load feature flags: {message}",
+      "enabled": "enabled",
+      "disabled": "disabled",
+      "restartRequired": "restart"
     },
     "restart": {
       "title": "Restart / update",

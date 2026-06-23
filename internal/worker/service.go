@@ -1015,11 +1015,15 @@ func (s *Service) startWatchers() {
 // call config.Get() per-request will pick up new values automatically.
 // Structural changes (port, token) log a warning — manual restart needed.
 func (s *Service) reloadConfig() {
-	_, changed, err := config.Reload()
+	newCfg, changed, err := config.Reload()
 	if err != nil {
 		log.Error().Err(err).Msg("Config reload failed — keeping current config")
 		return
 	}
+
+	s.initMu.Lock()
+	s.config = newCfg
+	s.initMu.Unlock()
 
 	if len(changed) == 0 {
 		log.Info().Msg("Config file changed but no values differ")
@@ -1278,6 +1282,9 @@ func (s *Service) setupRoutes() {
 		// Selfcheck endpoint (works before DB is ready - checks all components)
 		r.Get("/api/selfcheck", s.handleSelfCheck)
 
+		// Runtime feature flags (read-only current-process snapshot; works before DB is ready)
+		r.Get("/api/flags", s.handleGetFlags)
+
 		// Dashboard SSE endpoint (works before DB is ready)
 		r.Get("/api/events", s.sseBroadcaster.HandleSSE)
 
@@ -1400,6 +1407,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/memories/principal", s.handlePrincipalMemoryQuery)
 		r.Get("/api/memory-domains", s.handleListMemoryDomains)
 		r.Put("/api/memory-domains/{domain}", s.handleUpsertMemoryDomain)
+		r.Delete("/api/memory-domains/{domain}", s.handleDeleteMemoryDomain)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Behavioral rules management

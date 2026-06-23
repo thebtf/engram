@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	gormlib "gorm.io/gorm"
 
 	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -19,6 +21,7 @@ import (
 type domainOwnerStore interface {
 	List(ctx context.Context, opts gormdb.DomainOwnerListOptions) ([]*gormdb.DomainOwner, error)
 	Upsert(ctx context.Context, in *gormdb.DomainOwner) (*gormdb.DomainOwner, error)
+	Delete(ctx context.Context, domain string) error
 }
 
 type domainRegistryService interface {
@@ -101,6 +104,36 @@ func (s *Service) handleUpsertMemoryDomain(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, memoryDomainHTTPResponse(row))
+}
+
+func (s *Service) handleDeleteMemoryDomain(w http.ResponseWriter, r *http.Request) {
+	if rejectNonAdmin(w, r) {
+		return
+	}
+
+	store := s.currentDomainOwnerStore()
+	if store == nil {
+		http.Error(w, "domain owner store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	domain := strings.TrimSpace(chi.URLParam(r, "domain"))
+	if domain == "" {
+		http.Error(w, "domain must not be empty", http.StatusBadRequest)
+		return
+	}
+	if err := store.Delete(r.Context(), domain); err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "domain owner not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "delete memory domain failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"deleted": true,
+		"domain":  domain,
+	})
 }
 
 func (s *Service) currentDomainOwnerStore() domainOwnerStore {

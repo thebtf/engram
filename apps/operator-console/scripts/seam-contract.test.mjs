@@ -9,7 +9,9 @@ const nuxtConfigPath = join(root, 'nuxt.config.ts')
 const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
 const memoryLabPath = join(root, 'composables', 'useOperatorMemoryLab.ts')
+const healthSettingsPath = join(root, 'composables', 'useOperatorHealthSettings.ts')
 const memoryPagePath = join(root, 'pages', 'memory.vue')
+const settingsModalPath = join(root, 'components', 'SettingsModal.vue')
 const issuesPagePath = join(root, 'pages', 'issues.vue')
 const pageSizePath = join(root, 'composables', 'usePersistentPageSize.ts')
 
@@ -191,11 +193,15 @@ test('memory page-size contract offers persisted bounded all mode', () => {
   assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
 })
 
-test('memory detail actions are data-backed mustbuild capabilities, not hardcoded fake-live controls', () => {
+test('memory detail actions keep mustbuild descriptors while live delete is endpoint-backed', () => {
   const memoryPageSource = read(memoryPagePath)
   const memoryLabSource = read(memoryLabPath)
 
-  assert.doesNotMatch(memoryPageSource, /storeCopy|deleteOpened/, 'uncontracted store/delete controls must not be visible in Memory detail')
+  assert.doesNotMatch(memoryPageSource, /storeCopy/, 'uncontracted store-copy controls must not be visible in Memory detail')
+  assert.match(memoryPageSource, /deleteOpened/, 'Memory detail may expose delete only through the live delete handler')
+  assert.match(memoryPageSource, /deleteMemory\(memory\.id\)/, 'Memory detail delete must call the composable live delete action')
+  assert.match(memoryLabSource, /deleteMemory:\s*\(id:\s*string\)\s*=>\s*Promise<OperatorMutationResult<unknown>>/, 'Memory Lab delete must expose a typed mutation result')
+  assert.match(memoryLabSource, /endpointEvidence\(`\/api\/memories\/\$\{id\}`,\s*['"]memory-delete['"]\)/, 'Memory delete must carry the live REST endpoint as evidence')
   assert.match(memoryLabSource, /memoryActionGaps|actionGaps/, 'Memory Lab must expose action capability descriptors')
   assert.match(memoryLabSource, /unsupportedOperatorAction\(/, 'Memory actions without browser endpoints must use unsupported action descriptors')
   assert.match(memoryPageSource, /v-for="action in actionGaps"/, 'Memory detail buttons must render from action capability data')
@@ -220,6 +226,24 @@ test('memory capability evidence is an exported reusable typed data contract', (
   assert.match(memoryPageSource, /action\.labelKey/, 'Memory page must consume descriptor labels rather than duplicating copy')
   assert.match(memoryPageSource, /action\.badgeKey/, 'Memory page must consume descriptor badge labels rather than duplicating copy')
   assert.match(memoryPageSource, /action\.evidence\.endpoint/, 'Memory page must consume descriptor evidence rather than duplicating endpoints')
+})
+
+test('settings feature flags are live read-only data, not a mustbuild fake control', () => {
+  const healthSettingsSource = read(healthSettingsPath)
+  const settingsModalSource = read(settingsModalPath)
+
+  assert.match(healthSettingsSource, /interface ApiFlags/, 'Settings seam must type the live feature-flag payload')
+  assert.match(healthSettingsSource, /endpointEvidence\('\/api\/flags',\s*['"]flags['"]\)/, 'Feature flags must carry live endpoint evidence')
+  assert.match(healthSettingsSource, /loadOperatorJson<ApiFlags>\('\/api\/flags'/, 'Settings seam must fetch feature flags from the real endpoint')
+  assert.match(healthSettingsSource, /flagsState:\s*ComputedRef<OperatorLoadState<ApiFlags>>/, 'Feature flag state must be exposed to the modal')
+  assert.match(healthSettingsSource, /flagItems:\s*ComputedRef<ApiFlagItem\[\]>/, 'Feature flag items must be exposed to the modal')
+  assert.doesNotMatch(healthSettingsSource, /flagsGap/, 'GET /api/flags must no longer be represented as a mustbuild gap')
+  assert.doesNotMatch(healthSettingsSource, /['"]flags-read['"]/, 'Feature flag reads must not remain an unsupported action')
+
+  assert.match(settingsModalSource, /v-for="item in flagItems"/, 'Settings modal must render live flag rows from data')
+  assert.match(settingsModalSource, /settings\.flags\.title/, 'Feature flag copy must be keyed for i18n')
+  assert.match(settingsModalSource, /flagsState\.kind === 'error'/, 'Feature flag load errors must be visible')
+  assert.doesNotMatch(settingsModalSource, /flagsGap/, 'Settings modal must not render GET /api/flags as a mustbuild gap')
 })
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {

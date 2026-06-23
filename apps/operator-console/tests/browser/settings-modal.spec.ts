@@ -38,6 +38,9 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
   await expect(dialog.getByText('memory.inject_unified').first()).toBeVisible()
   await expect(dialog.getByText('PATCH /api/config')).toBeVisible()
   await expect(dialog.getByText('GET /api/flags')).toBeVisible()
+  await expect(dialog.getByText('ENGRAM_VNEXT_F_ENABLED')).toBeVisible()
+  await expect(dialog.getByText('включено').first()).toBeVisible()
+  await expect(dialog.getByText('Полная карта feature flags')).toHaveCount(0)
 
   await dialog.getByRole('button', { name: /Модели/ }).click()
   await expect(dialog.getByRole('heading', { name: 'Модели' })).toBeVisible()

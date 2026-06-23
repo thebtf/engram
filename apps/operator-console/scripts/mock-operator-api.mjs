@@ -47,6 +47,52 @@ const config = {
   },
 }
 
+const flags = {
+  flags: {
+    ENGRAM_VNEXT_ENABLED: false,
+    ENGRAM_LIFECYCLE_ENABLED: false,
+    ENGRAM_VNEXT_F_ENABLED: true,
+    ENGRAM_GRAPH_ENABLED: true,
+    ENGRAM_ADAPTIVE_ENABLED: false,
+    ENGRAM_CRYSTALLIZATION_ENABLED: false,
+    ENGRAM_CODE_INTEL_ENABLED: true,
+    ENGRAM_V7_PLUG_ENABLED: true,
+    ENGRAM_V7_S1_STATE: false,
+    ENGRAM_V7_S2_METAMEM: true,
+    ENGRAM_V7_S3_AMBIENT: false,
+    ENGRAM_V7_S4A_DIRECTIVES_CAPTURE: false,
+    ENGRAM_V7_S4B_DIRECTIVES_SURFACING: false,
+    ENGRAM_V7_S5_TELEMETRY: false,
+    ENGRAM_V7_S6_OUTCOME: false,
+    ENGRAM_ENFORCE_SOURCE_PROJECT: true,
+  },
+  items: [
+    { name: 'ENGRAM_VNEXT_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
+    { name: 'ENGRAM_LIFECYCLE_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
+    { name: 'ENGRAM_VNEXT_F_ENABLED', enabled: true, source: 'env', category: 'vnext', restart_required_to_change: true },
+    { name: 'ENGRAM_GRAPH_ENABLED', enabled: true, source: 'env', category: 'vnext', restart_required_to_change: true },
+    { name: 'ENGRAM_ADAPTIVE_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
+    { name: 'ENGRAM_CRYSTALLIZATION_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
+    { name: 'ENGRAM_CODE_INTEL_ENABLED', enabled: true, source: 'env', category: 'code-intel', restart_required_to_change: true },
+    { name: 'ENGRAM_V7_PLUG_ENABLED', enabled: true, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_V7_S1_STATE', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_V7_S2_METAMEM', enabled: true, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_V7_S3_AMBIENT', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_V7_S4A_DIRECTIVES_CAPTURE', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_V7_S4B_DIRECTIVES_SURFACING', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_V7_S5_TELEMETRY', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_V7_S6_OUTCOME', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_ENFORCE_SOURCE_PROJECT', enabled: true, source: 'config', category: 'operations', restart_required_to_change: false },
+  ],
+  summary: { total: 16, enabled: 6, disabled: 10 },
+  read_only: true,
+  apply: {
+    supported: false,
+    endpoint: 'PATCH /api/config',
+    reason: 'runtime flag mutation needs a settings save endpoint plus restart-required receipt',
+  },
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${host}:${port}`)
   const path = url.pathname.replace(/\/+$/, '') || '/'
@@ -96,6 +142,9 @@ const server = createServer((req, res) => {
       return
     case '/api/config':
       json(res, 200, config)
+      return
+    case '/api/flags':
+      json(res, 200, flags)
       return
     case '/api/stats':
       json(res, 200, {

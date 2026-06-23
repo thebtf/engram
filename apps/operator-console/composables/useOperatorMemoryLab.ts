@@ -1,6 +1,6 @@
 import type { ComputedRef } from 'vue'
 import type { Memory } from './useMockData'
-import type { OperatorLoadState, OperatorUnsupportedAction } from './useOperatorApi'
+import type { OperatorLoadState, OperatorMutationResult, OperatorUnsupportedAction } from './useOperatorApi'
 import {
   emptyState,
   endpointEvidence,
@@ -281,8 +281,8 @@ export function useOperatorMemoryLab(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  storeMemory: (input: StoreMemoryInput) => Promise<unknown>
-  deleteMemory: (id: string) => Promise<unknown>
+  storeMemory: (input: StoreMemoryInput) => Promise<OperatorMutationResult<Memory>>
+  deleteMemory: (id: string) => Promise<OperatorMutationResult<unknown>>
   auditGap: ReturnType<typeof unsupportedOperatorAction>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
   actionGaps: readonly MemoryActionGap[]

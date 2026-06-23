@@ -153,6 +153,24 @@ func (s *DomainOwnerStore) List(ctx context.Context, opts DomainOwnerListOptions
 	return result, nil
 }
 
+// Delete removes one explicit domain-owner row. There is no soft-delete column
+// on memory_domain_owners, so removal means "return this domain to implicit
+// legacy policy" rather than hiding an inactive row.
+func (s *DomainOwnerStore) Delete(ctx context.Context, domain string) error {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return fmt.Errorf("domain must not be empty")
+	}
+	res := s.db.WithContext(ctx).Delete(&DomainOwner{}, "domain = ?", domain)
+	if res.Error != nil {
+		return fmt.Errorf("delete domain owner %q: %w", domain, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("delete domain owner %q: %w", domain, gormlib.ErrRecordNotFound)
+	}
+	return nil
+}
+
 func normalizeDomainOwner(in *DomainOwner) (DomainOwner, error) {
 	if in == nil {
 		return DomainOwner{}, fmt.Errorf("domain owner must not be nil")

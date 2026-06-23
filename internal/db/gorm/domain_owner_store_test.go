@@ -135,6 +135,13 @@ func TestDomainOwnerStore(t *testing.T) {
 	_, err = store.Get(ctx, domain+"-missing")
 	require.ErrorIs(t, err, gormlib.ErrRecordNotFound)
 
+	err = store.Delete(ctx, domain)
+	require.NoError(t, err)
+	_, err = store.Get(ctx, domain)
+	require.ErrorIs(t, err, gormlib.ErrRecordNotFound)
+	err = store.Delete(ctx, domain)
+	require.ErrorIs(t, err, gormlib.ErrRecordNotFound)
+
 	for name, row := range map[string]*DomainOwner{
 		"nil":          nil,
 		"empty domain": {Domain: "", OwnerPrincipal: "agent/alice", OwnerPrincipalKind: "agent", Mode: "warn"},

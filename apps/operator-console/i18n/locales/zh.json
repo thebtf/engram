@@ -228,6 +228,7 @@
       "actions": {
         "storeCopy": "保存副本",
         "delete": "删除记录",
+        "confirmDelete": "确认删除",
         "hideNoise": "作为噪声隐藏",
         "editText": "编辑文本",
         "replace": "替换为新版本",
@@ -235,6 +236,11 @@
         "lifecycleRequired": "需要 lifecycle",
         "flag": "标记"
       }
+    },
+    "notice": {
+      "deleted": "记忆记录 {id} 已删除",
+      "error": "操作失败：{message}",
+      "unknownError": "未知错误"
     },
     "bulk": {
       "hideNoise": "作为噪声隐藏",
@@ -921,6 +927,15 @@
     "gaps": {
       "configSave": "runtime config 保存尚无带 restart-required receipt 的 endpoint。",
       "flags": "服务器尚未暴露完整 feature flags 映射。"
+    },
+    "flags": {
+      "title": "Feature flags",
+      "body": "来自 GET /api/flags 的只读当前进程快照。修改 flags 仍需要 settings save endpoint 和 restart-required receipt。",
+      "pending": "正在加载 feature flags…",
+      "error": "无法加载 feature flags：{message}",
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "restartRequired": "restart"
     },
     "restart": {
       "title": "Restart / update",

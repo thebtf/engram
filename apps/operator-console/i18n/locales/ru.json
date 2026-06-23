@@ -228,6 +228,7 @@
       "actions": {
         "storeCopy": "Сохранить копию",
         "delete": "Удалить запись",
+        "confirmDelete": "Подтвердить удаление",
         "hideNoise": "Скрыть как шум",
         "editText": "Редактировать текст",
         "replace": "Заменить новой версией",
@@ -235,6 +236,11 @@
         "lifecycleRequired": "требует lifecycle",
         "flag": "Пометить"
       }
+    },
+    "notice": {
+      "deleted": "Запись памяти {id} удалена",
+      "error": "Операция не выполнена: {message}",
+      "unknownError": "неизвестная ошибка"
     },
     "bulk": {
       "hideNoise": "Скрыть как шум",
@@ -921,6 +927,15 @@
     "gaps": {
       "configSave": "Сохранение runtime config пока не имеет endpoint с restart-required receipt.",
       "flags": "Полная карта feature flags пока не отдана сервером."
+    },
+    "flags": {
+      "title": "Feature flags",
+      "body": "Read-only снимок текущего процесса из GET /api/flags. Изменение флагов всё ещё требует settings save endpoint и restart-required receipt.",
+      "pending": "Загружаем feature flags…",
+      "error": "Не удалось загрузить feature flags: {message}",
+      "enabled": "включено",
+      "disabled": "выключено",
+      "restartRequired": "restart"
     },
     "restart": {
       "title": "Restart / update",

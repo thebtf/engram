@@ -25,9 +25,11 @@ const shell = useOperatorShellStatus()
 const info = shell.info
 const {
   configState,
+  flagsState,
   updateStatusState,
   updateCheckState,
   configMetrics,
+  flagItems,
   restartRequired,
   pending,
   error,
@@ -35,7 +37,6 @@ const {
   restartServer,
   restartAfterUpdate,
   configSaveGap,
-  flagsGap,
 } = useOperatorHealthSettings()
 
 const restartConfirm = ref(false)
@@ -302,9 +303,26 @@ onBeforeUnmount(() => {
                       <HonestyBadge cls="mustbuild" :evidence="configSaveGap.evidence.endpoint" />
                       <span>{{ t('settings.gaps.configSave') }}</span>
                     </div>
-                    <div class="gap">
-                      <HonestyBadge cls="mustbuild" :evidence="flagsGap.evidence.endpoint" />
-                      <span>{{ t('settings.gaps.flags') }}</span>
+                  </div>
+                </section>
+
+                <section class="settings-section">
+                  <div class="settings-section-title">{{ t('settings.flags.title') }}</div>
+                  <p class="plain-help">{{ t('settings.flags.body') }}</p>
+                  <div v-if="flagsState.kind === 'pending'" class="state pending">{{ t('settings.flags.pending') }}</div>
+                  <div v-else-if="flagsState.kind === 'error'" class="state error">{{ t('settings.flags.error', { message: flagsState.error.message }) }}</div>
+                  <div v-else class="flag-list">
+                    <div v-for="item in flagItems" :key="item.name" class="flag-row">
+                      <div class="flag-copy">
+                        <code>{{ item.name }}</code>
+                        <span>{{ item.category }} · {{ item.source }}</span>
+                      </div>
+                      <div class="flag-status">
+                        <span class="bdg" :class="item.enabled ? 'live' : 'off'">
+                          {{ item.enabled ? t('settings.flags.enabled') : t('settings.flags.disabled') }}
+                        </span>
+                        <span v-if="item.restart_required_to_change" class="tag">{{ t('settings.flags.restartRequired') }}</span>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -454,6 +472,7 @@ onBeforeUnmount(() => {
 .danger { border-color: color-mix(in oklab, var(--state-danger), transparent 55%); color: var(--state-danger); }
 .bdg { display: inline-flex; align-items: center; border-radius: var(--radius-pill); border: 1px solid var(--border); padding: 2px 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .bdg.live { color: var(--class-live); background: color-mix(in oklab, var(--class-live), transparent 90%); border-color: color-mix(in oklab, var(--class-live), transparent 65%); }
+.bdg.off { color: var(--muted); background: color-mix(in oklab, var(--surface), var(--fg) 3%); border-color: var(--border); }
 .tag { display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--fg-2); font-size: 10px; font-family: var(--font-mono); }
 .state { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); padding: 10px 12px; color: var(--fg-2); font-size: var(--text-sm); }
 .state.pending { border-color: color-mix(in oklab, var(--accent), transparent 55%); }
@@ -465,6 +484,12 @@ onBeforeUnmount(() => {
 .metrics div { border: 1px solid var(--border-soft); border-radius: var(--r-sm); padding: 10px; }
 .metrics span { display: block; color: var(--muted); font-size: var(--text-xs); }
 .metrics strong { display: block; margin-top: 6px; font-family: var(--font-mono); color: var(--fg); }
+.flag-list { display: grid; gap: 8px; }
+.flag-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--border-soft); border-radius: var(--r-sm); padding: 9px 10px; background: color-mix(in oklab, var(--surface), var(--fg) 1.5%); }
+.flag-copy { display: grid; gap: 3px; min-width: 0; }
+.flag-copy code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); color: var(--fg); font-size: var(--text-xs); }
+.flag-copy span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.flag-status { display: flex; justify-content: flex-end; align-items: center; gap: 6px; flex-wrap: wrap; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; }
 .settings-actions .left { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 .plain-help, .muted { color: var(--muted); font-size: var(--text-sm); line-height: 1.45; }
