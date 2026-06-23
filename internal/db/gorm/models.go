@@ -328,6 +328,7 @@ type BehavioralRule struct {
 	ID        int64      `gorm:"primaryKey;autoIncrement" json:"id"`
 	Priority  int        `gorm:"not null;default:0" json:"priority"`
 	Version   int        `gorm:"not null;default:1" json:"version"`
+	Enabled   bool       `gorm:"not null;default:true" json:"enabled"`
 }
 
 func (BehavioralRule) TableName() string { return "behavioral_rules" }

@@ -3,8 +3,9 @@ package models
 
 import "time"
 
-// BehavioralRule represents an always-inject guidance rule stored in the behavioral_rules table.
-// Rules are injected unconditionally at session-start so every Claude Code session receives them.
+// BehavioralRule represents operator-controlled guidance stored in the behavioral_rules table.
+// Enabled rules are injected at session-start; disabled rules remain visible to the operator
+// so they can be reviewed and re-enabled without losing audit history.
 //
 // Project field is a pointer: nil means the rule is global (applies to every session regardless
 // of project); non-nil means the rule applies only to the named project.
@@ -21,4 +22,5 @@ type BehavioralRule struct {
 	ID        int64      `json:"id"`
 	Priority  int        `json:"priority"`
 	Version   int        `json:"version"`
+	Enabled   bool       `json:"enabled"`
 }

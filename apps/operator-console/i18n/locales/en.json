@@ -459,13 +459,16 @@
       "project": "Scope",
       "priority": "Priority",
       "enableTitle": "Enable / disable",
-      "enableBody": "The current server model has no enabled field for behavioral rules, so the toggle is not operable.",
+      "enableBody": "Calls the live PATCH /api/rules/{id}/enabled endpoint; disabled rules stay listed but are not injected.",
+      "enabled": "enabled",
+      "disabled": "disabled",
       "edit": "Edit",
       "cancel": "Cancel",
       "save": "Save",
       "delete": "Delete",
       "confirmDelete": "Confirm",
-      "enable": "Toggle"
+      "enable": "Enable rule",
+      "disable": "Disable rule"
     }
   },
 

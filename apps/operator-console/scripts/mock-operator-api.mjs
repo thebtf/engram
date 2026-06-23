@@ -217,6 +217,31 @@ let candidateRows = candidateFixtureRows.map((row) => ({
   affected_projects: [...row.affected_projects],
 }))
 
+let ruleRows = [
+  {
+    id: 401,
+    project: '',
+    content: 'operator console rules are live data; disabled rows remain visible but do not inject',
+    priority: 40,
+    version: 1,
+    enabled: true,
+    edited_by: 'mock-operator-api',
+    created_at: '2026-06-22T10:00:00Z',
+    updated_at: '2026-06-22T10:00:00Z',
+  },
+  {
+    id: 402,
+    project: 'operator-console',
+    content: 'temporarily disabled guidance stays recoverable from the control plane',
+    priority: 30,
+    version: 3,
+    enabled: false,
+    edited_by: 'mock-operator-api',
+    created_at: '2026-06-21T10:00:00Z',
+    updated_at: '2026-06-22T11:00:00Z',
+  },
+]
+
 let domainRows = [
   {
     domain: 'memory-lab',
@@ -280,6 +305,39 @@ function candidateResponse(project, status, limit) {
     status,
     limit,
   }
+}
+
+function cloneRule(row) {
+  return {
+    ...row,
+    project: row.project || undefined,
+  }
+}
+
+function ruleResponse(url) {
+  const limitRaw = Number(url.searchParams.get('limit') || 100)
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 100
+  const all = url.searchParams.get('all') === 'true'
+  const project = (url.searchParams.get('project') || '').trim()
+  const rows = ruleRows
+    .filter((row) => {
+      if (all) return true
+      if (!project) return !row.project
+      return !row.project || row.project === project
+    })
+    .slice()
+    .sort((left, right) => {
+      if (left.priority !== right.priority) return right.priority - left.priority
+      return right.created_at < left.created_at ? -1 : 1
+    })
+    .slice(0, limit)
+    .map(cloneRule)
+
+  return rows
+}
+
+function nextRuleId() {
+  return Math.max(400, ...ruleRows.map((row) => row.id)) + 1
 }
 
 function domainRegistryResponse() {
@@ -644,6 +702,109 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && path === '/api/rules') {
+    try {
+      const body = await readRequestJson(req)
+      const content = typeof body.content === 'string' ? body.content.trim() : ''
+      if (!content) {
+        json(res, 400, { error: 'content is required' })
+        return
+      }
+
+      const now = new Date().toISOString()
+      const project = typeof body.project === 'string' ? body.project.trim() : ''
+      const priority = typeof body.priority === 'number' ? body.priority : 0
+      const row = {
+        id: nextRuleId(),
+        project,
+        content,
+        priority,
+        version: 1,
+        enabled: true,
+        edited_by: typeof body.edited_by === 'string' ? body.edited_by.trim() : 'operator-console',
+        created_at: now,
+        updated_at: now,
+      }
+      ruleRows = [row, ...ruleRows]
+      json(res, 201, cloneRule(row))
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  const ruleEnabledMatch = path.match(/^\/api\/rules\/([^/]+)\/enabled$/)
+  if (req.method === 'PATCH' && ruleEnabledMatch) {
+    const id = Number(ruleEnabledMatch[1])
+    const rowIndex = ruleRows.findIndex((row) => row.id === id)
+    if (rowIndex < 0) {
+      json(res, 404, { error: 'rule not found' })
+      return
+    }
+
+    try {
+      const body = await readRequestJson(req)
+      if (typeof body.enabled !== 'boolean') {
+        json(res, 400, { error: 'enabled is required' })
+        return
+      }
+      const updated = {
+        ...ruleRows[rowIndex],
+        enabled: body.enabled,
+        edited_by: typeof body.edited_by === 'string' ? body.edited_by.trim() : ruleRows[rowIndex].edited_by,
+        version: ruleRows[rowIndex].version + 1,
+        updated_at: new Date().toISOString(),
+      }
+      ruleRows = ruleRows.map((row, index) => index === rowIndex ? updated : row)
+      json(res, 200, cloneRule(updated))
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  const ruleMatch = path.match(/^\/api\/rules\/([^/]+)$/)
+  if ((req.method === 'PATCH' || req.method === 'DELETE') && ruleMatch) {
+    const id = Number(ruleMatch[1])
+    const rowIndex = ruleRows.findIndex((row) => row.id === id)
+    if (rowIndex < 0) {
+      json(res, 404, { error: 'rule not found' })
+      return
+    }
+
+    if (req.method === 'DELETE') {
+      ruleRows = ruleRows.filter((row) => row.id !== id)
+      json(res, 200, { deleted: id })
+      return
+    }
+
+    try {
+      const body = await readRequestJson(req)
+      const current = ruleRows[rowIndex]
+      let content = current.content
+      if (Object.hasOwn(body, 'content')) {
+        content = typeof body.content === 'string' ? body.content.trim() : ''
+        if (!content) {
+          json(res, 400, { error: 'content must not be empty' })
+          return
+        }
+      }
+      const updated = {
+        ...current,
+        content,
+        priority: typeof body.priority === 'number' ? body.priority : current.priority,
+        edited_by: typeof body.edited_by === 'string' ? body.edited_by.trim() : current.edited_by,
+        version: current.version + 1,
+        updated_at: new Date().toISOString(),
+      }
+      ruleRows = ruleRows.map((row, index) => index === rowIndex ? updated : row)
+      json(res, 200, cloneRule(updated))
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
   if (req.method !== 'GET') {
     json(res, 405, { error: 'method not allowed' })
     return
@@ -806,7 +967,7 @@ const server = createServer(async (req, res) => {
       }
       return
     case '/api/rules':
-      json(res, 200, [])
+      json(res, 200, ruleResponse(url))
       return
     case '/api/projects':
       json(res, 200, [...projectIds])

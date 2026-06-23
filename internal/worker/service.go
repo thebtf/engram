@@ -1441,6 +1441,7 @@ func (s *Service) setupRoutes() {
 		// Behavioral rules management
 		r.Get("/api/rules", s.handleListBehavioralRules)
 		r.Post("/api/rules", s.handleCreateBehavioralRule)
+		r.Patch("/api/rules/{id}/enabled", s.handleSetBehavioralRuleEnabled)
 		r.Patch("/api/rules/{id}", s.handleUpdateBehavioralRule)
 		r.Delete("/api/rules/{id}", s.handleDeleteBehavioralRule)
 

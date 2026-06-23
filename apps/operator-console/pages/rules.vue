@@ -13,9 +13,9 @@ const {
   refresh,
   createRule: runCreateRule,
   updateRule,
+  toggleRuleEnabled,
   reorderRules,
   deleteRule,
-  enableGap,
   scopeChangeGap,
 } = useOperatorRules()
 
@@ -114,6 +114,11 @@ async function saveEdit(rule: RuleRow) {
   })
   if (isRollback(result)) return
   cancelEdit()
+}
+
+async function toggleRule(rule: RuleRow) {
+  if (pending.value) return
+  await toggleRuleEnabled(rule.id, !rule.enabled)
 }
 
 async function confirmDelete(rule: RuleRow) {
@@ -245,6 +250,7 @@ function isRollback(result: unknown) {
           :class="{
             editing: editingId === rule.id,
             dragging: draggingId === rule.id,
+            'disabled-rule': !rule.enabled,
             'drag-over': dragOverId === rule.id && !dragOverAfter,
             'drag-over-bottom': dragOverId === rule.id && dragOverAfter,
           }"
@@ -288,12 +294,27 @@ function isRollback(result: unknown) {
               <div class="rule-preview">{{ rule.content }}</div>
               <div class="rule-meta">
                 <span class="scope-chip">{{ scopeLabel(rule.project) }}</span>
+                <span class="rule-status-chip" :class="{ off: !rule.enabled }" :data-testid="`rule-status-${rule.id}`">
+                  {{ rule.enabled ? t('rules.detail.enabled') : t('rules.detail.disabled') }}
+                </span>
                 <span v-for="meta in rowMeta(rule, index)" :key="meta">{{ meta }}</span>
               </div>
             </div>
             <div class="rule-side">
               <button class="act" @click="startEdit(rule)">{{ t('rules.detail.edit') }}</button>
-              <button class="toggle" disabled role="switch" aria-checked="true" :title="enableGap.evidence.endpoint" />
+              <button
+                class="toggle"
+                :class="{ on: rule.enabled }"
+                role="switch"
+                :aria-checked="String(rule.enabled)"
+                :aria-label="rule.enabled ? t('rules.detail.disable') : t('rules.detail.enable')"
+                :title="t('rules.detail.enableBody')"
+                :data-testid="`rule-enable-toggle-${rule.id}`"
+                :disabled="pending"
+                @click="toggleRule(rule)"
+              >
+                <span class="sr-only">{{ rule.enabled ? t('rules.detail.enabled') : t('rules.detail.disabled') }}</span>
+              </button>
               <button
                 class="act danger"
                 :class="{ confirm: confirmingDeleteId === rule.id }"
@@ -383,6 +404,8 @@ function isRollback(result: unknown) {
 .rule-row { display:grid; grid-template-columns:30px 30px minmax(0,1fr) auto; gap:12px; align-items:center; min-height:64px; padding:12px 14px; border-bottom:1px solid var(--border-soft); transition:box-shadow var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
 .rule-row:last-child { border-bottom:0; }
 .rule-row:hover { background:var(--surface-warm); }
+.rule-row.disabled-rule { opacity:.72; }
+.rule-row.disabled-rule .rule-preview { color:var(--fg-2); }
 .rule-row.dragging { opacity:.5; }
 .rule-row.drag-over { box-shadow:inset 0 2px 0 var(--accent); }
 .rule-row.drag-over-bottom { box-shadow:inset 0 -2px 0 var(--accent); }
@@ -395,6 +418,8 @@ function isRollback(result: unknown) {
 .rule-preview { color:var(--fg); font-size:var(--text-sm); line-height:1.35; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .rule-meta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:5px; color:var(--muted); font-size:var(--text-xs); }
 .scope-chip { border:1px solid color-mix(in oklab,var(--accent),transparent 60%); border-radius:var(--radius-pill); padding:2px 7px; color:var(--accent); background:color-mix(in oklab,var(--accent),transparent 91%); }
+.rule-status-chip { border:1px solid color-mix(in oklab,var(--class-live),transparent 60%); border-radius:var(--radius-pill); padding:2px 7px; color:var(--class-live); background:color-mix(in oklab,var(--class-live),transparent 91%); }
+.rule-status-chip.off { border-color:color-mix(in oklab,var(--class-dormant),transparent 60%); color:var(--class-dormant); background:color-mix(in oklab,var(--class-dormant),transparent 90%); }
 .rule-side { display:flex; align-items:center; gap:8px; }
 .rule-editor { display:grid; gap:10px; }
 .rule-prio { color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); font-variant-numeric:tabular-nums; }
@@ -405,8 +430,12 @@ function isRollback(result: unknown) {
 .danger { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
 .danger.confirm { background:color-mix(in oklab,var(--state-warn),transparent 88%); }
 .primary:disabled, .act:disabled, .tbtn:disabled { opacity:.5; cursor:not-allowed; }
-.toggle { width:36px; height:20px; border:1px solid var(--border); border-radius:999px; background:var(--surface-warm); opacity:.55; cursor:not-allowed; position:relative; }
-.toggle::after { content:""; position:absolute; top:3px; right:4px; width:12px; height:12px; border-radius:50%; background:var(--muted); }
+.toggle { width:38px; height:22px; border:1px solid var(--border); border-radius:999px; background:var(--surface-warm); cursor:pointer; position:relative; transition:background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard); }
+.toggle::after { content:""; position:absolute; top:4px; left:4px; width:12px; height:12px; border-radius:50%; background:var(--muted); transition:transform var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
+.toggle.on { border-color:color-mix(in oklab,var(--class-live),transparent 55%); background:color-mix(in oklab,var(--class-live),transparent 78%); }
+.toggle.on::after { transform:translateX(16px); background:var(--class-live); }
+.toggle:disabled { opacity:.55; cursor:not-allowed; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; min-height:180px; color:var(--muted); }
 .empty b { color:var(--fg-2); font-size:var(--text-lg); }
 .modal-backdrop { position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:24px; background:rgba(0,0,0,.62); }

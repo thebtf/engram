@@ -19,6 +19,7 @@ interface ApiRuleRow {
   content?: string
   priority?: number
   version?: number
+  enabled?: boolean
   edited_by?: string
   created_at?: string
   updated_at?: string
@@ -62,6 +63,7 @@ function mapRuleRow(row: ApiRuleRow): RuleRow {
     priority: typeof row.priority === 'number' ? row.priority : 0,
     version: typeof row.version === 'number' ? row.version : 1,
     updated: compactAge(row.updated_at || row.created_at),
+    enabled: row.enabled !== false,
   }
 }
 
@@ -95,9 +97,9 @@ export function useOperatorRules(): {
   refresh: () => Promise<void>
   createRule: (input: RuleCreateInput) => Promise<unknown>
   updateRule: (id: number, input: RuleUpdateInput) => Promise<unknown>
+  toggleRuleEnabled: (id: number, enabled: boolean) => Promise<unknown>
   reorderRules: (orderedRows: RuleRow[]) => Promise<unknown>
   deleteRule: (id: number) => Promise<unknown>
-  enableGap: ReturnType<typeof unsupportedOperatorAction>
   scopeChangeGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const evidence = endpointEvidence('/api/rules?all=true&limit=200', 'rules-list')
@@ -197,6 +199,26 @@ export function useOperatorRules(): {
     })
   }
 
+  async function toggleRuleEnabled(id: number, enabled: boolean) {
+    return runOperatorMutation({
+      action: 'rule-enable-toggle',
+      evidence: endpointEvidence(`/api/rules/${id}/enabled`, 'rule-enable-toggle'),
+      snapshot: () => [...rowsState.value],
+      optimistic: () => {
+        replaceArray(rowsState.value, rowsState.value.map((row) => row.id === id ? { ...row, enabled } : row))
+      },
+      run: async () => {
+        const row = await operatorFetchJson<ApiRuleRow>(`/api/rules/${id}/enabled`, jsonInit('PATCH', {
+          enabled,
+          edited_by: 'operator-console',
+        }), 'rule-enable-toggle')
+        return mapRuleRow(row)
+      },
+      rollback: (snapshot) => replaceArray(rowsState.value, snapshot || []),
+      refresh,
+    })
+  }
+
   async function reorderRules(orderedRows: RuleRow[]) {
     const nextRows = orderedRows.map((row, index) => ({
       ...row,
@@ -239,11 +261,6 @@ export function useOperatorRules(): {
     })
   }
 
-  const enableGap = unsupportedOperatorAction(
-    'rule-enable-toggle',
-    'PATCH /api/rules/{id}/enabled',
-    'Behavioral rules do not expose an enabled/disabled field in the current server model.',
-  )
   const scopeChangeGap = unsupportedOperatorAction(
     'rule-scope-change',
     'PATCH /api/rules/{id}/project',
@@ -261,9 +278,9 @@ export function useOperatorRules(): {
     refresh,
     createRule,
     updateRule,
+    toggleRuleEnabled,
     reorderRules,
     deleteRule,
-    enableGap,
     scopeChangeGap,
   }
 }

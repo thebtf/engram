@@ -260,7 +260,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		if project == "" {
 			projectPtr = nil
 		}
-		rules, aiErr := s.behavioralRulesStore.List(r.Context(), projectPtr, alwaysInjectLimit)
+		rules, aiErr := s.behavioralRulesStore.ListEnabled(r.Context(), projectPtr, alwaysInjectLimit)
 		if aiErr != nil {
 			log.Debug().Err(aiErr).Msg("Failed to fetch always-inject behavioral rules for search")
 		} else {
@@ -931,7 +931,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		if project == "" {
 			projectPtr = nil
 		}
-		rules, guidanceErr := s.behavioralRulesStore.List(ctx, projectPtr, 5)
+		rules, guidanceErr := s.behavioralRulesStore.ListEnabled(ctx, projectPtr, 5)
 		if guidanceErr != nil {
 			log.Debug().Err(guidanceErr).Str("project", project).Msg("Failed to fetch behavioral rules guidance")
 		} else {
@@ -958,7 +958,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		if project == "" {
 			projectPtr = nil
 		}
-		rules, aiErr := s.behavioralRulesStore.List(ctx, projectPtr, alwaysInjectLimit)
+		rules, aiErr := s.behavioralRulesStore.ListEnabled(ctx, projectPtr, alwaysInjectLimit)
 		if aiErr != nil {
 			log.Debug().Err(aiErr).Msg("Failed to fetch always-inject behavioral rules")
 		} else {

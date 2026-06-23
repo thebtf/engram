@@ -258,6 +258,7 @@ func TestHandleCreateBehavioralRule_Success(t *testing.T) {
 	require.Greater(t, created.ID, int64(0))
 	require.Equal(t, "handler test: created over HTTP", created.Content)
 	require.Equal(t, 12, created.Priority)
+	require.True(t, created.Enabled)
 	require.NotNil(t, created.Project)
 	require.Equal(t, project, *created.Project)
 
@@ -295,7 +296,70 @@ func TestHandleUpdateBehavioralRule_PartialSuccess(t *testing.T) {
 	assert.Equal(t, created.Content, updated.Content)
 	assert.Equal(t, 7, updated.Priority)
 	assert.Equal(t, "operator-console", updated.EditedBy)
+	assert.True(t, updated.Enabled, "partial update must preserve enabled state")
 	assert.Greater(t, updated.Version, created.Version)
+}
+
+func TestHandleSetBehavioralRuleEnabled_Success(t *testing.T) {
+	project := "test-rules-handler-enabled-success"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: toggle me",
+		Priority: 11,
+		EditedBy: "seed",
+	})
+	require.NoError(t, err)
+	require.True(t, created.Enabled)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequest(http.MethodPatch, "/api/rules/"+idStr+"/enabled", "id", idStr)
+	req.Body = ioNopCloser(`{"enabled":false,"edited_by":"operator-console"}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleSetBehavioralRuleEnabled(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var updated models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, created.ID, updated.ID)
+	assert.False(t, updated.Enabled)
+	assert.Equal(t, "operator-console", updated.EditedBy)
+	assert.Greater(t, updated.Version, created.Version)
+
+	operatorRows, err := brs.List(context.Background(), &projectPtr, 100)
+	require.NoError(t, err)
+	require.Len(t, operatorRows, 1)
+	assert.False(t, operatorRows[0].Enabled, "disabled rule remains visible to operator list")
+
+	injectionRows, err := brs.ListEnabled(context.Background(), &projectPtr, 100)
+	require.NoError(t, err)
+	require.Empty(t, injectionRows, "disabled rule must not be injected")
+}
+
+func TestHandleSetBehavioralRuleEnabled_RequiresEnabled(t *testing.T) {
+	project := "test-rules-handler-enabled-required"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: missing enabled field",
+		Priority: 1,
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequest(http.MethodPatch, "/api/rules/"+idStr+"/enabled", "id", idStr)
+	req.Body = ioNopCloser(`{"edited_by":"operator-console"}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleSetBehavioralRuleEnabled(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func storeDeleteRuleByProject(ctx context.Context, brs *dbgorm.BehavioralRulesStore, project string) error {

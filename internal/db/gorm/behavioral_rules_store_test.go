@@ -42,6 +42,7 @@ func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
 	assert.Equal(t, rule.Content, created.Content)
 	assert.Equal(t, 10, created.Priority)
 	assert.Equal(t, 1, created.Version, "Version should be 1 on create")
+	assert.True(t, created.Enabled, "Create must default rules to enabled for existing store_rule callers")
 	assert.Nil(t, created.DeletedAt, "active rule must have nil deleted_at")
 
 	// Verify input was NOT mutated
@@ -66,6 +67,7 @@ func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
 	assert.Equal(t, "always validate input at every boundary AND use schema-based validation", updated.Content)
 	assert.Equal(t, 20, updated.Priority)
 	assert.Equal(t, "update-test", updated.EditedBy)
+	assert.True(t, updated.Enabled, "content/priority updates must preserve enabled state")
 	assert.Equal(t, 2, updated.Version, "Version should be bumped to 2 after update")
 
 	// --- List ---
@@ -79,6 +81,35 @@ func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "Created rule must appear in List")
+
+	// --- Disable ---
+	disabled, err := brs.SetEnabled(ctx, created.ID, false, "toggle-test")
+	require.NoError(t, err, "SetEnabled(false) should succeed")
+	assert.False(t, disabled.Enabled)
+	assert.Equal(t, "toggle-test", disabled.EditedBy)
+	assert.Greater(t, disabled.Version, updated.Version)
+
+	operatorList, err := brs.List(ctx, strPtr(proj), 100)
+	require.NoError(t, err, "operator List should keep disabled rows visible")
+	foundDisabledInOperatorList := false
+	for _, r := range operatorList {
+		if r.ID == created.ID {
+			foundDisabledInOperatorList = true
+			assert.False(t, r.Enabled, "List should surface disabled state")
+			break
+		}
+	}
+	assert.True(t, foundDisabledInOperatorList, "disabled rule must remain visible in operator List")
+
+	enabledList, err := brs.ListEnabled(ctx, strPtr(proj), 100)
+	require.NoError(t, err, "ListEnabled should succeed")
+	for _, r := range enabledList {
+		assert.NotEqual(t, created.ID, r.ID, "disabled rule must not appear in injection ListEnabled")
+	}
+
+	reenabled, err := brs.SetEnabled(ctx, created.ID, true, "toggle-test")
+	require.NoError(t, err, "SetEnabled(true) should succeed")
+	assert.True(t, reenabled.Enabled)
 
 	// --- Delete ---
 	err = brs.Delete(ctx, created.ID)

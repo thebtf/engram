@@ -389,6 +389,7 @@ func (s *RuleGovernanceStore) ListLegacyBehavioralRuleFallback(ctx context.Conte
 	}
 	q := s.db.WithContext(ctx).
 		Where("deleted_at IS NULL").
+		Where("enabled = ?", true).
 		Order("priority DESC, created_at DESC").
 		Limit(limit)
 	if project == nil {

@@ -66,6 +66,7 @@ export interface RuleRow {
   priority: number
   version: number
   updated: string
+  enabled: boolean
 }
 
 export interface RuleCreateInput {
@@ -203,6 +204,8 @@ interface ApiRuleRow {
   project?: string
   content?: string
   priority?: number
+  version?: number
+  enabled?: boolean
   edited_by?: string
   created_at?: string
   updated_at?: string
@@ -394,7 +397,9 @@ function mapRuleRow(row: ApiRuleRow): RuleRow {
     content: row.content || '—',
     project: normalizeProject(row.project),
     priority: typeof row.priority === 'number' ? row.priority : 0,
+    version: typeof row.version === 'number' ? row.version : 1,
     updated: compactAge(row.updated_at || row.created_at),
+    enabled: row.enabled !== false,
   }
 }
 

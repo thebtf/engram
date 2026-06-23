@@ -53,6 +53,7 @@ func (s *BehavioralRulesStore) Create(ctx context.Context, rule *models.Behavior
 		Content:   rule.Content,
 		Priority:  rule.Priority,
 		EditedBy:  rule.EditedBy,
+		Enabled:   true,
 		Version:   1,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -93,6 +94,16 @@ func (s *BehavioralRulesStore) Get(ctx context.Context, id int64) (*models.Behav
 // Results are ordered by priority DESC, created_at DESC.
 // limit must be > 0; if ≤ 0 it is clamped to 50.
 func (s *BehavioralRulesStore) List(ctx context.Context, project *string, limit int) ([]*models.BehavioralRule, error) {
+	return s.list(ctx, project, limit, false)
+}
+
+// ListEnabled returns only enabled active behavioral rules for injection paths.
+// Operator registry screens use List/ListAll so disabled rules remain visible and recoverable.
+func (s *BehavioralRulesStore) ListEnabled(ctx context.Context, project *string, limit int) ([]*models.BehavioralRule, error) {
+	return s.list(ctx, project, limit, true)
+}
+
+func (s *BehavioralRulesStore) list(ctx context.Context, project *string, limit int, enabledOnly bool) ([]*models.BehavioralRule, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -106,6 +117,9 @@ func (s *BehavioralRulesStore) List(ctx context.Context, project *string, limit 
 		q = q.Where("project IS NULL")
 	} else {
 		q = q.Where("project = ? OR project IS NULL", *project)
+	}
+	if enabledOnly {
+		q = q.Where("enabled = ?", true)
 	}
 
 	var rows []BehavioralRule
@@ -159,11 +173,11 @@ func (s *BehavioralRulesStore) Update(ctx context.Context, rule *models.Behavior
 
 	now := time.Now().UTC()
 	updates := map[string]any{
-		"content":   rule.Content,
-		"priority":  rule.Priority,
-		"edited_by": rule.EditedBy,
+		"content":    rule.Content,
+		"priority":   rule.Priority,
+		"edited_by":  rule.EditedBy,
 		"updated_at": now,
-		"version":   gorm.Expr("version + 1"),
+		"version":    gorm.Expr("version + 1"),
 	}
 	// project is intentionally excluded from partial updates — changing a rule's scope
 	// (global → project-scoped or vice versa) is a design-time concern, not a runtime one.
@@ -180,6 +194,32 @@ func (s *BehavioralRulesStore) Update(ctx context.Context, rule *models.Behavior
 	}
 
 	return s.Get(ctx, rule.ID)
+}
+
+// SetEnabled toggles an active behavioral rule without changing content, priority, or scope.
+func (s *BehavioralRulesStore) SetEnabled(ctx context.Context, id int64, enabled bool, editedBy string) (*models.BehavioralRule, error) {
+	if id == 0 {
+		return nil, fmt.Errorf("behavioral rule ID must be set for SetEnabled")
+	}
+
+	now := time.Now().UTC()
+	result := s.db.WithContext(ctx).
+		Model(&BehavioralRule{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		Updates(map[string]any{
+			"enabled":    enabled,
+			"edited_by":  editedBy,
+			"updated_at": now,
+			"version":    gorm.Expr("version + 1"),
+		})
+	if result.Error != nil {
+		return nil, fmt.Errorf("set behavioral rule enabled id=%d: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return nil, fmt.Errorf("set behavioral rule enabled id=%d: %w", id, gorm.ErrRecordNotFound)
+	}
+
+	return s.Get(ctx, id)
 }
 
 // Delete soft-deletes the behavioral rule by setting deleted_at = NOW().
@@ -217,5 +257,6 @@ func behavioralRuleRowToModel(row *BehavioralRule) *models.BehavioralRule {
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
 		DeletedAt: row.DeletedAt,
+		Enabled:   row.Enabled,
 	}
 }

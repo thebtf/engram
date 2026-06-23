@@ -4716,6 +4716,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		apiTokenPrincipalsMigration148(),
 		memoryPrincipalsMigration149(),
 		memoryDomainOwnersMigration150(),
+		behavioralRulesEnabledMigration151(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

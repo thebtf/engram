@@ -459,13 +459,16 @@
       "project": "范围",
       "priority": "优先级",
       "enableTitle": "启用 / 禁用",
-      "enableBody": "当前服务器模型没有 behavioral rule 的 enabled 字段，因此 toggle 不可操作。",
+      "enableBody": "调用 live endpoint PATCH /api/rules/{id}/enabled；禁用的规则仍保留在列表中，但不会被注入。",
+      "enabled": "已启用",
+      "disabled": "已禁用",
       "edit": "编辑",
       "cancel": "取消",
       "save": "保存",
       "delete": "删除",
       "confirmDelete": "确认",
-      "enable": "切换"
+      "enable": "启用规则",
+      "disable": "禁用规则"
     }
   },
 

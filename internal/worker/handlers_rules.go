@@ -21,6 +21,11 @@ type behavioralRuleRequest struct {
 	EditedBy *string `json:"edited_by"`
 }
 
+type behavioralRuleEnabledRequest struct {
+	EditedBy *string `json:"edited_by"`
+	Enabled  *bool   `json:"enabled"`
+}
+
 func parseBehavioralRuleID(r *http.Request) (int64, bool) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -43,6 +48,14 @@ func normalizedOptionalString(value *string) *string {
 
 func decodeBehavioralRuleRequest(r *http.Request) (*behavioralRuleRequest, error) {
 	var req behavioralRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
+func decodeBehavioralRuleEnabledRequest(r *http.Request) (*behavioralRuleEnabledRequest, error) {
+	var req behavioralRuleEnabledRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return nil, err
 	}
@@ -224,6 +237,57 @@ func (s *Service) handleUpdateBehavioralRule(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		log.Error().Err(err).Int64("id", id).Msg("update behavioral rule failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, updated)
+}
+
+// handleSetBehavioralRuleEnabled godoc
+// @Summary Enable or disable a behavioral rule
+// @Description Toggles whether an active behavioral rule is injected. Disabled rules remain listed for operator review and re-enabling.
+// @Tags Rules
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Rule ID"
+// @Param body body behavioralRuleEnabledRequest true "Rule enabled payload"
+// @Success 200 {object} models.BehavioralRule
+// @Failure 400 {string} string "enabled is required"
+// @Failure 404 {string} string "rule not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal server error"
+// @Router /api/rules/{id}/enabled [patch]
+func (s *Service) handleSetBehavioralRuleEnabled(w http.ResponseWriter, r *http.Request) {
+	if s.behavioralRulesStore == nil {
+		http.Error(w, "behavioral rules store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	id, ok := parseBehavioralRuleID(r)
+	if !ok {
+		http.Error(w, "invalid rule id", http.StatusBadRequest)
+		return
+	}
+
+	req, err := decodeBehavioralRuleEnabledRequest(r)
+	if err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Enabled == nil {
+		http.Error(w, "enabled is required", http.StatusBadRequest)
+		return
+	}
+
+	updated, err := s.behavioralRulesStore.SetEnabled(r.Context(), id, *req.Enabled, strings.TrimSpace(stringValue(req.EditedBy)))
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "rule not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("set behavioral rule enabled failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
