@@ -1,0 +1,47 @@
+{
+  "slice": "operator-console-hardening-browser-smoke-ci",
+  "date": "2026-06-23",
+  "worktree": "D:\\Dev\\engram-wt\\operator-console-hardening",
+  "branch": "work/operator-console-hardening",
+  "goal": "Promote operator-console Settings modal browser/action smoke into repeatable CI coverage.",
+  "changes": [
+    "Added Playwright as an operator-console dev dependency.",
+    "Added apps/operator-console/playwright.config.ts with a local mock operator API and production preview server.",
+    "Added apps/operator-console/tests/browser/settings-modal.spec.ts to verify Settings opens as a modal overlay, preserves route context, exposes honest mustbuild evidence, and has no console/request failures.",
+    "Extended .github/workflows/test.yml to run parity, seam tests, Nuxt build, Chromium install, and browser smoke for apps/operator-console.",
+    "Ignored Playwright report and test result artifacts."
+  ],
+  "verification": [
+    {
+      "command": "npm run parity",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: DESIGN.md and PARITY.json design_version 2026.06.21; no drift; fidelity interactive 5, full 2, structural 5, stub 5; open gaps 37."
+    },
+    {
+      "command": "npm run test:seam",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: 11/11 seam contract tests."
+    },
+    {
+      "command": "npm run build",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: production Nuxt build completes."
+    },
+    {
+      "command": "npm run test:browser",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: 1/1 Playwright Chromium smoke; Settings modal route and mustbuild honesty verified; consoleProblems=[]; failedRequests=[]."
+    },
+    {
+      "command": "git diff --check",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening",
+      "result": "PASS: no whitespace errors; Git reported expected LF-to-CRLF working-copy warnings only."
+    }
+  ],
+  "known_residuals": [
+    "Nuxt build still emits transitive Node DEP0155 warnings from dependency exports.",
+    "npm audit still reports one low severity vulnerability.",
+    "nuxt dev remains unsuitable in this environment due the existing rollupOptions.input issue; CI smoke uses production build plus preview instead."
+  ],
+  "status": "ready_for_commit"
+}
