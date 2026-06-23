@@ -172,7 +172,7 @@ const candidateFixtureRows = [
   },
 ]
 
-const candidateRows = candidateFixtureRows.map((row) => ({
+let candidateRows = candidateFixtureRows.map((row) => ({
   ...row,
   evidence_handles: [...row.evidence_handles],
   affected_projects: [...row.affected_projects],
@@ -395,7 +395,8 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && candidateActionMatch) {
     const id = Number(candidateActionMatch[1])
     const action = candidateActionMatch[2]
-    const row = candidateRows.find((item) => item.id === id)
+    const rowIndex = candidateRows.findIndex((item) => item.id === id)
+    const row = candidateRows[rowIndex]
     if (!row) {
       json(res, 404, { error: 'candidate not found' })
       return
@@ -414,15 +415,20 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    row.status = action === 'promote' ? 'promoted' : action === 'reject' ? 'rejected' : 'superseded'
+    const nextStatus = action === 'promote' ? 'promoted' : action === 'reject' ? 'rejected' : 'superseded'
     const memoryId = action === 'promote' ? 9100 + id : undefined
-    if (memoryId !== undefined) row.promoted_memory_id = memoryId
+    const updatedRow = {
+      ...row,
+      status: nextStatus,
+      promoted_memory_id: memoryId ?? row.promoted_memory_id,
+    }
+    candidateRows = candidateRows.map((item, index) => index === rowIndex ? updatedRow : item)
     json(res, 200, {
       action,
-      candidate_id: row.id,
-      candidate_status: row.status,
+      candidate_id: updatedRow.id,
+      candidate_status: updatedRow.status,
       memory_id: memoryId,
-      promoted_memory_id: row.promoted_memory_id,
+      promoted_memory_id: updatedRow.promoted_memory_id,
     })
     return
   }
