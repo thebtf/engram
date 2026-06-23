@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -191,11 +192,15 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 
 	content, err := fs.ReadFile(staticSubFS, path)
 	if err != nil {
-		if isNuxtJSChunk(path) {
-			serveStaleNuxtChunkReload(w)
+		if errors.Is(err, fs.ErrNotExist) {
+			if isNuxtJSChunk(path) {
+				serveStaleNuxtChunkReload(w)
+				return
+			}
+			http.Error(w, "Asset not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, "Asset not found", http.StatusNotFound)
+		http.Error(w, "Asset read failed", http.StatusInternalServerError)
 		return
 	}
 

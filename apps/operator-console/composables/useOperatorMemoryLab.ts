@@ -425,7 +425,8 @@ export function useOperatorMemoryLab(): {
   }
 
   async function auditMemory(id: string, limit = 10) {
-    const path = `/api/memories/${encodeURIComponent(id)}/audit?limit=${limit}`
+    const normalizedLimit = Number.isInteger(limit) && limit > 0 ? Math.min(200, limit) : 10
+    const path = `/api/memories/${encodeURIComponent(id)}/audit?limit=${normalizedLimit}`
     return loadOperatorJson<MemoryAuditResponse>(path, {
       source: 'memory-audit',
       empty: (data) => !data.entries.length,

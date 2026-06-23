@@ -243,6 +243,7 @@ test('candidate review queue is a live gated surface, not a SectionStub', () => 
 test('memory detail actions keep mustbuild descriptors while live delete and audit are endpoint-backed', () => {
   const memoryPageSource = read(memoryPagePath)
   const memoryLabSource = read(memoryLabPath)
+  const mockOperatorApiSource = read(mockOperatorApiPath)
 
   assert.doesNotMatch(memoryPageSource, /storeCopy/, 'uncontracted store-copy controls must not be visible in Memory detail')
   assert.match(memoryPageSource, /suppressOpened/, 'Memory detail may expose hide-as-noise only through the live suppress handler')
@@ -262,7 +263,11 @@ test('memory detail actions keep mustbuild descriptors while live delete and aud
   assert.match(memoryPageSource, /memory-audit-panel/, 'Memory detail must expose a stable audit panel selector')
   assert.match(memoryPageSource, /auditMemory\(memory\.id\)/, 'Memory detail audit must call the composable live audit action')
   assert.match(memoryLabSource, /auditMemory:\s*\(id:\s*string,\s*limit\?:\s*number\)\s*=>\s*Promise<OperatorLoadState<MemoryAuditResponse>>/, 'Memory Lab audit must expose a typed load state')
-  assert.match(memoryLabSource, /\/api\/memories\/\$\{encodeURIComponent\(id\)\}\/audit\?limit=\$\{limit\}/, 'Memory audit must carry the live REST endpoint as evidence')
+  assert.match(memoryLabSource, /const normalizedLimit = Number\.isInteger\(limit\) && limit > 0 \? Math\.min\(200, limit\) : 10/, 'Memory audit must normalize browser-provided limits before constructing the endpoint URL')
+  assert.match(memoryLabSource, /\/api\/memories\/\$\{encodeURIComponent\(id\)\}\/audit\?limit=\$\{normalizedLimit\}/, 'Memory audit must carry the live REST endpoint as evidence with the normalized limit')
+  assert.match(mockOperatorApiSource, /if \(!Number\.isInteger\(id\) \|\| id <= 0\) \{[\s\S]*json\(res,\s*400,\s*\{\s*error:\s*['"]invalid memory id['"]\s*\}/, 'Mock memory audit must reject invalid memory IDs like the live handler')
+  assert.match(mockOperatorApiSource, /if \(!Number\.isInteger\(limit\) \|\| limit <= 0 \|\| limit > 200\) \{[\s\S]*json\(res,\s*400,\s*\{\s*error:\s*['"]invalid limit['"]\s*\}/, 'Mock memory audit must reject invalid limits like the live handler')
+  assert.match(mockOperatorApiSource, /const row = memoryRows\.find\(\(item\) => item\.id === id\)/, 'Mock memory audit must use numeric memory ID matching before returning audit rows')
   assert.doesNotMatch(memoryLabSource, /unsupportedOperatorAction\(\s*['"]memory-audit['"]/, 'Memory audit must not remain a mustbuild descriptor after the endpoint exists')
   assert.match(memoryLabSource, /memoryActionGaps|actionGaps/, 'Memory Lab must expose action capability descriptors')
   assert.match(memoryLabSource, /unsupportedOperatorAction\(/, 'Memory actions without browser endpoints must use unsupported action descriptors')

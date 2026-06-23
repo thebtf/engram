@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -87,6 +88,25 @@ func TestOperatorConsoleMissingNuxtJSChunkReturnsReloadModule(t *testing.T) {
 	}
 }
 
+func TestOperatorConsoleNuxtJSChunkReadErrorReturns500(t *testing.T) {
+	restoreStaticFS := replaceStaticFSForTest(t, readErrorFS{err: errors.New("test read failure")})
+	defer restoreStaticFS()
+
+	svc := &Service{router: chi.NewRouter()}
+	svc.setupRoutes()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/_nuxt/broken-build-chunk.js", nil)
+	svc.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("broken Nuxt JS chunk status = %d, want 500; body=%q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); strings.Contains(got, "engram_chunk_reload") || strings.Contains(got, "export default {}") {
+		t.Fatalf("read error was masked as a stale chunk reload module: %q", got)
+	}
+}
+
 func replaceStaticFSForTest(t *testing.T, next fs.FS) func() {
 	t.Helper()
 
@@ -99,4 +119,16 @@ func replaceStaticFSForTest(t *testing.T, next fs.FS) func() {
 		staticSubFS = prevFS
 		staticInitErr = prevErr
 	}
+}
+
+type readErrorFS struct {
+	err error
+}
+
+func (fsys readErrorFS) Open(name string) (fs.File, error) {
+	return nil, fsys.err
+}
+
+func (fsys readErrorFS) ReadFile(name string) ([]byte, error) {
+	return nil, fsys.err
 }
