@@ -592,6 +592,10 @@ func (s *Service) handleSuppressMemoryByID(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	if before == nil {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
 	if !memoryDomainManageAllowedREST(r.Context(), before) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return
