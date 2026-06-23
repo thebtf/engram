@@ -157,6 +157,16 @@ interface ApiUpdateCheck {
   message?: string
 }
 
+interface ApiMigrationState {
+  engine?: string
+  table?: string
+  current_version?: string
+  applied_count?: number
+  applied_ids?: string[]
+  dirty_supported?: boolean
+  applied_at_supported?: boolean
+}
+
 export interface OperatorHealthMetric {
   label: string
   value: string
@@ -194,9 +204,11 @@ export function useOperatorHealthSettings(): {
   vectorState: ComputedRef<OperatorLoadState<ApiVectorMetrics>>
   updateStatusState: ComputedRef<OperatorLoadState<ApiUpdateStatus>>
   updateCheckState: ComputedRef<OperatorLoadState<ApiUpdateCheck>>
+  migrationsState: ComputedRef<OperatorLoadState<ApiMigrationState>>
   components: ComputedRef<ApiComponentHealth[]>
   flagItems: ComputedRef<ApiFlagItem[]>
   embeddingMetrics: ComputedRef<OperatorHealthMetric[]>
+  migrationMetrics: ComputedRef<OperatorHealthMetric[]>
   configMetrics: ComputedRef<OperatorHealthMetric[]>
   configPendingRestart: ComputedRef<ApiConfigPendingRestart[]>
   restartRequired: ComputedRef<boolean>
@@ -216,6 +228,7 @@ export function useOperatorHealthSettings(): {
   const vectorEvidence = endpointEvidence('/api/vector/metrics', 'vector-metrics')
   const updateStatusEvidence = endpointEvidence('/api/update/status', 'update-status')
   const updateCheckEvidence = endpointEvidence('/api/update/check', 'update-check')
+  const migrationsEvidence = endpointEvidence('/api/migrations', 'migrations')
   const configSaveEvidence = endpointEvidence('/api/config', 'config-save')
 
   const selfcheck = useState<OperatorLoadState<ApiSelfcheck>>('live:health-settings:selfcheck', () => pendingState(selfcheckEvidence))
@@ -226,6 +239,7 @@ export function useOperatorHealthSettings(): {
   const vector = useState<OperatorLoadState<ApiVectorMetrics>>('live:health-settings:vector', () => pendingState(vectorEvidence))
   const updateStatus = useState<OperatorLoadState<ApiUpdateStatus>>('live:health-settings:update-status', () => pendingState(updateStatusEvidence))
   const updateCheck = useState<OperatorLoadState<ApiUpdateCheck>>('live:health-settings:update-check', () => pendingState(updateCheckEvidence))
+  const migrations = useState<OperatorLoadState<ApiMigrationState>>('live:health-settings:migrations', () => pendingState(migrationsEvidence))
 
   const selfcheckState = computed(() => selfcheck.value)
   const readyState = computed(() => ready.value)
@@ -235,6 +249,7 @@ export function useOperatorHealthSettings(): {
   const vectorState = computed(() => vector.value)
   const updateStatusState = computed(() => updateStatus.value)
   const updateCheckState = computed(() => updateCheck.value)
+  const migrationsState = computed(() => migrations.value)
 
   const components = computed(() => selfcheck.value.kind === 'live' ? selfcheck.value.data.components || [] : [])
   const flagItems = computed(() => flags.value.kind === 'live' ? flags.value.data.items || [] : [])
@@ -248,6 +263,15 @@ export function useOperatorHealthSettings(): {
       { label: 'coverage', value: percent(embedding?.embedding_coverage) },
       { label: 'noise_ratio', value: display(vnext.value.kind === 'live' ? vnext.value.data.noise_ratio : undefined) },
       { label: 'model', value: display(embedding?.model ?? vectorStats?.model) },
+    ]
+  })
+  const migrationMetrics = computed(() => {
+    const data = migrations.value.kind === 'live' ? migrations.value.data : {}
+    return [
+      { label: 'engine', value: display(data.engine) },
+      { label: 'table', value: display(data.table) },
+      { label: 'current_version', value: display(data.current_version) },
+      { label: 'applied_count', value: display(data.applied_count) },
     ]
   })
   const configMetrics = computed(() => {
@@ -279,9 +303,10 @@ export function useOperatorHealthSettings(): {
     vector.value,
     updateStatus.value,
     updateCheck.value,
+    migrations.value,
   ].some((state) => state.kind === 'pending'))
   const error = computed(() => {
-    for (const state of [selfcheck.value, ready.value, config.value, flags.value, vnext.value, vector.value, updateStatus.value, updateCheck.value]) {
+    for (const state of [selfcheck.value, ready.value, config.value, flags.value, vnext.value, vector.value, updateStatus.value, updateCheck.value, migrations.value]) {
       if (state.kind === 'error') return state.error.message
     }
     return null
@@ -296,6 +321,7 @@ export function useOperatorHealthSettings(): {
     vector.value = await loadOperatorJson<ApiVectorMetrics>('/api/vector/metrics', { source: 'vector-metrics' })
     updateStatus.value = await loadOperatorJson<ApiUpdateStatus>('/api/update/status', { source: 'update-status' })
     updateCheck.value = await loadOperatorJson<ApiUpdateCheck>('/api/update/check', { source: 'update-check' })
+    migrations.value = await loadOperatorJson<ApiMigrationState>('/api/migrations', { source: 'migrations' })
   }
 
   async function saveConfig(patch: ApiConfigPatch) {
@@ -339,9 +365,11 @@ export function useOperatorHealthSettings(): {
     vectorState,
     updateStatusState,
     updateCheckState,
+    migrationsState,
     components,
     flagItems,
     embeddingMetrics,
+    migrationMetrics,
     configMetrics,
     configPendingRestart,
     restartRequired,

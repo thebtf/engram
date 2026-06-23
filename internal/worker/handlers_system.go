@@ -338,6 +338,27 @@ func (s *Service) handleGetFlags(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, buildRuntimeFlagsResponse(cfg, s.flagConfig))
 }
 
+// handleGetMigrations returns the applied database migration state from the
+// actual gormigrate bookkeeping table. It is intentionally read-only.
+func (s *Service) handleGetMigrations(w http.ResponseWriter, r *http.Request) {
+	s.initMu.RLock()
+	store := s.store
+	s.initMu.RUnlock()
+
+	if store == nil {
+		http.Error(w, "database not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	state, err := store.GetMigrationState(r.Context())
+	if err != nil {
+		http.Error(w, "migration state unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, state)
+}
+
 func buildRuntimeFlagsResponse(cfg *config.Config, flagCfg cognitivecore.FlagConfig) runtimeFlagsResponse {
 	items := []runtimeFlagItem{
 		envRuntimeFlag("ENGRAM_VNEXT_ENABLED", "vnext", "Master vNext gate for hybrid retrieval, purge, audit, and retention paths."),

@@ -106,6 +106,16 @@ const flags = {
   },
 }
 
+const migrations = {
+  engine: 'gormigrate',
+  table: 'migrations',
+  current_version: '151_behavioral_rules_enabled',
+  applied_count: 3,
+  applied_ids: ['001_init_schema', '150_config_patch_receipts', '151_behavioral_rules_enabled'],
+  dirty_supported: false,
+  applied_at_supported: false,
+}
+
 const memoryRows = [
   {
     id: 101,
@@ -845,6 +855,9 @@ const server = createServer(async (req, res) => {
       return
     case '/api/flags':
       json(res, 200, flags)
+      return
+    case '/api/migrations':
+      json(res, 200, migrations)
       return
     case '/api/stats':
       json(res, 200, {

@@ -891,12 +891,20 @@
     "embedding": "Embedding coverage",
     "vector": "pgvector",
     "update": "Update channel",
+    "migrations": "Migrations",
     "updateState": "Update state",
     "updateAvailable": "Update available",
     "idle": "idle",
     "vectorUnavailable": "vector unavailable",
     "noise": "Noise",
     "emptyComponents": "Selfcheck components are not loaded yet.",
+    "migration": {
+      "engine": "Engine",
+      "table": "Table",
+      "current_version": "Current version",
+      "applied_count": "Applied",
+      "dirtyUnsupported": "Engram uses gormigrate: dirty/applied_at are not supported by this table."
+    },
     "state": {
       "pending": "Loading server health…",
       "error": "Could not load health: {message}",

@@ -84,6 +84,47 @@ func TestHandleGetFlags_ConfigUnavailable(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "config not available")
 }
 
+func TestHandleGetMigrations_StoreUnavailable(t *testing.T) {
+	svc := &Service{}
+	req := httptest.NewRequest(http.MethodGet, "/api/migrations", nil)
+	w := httptest.NewRecorder()
+
+	svc.handleGetMigrations(w, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), "database not available")
+}
+
+func TestHandleGetMigrations_ReturnsAppliedState(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, store.Close())
+	})
+
+	svc := &Service{store: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/migrations", nil)
+	w := httptest.NewRecorder()
+
+	svc.handleGetMigrations(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var response dbgorm.MigrationState
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "gormigrate", response.Engine)
+	assert.Equal(t, "migrations", response.Table)
+	assert.NotEmpty(t, response.CurrentVersion)
+	assert.Positive(t, response.AppliedCount)
+	assert.Len(t, response.AppliedIDs, response.AppliedCount)
+	assert.False(t, response.DirtySupported)
+	assert.False(t, response.AppliedAtSupported)
+}
+
 func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("HOME", tempDir)

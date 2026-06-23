@@ -1301,6 +1301,9 @@ func (s *Service) setupRoutes() {
 		// Runtime feature flags (read-only current-process snapshot; works before DB is ready)
 		r.Get("/api/flags", s.handleGetFlags)
 
+		// Migration state (read-only DB bookkeeping; returns 503 until DB is ready)
+		r.Get("/api/migrations", s.handleGetMigrations)
+
 		// Config management is file-backed, so recovery settings remain available before DB readiness.
 		r.Get("/api/config", s.handleGetConfig)
 		r.Patch("/api/config", s.handlePatchConfig)

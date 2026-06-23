@@ -891,12 +891,20 @@
     "embedding": "Embedding 覆盖率",
     "vector": "pgvector",
     "update": "Update channel",
+    "migrations": "迁移",
     "updateState": "Update 状态",
     "updateAvailable": "有可用更新",
     "idle": "空闲",
     "vectorUnavailable": "向量层不可用",
     "noise": "噪声",
     "emptyComponents": "selfcheck 组件尚未加载。",
+    "migration": {
+      "engine": "引擎",
+      "table": "表",
+      "current_version": "当前版本",
+      "applied_count": "已应用",
+      "dirtyUnsupported": "Engram 使用 gormigrate：此表不支持 dirty/applied_at。"
+    },
     "state": {
       "pending": "正在加载服务器状态…",
       "error": "无法加载状态：{message}",

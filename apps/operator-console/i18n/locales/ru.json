@@ -891,12 +891,20 @@
     "embedding": "Покрытие эмбеддингами",
     "vector": "pgvector",
     "update": "Update channel",
+    "migrations": "Миграции",
     "updateState": "Статус update",
     "updateAvailable": "Доступно обновление",
     "idle": "ожидание",
     "vectorUnavailable": "векторный слой недоступен",
     "noise": "Шум",
     "emptyComponents": "Компоненты selfcheck пока не загружены.",
+    "migration": {
+      "engine": "Движок",
+      "table": "Таблица",
+      "current_version": "Текущая версия",
+      "applied_count": "Применено",
+      "dirtyUnsupported": "Engram использует gormigrate: dirty/applied_at не поддерживаются этой таблицей."
+    },
     "state": {
       "pending": "Загружаем состояние сервера…",
       "error": "Не удалось загрузить состояние: {message}",
