@@ -3,8 +3,10 @@
 Design-fidelity **Nuxt 3 + Nuxt UI** scaffold of the operator console. Renders the
 `.od/index.html` contract as real Vue pages with **mock data behind explicit seams**.
 
-> **Integration agents start at `../INTEGRATION-AGENT-PROMPT.md`** — the system prompt that
-> sets the whole methodology (contract-follow, no codegen, continuous sync) and routes here.
+> **Integration agents start at
+> `../../design/operator-console/contracts/INTEGRATION-AGENT-PROMPT.md`** - the system
+> prompt that sets the whole methodology (contract-follow, no codegen, continuous sync)
+> and routes here.
 
 ## Ownership (decided 2026-06-20)
 
@@ -26,6 +28,22 @@ never change when data goes real.
 
 The port catches up to the mockup through an **auditable ledger, not codegen** — see
 **Staying in sync** below.
+
+## Repository boundary
+
+OpenDesign continues to author inside the local/private `.od/` workspace. GitHub and
+production do not track or ship that workspace; `.gitignore` keeps `.od/**` out of the
+repo.
+
+Tracked repo state is the promoted subset described in
+`../../design/operator-console/PROMOTION-CONTRACT.md`:
+
+- `design/operator-console/contracts/` and `design/operator-console/mockups/` are the
+  curated design-contract snapshot safe to review and publish.
+- `apps/operator-console/` is the deployable Nuxt source used by CI/CD and the server
+  image.
+- Promotion is one-way from `.od/` to tracked paths. It is not a generator, and it does
+  not make `.od/` public.
 
 ## Run
 
