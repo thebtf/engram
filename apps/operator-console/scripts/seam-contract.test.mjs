@@ -20,6 +20,7 @@ const queuePagePath = join(root, 'pages', 'queue.vue')
 const queueComposablePath = join(root, 'composables', 'useOperatorQueue.ts')
 const pageSizePath = join(root, 'composables', 'usePersistentPageSize.ts')
 const mockOperatorApiPath = join(root, 'scripts', 'mock-operator-api.mjs')
+const chunkReloadPluginPath = join(root, 'plugins', 'chunk-reload.client.ts')
 
 function read(path) {
   return readFileSync(path, 'utf8')
@@ -239,9 +240,10 @@ test('candidate review queue is a live gated surface, not a SectionStub', () => 
   assert.match(overviewPageSource, /overview\.attention\.queueLive/, 'Overview attention must distinguish live queue count from gated copy')
 })
 
-test('memory detail actions keep mustbuild descriptors while live delete is endpoint-backed', () => {
+test('memory detail actions keep mustbuild descriptors while live delete and audit are endpoint-backed', () => {
   const memoryPageSource = read(memoryPagePath)
   const memoryLabSource = read(memoryLabPath)
+  const mockOperatorApiSource = read(mockOperatorApiPath)
 
   assert.doesNotMatch(memoryPageSource, /storeCopy/, 'uncontracted store-copy controls must not be visible in Memory detail')
   assert.match(memoryPageSource, /suppressOpened/, 'Memory detail may expose hide-as-noise only through the live suppress handler')
@@ -258,6 +260,15 @@ test('memory detail actions keep mustbuild descriptors while live delete is endp
   assert.match(memoryLabSource, /operatorFetchJson<MemoryActionReceipt\[\]>\('\/api\/memories\/suppress'/, 'Memory bulk suppress must avoid client-side Promise.all fanout')
   assert.doesNotMatch(memoryLabSource, /Promise\.all\(uniqueIds\.map/, 'Memory bulk suppress must not fan out partial row mutations from the browser')
   assert.doesNotMatch(memoryLabSource, /memory-hide-noise/, 'hide-as-noise must not remain in mustbuild action gaps after the live REST bridge exists')
+  assert.match(memoryPageSource, /memory-audit-panel/, 'Memory detail must expose a stable audit panel selector')
+  assert.match(memoryPageSource, /auditMemory\(memory\.id\)/, 'Memory detail audit must call the composable live audit action')
+  assert.match(memoryLabSource, /auditMemory:\s*\(id:\s*string,\s*limit\?:\s*number\)\s*=>\s*Promise<OperatorLoadState<MemoryAuditResponse>>/, 'Memory Lab audit must expose a typed load state')
+  assert.match(memoryLabSource, /const normalizedLimit = Number\.isInteger\(limit\) && limit > 0 \? Math\.min\(200, limit\) : 10/, 'Memory audit must normalize browser-provided limits before constructing the endpoint URL')
+  assert.match(memoryLabSource, /\/api\/memories\/\$\{encodeURIComponent\(id\)\}\/audit\?limit=\$\{normalizedLimit\}/, 'Memory audit must carry the live REST endpoint as evidence with the normalized limit')
+  assert.match(mockOperatorApiSource, /if \(!Number\.isInteger\(id\) \|\| id <= 0\) \{[\s\S]*json\(res,\s*400,\s*\{\s*error:\s*['"]invalid memory id['"]\s*\}/, 'Mock memory audit must reject invalid memory IDs like the live handler')
+  assert.match(mockOperatorApiSource, /if \(!Number\.isInteger\(limit\) \|\| limit <= 0 \|\| limit > 200\) \{[\s\S]*json\(res,\s*400,\s*\{\s*error:\s*['"]invalid limit['"]\s*\}/, 'Mock memory audit must reject invalid limits like the live handler')
+  assert.match(mockOperatorApiSource, /const row = memoryRows\.find\(\(item\) => item\.id === id\)/, 'Mock memory audit must use numeric memory ID matching before returning audit rows')
+  assert.doesNotMatch(memoryLabSource, /unsupportedOperatorAction\(\s*['"]memory-audit['"]/, 'Memory audit must not remain a mustbuild descriptor after the endpoint exists')
   assert.match(memoryLabSource, /memoryActionGaps|actionGaps/, 'Memory Lab must expose action capability descriptors')
   assert.match(memoryLabSource, /unsupportedOperatorAction\(/, 'Memory actions without browser endpoints must use unsupported action descriptors')
   assert.match(memoryPageSource, /v-for="action in actionGaps"/, 'Memory detail buttons must render from action capability data')
@@ -360,4 +371,18 @@ test('Nuxt UI color-mode auto-registration stays disabled', () => {
 
   assert.match(source, /ui:\s*{[\s\S]*colorMode:\s*false/, 'Nuxt UI color-mode auto-registration must remain disabled')
   assert.match(source, /@nuxtjs\/color-mode/, 'the app still owns theme classes through @nuxtjs/color-mode')
+})
+
+test('operator console recovers from stale Nuxt chunk errors after deploy', () => {
+  const source = read(chunkReloadPluginPath)
+
+  assert.match(source, /reloadNuxtApp/, 'chunk reload plugin must use Nuxt hard reload utility')
+  assert.match(source, /app:chunkError/, 'Nuxt app chunk errors must be handled explicitly')
+  assert.match(source, /vite:preloadError/, 'Vite preload errors must be handled explicitly')
+  assert.match(source, /unhandledrejection/, 'dynamic-import promise rejections must be handled explicitly')
+  assert.match(source, /failed to fetch dynamically imported module/, 'browser dynamic import error text must be recognized')
+  assert.match(source, /RELOAD_TTL_MS\s*=\s*30_000/, 'reload guard must bound repeated reload attempts')
+  assert.match(source, /sessionStorage\.setItem\(RELOAD_KEY/, 'reload guard must persist a short-lived retry marker')
+  assert.match(source, /RELOAD_QUERY_PARAM\s*=\s*['"]engram_chunk_reload['"]/, 'reload guard must have a storage-disabled URL fallback')
+  assert.match(source, /window\.location\.replace\(url\.toString\(\)\)/, 'storage-disabled fallback must replace the URL instead of looping reloads')
 })

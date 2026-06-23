@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -39,6 +40,45 @@ var (
 	operatorConsoleProxyErr    error
 	operatorConsoleProxyTarget string
 )
+
+const staleNuxtChunkReloadModule = `const key = "engram:operator-console:stale-chunk-reload";
+const reloadParam = "engram_chunk_reload";
+const now = Date.now();
+let state = { count: 0, at: 0 };
+let storageWorking = false;
+try {
+  sessionStorage.setItem(key + ":probe", "1");
+  sessionStorage.removeItem(key + ":probe");
+  storageWorking = true;
+} catch {}
+if (storageWorking) {
+  try {
+    state = JSON.parse(sessionStorage.getItem(key) || "null") || state;
+  } catch {
+    state = { count: 0, at: 0 };
+  }
+  if (!state.at || now - state.at > 30000) {
+    state = { count: 0, at: now };
+  }
+  if (state.count < 1) {
+    try {
+      sessionStorage.setItem(key, JSON.stringify({ count: state.count + 1, at: now }));
+    } catch {}
+    window.location.reload();
+  } else {
+    console.error("Engram operator console stale Nuxt chunk is still missing after reload.");
+  }
+} else {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(reloadParam)) {
+    url.searchParams.set(reloadParam, "1");
+    window.location.replace(url.toString());
+  } else {
+    console.error("Engram operator console stale Nuxt chunk is still missing after reload without storage.");
+  }
+}
+export default {};
+`
 
 func init() {
 	staticSubFS, staticInitErr = fs.Sub(staticFS, "static")
@@ -152,7 +192,15 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 
 	content, err := fs.ReadFile(staticSubFS, path)
 	if err != nil {
-		http.Error(w, "Asset not found", http.StatusNotFound)
+		if errors.Is(err, fs.ErrNotExist) {
+			if isNuxtJSChunk(path) {
+				serveStaleNuxtChunkReload(w)
+				return
+			}
+			http.Error(w, "Asset not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Asset read failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -181,4 +229,17 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 	_, _ = w.Write(content)
+}
+
+func isNuxtJSChunk(path string) bool {
+	return strings.HasPrefix(path, "_nuxt/") && pathpkg.Ext(path) == ".js"
+}
+
+func serveStaleNuxtChunkReload(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(staleNuxtChunkReloadModule))
 }

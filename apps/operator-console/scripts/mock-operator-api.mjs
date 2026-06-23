@@ -433,6 +433,48 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  const memoryAuditMatch = path.match(/^\/api\/memories\/([^/]+)\/audit$/)
+  if (req.method === 'GET' && memoryAuditMatch) {
+    const idRaw = memoryAuditMatch[1]
+    const id = Number(idRaw)
+    if (!Number.isInteger(id) || id <= 0) {
+      json(res, 400, { error: 'invalid memory id' })
+      return
+    }
+
+    const rawLimit = url.searchParams.get('limit') ?? ''
+    if (rawLimit.trim() !== '') {
+      const limit = Number(rawLimit)
+      if (!Number.isInteger(limit) || limit <= 0 || limit > 200) {
+        json(res, 400, { error: 'invalid limit' })
+        return
+      }
+    }
+
+    const idKey = String(id)
+    const row = memoryRows.find((item) => item.id === id)
+    if (!row || suppressedMemoryIds.has(idKey)) {
+      json(res, 404, { error: 'memory not found' })
+      return
+    }
+    json(res, 200, {
+      memory_id: id,
+      entries: [
+        {
+          id: 7000 + id,
+          memory_id: id,
+          action: 'memory.store',
+          actor: 'mock-operator-api',
+          reason: 'browser smoke fixture',
+          before_state_present: false,
+          after_state_present: true,
+          created_at: row.updated_at,
+        },
+      ],
+    })
+    return
+  }
+
   const candidateActionMatch = path.match(/^\/api\/memory\/candidates\/([^/]+)\/(promote|reject|supersede)$/)
   if (req.method === 'POST' && candidateActionMatch) {
     const id = Number(candidateActionMatch[1])

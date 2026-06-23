@@ -264,6 +264,13 @@
       "noiseWarning": "看起来像噪声：代理经常看到这条记录，但从未在回答中使用。",
       "audit": "审计",
       "auditBody": "记忆审计日志",
+      "auditRefresh": "刷新",
+      "auditLoading": "正在加载审计…",
+      "auditEmpty": "此记录还没有审计事件。",
+      "auditError": "无法加载审计：{message}",
+      "auditUnknownActor": "system",
+      "auditStateSnapshot": "存在状态快照",
+      "provenancePending": "记录来源尚未通过浏览器 REST API 暴露。",
       "actions": {
         "storeCopy": "保存副本",
         "delete": "删除记录",

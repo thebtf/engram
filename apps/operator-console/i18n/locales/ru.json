@@ -264,6 +264,13 @@
       "noiseWarning": "Похоже на шум: запись часто показывали агентам, но ни разу не использовали в ответе.",
       "audit": "Аудит",
       "auditBody": "Журнал аудита по памяти",
+      "auditRefresh": "Обновить",
+      "auditLoading": "Загружаем аудит…",
+      "auditEmpty": "По этой записи пока нет событий аудита.",
+      "auditError": "Не удалось загрузить аудит: {message}",
+      "auditUnknownActor": "system",
+      "auditStateSnapshot": "есть снимок состояния",
+      "provenancePending": "Происхождение записи ещё не раскрыто через browser REST API.",
       "actions": {
         "storeCopy": "Сохранить копию",
         "delete": "Удалить запись",

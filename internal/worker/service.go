@@ -1434,6 +1434,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/memory/candidates/{id}/reject", s.handleRejectMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/supersede", s.handleSupersedeMemoryCandidate)
 		r.Post("/api/memories/suppress", s.handleSuppressMemories)
+		r.Get("/api/memories/{id}/audit", s.handleGetMemoryAudit)
 		r.Post("/api/memories/{id}/suppress", s.handleSuppressMemoryByID)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 

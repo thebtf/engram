@@ -264,6 +264,13 @@
       "noiseWarning": "Looks noisy: agents saw this record often, but never used it in an answer.",
       "audit": "Audit",
       "auditBody": "Memory audit log",
+      "auditRefresh": "Refresh",
+      "auditLoading": "Loading audit…",
+      "auditEmpty": "No audit events for this record yet.",
+      "auditError": "Could not load audit: {message}",
+      "auditUnknownActor": "system",
+      "auditStateSnapshot": "state snapshot present",
+      "provenancePending": "Record provenance is not exposed through the browser REST API yet.",
       "actions": {
         "storeCopy": "Save copy",
         "delete": "Delete record",

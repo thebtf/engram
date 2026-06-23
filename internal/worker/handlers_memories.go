@@ -19,6 +19,7 @@ import (
 	gormlib "gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/auth"
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -56,6 +57,23 @@ type memoryActionReceipt struct {
 	Action string `json:"action"`
 	ID     int64  `json:"id"`
 	Reason string `json:"reason,omitempty"`
+}
+
+type memoryAuditResponse struct {
+	MemoryID int64                      `json:"memory_id"`
+	Entries  []memoryAuditEntryResponse `json:"entries"`
+}
+
+type memoryAuditEntryResponse struct {
+	ID                 int64     `json:"id"`
+	MemoryID           int64     `json:"memory_id"`
+	Action             string    `json:"action"`
+	Actor              string    `json:"actor"`
+	SourceSessionID    string    `json:"source_session_id,omitempty"`
+	Reason             string    `json:"reason,omitempty"`
+	BeforeStatePresent bool      `json:"before_state_present"`
+	AfterStatePresent  bool      `json:"after_state_present"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // isValidPrivacyScopeREST mirrors the migration 125 CHECK constraint enum.
@@ -446,6 +464,54 @@ func memoryDomainManageAllowedREST(ctx context.Context, mem *models.Memory) bool
 	return scope.ResolveMemoryManage(memoryVisibilityCaller(ctx, ""), mem)
 }
 
+func parseMemoryAuditLimit(raw string) (int, error) {
+	const (
+		defaultLimit = 50
+		maxLimit     = 200
+	)
+
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return defaultLimit, nil
+	}
+
+	limit, err := strconv.Atoi(trimmed)
+	if err != nil || limit <= 0 {
+		return 0, fmt.Errorf("limit must be a positive integer")
+	}
+	if limit > maxLimit {
+		return 0, fmt.Errorf("limit must not exceed %d", maxLimit)
+	}
+	return limit, nil
+}
+
+func mapMemoryAuditResponse(memoryID int64, entries []dbgorm.AuditLogEntry) memoryAuditResponse {
+	response := memoryAuditResponse{
+		MemoryID: memoryID,
+		Entries:  make([]memoryAuditEntryResponse, 0, len(entries)),
+	}
+
+	for _, entry := range entries {
+		entryMemoryID := memoryID
+		if entry.MemoryID != nil {
+			entryMemoryID = *entry.MemoryID
+		}
+		response.Entries = append(response.Entries, memoryAuditEntryResponse{
+			ID:                 entry.ID,
+			MemoryID:           entryMemoryID,
+			Action:             entry.Action,
+			Actor:              entry.Actor,
+			SourceSessionID:    entry.SourceSessionID,
+			Reason:             entry.Reason,
+			BeforeStatePresent: entry.BeforeState != nil,
+			AfterStatePresent:  entry.AfterState != nil,
+			CreatedAt:          jsonSafeTime(entry.CreatedAt),
+		})
+	}
+
+	return response
+}
+
 // memoryListStore is the subset of the MemoryStore surface that
 // listVisibleMemoriesREST needs. Defined as a small interface so the
 // function can be unit-tested with a fake without pulling in the full
@@ -485,6 +551,68 @@ func listVisibleForInjection(ctx context.Context, store injectionCandidateStore,
 		}
 	}
 	return visible, nil
+}
+
+// handleGetMemoryAudit godoc
+// @Summary Get memory audit history
+// @Description Returns safe audit summaries for a memory visible to the operator.
+// @Tags Memories
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Memory ID"
+// @Param limit query int false "Maximum number of audit rows (default 50, max 200)"
+// @Success 200 {object} memoryAuditResponse
+// @Failure 400 {string} string "invalid id or limit"
+// @Failure 404 {string} string "not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal error"
+// @Router /api/memories/{id}/audit [get]
+func (s *Service) handleGetMemoryAudit(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+	if s.auditStore == nil {
+		http.Error(w, "audit store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+
+	limit, err := parseMemoryAuditLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	memory, err := s.memoryStore.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("get memory before audit failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if memory == nil || !memoryDomainManageAllowedREST(r.Context(), memory) {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+
+	entries, err := s.auditStore.GetByMemory(r.Context(), id, limit)
+	if err != nil {
+		log.Error().Err(err).Int64("id", id).Msg("get memory audit failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, mapMemoryAuditResponse(id, entries))
 }
 
 // handleDeleteMemoryByID godoc

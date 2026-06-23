@@ -339,6 +339,62 @@ definitions:
       project:
         type: string
     type: object
+  internal_worker.candidateListResponse:
+    properties:
+      candidates:
+        items:
+          $ref: '#/definitions/internal_worker.candidateReviewItem'
+        type: array
+      count:
+        type: integer
+      limit:
+        type: integer
+      project:
+        type: string
+      status:
+        type: string
+    type: object
+  internal_worker.candidateReviewItem:
+    properties:
+      affected_projects:
+        items:
+          type: string
+        type: array
+      confidence:
+        type: number
+      created_at:
+        type: string
+      evidence_handles:
+        items:
+          type: string
+        type: array
+      fingerprint:
+        type: string
+      id:
+        type: integer
+      privacy_scope:
+        type: string
+      promoted_memory_id:
+        type: integer
+      proposed_content:
+        type: string
+      proposed_epistemic_type:
+        type: string
+      proposed_promotion_target:
+        type: string
+      proposed_tier:
+        type: string
+      recurrence_count:
+        type: integer
+      review_after:
+        type: string
+      source_session_id:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
   internal_worker.embeddingTelemetry:
     properties:
       active_memory_count:
@@ -367,6 +423,47 @@ definitions:
     properties:
       token:
         type: string
+    type: object
+  internal_worker.memoryActionReceipt:
+    properties:
+      action:
+        type: string
+      id:
+        type: integer
+      reason:
+        type: string
+      status:
+        type: string
+    type: object
+  internal_worker.memoryAuditEntryResponse:
+    properties:
+      action:
+        type: string
+      actor:
+        type: string
+      after_state_present:
+        type: boolean
+      before_state_present:
+        type: boolean
+      created_at:
+        type: string
+      id:
+        type: integer
+      memory_id:
+        type: integer
+      reason:
+        type: string
+      source_session_id:
+        type: string
+    type: object
+  internal_worker.memoryAuditResponse:
+    properties:
+      entries:
+        items:
+          $ref: '#/definitions/internal_worker.memoryAuditEntryResponse'
+        type: array
+      memory_id:
+        type: integer
     type: object
   internal_worker.outcomeTelemetry:
     properties:
@@ -464,6 +561,20 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  internal_worker.suppressMemoriesRequest:
+    properties:
+      ids:
+        items:
+          type: integer
+        type: array
+      reason:
+        type: string
+    type: object
+  internal_worker.suppressMemoryRequest:
+    properties:
+      reason:
+        type: string
     type: object
   internal_worker.tokenCreateRequest:
     properties:
@@ -1477,6 +1588,180 @@ paths:
       security:
       - ApiKeyAuth: []
       summary: Delete a memory note by ID
+      tags:
+      - Memories
+  /api/memories/{id}/audit:
+    get:
+      description: Returns safe audit summaries for a memory visible to the operator.
+      parameters:
+      - description: Memory ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Maximum number of audit rows (default 50, max 200)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.memoryAuditResponse'
+        "400":
+          description: invalid id or limit
+          schema:
+            type: string
+        "404":
+          description: not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get memory audit history
+      tags:
+      - Memories
+  /api/memories/{id}/suppress:
+    post:
+      consumes:
+      - application/json
+      description: Soft-deletes a memory entry by its numeric ID and returns an operator
+        action receipt.
+      parameters:
+      - description: Memory ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Suppression reason
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_worker.suppressMemoryRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.memoryActionReceipt'
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "404":
+          description: not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Suppress a memory note by ID
+      tags:
+      - Memories
+  /api/memories/suppress:
+    post:
+      consumes:
+      - application/json
+      description: Validates all requested memory IDs before soft-deleting them and
+        returns operator action receipts.
+      parameters:
+      - description: Memory IDs and suppression reason
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.suppressMemoriesRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_worker.memoryActionReceipt'
+            type: array
+        "400":
+          description: invalid request
+          schema:
+            type: string
+        "404":
+          description: not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Suppress multiple memory notes
+      tags:
+      - Memories
+  /api/memory/candidates:
+    get:
+      description: Returns vNext-F crystallization candidates filtered by project
+        and status.
+      parameters:
+      - description: Project identifier or 'all' for unscoped/all-project candidates
+        in: query
+        name: project
+        type: string
+      - description: Candidate status (default pending)
+        in: query
+        name: status
+        type: string
+      - description: Maximum number of results (default 20, max 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.candidateListResponse'
+        "400":
+          description: bad request
+          schema:
+            type: string
+        "403":
+          description: feature flag required
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List crystallization candidates for operator review
       tags:
       - Memories
   /api/memory/triggers:
