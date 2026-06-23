@@ -52,6 +52,30 @@ interface ApiConfig {
   }
 }
 
+interface ApiFlagItem {
+  name: string
+  enabled: boolean
+  source: string
+  category: string
+  restart_required_to_change?: boolean
+}
+
+interface ApiFlags {
+  flags?: Record<string, boolean>
+  items?: ApiFlagItem[]
+  summary?: {
+    total?: number
+    enabled?: number
+    disabled?: number
+  }
+  read_only?: boolean
+  apply?: {
+    supported?: boolean
+    endpoint?: string
+    reason?: string
+  }
+}
+
 interface ApiStatsVNext {
   injection_count?: number
   citation_count?: number
@@ -130,11 +154,13 @@ export function useOperatorHealthSettings(): {
   selfcheckState: ComputedRef<OperatorLoadState<ApiSelfcheck>>
   readyState: ComputedRef<OperatorLoadState<ApiReady>>
   configState: ComputedRef<OperatorLoadState<ApiConfig>>
+  flagsState: ComputedRef<OperatorLoadState<ApiFlags>>
   vnextState: ComputedRef<OperatorLoadState<ApiStatsVNext>>
   vectorState: ComputedRef<OperatorLoadState<ApiVectorMetrics>>
   updateStatusState: ComputedRef<OperatorLoadState<ApiUpdateStatus>>
   updateCheckState: ComputedRef<OperatorLoadState<ApiUpdateCheck>>
   components: ComputedRef<ApiComponentHealth[]>
+  flagItems: ComputedRef<ApiFlagItem[]>
   embeddingMetrics: ComputedRef<OperatorHealthMetric[]>
   configMetrics: ComputedRef<OperatorHealthMetric[]>
   restartRequired: ComputedRef<boolean>
@@ -144,11 +170,11 @@ export function useOperatorHealthSettings(): {
   restartServer: () => Promise<unknown>
   restartAfterUpdate: () => Promise<unknown>
   configSaveGap: ReturnType<typeof unsupportedOperatorAction>
-  flagsGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const selfcheckEvidence = endpointEvidence('/api/selfcheck', 'selfcheck')
   const readyEvidence = endpointEvidence('/api/ready', 'ready')
   const configEvidence = endpointEvidence('/api/config', 'config')
+  const flagsEvidence = endpointEvidence('/api/flags', 'flags')
   const vnextEvidence = endpointEvidence('/api/stats/vnext', 'stats-vnext')
   const vectorEvidence = endpointEvidence('/api/vector/metrics', 'vector-metrics')
   const updateStatusEvidence = endpointEvidence('/api/update/status', 'update-status')
@@ -157,6 +183,7 @@ export function useOperatorHealthSettings(): {
   const selfcheck = useState<OperatorLoadState<ApiSelfcheck>>('live:health-settings:selfcheck', () => pendingState(selfcheckEvidence))
   const ready = useState<OperatorLoadState<ApiReady>>('live:health-settings:ready', () => pendingState(readyEvidence))
   const config = useState<OperatorLoadState<ApiConfig>>('live:health-settings:config', () => pendingState(configEvidence))
+  const flags = useState<OperatorLoadState<ApiFlags>>('live:health-settings:flags', () => pendingState(flagsEvidence))
   const vnext = useState<OperatorLoadState<ApiStatsVNext>>('live:health-settings:vnext', () => pendingState(vnextEvidence))
   const vector = useState<OperatorLoadState<ApiVectorMetrics>>('live:health-settings:vector', () => pendingState(vectorEvidence))
   const updateStatus = useState<OperatorLoadState<ApiUpdateStatus>>('live:health-settings:update-status', () => pendingState(updateStatusEvidence))
@@ -165,12 +192,14 @@ export function useOperatorHealthSettings(): {
   const selfcheckState = computed(() => selfcheck.value)
   const readyState = computed(() => ready.value)
   const configState = computed(() => config.value)
+  const flagsState = computed(() => flags.value)
   const vnextState = computed(() => vnext.value)
   const vectorState = computed(() => vector.value)
   const updateStatusState = computed(() => updateStatus.value)
   const updateCheckState = computed(() => updateCheck.value)
 
   const components = computed(() => selfcheck.value.kind === 'live' ? selfcheck.value.data.components || [] : [])
+  const flagItems = computed(() => flags.value.kind === 'live' ? flags.value.data.items || [] : [])
   const embeddingMetrics = computed(() => {
     const embedding = vnext.value.kind === 'live' ? vnext.value.data.embedding : undefined
     const vectorStats = vector.value.kind === 'live' ? vector.value.data.stats : undefined
@@ -203,13 +232,14 @@ export function useOperatorHealthSettings(): {
     selfcheck.value,
     ready.value,
     config.value,
+    flags.value,
     vnext.value,
     vector.value,
     updateStatus.value,
     updateCheck.value,
   ].some((state) => state.kind === 'pending'))
   const error = computed(() => {
-    for (const state of [selfcheck.value, ready.value, config.value, vnext.value, vector.value, updateStatus.value, updateCheck.value]) {
+    for (const state of [selfcheck.value, ready.value, config.value, flags.value, vnext.value, vector.value, updateStatus.value, updateCheck.value]) {
       if (state.kind === 'error') return state.error.message
     }
     return null
@@ -219,6 +249,7 @@ export function useOperatorHealthSettings(): {
     selfcheck.value = await loadOperatorJson<ApiSelfcheck>('/api/selfcheck', { source: 'selfcheck' })
     ready.value = await loadOperatorJson<ApiReady>('/api/ready', { source: 'ready' })
     config.value = await loadOperatorJson<ApiConfig>('/api/config', { source: 'config' })
+    flags.value = await loadOperatorJson<ApiFlags>('/api/flags', { source: 'flags' })
     vnext.value = await loadOperatorJson<ApiStatsVNext>('/api/stats/vnext', { source: 'stats-vnext' })
     vector.value = await loadOperatorJson<ApiVectorMetrics>('/api/vector/metrics', { source: 'vector-metrics' })
     updateStatus.value = await loadOperatorJson<ApiUpdateStatus>('/api/update/status', { source: 'update-status' })
@@ -247,11 +278,6 @@ export function useOperatorHealthSettings(): {
     'PATCH /api/config',
     'Runtime config is exposed as a read model only; saving settings needs a server endpoint and restart-required receipt.',
   )
-  const flagsGap = unsupportedOperatorAction(
-    'flags-read',
-    'GET /api/flags',
-    'Feature flag inventory is not exposed by the current server API.',
-  )
 
   startOnce('health-settings', refresh)
 
@@ -259,11 +285,13 @@ export function useOperatorHealthSettings(): {
     selfcheckState,
     readyState,
     configState,
+    flagsState,
     vnextState,
     vectorState,
     updateStatusState,
     updateCheckState,
     components,
+    flagItems,
     embeddingMetrics,
     configMetrics,
     restartRequired,
@@ -273,6 +301,5 @@ export function useOperatorHealthSettings(): {
     restartServer,
     restartAfterUpdate,
     configSaveGap,
-    flagsGap,
   }
 }

@@ -1278,6 +1278,9 @@ func (s *Service) setupRoutes() {
 		// Selfcheck endpoint (works before DB is ready - checks all components)
 		r.Get("/api/selfcheck", s.handleSelfCheck)
 
+		// Runtime feature flags (read-only current-process snapshot; works before DB is ready)
+		r.Get("/api/flags", s.handleGetFlags)
+
 		// Dashboard SSE endpoint (works before DB is ready)
 		r.Get("/api/events", s.sseBroadcaster.HandleSSE)
 

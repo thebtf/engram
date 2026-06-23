@@ -928,6 +928,15 @@
       "configSave": "Сохранение runtime config пока не имеет endpoint с restart-required receipt.",
       "flags": "Полная карта feature flags пока не отдана сервером."
     },
+    "flags": {
+      "title": "Feature flags",
+      "body": "Read-only снимок текущего процесса из GET /api/flags. Изменение флагов всё ещё требует settings save endpoint и restart-required receipt.",
+      "pending": "Загружаем feature flags…",
+      "error": "Не удалось загрузить feature flags: {message}",
+      "enabled": "включено",
+      "disabled": "выключено",
+      "restartRequired": "restart"
+    },
     "restart": {
       "title": "Restart / update",
       "body": "Оба действия меняют живой процесс, поэтому запускаются только после второго клика-подтверждения.",
