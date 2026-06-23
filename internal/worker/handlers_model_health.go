@@ -3,6 +3,7 @@ package worker
 import (
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -142,10 +143,10 @@ func buildConfiguredModelRow(input modelRowInput, rowsByKey map[string]*models.M
 
 	health := "standby"
 	message := input.DisabledMsg
-	if input.ActiveClient != nil {
+	if activeModel, active := activeModelName(input.ActiveClient); active {
 		health = "ok"
 		message = input.ActiveMsg
-		if activeModel := strings.TrimSpace(input.ActiveClient.Model()); activeModel != "" {
+		if activeModel != "" {
 			model = activeModel
 		}
 	} else if url.Set {
@@ -170,6 +171,22 @@ func buildConfiguredModelRow(input modelRowInput, rowsByKey map[string]*models.M
 		Configured: url.Set,
 		SecretSet:  secret.Set,
 	}
+}
+
+func activeModelName(client modelNameProvider) (string, bool) {
+	if client == nil {
+		return "", false
+	}
+
+	value := reflect.ValueOf(client)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		if value.IsNil() {
+			return "", false
+		}
+	}
+
+	return strings.TrimSpace(client.Model()), true
 }
 
 func buildOnDemandLLMRow() modelHealthRow {

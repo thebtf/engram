@@ -72,6 +72,23 @@ func TestBuildModelHealthResponse_EnvConfiguredButClientMissingIsDegraded(t *tes
 	assert.Equal(t, 1, response.Summary.Degraded)
 }
 
+func TestBuildModelHealthResponse_TypedNilClientIsNotActive(t *testing.T) {
+	t.Setenv("ENGRAM_EMBEDDING_URL", "https://env-embedder.example")
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", "")
+	t.Setenv("ENGRAM_RERANK_URL", "")
+	t.Setenv("ENGRAM_LLM_URL", "")
+
+	var embeddingClient *fakeModelClient
+	response := buildModelHealthResponse(nil, embeddingClient, nil)
+
+	require.Len(t, response.Rows, 3)
+	embedding := response.Rows[0]
+	assert.Equal(t, "degraded", embedding.Health)
+	assert.Equal(t, "Embedding URL is configured, but the client is not initialized.", embedding.Message)
+	assert.Equal(t, 0, response.Summary.OK)
+	assert.Equal(t, 1, response.Summary.Degraded)
+}
+
 func TestHandleModelHealth_StoreUnavailable(t *testing.T) {
 	svc := &Service{}
 	req := httptest.NewRequest(http.MethodGet, "/api/model-health", nil)

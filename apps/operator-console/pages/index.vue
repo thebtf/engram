@@ -89,7 +89,7 @@ const modelHealth = computed(() => {
     { label: t('overview.modelHealth.standby'), count: modelStandby.value, color: 'var(--muted)' },
     { label: t('overview.modelHealth.degraded'), count: modelDegraded.value, color: 'var(--state-warn)' },
   ]
-  const total = Math.max(1, ...rows.map((row) => row.count))
+  const total = Math.max(1, rows.reduce((sum, row) => sum + row.count, 0))
   return rows.map((row) => ({ ...row, width: Math.round((row.count / total) * 100) }))
 })
 
