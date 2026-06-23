@@ -78,8 +78,8 @@ onMounted(() => {
 })
 const canLogout = computed(() => info.value.authenticated && !info.value.authDisabled)
 const logoutTitle = computed(() => {
-  if (canLogout.value) return t('shell.profileMenuLogout')
   if (logoutInFlight.value) return t('shell.profileMenuLogoutPending')
+  if (canLogout.value) return t('shell.profileMenuLogout')
   if (info.value.authDisabled) return t('shell.profileMenuLogoutAuthDisabled')
   if (info.value.authPosture === 'locked') return t('shell.profileMenuLogoutLocked')
   return t('shell.profileMenuLogoutUnavailable')
