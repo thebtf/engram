@@ -10,6 +10,7 @@ const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
 const memoryLabPath = join(root, 'composables', 'useOperatorMemoryLab.ts')
 const healthSettingsPath = join(root, 'composables', 'useOperatorHealthSettings.ts')
+const domainRegistryPath = join(root, 'composables', 'useOperatorDomainRegistry.ts')
 const overviewComposablePath = join(root, 'composables', 'useOperatorOverview.ts')
 const overviewPagePath = join(root, 'pages', 'index.vue')
 const memoryPagePath = join(root, 'pages', 'memory.vue')
@@ -320,6 +321,26 @@ test('settings config save is live allowlisted PATCH with restart receipt', () =
   assert.match(settingsModalSource, /settings\.lifecycle\.desired/, 'Pending lifecycle desired label must be keyed for i18n')
   assert.match(settingsModalSource, /settings\.save\.success/, 'Settings save copy must be keyed for i18n')
   assert.doesNotMatch(settingsModalSource, /settings\.gaps\.configSave/, 'Settings modal must not render the old config-save mustbuild gap')
+})
+
+test('settings domain registry is live GET PUT DELETE control-plane surface', () => {
+  const domainRegistrySource = read(domainRegistryPath)
+  const settingsModalSource = read(settingsModalPath)
+
+  assert.match(domainRegistrySource, /endpointEvidence\('\/api\/memory-domains',\s*['"]memory-domain-registry['"]\)/, 'Domain registry list must carry live endpoint evidence')
+  assert.match(domainRegistrySource, /loadOperatorJson<ApiMemoryDomainsListResponse>\('\/api\/memory-domains'/, 'Domain registry must load the live list endpoint')
+  assert.match(domainRegistrySource, /operatorFetchJson<ApiMemoryDomain>\(endpoint,\s*\{[\s\S]*method:\s*'PUT'/, 'Domain registry upsert must call PUT /api/memory-domains/{domain}')
+  assert.match(domainRegistrySource, /operatorFetchJson<ApiMemoryDomainDeleteReceipt>\(endpoint,\s*\{\s*method:\s*'DELETE'\s*\}/, 'Domain registry delete must call DELETE /api/memory-domains/{domain}')
+  assert.match(domainRegistrySource, /runOperatorMutation/, 'Domain registry writes must use the rollback-capable mutation seam')
+  assert.match(domainRegistrySource, /DOMAIN_OWNER_KINDS\s*=\s*\['human',\s*'agent',\s*'service'\]/, 'Domain registry owner kinds must mirror server validation')
+  assert.match(domainRegistrySource, /DOMAIN_OWNER_MODES\s*=\s*\['off',\s*'warn',\s*'reject'\]/, 'Domain registry modes must mirror server validation')
+
+  assert.match(settingsModalSource, /id:\s*['"]domains['"][\s\S]*kind:\s*['"]domains['"][\s\S]*cls:\s*['"]live['"]/, 'Settings must expose domain registry as a live tab')
+  assert.match(settingsModalSource, /selectedTab\.kind === 'domains'/, 'Settings modal must render a dedicated domain registry branch')
+  assert.match(settingsModalSource, /domainDeleteConfirm\.value !== domain/, 'Domain delete must require a confirmation click')
+  assert.match(settingsModalSource, /settings\.domains\.rows\.deleteHelp/, 'Domain delete copy must clarify that memories are not deleted')
+  assert.match(settingsModalSource, /domainListEvidence\.endpoint/, 'Domain registry tab must show live endpoint evidence')
+  assert.doesNotMatch(settingsModalSource, /GET \/api\/memory-domains['"],\s*kind:\s*['"]mustbuild['"]/, 'Domain registry must not be represented as mustbuild after the backend seam exists')
 })
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
