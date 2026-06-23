@@ -43,6 +43,11 @@
     "identityInitials": "OD",
     "identityName": "Oleg Dobryakov",
     "identityProvider": "Google",
+    "profileMenu": "Profile menu",
+    "profileMenuProfile": "Profile and settings",
+    "profileMenuSettings": "Console settings",
+    "profileMenuLogout": "Sign out of console",
+    "profileMenuLogoutDisabled": "Auth is disabled: the current session cannot be ended from the UI",
     "authDisabled": "auth disabled",
     "authAuthenticated": "session active",
     "authLocked": "login required",
@@ -55,6 +60,24 @@
     "recordsLoading": "… records",
     "reviewQueue": "{count} in review | {count} in review",
     "uptime": "running {value}"
+  },
+
+  "profileModal": {
+    "aria": "Operator profile",
+    "close": "Close profile",
+    "via": "signed in through {provider}",
+    "profileTitle": "Profile",
+    "displayName": "Display name",
+    "displayNameDesc": "How the operator appears in issues, threads, and audit.",
+    "role": "Role",
+    "roleDesc": "Current user's permissions in the self-hosted instance.",
+    "profileMustBuildTitle": "Profile editing waits for a backend seam",
+    "profileMustBuildBody": "The design contract includes profile saving, but the current server does not yet accept PATCH /api/profile.",
+    "sessionsTitle": "Active sessions",
+    "sessionsCount": "{count} session | {count} sessions",
+    "currentSession": "Current workstation",
+    "current": "current",
+    "sessionsMustBuildBody": "Full session listing and revoke actions stay mustbuild until an auth sessions endpoint exists."
   },
 
   "nav": {

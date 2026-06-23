@@ -43,6 +43,11 @@
     "identityInitials": "OD",
     "identityName": "Oleg Dobryakov",
     "identityProvider": "Google",
+    "profileMenu": "个人资料菜单",
+    "profileMenuProfile": "个人资料和设置",
+    "profileMenuSettings": "控制台设置",
+    "profileMenuLogout": "退出控制台",
+    "profileMenuLogoutDisabled": "认证已关闭：当前会话不能从 UI 结束",
     "authDisabled": "认证已关闭",
     "authAuthenticated": "会话已激活",
     "authLocked": "需要登录",
@@ -55,6 +60,24 @@
     "recordsLoading": "… 条记录",
     "reviewQueue": "{count} 项待审核",
     "uptime": "已运行 {value}"
+  },
+
+  "profileModal": {
+    "aria": "操作员资料",
+    "close": "关闭资料",
+    "via": "通过 {provider} 登录",
+    "profileTitle": "资料",
+    "displayName": "显示名称",
+    "displayNameDesc": "操作员在任务、thread 和审计中的显示方式。",
+    "role": "角色",
+    "roleDesc": "当前用户在 self-hosted 实例中的权限。",
+    "profileMustBuildTitle": "资料编辑仍在等待 backend seam",
+    "profileMustBuildBody": "设计契约包含资料保存，但当前服务器尚未接受 PATCH /api/profile。",
+    "sessionsTitle": "活动会话",
+    "sessionsCount": "{count} 个会话",
+    "currentSession": "当前工作站",
+    "current": "当前",
+    "sessionsMustBuildBody": "完整会话列表和 revoke 操作在 auth sessions endpoint 出现之前保持 mustbuild。"
   },
 
   "nav": {

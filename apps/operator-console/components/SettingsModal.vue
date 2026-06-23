@@ -58,6 +58,7 @@ const restartConfirm = ref(false)
 const updateRestartConfirm = ref(false)
 const restartInFlight = ref(false)
 const updateRestartInFlight = ref(false)
+const previousBodyOverflow = ref<string | null>(null)
 const configSaveInFlight = ref(false)
 const domainSaveInFlight = ref(false)
 const domainDeleteInFlight = ref<string | null>(null)
@@ -330,8 +331,16 @@ function onKeydown(event: KeyboardEvent) {
 watch(open, (isOpen) => {
   if (!import.meta.client) return
   if (isOpen) {
+    if (previousBodyOverflow.value === null) {
+      previousBodyOverflow.value = document.body.style.overflow
+    }
+    document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', onKeydown)
   } else {
+    if (previousBodyOverflow.value !== null) {
+      document.body.style.overflow = previousBodyOverflow.value
+      previousBodyOverflow.value = null
+    }
     window.removeEventListener('keydown', onKeydown)
   }
 }, { immediate: true })
@@ -341,7 +350,12 @@ watch(configState, () => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
-  if (import.meta.client) window.removeEventListener('keydown', onKeydown)
+  if (!import.meta.client) return
+  window.removeEventListener('keydown', onKeydown)
+  if (previousBodyOverflow.value !== null) {
+    document.body.style.overflow = previousBodyOverflow.value
+    previousBodyOverflow.value = null
+  }
 })
 </script>
 
@@ -363,7 +377,7 @@ onBeforeUnmount(() => {
                 @click="selectTab(tab.id)"
               >
                 <span class="tab-mark" :data-cls="tab.cls" />
-                <span>{{ t(`settings.modal.tabs.${tab.labelKey}.label`) }}</span>
+                <span class="tab-label">{{ t(`settings.modal.tabs.${tab.labelKey}.label`) }}</span>
                 <HonestyBadge v-if="tab.cls === 'mustbuild'" cls="mustbuild" :evidence="tab.evidence" :label="t('honesty.mustbuild')" />
                 <HonestyBadge v-else-if="tab.cls === 'stale'" cls="stale" :label="t('honesty.stale')" />
               </button>
@@ -748,7 +762,7 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, #000, transparent 34%);
 }
 .modal.settings-modal {
-  width: min(960px, calc(100vw - 48px));
+  width: min(1040px, calc(100vw - 48px));
   max-height: min(760px, 88vh);
   overflow: hidden;
   border: 1px solid var(--border);
@@ -757,14 +771,18 @@ onBeforeUnmount(() => {
   box-shadow: var(--elev-raised);
   color: var(--fg);
 }
-.settings-shell { display: grid; grid-template-columns: 200px minmax(0, 1fr); height: min(760px, 88vh); min-height: 620px; }
-.settings-rail { border-right: 1px solid var(--border); background: color-mix(in oklab, var(--surface), var(--bg) 28%); padding: 26px 8px 18px; overflow: auto; }
+.settings-shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: min(760px, 88vh); min-height: 620px; }
+.settings-rail { border-right: 1px solid var(--border); background: color-mix(in oklab, var(--surface), var(--bg) 28%); padding: 26px 8px 18px; overflow-y: auto; overflow-x: hidden; }
 .settings-kicker { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; padding: 0 12px 8px; }
 .settings-group { display: grid; gap: 4px; }
 .sr-label { margin: 18px 12px 5px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; font-weight: 800; }
-.settings-tab { width: 100%; min-height: 36px; border: 0; background: transparent; color: var(--fg-2); text-align: left; border-radius: var(--r-sm); padding: 8px 10px; font-weight: 650; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; cursor: pointer; }
+.settings-tab { width: 100%; min-height: 36px; border: 0; background: transparent; color: var(--fg-2); text-align: left; border-radius: var(--r-sm); padding: 8px 10px; font-weight: 650; display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: center; gap: 6px 8px; cursor: pointer; }
 .settings-tab:hover { background: color-mix(in oklab, var(--surface), var(--fg) 4%); color: var(--fg); }
 .settings-tab[aria-selected="true"] { background: color-mix(in oklab, var(--accent), transparent 88%); color: var(--fg); }
+.settings-tab .tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-tab :deep(.hb) { grid-column: 2; justify-self: start; max-width: 100%; min-width: 0; }
+.settings-tab :deep(.hb-lbl) { white-space: nowrap; }
+.settings-tab :deep(.hb-ev) { max-width: 116px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-mark { width: 7px; height: 7px; border-radius: 50%; background: var(--class-live); }
 .tab-mark[data-cls="mustbuild"] { background: var(--class-mustbuild); }
 .tab-mark[data-cls="stale"] { background: transparent; border: 1.5px solid var(--class-stale); }
