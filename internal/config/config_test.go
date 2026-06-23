@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -399,8 +400,8 @@ func (s *ConfigSuite) TestSaveSettings_MergesOperatorUpdates() {
 	s.Require().NoError(err)
 	defer os.RemoveAll(tempDir)
 
-	os.Setenv("HOME", tempDir)
-	os.Setenv("USERPROFILE", tempDir)
+	s.T().Setenv("HOME", tempDir)
+	s.T().Setenv("USERPROFILE", tempDir)
 	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
 	s.Require().NoError(err)
 
@@ -448,6 +449,13 @@ func (s *ConfigSuite) TestSaveSettings_SerializesConcurrentUpdates() {
 	for err := range errs {
 		s.Require().NoError(err)
 	}
+
+	data, err := os.ReadFile(filepath.Join(tempDir, ".engram", "settings.json"))
+	s.Require().NoError(err)
+	settings := map[string]any{}
+	s.Require().NoError(json.Unmarshal(data, &settings))
+	s.Equal(false, settings["ENGRAM_ENFORCE_SOURCE_PROJECT"])
+	s.Equal(false, settings["ENGRAM_INJECT_UNIFIED"])
 
 	cfg, err := Load()
 	s.Require().NoError(err)
