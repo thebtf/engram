@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -518,4 +519,125 @@ func TestHandleDeleteMemoryByID_NotFound(t *testing.T) {
 	service.handleDeleteMemoryByID(deleteW, deleteReq)
 
 	require.Equal(t, http.StatusNotFound, deleteW.Code)
+}
+
+func TestHandleSuppressMemoryByID_RoundTrip(t *testing.T) {
+	project := "test-memory-handler-suppress-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"suppress-me"}`)))
+	storeW := httptest.NewRecorder()
+	service.handleStoreMemoryExplicit(storeW, storeReq)
+	require.Equal(t, http.StatusCreated, storeW.Code)
+
+	var created models.Memory
+	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
+
+	body := bytes.NewReader([]byte(`{"reason":"operator marked as noise"}`))
+	suppressReq := newCHIRequest(http.MethodPost, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/suppress", "id", strconv.FormatInt(created.ID, 10))
+	suppressReq.Body = io.NopCloser(body)
+	suppressW := httptest.NewRecorder()
+	service.handleSuppressMemoryByID(suppressW, suppressReq)
+
+	require.Equal(t, http.StatusOK, suppressW.Code, suppressW.Body.String())
+
+	var suppressResp map[string]any
+	require.NoError(t, json.Unmarshal(suppressW.Body.Bytes(), &suppressResp))
+	assert.Equal(t, "ok", suppressResp["status"])
+	assert.Equal(t, "suppress", suppressResp["action"])
+	assert.Equal(t, float64(created.ID), suppressResp["id"])
+	assert.Equal(t, "operator marked as noise", suppressResp["reason"])
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/memories?project="+project, nil)
+	listW := httptest.NewRecorder()
+	service.handleListMemories(listW, listReq)
+	require.Equal(t, http.StatusOK, listW.Code)
+
+	var list []models.Memory
+	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
+	require.Len(t, list, 0)
+}
+
+func TestHandleSuppressMemoryByID_NotFound(t *testing.T) {
+	project := "test-memory-handler-suppress-not-found-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	nonExistentID := int64(999999999)
+	suppressReq := newCHIRequest(http.MethodPost, "/api/memories/"+strconv.FormatInt(nonExistentID, 10)+"/suppress", "id", strconv.FormatInt(nonExistentID, 10))
+	suppressW := httptest.NewRecorder()
+	service.handleSuppressMemoryByID(suppressW, suppressReq)
+
+	require.Equal(t, http.StatusNotFound, suppressW.Code)
+}
+
+func TestHandleSuppressMemories_RoundTrip(t *testing.T) {
+	project := "test-memory-handler-bulk-suppress-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	create := func(content string) models.Memory {
+		storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"`+content+`"}`)))
+		storeW := httptest.NewRecorder()
+		service.handleStoreMemoryExplicit(storeW, storeReq)
+		require.Equal(t, http.StatusCreated, storeW.Code)
+
+		var created models.Memory
+		require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
+		return created
+	}
+
+	first := create("bulk-suppress-one")
+	second := create("bulk-suppress-two")
+
+	body := bytes.NewReader([]byte(`{"ids":[` + strconv.FormatInt(first.ID, 10) + `,` + strconv.FormatInt(second.ID, 10) + `],"reason":"operator bulk marked as noise"}`))
+	suppressReq := httptest.NewRequest(http.MethodPost, "/api/memories/suppress", body)
+	suppressW := httptest.NewRecorder()
+	service.handleSuppressMemories(suppressW, suppressReq)
+
+	require.Equal(t, http.StatusOK, suppressW.Code, suppressW.Body.String())
+
+	var suppressResp []memoryActionReceipt
+	require.NoError(t, json.Unmarshal(suppressW.Body.Bytes(), &suppressResp))
+	require.Len(t, suppressResp, 2)
+	assert.Equal(t, first.ID, suppressResp[0].ID)
+	assert.Equal(t, second.ID, suppressResp[1].ID)
+	assert.Equal(t, "operator bulk marked as noise", suppressResp[0].Reason)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/memories?project="+project, nil)
+	listW := httptest.NewRecorder()
+	service.handleListMemories(listW, listReq)
+	require.Equal(t, http.StatusOK, listW.Code)
+
+	var list []models.Memory
+	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
+	require.Len(t, list, 0)
+}
+
+func TestHandleSuppressMemories_ValidatesBeforeDelete(t *testing.T) {
+	project := "test-memory-handler-bulk-suppress-validate-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"keep-me"}`)))
+	storeW := httptest.NewRecorder()
+	service.handleStoreMemoryExplicit(storeW, storeReq)
+	require.Equal(t, http.StatusCreated, storeW.Code)
+
+	var created models.Memory
+	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
+
+	body := bytes.NewReader([]byte(`{"ids":[` + strconv.FormatInt(created.ID, 10) + `,999999999],"reason":"operator bulk marked as noise"}`))
+	suppressReq := httptest.NewRequest(http.MethodPost, "/api/memories/suppress", body)
+	suppressW := httptest.NewRecorder()
+	service.handleSuppressMemories(suppressW, suppressReq)
+
+	require.Equal(t, http.StatusNotFound, suppressW.Code)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/memories?project="+project, nil)
+	listW := httptest.NewRecorder()
+	service.handleListMemories(listW, listReq)
+	require.Equal(t, http.StatusOK, listW.Code)
+
+	var list []models.Memory
+	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
+	require.Len(t, list, 1)
+	assert.Equal(t, created.ID, list[0].ID)
 }

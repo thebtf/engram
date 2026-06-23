@@ -102,6 +102,44 @@ const flags = {
   },
 }
 
+const memoryRows = [
+  {
+    id: 101,
+    project: 'operator-console',
+    content: 'operator console = data plane: manage memory PRODUCT, config one Settings tab',
+    tags: ['product', 'operator-console'],
+    tier: 'semantic',
+    epistemic_type: 'fact',
+    confidence: 0.92,
+    citation_count: 12,
+    injection_count: 15,
+    updated_at: '2026-06-22T10:00:00Z',
+    status: 'active',
+  },
+  {
+    id: 102,
+    project: 'operator-console',
+    content: 'stale recall hits should be suppressed when they no longer help the current roadmap',
+    tags: ['moderation', 'noise'],
+    tier: 'episodic',
+    epistemic_type: 'observation',
+    confidence: 0.61,
+    citation_count: 0,
+    injection_count: 28,
+    updated_at: '2026-05-19T10:00:00Z',
+    status: 'active',
+  },
+]
+
+const suppressedMemoryIds = new Set()
+
+function memoryResponseForProject(project) {
+  return memoryRows
+    .filter((row) => row.project === project)
+    .filter((row) => !suppressedMemoryIds.has(String(row.id)))
+    .map((row) => ({ ...row, tags: [...row.tags] }))
+}
+
 function syncConfigFlags() {
   flags.flags.ENGRAM_ENFORCE_SOURCE_PROJECT = Boolean(config.features.enforce_source_project)
   const sourceProject = flags.items.find((item) => item.name === 'ENGRAM_ENFORCE_SOURCE_PROJECT')
@@ -213,6 +251,62 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && path === '/api/memories/suppress') {
+    try {
+      const body = await readRequestJson(req)
+      const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map((id) => Number(id)))] : []
+      if (!ids.length || ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+        json(res, 400, { error: 'invalid memory ids' })
+        return
+      }
+      const missing = ids.some((id) => !memoryRows.some((row) => row.id === id) || suppressedMemoryIds.has(String(id)))
+      if (missing) {
+        json(res, 404, { error: 'memory not found' })
+        return
+      }
+      const reason = typeof body.reason === 'string' ? body.reason.trim() : ''
+      ids.forEach((id) => suppressedMemoryIds.add(String(id)))
+      json(res, 200, ids.map((id) => ({ status: 'ok', action: 'suppress', id, reason })))
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  const suppressMatch = path.match(/^\/api\/memories\/([^/]+)\/suppress$/)
+  if (req.method === 'POST' && suppressMatch) {
+    const id = suppressMatch[1]
+    const exists = memoryRows.some((row) => String(row.id) === id)
+    if (!exists || suppressedMemoryIds.has(id)) {
+      json(res, 404, { error: 'memory not found' })
+      return
+    }
+
+    let reason = ''
+    try {
+      const body = await readRequestJson(req)
+      reason = typeof body.reason === 'string' ? body.reason.trim() : ''
+    } catch {
+      reason = ''
+    }
+    suppressedMemoryIds.add(id)
+    json(res, 200, { status: 'ok', action: 'suppress', id: Number(id), reason })
+    return
+  }
+
+  const deleteMatch = path.match(/^\/api\/memories\/([^/]+)$/)
+  if (req.method === 'DELETE' && deleteMatch) {
+    const id = deleteMatch[1]
+    const exists = memoryRows.some((row) => String(row.id) === id)
+    if (!exists || suppressedMemoryIds.has(id)) {
+      json(res, 404, { error: 'memory not found' })
+      return
+    }
+    suppressedMemoryIds.add(id)
+    json(res, 200, { status: 'ok' })
+    return
+  }
+
   if (req.method !== 'GET') {
     json(res, 405, { error: 'method not allowed' })
     return
@@ -297,10 +391,10 @@ const server = createServer(async (req, res) => {
       })
       return
     case '/api/projects':
-      json(res, 200, [])
+      json(res, 200, ['operator-console'])
       return
     case '/api/memories':
-      json(res, 200, [])
+      json(res, 200, memoryResponseForProject(url.searchParams.get('project') || 'operator-console'))
       return
     default:
       json(res, 404, { error: 'not found' })

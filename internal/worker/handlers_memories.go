@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -39,6 +40,22 @@ type storeMemoryRequest struct {
 	SessionID       string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
 	AgentVisibility string   `json:"agent_visibility,omitempty" enums:"private,shared"`
 	Domain          string   `json:"domain,omitempty"`
+}
+
+type suppressMemoryRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type suppressMemoriesRequest struct {
+	IDs    []int64 `json:"ids"`
+	Reason string  `json:"reason,omitempty"`
+}
+
+type memoryActionReceipt struct {
+	Status string `json:"status"`
+	Action string `json:"action"`
+	ID     int64  `json:"id"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // isValidPrivacyScopeREST mirrors the migration 125 CHECK constraint enum.
@@ -506,6 +523,10 @@ func (s *Service) handleDeleteMemoryByID(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	if before == nil {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
 	if !memoryDomainManageAllowedREST(r.Context(), before) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return
@@ -522,4 +543,167 @@ func (s *Service) handleDeleteMemoryByID(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleSuppressMemoryByID godoc
+// @Summary Suppress a memory note by ID
+// @Description Soft-deletes a memory entry by its numeric ID and returns an operator action receipt.
+// @Tags Memories
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Memory ID"
+// @Param body body suppressMemoryRequest false "Suppression reason"
+// @Success 200 {object} memoryActionReceipt
+// @Failure 400 {string} string "invalid id"
+// @Failure 404 {string} string "not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal error"
+// @Router /api/memories/{id}/suppress [post]
+func (s *Service) handleSuppressMemoryByID(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+
+	var req suppressMemoryRequest
+	if r.Body != nil {
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	before, err := s.memoryStore.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("get memory before suppress failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if before == nil {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+	if !memoryDomainManageAllowedREST(r.Context(), before) {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.memoryStore.Delete(r.Context(), id); err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("suppress memory failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	log.Info().Int64("id", id).Str("reason", reason).Msg("memory suppressed")
+	writeJSON(w, memoryActionReceipt{
+		Status: "ok",
+		Action: "suppress",
+		ID:     id,
+		Reason: reason,
+	})
+}
+
+// handleSuppressMemories godoc
+// @Summary Suppress multiple memory notes
+// @Description Validates all requested memory IDs before soft-deleting them and returns operator action receipts.
+// @Tags Memories
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body suppressMemoriesRequest true "Memory IDs and suppression reason"
+// @Success 200 {array} memoryActionReceipt
+// @Failure 400 {string} string "invalid request"
+// @Failure 404 {string} string "not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal error"
+// @Router /api/memories/suppress [post]
+func (s *Service) handleSuppressMemories(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req suppressMemoriesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	seen := map[int64]struct{}{}
+	ids := make([]int64, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		if id <= 0 {
+			http.Error(w, "invalid memory id", http.StatusBadRequest)
+			return
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		http.Error(w, "at least one memory id is required", http.StatusBadRequest)
+		return
+	}
+
+	before := make([]*models.Memory, 0, len(ids))
+	for _, id := range ids {
+		memory, err := s.memoryStore.Get(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, gormlib.ErrRecordNotFound) {
+				http.Error(w, "memory not found", http.StatusNotFound)
+				return
+			}
+			log.Error().Err(err).Int64("id", id).Msg("get memory before bulk suppress failed")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if memory == nil || !memoryDomainManageAllowedREST(r.Context(), memory) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		before = append(before, memory)
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	receipts := make([]memoryActionReceipt, 0, len(before))
+	for _, memory := range before {
+		if err := s.memoryStore.Delete(r.Context(), memory.ID); err != nil {
+			if errors.Is(err, gormlib.ErrRecordNotFound) {
+				http.Error(w, "memory not found", http.StatusNotFound)
+				return
+			}
+			log.Error().Err(err).Int64("id", memory.ID).Msg("bulk suppress memory failed")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		receipts = append(receipts, memoryActionReceipt{
+			Status: "ok",
+			Action: "suppress",
+			ID:     memory.ID,
+			Reason: reason,
+		})
+	}
+
+	log.Info().Int("count", len(receipts)).Str("reason", reason).Msg("memories suppressed")
+	writeJSON(w, receipts)
 }

@@ -230,6 +230,7 @@
         "delete": "删除记录",
         "confirmDelete": "确认删除",
         "hideNoise": "作为噪声隐藏",
+        "confirmHideNoise": "确认隐藏",
         "editText": "编辑文本",
         "replace": "替换为新版本",
         "promote": "提升重要性",
@@ -239,14 +240,19 @@
     },
     "notice": {
       "deleted": "记忆记录 {id} 已删除",
+      "suppressed": "记忆记录 {id} 已作为噪声隐藏",
+      "bulkSuppressed": "已将 {count} 条记录作为噪声隐藏",
       "error": "操作失败：{message}",
       "unknownError": "未知错误"
     },
     "bulk": {
       "hideNoise": "作为噪声隐藏",
+      "confirmHideNoise": "确认隐藏",
+      "suppressing": "正在隐藏…",
       "replace": "替换版本",
       "moveProject": "移动项目…",
       "note": "先做快照 · 再应用",
+      "confirmNote": "再次点击会将选中的记录作为噪声隐藏",
       "mustBuildNote": "批量操作等待服务器 endpoints；当前选择可以清除"
     }
   },
