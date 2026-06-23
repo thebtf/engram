@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/config"
 )
@@ -37,8 +40,10 @@ func TestHandleGetFlagsReturnsReadOnlyRuntimeSnapshot(t *testing.T) {
 	var response runtimeFlagsResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	assert.True(t, response.ReadOnly)
-	assert.False(t, response.Apply["supported"].(bool))
+	assert.True(t, response.Apply["supported"].(bool))
 	assert.Equal(t, "PATCH /api/config", response.Apply["endpoint"])
+	assert.Contains(t, response.Apply["fields"], "features.enforce_source_project")
+	assert.Contains(t, response.Apply["fields"], "memory.inject_unified")
 	assert.True(t, response.Flags["ENGRAM_VNEXT_ENABLED"])
 	assert.False(t, response.Flags["ENGRAM_GRAPH_ENABLED"])
 	assert.True(t, response.Flags["ENGRAM_CODE_INTEL_ENABLED"])
@@ -74,4 +79,99 @@ func TestHandleGetFlags_ConfigUnavailable(t *testing.T) {
 
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 	assert.Contains(t, w.Body.String(), "config not available")
+}
+
+func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+	require.NoError(t, config.SaveSettings(map[string]any{
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": true,
+		"ENGRAM_INJECT_UNIFIED":         true,
+	}))
+	cfg, _, err := config.Reload()
+	require.NoError(t, err)
+
+	svc := &Service{config: cfg}
+	body := bytes.NewBufferString(`{
+		"features": {"enforce_source_project": false},
+		"memory": {"inject_unified": false}
+	}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", body).
+		WithContext(auth.WithIdentity(context.Background(), auth.Admin()))
+	w := httptest.NewRecorder()
+
+	svc.handlePatchConfig(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, true, response["success"])
+	assert.Equal(t, true, response["applied"])
+	assert.Equal(t, true, response["restart_required"])
+	assert.Contains(t, response["changed"], "enforce_source_project")
+	assert.Contains(t, response["changed"], "inject_unified (requires restart)")
+	assert.Contains(t, response["restart_required_fields"], "memory.inject_unified")
+
+	svc.initMu.RLock()
+	require.NotNil(t, svc.config)
+	assert.False(t, svc.config.EnforceSourceProject)
+	assert.True(t, svc.config.InjectUnified)
+	svc.initMu.RUnlock()
+
+	persisted, err := config.Load()
+	require.NoError(t, err)
+	assert.False(t, persisted.InjectUnified)
+}
+
+func TestHandlePatchConfig_RejectsTrailingJSON(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+	require.NoError(t, config.SaveSettings(map[string]any{
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": true,
+	}))
+	cfg, _, err := config.Reload()
+	require.NoError(t, err)
+
+	svc := &Service{config: cfg}
+	body := bytes.NewBufferString(`{"features":{"enforce_source_project":false}}{}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", body).
+		WithContext(auth.WithIdentity(context.Background(), auth.Admin()))
+	w := httptest.NewRecorder()
+
+	svc.handlePatchConfig(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandlePatchConfig_RejectsEnvControlledSetting(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "true")
+	cfg := config.Default()
+	svc := &Service{config: cfg}
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{
+		"features": {"enforce_source_project": false}
+	}`)).WithContext(auth.WithIdentity(context.Background(), auth.Admin()))
+	w := httptest.NewRecorder()
+
+	svc.handlePatchConfig(w, req)
+
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "features.enforce_source_project")
+	assert.Contains(t, w.Body.String(), "ENGRAM_ENFORCE_SOURCE_PROJECT")
+}
+
+func TestHandlePatchConfig_AdminRequired(t *testing.T) {
+	svc := &Service{config: config.Default()}
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{
+		"features": {"enforce_source_project": false}
+	}`))
+	w := httptest.NewRecorder()
+
+	svc.handlePatchConfig(w, req)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
 }

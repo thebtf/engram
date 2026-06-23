@@ -246,6 +246,23 @@ test('settings feature flags are live read-only data, not a mustbuild fake contr
   assert.doesNotMatch(settingsModalSource, /flagsGap/, 'Settings modal must not render GET /api/flags as a mustbuild gap')
 })
 
+test('settings config save is live allowlisted PATCH with restart receipt', () => {
+  const healthSettingsSource = read(healthSettingsPath)
+  const settingsModalSource = read(settingsModalPath)
+
+  assert.match(healthSettingsSource, /interface ApiConfigPatch/, 'Settings save seam must type the PATCH request')
+  assert.match(healthSettingsSource, /interface ApiConfigPatchReceipt/, 'Settings save seam must type the restart receipt')
+  assert.match(healthSettingsSource, /saveConfig:\s*\(patch: ApiConfigPatch\)/, 'Settings composable must expose a typed saveConfig action')
+  assert.match(healthSettingsSource, /operatorFetchJson<ApiConfigPatchReceipt>\('\/api\/config',\s*\{[\s\S]*method:\s*'PATCH'/, 'Settings save must call PATCH /api/config')
+  assert.match(healthSettingsSource, /configSaveEvidence = endpointEvidence\('\/api\/config',\s*'config-save'\)/, 'Settings save must carry live endpoint evidence')
+  assert.doesNotMatch(healthSettingsSource, /configSaveGap/, 'Settings save must not remain an unsupported mustbuild action')
+
+  assert.match(settingsModalSource, /saveRuntimeConfig/, 'Settings modal must expose a save action')
+  assert.match(settingsModalSource, /configSaveResult\.data\.restart_required/, 'Settings modal must render restart-required receipt state')
+  assert.match(settingsModalSource, /settings\.save\.success/, 'Settings save copy must be keyed for i18n')
+  assert.doesNotMatch(settingsModalSource, /settings\.gaps\.configSave/, 'Settings modal must not render the old config-save mustbuild gap')
+})
+
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
   const source = read(nuxtConfigPath)
 

@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -27,6 +29,20 @@ type runtimeFlagsResponse struct {
 	Config   map[string]any    `json:"config,omitempty"`
 }
 
+type patchConfigRequest struct {
+	Features *patchConfigFeatures `json:"features,omitempty"`
+	Memory   *patchConfigMemory   `json:"memory,omitempty"`
+}
+
+type patchConfigFeatures struct {
+	EnforceSourceProject *bool `json:"enforce_source_project,omitempty"`
+	TelemetryEnabled     *bool `json:"telemetry_enabled,omitempty"`
+}
+
+type patchConfigMemory struct {
+	InjectUnified *bool `json:"inject_unified,omitempty"`
+}
+
 // handleGetConfig returns the current runtime configuration, grouped by category.
 // Secrets (API keys, DSN, encryption keys) are redacted.
 func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
@@ -39,7 +55,67 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	response := map[string]any{
+	writeJSON(w, buildConfigResponse(cfg))
+}
+
+// handlePatchConfig applies the narrow operator-safe runtime settings allowlist.
+// Env-controlled values are refused rather than reported as applied.
+func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	if rejectNonAdmin(w, r) {
+		return
+	}
+
+	var req patchConfigRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	updates, unsupported, blocked := configSettingsUpdates(req)
+	if len(unsupported) > 0 {
+		http.Error(w, "unsupported config field: "+strings.Join(unsupported, ", "), http.StatusBadRequest)
+		return
+	}
+	if len(blocked) > 0 {
+		http.Error(w, "config field controlled by environment: "+strings.Join(blocked, ", "), http.StatusConflict)
+		return
+	}
+	if len(updates) == 0 {
+		http.Error(w, "no supported config changes", http.StatusBadRequest)
+		return
+	}
+
+	if err := config.SaveSettings(updates); err != nil {
+		http.Error(w, "save config failed", http.StatusInternalServerError)
+		return
+	}
+
+	newCfg, changed, err := s.applyConfigReload()
+	if err != nil {
+		http.Error(w, "reload config failed", http.StatusInternalServerError)
+		return
+	}
+
+	restartRequiredFields := configRestartRequiredFields(changed)
+	writeJSON(w, map[string]any{
+		"success":                 true,
+		"applied":                 true,
+		"changed":                 changed,
+		"restart_required":        len(restartRequiredFields) > 0,
+		"restart_required_fields": restartRequiredFields,
+		"config":                  buildConfigResponse(newCfg),
+	})
+}
+
+func buildConfigResponse(cfg *config.Config) map[string]any {
+	return map[string]any{
 		"context": map[string]any{
 			"observations":        cfg.ContextObservations,
 			"max_tokens":          cfg.ContextMaxTokens,
@@ -63,8 +139,51 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 			"enforce_source_project": cfg.EnforceSourceProject,
 		},
 	}
+}
 
-	writeJSON(w, response)
+func configSettingsUpdates(req patchConfigRequest) (map[string]any, []string, []string) {
+	updates := map[string]any{}
+	unsupported := []string{}
+	blocked := []string{}
+
+	if req.Features != nil {
+		addBoolSettingUpdate(updates, &blocked, "features.enforce_source_project", "ENGRAM_ENFORCE_SOURCE_PROJECT", req.Features.EnforceSourceProject)
+		if req.Features.TelemetryEnabled != nil {
+			unsupported = append(unsupported, "features.telemetry_enabled")
+		}
+	}
+	if req.Memory != nil {
+		addBoolSettingUpdate(updates, &blocked, "memory.inject_unified", "ENGRAM_INJECT_UNIFIED", req.Memory.InjectUnified)
+	}
+
+	return updates, unsupported, blocked
+}
+
+func addBoolSettingUpdate(updates map[string]any, blocked *[]string, path string, envKey string, value *bool) {
+	if value == nil {
+		return
+	}
+	if strings.TrimSpace(os.Getenv(envKey)) != "" {
+		*blocked = append(*blocked, path+" via "+envKey)
+		return
+	}
+	updates[envKey] = *value
+}
+
+func configRestartRequiredFields(changed []string) []string {
+	fields := make([]string, 0, len(changed))
+	for _, field := range changed {
+		if !strings.Contains(field, "requires restart") {
+			continue
+		}
+		switch {
+		case strings.Contains(field, "inject_unified"):
+			fields = append(fields, "memory.inject_unified")
+		default:
+			fields = append(fields, field)
+		}
+	}
+	return fields
 }
 
 // handleGetFlags returns a read-only snapshot of runtime feature flags.
@@ -124,9 +243,10 @@ func buildRuntimeFlagsResponse(cfg *config.Config, flagCfg cognitivecore.FlagCon
 		},
 		ReadOnly: true,
 		Apply: map[string]any{
-			"supported": false,
+			"supported": true,
 			"endpoint":  "PATCH /api/config",
-			"reason":    "runtime flag mutation needs a settings save endpoint plus restart-required receipt",
+			"fields":    []string{"features.enforce_source_project", "memory.inject_unified"},
+			"reason":    "only allowlisted config-backed fields are writable; env-controlled flags remain read-only",
 		},
 		Config: map[string]any{
 			"source": "current process snapshot",

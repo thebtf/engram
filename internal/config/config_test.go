@@ -2,8 +2,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -391,6 +393,105 @@ func (s *ConfigSuite) TestLoad_JSONContextSettings() {
 	s.Equal("flat", cfg.VectorStorageStrategy)
 	s.Equal(10, cfg.HubThreshold)
 	s.False(cfg.EnforceSourceProject)
+}
+
+func (s *ConfigSuite) TestSaveSettings_MergesOperatorUpdates() {
+	tempDir, err := os.MkdirTemp("", "config-save-settings-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	s.T().Setenv("HOME", tempDir)
+	s.T().Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	err = os.WriteFile(filepath.Join(tempDir, ".engram", "settings.json"), []byte(`{"ENGRAM_MODEL":"haiku"}`), 0600)
+	s.Require().NoError(err)
+
+	err = SaveSettings(map[string]any{
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": false,
+		"ENGRAM_INJECT_UNIFIED":         false,
+	})
+	s.Require().NoError(err)
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.Equal("haiku", cfg.Model)
+	s.False(cfg.EnforceSourceProject)
+	s.False(cfg.InjectUnified)
+}
+
+func (s *ConfigSuite) TestSaveSettings_SerializesConcurrentUpdates() {
+	tempDir, err := os.MkdirTemp("", "config-save-settings-concurrent-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, updates := range []map[string]any{
+		{"ENGRAM_ENFORCE_SOURCE_PROJECT": false},
+		{"ENGRAM_INJECT_UNIFIED": false},
+	} {
+		wg.Add(1)
+		go func(updates map[string]any) {
+			defer wg.Done()
+			errs <- SaveSettings(updates)
+		}(updates)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		s.Require().NoError(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tempDir, ".engram", "settings.json"))
+	s.Require().NoError(err)
+	settings := map[string]any{}
+	s.Require().NoError(json.Unmarshal(data, &settings))
+	s.Equal(false, settings["ENGRAM_ENFORCE_SOURCE_PROJECT"])
+	s.Equal(false, settings["ENGRAM_INJECT_UNIFIED"])
+
+	cfg, err := Load()
+	s.Require().NoError(err)
+	s.False(cfg.EnforceSourceProject)
+	s.False(cfg.InjectUnified)
+}
+
+func (s *ConfigSuite) TestReload_DetectsOperatorSettingsChanges() {
+	tempDir, err := os.MkdirTemp("", "config-reload-operator-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	s.T().Setenv("HOME", tempDir)
+	s.T().Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	_, _, err = Reload()
+	s.Require().NoError(err)
+
+	err = SaveSettings(map[string]any{
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": false,
+		"ENGRAM_INJECT_UNIFIED":         false,
+	})
+	s.Require().NoError(err)
+
+	cfg, changed, err := Reload()
+	s.Require().NoError(err)
+	s.False(cfg.EnforceSourceProject)
+	s.True(cfg.InjectUnified)
+	s.Contains(changed, "enforce_source_project")
+	s.Contains(changed, "inject_unified (requires restart)")
+
+	persisted, err := Load()
+	s.Require().NoError(err)
+	s.False(persisted.InjectUnified)
 }
 
 // TestLoad_DBPathFromJSON verifies ENGRAM_DB_PATH in JSON settings is applied.

@@ -1,12 +1,11 @@
 import type { ComputedRef } from 'vue'
-import type { OperatorLoadState } from './useOperatorApi'
+import type { OperatorLoadState, OperatorMutationResult } from './useOperatorApi'
 import {
   endpointEvidence,
   loadOperatorJson,
   operatorFetchJson,
   pendingState,
   runOperatorMutation,
-  unsupportedOperatorAction,
 } from './useOperatorApi'
 
 interface ApiComponentHealth {
@@ -50,6 +49,24 @@ interface ApiConfig {
     telemetry_enabled?: boolean
     enforce_source_project?: boolean
   }
+}
+
+interface ApiConfigPatch {
+  memory?: {
+    inject_unified?: boolean
+  }
+  features?: {
+    enforce_source_project?: boolean
+  }
+}
+
+interface ApiConfigPatchReceipt {
+  success?: boolean
+  applied?: boolean
+  changed?: string[]
+  restart_required?: boolean
+  restart_required_fields?: string[]
+  config?: ApiConfig
 }
 
 interface ApiFlagItem {
@@ -167,9 +184,10 @@ export function useOperatorHealthSettings(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
+  saveConfig: (patch: ApiConfigPatch) => Promise<OperatorMutationResult<ApiConfigPatchReceipt>>
   restartServer: () => Promise<unknown>
   restartAfterUpdate: () => Promise<unknown>
-  configSaveGap: ReturnType<typeof unsupportedOperatorAction>
+  configSaveEvidence: ReturnType<typeof endpointEvidence>
 } {
   const selfcheckEvidence = endpointEvidence('/api/selfcheck', 'selfcheck')
   const readyEvidence = endpointEvidence('/api/ready', 'ready')
@@ -179,6 +197,7 @@ export function useOperatorHealthSettings(): {
   const vectorEvidence = endpointEvidence('/api/vector/metrics', 'vector-metrics')
   const updateStatusEvidence = endpointEvidence('/api/update/status', 'update-status')
   const updateCheckEvidence = endpointEvidence('/api/update/check', 'update-check')
+  const configSaveEvidence = endpointEvidence('/api/config', 'config-save')
 
   const selfcheck = useState<OperatorLoadState<ApiSelfcheck>>('live:health-settings:selfcheck', () => pendingState(selfcheckEvidence))
   const ready = useState<OperatorLoadState<ApiReady>>('live:health-settings:ready', () => pendingState(readyEvidence))
@@ -256,6 +275,19 @@ export function useOperatorHealthSettings(): {
     updateCheck.value = await loadOperatorJson<ApiUpdateCheck>('/api/update/check', { source: 'update-check' })
   }
 
+  async function saveConfig(patch: ApiConfigPatch) {
+    return runOperatorMutation({
+      action: 'config-save',
+      evidence: configSaveEvidence,
+      run: () => operatorFetchJson<ApiConfigPatchReceipt>('/api/config', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      }, 'config-save'),
+      refresh,
+    })
+  }
+
   async function restartServer() {
     return runOperatorMutation({
       action: 'server-restart',
@@ -272,12 +304,6 @@ export function useOperatorHealthSettings(): {
       refresh,
     })
   }
-
-  const configSaveGap = unsupportedOperatorAction(
-    'config-save',
-    'PATCH /api/config',
-    'Runtime config is exposed as a read model only; saving settings needs a server endpoint and restart-required receipt.',
-  )
 
   startOnce('health-settings', refresh)
 
@@ -298,8 +324,9 @@ export function useOperatorHealthSettings(): {
     pending,
     error,
     refresh,
+    saveConfig,
     restartServer,
     restartAfterUpdate,
-    configSaveGap,
+    configSaveEvidence,
   }
 }

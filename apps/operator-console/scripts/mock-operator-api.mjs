@@ -65,6 +65,7 @@ const flags = {
     ENGRAM_V7_S5_TELEMETRY: false,
     ENGRAM_V7_S6_OUTCOME: false,
     ENGRAM_ENFORCE_SOURCE_PROJECT: true,
+    ENGRAM_INJECT_UNIFIED: true,
   },
   items: [
     { name: 'ENGRAM_VNEXT_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
@@ -83,17 +84,45 @@ const flags = {
     { name: 'ENGRAM_V7_S5_TELEMETRY', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
     { name: 'ENGRAM_V7_S6_OUTCOME', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
     { name: 'ENGRAM_ENFORCE_SOURCE_PROJECT', enabled: true, source: 'config', category: 'operations', restart_required_to_change: false },
+    { name: 'ENGRAM_INJECT_UNIFIED', enabled: true, source: 'config', category: 'memory', restart_required_to_change: true },
   ],
-  summary: { total: 16, enabled: 6, disabled: 10 },
+  summary: { total: 17, enabled: 7, disabled: 10 },
   read_only: true,
   apply: {
-    supported: false,
+    supported: true,
     endpoint: 'PATCH /api/config',
-    reason: 'runtime flag mutation needs a settings save endpoint plus restart-required receipt',
+    fields: ['features.enforce_source_project', 'memory.inject_unified'],
+    reason: 'only allowlisted config-backed fields are writable; env-controlled flags remain read-only',
   },
 }
 
-const server = createServer((req, res) => {
+function syncConfigFlags() {
+  flags.flags.ENGRAM_ENFORCE_SOURCE_PROJECT = Boolean(config.features.enforce_source_project)
+  const sourceProject = flags.items.find((item) => item.name === 'ENGRAM_ENFORCE_SOURCE_PROJECT')
+  if (sourceProject) sourceProject.enabled = flags.flags.ENGRAM_ENFORCE_SOURCE_PROJECT
+
+  flags.flags.ENGRAM_INJECT_UNIFIED = Boolean(config.memory.inject_unified)
+  const injectUnified = flags.items.find((item) => item.name === 'ENGRAM_INJECT_UNIFIED')
+  if (injectUnified) injectUnified.enabled = flags.flags.ENGRAM_INJECT_UNIFIED
+}
+
+function readRequestJson(req) {
+  return new Promise((resolve, reject) => {
+    let body = ''
+    req.setEncoding('utf8')
+    req.on('data', (chunk) => { body += chunk })
+    req.on('end', () => {
+      try {
+        resolve(body.trim() ? JSON.parse(body) : {})
+      } catch (error) {
+        reject(error)
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${host}:${port}`)
   const path = url.pathname.replace(/\/+$/, '') || '/'
 
@@ -110,6 +139,33 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && (path === '/api/restart' || path === '/api/update/restart')) {
     json(res, 202, { ok: true, state: 'accepted' })
+    return
+  }
+
+  if (req.method === 'PATCH' && path === '/api/config') {
+    try {
+      const patch = await readRequestJson(req)
+      const changed = []
+      if (patch.features && Object.hasOwn(patch.features, 'enforce_source_project')) {
+        config.features.enforce_source_project = Boolean(patch.features.enforce_source_project)
+        changed.push('enforce_source_project')
+      }
+      if (patch.memory && Object.hasOwn(patch.memory, 'inject_unified')) {
+        config.memory.inject_unified = Boolean(patch.memory.inject_unified)
+        changed.push('inject_unified (requires restart)')
+      }
+      syncConfigFlags()
+      json(res, 200, {
+        success: true,
+        applied: true,
+        changed,
+        restart_required: changed.includes('inject_unified (requires restart)'),
+        restart_required_fields: changed.includes('inject_unified (requires restart)') ? ['memory.inject_unified'] : [],
+        config,
+      })
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
     return
   }
 

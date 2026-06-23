@@ -34,15 +34,21 @@ const {
   pending,
   error,
   refresh,
+  saveConfig,
   restartServer,
   restartAfterUpdate,
-  configSaveGap,
+  configSaveEvidence,
 } = useOperatorHealthSettings()
 
 const restartConfirm = ref(false)
 const updateRestartConfirm = ref(false)
 const restartInFlight = ref(false)
 const updateRestartInFlight = ref(false)
+const configSaveInFlight = ref(false)
+const configSaveResult = ref<Awaited<ReturnType<typeof saveConfig>> | null>(null)
+const configDraftTouched = ref(false)
+const draftInjectUnified = ref(false)
+const draftSourceProject = ref(false)
 
 const tabs = computed<SettingsTab[]>(() => [
   { id: 'general', groupKey: 'basic', labelKey: 'general', titleKey: 'general', descKey: 'general', kind: 'general', cls: 'live' },
@@ -78,32 +84,91 @@ const groupedTabs = computed(() => {
 
 const selectedTab = computed(() => tabs.value.find((tab) => tab.id === activeTab.value) || tabs.value[0])
 const config = computed(() => configState.value.kind === 'live' ? configState.value.data : {})
+const configAvailable = computed(() => configState.value.kind === 'live')
+const currentInjectUnified = computed(() => Boolean(config.value?.memory?.inject_unified))
+const currentSourceProject = computed(() => Boolean(config.value?.features?.enforce_source_project))
+const configDraftDirty = computed(() => configAvailable.value && (
+  draftInjectUnified.value !== currentInjectUnified.value ||
+  draftSourceProject.value !== currentSourceProject.value
+))
 const switches = computed(() => [
   {
     key: 'injectUnified',
     title: t('settings.switches.injectUnified.title'),
     desc: t('settings.switches.injectUnified.desc'),
-    value: Boolean(config.value?.memory?.inject_unified),
+    value: draftInjectUnified.value,
+    set: (value: boolean) => {
+      configDraftTouched.value = true
+      draftInjectUnified.value = value
+    },
     evidence: 'memory.inject_unified',
     reload: true,
+    disabled: !configAvailable.value,
   },
   {
     key: 'telemetry',
     title: t('settings.switches.telemetry.title'),
     desc: t('settings.switches.telemetry.desc'),
     value: Boolean(config.value?.features?.telemetry_enabled),
+    set: () => {},
     evidence: 'features.telemetry_enabled',
     reload: false,
+    disabled: true,
   },
   {
     key: 'sourceProject',
     title: t('settings.switches.sourceProject.title'),
     desc: t('settings.switches.sourceProject.desc'),
-    value: Boolean(config.value?.features?.enforce_source_project),
+    value: draftSourceProject.value,
+    set: (value: boolean) => {
+      configDraftTouched.value = true
+      draftSourceProject.value = value
+    },
     evidence: 'features.enforce_source_project',
-    reload: true,
+    reload: false,
+    disabled: !configAvailable.value,
   },
 ])
+
+function resetConfigDraft() {
+  draftInjectUnified.value = currentInjectUnified.value
+  draftSourceProject.value = currentSourceProject.value
+  configDraftTouched.value = false
+  configSaveResult.value = null
+}
+
+function buildConfigPatch() {
+  const patch: {
+    memory?: { inject_unified?: boolean }
+    features?: { enforce_source_project?: boolean }
+  } = {}
+  if (draftInjectUnified.value !== currentInjectUnified.value) {
+    patch.memory = { inject_unified: draftInjectUnified.value }
+  }
+  if (draftSourceProject.value !== currentSourceProject.value) {
+    patch.features = { enforce_source_project: draftSourceProject.value }
+  }
+  return patch
+}
+
+function formatChanged(fields?: string[]) {
+  return fields && fields.length ? fields.join(', ') : t('settings.save.noEffectiveChanges')
+}
+
+async function saveRuntimeConfig() {
+  if (!configDraftDirty.value || configSaveInFlight.value) return
+  configSaveInFlight.value = true
+  try {
+    configSaveResult.value = await saveConfig(buildConfigPatch())
+    if (configSaveResult.value.kind === 'success' && configSaveResult.value.data.config) {
+      draftInjectUnified.value = Boolean(configSaveResult.value.data.config.memory?.inject_unified)
+      draftSourceProject.value = Boolean(configSaveResult.value.data.config.features?.enforce_source_project)
+      configDraftTouched.value = false
+    }
+  } finally {
+    configSaveInFlight.value = false
+  }
+}
 
 function selectTab(id: string) {
   activeTab.value = id
@@ -164,6 +229,10 @@ watch(open, (isOpen) => {
   } else {
     window.removeEventListener('keydown', onKeydown)
   }
+}, { immediate: true })
+
+watch(configState, () => {
+  if (!configDraftTouched.value) resetConfigDraft()
 }, { immediate: true })
 
 onBeforeUnmount(() => {
@@ -295,14 +364,32 @@ onBeforeUnmount(() => {
                       :desc="item.desc"
                       :evidence="item.evidence"
                       :reload="item.reload"
-                      disabled
+                      :disabled="item.disabled"
+                      @update:model-value="item.set"
                     />
                   </div>
-                  <div class="gaps">
-                    <div class="gap">
-                      <HonestyBadge cls="mustbuild" :evidence="configSaveGap.evidence.endpoint" />
-                      <span>{{ t('settings.gaps.configSave') }}</span>
+                  <div class="settings-actions config-actions">
+                    <div class="left">
+                      <button class="tbtn primary" type="button" :disabled="!configDraftDirty || configSaveInFlight" @click="saveRuntimeConfig">
+                        {{ configSaveInFlight ? t('settings.save.pending') : t('settings.save.action') }}
+                      </button>
+                      <button class="tbtn" type="button" :disabled="!configDraftDirty || configSaveInFlight" @click="resetConfigDraft">
+                        {{ t('settings.save.reset') }}
+                      </button>
                     </div>
+                    <HonestyBadge cls="live" :evidence="configSaveEvidence.endpoint" />
+                  </div>
+                  <div v-if="configSaveResult?.kind === 'success'" class="state" :class="configSaveResult.data.restart_required ? 'restart' : 'ok'">
+                    {{ t('settings.save.success', {
+                      changed: formatChanged(configSaveResult.data.changed),
+                      restart: configSaveResult.data.restart_required ? t('common.yes') : t('common.no'),
+                    }) }}
+                    <span v-if="configSaveResult.data.restart_required_fields?.length">
+                      {{ t('settings.save.restartFields', { fields: configSaveResult.data.restart_required_fields.join(', ') }) }}
+                    </span>
+                  </div>
+                  <div v-else-if="configSaveResult?.kind === 'rollback'" class="state error">
+                    {{ t('settings.save.error', { message: configSaveResult.error.message }) }}
                   </div>
                 </section>
 
@@ -467,6 +554,7 @@ onBeforeUnmount(() => {
 .seg button { border: 0; background: transparent; padding: 6px 10px; font-size: var(--text-xs); font-weight: 700; color: var(--muted); cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--surface); color: var(--fg); }
 .tbtn, .danger { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--fg); padding: 8px 12px; font: inherit; font-size: var(--text-xs); font-weight: 700; cursor: pointer; }
+.tbtn.primary { border-color: color-mix(in oklab, var(--accent), transparent 52%); background: color-mix(in oklab, var(--accent), transparent 88%); color: var(--fg); }
 .tbtn:disabled { opacity: .55; cursor: not-allowed; }
 .tbtn.close { width: 32px; height: 32px; padding: 0; font-size: 18px; line-height: 1; }
 .danger { border-color: color-mix(in oklab, var(--state-danger), transparent 55%); color: var(--state-danger); }
@@ -476,8 +564,11 @@ onBeforeUnmount(() => {
 .tag { display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--fg-2); font-size: 10px; font-family: var(--font-mono); }
 .state { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); padding: 10px 12px; color: var(--fg-2); font-size: var(--text-sm); }
 .state.pending { border-color: color-mix(in oklab, var(--accent), transparent 55%); }
-.state.error, .state.restart { color: var(--state-warn); border-color: color-mix(in oklab, var(--state-warn), transparent 45%); }
+.state.ok { color: var(--class-live); border-color: color-mix(in oklab, var(--class-live), transparent 45%); }
+.state.restart { color: var(--state-warn); border-color: color-mix(in oklab, var(--state-warn), transparent 45%); }
+.state.error { color: var(--state-danger); border-color: color-mix(in oklab, var(--state-danger), transparent 45%); }
 .switches { padding: 0 4px; }
+.config-actions { margin-top: 14px; }
 .gaps { display: grid; gap: 10px; margin-top: 14px; }
 .gap { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px dashed var(--border); border-radius: var(--r-sm); padding: 10px 12px; color: var(--muted); font-size: var(--text-xs); }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }

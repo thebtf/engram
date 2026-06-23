@@ -146,6 +146,7 @@ var (
 	globalConfig *Config
 	configOnce   sync.Once
 	configMu     sync.RWMutex
+	settingsMu   sync.Mutex
 )
 
 // DataDir returns the data directory path (~/.engram).
@@ -192,6 +193,72 @@ func EnsureSettings() error {
 }
 `
 	return os.WriteFile(path, []byte(defaultSettings), 0600)
+}
+
+// SaveSettings merges validated operator-facing settings into settings.json.
+// Callers must keep secrets and env-only values out of updates before calling.
+func SaveSettings(updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+
+	if err := EnsureDataDir(); err != nil {
+		return err
+	}
+
+	path := SettingsPath()
+	settings := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil && strings.TrimSpace(string(data)) != "" {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return err
+		}
+	}
+
+	for key, value := range updates {
+		settings[key] = value
+	}
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(out); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanupTemp = false
+	return nil
 }
 
 // EnsureAll ensures all required directories and files exist.
@@ -307,6 +374,9 @@ func Load() (*Config, error) {
 			}
 			if v, ok := settings["ENGRAM_ENFORCE_SOURCE_PROJECT"].(bool); ok {
 				cfg.EnforceSourceProject = v
+			}
+			if v, ok := settings["ENGRAM_INJECT_UNIFIED"].(bool); ok {
+				cfg.InjectUnified = v
 			}
 		}
 	}
@@ -495,10 +565,6 @@ func Reload() (*Config, []string, error) {
 
 	configMu.Lock()
 	old := globalConfig
-	globalConfig = newCfg
-	configMu.Unlock()
-
-	// Detect changed fields for logging
 	var changed []string
 	if old != nil {
 		if old.Model != newCfg.Model {
@@ -510,11 +576,20 @@ func Reload() (*Config, []string, error) {
 		if old.ContextObservations != newCfg.ContextObservations {
 			changed = append(changed, "context_observations")
 		}
+		if old.EnforceSourceProject != newCfg.EnforceSourceProject {
+			changed = append(changed, "enforce_source_project")
+		}
+		if old.InjectUnified != newCfg.InjectUnified {
+			changed = append(changed, "inject_unified (requires restart)")
+			newCfg.InjectUnified = old.InjectUnified
+		}
 		if old.WorkerPort != newCfg.WorkerPort {
 			changed = append(changed, "worker_port (requires restart)")
+			newCfg.WorkerPort = old.WorkerPort
 		}
 		if old.WorkerToken != newCfg.WorkerToken {
 			changed = append(changed, "worker_token (requires restart)")
+			newCfg.WorkerToken = old.WorkerToken
 		}
 		if old.AuthSkipLocal != newCfg.AuthSkipLocal {
 			changed = append(changed, "auth_skip_local")
@@ -523,6 +598,11 @@ func Reload() (*Config, []string, error) {
 			changed = append(changed, "auth_trusted_proxy")
 		}
 	}
+
+	// Restart-required settings are persisted for the next process start, but the
+	// current process snapshot keeps the old effective value until then.
+	globalConfig = newCfg
+	configMu.Unlock()
 
 	return newCfg, changed, nil
 }

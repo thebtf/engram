@@ -1015,15 +1015,11 @@ func (s *Service) startWatchers() {
 // call config.Get() per-request will pick up new values automatically.
 // Structural changes (port, token) log a warning — manual restart needed.
 func (s *Service) reloadConfig() {
-	newCfg, changed, err := config.Reload()
+	_, changed, err := s.applyConfigReload()
 	if err != nil {
 		log.Error().Err(err).Msg("Config reload failed — keeping current config")
 		return
 	}
-
-	s.initMu.Lock()
-	s.config = newCfg
-	s.initMu.Unlock()
 
 	if len(changed) == 0 {
 		log.Info().Msg("Config file changed but no values differ")
@@ -1038,6 +1034,19 @@ func (s *Service) reloadConfig() {
 		"message": "Configuration reloaded",
 		"changed": changed,
 	})
+}
+
+func (s *Service) applyConfigReload() (*config.Config, []string, error) {
+	newCfg, changed, err := config.Reload()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s.initMu.Lock()
+	s.config = newCfg
+	s.initMu.Unlock()
+
+	return newCfg, changed, nil
 }
 
 // isCrystallizationEnabled reports whether the crystallization pipeline is
@@ -1285,6 +1294,10 @@ func (s *Service) setupRoutes() {
 		// Runtime feature flags (read-only current-process snapshot; works before DB is ready)
 		r.Get("/api/flags", s.handleGetFlags)
 
+		// Config management is file-backed, so recovery settings remain available before DB readiness.
+		r.Get("/api/config", s.handleGetConfig)
+		r.Patch("/api/config", s.handlePatchConfig)
+
 		// Dashboard SSE endpoint (works before DB is ready)
 		r.Get("/api/events", s.sseBroadcaster.HandleSSE)
 
@@ -1419,8 +1432,6 @@ func (s *Service) setupRoutes() {
 		// Token stats
 		r.Get("/api/auth/tokens/{id}/stats", s.handleGetTokenStats)
 
-		// Config
-		r.Get("/api/config", s.handleGetConfig)
 	})
 
 	// Catch-all browser routes for the promoted operator-console surface.
