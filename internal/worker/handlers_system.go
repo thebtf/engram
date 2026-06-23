@@ -60,7 +60,7 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	writeJSON(w, buildConfigResponse(cfg))
+	writeJSON(w, buildConfigResponseWithLifecycle(cfg))
 }
 
 // handlePatchConfig applies the narrow operator-safe runtime settings allowlist.
@@ -110,7 +110,7 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	restartRequiredFields := configRestartRequiredFields(changed)
-	afterConfig := buildConfigResponse(newCfg)
+	afterConfig := buildConfigResponseWithLifecycle(newCfg)
 	auditLogged := s.logConfigAudit(r.Context(), beforeConfig, afterConfig, updates, changed, restartRequiredFields)
 	writeJSON(w, map[string]any{
 		"success":                 true,
@@ -130,7 +130,7 @@ func (s *Service) currentConfigResponse() map[string]any {
 	if cfg == nil {
 		cfg = config.Get()
 	}
-	return buildConfigResponse(cfg)
+	return buildConfigResponseWithLifecycle(cfg)
 }
 
 func (s *Service) logConfigAudit(ctx context.Context, beforeConfig map[string]any, afterConfig map[string]any, updates map[string]any, changed []string, restartRequiredFields []string) bool {
@@ -221,6 +221,59 @@ func buildConfigResponse(cfg *config.Config) map[string]any {
 			"enforce_source_project": cfg.EnforceSourceProject,
 		},
 	}
+}
+
+func buildConfigResponseWithLifecycle(effective *config.Config) map[string]any {
+	response := buildConfigResponse(effective)
+	lifecycle := map[string]any{
+		"restart_required": false,
+		"pending_restart":  []map[string]any{},
+		"apply": map[string]any{
+			"supported": false,
+			"reason":    "generic restart/apply endpoint is not available",
+		},
+	}
+	desired, err := config.Load()
+	if err != nil {
+		lifecycle["error"] = err.Error()
+		response["lifecycle"] = lifecycle
+		return response
+	}
+	pending := configPendingRestart(effective, desired)
+	lifecycle["restart_required"] = len(pending) > 0
+	lifecycle["pending_restart"] = pending
+	response["lifecycle"] = lifecycle
+	return response
+}
+
+func configPendingRestart(effective *config.Config, desired *config.Config) []map[string]any {
+	pending := make([]map[string]any, 0, 3)
+	if effective.InjectUnified != desired.InjectUnified {
+		pending = append(pending, map[string]any{
+			"field":     "memory.inject_unified",
+			"effective": effective.InjectUnified,
+			"desired":   desired.InjectUnified,
+			"reason":    "requires_restart",
+		})
+	}
+	if effective.WorkerPort != desired.WorkerPort {
+		pending = append(pending, map[string]any{
+			"field":     "server.worker_port",
+			"effective": effective.WorkerPort,
+			"desired":   desired.WorkerPort,
+			"reason":    "requires_restart",
+		})
+	}
+	if effective.WorkerToken != desired.WorkerToken {
+		pending = append(pending, map[string]any{
+			"field":     "server.worker_token",
+			"effective": "changed",
+			"desired":   "changed",
+			"reason":    "requires_restart",
+			"sensitive": true,
+		})
+	}
+	return pending
 }
 
 func configSettingsUpdates(req patchConfigRequest) (map[string]any, []string, []string) {

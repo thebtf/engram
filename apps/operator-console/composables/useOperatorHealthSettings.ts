@@ -49,6 +49,23 @@ interface ApiConfig {
     telemetry_enabled?: boolean
     enforce_source_project?: boolean
   }
+  lifecycle?: {
+    restart_required?: boolean
+    pending_restart?: ApiConfigPendingRestart[]
+    apply?: {
+      supported?: boolean
+      endpoint?: string
+      reason?: string
+    }
+  }
+}
+
+interface ApiConfigPendingRestart {
+  field: string
+  effective?: unknown
+  desired?: unknown
+  reason?: string
+  sensitive?: boolean
 }
 
 interface ApiConfigPatch {
@@ -181,6 +198,7 @@ export function useOperatorHealthSettings(): {
   flagItems: ComputedRef<ApiFlagItem[]>
   embeddingMetrics: ComputedRef<OperatorHealthMetric[]>
   configMetrics: ComputedRef<OperatorHealthMetric[]>
+  configPendingRestart: ComputedRef<ApiConfigPendingRestart[]>
   restartRequired: ComputedRef<boolean>
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
@@ -247,7 +265,11 @@ export function useOperatorHealthSettings(): {
       { label: 'features.enforce_source_project', value: display(data.features?.enforce_source_project) },
     ]
   })
-  const restartRequired = computed(() => updateStatus.value.kind === 'live' && updateStatus.value.data.state === 'done')
+  const configPendingRestart = computed(() => config.value.kind === 'live' ? config.value.data.lifecycle?.pending_restart || [] : [])
+  const restartRequired = computed(() => (
+    (config.value.kind === 'live' && Boolean(config.value.data.lifecycle?.restart_required)) ||
+    (updateStatus.value.kind === 'live' && updateStatus.value.data.state === 'done')
+  ))
   const pending = computed(() => [
     selfcheck.value,
     ready.value,
@@ -321,6 +343,7 @@ export function useOperatorHealthSettings(): {
     flagItems,
     embeddingMetrics,
     configMetrics,
+    configPendingRestart,
     restartRequired,
     pending,
     error,

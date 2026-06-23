@@ -946,6 +946,10 @@
       "error": "Could not save config: {message}",
       "noEffectiveChanges": "effective values unchanged"
     },
+    "lifecycle": {
+      "effective": "Now",
+      "desired": "After restart"
+    },
     "restart": {
       "title": "Restart / update",
       "body": "Both actions affect the live process, so they require a second confirmation click.",
