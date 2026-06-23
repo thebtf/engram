@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useOperatorMemoryLab } from '../composables/useOperatorMemoryLab'
+import { useOperatorMemoryLab, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
 import { MEMORY_PAGE_SIZE_STORAGE_KEY, resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import type { Memory } from '../composables/useMockData'
+import type { OperatorLoadState } from '../composables/useOperatorApi'
 
 const { t } = useI18n()
 const {
@@ -14,12 +15,13 @@ const {
   deleteMemory,
   suppressMemory,
   suppressMemories,
-  auditGap,
+  auditMemory,
   provenanceGap,
   actionGaps,
 } = useOperatorMemoryLab()
 
 type MemoryFilter = 'active' | 'flagged' | 'stale' | 'low' | 'chain'
+type MemoryAuditState = OperatorLoadState<MemoryAuditResponse>
 
 const project = ref('all')
 const filters = ref<Record<MemoryFilter, boolean>>({
@@ -40,6 +42,9 @@ const deletePending = ref(false)
 const suppressPending = ref(false)
 const bulkSuppressPending = ref(false)
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
+const auditState = ref<MemoryAuditState | null>(null)
+const auditPending = ref(false)
+let auditRequestSeq = 0
 
 const projects = computed(() => [...new Set(all.map((memory) => memory.project).filter(Boolean))].sort())
 const activeFilterCount = computed(() => Object.values(filters.value).filter(Boolean).length + (project.value === 'all' ? 0 : 1))
@@ -83,6 +88,7 @@ const bulkVerbs = computed(() => {
 })
 const bulkNote = computed(() => bulkSuppressConfirm.value ? t('memory.bulk.confirmNote') : t('memory.bulk.note'))
 const opened = computed(() => all.find((memory) => memory.id === openId.value) || null)
+const auditEntries = computed(() => auditState.value?.data?.entries || [])
 const noiseRatio = computed(() => {
   const measured = all.filter((memory) => memory.utilityKnown)
   if (!measured.length) return '—'
@@ -97,9 +103,13 @@ watch(pageSize, () => {
   page.value = 1
 })
 
-watch(openId, () => {
+watch(opened, (memory) => {
   deleteConfirmId.value = null
   suppressConfirmId.value = null
+  auditState.value = null
+  auditPending.value = false
+  auditRequestSeq += 1
+  if (memory) void loadAudit(memory)
 })
 
 watch(selectedIds, () => {
@@ -213,6 +223,23 @@ async function handleBulkAction() {
   }
 }
 
+async function loadAudit(memory: Memory | null = opened.value) {
+  if (!memory) return
+
+  const seq = ++auditRequestSeq
+  auditPending.value = true
+  try {
+    const nextState = await auditMemory(memory.id)
+    if (seq === auditRequestSeq && openId.value === memory.id) {
+      auditState.value = nextState
+    }
+  } finally {
+    if (seq === auditRequestSeq && openId.value === memory.id) {
+      auditPending.value = false
+    }
+  }
+}
+
 function rowState(memory: Memory) {
   if (memory.status === 'flagged' || memory.noise) return 'flagged'
   if (memory.status === 'superseded') return 'superseded'
@@ -246,6 +273,16 @@ function utilityText(memory: Memory) {
 
 function isNoisyUtility(memory: Memory) {
   return memory.utilityKnown && memory.inj >= 10 && memory.cite === 0
+}
+
+function formatAuditTime(timestamp?: string) {
+  if (!timestamp) return '—'
+  const value = Date.parse(timestamp)
+  if (Number.isNaN(value)) return '—'
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(value)
 }
 </script>
 
@@ -395,9 +432,30 @@ function isNoisyUtility(memory: Memory) {
 
         <section class="dsection">
           <div class="dsh">{{ t('memory.detail.audit') }}</div>
-          <div class="mb-card">
-            {{ t('memory.detail.auditBody') }}
-            <div class="mid">{{ auditGap.evidence.endpoint }}</div>
+          <div class="audit-card" :data-state="auditPending ? 'pending' : auditState?.kind || 'empty'" data-testid="memory-audit-panel">
+            <div class="audit-card-head">
+              <b>{{ t('memory.detail.auditBody') }}</b>
+              <button class="tbtn mini" :disabled="auditPending" @click="loadAudit(opened)">{{ t('memory.detail.auditRefresh') }}</button>
+            </div>
+            <div v-if="auditPending" class="mid">{{ t('memory.detail.auditLoading') }}</div>
+            <div v-else-if="auditState?.kind === 'error'" class="callout danger">
+              {{ t('memory.detail.auditError', { message: auditState.error.message }) }}
+              <button class="tbtn mini" @click="loadAudit(opened)">{{ t('memory.state.retry') }}</button>
+            </div>
+            <div v-else-if="!auditEntries.length" class="mid">{{ t('memory.detail.auditEmpty') }}</div>
+            <ol v-else class="audit-list">
+              <li v-for="entry in auditEntries" :key="entry.id">
+                <span class="mono">{{ entry.action }}</span>
+                <span>{{ entry.actor || t('memory.detail.auditUnknownActor') }}</span>
+                <span class="mid">{{ formatAuditTime(entry.created_at) }}</span>
+                <span v-if="entry.reason" class="mid">{{ entry.reason }}</span>
+                <span v-if="entry.before_state_present || entry.after_state_present" class="tag">{{ t('memory.detail.auditStateSnapshot') }}</span>
+              </li>
+            </ol>
+            <div class="mid">{{ auditState?.evidence.endpoint || `/api/memories/${opened.id}/audit?limit=10` }}</div>
+          </div>
+          <div class="mb-card compact">
+            {{ t('memory.detail.provenancePending') }}
             <div class="mid">{{ provenanceGap.evidence.endpoint }}</div>
           </div>
         </section>
@@ -501,7 +559,18 @@ function isNoisyUtility(memory: Memory) {
 .callout { margin-top:9px; padding:9px 11px; border-radius:var(--r-sm); font-size:var(--text-xs); }
 .callout.danger { color:var(--state-warn); border:1px solid color-mix(in oklab,var(--state-warn),transparent 55%); background:color-mix(in oklab,var(--state-warn),transparent 90%); }
 .callout.muted { color:var(--muted); border:1px solid var(--border); background:var(--surface-warm); }
+.audit-card { display:flex; flex-direction:column; gap:9px; padding:12px; border-radius:var(--r-sm); border:1px solid color-mix(in oklab,var(--class-live),transparent 58%); background:color-mix(in oklab,var(--class-live),transparent 94%); color:var(--fg-2); font-size:var(--text-sm); }
+.audit-card[data-state="pending"] { border-color:color-mix(in oklab,var(--accent),transparent 58%); }
+.audit-card[data-state="error"] { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); background:color-mix(in oklab,var(--state-warn),transparent 92%); }
+.audit-card[data-state="empty"] { border-color:var(--border); background:var(--surface-warm); }
+.audit-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.audit-list { display:flex; flex-direction:column; gap:7px; margin:0; padding:0; list-style:none; }
+.audit-list li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 8px; padding:8px 0; border-top:1px solid var(--border-soft); }
+.audit-list li:first-child { border-top:0; padding-top:0; }
+.audit-list .mono { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg); }
+.mini { min-height:24px; padding:3px 8px; }
 .mb-card { padding:12px; border-radius:var(--r-sm); border:1px solid color-mix(in oklab,var(--class-mustbuild),transparent 55%); background:color-mix(in oklab,var(--class-mustbuild),transparent 91%); color:var(--fg-2); font-size:var(--text-sm); }
+.mb-card.compact { margin-top:8px; }
 .mb-card .mid { margin-top:4px; color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); }
 .dactions { display:flex; gap:8px; flex-wrap:wrap; margin-top:15px; }
 .act { border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg-2); padding:7px 10px; font-size:var(--text-xs); font-weight:800; }

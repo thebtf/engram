@@ -36,9 +36,14 @@ func newMemoryTestService(t *testing.T, project string) *Service {
 	require.NoError(t, err)
 
 	memoryStore := dbgorm.NewMemoryStore(store)
-	service := &Service{memoryStore: memoryStore}
+	auditStore := dbgorm.NewAuditStore(store.GetDB())
+	service := &Service{
+		memoryStore: memoryStore,
+		auditStore:  auditStore,
+	}
 
 	t.Cleanup(func() {
+		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM audit_log WHERE memory_id IN (SELECT id FROM memories WHERE project = ?)", project).Error)
 		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM memories WHERE project = ?", project).Error)
 		require.NoError(t, store.Close())
 	})
@@ -519,6 +524,82 @@ func TestHandleDeleteMemoryByID_NotFound(t *testing.T) {
 	service.handleDeleteMemoryByID(deleteW, deleteReq)
 
 	require.Equal(t, http.StatusNotFound, deleteW.Code)
+}
+
+func TestHandleGetMemoryAudit_RoundTrip(t *testing.T) {
+	project := "test-memory-handler-audit-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"audit-me"}`)))
+	storeW := httptest.NewRecorder()
+	service.handleStoreMemoryExplicit(storeW, storeReq)
+	require.Equal(t, http.StatusCreated, storeW.Code)
+
+	var created models.Memory
+	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
+
+	beforeState := json.RawMessage(`{"status":"active"}`)
+	afterState := json.RawMessage(`{"status":"suppressed"}`)
+	require.NoError(t, service.auditStore.Log(context.Background(), dbgorm.AuditLogEntry{
+		MemoryID:        &created.ID,
+		Action:          "memory.suppress",
+		Actor:           "operator-console",
+		SourceSessionID: "session-123",
+		BeforeState:     &beforeState,
+		AfterState:      &afterState,
+		Reason:          "operator marked as noise",
+	}))
+
+	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?limit=10", "id", strconv.FormatInt(created.ID, 10))
+	auditW := httptest.NewRecorder()
+	service.handleGetMemoryAudit(auditW, auditReq)
+
+	require.Equal(t, http.StatusOK, auditW.Code, auditW.Body.String())
+
+	var response memoryAuditResponse
+	require.NoError(t, json.Unmarshal(auditW.Body.Bytes(), &response))
+	require.Equal(t, created.ID, response.MemoryID)
+	require.Len(t, response.Entries, 1)
+	entry := response.Entries[0]
+	assert.Equal(t, created.ID, entry.MemoryID)
+	assert.Equal(t, "memory.suppress", entry.Action)
+	assert.Equal(t, "operator-console", entry.Actor)
+	assert.Equal(t, "session-123", entry.SourceSessionID)
+	assert.Equal(t, "operator marked as noise", entry.Reason)
+	assert.True(t, entry.BeforeStatePresent)
+	assert.True(t, entry.AfterStatePresent)
+	assert.False(t, entry.CreatedAt.IsZero())
+}
+
+func TestHandleGetMemoryAudit_NotFound(t *testing.T) {
+	project := "test-memory-handler-audit-not-found-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	nonExistentID := int64(999999999)
+	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(nonExistentID, 10)+"/audit", "id", strconv.FormatInt(nonExistentID, 10))
+	auditW := httptest.NewRecorder()
+	service.handleGetMemoryAudit(auditW, auditReq)
+
+	require.Equal(t, http.StatusNotFound, auditW.Code)
+}
+
+func TestHandleGetMemoryAudit_InvalidLimit(t *testing.T) {
+	project := "test-memory-handler-audit-invalid-limit-" + uuid.NewString()
+	service := newMemoryTestService(t, project)
+
+	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"audit-limit"}`)))
+	storeW := httptest.NewRecorder()
+	service.handleStoreMemoryExplicit(storeW, storeReq)
+	require.Equal(t, http.StatusCreated, storeW.Code)
+
+	var created models.Memory
+	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
+
+	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?limit=0", "id", strconv.FormatInt(created.ID, 10))
+	auditW := httptest.NewRecorder()
+	service.handleGetMemoryAudit(auditW, auditReq)
+
+	require.Equal(t, http.StatusBadRequest, auditW.Code)
 }
 
 func TestHandleSuppressMemoryByID_RoundTrip(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -56,6 +57,33 @@ func TestOperatorConsoleMissingFontAssetReturns404NotSPAHTML(t *testing.T) {
 	}
 	if got := rec.Body.String(); got == "<!doctype html><title>operator</title>" {
 		t.Fatalf("missing font fell through to SPA HTML body")
+	}
+}
+
+func TestOperatorConsoleMissingNuxtJSChunkReturnsReloadModule(t *testing.T) {
+	restoreStaticFS := replaceStaticFSForTest(t, fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>operator</title>")},
+	})
+	defer restoreStaticFS()
+
+	svc := &Service{router: chi.NewRouter()}
+	svc.setupRoutes()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/_nuxt/old-build-chunk.js", nil)
+	svc.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("missing Nuxt JS chunk status = %d, want 200; body=%q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/javascript; charset=utf-8" {
+		t.Fatalf("missing Nuxt JS chunk content-type = %q, want application/javascript; charset=utf-8", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache, no-store, must-revalidate" {
+		t.Fatalf("missing Nuxt JS chunk cache-control = %q, want no-cache, no-store, must-revalidate", got)
+	}
+	if got := rec.Body.String(); !strings.Contains(got, "window.location.reload()") || !strings.Contains(got, "export default {}") {
+		t.Fatalf("missing Nuxt JS chunk fallback does not look like a reload module: %q", got)
 	}
 }
 

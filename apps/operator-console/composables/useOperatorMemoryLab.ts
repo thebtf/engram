@@ -48,6 +48,23 @@ export interface MemoryActionReceipt {
   reason?: string
 }
 
+export interface MemoryAuditEntry {
+  id: number
+  memory_id: number
+  action: string
+  actor: string
+  source_session_id?: string
+  reason?: string
+  before_state_present: boolean
+  after_state_present: boolean
+  created_at: string
+}
+
+export interface MemoryAuditResponse {
+  memory_id: number
+  entries: MemoryAuditEntry[]
+}
+
 export interface MemoryActionGap extends OperatorUnsupportedAction {
   labelKey: string
   badgeKey: string
@@ -286,7 +303,7 @@ export function useOperatorMemoryLab(): {
   deleteMemory: (id: string) => Promise<OperatorMutationResult<unknown>>
   suppressMemory: (id: string, reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt>>
   suppressMemories: (ids: string[], reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt[]>>
-  auditGap: ReturnType<typeof unsupportedOperatorAction>
+  auditMemory: (id: string, limit?: number) => Promise<OperatorLoadState<MemoryAuditResponse>>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
   actionGaps: readonly MemoryActionGap[]
 } {
@@ -407,11 +424,14 @@ export function useOperatorMemoryLab(): {
     })
   }
 
-  const auditGap = unsupportedOperatorAction(
-    'memory-audit',
-    'GET /api/memories/{id}/audit',
-    'Memory audit history is not exposed by the current server API.',
-  )
+  async function auditMemory(id: string, limit = 10) {
+    const path = `/api/memories/${encodeURIComponent(id)}/audit?limit=${limit}`
+    return loadOperatorJson<MemoryAuditResponse>(path, {
+      source: 'memory-audit',
+      empty: (data) => !data.entries.length,
+    })
+  }
+
   const provenanceGap = unsupportedOperatorAction(
     'memory-provenance',
     'GET /api/memories/{id}/provenance',
@@ -430,7 +450,7 @@ export function useOperatorMemoryLab(): {
     deleteMemory,
     suppressMemory,
     suppressMemories,
-    auditGap,
+    auditMemory,
     provenanceGap,
     actionGaps: memoryActionGaps,
   }
