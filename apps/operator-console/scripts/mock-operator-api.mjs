@@ -133,6 +133,25 @@ const memoryRows = [
 
 const suppressedMemoryIds = new Set()
 
+const vaultCredentials = [
+  {
+    id: 1,
+    name: 'shared-token',
+    project: 'alpha',
+    scope: 'project',
+    created_at: '2026-06-21T10:00:00Z',
+    value: 'alpha-secret-value',
+  },
+  {
+    id: 2,
+    name: 'shared-token',
+    project: 'beta',
+    scope: 'project',
+    created_at: '2026-06-22T10:00:00Z',
+    value: 'beta-secret-value',
+  },
+]
+
 function memoryResponseForProject(project) {
   return memoryRows
     .filter((row) => row.project === project)
@@ -307,6 +326,27 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  const vaultCredentialMatch = path.match(/^\/api\/vault\/credentials\/([^/]+)$/)
+  if (vaultCredentialMatch) {
+    const name = decodeURIComponent(vaultCredentialMatch[1])
+    const project = url.searchParams.get('project') || ''
+    const cred = vaultCredentials.find((item) => item.name === name && (item.project || '') === project)
+    if (!cred) {
+      json(res, 404, { error: 'credential not found' })
+      return
+    }
+    if (req.method === 'GET') {
+      json(res, 200, { name: cred.name, value: cred.value, scope: cred.scope })
+      return
+    }
+    if (req.method === 'DELETE') {
+      const index = vaultCredentials.findIndex((item) => item.id === cred.id)
+      if (index >= 0) vaultCredentials.splice(index, 1)
+      json(res, 200, { deleted: true, name: cred.name })
+      return
+    }
+  }
+
   if (req.method !== 'GET') {
     json(res, 405, { error: 'method not allowed' })
     return
@@ -441,10 +481,10 @@ const server = createServer(async (req, res) => {
       json(res, 200, { issues: [] })
       return
     case '/api/vault/credentials':
-      json(res, 200, [])
+      json(res, 200, vaultCredentials.map(({ value: _value, ...item }) => item))
       return
     case '/api/vault/status':
-      json(res, 200, { key_configured: false, fingerprint: '—', key_source: 'mock' })
+      json(res, 200, { key_configured: true, fingerprint: 'abcddcba11223344', key_source: 'mock', credential_count: vaultCredentials.length })
       return
     case '/api/sessions/list':
       json(res, 200, { sessions: [], total: 0 })

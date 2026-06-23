@@ -622,6 +622,7 @@
     "delete": "删除",
     "confirmDelete": "确认",
     "vaultDisabled": "vault 已关闭",
+    "globalProject": "global",
     "state": {
       "pending": "正在从服务器加载 vault…",
       "error": "无法加载 vault：{message}",
