@@ -892,6 +892,7 @@
     "vector": "pgvector",
     "update": "Update channel",
     "migrations": "Migrations",
+    "flagsByArea": "Flags by area",
     "updateState": "Update state",
     "updateAvailable": "Update available",
     "idle": "idle",
@@ -904,6 +905,12 @@
       "current_version": "Current version",
       "applied_count": "Applied",
       "dirtyUnsupported": "Engram uses gormigrate: dirty/applied_at are not supported by this table."
+    },
+    "flags": {
+      "empty": "The server returned no flags.",
+      "uncategorized": "Uncategorized",
+      "summary": "enabled {enabled} · disabled {disabled} · restart {restart}",
+      "evidence": "{enabled}/{total} enabled"
     },
     "state": {
       "pending": "Loading server health…",

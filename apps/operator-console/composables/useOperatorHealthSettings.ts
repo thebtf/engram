@@ -172,6 +172,14 @@ export interface OperatorHealthMetric {
   value: string
 }
 
+export interface OperatorFlagGroup {
+  category: string
+  total: number
+  enabled: number
+  disabled: number
+  restartRequired: number
+}
+
 function display(value: unknown): string {
   if (value === undefined || value === null || value === '') return '-'
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(3)
@@ -207,6 +215,7 @@ export function useOperatorHealthSettings(): {
   migrationsState: ComputedRef<OperatorLoadState<ApiMigrationState>>
   components: ComputedRef<ApiComponentHealth[]>
   flagItems: ComputedRef<ApiFlagItem[]>
+  flagGroups: ComputedRef<OperatorFlagGroup[]>
   embeddingMetrics: ComputedRef<OperatorHealthMetric[]>
   migrationMetrics: ComputedRef<OperatorHealthMetric[]>
   configMetrics: ComputedRef<OperatorHealthMetric[]>
@@ -253,6 +262,27 @@ export function useOperatorHealthSettings(): {
 
   const components = computed(() => selfcheck.value.kind === 'live' ? selfcheck.value.data.components || [] : [])
   const flagItems = computed(() => flags.value.kind === 'live' ? flags.value.data.items || [] : [])
+  const flagGroups = computed(() => {
+    const groups = new Map<string, OperatorFlagGroup>()
+    for (const item of flagItems.value) {
+      const category = item.category || ''
+      let group = groups.get(category)
+      if (!group) {
+        group = { category, total: 0, enabled: 0, disabled: 0, restartRequired: 0 }
+        groups.set(category, group)
+      }
+      group.total += 1
+      if (item.enabled) {
+        group.enabled += 1
+      } else {
+        group.disabled += 1
+      }
+      if (item.restart_required_to_change) {
+        group.restartRequired += 1
+      }
+    }
+    return [...groups.values()].sort((a, b) => a.category.localeCompare(b.category))
+  })
   const embeddingMetrics = computed(() => {
     const embedding = vnext.value.kind === 'live' ? vnext.value.data.embedding : undefined
     const vectorStats = vector.value.kind === 'live' ? vector.value.data.stats : undefined
@@ -368,6 +398,7 @@ export function useOperatorHealthSettings(): {
     migrationsState,
     components,
     flagItems,
+    flagGroups,
     embeddingMetrics,
     migrationMetrics,
     configMetrics,
