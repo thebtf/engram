@@ -16,6 +16,9 @@ import {
 const QUEUE_LIMIT = 100
 const QUEUE_FLAG = 'ENGRAM_VNEXT_F_ENABLED'
 const QUEUE_STATUS = 'pending'
+const QUEUE_ALL_PROJECTS_API = 'all'
+
+export const QUEUE_ALL_PROJECTS = '__all__'
 
 interface ApiFlags {
   flags?: Record<string, boolean>
@@ -161,7 +164,7 @@ export function useOperatorQueue(): {
   })
   const rowsState = useState<OperatorCandidate[]>('live:candidate-queue:rows', () => [])
   const projectsState = useState<string[]>('live:candidate-queue:projects', () => [])
-  const selectedProject = useState<string>('live:candidate-queue:selected-project', () => '')
+  const selectedProject = useState<string>('live:candidate-queue:selected-project', () => QUEUE_ALL_PROJECTS)
   const state = useState<OperatorLoadState<OperatorCandidate[]>>('live:candidate-queue:state', () => pendingState(evidence, rowsState.value))
 
   const loadState = computed(() => state.value)
@@ -179,18 +182,14 @@ export function useOperatorQueue(): {
       }
 
       const projects = await operatorFetchJson<string[]>('/api/projects', undefined, 'candidate-projects')
-      replaceArray(projectsState.value, Array.isArray(projects) ? projects.filter(Boolean).sort() : [])
-      if (!selectedProject.value && projectsState.value.length) {
-        selectedProject.value = projectsState.value[0]
+      const nextProjects = Array.isArray(projects) ? projects.filter(Boolean).sort() : []
+      replaceArray(projectsState.value, [QUEUE_ALL_PROJECTS, ...nextProjects])
+      if (!selectedProject.value || !projectsState.value.includes(selectedProject.value)) {
+        selectedProject.value = QUEUE_ALL_PROJECTS
       }
 
-      if (!selectedProject.value) {
-        replaceArray(rowsState.value, [])
-        state.value = emptyState(evidence, rowsState.value)
-        return
-      }
-
-      const path = `/api/memory/candidates?project=${encodeURIComponent(selectedProject.value)}&status=${QUEUE_STATUS}&limit=${QUEUE_LIMIT}`
+      const apiProject = selectedProject.value === QUEUE_ALL_PROJECTS ? QUEUE_ALL_PROJECTS_API : selectedProject.value
+      const path = `/api/memory/candidates?project=${encodeURIComponent(apiProject)}&status=${QUEUE_STATUS}&limit=${QUEUE_LIMIT}`
       const payload = await operatorFetchJson<ApiCandidateListResponse>(path, undefined, 'candidate-queue')
       const rows = parseCandidatePayload(payload, path)
       replaceArray(rowsState.value, rows)

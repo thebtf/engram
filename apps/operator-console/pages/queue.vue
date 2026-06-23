@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
-import { useOperatorQueue, type OperatorCandidate } from '../composables/useOperatorQueue'
+import { QUEUE_ALL_PROJECTS, useOperatorQueue, type OperatorCandidate } from '../composables/useOperatorQueue'
 
 type CandidateAction = 'promote' | 'reject' | 'supersede'
 
@@ -83,6 +83,14 @@ function confidenceLabel(candidate: OperatorCandidate) {
   return candidate.confidence === null ? '—' : `${Math.round(candidate.confidence * 100)}%`
 }
 
+function projectLabel(project: string) {
+  return project === QUEUE_ALL_PROJECTS ? t('queue.filters.allProjects') : project
+}
+
+function candidateProjectsLabel(candidate: OperatorCandidate) {
+  return candidate.affectedProjects.length ? candidate.affectedProjects.join(', ') : t('queue.filters.unscoped')
+}
+
 function compactDate(value?: string) {
   if (!value) return '—'
   const parsed = Date.parse(value)
@@ -122,6 +130,10 @@ function clearMatchingConfirm(id: string, action: CandidateAction) {
   if (confirm.value?.id === id && confirm.value.action === action) {
     confirm.value = null
   }
+}
+
+function actionAriaLabel(candidate: OperatorCandidate, action: CandidateAction) {
+  return t('queue.aria.action', { action: actionLabel(candidate, action), id: candidate.id })
 }
 
 function mutationError(result: unknown) {
@@ -196,7 +208,7 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
     <section class="ops">
       <div class="ops-left">
         <select id="queue-project-filter" v-model="selectedProject" class="select" name="queue-project-filter" :aria-label="t('queue.filters.project')">
-          <option v-for="project in projects" :key="project" :value="project">{{ project }}</option>
+          <option v-for="project in projects" :key="project" :value="project">{{ projectLabel(project) }}</option>
         </select>
         <button class="tbtn" @click="selectAll">{{ t('queue.actions.selectAll') }}</button>
         <button class="tbtn" @click="clearSelected">{{ t('queue.actions.clearSelection') }}</button>
@@ -213,11 +225,11 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
           </select>
         </label>
         <span class="cnt">{{ t('queue.pageRange', { from: pageRange.from, to: pageRange.to, total: rows.length }) }}</span>
-        <button class="pg" :disabled="page <= 1" @click="page = 1">«</button>
-        <button class="pg" :disabled="page <= 1" @click="page--">‹</button>
-        <button class="pg on">{{ page }}</button>
-        <button class="pg" :disabled="page >= pageCount" @click="page++">›</button>
-        <button class="pg" :disabled="page >= pageCount" @click="page = pageCount">»</button>
+        <button class="pg" :aria-label="t('queue.pagination.first')" :disabled="page <= 1" @click="page = 1">«</button>
+        <button class="pg" :aria-label="t('queue.pagination.previous')" :disabled="page <= 1" @click="page--">‹</button>
+        <button class="pg on" :aria-label="t('queue.pagination.current', { page })" aria-current="page">{{ page }}</button>
+        <button class="pg" :aria-label="t('queue.pagination.next')" :disabled="page >= pageCount" @click="page++">›</button>
+        <button class="pg" :aria-label="t('queue.pagination.last')" :disabled="page >= pageCount" @click="page = pageCount">»</button>
       </div>
     </section>
 
@@ -249,33 +261,44 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
           :class="{ open: openId === candidate.id }"
           :data-testid="`queue-row-${candidate.id}`"
         >
-          <button class="qbody" @click="openId = openId === candidate.id ? null : candidate.id">
-            <span class="echk" :class="{ on: selected[candidate.id] }" @click.stop="toggleSelected(candidate.id)">{{ selected[candidate.id] ? '✓' : '' }}</span>
-            <span class="estate" />
-            <span class="qcopy">
-              <span class="qtitle">{{ candidate.content }}</span>
-              <span class="qmeta">
-                <span>{{ candidate.target }}</span>
-                <span>{{ candidate.tier }}</span>
-                <span>{{ candidate.affectedProjects.join(', ') || selectedProject }}</span>
-                <ClientOnly fallback="—">
-                  <span>{{ compactDate(candidate.createdAt) }}</span>
-                </ClientOnly>
+          <div class="qbody">
+            <button
+              type="button"
+              class="echk"
+              :class="{ on: selected[candidate.id] }"
+              :aria-label="t('queue.aria.toggleCandidate', { id: candidate.id })"
+              :aria-pressed="Boolean(selected[candidate.id])"
+              @click="toggleSelected(candidate.id)"
+            >
+              {{ selected[candidate.id] ? '✓' : '' }}
+            </button>
+            <button type="button" class="qopen" @click="openId = openId === candidate.id ? null : candidate.id">
+              <span class="estate" />
+              <span class="qcopy">
+                <span class="qtitle">{{ candidate.content }}</span>
+                <span class="qmeta">
+                  <span>{{ candidate.target }}</span>
+                  <span>{{ candidate.tier }}</span>
+                  <span>{{ candidateProjectsLabel(candidate) }}</span>
+                  <ClientOnly fallback="—">
+                    <span>{{ compactDate(candidate.createdAt) }}</span>
+                  </ClientOnly>
+                </span>
               </span>
-            </span>
-          </button>
+            </button>
+          </div>
           <div class="qconf">
             <b>{{ confidenceLabel(candidate) }}</b>
             <span>{{ t('queue.meta.recurrence', { count: candidate.recurrenceCount }) }}</span>
           </div>
           <div class="qactions">
-            <button class="act primary" :data-testid="`queue-action-promote-${candidate.id}`" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'promote')">
+            <button class="act primary" :data-testid="`queue-action-promote-${candidate.id}`" :aria-label="actionAriaLabel(candidate, 'promote')" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'promote')">
               {{ actionLabel(candidate, 'promote') }}
             </button>
-            <button class="act" :data-testid="`queue-action-reject-${candidate.id}`" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'reject')">
+            <button class="act" :data-testid="`queue-action-reject-${candidate.id}`" :aria-label="actionAriaLabel(candidate, 'reject')" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'reject')">
               {{ actionLabel(candidate, 'reject') }}
             </button>
-            <button class="act muted" :data-testid="`queue-action-supersede-${candidate.id}`" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'supersede')">
+            <button class="act muted" :data-testid="`queue-action-supersede-${candidate.id}`" :aria-label="actionAriaLabel(candidate, 'supersede')" :disabled="isCandidateBusy(candidate.id)" @click="runAction(candidate, 'supersede')">
               {{ actionLabel(candidate, 'supersede') }}
             </button>
           </div>
@@ -298,7 +321,7 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
           <dt>{{ t('queue.detail.target') }}</dt><dd>{{ opened.target }}</dd>
           <dt>{{ t('queue.detail.tier') }}</dt><dd>{{ opened.tier }}</dd>
           <dt>{{ t('queue.detail.type') }}</dt><dd>{{ opened.epistemicType }}</dd>
-          <dt>{{ t('queue.detail.project') }}</dt><dd>{{ opened.affectedProjects.join(', ') || selectedProject }}</dd>
+          <dt>{{ t('queue.detail.project') }}</dt><dd>{{ candidateProjectsLabel(opened) }}</dd>
           <dt>{{ t('queue.detail.source') }}</dt><dd>{{ opened.sourceSessionId }}</dd>
           <dt>{{ t('queue.detail.fingerprint') }}</dt><dd>{{ opened.fingerprint || '—' }}</dd>
           <dt>{{ t('queue.detail.reviewAfter') }}</dt><dd>{{ opened.reviewAfter || '—' }}</dd>
@@ -352,9 +375,11 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
 .qrow { display:grid; grid-template-columns:minmax(0,1fr) 132px 340px; align-items:center; gap:12px; min-height:62px; padding:9px 12px; border-bottom:1px solid var(--border-soft); }
 .qrow:hover, .qrow.open { background:var(--surface-warm); }
 .qrow.open { box-shadow:inset 3px 0 0 var(--accent); }
-.qbody { min-width:0; display:grid; grid-template-columns:22px 8px minmax(0,1fr); align-items:center; gap:10px; border:0; background:transparent; color:var(--fg); text-align:left; cursor:pointer; }
-.echk { width:22px; height:22px; border:1px solid var(--border); border-radius:5px; display:grid; place-items:center; color:var(--accent-on); font-size:12px; font-weight:900; }
+.qbody { min-width:0; display:grid; grid-template-columns:22px minmax(0,1fr); align-items:center; gap:10px; color:var(--fg); }
+.qopen { min-width:0; display:grid; grid-template-columns:8px minmax(0,1fr); align-items:center; gap:10px; border:0; background:transparent; color:var(--fg); text-align:left; cursor:pointer; }
+.echk { width:22px; height:22px; padding:0; border:1px solid var(--border); border-radius:5px; display:grid; place-items:center; background:transparent; color:var(--accent-on); font-size:12px; font-weight:900; cursor:pointer; }
 .echk.on { background:var(--accent); border-color:var(--accent); }
+.echk:focus-visible, .qopen:focus-visible, .act:focus-visible, .pg:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .estate { width:8px; height:8px; border-radius:50%; background:var(--class-dormant); }
 .qcopy { min-width:0; display:flex; flex-direction:column; gap:4px; }
 .qtitle { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--fg); }

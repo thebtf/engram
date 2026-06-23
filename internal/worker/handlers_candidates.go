@@ -20,6 +20,7 @@ import (
 )
 
 const candidateQueueFlag = "ENGRAM_VNEXT_F_ENABLED"
+const candidateQueueAllProjects = "all"
 const statusClientClosedRequest = 499
 
 type candidateReviewStore interface {
@@ -106,6 +107,14 @@ func candidateRFC3339Ptr(value *time.Time) *string {
 	return &formatted
 }
 
+func normalizeCandidateProject(project string) string {
+	project = strings.TrimSpace(project)
+	if strings.EqualFold(project, candidateQueueAllProjects) || project == "*" {
+		return ""
+	}
+	return project
+}
+
 func candidateReviewItemFromDomain(candidate *models.CrystallizationCandidate) candidateReviewItem {
 	if candidate == nil {
 		return candidateReviewItem{}
@@ -183,10 +192,19 @@ func decodeRejectCandidateRequest(r *http.Request) (rejectCandidateRequest, erro
 	return req, err
 }
 
-func memoryFromCandidate(candidate *models.CrystallizationCandidate) *models.Memory {
+func memoryFromCandidate(candidate *models.CrystallizationCandidate) (*models.Memory, error) {
+	if candidate == nil {
+		return nil, errors.New("candidate is required")
+	}
 	project := ""
-	if len(candidate.AffectedProjects) > 0 {
-		project = candidate.AffectedProjects[0]
+	for _, affectedProject := range candidate.AffectedProjects {
+		project = strings.TrimSpace(affectedProject)
+		if project != "" {
+			break
+		}
+	}
+	if project == "" {
+		return nil, errors.New("candidate has no affected project")
 	}
 	return &models.Memory{
 		Content:       candidate.ProposedContent,
@@ -195,7 +213,7 @@ func memoryFromCandidate(candidate *models.CrystallizationCandidate) *models.Mem
 		EpistemicType: "decision",
 		Tags:          []string{fmt.Sprintf("candidate:%d", candidate.ID), "crystallized"},
 		SourceAgent:   "crystallization",
-	}
+	}, nil
 }
 
 // handleListMemoryCandidates godoc
@@ -204,7 +222,7 @@ func memoryFromCandidate(candidate *models.CrystallizationCandidate) *models.Mem
 // @Tags Memories
 // @Produce json
 // @Security ApiKeyAuth
-// @Param project query string true "Project identifier"
+// @Param project query string false "Project identifier or 'all' for unscoped/all-project candidates"
 // @Param status query string false "Candidate status (default pending)"
 // @Param limit query int false "Maximum number of results (default 20, max 100)"
 // @Success 200 {object} candidateListResponse
@@ -225,10 +243,11 @@ func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	project := strings.TrimSpace(r.URL.Query().Get("project"))
-	if project == "" {
-		http.Error(w, "project is required", http.StatusBadRequest)
-		return
+	projectParam := strings.TrimSpace(r.URL.Query().Get("project"))
+	listProject := normalizeCandidateProject(projectParam)
+	responseProject := projectParam
+	if responseProject == "" || listProject == "" {
+		responseProject = candidateQueueAllProjects
 	}
 
 	status := models.CandidateStatus(strings.TrimSpace(r.URL.Query().Get("status")))
@@ -254,12 +273,12 @@ func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Requ
 		limit = n
 	}
 
-	candidates, err := store.ListByStatus(r.Context(), project, status, limit)
+	candidates, err := store.ListByStatus(r.Context(), listProject, status, limit)
 	if err != nil {
 		if writeCandidateContextError(w, err) {
 			return
 		}
-		log.Error().Err(err).Str("project", project).Str("status", string(status)).Msg("list candidates failed")
+		log.Error().Err(err).Str("project", responseProject).Str("status", string(status)).Msg("list candidates failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -275,7 +294,7 @@ func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, candidateListResponse{
 		Candidates: items,
 		Count:      len(items),
-		Project:    project,
+		Project:    responseProject,
 		Status:     string(status),
 		Limit:      limit,
 	})
@@ -311,7 +330,13 @@ func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	updated, created, err := store.PromoteWithMemory(r.Context(), id, memoryFromCandidate(candidate))
+	memory, err := memoryFromCandidate(candidate)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	updated, created, err := store.PromoteWithMemory(r.Context(), id, memory)
 	if err != nil {
 		writeCandidateStoreError(w, "promote_candidate", id, err)
 		return

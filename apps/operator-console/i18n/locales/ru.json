@@ -283,7 +283,9 @@
       "lowConfidence": "низкая уверенность"
     },
     "filters": {
-      "project": "Проект очереди"
+      "project": "Проект очереди",
+      "allProjects": "Все проекты",
+      "unscoped": "без привязки к проекту"
     },
     "actions": {
       "selectAll": "Выделить все",
@@ -301,9 +303,20 @@
     },
     "countInFilter": "{shown} кандидатов · выбрано {selected}",
     "rowsLabel": "Строк",
-    "allRows": "Все",
-    "pageRange": "{from}–{to} из {total}",
-    "table": {
+  "allRows": "Все",
+  "pageRange": "{from}–{to} из {total}",
+  "pagination": {
+    "first": "Перейти на первую страницу",
+    "previous": "Перейти на предыдущую страницу",
+    "current": "Текущая страница {page}",
+    "next": "Перейти на следующую страницу",
+    "last": "Перейти на последнюю страницу"
+  },
+  "aria": {
+    "toggleCandidate": "Выбрать кандидата {id}",
+    "action": "{action}: кандидат {id}"
+  },
+  "table": {
       "candidate": "Кандидат · назначение · проект · давность",
       "confidence": "Уверенность",
       "actions": "Решение"

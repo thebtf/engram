@@ -283,7 +283,9 @@
       "lowConfidence": "low confidence"
     },
     "filters": {
-      "project": "Queue project"
+      "project": "Queue project",
+      "allProjects": "All projects",
+      "unscoped": "unscoped"
     },
     "actions": {
       "selectAll": "Select all",
@@ -301,9 +303,20 @@
     },
     "countInFilter": "{shown} candidates · {selected} selected",
     "rowsLabel": "Rows",
-    "allRows": "All",
-    "pageRange": "{from}–{to} of {total}",
-    "table": {
+  "allRows": "All",
+  "pageRange": "{from}–{to} of {total}",
+  "pagination": {
+    "first": "Go to first page",
+    "previous": "Go to previous page",
+    "current": "Current page {page}",
+    "next": "Go to next page",
+    "last": "Go to last page"
+  },
+  "aria": {
+    "toggleCandidate": "Select candidate {id}",
+    "action": "{action}: candidate {id}"
+  },
+  "table": {
       "candidate": "Candidate · target · project · age",
       "confidence": "Confidence",
       "actions": "Decision"

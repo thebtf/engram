@@ -283,7 +283,9 @@
       "lowConfidence": "低置信度"
     },
     "filters": {
-      "project": "队列项目"
+      "project": "队列项目",
+      "allProjects": "所有项目",
+      "unscoped": "未绑定项目"
     },
     "actions": {
       "selectAll": "全选",
@@ -301,9 +303,20 @@
     },
     "countInFilter": "{shown} 个候选项 · 已选择 {selected} 个",
     "rowsLabel": "行数",
-    "allRows": "全部",
-    "pageRange": "{from}–{to} / {total}",
-    "table": {
+  "allRows": "全部",
+  "pageRange": "{from}–{to} / {total}",
+  "pagination": {
+    "first": "转到第一页",
+    "previous": "转到上一页",
+    "current": "当前第 {page} 页",
+    "next": "转到下一页",
+    "last": "转到最后一页"
+  },
+  "aria": {
+    "toggleCandidate": "选择候选项 {id}",
+    "action": "{action}：候选项 {id}"
+  },
+  "table": {
       "candidate": "候选项 · 目标 · 项目 · 时间",
       "confidence": "置信度",
       "actions": "决策"

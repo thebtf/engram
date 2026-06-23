@@ -133,7 +133,7 @@ const memoryRows = [
 
 const suppressedMemoryIds = new Set()
 
-const candidateRows = [
+const candidateFixtureRows = [
   {
     id: 301,
     status: 'pending',
@@ -172,6 +172,12 @@ const candidateRows = [
   },
 ]
 
+const candidateRows = candidateFixtureRows.map((row) => ({
+  ...row,
+  evidence_handles: [...row.evidence_handles],
+  affected_projects: [...row.affected_projects],
+}))
+
 const vaultCredentials = [
   {
     id: 1,
@@ -199,9 +205,10 @@ function memoryResponseForProject(project) {
 }
 
 function candidateResponse(project, status, limit) {
+  const normalizedProject = project === 'all' ? '' : project
   const rows = candidateRows
     .filter((row) => row.status === status)
-    .filter((row) => row.affected_projects.includes(project))
+    .filter((row) => !normalizedProject || row.affected_projects.includes(normalizedProject))
     .slice(0, limit)
     .map((row) => ({
       ...row,
@@ -211,7 +218,7 @@ function candidateResponse(project, status, limit) {
   return {
     candidates: rows,
     count: rows.length,
-    project,
+    project: project || 'all',
     status,
     limit,
   }

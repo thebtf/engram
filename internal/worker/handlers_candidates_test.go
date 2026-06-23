@@ -167,6 +167,32 @@ func TestHandleListMemoryCandidates_ReturnsProjectScopedPayload(t *testing.T) {
 	assert.Equal(t, "2026-06-24T12:00:00Z", *response.Candidates[0].ReviewAfter)
 }
 
+func TestHandleListMemoryCandidates_AllProjectListsUnscopedQueue(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		listRows: []*models.CrystallizationCandidate{{
+			ID:              43,
+			Status:          models.CandidateStatusPending,
+			ProposedContent: "unscoped candidate should remain visible to the operator",
+			CreatedAt:       time.Date(2026, time.June, 23, 11, 0, 0, 0, time.UTC),
+			UpdatedAt:       time.Date(2026, time.June, 23, 11, 0, 0, 0, time.UTC),
+		}},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/candidates?project=all&status=pending", nil)
+	w := httptest.NewRecorder()
+
+	service.handleListMemoryCandidates(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "", store.listProject)
+
+	var response candidateListResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, candidateQueueAllProjects, response.Project)
+	require.Len(t, response.Candidates, 1)
+	assert.Empty(t, response.Candidates[0].AffectedProjects)
+}
+
 func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 	promotedMemoryID := int64(77)
 	store := &fakeCandidateReviewStore{
@@ -207,6 +233,28 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 	assert.Equal(t, int64(42), receipt.CandidateID)
 	assert.Equal(t, "promoted", receipt.CandidateStatus)
 	assert.Equal(t, promotedMemoryID, receipt.MemoryID)
+}
+
+func TestHandlePromoteMemoryCandidate_RejectsUnscopedPromotion(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {
+				ID:              42,
+				Status:          models.CandidateStatusPending,
+				ProposedContent: "unscoped candidate must not create a projectless memory",
+				ProposedTier:    "semantic",
+			},
+		},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/promote", nil)
+	router.Post("/api/memory/candidates/{id}/promote", service.handlePromoteMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "candidate has no affected project")
+	assert.Equal(t, int64(0), store.promoteID)
 }
 
 func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testing.T) {
