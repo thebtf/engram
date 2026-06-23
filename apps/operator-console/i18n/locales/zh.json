@@ -946,6 +946,10 @@
       "error": "无法保存 config：{message}",
       "noEffectiveChanges": "effective values unchanged"
     },
+    "lifecycle": {
+      "effective": "当前",
+      "desired": "Restart 后"
+    },
     "restart": {
       "title": "Restart / update",
       "body": "两个动作都会影响 live 进程，因此需要第二次点击确认。",

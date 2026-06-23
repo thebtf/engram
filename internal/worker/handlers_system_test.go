@@ -116,6 +116,15 @@ func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	assert.Contains(t, response["changed"], "enforce_source_project")
 	assert.Contains(t, response["changed"], "inject_unified (requires restart)")
 	assert.Contains(t, response["restart_required_fields"], "memory.inject_unified")
+	responseConfig := response["config"].(map[string]any)
+	lifecycle := responseConfig["lifecycle"].(map[string]any)
+	assert.Equal(t, true, lifecycle["restart_required"])
+	pendingRestart := lifecycle["pending_restart"].([]any)
+	require.Len(t, pendingRestart, 1)
+	pendingInject := pendingRestart[0].(map[string]any)
+	assert.Equal(t, "memory.inject_unified", pendingInject["field"])
+	assert.Equal(t, true, pendingInject["effective"])
+	assert.Equal(t, false, pendingInject["desired"])
 
 	svc.initMu.RLock()
 	require.NotNil(t, svc.config)
@@ -126,6 +135,22 @@ func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	persisted, err := config.Load()
 	require.NoError(t, err)
 	assert.False(t, persisted.InjectUnified)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	getW := httptest.NewRecorder()
+	svc.handleGetConfig(getW, getReq)
+
+	require.Equal(t, http.StatusOK, getW.Code, getW.Body.String())
+	var getResponse map[string]any
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResponse))
+	getLifecycle := getResponse["lifecycle"].(map[string]any)
+	assert.Equal(t, true, getLifecycle["restart_required"])
+	getPendingRestart := getLifecycle["pending_restart"].([]any)
+	require.Len(t, getPendingRestart, 1)
+	getPendingInject := getPendingRestart[0].(map[string]any)
+	assert.Equal(t, "memory.inject_unified", getPendingInject["field"])
+	assert.Equal(t, true, getPendingInject["effective"])
+	assert.Equal(t, false, getPendingInject["desired"])
 }
 
 func TestHandlePatchConfig_AuditLogsWhenStoreAvailable(t *testing.T) {

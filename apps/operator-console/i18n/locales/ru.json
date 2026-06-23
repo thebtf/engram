@@ -946,6 +946,10 @@
       "error": "Не удалось сохранить config: {message}",
       "noEffectiveChanges": "effective values unchanged"
     },
+    "lifecycle": {
+      "effective": "Сейчас",
+      "desired": "После restart"
+    },
     "restart": {
       "title": "Restart / update",
       "body": "Оба действия меняют живой процесс, поэтому запускаются только после второго клика-подтверждения.",

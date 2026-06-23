@@ -252,6 +252,8 @@ test('settings config save is live allowlisted PATCH with restart receipt', () =
 
   assert.match(healthSettingsSource, /interface ApiConfigPatch/, 'Settings save seam must type the PATCH request')
   assert.match(healthSettingsSource, /interface ApiConfigPatchReceipt/, 'Settings save seam must type the restart receipt')
+  assert.match(healthSettingsSource, /interface ApiConfigPendingRestart/, 'Settings seam must type pending restart lifecycle rows')
+  assert.match(healthSettingsSource, /configPendingRestart:\s*ComputedRef<ApiConfigPendingRestart\[\]>/, 'Settings seam must expose pending restart lifecycle rows')
   assert.match(healthSettingsSource, /saveConfig:\s*\(patch: ApiConfigPatch\)/, 'Settings composable must expose a typed saveConfig action')
   assert.match(healthSettingsSource, /operatorFetchJson<ApiConfigPatchReceipt>\('\/api\/config',\s*\{[\s\S]*method:\s*'PATCH'/, 'Settings save must call PATCH /api/config')
   assert.match(healthSettingsSource, /configSaveEvidence = endpointEvidence\('\/api\/config',\s*'config-save'\)/, 'Settings save must carry live endpoint evidence')
@@ -259,6 +261,9 @@ test('settings config save is live allowlisted PATCH with restart receipt', () =
 
   assert.match(settingsModalSource, /saveRuntimeConfig/, 'Settings modal must expose a save action')
   assert.match(settingsModalSource, /configSaveResult\.data\.restart_required/, 'Settings modal must render restart-required receipt state')
+  assert.match(settingsModalSource, /v-for="item in configPendingRestart"/, 'Settings modal must render pending restart lifecycle rows')
+  assert.match(settingsModalSource, /settings\.lifecycle\.effective/, 'Pending lifecycle effective label must be keyed for i18n')
+  assert.match(settingsModalSource, /settings\.lifecycle\.desired/, 'Pending lifecycle desired label must be keyed for i18n')
   assert.match(settingsModalSource, /settings\.save\.success/, 'Settings save copy must be keyed for i18n')
   assert.doesNotMatch(settingsModalSource, /settings\.gaps\.configSave/, 'Settings modal must not render the old config-save mustbuild gap')
 })

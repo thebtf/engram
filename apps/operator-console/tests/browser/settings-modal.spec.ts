@@ -47,6 +47,9 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
   await expect(dialog.getByText(/Сохранено: inject_unified/)).toBeVisible()
   await expect(dialog.getByText(/Restart required: да/)).toBeVisible()
   await expect(dialog.getByText(/Restart нужен для: memory\.inject_unified/)).toBeVisible()
+  await expect(dialog.getByText(/Изменение ожидает restart/)).toBeVisible()
+  await expect(dialog.getByText(/Сейчас: да/)).toBeVisible()
+  await expect(dialog.getByText(/После restart: нет/)).toBeVisible()
 
   await dialog.getByRole('button', { name: /Модели/ }).click()
   await expect(dialog.getByRole('heading', { name: 'Модели' })).toBeVisible()

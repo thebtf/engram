@@ -30,6 +30,7 @@ const {
   updateCheckState,
   configMetrics,
   flagItems,
+  configPendingRestart,
   restartRequired,
   pending,
   error,
@@ -153,6 +154,12 @@ function buildConfigPatch() {
 
 function formatChanged(fields?: string[]) {
   return fields && fields.length ? fields.join(', ') : t('settings.save.noEffectiveChanges')
+}
+
+function formatLifecycleValue(value: unknown) {
+  if (value === null || value === undefined) return '—'
+  if (typeof value === 'boolean') return value ? t('common.yes') : t('common.no')
+  return String(value)
 }
 
 async function saveRuntimeConfig() {
@@ -351,6 +358,13 @@ onBeforeUnmount(() => {
                 <div v-if="pending" class="state pending">{{ t('settings.state.pending') }}</div>
                 <div v-if="error" class="state error">{{ t('settings.state.error', { message: error }) }}</div>
                 <div v-if="restartRequired" class="state restart">{{ t('settings.state.restartRequired') }}</div>
+                <div v-if="configPendingRestart.length" class="pending-restart-list">
+                  <div v-for="item in configPendingRestart" :key="item.field" class="pending-restart-row">
+                    <code>{{ item.field }}</code>
+                    <span>{{ t('settings.lifecycle.effective') }}: <b>{{ formatLifecycleValue(item.effective) }}</b></span>
+                    <span>{{ t('settings.lifecycle.desired') }}: <b>{{ formatLifecycleValue(item.desired) }}</b></span>
+                  </div>
+                </div>
 
                 <section class="settings-section">
                   <div class="settings-section-title">{{ t('settings.runtime') }}</div>
@@ -567,6 +581,10 @@ onBeforeUnmount(() => {
 .state.ok { color: var(--class-live); border-color: color-mix(in oklab, var(--class-live), transparent 45%); }
 .state.restart { color: var(--state-warn); border-color: color-mix(in oklab, var(--state-warn), transparent 45%); }
 .state.error { color: var(--state-danger); border-color: color-mix(in oklab, var(--state-danger), transparent 45%); }
+.pending-restart-list { display: grid; gap: 8px; }
+.pending-restart-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 10px; align-items: center; border: 1px solid color-mix(in oklab, var(--state-warn), transparent 62%); border-radius: var(--r-sm); background: color-mix(in oklab, var(--state-warn), transparent 92%); padding: 9px 10px; color: var(--fg-2); font-size: var(--text-xs); }
+.pending-restart-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); color: var(--fg); }
+.pending-restart-row b { color: var(--fg); font-family: var(--font-mono); }
 .switches { padding: 0 4px; }
 .config-actions { margin-top: 14px; }
 .gaps { display: grid; gap: 10px; margin-top: 14px; }
@@ -599,6 +617,7 @@ onBeforeUnmount(() => {
   .settings-rail { border-right: 0; border-bottom: 1px solid var(--border); max-height: 220px; }
   .settings-row { grid-template-columns: 1fr; }
   .setting-control { justify-content: flex-start; }
+  .pending-restart-row { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
   .settings-overlay { padding: 12px; place-items: stretch; }

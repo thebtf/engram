@@ -47,6 +47,12 @@ const config = {
   },
 }
 
+const desiredConfig = {
+  memory: {
+    inject_unified: config.memory.inject_unified,
+  },
+}
+
 const flags = {
   flags: {
     ENGRAM_VNEXT_ENABLED: false,
@@ -106,6 +112,41 @@ function syncConfigFlags() {
   if (injectUnified) injectUnified.enabled = flags.flags.ENGRAM_INJECT_UNIFIED
 }
 
+function pendingRestartItems() {
+  const pending = []
+  if (config.memory.inject_unified !== desiredConfig.memory.inject_unified) {
+    pending.push({
+      field: 'memory.inject_unified',
+      effective: config.memory.inject_unified,
+      desired: desiredConfig.memory.inject_unified,
+      reason: 'requires_restart',
+    })
+  }
+  return pending
+}
+
+function configResponse() {
+  const pending_restart = pendingRestartItems()
+  return {
+    context: {
+      ...config.context,
+      obs_types: [...config.context.obs_types],
+      obs_concepts: [...config.context.obs_concepts],
+    },
+    memory: { ...config.memory },
+    storage: { ...config.storage },
+    features: { ...config.features },
+    lifecycle: {
+      restart_required: pending_restart.length > 0,
+      pending_restart,
+      apply: {
+        supported: false,
+        reason: 'generic restart/apply endpoint is not available',
+      },
+    },
+  }
+}
+
 function readRequestJson(req) {
   return new Promise((resolve, reject) => {
     let body = ''
@@ -151,17 +192,20 @@ const server = createServer(async (req, res) => {
         changed.push('enforce_source_project')
       }
       if (patch.memory && Object.hasOwn(patch.memory, 'inject_unified')) {
+        desiredConfig.memory.inject_unified = Boolean(patch.memory.inject_unified)
         changed.push('inject_unified (requires restart)')
       }
       syncConfigFlags()
+      const responseConfig = configResponse()
+      const pendingRestartFields = responseConfig.lifecycle.pending_restart.map((item) => item.field)
       json(res, 200, {
         success: true,
         applied: true,
         audit_logged: true,
         changed,
-        restart_required: changed.includes('inject_unified (requires restart)'),
-        restart_required_fields: changed.includes('inject_unified (requires restart)') ? ['memory.inject_unified'] : [],
-        config,
+        restart_required: responseConfig.lifecycle.restart_required,
+        restart_required_fields: pendingRestartFields,
+        config: responseConfig,
       })
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -197,7 +241,7 @@ const server = createServer(async (req, res) => {
       })
       return
     case '/api/config':
-      json(res, 200, config)
+      json(res, 200, configResponse())
       return
     case '/api/flags':
       json(res, 200, flags)
