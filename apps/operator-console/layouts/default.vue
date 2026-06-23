@@ -77,6 +77,13 @@ onMounted(() => {
   window.addEventListener('keydown', onDocumentKeydown)
 })
 const canLogout = computed(() => info.value.authenticated && !info.value.authDisabled)
+const logoutTitle = computed(() => {
+  if (canLogout.value) return t('shell.profileMenuLogout')
+  if (logoutInFlight.value) return t('shell.profileMenuLogoutPending')
+  if (info.value.authDisabled) return t('shell.profileMenuLogoutAuthDisabled')
+  if (info.value.authPosture === 'locked') return t('shell.profileMenuLogoutLocked')
+  return t('shell.profileMenuLogoutUnavailable')
+})
 
 onBeforeUnmount(() => {
   if (!import.meta.client) return
@@ -300,7 +307,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
               type="button"
               role="menuitem"
               :disabled="!canLogout || logoutInFlight"
-              :title="canLogout ? t('shell.profileMenuLogout') : t('shell.profileMenuLogoutDisabled')"
+              :title="logoutTitle"
               @click="logoutIdentity"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 11.5v1.4a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V3.1a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v1.4"/><path d="M7 8h7M11.6 5.4 14.2 8l-2.6 2.6"/></svg>
