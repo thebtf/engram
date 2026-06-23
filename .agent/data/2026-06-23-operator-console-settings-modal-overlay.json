@@ -1,0 +1,63 @@
+{
+  "id": "operator-console-settings-modal-overlay",
+  "date": "2026-06-23",
+  "branch": "work/operator-console-hardening",
+  "design_contract": {
+    "source": ".od/index.html (private design workspace, not committed)",
+    "settings_contract": "Settings is a launch card plus modal overlay with rail/tab/stage/body. The modal opens over the current section and must not fake-wire backend controls without endpoints."
+  },
+  "changes": [
+    "Added apps/operator-console/composables/useSettingsModal.ts as the shared overlay state seam.",
+    "Added apps/operator-console/components/SettingsModal.vue with design-contract rail/tab/stage/body structure.",
+    "Changed apps/operator-console/pages/settings.vue from a full settings page into a launch surface.",
+    "Changed apps/operator-console/layouts/default.vue so Settings nav and statusbar host/version open the overlay over the current section.",
+    "Added ru/en/zh i18n keys for settings launch page, modal groups, tabs, sections, and honesty placeholders."
+  ],
+  "honesty": [
+    "Runtime flags remain read-only live controls from /api/config.",
+    "Config save remains mustbuild with PATCH /api/config evidence.",
+    "Feature flag inventory remains mustbuild with GET /api/flags evidence.",
+    "Models, credentials, bindings, add-model, and access administration tabs remain mustbuild with named endpoint evidence."
+  ],
+  "verification": {
+    "parity": "PASS: npm run parity",
+    "seam": "PASS: npm run test:seam (11/11)",
+    "build": "PASS: npm run build",
+    "browser": {
+      "automated": {
+        "command": "npm run test:browser",
+        "cwd": "apps/operator-console",
+        "assertions": [
+          "Settings opens as role=dialog modal overlay from /settings.",
+          "Route remains /settings after Escape closes the overlay.",
+          "Runtime tab exposes live switch evidence and mustbuild PATCH /api/config plus GET /api/flags gaps.",
+          "Models tab exposes honest mustbuild placeholder with GET /api/models evidence.",
+          "consoleProblems=[], failedRequests=[], badResponses=[], pageErrors=[]."
+        ],
+        "artifacts": [
+          "apps/operator-console/test-results/",
+          "apps/operator-console/playwright-report/"
+        ]
+      },
+      "runtime": "Nuxt preview from .output/server/index.mjs on port 37991",
+      "route": "GET http://127.0.0.1:37991/settings -> 200",
+      "devtools": [
+        "A11y snapshot showed /settings launch card and footer host/version as a button.",
+        "Click Open settings produced role=dialog aria-modal=true Settings overlay.",
+        "Runtime tab showed live /api/config switches, restart badges, and mustbuild PATCH /api/config plus GET /api/flags gaps.",
+        "Models tab showed honest mustbuild placeholder with GET /api/models evidence.",
+        "Escape closed the overlay without route change.",
+        "Console errors/warnings: none during checked scenario.",
+        "Network requests inspected: checked page/static/api requests returned 200 in the listed page."
+      ]
+    }
+  },
+  "known_warnings": [
+    "nuxt dev still fails in this environment with No entry found in rollupOptions.input; production build and preview are green.",
+    "npm run build still reports transitive DEP0155 warnings from @iconify/@vue dependency paths."
+  ],
+  "cleanup": [
+    "Preview owner process for local port 37991 was stopped.",
+    "Port 37991 had no listening process after cleanup."
+  ]
+}

@@ -115,6 +115,8 @@ continuity.txt
 
 # Playwright MCP test artifacts
 .playwright-mcp/
+playwright-report/
+test-results/
 
 # shadcn IDE extension config (auto-generated, not for repo)
 .mcp.json

@@ -35,6 +35,11 @@ export default defineNuxtConfig({
     defaultLocale: 'ru',
     lazy: true,
     langDir: 'locales',
+    bundle: {
+      // Nuxt i18n v9 enables this by default and warns because the optimization
+      // is deprecated/removed in v10; keep the console on the safer explicit path.
+      optimizeTranslationDirective: false,
+    },
     experimental: {
       // Prevent locale metadata in the generated client config from exposing
       // absolute build-container filesystem paths like /workspace/... .

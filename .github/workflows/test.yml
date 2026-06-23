@@ -82,7 +82,10 @@ jobs:
         run: |
           npm ci
           npm run parity
+          npm run test:seam
           npm run build
+          npx playwright install --with-deps chromium
+          npm run test:browser
 
       - name: Vet
         run: go vet ./...
