@@ -96,6 +96,9 @@
     "attentionTitle": "需要注意",
     "attention": {
       "model": "模型 “fallback/gpt-4-1-mini” 已降级",
+      "modelHealthOk": "模型健康已接入 — 快照中 {n} 行",
+      "modelHealthDegraded": "模型健康：{n} 行降级",
+      "modelHealthError": "模型健康不可用",
       "search": "相似搜索 — 子系统降级",
       "queue": "{n} 个候选等待审核（受 VNEXT_F 控制）",
       "queueGated": "审核队列已关闭（受 {flag} 控制）",
@@ -119,6 +122,14 @@
       "memoryTrend": "记忆随时间增长需要每日历史 endpoint",
       "modelTrend": "每日可用性和成本 —"
     },
+    "modelHealth": {
+      "ok": "正常",
+      "standby": "待命",
+      "degraded": "降级",
+      "loading": "加载中",
+      "error": "错误",
+      "errorShort": "无法加载模型健康：{message}"
+    },
     "recordsCount": "{n} 条记录",
     "total": "总计",
     "totalIssues": "共 {n}",
@@ -130,7 +141,8 @@
       "mustBuildParen": "(must-build)",
       "semanticCount": "semantic {n}",
       "episodicCount": "episodic {n}",
-      "vaultLive": "vault ok"
+      "vaultLive": "vault ok",
+      "liveEndpoint": "实时端点"
     },
     "groups": {
       "memoryProduct": "记忆与产品",

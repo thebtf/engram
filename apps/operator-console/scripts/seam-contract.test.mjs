@@ -10,6 +10,8 @@ const seamPath = join(root, 'composables', 'useOperatorApi.ts')
 const compatibilityPath = join(root, 'composables', 'useMockData.ts')
 const memoryLabPath = join(root, 'composables', 'useOperatorMemoryLab.ts')
 const healthSettingsPath = join(root, 'composables', 'useOperatorHealthSettings.ts')
+const overviewComposablePath = join(root, 'composables', 'useOperatorOverview.ts')
+const overviewPagePath = join(root, 'pages', 'index.vue')
 const memoryPagePath = join(root, 'pages', 'memory.vue')
 const settingsModalPath = join(root, 'components', 'SettingsModal.vue')
 const issuesPagePath = join(root, 'pages', 'issues.vue')
@@ -143,6 +145,23 @@ test('useMockData remains an import-compatible ownership map for page CRs', () =
   ]) {
     assert.match(source, new RegExp(`export const ${exportedName}\\b`), `${exportedName} compatibility export must remain`)
   }
+})
+
+test('overview model health is live endpoint data, not a mustbuild mock chart', () => {
+  const compatibilitySource = read(compatibilityPath)
+  const overviewComposableSource = read(overviewComposablePath)
+  const overviewPageSource = read(overviewPagePath)
+
+  assert.match(compatibilitySource, /interface ApiModelHealthResponse/, 'model-health payload must be typed')
+  assert.match(compatibilitySource, /export const useModelsState\b/, 'model-health must expose a stateful live seam')
+  assert.match(compatibilitySource, /fetchJson<ApiModelHealthResponse>\('\/api\/model-health'\)/, 'model-health must fetch the live REST endpoint')
+  assert.doesNotMatch(compatibilitySource, /fallback\/gpt-4-1-mini/, 'model-health must not keep old hardcoded mock model rows')
+  assert.doesNotMatch(overviewComposableSource, /unsupportedOperatorAction\(\s*['"]model-health['"]/, 'Overview must not represent model health as mustbuild after the endpoint exists')
+  assert.match(overviewComposableSource, /useModelsState/, 'Overview must consume the live model-health state seam')
+  assert.match(overviewPageSource, /\/api\/model-health/, 'Overview chart must show model-health endpoint evidence')
+  assert.match(overviewPageSource, /overview\.modelHealth\.ok/, 'Model-health chart labels must be keyed for i18n')
+  assert.match(overviewPageSource, /overview\.modelHealth\.errorShort/, 'Model-health errors must be visible and keyed')
+  assert.doesNotMatch(overviewPageSource, /modelHealthGap/, 'Overview page must not render stale modelHealthGap data')
 })
 
 test('memory compatibility export uses the Memory Lab live state seam', () => {

@@ -1,6 +1,6 @@
 import { computed } from 'vue'
 import { endpointEvidence, unsupportedOperatorAction } from './useOperatorApi'
-import { useCreds, useIssuesState, useProjects, useRules } from './useMockData'
+import { useCreds, useIssuesState, useModelsState, useProjects, useRules } from './useMockData'
 import { useOperatorMemoryLab } from './useOperatorMemoryLab'
 import { useOperatorShellStatus } from './useOperatorShell'
 
@@ -12,6 +12,8 @@ export function useOperatorOverview() {
   const creds = useCreds()
   const rules = useRules()
   const projects = useProjects()
+  const modelsState = useModelsState()
+  const models = computed(() => modelsState.rows.value)
   const shell = useOperatorShellStatus()
 
   const memoryActive = computed(() => memories.filter((memory) => !memory.noise).length)
@@ -26,12 +28,11 @@ export function useOperatorOverview() {
   const issuesPending = computed(() => issuesState.pending.value && issues.length === 0)
   const rulesPending = computed(() => rules.pending.value && rules.rows.value.length === 0)
   const projectsPending = computed(() => projects.pending.value && projects.rows.value.length === 0)
-
-  const modelHealthGap = unsupportedOperatorAction(
-    'model-health',
-    'GET /api/model-health',
-    'No backend endpoint currently exposes model-level health for the overview chart.',
-  )
+  const modelsPending = computed(() => modelsState.pending.value && models.value.length === 0)
+  const modelsError = computed(() => modelsState.error.value)
+  const modelOK = computed(() => models.value.filter((model) => model.health === 'ok').length)
+  const modelStandby = computed(() => models.value.filter((model) => model.health === 'standby').length)
+  const modelDegraded = computed(() => models.value.filter((model) => model.health === 'degraded').length)
   const accessGap = unsupportedOperatorAction(
     'access-summary',
     'GET /api/access/summary',
@@ -53,6 +54,7 @@ export function useOperatorOverview() {
     creds,
     rules,
     projects,
+    models,
     info: shell.info,
     memoryActive,
     memoryNoise,
@@ -66,7 +68,11 @@ export function useOperatorOverview() {
     issuesPending,
     rulesPending,
     projectsPending,
-    modelHealthGap,
+    modelsPending,
+    modelsError,
+    modelOK,
+    modelStandby,
+    modelDegraded,
     accessGap,
     queueGap,
   }
