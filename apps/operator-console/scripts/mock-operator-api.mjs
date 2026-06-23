@@ -330,7 +330,7 @@ const server = createServer(async (req, res) => {
   if (vaultCredentialMatch) {
     const name = decodeURIComponent(vaultCredentialMatch[1])
     const project = url.searchParams.get('project') || ''
-    const cred = vaultCredentials.find((item) => item.name === name && (!project || item.project === project))
+    const cred = vaultCredentials.find((item) => item.name === name && (item.project || '') === project)
     if (!cred) {
       json(res, 404, { error: 'credential not found' })
       return

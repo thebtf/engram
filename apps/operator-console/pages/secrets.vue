@@ -94,6 +94,15 @@ async function deleteOpened() {
   await deleteSecret(cred)
 }
 
+async function requestDelete(cred: OperatorCredential) {
+  if (openedName.value !== cred.id) {
+    openedName.value = cred.id
+    deleteConfirm.value = false
+  }
+
+  await deleteOpened()
+}
+
 async function cleanupOrphans() {
   await runCleanupOrphans()
 }
@@ -202,7 +211,7 @@ async function cleanupOrphans() {
             <td><span class="vcol">{{ c.created }}</span></td>
             <td class="r">
               <button v-if="revealed?.id !== c.id" class="act" :data-testid="`secret-reveal-${c.id}`" @click.stop="revealSecret(c)">{{ t('secrets.reveal') }}</button>
-              <button class="act danger" @click.stop="openedName = c.id; deleteOpened()">{{ deleteConfirm && openedName === c.id ? t('secrets.confirmDelete') : t('secrets.delete') }}</button>
+              <button class="act danger" :data-testid="`secret-delete-${c.id}`" @click.stop="requestDelete(c)">{{ deleteConfirm && openedName === c.id ? t('secrets.confirmDelete') : t('secrets.delete') }}</button>
             </td>
           </tr>
         </template>
