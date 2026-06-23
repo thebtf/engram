@@ -177,6 +177,7 @@ type Service struct {
 	embeddingClient             *embedding.Client
 	embeddingStore              *embedding.Store
 	embeddingRecorder           *embedding.BackfillRecorder
+	rerankClient                *reranking.Client
 	promotionStore              *gorm.PromotionStore
 	graphStore                  *graph.Store
 	vaultOnce                   sync.Once
@@ -903,6 +904,9 @@ func (s *Service) initializeAsync() {
 		}
 	} else {
 		mcpServer.SetRerankClient(rerankClient)
+		s.initMu.Lock()
+		s.rerankClient = rerankClient
+		s.initMu.Unlock()
 		log.Info().Str("model", rerankClient.Model()).Msg("reranking: cross-encoder rerank enabled on recall path")
 	}
 
@@ -1368,6 +1372,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/stats/vnext", s.handleStatsVnext)
 		r.Get("/api/types", s.handleGetTypes)
 		r.Get("/api/models", s.handleGetModels)
+		r.Get("/api/model-health", s.handleModelHealth)
 
 		// Context injection
 		r.Get("/api/context/count", s.handleContextCount)

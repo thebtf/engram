@@ -8,6 +8,7 @@ const {
   memories,
   issues,
   creds,
+  models,
   info,
   memoryActive,
   memoryNoise,
@@ -21,7 +22,11 @@ const {
   issuesPending,
   rulesPending,
   projectsPending,
-  modelHealthGap,
+  modelsPending,
+  modelsError,
+  modelOK,
+  modelStandby,
+  modelDegraded,
   queueGap,
   accessGap,
 } = useOperatorOverview()
@@ -46,6 +51,9 @@ const resolvedIssuesDisplay = computed(() => displayCount(resolvedIssues.value, 
 const closedIssuesDisplay = computed(() => displayCount(closedIssues.value, issuesPending.value))
 const ruleCountDisplay = computed(() => displayCount(ruleCount.value, rulesPending.value))
 const projectCountDisplay = computed(() => displayCount(projectCount.value, projectsPending.value))
+const modelCountDisplay = computed(() => displayCount(models.value.length, modelsPending.value))
+const modelOKDisplay = computed(() => displayCount(modelOK.value, modelsPending.value))
+const modelDegradedDisplay = computed(() => displayCount(modelDegraded.value, modelsPending.value))
 
 const memoryStops = computed(() => {
   const total = Math.max(1, memories.length)
@@ -68,16 +76,34 @@ const taskBars = computed(() => {
 })
 
 const modelHealth = computed(() => {
+  if (modelsPending.value && models.value.length === 0) {
+    return [{ label: t('overview.modelHealth.loading'), count: 1, color: 'var(--muted)', width: 100 }]
+  }
+
+  if (modelsError.value) {
+    return [{ label: t('overview.modelHealth.error'), count: 1, color: 'var(--state-warn)', width: 100 }]
+  }
+
   const rows = [
-    { label: 'live endpoint', count: 0, color: 'var(--muted)' },
-    { label: modelHealthGap.kind, count: 1, color: 'var(--class-mustbuild)' },
+    { label: t('overview.modelHealth.ok'), count: modelOK.value, color: 'var(--class-live)' },
+    { label: t('overview.modelHealth.standby'), count: modelStandby.value, color: 'var(--muted)' },
+    { label: t('overview.modelHealth.degraded'), count: modelDegraded.value, color: 'var(--state-warn)' },
   ]
   const total = Math.max(1, ...rows.map((row) => row.count))
   return rows.map((row) => ({ ...row, width: Math.round((row.count / total) * 100) }))
 })
 
 const attention = computed(() => [
-  { color: 'var(--state-warn)', text: t('overview.attention.model'), to: '/health', label: t('overview.attention.stateLink') },
+  {
+    color: modelsError.value || modelDegraded.value > 0 ? 'var(--state-warn)' : 'var(--class-live)',
+    text: modelsError.value
+      ? t('overview.attention.modelHealthError')
+      : modelDegraded.value > 0
+        ? t('overview.attention.modelHealthDegraded', { n: modelDegradedDisplay.value })
+        : t('overview.attention.modelHealthOk', { n: modelCountDisplay.value }),
+    to: '/health',
+    label: t('overview.attention.stateLink'),
+  },
   { color: 'var(--state-warn)', text: t('overview.attention.search'), to: '/health', label: t('overview.attention.stateLink') },
   { color: 'var(--class-dormant)', text: t('overview.attention.queueGated', { flag: queueGap.evidence.flag }), to: '/queue', label: t('overview.attention.queueLink') },
   { color: 'var(--class-mustbuild)', text: t('overview.attention.books'), to: '/books', label: t('overview.attention.booksLink') },
@@ -163,8 +189,8 @@ const serviceCards = computed(() => [
     icon: 'health',
     name: t('nav.items.health'),
     big: String(info.value.health),
-    sub: t('overview.cards.health.sub', { ok: 0, degraded: 0 }),
-    meta: [{ cls: 'mb', text: t('overview.badges.mustBuild') }],
+    sub: t('overview.cards.health.sub', { ok: modelOKDisplay.value, degraded: modelDegradedDisplay.value }),
+    meta: [{ cls: 'live', text: t('overview.badges.liveEndpoint') }],
   },
   {
     to: '/secrets',
@@ -273,14 +299,17 @@ function iconPath(icon: string) {
       </div>
 
       <div class="vz">
-        <h4>{{ t('overview.viz.modelHealth') }}<span class="src">/api/stats</span></h4>
+        <h4>{{ t('overview.viz.modelHealth') }}<span class="src">/api/model-health</span></h4>
         <div class="segbar"><i v-for="row in modelHealth" :key="row.label" :style="{ width: `${row.width}%`, background: row.color }" /></div>
         <div class="seg-legend">
           <span v-for="row in modelHealth" :key="row.label"><span class="sw" :style="{ background: row.color }" />{{ row.label }} · {{ row.count }}</span>
         </div>
         <div class="vz-trend">
           <svg viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="15" x2="120" y2="15" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 5" opacity=".6" /></svg>
-          <span class="tt">{{ t('overview.viz.modelTrend') }} <b>{{ t('overview.badges.mustBuild') }}</b>; {{ t('overview.snapshotOnly') }}</span>
+          <span class="tt">
+            <template v-if="modelsError">{{ t('overview.modelHealth.errorShort', { message: modelsError }) }}</template>
+            <template v-else>{{ t('overview.viz.modelTrend') }} <b>{{ t('overview.badges.mustBuild') }}</b>; {{ t('overview.snapshotOnly') }}</template>
+          </span>
         </div>
       </div>
     </section>

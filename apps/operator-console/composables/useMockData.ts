@@ -5,9 +5,7 @@
  *
  * Current live-wire policy:
  * - Memories, issues, vault status, vault credentials, server info, rules, projects,
- *   health, and server config are backed by the current Engram HTTP surface.
- * - Model rows remain mock until there is a direct, truthful model-health endpoint for
- *   this exact UI contract.
+ *   health, server config, and model health are backed by the current Engram HTTP surface.
  */
 
 import { operatorApiBase, operatorApiUrl } from './useOperatorApi'
@@ -52,9 +50,13 @@ export interface Cred {
 
 export interface ModelRow {
   id: string
+  role: string
   provider: string
   health: 'ok' | 'standby' | 'degraded'
   costs: string
+  source: string
+  configured: boolean
+  message: string
 }
 
 export interface RuleRow {
@@ -238,6 +240,23 @@ interface ApiConfig {
   }
 }
 
+interface ApiModelHealthRow {
+  id?: string
+  role?: string
+  provider?: string
+  model?: string
+  health?: 'ok' | 'standby' | 'degraded'
+  source?: string
+  endpoint?: string
+  message?: string
+  configured?: boolean
+  secret_set?: boolean
+}
+
+interface ApiModelHealthResponse {
+  rows?: ApiModelHealthRow[]
+}
+
 function apiBase(): string {
   return operatorApiBase()
 }
@@ -376,6 +395,19 @@ function mapRuleRow(row: ApiRuleRow): RuleRow {
     project: normalizeProject(row.project),
     priority: typeof row.priority === 'number' ? row.priority : 0,
     updated: compactAge(row.updated_at || row.created_at),
+  }
+}
+
+function mapModelHealthRow(row: ApiModelHealthRow): ModelRow {
+  return {
+    id: row.id || row.role || 'unknown-model',
+    role: row.role || 'model',
+    provider: row.provider || 'OpenAI-compatible',
+    health: row.health || 'standby',
+    costs: row.source ? `${row.source}${row.secret_set ? ' · key set' : ''}` : '—',
+    source: row.source || 'unknown',
+    configured: Boolean(row.configured),
+    message: row.message || row.endpoint || '—',
   }
 }
 
@@ -686,12 +718,30 @@ export const useHealthSnapshot = () => {
   return { snapshot, pending, error, refresh }
 }
 
-export const useModels = () => ([
-  { id: 'recall/embedding-small', provider: 'OpenAI-compatible', health: 'ok', costs: 'In $0.01 · Out —' },
-  { id: 'recall/reranker-v2', provider: 'LM Studio', health: 'standby', costs: 'local' },
-  { id: 'engram/ops-llm', provider: 'OpenAI-compatible', health: 'ok', costs: 'In $0.00 · Out $0.01' },
-  { id: 'fallback/gpt-4-1-mini', provider: 'OpenAI', health: 'degraded', costs: 'In $0.04 · Out $0.16' },
-] as ModelRow[])
+export const useModelsState = () => {
+  const rows = useState<ModelRow[]>('live:models', () => [])
+  const pending = useState<boolean>('live:models:pending', () => false)
+  const error = useState<string | null>('live:models:error', () => null)
+
+  async function refresh() {
+    pending.value = true
+    error.value = null
+    try {
+      const payload = await fetchJson<ApiModelHealthResponse>('/api/model-health')
+      replaceArray(rows.value, (payload.rows || []).map(mapModelHealthRow))
+    } catch (nextError) {
+      error.value = errorMessage(nextError)
+    } finally {
+      pending.value = false
+    }
+  }
+
+  startOnce('models', refresh)
+
+  return { rows, pending, error, refresh }
+}
+
+export const useModels = () => useModelsState().rows.value
 
 export const useServerInfo = () => {
   const config = useRuntimeConfig().public

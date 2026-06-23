@@ -96,6 +96,9 @@
     "attentionTitle": "Needs attention",
     "attention": {
       "model": "Model “fallback/gpt-4-1-mini” is degraded",
+      "modelHealthOk": "Model health is live — {n} row(s) in the snapshot",
+      "modelHealthDegraded": "Model health: {n} row(s) degraded",
+      "modelHealthError": "Model health is unavailable",
       "search": "Similarity search — subsystem degradation",
       "queue": "{n} candidate(s) waiting for review (behind VNEXT_F)",
       "queueGated": "Review queue is off (behind {flag})",
@@ -119,6 +122,14 @@
       "memoryTrend": "Memory growth over time needs a daily-history endpoint",
       "modelTrend": "Availability and cost by day —"
     },
+    "modelHealth": {
+      "ok": "ok",
+      "standby": "standby",
+      "degraded": "degraded",
+      "loading": "loading",
+      "error": "error",
+      "errorShort": "Could not load model health: {message}"
+    },
     "recordsCount": "{n} records",
     "total": "total",
     "totalIssues": "{n} total",
@@ -130,7 +141,8 @@
       "mustBuildParen": "(must-build)",
       "semanticCount": "semantic {n}",
       "episodicCount": "episodic {n}",
-      "vaultLive": "vault ok"
+      "vaultLive": "vault ok",
+      "liveEndpoint": "live endpoint"
     },
     "groups": {
       "memoryProduct": "Memory & product",

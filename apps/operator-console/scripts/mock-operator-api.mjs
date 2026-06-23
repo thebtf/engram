@@ -369,6 +369,53 @@ const server = createServer(async (req, res) => {
         },
       })
       return
+    case '/api/model-health':
+      json(res, 200, {
+        generated_at: new Date().toISOString(),
+        rows: [
+          {
+            id: 'recall/embedder',
+            role: 'embedding',
+            provider: 'OpenAI-compatible embeddings',
+            model: 'smoke-embedding',
+            health: 'ok',
+            source: 'settings',
+            endpoint: '/v1/embeddings',
+            message: 'Embedding client is initialized; vector recall can use the configured endpoint.',
+            evidence: ['model_settings.embedder.url', 'model_settings.embedder.model'],
+            configured: true,
+            secret_set: false,
+          },
+          {
+            id: 'recall/reranker',
+            role: 'reranker',
+            provider: 'Cohere-compatible rerank',
+            model: 'bge-reranker',
+            health: 'standby',
+            source: 'absent',
+            endpoint: '/v1/rerank',
+            message: 'Reranker URL is not configured; recall keeps fusion order.',
+            evidence: ['ENGRAM_RERANK_URL', 'model_settings.reranker.url'],
+            configured: false,
+            secret_set: false,
+          },
+          {
+            id: 'ops/llm',
+            role: 'llm',
+            provider: 'OpenAI-compatible chat',
+            model: 'chat-default',
+            health: 'standby',
+            source: 'absent',
+            endpoint: '/v1/chat/completions',
+            message: 'LLM URL is not configured; crystallization and on-demand LLM flows stay disabled.',
+            evidence: ['ENGRAM_LLM_URL'],
+            configured: false,
+            secret_set: false,
+          },
+        ],
+        summary: { total: 3, ok: 1, standby: 2, degraded: 0, configured: 1 },
+      })
+      return
     case '/api/vector/metrics':
       json(res, 200, {
         enabled: true,
@@ -389,6 +436,21 @@ const server = createServer(async (req, res) => {
         latest_version: 'v6.29.0-smoke',
         available: false,
       })
+      return
+    case '/api/issues':
+      json(res, 200, { issues: [] })
+      return
+    case '/api/vault/credentials':
+      json(res, 200, [])
+      return
+    case '/api/vault/status':
+      json(res, 200, { key_configured: false, fingerprint: '—', key_source: 'mock' })
+      return
+    case '/api/sessions/list':
+      json(res, 200, { sessions: [], total: 0 })
+      return
+    case '/api/rules':
+      json(res, 200, [])
       return
     case '/api/projects':
       json(res, 200, ['operator-console'])

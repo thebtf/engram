@@ -96,6 +96,9 @@
     "attentionTitle": "Требует внимания",
     "attention": {
       "model": "Модель «fallback/gpt-4-1-mini» деградирует",
+      "modelHealthOk": "Здоровье моделей подключено — {n} строк(и) в live-срезе",
+      "modelHealthDegraded": "Здоровье моделей: {n} строк(и) деградирует",
+      "modelHealthError": "Здоровье моделей недоступно",
       "search": "Поиск похожего — деградация подсистемы",
       "queue": "{n} кандидат(ов) ждут проверки (за флагом VNEXT_F)",
       "queueGated": "Очередь проверки отключена (за флагом {flag})",
@@ -119,6 +122,14 @@
       "memoryTrend": "Рост памяти во времени — нужен endpoint дневной истории",
       "modelTrend": "Доступность и стоимость по дням —"
     },
+    "modelHealth": {
+      "ok": "ok",
+      "standby": "standby",
+      "degraded": "degraded",
+      "loading": "загрузка",
+      "error": "ошибка",
+      "errorShort": "Не удалось загрузить здоровье моделей: {message}"
+    },
     "recordsCount": "{n} записей",
     "total": "всего",
     "totalIssues": "{n} всего",
@@ -130,7 +141,8 @@
       "mustBuildParen": "(must-build)",
       "semanticCount": "semantic {n}",
       "episodicCount": "episodic {n}",
-      "vaultLive": "vault ok"
+      "vaultLive": "vault ok",
+      "liveEndpoint": "live endpoint"
     },
     "groups": {
       "memoryProduct": "Память и продукт",
