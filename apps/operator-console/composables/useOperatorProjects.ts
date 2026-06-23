@@ -14,7 +14,7 @@ import {
 } from './useOperatorApi'
 
 type ApiNullableString = string | { String?: string; Valid?: boolean } | null
-type ApiNullableInt = number | string | { Int64?: number | string; Valid?: boolean } | null
+type ApiNullableInt = number | string | { Int64?: number | string | null; Valid?: boolean } | null
 
 interface ApiSessionRow {
   id?: number | string
@@ -93,7 +93,7 @@ function nullableString(value: ApiNullableString | undefined, fallback = ''): st
 function nullableIntString(value: ApiNullableInt | undefined, fallback = '-'): string {
   if (typeof value === 'number' || typeof value === 'string') return String(value)
   if (!value || value.Valid === false) return fallback
-  return value.Int64 === undefined ? fallback : String(value.Int64)
+  return value.Int64 === undefined || value.Int64 === null ? fallback : String(value.Int64)
 }
 
 function mapSession(row: ApiSessionRow): OperatorSessionRow {

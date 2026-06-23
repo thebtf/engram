@@ -377,9 +377,10 @@ test('projects control plane archives projects through typed soft-delete confirm
   assert.match(projectsComposableSource, /const endpoint = `\/api\/projects\/\$\{encodeURIComponent\(project\)\}`/, 'Project archive evidence must use the same encoded endpoint as the mutation request')
   assert.match(projectsComposableSource, /operatorFetchJson\(endpoint,\s*jsonInit\('DELETE'\),\s*['"]projects-delete['"]\)/, 'Project archive must call the live DELETE /api/projects/{id} endpoint')
   assert.match(projectsComposableSource, /type ApiNullableString = string \| \{ String\?: string; Valid\?: boolean \}/, 'Session detail mapper must accept Go sql.NullString JSON from the live endpoint')
-  assert.match(projectsComposableSource, /type ApiNullableInt = number \| string \| \{ Int64\?: number \| string; Valid\?: boolean \}/, 'Session detail mapper must accept Go sql.NullInt64 JSON from the live endpoint')
+  assert.match(projectsComposableSource, /type ApiNullableInt = number \| string \| \{ Int64\?: number \| string \| null; Valid\?: boolean \}/, 'Session detail mapper must accept Go sql.NullInt64 JSON from the live endpoint')
   assert.match(projectsComposableSource, /function nullableString\(/, 'Session detail mapper must normalize nullable string payloads before rendering')
   assert.match(projectsComposableSource, /function nullableIntString\(/, 'Session detail mapper must normalize nullable integer payloads before rendering')
+  assert.match(projectsComposableSource, /value\.Int64 === undefined \|\| value\.Int64 === null/, 'Session detail mapper must not render null Int64 values as the literal string null')
   assert.match(projectsComposableSource, /sessionRouteGap/, 'Projects page must keep route-decision timeline as the honest mustbuild gap')
   assert.doesNotMatch(projectsComposableSource, /sessionStrategyGap/, 'Session strategy readback must not remain classified as mustbuild once the live detail endpoint exposes injection_strategy')
 
