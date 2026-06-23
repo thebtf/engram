@@ -35,17 +35,21 @@ function openSessionRow(session: typeof sessions[number]) {
   void openSession(session)
 }
 
-async function confirmArchiveProject(project: string) {
+function toggleArchiveProject(project: string) {
   if (projectArchivePending.value) return
 
-  if (projectArchiveTarget.value !== project) {
-    projectArchiveTarget.value = project
-    projectArchiveInput.value = ''
-    projectArchiveError.value = ''
+  if (projectArchiveTarget.value === project) {
+    cancelArchiveProject()
     return
   }
 
-  if (projectArchiveInput.value !== project) return
+  projectArchiveTarget.value = project
+  projectArchiveInput.value = ''
+  projectArchiveError.value = ''
+}
+
+async function submitArchiveProject(project: string) {
+  if (projectArchivePending.value || projectArchiveTarget.value !== project || projectArchiveInput.value !== project) return
 
   projectArchivePending.value = project
   projectArchiveError.value = ''
@@ -137,7 +141,7 @@ function projectArchiveEndpoint(project: string) {
                 :aria-expanded="projectArchiveTarget === project.id"
                 :aria-label="t('projects.actions.archiveProject', { project: project.id })"
                 :disabled="projectArchivePending === project.id"
-                @click="confirmArchiveProject(project.id)"
+                @click="toggleArchiveProject(project.id)"
               >
                 {{ projectArchivePending === project.id ? t('projects.actions.archiving') : t('projects.actions.archive') }}
               </button>
@@ -162,7 +166,7 @@ function projectArchiveEndpoint(project: string) {
                 :disabled="projectArchivePending === project.id"
                 :placeholder="t('projects.archive.inputPlaceholder')"
                 :data-testid="`project-archive-input-${project.id}`"
-                @keydown.enter.prevent="confirmArchiveProject(project.id)"
+                @keydown.enter.prevent="submitArchiveProject(project.id)"
               />
             </label>
             <div class="archive-actions">
@@ -172,9 +176,9 @@ function projectArchiveEndpoint(project: string) {
               <button
                 class="mini danger"
                 type="button"
-                :disabled="projectArchiveInput !== project.id || projectArchivePending === project.id"
+                :disabled="projectArchiveInput !== project.id || Boolean(projectArchivePending)"
                 :data-testid="`project-archive-confirm-button-${project.id}`"
-                @click="confirmArchiveProject(project.id)"
+                @click="submitArchiveProject(project.id)"
               >
                 {{ projectArchivePending === project.id ? t('projects.actions.archiving') : t('projects.actions.confirmArchive') }}
               </button>
