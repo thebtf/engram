@@ -786,10 +786,11 @@ const server = createServer(async (req, res) => {
     case '/api/sessions/list':
       {
         const project = url.searchParams.get('project') || ''
-        const limit = Number(url.searchParams.get('limit') || 100)
+        const requestedLimit = Number(url.searchParams.get('limit') || 100)
+        const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : 100
         const rows = sessionRows
           .filter((row) => !project || row.project === project)
-          .slice(0, Number.isFinite(limit) && limit > 0 ? limit : 100)
+          .slice(0, limit)
         json(res, 200, { sessions: rows, total: rows.length, limit, offset: 0 })
       }
       return
