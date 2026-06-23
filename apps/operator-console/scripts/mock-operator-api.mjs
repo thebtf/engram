@@ -151,13 +151,13 @@ const server = createServer(async (req, res) => {
         changed.push('enforce_source_project')
       }
       if (patch.memory && Object.hasOwn(patch.memory, 'inject_unified')) {
-        config.memory.inject_unified = Boolean(patch.memory.inject_unified)
         changed.push('inject_unified (requires restart)')
       }
       syncConfigFlags()
       json(res, 200, {
         success: true,
         applied: true,
+        audit_logged: true,
         changed,
         restart_required: changed.includes('inject_unified (requires restart)'),
         restart_required_fields: changed.includes('inject_unified (requires restart)') ? ['memory.inject_unified'] : [],

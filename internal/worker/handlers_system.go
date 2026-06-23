@@ -1,14 +1,19 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
+	"github.com/thebtf/engram/internal/auth"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/config"
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 )
 
 type runtimeFlagItem struct {
@@ -92,6 +97,7 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	beforeConfig := s.currentConfigResponse()
 	if err := config.SaveSettings(updates); err != nil {
 		http.Error(w, "save config failed", http.StatusInternalServerError)
 		return
@@ -104,14 +110,90 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	restartRequiredFields := configRestartRequiredFields(changed)
+	afterConfig := buildConfigResponse(newCfg)
+	auditLogged := s.logConfigAudit(r.Context(), beforeConfig, afterConfig, updates, changed, restartRequiredFields)
 	writeJSON(w, map[string]any{
 		"success":                 true,
 		"applied":                 true,
+		"audit_logged":            auditLogged,
 		"changed":                 changed,
 		"restart_required":        len(restartRequiredFields) > 0,
 		"restart_required_fields": restartRequiredFields,
-		"config":                  buildConfigResponse(newCfg),
+		"config":                  afterConfig,
 	})
+}
+
+func (s *Service) currentConfigResponse() map[string]any {
+	s.initMu.RLock()
+	cfg := s.config
+	s.initMu.RUnlock()
+	if cfg == nil {
+		cfg = config.Get()
+	}
+	return buildConfigResponse(cfg)
+}
+
+func (s *Service) logConfigAudit(ctx context.Context, beforeConfig map[string]any, afterConfig map[string]any, updates map[string]any, changed []string, restartRequiredFields []string) bool {
+	s.initMu.RLock()
+	auditStore := s.auditStore
+	s.initMu.RUnlock()
+	if auditStore == nil {
+		return false
+	}
+	actor, sourceSessionID := configAuditIdentity(ctx)
+	before := configAuditRaw(map[string]any{
+		"config": beforeConfig,
+	})
+	after := configAuditRaw(map[string]any{
+		"config":                  afterConfig,
+		"requested_updates":       updates,
+		"changed":                 changed,
+		"restart_required":        len(restartRequiredFields) > 0,
+		"restart_required_fields": restartRequiredFields,
+	})
+	auditCtx := context.WithoutCancel(ctx)
+	if err := auditStore.Log(auditCtx, dbgorm.AuditLogEntry{
+		Action:          "config.patch",
+		Actor:           actor,
+		SourceSessionID: sourceSessionID,
+		BeforeState:     before,
+		AfterState:      after,
+		Reason:          "PATCH /api/config",
+	}); err != nil {
+		log.Error().Err(err).Str("actor", actor).Strs("changed", changed).Msg("config audit log failed")
+		return false
+	}
+	return true
+}
+
+func configAuditIdentity(ctx context.Context) (actor string, sourceSessionID string) {
+	id, ok := auth.IdentityFrom(ctx)
+	if !ok {
+		return "unauthenticated", ""
+	}
+	if principal, kind, ok := id.MemoryOwner(); ok {
+		return string(id.Source) + ":" + kind + ":" + principal, id.WorkstationID()
+	}
+	if id.KeycardID != "" {
+		return string(id.Source) + ":" + id.KeycardID, id.WorkstationID()
+	}
+	if id.Role != "" {
+		return string(id.Source) + ":" + string(id.Role), id.WorkstationID()
+	}
+	if id.Source != "" {
+		return string(id.Source), id.WorkstationID()
+	}
+	return "unknown", ""
+}
+
+func configAuditRaw(value any) *json.RawMessage {
+	b, err := json.Marshal(value)
+	if err != nil {
+		log.Error().Err(err).Msg("config audit marshal failed")
+		return nil
+	}
+	raw := json.RawMessage(b)
+	return &raw
 }
 
 func buildConfigResponse(cfg *config.Config) map[string]any {
