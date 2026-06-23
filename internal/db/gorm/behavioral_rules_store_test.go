@@ -107,9 +107,11 @@ func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
 		assert.NotEqual(t, created.ID, r.ID, "disabled rule must not appear in injection ListEnabled")
 	}
 
-	reenabled, err := brs.SetEnabled(ctx, created.ID, true, "toggle-test")
+	reenabled, err := brs.SetEnabled(ctx, created.ID, true, "")
 	require.NoError(t, err, "SetEnabled(true) should succeed")
 	assert.True(t, reenabled.Enabled)
+	assert.Equal(t, "toggle-test", reenabled.EditedBy, "empty editedBy must preserve existing audit actor")
+	assert.Greater(t, reenabled.Version, disabled.Version)
 
 	// --- Delete ---
 	err = brs.Delete(ctx, created.ID)

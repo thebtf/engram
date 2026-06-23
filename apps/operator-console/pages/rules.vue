@@ -29,6 +29,7 @@ const confirmingDeleteId = ref<number | null>(null)
 const draggingId = ref<number | null>(null)
 const dragOverId = ref<number | null>(null)
 const dragOverAfter = ref(false)
+const isToggling = ref(false)
 
 const sortedRows = computed(() => [...rows].sort(compareRules))
 const visibleRows = computed(() => sortedRows.value.filter((rule) => scopeFilter.value === 'all' || rule.project === scopeFilter.value))
@@ -117,8 +118,13 @@ async function saveEdit(rule: RuleRow) {
 }
 
 async function toggleRule(rule: RuleRow) {
-  if (pending.value) return
-  await toggleRuleEnabled(rule.id, !rule.enabled)
+  if (pending.value || isToggling.value) return
+  isToggling.value = true
+  try {
+    await toggleRuleEnabled(rule.id, !rule.enabled)
+  } finally {
+    isToggling.value = false
+  }
 }
 
 async function confirmDelete(rule: RuleRow) {
@@ -310,7 +316,7 @@ function isRollback(result: unknown) {
                 :aria-label="rule.enabled ? t('rules.detail.disable') : t('rules.detail.enable')"
                 :title="t('rules.detail.enableBody')"
                 :data-testid="`rule-enable-toggle-${rule.id}`"
-                :disabled="pending"
+                :disabled="pending || isToggling"
                 @click="toggleRule(rule)"
               >
                 <span class="sr-only">{{ rule.enabled ? t('rules.detail.enabled') : t('rules.detail.disabled') }}</span>

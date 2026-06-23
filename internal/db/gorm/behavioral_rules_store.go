@@ -203,15 +203,19 @@ func (s *BehavioralRulesStore) SetEnabled(ctx context.Context, id int64, enabled
 	}
 
 	now := time.Now().UTC()
+	updates := map[string]any{
+		"enabled":    enabled,
+		"updated_at": now,
+		"version":    gorm.Expr("version + 1"),
+	}
+	if editedBy != "" {
+		updates["edited_by"] = editedBy
+	}
+
 	result := s.db.WithContext(ctx).
 		Model(&BehavioralRule{}).
 		Where("id = ? AND deleted_at IS NULL", id).
-		Updates(map[string]any{
-			"enabled":    enabled,
-			"edited_by":  editedBy,
-			"updated_at": now,
-			"version":    gorm.Expr("version + 1"),
-		})
+		Updates(updates)
 	if result.Error != nil {
 		return nil, fmt.Errorf("set behavioral rule enabled id=%d: %w", id, result.Error)
 	}

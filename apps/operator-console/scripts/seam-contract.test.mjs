@@ -260,8 +260,11 @@ test('behavioral rules enabled toggle is live endpoint-backed and remains recove
   assert.doesNotMatch(rulesComposableSource, /enableGap/, 'Rule enabled toggle must not remain an unsupported mustbuild gap')
   assert.doesNotMatch(rulesComposableSource, /unsupportedOperatorAction\(\s*['"]rule-enable-toggle['"]/, 'Rule enabled toggle must not be represented as an unsupported action')
 
+  assert.match(rulesPageSource, /const isToggling = ref\(false\)/, 'Rules page must keep a local in-flight guard for toggle mutations')
+  assert.match(rulesPageSource, /if \(pending\.value \|\| isToggling\.value\) return/, 'Rules page toggle handler must reject concurrent toggle clicks')
   assert.match(rulesPageSource, /@click="toggleRule\(rule\)"/, 'Rules page switch must call the live toggle handler')
   assert.match(rulesPageSource, /:aria-checked="String\(rule\.enabled\)"/, 'Rules page switch must expose true state to assistive tech')
+  assert.match(rulesPageSource, /:disabled="pending \|\| isToggling"/, 'Rules page switch must be disabled while a toggle mutation is locally in flight')
   assert.match(rulesPageSource, /data-testid="`rule-enable-toggle-\$\{rule\.id\}`"/, 'Rules page switch must expose a stable browser-smoke selector')
   assert.match(rulesPageSource, /data-testid="`rule-status-\$\{rule\.id\}`"/, 'Rules page status chip must expose a stable browser-smoke selector')
   assert.match(rulesPageSource, /rules\.detail\.enabled/, 'Rules page enabled label must be i18n-keyed')

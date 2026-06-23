@@ -362,6 +362,40 @@ func TestHandleSetBehavioralRuleEnabled_RequiresEnabled(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestSearchFallbackObservations_UsesEnabledBehavioralRulesOnly(t *testing.T) {
+	project := "test-rules-search-fallback-enabled-only"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	enabledRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: enabled fallback guidance",
+		Priority: 20,
+		EditedBy: "seed",
+	})
+	require.NoError(t, err)
+
+	disabledRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: disabled fallback guidance",
+		Priority: 30,
+		EditedBy: "seed",
+	})
+	require.NoError(t, err)
+	_, err = brs.SetEnabled(context.Background(), disabledRule.ID, false, "operator-console")
+	require.NoError(t, err)
+
+	observations, err := svc.searchFallbackObservations(context.Background(), "", retrievalScope{Project: project}, 100)
+	require.NoError(t, err)
+
+	byTitle := map[string]bool{}
+	for _, observation := range observations {
+		byTitle[observation.Title.String] = true
+	}
+	assert.True(t, byTitle[enabledRule.Content], "enabled rule must remain visible to fallback observations")
+	assert.False(t, byTitle[disabledRule.Content], "disabled rule must not leak into data-plane fallback observations")
+}
+
 func storeDeleteRuleByProject(ctx context.Context, brs *dbgorm.BehavioralRulesStore, project string) error {
 	rows, err := brs.List(ctx, &project, 200)
 	if err != nil {

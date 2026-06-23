@@ -286,7 +286,7 @@ func (s *Service) searchFallbackObservations(ctx context.Context, query string, 
 			project := scopeFilter.Project
 			projectPtr = &project
 		}
-		rules, err := s.behavioralRulesStore.List(ctx, projectPtr, fetchLimit)
+		rules, err := s.behavioralRulesStore.ListEnabled(ctx, projectPtr, fetchLimit)
 		if err != nil {
 			return nil, err
 		}
