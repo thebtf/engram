@@ -1,0 +1,58 @@
+{
+  "slice": "operator-console-hardening-dependency-warnings",
+  "date": "2026-06-23",
+  "worktree": "D:\\Dev\\engram-wt\\operator-console-hardening",
+  "branch": "work/operator-console-hardening",
+  "goal": "Close real operator-console dependency audit warnings without destabilizing the Nuxt design scaffold.",
+  "change": {
+    "package": "apps/operator-console/package.json",
+    "policy": "Root package.json uses npm overrides to force Vite's transitive esbuild to 0.28.1.",
+    "docs": "Context7 /npm/cli package.json overrides documentation confirmed root-level transitive dependency override syntax."
+  },
+  "verification": [
+    {
+      "command": "npm install",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: install completed; found 0 vulnerabilities."
+    },
+    {
+      "command": "npm run parity",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: design_version 2026.06.21 in sync, no drift."
+    },
+    {
+      "command": "npm run test:seam",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: 11/11 seam contract tests."
+    },
+    {
+      "command": "npm run build",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: Nuxt production build completed."
+    },
+    {
+      "command": "npm run test:browser",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: 1/1 Playwright Chromium Settings modal smoke."
+    },
+    {
+      "command": "npm audit --json",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: vulnerabilities total 0."
+    },
+    {
+      "command": "npm ls esbuild",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: Vite and vite-node paths resolve esbuild@0.28.1; remaining esbuild@0.25.12 paths are outside the audited vulnerable range."
+    }
+  ],
+  "residuals": [
+    {
+      "warning": "DEP0155 trailing slash export-map deprecation from @nuxt/icon -> @iconify/utils and @nuxt/nitro-server -> @vue/shared.",
+      "classification": "upstream-runtime-warning",
+      "attempted_fix": "Tried @iconify/utils@3.1.3 override; full gate stayed green but warning remained, so the major override was removed as no-benefit risk.",
+      "defer_reason": "Removing the remaining warning would require upstream Nuxt/Icon/Nitro changes or a major Nuxt/UI upgrade, not a safe operator-console hardening patch."
+    }
+  ],
+  "status": "ready_for_commit"
+}
