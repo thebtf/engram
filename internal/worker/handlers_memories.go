@@ -470,11 +470,12 @@ func parseMemoryAuditLimit(raw string) (int, error) {
 		maxLimit     = 200
 	)
 
-	if strings.TrimSpace(raw) == "" {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
 		return defaultLimit, nil
 	}
 
-	limit, err := strconv.Atoi(raw)
+	limit, err := strconv.Atoi(trimmed)
 	if err != nil || limit <= 0 {
 		return 0, fmt.Errorf("limit must be a positive integer")
 	}

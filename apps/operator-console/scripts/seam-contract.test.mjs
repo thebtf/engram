@@ -378,4 +378,6 @@ test('operator console recovers from stale Nuxt chunk errors after deploy', () =
   assert.match(source, /failed to fetch dynamically imported module/, 'browser dynamic import error text must be recognized')
   assert.match(source, /RELOAD_TTL_MS\s*=\s*30_000/, 'reload guard must bound repeated reload attempts')
   assert.match(source, /sessionStorage\.setItem\(RELOAD_KEY/, 'reload guard must persist a short-lived retry marker')
+  assert.match(source, /RELOAD_QUERY_PARAM\s*=\s*['"]engram_chunk_reload['"]/, 'reload guard must have a storage-disabled URL fallback')
+  assert.match(source, /window\.location\.replace\(url\.toString\(\)\)/, 'storage-disabled fallback must replace the URL instead of looping reloads')
 })

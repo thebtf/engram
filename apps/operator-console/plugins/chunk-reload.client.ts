@@ -2,6 +2,7 @@ import { defineNuxtPlugin, reloadNuxtApp } from '#app'
 
 const RELOAD_KEY = 'engram:operator-console:chunk-error-reload'
 const RELOAD_TTL_MS = 30_000
+const RELOAD_QUERY_PARAM = 'engram_chunk_reload'
 
 const CHUNK_ERROR_PATTERNS = [
   'failed to fetch dynamically imported module',
@@ -19,6 +20,16 @@ function readReloadState() {
   }
 }
 
+function canUseSessionStorage() {
+  try {
+    sessionStorage.setItem(`${RELOAD_KEY}:probe`, '1')
+    sessionStorage.removeItem(`${RELOAD_KEY}:probe`)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function writeReloadState(state: { count: number; at: number }) {
   try {
     sessionStorage.setItem(RELOAD_KEY, JSON.stringify(state))
@@ -27,7 +38,7 @@ function writeReloadState(state: { count: number; at: number }) {
   }
 }
 
-function shouldReloadNow() {
+function shouldReloadWithSessionStorage() {
   const now = Date.now()
   const state = readReloadState()
 
@@ -42,6 +53,17 @@ function shouldReloadNow() {
   }
 
   return false
+}
+
+function reloadWithURLGuard(reason: unknown) {
+  const url = new URL(window.location.href)
+  if (url.searchParams.has(RELOAD_QUERY_PARAM)) {
+    console.error('Engram operator console chunk reload guard stopped a repeated reload without storage.', reason)
+    return
+  }
+
+  url.searchParams.set(RELOAD_QUERY_PARAM, '1')
+  window.location.replace(url.toString())
 }
 
 function messageFromReason(reason: unknown) {
@@ -60,7 +82,12 @@ function isChunkError(reason: unknown) {
 }
 
 function reloadForChunkError(reason: unknown) {
-  if (!shouldReloadNow()) {
+  if (!canUseSessionStorage()) {
+    reloadWithURLGuard(reason)
+    return
+  }
+
+  if (!shouldReloadWithSessionStorage()) {
     console.error('Engram operator console chunk reload guard stopped a repeated reload.', reason)
     return
   }

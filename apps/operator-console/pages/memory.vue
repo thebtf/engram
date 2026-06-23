@@ -5,7 +5,7 @@ import { MEMORY_PAGE_SIZE_STORAGE_KEY, resolvePageSize, usePersistentPageSize } 
 import type { Memory } from '../composables/useMockData'
 import type { OperatorLoadState } from '../composables/useOperatorApi'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const {
   rows: all,
   loadState,
@@ -103,13 +103,13 @@ watch(pageSize, () => {
   page.value = 1
 })
 
-watch(opened, (memory) => {
+watch(() => opened.value?.id, () => {
   deleteConfirmId.value = null
   suppressConfirmId.value = null
   auditState.value = null
   auditPending.value = false
   auditRequestSeq += 1
-  if (memory) void loadAudit(memory)
+  if (opened.value) void loadAudit(opened.value)
 })
 
 watch(selectedIds, () => {
@@ -279,7 +279,7 @@ function formatAuditTime(timestamp?: string) {
   if (!timestamp) return '—'
   const value = Date.parse(timestamp)
   if (Number.isNaN(value)) return '—'
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale.value, {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(value)

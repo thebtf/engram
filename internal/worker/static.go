@@ -41,23 +41,40 @@ var (
 )
 
 const staleNuxtChunkReloadModule = `const key = "engram:operator-console:stale-chunk-reload";
+const reloadParam = "engram_chunk_reload";
 const now = Date.now();
 let state = { count: 0, at: 0 };
+let storageWorking = false;
 try {
-  state = JSON.parse(sessionStorage.getItem(key) || "null") || state;
-} catch {
-  state = { count: 0, at: 0 };
-}
-if (!state.at || now - state.at > 30000) {
-  state = { count: 0, at: now };
-}
-if (state.count < 1) {
+  sessionStorage.setItem(key + ":probe", "1");
+  sessionStorage.removeItem(key + ":probe");
+  storageWorking = true;
+} catch {}
+if (storageWorking) {
   try {
-    sessionStorage.setItem(key, JSON.stringify({ count: state.count + 1, at: now }));
-  } catch {}
-  window.location.reload();
+    state = JSON.parse(sessionStorage.getItem(key) || "null") || state;
+  } catch {
+    state = { count: 0, at: 0 };
+  }
+  if (!state.at || now - state.at > 30000) {
+    state = { count: 0, at: now };
+  }
+  if (state.count < 1) {
+    try {
+      sessionStorage.setItem(key, JSON.stringify({ count: state.count + 1, at: now }));
+    } catch {}
+    window.location.reload();
+  } else {
+    console.error("Engram operator console stale Nuxt chunk is still missing after reload.");
+  }
 } else {
-  console.error("Engram operator console stale Nuxt chunk is still missing after reload.");
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(reloadParam)) {
+    url.searchParams.set(reloadParam, "1");
+    window.location.replace(url.toString());
+  } else {
+    console.error("Engram operator console stale Nuxt chunk is still missing after reload without storage.");
+  }
 }
 export default {};
 `

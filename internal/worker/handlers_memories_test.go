@@ -595,6 +595,12 @@ func TestHandleGetMemoryAudit_InvalidLimit(t *testing.T) {
 	var created models.Memory
 	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
 
+	trimmedReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?limit=%201%20", "id", strconv.FormatInt(created.ID, 10))
+	trimmedW := httptest.NewRecorder()
+	service.handleGetMemoryAudit(trimmedW, trimmedReq)
+
+	require.Equal(t, http.StatusOK, trimmedW.Code, trimmedW.Body.String())
+
 	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?limit=0", "id", strconv.FormatInt(created.ID, 10))
 	auditW := httptest.NewRecorder()
 	service.handleGetMemoryAudit(auditW, auditReq)
