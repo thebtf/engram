@@ -46,6 +46,11 @@ const reloadParam = "engram_chunk_reload";
 const now = Date.now();
 let state = { count: 0, at: 0 };
 let storageWorking = false;
+function replaceWithFreshEntry() {
+  const url = new URL(window.location.href);
+  url.searchParams.set(reloadParam, String(now));
+  window.location.replace(url.toString());
+}
 try {
   sessionStorage.setItem(key + ":probe", "1");
   sessionStorage.removeItem(key + ":probe");
@@ -64,17 +69,16 @@ if (storageWorking) {
     try {
       sessionStorage.setItem(key, JSON.stringify({ count: state.count + 1, at: now }));
     } catch {}
-    window.location.reload();
+    replaceWithFreshEntry();
   } else {
-    console.error("Engram operator console stale Nuxt chunk is still missing after reload.");
+    console.error("Engram operator console stale Nuxt chunk is still missing after URL replacement.");
   }
 } else {
   const url = new URL(window.location.href);
   if (!url.searchParams.has(reloadParam)) {
-    url.searchParams.set(reloadParam, "1");
-    window.location.replace(url.toString());
+    replaceWithFreshEntry();
   } else {
-    console.error("Engram operator console stale Nuxt chunk is still missing after reload without storage.");
+    console.error("Engram operator console stale Nuxt chunk is still missing after URL replacement without storage.");
   }
 }
 export default {};
