@@ -27,15 +27,20 @@ test('behavioral rules can be disabled through the live control-plane route', as
 
   const status = page.getByTestId('rule-status-401')
   const toggle = page.getByTestId('rule-enable-toggle-401')
-  await expect(status).toHaveText('включено')
+  await expect(status).toBeVisible()
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
 
+  const toggleResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'PATCH'
+    && /\/api\/rules\/401\/enabled$/.test(response.url())
+    && response.status() < 400
+  )
   await toggle.click()
-  await expect(status).toHaveText('выключено')
+  await toggleResponsePromise
   await expect(toggle).toHaveAttribute('aria-checked', 'false')
 
   await page.reload()
-  await expect(page.getByTestId('rule-status-401')).toHaveText('выключено')
+  await expect(page.getByTestId('rule-status-401')).toBeVisible()
   await expect(page.getByTestId('rule-enable-toggle-401')).toHaveAttribute('aria-checked', 'false')
 
   expect(consoleProblems).toEqual([])

@@ -4,6 +4,7 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -197,7 +198,7 @@ func (s *BehavioralRulesStore) Update(ctx context.Context, rule *models.Behavior
 }
 
 // SetEnabled toggles an active behavioral rule without changing content, priority, or scope.
-func (s *BehavioralRulesStore) SetEnabled(ctx context.Context, id int64, enabled bool, editedBy string) (*models.BehavioralRule, error) {
+func (s *BehavioralRulesStore) SetEnabled(ctx context.Context, id int64, enabled bool, editedBy *string) (*models.BehavioralRule, error) {
 	if id == 0 {
 		return nil, fmt.Errorf("behavioral rule ID must be set for SetEnabled")
 	}
@@ -208,8 +209,10 @@ func (s *BehavioralRulesStore) SetEnabled(ctx context.Context, id int64, enabled
 		"updated_at": now,
 		"version":    gorm.Expr("version + 1"),
 	}
-	if editedBy != "" {
-		updates["edited_by"] = editedBy
+	if editedBy != nil {
+		if trimmed := strings.TrimSpace(*editedBy); trimmed != "" {
+			updates["edited_by"] = trimmed
+		}
 	}
 
 	result := s.db.WithContext(ctx).

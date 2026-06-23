@@ -362,6 +362,34 @@ func TestHandleSetBehavioralRuleEnabled_RequiresEnabled(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestHandleSetBehavioralRuleEnabled_OmittedEditedByPreservesAudit(t *testing.T) {
+	project := "test-rules-handler-enabled-preserve-edited-by"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: preserve edited_by",
+		Priority: 3,
+		EditedBy: "seed-operator",
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequest(http.MethodPatch, "/api/rules/"+idStr+"/enabled", "id", idStr)
+	req.Body = ioNopCloser(`{"enabled":false}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleSetBehavioralRuleEnabled(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var updated models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.False(t, updated.Enabled)
+	assert.Equal(t, "seed-operator", updated.EditedBy, "omitted edited_by must preserve the existing audit actor")
+}
+
 func TestSearchFallbackObservations_UsesEnabledBehavioralRulesOnly(t *testing.T) {
 	project := "test-rules-search-fallback-enabled-only"
 	svc, brs := newRulesTestService(t, project)
@@ -382,7 +410,8 @@ func TestSearchFallbackObservations_UsesEnabledBehavioralRulesOnly(t *testing.T)
 		EditedBy: "seed",
 	})
 	require.NoError(t, err)
-	_, err = brs.SetEnabled(context.Background(), disabledRule.ID, false, "operator-console")
+	editedBy := "operator-console"
+	_, err = brs.SetEnabled(context.Background(), disabledRule.ID, false, &editedBy)
 	require.NoError(t, err)
 
 	observations, err := svc.searchFallbackObservations(context.Background(), "", retrievalScope{Project: project}, 100)

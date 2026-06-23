@@ -182,7 +182,7 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 		EditedBy: project,
 	})
 	require.NoError(t, err)
-	_, err = ruleStore.SetEnabled(ctx, disabledRule.ID, false, project)
+	_, err = ruleStore.SetEnabled(ctx, disabledRule.ID, false, &project)
 	require.NoError(t, err)
 	_, err = ruleStore.Create(ctx, &models.BehavioralRule{
 		Project:  &otherProject,
@@ -379,7 +379,7 @@ func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
 		EditedBy: project,
 	})
 	require.NoError(t, err)
-	_, err = ruleStore.SetEnabled(ctx, disabledLegacyRule.ID, false, project)
+	_, err = ruleStore.SetEnabled(ctx, disabledLegacyRule.ID, false, &project)
 	require.NoError(t, err)
 
 	srv := &Server{db: db}

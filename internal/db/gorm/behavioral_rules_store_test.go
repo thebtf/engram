@@ -83,7 +83,7 @@ func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
 	assert.True(t, found, "Created rule must appear in List")
 
 	// --- Disable ---
-	disabled, err := brs.SetEnabled(ctx, created.ID, false, "toggle-test")
+	disabled, err := brs.SetEnabled(ctx, created.ID, false, strPtr("toggle-test"))
 	require.NoError(t, err, "SetEnabled(false) should succeed")
 	assert.False(t, disabled.Enabled)
 	assert.Equal(t, "toggle-test", disabled.EditedBy)
@@ -107,7 +107,7 @@ func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
 		assert.NotEqual(t, created.ID, r.ID, "disabled rule must not appear in injection ListEnabled")
 	}
 
-	reenabled, err := brs.SetEnabled(ctx, created.ID, true, "")
+	reenabled, err := brs.SetEnabled(ctx, created.ID, true, nil)
 	require.NoError(t, err, "SetEnabled(true) should succeed")
 	assert.True(t, reenabled.Enabled)
 	assert.Equal(t, "toggle-test", reenabled.EditedBy, "empty editedBy must preserve existing audit actor")

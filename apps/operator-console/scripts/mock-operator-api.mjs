@@ -328,7 +328,7 @@ function ruleResponse(url) {
     .slice()
     .sort((left, right) => {
       if (left.priority !== right.priority) return right.priority - left.priority
-      return right.created_at < left.created_at ? -1 : 1
+      return right.created_at.localeCompare(left.created_at)
     })
     .slice(0, limit)
     .map(cloneRule)
@@ -736,6 +736,10 @@ const server = createServer(async (req, res) => {
   const ruleEnabledMatch = path.match(/^\/api\/rules\/([^/]+)\/enabled$/)
   if (req.method === 'PATCH' && ruleEnabledMatch) {
     const id = Number(ruleEnabledMatch[1])
+    if (!Number.isInteger(id) || id <= 0) {
+      json(res, 400, { error: 'invalid rule id' })
+      return
+    }
     const rowIndex = ruleRows.findIndex((row) => row.id === id)
     if (rowIndex < 0) {
       json(res, 404, { error: 'rule not found' })
@@ -766,6 +770,10 @@ const server = createServer(async (req, res) => {
   const ruleMatch = path.match(/^\/api\/rules\/([^/]+)$/)
   if ((req.method === 'PATCH' || req.method === 'DELETE') && ruleMatch) {
     const id = Number(ruleMatch[1])
+    if (!Number.isInteger(id) || id <= 0) {
+      json(res, 400, { error: 'invalid rule id' })
+      return
+    }
     const rowIndex = ruleRows.findIndex((row) => row.id === id)
     if (rowIndex < 0) {
       json(res, 404, { error: 'rule not found' })

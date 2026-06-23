@@ -281,7 +281,7 @@ func (s *Service) handleSetBehavioralRuleEnabled(w http.ResponseWriter, r *http.
 		return
 	}
 
-	updated, err := s.behavioralRulesStore.SetEnabled(r.Context(), id, *req.Enabled, strings.TrimSpace(stringValue(req.EditedBy)))
+	updated, err := s.behavioralRulesStore.SetEnabled(r.Context(), id, *req.Enabled, normalizedOptionalString(req.EditedBy))
 	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "rule not found", http.StatusNotFound)

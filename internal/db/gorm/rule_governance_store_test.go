@@ -289,7 +289,7 @@ func TestRuleGovernanceStore_ListLegacyBehavioralRuleFallbackKeepsLegacyRowsCont
 		EditedBy: "rg2-test",
 	})
 	require.NoError(t, err)
-	_, err = behavioralStore.SetEnabled(ctx, disabled.ID, false, "rg2-test")
+	_, err = behavioralStore.SetEnabled(ctx, disabled.ID, false, strPtr("rg2-test"))
 	require.NoError(t, err)
 
 	got, err := store.ListLegacyBehavioralRuleFallback(ctx, &project, 1000)
