@@ -191,11 +191,15 @@ test('memory page-size contract offers persisted bounded all mode', () => {
   assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
 })
 
-test('memory detail actions are data-backed mustbuild capabilities, not hardcoded fake-live controls', () => {
+test('memory detail actions keep mustbuild descriptors while live delete is endpoint-backed', () => {
   const memoryPageSource = read(memoryPagePath)
   const memoryLabSource = read(memoryLabPath)
 
-  assert.doesNotMatch(memoryPageSource, /storeCopy|deleteOpened/, 'uncontracted store/delete controls must not be visible in Memory detail')
+  assert.doesNotMatch(memoryPageSource, /storeCopy/, 'uncontracted store-copy controls must not be visible in Memory detail')
+  assert.match(memoryPageSource, /deleteOpened/, 'Memory detail may expose delete only through the live delete handler')
+  assert.match(memoryPageSource, /deleteMemory\(memory\.id\)/, 'Memory detail delete must call the composable live delete action')
+  assert.match(memoryLabSource, /deleteMemory:\s*\(id:\s*string\)\s*=>\s*Promise<OperatorMutationResult<unknown>>/, 'Memory Lab delete must expose a typed mutation result')
+  assert.match(memoryLabSource, /endpointEvidence\(`\/api\/memories\/\$\{id\}`,\s*['"]memory-delete['"]\)/, 'Memory delete must carry the live REST endpoint as evidence')
   assert.match(memoryLabSource, /memoryActionGaps|actionGaps/, 'Memory Lab must expose action capability descriptors')
   assert.match(memoryLabSource, /unsupportedOperatorAction\(/, 'Memory actions without browser endpoints must use unsupported action descriptors')
   assert.match(memoryPageSource, /v-for="action in actionGaps"/, 'Memory detail buttons must render from action capability data')

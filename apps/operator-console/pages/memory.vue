@@ -11,6 +11,7 @@ const {
   pending,
   error,
   refresh,
+  deleteMemory,
   auditGap,
   provenanceGap,
   actionGaps,
@@ -30,6 +31,9 @@ const selected = ref<Record<string, boolean>>({})
 const openId = ref<string | null>(null)
 const page = ref(1)
 const { pageSize, pageSizeOptions } = usePersistentPageSize(MEMORY_PAGE_SIZE_STORAGE_KEY, 10)
+const deleteConfirmId = ref<string | null>(null)
+const deletePending = ref(false)
+const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 
 const projects = computed(() => [...new Set(all.map((memory) => memory.project).filter(Boolean))].sort())
 const activeFilterCount = computed(() => Object.values(filters.value).filter(Boolean).length + (project.value === 'all' ? 0 : 1))
@@ -82,6 +86,10 @@ watch(pageSize, () => {
   page.value = 1
 })
 
+watch(openId, () => {
+  deleteConfirmId.value = null
+})
+
 function toggleFilter(key: MemoryFilter) {
   filters.value[key] = !filters.value[key]
   page.value = 1
@@ -105,6 +113,34 @@ function clearSelected() {
 
 function toggleSelected(id: string) {
   selected.value = { ...selected.value, [id]: !selected.value[id] }
+}
+
+async function deleteOpened() {
+  const memory = opened.value
+  if (!memory || deletePending.value) return
+
+  if (deleteConfirmId.value !== memory.id) {
+    deleteConfirmId.value = memory.id
+    notice.value = null
+    return
+  }
+
+  deletePending.value = true
+  try {
+    const result = await deleteMemory(memory.id)
+    if (result.kind === 'success') {
+      const nextSelected = { ...selected.value }
+      delete nextSelected[memory.id]
+      selected.value = nextSelected
+      openId.value = null
+      deleteConfirmId.value = null
+      notice.value = { kind: 'success', text: t('memory.notice.deleted', { id: memory.id }) }
+    } else {
+      notice.value = { kind: 'error', text: t('memory.notice.error', { message: result.error.message || t('memory.notice.unknownError') }) }
+    }
+  } finally {
+    deletePending.value = false
+  }
 }
 
 function rowState(memory: Memory) {
@@ -201,6 +237,11 @@ function isNoisyUtility(memory: Memory) {
       <span class="fcount">{{ t('memory.filterSummary', { count: filtered.length, noise: noiseRatio }) }}</span>
     </section>
 
+    <section v-if="notice" class="statebar" :data-state="notice.kind === 'error' ? 'error' : 'live'">
+      <span>{{ notice.text }}</span>
+      <button class="tbtn" @click="notice = null">{{ t('common.hide') }}</button>
+    </section>
+
     <section v-if="pending || error || loadState.kind === 'empty' || loadState.kind === 'gated'" class="statebar" :data-state="loadState.kind">
       <span v-if="pending">{{ t('memory.state.pending') }}</span>
       <span v-else-if="error">{{ t('memory.state.error', { message: error }) }}</span>
@@ -292,6 +333,9 @@ function isNoisyUtility(memory: Memory) {
         </section>
 
         <div class="dactions">
+          <button class="act danger" :disabled="deletePending" @click="deleteOpened">
+            {{ deleteConfirmId === opened.id ? t('memory.detail.actions.confirmDelete') : t('memory.detail.actions.delete') }}
+          </button>
           <button v-for="action in actionGaps" :key="action.action" class="act" disabled :title="action.evidence.endpoint">
             {{ t(action.labelKey) }} <span class="mbp">{{ t(action.badgeKey) }}</span>
           </button>

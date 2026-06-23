@@ -228,6 +228,7 @@
       "actions": {
         "storeCopy": "Сохранить копию",
         "delete": "Удалить запись",
+        "confirmDelete": "Подтвердить удаление",
         "hideNoise": "Скрыть как шум",
         "editText": "Редактировать текст",
         "replace": "Заменить новой версией",
@@ -235,6 +236,11 @@
         "lifecycleRequired": "требует lifecycle",
         "flag": "Пометить"
       }
+    },
+    "notice": {
+      "deleted": "Запись памяти {id} удалена",
+      "error": "Операция не выполнена: {message}",
+      "unknownError": "неизвестная ошибка"
     },
     "bulk": {
       "hideNoise": "Скрыть как шум",

@@ -52,6 +52,47 @@ func TestMemoryDomainsHandlers_AdminListAndPut(t *testing.T) {
 	assert.Equal(t, "memory-lab", listResp.Domains[0].Domain)
 }
 
+func TestMemoryDomainsHandlers_AdminDelete(t *testing.T) {
+	service, cleanup := newMemoryDomainTestService(t)
+	defer cleanup()
+
+	router := memoryDomainTestRouter(service)
+	admin := auth.WithIdentity(context.Background(), auth.Admin())
+	body := bytes.NewReader([]byte(`{
+		"owner_principal": "agent/alice",
+		"owner_principal_kind": "agent",
+		"mode": "reject"
+	}`))
+	putReq := httptest.NewRequest(http.MethodPut, "/api/memory-domains/memory-lab", body).WithContext(admin)
+	putW := httptest.NewRecorder()
+	router.ServeHTTP(putW, putReq)
+	require.Equal(t, http.StatusOK, putW.Code, putW.Body.String())
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/memory-domains/memory-lab", nil).WithContext(admin)
+	deleteW := httptest.NewRecorder()
+	router.ServeHTTP(deleteW, deleteReq)
+	require.Equal(t, http.StatusOK, deleteW.Code, deleteW.Body.String())
+
+	var receipt map[string]any
+	require.NoError(t, json.Unmarshal(deleteW.Body.Bytes(), &receipt))
+	assert.Equal(t, true, receipt["deleted"])
+	assert.Equal(t, "memory-lab", receipt["domain"])
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/memory-domains?domain=memory-lab", nil).WithContext(admin)
+	listW := httptest.NewRecorder()
+	router.ServeHTTP(listW, listReq)
+	require.Equal(t, http.StatusOK, listW.Code, listW.Body.String())
+
+	var listResp memoryDomainsListResponse
+	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &listResp))
+	assert.Empty(t, listResp.Domains)
+
+	deleteAgainReq := httptest.NewRequest(http.MethodDelete, "/api/memory-domains/memory-lab", nil).WithContext(admin)
+	deleteAgainW := httptest.NewRecorder()
+	router.ServeHTTP(deleteAgainW, deleteAgainReq)
+	require.Equal(t, http.StatusNotFound, deleteAgainW.Code, deleteAgainW.Body.String())
+}
+
 func TestMemoryDomainsHandlers_AdminRequired(t *testing.T) {
 	service, cleanup := newMemoryDomainTestService(t)
 	defer cleanup()
@@ -120,6 +161,7 @@ func memoryDomainTestRouter(service *Service) http.Handler {
 	router := chi.NewRouter()
 	router.Get("/api/memory-domains", service.handleListMemoryDomains)
 	router.Put("/api/memory-domains/{domain}", service.handleUpsertMemoryDomain)
+	router.Delete("/api/memory-domains/{domain}", service.handleDeleteMemoryDomain)
 	return router
 }
 
