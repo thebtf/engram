@@ -1,0 +1,96 @@
+{
+  "slice": "operator-console-hardening-pr-readiness",
+  "date": "2026-06-23",
+  "worktree": "D:\\Dev\\engram-wt\\operator-console-hardening",
+  "branch": "work/operator-console-hardening",
+  "base": "origin/main",
+  "base_sha": "926b93344ecf8a503d588047d889ebd091cf3a64",
+  "head_before_commit": "1c06724a14de10a932562301e4754d7fc9d84233",
+  "worktree_state": "clean",
+  "publication_state": "not_pushed_at_evidence_time",
+  "open_prs_at_evidence_time": [],
+  "housekeeping": {
+    "primary_checkout": {
+      "path": "D:\\Dev\\engram",
+      "branch": "main",
+      "state": "dirty-preserved",
+      "status": "ahead 1, behind 81 with many local modifications and untracked apps/design files",
+      "decision": "Do not use for source edits or destructive cleanup in this slice."
+    },
+    "reference_worktree": {
+      "path": "D:\\Dev\\engram-wt\\mvp-operator-control-plane",
+      "branch": "feat/operator-web-design-first-pilot",
+      "state": "clean-reference",
+      "head": "926b93344ecf8a503d588047d889ebd091cf3a64"
+    },
+    "active_worktree": {
+      "path": "D:\\Dev\\engram-wt\\operator-console-hardening",
+      "branch": "work/operator-console-hardening",
+      "state": "merge-ready after PR publication",
+      "head_before_commit": "1c06724a14de10a932562301e4754d7fc9d84233"
+    }
+  },
+  "commits": [
+    "11a8ccc5 fix(operator-console): silence i18n build warning",
+    "1a0bac1f fix(operator-console): make settings a modal overlay",
+    "ff8db71d test(operator-console): add settings browser smoke",
+    "2db55112 fix(operator-console): pin safe esbuild for vite",
+    "1c06724a docs(operator-console): clarify design source boundary"
+  ],
+  "verification": [
+    {
+      "command": "git fetch origin",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening",
+      "result": "PASS: origin/main remained 926b93344ecf8a503d588047d889ebd091cf3a64; branch merge-base equals origin/main."
+    },
+    {
+      "command": "gh pr list --state open --json number,title,headRefName,baseRefName,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup,url,updatedAt",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening",
+      "result": "PASS: no open PRs before publishing this branch."
+    },
+    {
+      "command": "npm ci",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: clean install completed and reported 0 vulnerabilities."
+    },
+    {
+      "command": "npm run parity",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: design_version 2026.06.21 in sync; no drift; open gaps 37."
+    },
+    {
+      "command": "npm run test:seam",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: 11/11 seam contract tests."
+    },
+    {
+      "command": "npm run build",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: production Nuxt build completed."
+    },
+    {
+      "command": "npm run test:browser",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: 1/1 Playwright Chromium Settings modal smoke."
+    },
+    {
+      "command": "npm audit --json",
+      "cwd": "D:\\Dev\\engram-wt\\operator-console-hardening\\apps\\operator-console",
+      "result": "PASS: vulnerabilities total 0."
+    }
+  ],
+  "residuals": [
+    {
+      "class": "upstream dependency deprecation warning",
+      "items": [
+        "@oxc-parser/wasm@0.60.0 deprecated via @nuxtjs/i18n tree",
+        "vue-i18n@10.0.8 maintenance warning via @nuxtjs/i18n",
+        "unplugin-vue-router 0.12.0/0.19.2 deprecation warnings via Nuxt/i18n",
+        "glob@10.5.0 deprecation warning",
+        "DEP0155 export-map warnings from @nuxt/icon -> @iconify/utils and @nuxt/nitro-server -> @vue/shared"
+      ],
+      "decision": "Not blocking this hardening PR because audit is clean, production build and browser smoke pass, and removing these warnings requires upstream Nuxt/i18n/Icon migration outside this safe patch."
+    }
+  ],
+  "next": "Push work/operator-console-hardening, open PR against main, wait for CI, then merge if checks are green and no review blocker appears."
+}
