@@ -351,6 +351,29 @@ test('settings feature flags are live read-only data, not a mustbuild fake contr
   assert.doesNotMatch(settingsModalSource, /flagsGap/, 'Settings modal must not render GET /api/flags as a mustbuild gap')
 })
 
+test('health flags by area are live read-only endpoint state', () => {
+  const healthSettingsSource = read(healthSettingsPath)
+  const healthPageSource = read(join(root, 'pages', 'health.vue'))
+  const paritySource = read(join(root, 'PARITY.json'))
+
+  assert.match(healthSettingsSource, /interface OperatorFlagGroup/, 'Health seam must expose grouped feature-flag state')
+  assert.match(healthSettingsSource, /flagGroups:\s*ComputedRef<OperatorFlagGroup\[\]>/, 'Feature flag groups must be exposed to the Health page')
+  assert.match(healthSettingsSource, /const flagGroups = computed/, 'Feature flag groups must be derived from live flag items')
+  assert.match(healthSettingsSource, /restart_required_to_change/, 'Feature flag groups must preserve restart-required evidence')
+  assert.match(healthSettingsSource, /a\.category\.localeCompare\(b\.category\)/, 'Feature flag groups must render in stable category order')
+
+  assert.match(healthPageSource, /flagsState/, 'Health page must read feature-flag load state')
+  assert.match(healthPageSource, /flagGroups/, 'Health page must render grouped feature flags')
+  assert.match(healthPageSource, /health\.flagsByArea/, 'Health flag card title must be i18n-keyed')
+  assert.match(healthPageSource, /\/api\/flags/, 'Health flag card must show live endpoint evidence')
+  assert.match(healthPageSource, /flagsState\.kind !== 'live'/, 'Health flag card must keep a real not-loaded state')
+  assert.match(healthPageSource, /v-for="flagGroup in flagGroups"/, 'Health flag card must render one row per feature-flag area')
+  assert.match(healthPageSource, /health\.flags\.summary/, 'Health flag row summary must be i18n-keyed')
+  assert.match(healthPageSource, /health\.flags\.evidence/, 'Health flag evidence badge must be i18n-keyed')
+  assert.doesNotMatch(healthPageSource, /v-for="item in flagItems"/, 'Health page must not duplicate the Settings raw flag control list')
+  assert.doesNotMatch(paritySource, /flags-by-area is live in Settings modal via GET \/api\/flags but not promoted into this page/, 'PARITY health row must not keep the closed flags-by-area gap')
+})
+
 test('health migrations state is live endpoint-backed and no longer mustbuild', () => {
   const healthSettingsSource = read(healthSettingsPath)
   const healthPageSource = read(join(root, 'pages', 'health.vue'))

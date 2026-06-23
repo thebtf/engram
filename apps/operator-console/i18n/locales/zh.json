@@ -892,6 +892,7 @@
     "vector": "pgvector",
     "update": "Update channel",
     "migrations": "迁移",
+    "flagsByArea": "按区域的 flag",
     "updateState": "Update 状态",
     "updateAvailable": "有可用更新",
     "idle": "空闲",
@@ -904,6 +905,12 @@
       "current_version": "当前版本",
       "applied_count": "已应用",
       "dirtyUnsupported": "Engram 使用 gormigrate：此表不支持 dirty/applied_at。"
+    },
+    "flags": {
+      "empty": "服务器没有返回 flag。",
+      "uncategorized": "未分类",
+      "summary": "启用 {enabled} · 关闭 {disabled} · restart {restart}",
+      "evidence": "{enabled}/{total} 已启用"
     },
     "state": {
       "pending": "正在加载服务器状态…",

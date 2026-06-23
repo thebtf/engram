@@ -892,6 +892,7 @@
     "vector": "pgvector",
     "update": "Update channel",
     "migrations": "Миграции",
+    "flagsByArea": "Флаги по областям",
     "updateState": "Статус update",
     "updateAvailable": "Доступно обновление",
     "idle": "ожидание",
@@ -904,6 +905,12 @@
       "current_version": "Текущая версия",
       "applied_count": "Применено",
       "dirtyUnsupported": "Engram использует gormigrate: dirty/applied_at не поддерживаются этой таблицей."
+    },
+    "flags": {
+      "empty": "Сервер не вернул флаги.",
+      "uncategorized": "Без категории",
+      "summary": "включено {enabled} · выключено {disabled} · restart {restart}",
+      "evidence": "{enabled}/{total} включено"
     },
     "state": {
       "pending": "Загружаем состояние сервера…",

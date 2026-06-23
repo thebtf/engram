@@ -8,7 +8,9 @@ const {
   updateStatusState,
   updateCheckState,
   migrationsState,
+  flagsState,
   components,
+  flagGroups,
   embeddingMetrics,
   migrationMetrics,
   pending,
@@ -132,6 +134,24 @@ const migrationMessage = computed(() => {
         <p v-if="migrationMessage" class="message">{{ migrationMessage }}</p>
         <HonestyBadge :cls="migrationsState.kind === 'live' && migrationsState.data.current_version ? 'live' : 'dormant'" :evidence="migrationsState.kind === 'live' ? migrationsState.data.engine : t('health.state.notLoaded')" />
       </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2>{{ t('health.flagsByArea') }}</h2>
+          <code>/api/flags</code>
+        </div>
+        <p v-if="flagsState.kind !== 'live'" class="message">{{ t('health.state.notLoaded') }}</p>
+        <p v-else-if="!flagGroups.length" class="message">{{ t('health.flags.empty') }}</p>
+        <div v-else class="rows">
+          <div v-for="flagGroup in flagGroups" :key="flagGroup.category || 'uncategorized'" class="row flag-row">
+            <div>
+              <span>{{ flagGroup.category || t('health.flags.uncategorized') }}</span>
+              <small>{{ t('health.flags.summary', { enabled: flagGroup.enabled, disabled: flagGroup.disabled, restart: flagGroup.restartRequired }) }}</small>
+            </div>
+            <HonestyBadge cls="live" :evidence="t('health.flags.evidence', { enabled: flagGroup.enabled, total: flagGroup.total })" />
+          </div>
+        </div>
+      </article>
     </section>
   </div>
 </template>
@@ -158,6 +178,7 @@ const migrationMessage = computed(() => {
 .card-head code { margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--muted); }
 .rows { display:grid; gap:8px; }
 .row { display:flex; align-items:center; justify-content:space-between; gap:10px; border-bottom:1px solid var(--border-soft); padding:8px 0; color:var(--fg-2); }
+.flag-row small { display:block; margin-top:4px; color:var(--muted); font-size:var(--text-xs); }
 .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
 .message, .empty { color:var(--muted); font-size:var(--text-sm); margin:0 0 12px; }
 @media (max-width: 720px) { .head { display:grid; } }
