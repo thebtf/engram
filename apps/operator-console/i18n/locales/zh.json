@@ -744,6 +744,158 @@
   "settings": {
     "title": "设置",
     "subtitle": "只读 runtime config，以及需要操作员明确确认的动作。",
+    "launch": {
+      "title": "服务器设置",
+      "body": "打开设置以调整模型、密钥、服务器 flag、主题和界面密度。按照设计契约，设置应覆盖在当前分区上方，不把操作员带离当前任务。",
+      "action": "打开设置"
+    },
+    "modal": {
+      "aria": "服务器设置",
+      "kicker": "设置",
+      "close": "关闭设置",
+      "groups": {
+        "basic": "基础",
+        "models": "模型",
+        "access": "访问",
+        "server": "服务器"
+      },
+      "tabs": {
+        "general": {
+          "label": "通用",
+          "title": "通用",
+          "desc": "主题、密度、语言和工作区。"
+        },
+        "models": {
+          "label": "模型",
+          "title": "模型",
+          "desc": "Engram 角色使用的已发布模型名称。"
+        },
+        "credentials": {
+          "label": "凭据",
+          "title": "凭据",
+          "desc": "Provider、API base 和 key。一个凭据可以服务多个模型。"
+        },
+        "bindings": {
+          "label": "绑定",
+          "title": "绑定",
+          "desc": "哪个模型负责搜索、reranking、Engram 回答和记忆维护。"
+        },
+        "addModel": {
+          "label": "添加模型",
+          "title": "添加模型",
+          "desc": "选择已有凭据或创建新凭据来发布新模型。"
+        },
+        "acProviders": {
+          "label": "登录 provider",
+          "title": "登录 provider",
+          "desc": "用户如何登录这个 self-hosted 实例：OAuth provider 和企业 OIDC broker。"
+        },
+        "acPolicy": {
+          "label": "访问策略",
+          "title": "访问策略",
+          "desc": "谁可以登录。没有这条规则，启用 provider 的任意账号都能获得访问。"
+        },
+        "acUsers": {
+          "label": "用户",
+          "title": "用户",
+          "desc": "所有有实例访问权的人。角色决定权限，provider 决定登录方式。"
+        },
+        "acInvites": {
+          "label": "邀请",
+          "title": "邀请",
+          "desc": "已发送但尚未接受的邀请。链接有有效期。"
+        },
+        "acRoles": {
+          "label": "角色",
+          "title": "角色",
+          "desc": "self-hosted 的四个访问级别：Owner、Admin、Operator 和 Viewer。"
+        },
+        "acSessions": {
+          "label": "会话",
+          "title": "会话",
+          "desc": "实例中所有用户的活动会话。"
+        },
+        "acAudit": {
+          "label": "访问日志",
+          "title": "访问日志",
+          "desc": "登录、角色变更、邀请、OAuth 配置变更和策略更新。"
+        },
+        "runtime": {
+          "label": "服务器 flag",
+          "title": "服务器 flag",
+          "desc": "服务器行为开关：哪些立即生效，哪些等待 restart。"
+        },
+        "actions": {
+          "label": "Restart / update",
+          "title": "Restart / update",
+          "desc": "会改变 live 进程且需要确认的操作员动作。"
+        },
+        "client": {
+          "label": "Web UI / client",
+          "title": "Web UI / client",
+          "desc": "控制台 Web 界面和工作站本地 client 行为。"
+        },
+        "dead": {
+          "label": "旧机制，不要触碰",
+          "title": "旧机制，不要触碰",
+          "desc": "已移除机制显示为 tombstone，而不是工作控件。"
+        }
+      },
+      "sections": {
+        "appearance": "外观",
+        "workspace": "工作区",
+        "client": "Client",
+        "tombstones": "Tombstone",
+        "honesty": "Surface 诚实性"
+      },
+      "general": {
+        "theme": {
+          "title": "主题",
+          "desc": "在适合第二屏的深色模式和适合白天检查的浅色模式之间切换。",
+          "dark": "深色",
+          "light": "浅色"
+        },
+        "density": {
+          "title": "密度",
+          "desc": "舒适模式显示更多标签和细节；紧凑模式在工作区保留更多行。"
+        },
+        "language": {
+          "title": "界面语言",
+          "desc": "操作员标签会本地化；技术标识保持原样。"
+        },
+        "server": {
+          "title": "服务器",
+          "desc": "当前工作站连接到一个 Engram server；设置作用于这个控制台及其角色。"
+        },
+        "overlay": {
+          "title": "打开设置",
+          "desc": "设置覆盖在当前分区上方，不会把操作员带离当前任务。",
+          "badge": "模态窗口"
+        }
+      },
+      "client": {
+        "theme": {
+          "title": "主题",
+          "desc": "当前本地控制台主题状态。"
+        },
+        "density": {
+          "title": "密度",
+          "desc": "当前工作区密度模式。"
+        },
+        "locale": {
+          "title": "Locale",
+          "desc": "当前界面语言。"
+        }
+      },
+      "mustbuild": {
+        "title": "Backend seam 尚未准备好",
+        "body": "设计契约包含这个 tab，但当前服务器还没有暴露所需 endpoint。因此控件保持诚实的 mustbuild，而不是变成死按钮。"
+      },
+      "dead": {
+        "title": "不要复活已移除机制",
+        "body": "这个 surface 提醒我们遵守 v5 demolition guard：stale scaffold 不能像 live 功能一样继续扩展。"
+      }
+    },
     "refresh": "刷新",
     "runtime": "Runtime flags",
     "configSnapshot": "配置快照",

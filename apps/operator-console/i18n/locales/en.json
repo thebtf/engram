@@ -744,6 +744,158 @@
   "settings": {
     "title": "Settings",
     "subtitle": "Read-only runtime config and actions that require explicit operator confirmation.",
+    "launch": {
+      "title": "Server settings",
+      "body": "Open settings to change models, keys, server flags, theme, and interface density. Per the design contract, settings appear over the current section and do not pull the operator out of the task.",
+      "action": "Open settings"
+    },
+    "modal": {
+      "aria": "Server settings",
+      "kicker": "Settings",
+      "close": "Close settings",
+      "groups": {
+        "basic": "Basic",
+        "models": "Models",
+        "access": "Access",
+        "server": "Server"
+      },
+      "tabs": {
+        "general": {
+          "label": "General",
+          "title": "General",
+          "desc": "Theme, density, language, and workspace."
+        },
+        "models": {
+          "label": "Models",
+          "title": "Models",
+          "desc": "Published model names for Engram roles."
+        },
+        "credentials": {
+          "label": "Credentials",
+          "title": "Credentials",
+          "desc": "Providers, API base, and keys. One credential can serve multiple models."
+        },
+        "bindings": {
+          "label": "Bindings",
+          "title": "Bindings",
+          "desc": "Which model handles search, reranking, Engram answers, and memory maintenance."
+        },
+        "addModel": {
+          "label": "Add model",
+          "title": "Add model",
+          "desc": "Publish a new model by selecting an existing credential or creating a new one."
+        },
+        "acProviders": {
+          "label": "Login providers",
+          "title": "Login providers",
+          "desc": "How users sign in to this self-hosted instance: OAuth providers and a corporate OIDC broker."
+        },
+        "acPolicy": {
+          "label": "Access policy",
+          "title": "Access policy",
+          "desc": "Who may sign in at all. Without this rule, any account from an enabled provider gets access."
+        },
+        "acUsers": {
+          "label": "Users",
+          "title": "Users",
+          "desc": "Everyone with access to the instance. The role defines permissions; providers define login paths."
+        },
+        "acInvites": {
+          "label": "Invites",
+          "title": "Invites",
+          "desc": "Sent invites that have not been accepted yet. Each link expires."
+        },
+        "acRoles": {
+          "label": "Roles",
+          "title": "Roles",
+          "desc": "Four self-hosted access levels: Owner, Admin, Operator, and Viewer."
+        },
+        "acSessions": {
+          "label": "Sessions",
+          "title": "Sessions",
+          "desc": "Active sessions for all users of the instance."
+        },
+        "acAudit": {
+          "label": "Access log",
+          "title": "Access log",
+          "desc": "Sign-ins, role changes, invites, OAuth config changes, and policy updates."
+        },
+        "runtime": {
+          "label": "Server flags",
+          "title": "Server flags",
+          "desc": "Server behavior switches: what changes immediately and what waits for restart."
+        },
+        "actions": {
+          "label": "Restart / update",
+          "title": "Restart / update",
+          "desc": "Operator actions that change the live process and require confirmation."
+        },
+        "client": {
+          "label": "Web UI / client",
+          "title": "Web UI / client",
+          "desc": "Console web interface and workstation-local client behavior."
+        },
+        "dead": {
+          "label": "Old, do not touch",
+          "title": "Old, do not touch",
+          "desc": "Removed mechanisms are shown as tombstones, not as working controls."
+        }
+      },
+      "sections": {
+        "appearance": "Appearance",
+        "workspace": "Workspace",
+        "client": "Client",
+        "tombstones": "Tombstones",
+        "honesty": "Surface honesty"
+      },
+      "general": {
+        "theme": {
+          "title": "Theme",
+          "desc": "Switches the workstation between a dark second-monitor mode and a light daytime review mode.",
+          "dark": "Dark",
+          "light": "Light"
+        },
+        "density": {
+          "title": "Density",
+          "desc": "Comfort mode exposes labels and details; compact mode keeps more rows in the workspace."
+        },
+        "language": {
+          "title": "Interface language",
+          "desc": "Operator labels are localized; technical identifiers remain unchanged."
+        },
+        "server": {
+          "title": "Server",
+          "desc": "This workstation is attached to one Engram server; settings apply to this console and its roles."
+        },
+        "overlay": {
+          "title": "Open settings",
+          "desc": "Settings appear over the current section and do not pull the operator out of the task.",
+          "badge": "modal overlay"
+        }
+      },
+      "client": {
+        "theme": {
+          "title": "Theme",
+          "desc": "Current local console theme state."
+        },
+        "density": {
+          "title": "Density",
+          "desc": "Current workspace density mode."
+        },
+        "locale": {
+          "title": "Locale",
+          "desc": "Current interface language."
+        }
+      },
+      "mustbuild": {
+        "title": "Backend seam is not ready yet",
+        "body": "The design contract includes this tab, but the current server does not expose the required endpoint. The control stays honest mustbuild instead of becoming a dead button."
+      },
+      "dead": {
+        "title": "Do not revive removed mechanisms",
+        "body": "This surface reminds us of the v5 demolition guard: stale scaffolds must not be extended as if they were live."
+      }
+    },
     "refresh": "Refresh",
     "runtime": "Runtime flags",
     "configSnapshot": "Config snapshot",

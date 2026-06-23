@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useNav } from '../composables/useNav'
+import { useNav, type NavItem } from '../composables/useNav'
 import { useOperatorMemoryLab } from '../composables/useOperatorMemoryLab'
 import { useOperatorShellStatus } from '../composables/useOperatorShell'
 
@@ -14,6 +14,7 @@ const router = useRouter()
 const colorMode = useColorMode()
 const density = useState<'comfortable' | 'compact'>('density', () => 'compact')
 const { t, locale, locales, setLocale } = useI18n()
+const { settingsModalOpen, settingsModalTab, openSettingsModal } = useSettingsModal()
 
 const NAV_COLLAPSE_KEY = 'engram.console.navCollapsed'
 const navCollapsed = useState<boolean>('nav-collapsed', () => false)
@@ -123,6 +124,13 @@ function goSearch() {
   const query = search.value.trim()
   void router.push(query ? { path: '/search', query: { q: query } } : '/search')
 }
+
+function handleNavItemClick(event: MouseEvent, item: NavItem) {
+  mobileNavOpen.value = false
+  if (item.id !== 'settings') return
+  event.preventDefault()
+  openSettingsModal('general')
+}
 </script>
 
 <template>
@@ -167,7 +175,7 @@ function goSearch() {
             :class="{ tomb: item.cls === 'stale' }"
             exact-active-class="on"
             :title="t(`nav.items.${item.labelKey}`)"
-            @click="mobileNavOpen = false"
+            @click="handleNavItemClick($event, item)"
           >
             <span class="ndot" :data-s="dotState(item.cls)" />
             <span v-html="navIcon(item.id)" />
@@ -212,7 +220,7 @@ function goSearch() {
 
     <footer class="statusbar">
       <span class="si"><span class="dot" />{{ t('shell.online') }}</span>
-      <NuxtLink to="/settings" class="si"><span>{{ info.host }}</span><strong>{{ info.version }}</strong></NuxtLink>
+      <button type="button" class="si status-action" @click="openSettingsModal('general')"><span>{{ info.host }}</span><strong>{{ info.version }}</strong></button>
       <span class="si">{{ t('shell.postgres') }}</span>
       <span class="si">{{ currentArea }}</span>
       <span class="ssp" />
@@ -222,6 +230,8 @@ function goSearch() {
       <NuxtLink to="/queue" class="si">{{ t('shell.reviewQueue', 7) }}</NuxtLink>
       <span class="si">{{ t('shell.uptime', { value: info.uptime }) }}</span>
     </footer>
+
+    <SettingsModal v-model:open="settingsModalOpen" v-model:active-tab="settingsModalTab" />
   </div>
 </template>
 
@@ -336,6 +346,8 @@ function goSearch() {
 .content { min-width:0; overflow-y:auto; padding:22px 24px 90px; }
 .statusbar { display:flex; align-items:center; gap:var(--space-4); padding:0 var(--space-4); background:var(--surface); border-top:1px solid var(--border); font-size:11px; color:var(--muted); font-family:var(--font-mono); min-width:0; overflow:hidden; }
 .statusbar .si { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; color:var(--muted); text-decoration:none; }
+.statusbar button.si { border:0; background:transparent; padding:0; font:inherit; cursor:pointer; }
+.statusbar button.si:hover { color:var(--fg-2); }
 .statusbar .si strong { color:var(--fg-2); }
 .statusbar .si .dot { width:6px; height:6px; border-radius:50%; background:var(--class-live); flex:none; }
 .statusbar .si.warn { color:var(--state-warn); }
