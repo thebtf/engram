@@ -368,7 +368,11 @@ test('health migrations state is live endpoint-backed and no longer mustbuild', 
   assert.match(healthPageSource, /const migrationMessage = computed/, 'Health page must compute migration helper copy from load state')
   assert.match(healthPageSource, /migrationsState\.value\.kind !== 'live'[\s\S]*health\.state\.notLoaded/, 'Health page must reserve not-loaded copy for non-live migration state')
   assert.match(healthPageSource, /migrationsState\.value\.data\.dirty_supported === false/, 'Health page must show dirty unsupported copy only when the live payload says so')
-  assert.match(mockOperatorApiSource, /case '\/api\/migrations':[\s\S]*json\(res,\s*200,\s*migrations\)/, 'Mock operator API must serve migration state for smoke')
+  assert.match(
+    mockOperatorApiSource,
+    /case '\/api\/migrations':[\s\S]*?json\(res,\s*200,\s*migrations\)[\s\S]*?return/,
+    'Mock operator API must serve migration state for smoke',
+  )
   assert.doesNotMatch(paritySource, /migrations \(mustbuild\)/, 'PARITY health row must not keep migrations as a mustbuild gap')
 })
 

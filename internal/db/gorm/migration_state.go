@@ -3,6 +3,9 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -35,11 +38,11 @@ func (s *Store) GetMigrationState(ctx context.Context) (*MigrationState, error) 
 	if err := s.DB.WithContext(ctx).
 		Table(migrationTable).
 		Select("id").
-		Order("id ASC").
 		Scan(&ids).Error; err != nil {
 		return nil, fmt.Errorf("read migration state: %w", err)
 	}
 
+	ids = sortAppliedMigrationIDs(ids)
 	current := ""
 	if len(ids) > 0 {
 		current = ids[len(ids)-1]
@@ -54,4 +57,29 @@ func (s *Store) GetMigrationState(ctx context.Context) (*MigrationState, error) 
 		DirtySupported:     false,
 		AppliedAtSupported: false,
 	}, nil
+}
+
+func sortAppliedMigrationIDs(ids []string) []string {
+	ordered := append([]string(nil), ids...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, leftOK := migrationSequence(ordered[i])
+		right, rightOK := migrationSequence(ordered[j])
+		if leftOK && rightOK && left != right {
+			return left < right
+		}
+		if leftOK != rightOK {
+			return leftOK
+		}
+		return ordered[i] < ordered[j]
+	})
+	return ordered
+}
+
+func migrationSequence(id string) (int, bool) {
+	prefix, _, ok := strings.Cut(id, "_")
+	if !ok || prefix == "" {
+		return 0, false
+	}
+	value, err := strconv.Atoi(prefix)
+	return value, err == nil
 }
