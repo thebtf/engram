@@ -22,7 +22,7 @@ const fpShown = ref(false)
 const openedName = ref<string | null>(null)
 const deleteConfirm = ref(false)
 const revealError = ref<string | null>(null)
-const revealed = ref<{ name: string; value: string } | null>(null)
+const revealed = ref<{ id: string; value: string } | null>(null)
 const createName = ref('')
 const createProject = ref('engram')
 const createValue = ref('')
@@ -52,18 +52,18 @@ function openCredential(cred: OperatorCredential) {
   revealError.value = null
 }
 
-async function revealSecret(name: string) {
+async function revealSecret(cred: OperatorCredential) {
   revealError.value = null
   try {
-    const value = await fetchSecretValue(name)
-    revealed.value = { name, value }
+    const value = await fetchSecretValue(cred)
+    revealed.value = { id: cred.id, value }
   } catch (nextError) {
     revealError.value = nextError instanceof Error ? nextError.message : String(nextError)
   }
 }
 
-function hideSecret(name: string) {
-  if (revealed.value?.name === name) {
+function hideSecret(id: string) {
+  if (revealed.value?.id === id) {
     revealed.value = null
   }
 }
@@ -87,11 +87,11 @@ async function deleteOpened() {
     return
   }
 
-  const name = selected.value.id
+  const cred = selected.value
   openedName.value = null
   deleteConfirm.value = false
-  hideSecret(name)
-  await deleteSecret(name)
+  hideSecret(cred.id)
+  await deleteSecret(cred)
 }
 
 async function cleanupOrphans() {
@@ -189,19 +189,19 @@ async function cleanupOrphans() {
       </thead>
       <tbody>
         <template v-for="c in creds" :key="c.id">
-          <tr :class="{ open: openedName === c.id }" @click="openCredential(c)">
+          <tr :class="{ open: openedName === c.id }" :data-testid="`secret-row-${c.id}`" @click="openCredential(c)">
             <td>
               <div class="vn">
-                <span><span class="vk">🔑</span>{{ c.id }}</span>
-                <RevealSecret v-if="revealed?.name === c.id" :value="revealed.value" :seconds="30" @hide="hideSecret(c.id)" />
+                <span><span class="vk">🔑</span>{{ c.name }}</span>
+                <RevealSecret v-if="revealed?.id === c.id" :value="revealed.value" :seconds="30" @hide="hideSecret(c.id)" />
                 <span v-if="revealError && openedName === c.id" class="err">{{ revealError }}</span>
               </div>
             </td>
-            <td><span class="vcol">{{ c.project }}</span></td>
+            <td><span class="vcol">{{ c.project || t('secrets.globalProject') }}</span></td>
             <td><span class="bdg">{{ c.scope }}</span></td>
             <td><span class="vcol">{{ c.created }}</span></td>
             <td class="r">
-              <button v-if="revealed?.name !== c.id" class="act" @click.stop="revealSecret(c.id)">{{ t('secrets.reveal') }}</button>
+              <button v-if="revealed?.id !== c.id" class="act" :data-testid="`secret-reveal-${c.id}`" @click.stop="revealSecret(c)">{{ t('secrets.reveal') }}</button>
               <button class="act danger" @click.stop="openedName = c.id; deleteOpened()">{{ deleteConfirm && openedName === c.id ? t('secrets.confirmDelete') : t('secrets.delete') }}</button>
             </td>
           </tr>

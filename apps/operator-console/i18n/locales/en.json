@@ -622,6 +622,7 @@
     "delete": "Delete",
     "confirmDelete": "Confirm",
     "vaultDisabled": "vault off",
+    "globalProject": "global",
     "state": {
       "pending": "Loading vault from the server…",
       "error": "Could not load vault: {message}",

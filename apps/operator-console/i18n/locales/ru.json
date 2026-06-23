@@ -622,6 +622,7 @@
     "delete": "Удалить",
     "confirmDelete": "Подтвердить",
     "vaultDisabled": "vault выключен",
+    "globalProject": "global",
     "state": {
       "pending": "Загружаем vault с сервера…",
       "error": "Не удалось загрузить vault: {message}",

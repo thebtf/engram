@@ -15,6 +15,7 @@ import {
 
 export interface OperatorCredential {
   id: string
+  name: string
   project: string
   scope: string
   created: string
@@ -36,6 +37,7 @@ export interface StoreSecretInput {
 }
 
 interface ApiVaultCredential {
+  id?: number
   name: string
   project?: string
   scope?: string
@@ -95,12 +97,22 @@ function compactAge(timestamp?: string): string {
 }
 
 function mapCredential(row: ApiVaultCredential): OperatorCredential {
+  const project = row.project || ''
   return {
-    id: row.name,
-    project: row.project || 'global',
+    id: row.id !== undefined ? String(row.id) : `${project || 'global'}:${row.name}`,
+    name: row.name,
+    project,
     scope: row.scope || 'project',
     created: compactAge(row.created_at),
   }
+}
+
+function credentialUrl(cred: OperatorCredential): string {
+  const base = `/api/vault/credentials/${encodeURIComponent(cred.name)}`
+  if (!cred.project) return base
+
+  const params = new URLSearchParams({ project: cred.project })
+  return `${base}?${params.toString()}`
 }
 
 function mapVaultStatus(row: ApiVaultStatus): OperatorVaultStatus {
@@ -133,9 +145,9 @@ export function useOperatorSecrets(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  revealSecret: (name: string) => Promise<string>
+  revealSecret: (cred: OperatorCredential) => Promise<string>
   createSecret: (input: StoreSecretInput) => Promise<unknown>
-  deleteSecret: (name: string) => Promise<unknown>
+  deleteSecret: (cred: OperatorCredential) => Promise<unknown>
   cleanupOrphans: () => Promise<unknown>
   rotationGap: ReturnType<typeof unsupportedOperatorAction>
 } {
@@ -218,10 +230,11 @@ export function useOperatorSecrets(): {
     await Promise.all([refreshVault(), refreshCreds()])
   }
 
-  async function revealSecret(name: string): Promise<string> {
+  async function revealSecret(cred: OperatorCredential): Promise<string> {
+    const path = credentialUrl(cred)
     try {
       const payload = await operatorFetchJson<ApiVaultReveal>(
-        `/api/vault/credentials/${encodeURIComponent(name)}`,
+        path,
         undefined,
         'vault-reveal',
       )
@@ -229,7 +242,7 @@ export function useOperatorSecrets(): {
     } catch (nextError) {
       const mapped = toOperatorSourceError(nextError, {
         source: 'vault-reveal',
-        path: `/api/vault/credentials/${encodeURIComponent(name)}`,
+        path,
         method: 'GET',
       })
       throw new Error(mapped.message)
@@ -252,15 +265,16 @@ export function useOperatorSecrets(): {
     })
   }
 
-  async function deleteSecret(name: string) {
+  async function deleteSecret(cred: OperatorCredential) {
+    const path = credentialUrl(cred)
     return runOperatorMutation({
       action: 'vault-delete',
-      evidence: endpointEvidence(`/api/vault/credentials/${name}`, 'vault-delete'),
+      evidence: endpointEvidence(path, 'vault-delete'),
       snapshot: () => [...credsState.value],
       optimistic: () => {
-        replaceArray(credsState.value, credsState.value.filter((row) => row.id !== name))
+        replaceArray(credsState.value, credsState.value.filter((row) => row.id !== cred.id))
       },
-      run: () => operatorFetchJson(`/api/vault/credentials/${encodeURIComponent(name)}`, jsonInit('DELETE'), 'vault-delete'),
+      run: () => operatorFetchJson(path, jsonInit('DELETE'), 'vault-delete'),
       rollback: (snapshot) => replaceArray(credsState.value, snapshot || []),
       refresh,
     })
