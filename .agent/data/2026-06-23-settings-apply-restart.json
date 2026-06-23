@@ -3,17 +3,18 @@
   "date": "2026-06-23",
   "goal_slice": "Server Control Plane Completion / Operator Console Hardening",
   "summary": "Promoted Settings config save from honest mustbuild placeholder to a narrow live PATCH /api/config seam for allowlisted config-backed fields, preserving env-controlled read-only semantics and restart-required receipts.",
-  "worktree": "D:/Dev/engram-wt/settings-apply-restart",
+  "worktree": "settings-apply-restart",
   "branch": "work/settings-apply-restart",
   "implemented": [
     "Added config.SaveSettings to merge validated operator settings into settings.json.",
     "Added JSON loading and reload change detection for ENGRAM_INJECT_UNIFIED.",
-    "Added admin-only PATCH /api/config with strict JSON decoding, unsupported-field rejection, env-controlled conflict responses, allowlisted settings persistence, hot reload, and restart_required_fields receipt.",
+    "Added admin-only PATCH /api/config with strict bounded single-document JSON decoding, unsupported-field rejection, env-controlled conflict responses, allowlisted settings persistence, hot apply for hot fields, and restart_required_fields receipt for restart-only fields.",
     "Updated GET /api/flags apply metadata from mustbuild to live allowlisted PATCH /api/config evidence.",
     "Updated Settings modal to edit memory.inject_unified and features.enforce_source_project through the live mutation seam while telemetry remains disabled/read-only.",
     "Updated ru/en/zh i18n for config save action, receipt, rollback error, and honest settings descriptions.",
     "Updated mock operator API, seam test, browser smoke, and UI surface ledger for the new live seam.",
-    "Addressed PR review feedback by serializing settings.json read-modify-write with a package mutex and writing through a same-directory temp file before rename."
+    "Addressed PR review feedback by serializing settings.json read-modify-write with a package mutex and writing through a same-directory temp file before rename.",
+    "Kept restart-required config fields effective-value honest: persisted changes wait for process restart instead of silently changing live behavior."
   ],
   "remaining_gaps": [
     "Telemetry and most runtime settings remain read-only or mustbuild until backed by real server seams.",
@@ -62,6 +63,7 @@
   "honesty_notes": [
     "Env-controlled settings return HTTP 409 instead of pretending the UI changed the effective value.",
     "Unsupported known fields, including features.telemetry_enabled, return HTTP 400 and remain non-operable in the UI.",
-    "memory.inject_unified returns restart_required_fields because the operator needs an explicit restart/apply signal."
+    "memory.inject_unified returns restart_required_fields because the operator needs an explicit restart/apply signal.",
+    "Restart-required fields are persisted for the next process start but the current process snapshot keeps the old effective value until restart."
   ]
 }

@@ -1294,6 +1294,10 @@ func (s *Service) setupRoutes() {
 		// Runtime feature flags (read-only current-process snapshot; works before DB is ready)
 		r.Get("/api/flags", s.handleGetFlags)
 
+		// Config management is file-backed, so recovery settings remain available before DB readiness.
+		r.Get("/api/config", s.handleGetConfig)
+		r.Patch("/api/config", s.handlePatchConfig)
+
 		// Dashboard SSE endpoint (works before DB is ready)
 		r.Get("/api/events", s.sseBroadcaster.HandleSSE)
 
@@ -1428,9 +1432,6 @@ func (s *Service) setupRoutes() {
 		// Token stats
 		r.Get("/api/auth/tokens/{id}/stats", s.handleGetTokenStats)
 
-		// Config
-		r.Get("/api/config", s.handleGetConfig)
-		r.Patch("/api/config", s.handlePatchConfig)
 	})
 
 	// Catch-all browser routes for the promoted operator-console surface.

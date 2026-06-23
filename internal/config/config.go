@@ -565,10 +565,6 @@ func Reload() (*Config, []string, error) {
 
 	configMu.Lock()
 	old := globalConfig
-	globalConfig = newCfg
-	configMu.Unlock()
-
-	// Detect changed fields for logging
 	var changed []string
 	if old != nil {
 		if old.Model != newCfg.Model {
@@ -585,12 +581,15 @@ func Reload() (*Config, []string, error) {
 		}
 		if old.InjectUnified != newCfg.InjectUnified {
 			changed = append(changed, "inject_unified (requires restart)")
+			newCfg.InjectUnified = old.InjectUnified
 		}
 		if old.WorkerPort != newCfg.WorkerPort {
 			changed = append(changed, "worker_port (requires restart)")
+			newCfg.WorkerPort = old.WorkerPort
 		}
 		if old.WorkerToken != newCfg.WorkerToken {
 			changed = append(changed, "worker_token (requires restart)")
+			newCfg.WorkerToken = old.WorkerToken
 		}
 		if old.AuthSkipLocal != newCfg.AuthSkipLocal {
 			changed = append(changed, "auth_skip_local")
@@ -599,6 +598,11 @@ func Reload() (*Config, []string, error) {
 			changed = append(changed, "auth_trusted_proxy")
 		}
 	}
+
+	// Restart-required settings are persisted for the next process start, but the
+	// current process snapshot keeps the old effective value until then.
+	globalConfig = newCfg
+	configMu.Unlock()
 
 	return newCfg, changed, nil
 }

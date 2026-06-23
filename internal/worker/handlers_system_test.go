@@ -116,8 +116,33 @@ func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	svc.initMu.RLock()
 	require.NotNil(t, svc.config)
 	assert.False(t, svc.config.EnforceSourceProject)
-	assert.False(t, svc.config.InjectUnified)
+	assert.True(t, svc.config.InjectUnified)
 	svc.initMu.RUnlock()
+
+	persisted, err := config.Load()
+	require.NoError(t, err)
+	assert.False(t, persisted.InjectUnified)
+}
+
+func TestHandlePatchConfig_RejectsTrailingJSON(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+	require.NoError(t, config.SaveSettings(map[string]any{
+		"ENGRAM_ENFORCE_SOURCE_PROJECT": true,
+	}))
+	cfg, _, err := config.Reload()
+	require.NoError(t, err)
+
+	svc := &Service{config: cfg}
+	body := bytes.NewBufferString(`{"features":{"enforce_source_project":false}}{}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", body).
+		WithContext(auth.WithIdentity(context.Background(), auth.Admin()))
+	w := httptest.NewRecorder()
+
+	svc.handlePatchConfig(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestHandlePatchConfig_RejectsEnvControlledSetting(t *testing.T) {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -65,9 +66,14 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req patchConfigRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}

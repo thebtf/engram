@@ -468,8 +468,8 @@ func (s *ConfigSuite) TestReload_DetectsOperatorSettingsChanges() {
 	s.Require().NoError(err)
 	defer os.RemoveAll(tempDir)
 
-	os.Setenv("HOME", tempDir)
-	os.Setenv("USERPROFILE", tempDir)
+	s.T().Setenv("HOME", tempDir)
+	s.T().Setenv("USERPROFILE", tempDir)
 	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
 	s.Require().NoError(err)
 
@@ -485,9 +485,13 @@ func (s *ConfigSuite) TestReload_DetectsOperatorSettingsChanges() {
 	cfg, changed, err := Reload()
 	s.Require().NoError(err)
 	s.False(cfg.EnforceSourceProject)
-	s.False(cfg.InjectUnified)
+	s.True(cfg.InjectUnified)
 	s.Contains(changed, "enforce_source_project")
 	s.Contains(changed, "inject_unified (requires restart)")
+
+	persisted, err := Load()
+	s.Require().NoError(err)
+	s.False(persisted.InjectUnified)
 }
 
 // TestLoad_DBPathFromJSON verifies ENGRAM_DB_PATH in JSON settings is applied.

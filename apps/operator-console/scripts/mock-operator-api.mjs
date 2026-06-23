@@ -65,6 +65,7 @@ const flags = {
     ENGRAM_V7_S5_TELEMETRY: false,
     ENGRAM_V7_S6_OUTCOME: false,
     ENGRAM_ENFORCE_SOURCE_PROJECT: true,
+    ENGRAM_INJECT_UNIFIED: true,
   },
   items: [
     { name: 'ENGRAM_VNEXT_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
@@ -83,8 +84,9 @@ const flags = {
     { name: 'ENGRAM_V7_S5_TELEMETRY', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
     { name: 'ENGRAM_V7_S6_OUTCOME', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
     { name: 'ENGRAM_ENFORCE_SOURCE_PROJECT', enabled: true, source: 'config', category: 'operations', restart_required_to_change: false },
+    { name: 'ENGRAM_INJECT_UNIFIED', enabled: true, source: 'config', category: 'memory', restart_required_to_change: true },
   ],
-  summary: { total: 16, enabled: 6, disabled: 10 },
+  summary: { total: 17, enabled: 7, disabled: 10 },
   read_only: true,
   apply: {
     supported: true,
@@ -98,6 +100,10 @@ function syncConfigFlags() {
   flags.flags.ENGRAM_ENFORCE_SOURCE_PROJECT = Boolean(config.features.enforce_source_project)
   const sourceProject = flags.items.find((item) => item.name === 'ENGRAM_ENFORCE_SOURCE_PROJECT')
   if (sourceProject) sourceProject.enabled = flags.flags.ENGRAM_ENFORCE_SOURCE_PROJECT
+
+  flags.flags.ENGRAM_INJECT_UNIFIED = Boolean(config.memory.inject_unified)
+  const injectUnified = flags.items.find((item) => item.name === 'ENGRAM_INJECT_UNIFIED')
+  if (injectUnified) injectUnified.enabled = flags.flags.ENGRAM_INJECT_UNIFIED
 }
 
 function readRequestJson(req) {
