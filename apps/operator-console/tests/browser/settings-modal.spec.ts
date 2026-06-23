@@ -69,8 +69,15 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
 
   await dialog.getByRole('button', { name: /Модели/ }).click()
   await expect(dialog.getByRole('heading', { name: 'Модели' })).toBeVisible()
-  await expect(dialog.getByText('Backend seam ещё не готов')).toBeVisible()
+  await expect(dialog.getByText('Здоровье моделей')).toBeVisible()
+  await expect(dialog.locator('.endpoint-pill', { hasText: 'GET /api/model-health' })).toBeVisible()
+  await expect(dialog.getByText('recall/embedder')).toBeVisible()
+  await expect(dialog.getByText('smoke-embedding')).toBeVisible()
+  await expect(dialog.getByText('Runtime registry пуст')).toBeVisible()
   await expect(dialog.getByText('GET /api/models').first()).toBeVisible()
+  await expect(dialog.getByText('Редактирование моделей ещё mustbuild')).toBeVisible()
+  await expect(dialog.getByText('GET /api/model-credentials · GET /api/model-bindings · POST /api/models')).toBeVisible()
+  await expect(dialog.getByText('Backend seam ещё не готов')).toHaveCount(0)
 
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()

@@ -888,6 +888,13 @@ const server = createServer(async (req, res) => {
         },
       })
       return
+    case '/api/models':
+      json(res, 200, {
+        models: [],
+        default: null,
+        current: '',
+      })
+      return
     case '/api/model-health':
       json(res, 200, {
         generated_at: new Date().toISOString(),

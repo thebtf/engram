@@ -5,7 +5,7 @@
  *
  * Current live-wire policy:
  * - Memories, issues, vault status, vault credentials, server info, rules, projects,
- *   health, server config, and model health are backed by the current Engram HTTP surface.
+ *   health, server config, model registry, and model health are backed by the current Engram HTTP surface.
  */
 
 import { operatorApiBase, operatorApiUrl } from './useOperatorApi'
@@ -52,11 +52,20 @@ export interface ModelRow {
   id: string
   role: string
   provider: string
+  model: string
   health: 'ok' | 'standby' | 'degraded'
   costs: string
   source: string
+  endpoint: string
   configured: boolean
+  secretSet: boolean
   message: string
+}
+
+export interface ModelRegistrySnapshot {
+  models: string[]
+  defaultModel: string
+  currentModel: string
 }
 
 export interface RuleRow {
@@ -260,6 +269,12 @@ interface ApiModelHealthResponse {
   rows?: ApiModelHealthRow[]
 }
 
+interface ApiModelsResponse {
+  models?: unknown[]
+  default?: unknown
+  current?: unknown
+}
+
 function apiBase(): string {
   return operatorApiBase()
 }
@@ -408,11 +423,41 @@ function mapModelHealthRow(row: ApiModelHealthRow): ModelRow {
     id: row.id || row.role || 'unknown-model',
     role: row.role || 'model',
     provider: row.provider || 'OpenAI-compatible',
+    model: row.model || '—',
     health: row.health || 'standby',
     costs: row.source ? `${row.source}${row.secret_set ? ' · key set' : ''}` : '—',
     source: row.source || 'unknown',
+    endpoint: row.endpoint || '—',
     configured: Boolean(row.configured),
+    secretSet: Boolean(row.secret_set),
     message: row.message || row.endpoint || '—',
+  }
+}
+
+function modelRegistryName(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed || null
+  }
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    for (const key of ['id', 'name', 'model']) {
+      const candidate = record[key]
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim()
+      }
+    }
+  }
+
+  return null
+}
+
+function mapModelRegistry(payload: ApiModelsResponse | undefined): ModelRegistrySnapshot {
+  return {
+    models: [...new Set((payload?.models || []).map(modelRegistryName).filter((value): value is string => Boolean(value)))],
+    defaultModel: modelRegistryName(payload?.default) || '—',
+    currentModel: modelRegistryName(payload?.current) || '—',
   }
 }
 
@@ -744,6 +789,33 @@ export const useModelsState = () => {
   startOnce('models', refresh)
 
   return { rows, pending, error, refresh }
+}
+
+export const useModelRegistryState = () => {
+  const snapshot = useState<ModelRegistrySnapshot>('live:model-registry', () => ({
+    models: [],
+    defaultModel: '—',
+    currentModel: '—',
+  }))
+  const pending = useState<boolean>('live:model-registry:pending', () => false)
+  const error = useState<string | null>('live:model-registry:error', () => null)
+
+  async function refresh() {
+    pending.value = true
+    error.value = null
+    try {
+      const payload = await fetchJson<ApiModelsResponse>('/api/models')
+      snapshot.value = mapModelRegistry(payload)
+    } catch (nextError) {
+      error.value = errorMessage(nextError)
+    } finally {
+      pending.value = false
+    }
+  }
+
+  startOnce('model-registry', refresh)
+
+  return { snapshot, pending, error, refresh }
 }
 
 export const useModels = () => useModelsState().rows.value

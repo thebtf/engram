@@ -1122,6 +1122,38 @@
       "disabled": "выключено",
       "restartRequired": "restart"
     },
+    "models": {
+      "count": "{count} модель | {count} модели | {count} моделей",
+      "configured": "настроено {count}",
+      "secrets": "ключей {count}",
+      "health": {
+        "title": "Здоровье моделей",
+        "body": "Read-only снимок модельных ролей из GET /api/model-health: что настроено, где нет ключа, и какие клиенты реально инициализированы.",
+        "pending": "Загружаем состояние моделей…",
+        "error": "Не удалось загрузить состояние моделей: {message}",
+        "status": {
+          "ok": "работает",
+          "standby": "ожидает",
+          "degraded": "деградация"
+        }
+      },
+      "registry": {
+        "title": "Реестр /api/models",
+        "body": "GET /api/models остаётся live endpoint, но после v5 demolition он честно возвращает пустой runtime registry. Это не редактор моделей.",
+        "pending": "Загружаем реестр моделей…",
+        "error": "Не удалось загрузить реестр моделей: {message}",
+        "modelBody": "Запись из live registry.",
+        "emptyTitle": "Runtime registry пуст",
+        "emptyBody": "Сервер вычисляет embeddings через внешние API и не держит on-box model registry. Используйте model-health выше как рабочий снимок.",
+        "default": "Default",
+        "current": "Current"
+      },
+      "next": {
+        "title": "Не построено",
+        "bodyTitle": "Редактирование моделей ещё mustbuild",
+        "body": "Credentials, bindings и POST /api/models остаются честными placeholder controls, пока сервер не отдаст соответствующие endpoints."
+      }
+    },
     "domains": {
       "title": "Domain registry",
       "body": "Live-таблица memory_domain_owners. Удаление строки возвращает домен к implicit legacy policy и не удаляет записи памяти.",

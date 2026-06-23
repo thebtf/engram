@@ -1122,6 +1122,38 @@
       "disabled": "disabled",
       "restartRequired": "restart"
     },
+    "models": {
+      "count": "{count} model | {count} models",
+      "configured": "configured {count}",
+      "secrets": "keys {count}",
+      "health": {
+        "title": "Model health",
+        "body": "Read-only snapshot of model roles from GET /api/model-health: what is configured, where keys are missing, and which clients are initialized.",
+        "pending": "Loading model state…",
+        "error": "Could not load model state: {message}",
+        "status": {
+          "ok": "working",
+          "standby": "standby",
+          "degraded": "degraded"
+        }
+      },
+      "registry": {
+        "title": "/api/models registry",
+        "body": "GET /api/models remains a live endpoint, but after the v5 demolition it honestly returns an empty runtime registry. This is not a model editor.",
+        "pending": "Loading model registry…",
+        "error": "Could not load model registry: {message}",
+        "modelBody": "Live registry entry.",
+        "emptyTitle": "Runtime registry is empty",
+        "emptyBody": "The server computes embeddings through external APIs and does not keep an on-box model registry. Use model-health above as the working snapshot.",
+        "default": "Default",
+        "current": "Current"
+      },
+      "next": {
+        "title": "Not built",
+        "bodyTitle": "Model editing is still mustbuild",
+        "body": "Credentials, bindings, and POST /api/models stay honest placeholder controls until the server exposes matching endpoints."
+      }
+    },
     "domains": {
       "title": "Domain registry",
       "body": "Live memory_domain_owners table. Deleting a row returns the domain to implicit legacy policy and does not delete memory records.",
