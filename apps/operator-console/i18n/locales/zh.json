@@ -859,18 +859,18 @@
       "status": "状态",
       "startedAt": "开始时间",
       "completedAt": "完成时间",
-      "prompts": "Prompts",
-      "worker": "Worker port",
+      "prompts": "提示词次数",
+      "worker": "工作进程端口",
       "strategy": "策略",
       "outcome": "结果",
       "outcomeReason": "结果原因",
-      "userPrompt": "User prompt",
+      "userPrompt": "用户提示词",
       "noValue": "—"
     },
     "gaps": {
-      "transcript": "Transcript readback 尚未通过 REST endpoint 暴露。",
-      "route": "路由决策 timeline 仍是服务器侧 must-build。",
-      "codeIntel": "code-intel 摘要目前只能通过工具 surface 使用。"
+      "transcript": "会话记录尚未通过 REST 端点暴露。",
+      "route": "路由决策时间线仍需服务器端实现。",
+      "codeIntel": "代码智能摘要目前只能通过工具界面使用。"
     }
   },
 
