@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { DOMAIN_OWNER_KINDS, DOMAIN_OWNER_MODES, useOperatorDomainRegistry } from '../composables/useOperatorDomainRegistry'
+import type { DomainRegistryDraft, OperatorMemoryDomain } from '../composables/useOperatorDomainRegistry'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
-type SettingsTabKind = 'general' | 'runtime' | 'actions' | 'client' | 'dead' | 'mustbuild'
+type SettingsTabKind = 'general' | 'runtime' | 'actions' | 'domains' | 'client' | 'dead' | 'mustbuild'
 type SettingsTabClass = 'live' | 'mustbuild' | 'stale'
 
 interface SettingsTab {
@@ -40,16 +42,39 @@ const {
   restartAfterUpdate,
   configSaveEvidence,
 } = useOperatorHealthSettings()
+const {
+  domainState,
+  domains,
+  count: domainCount,
+  pending: domainsPending,
+  error: domainsError,
+  refreshDomains,
+  upsertDomain,
+  deleteDomain,
+  listEvidence: domainListEvidence,
+} = useOperatorDomainRegistry()
 
 const restartConfirm = ref(false)
 const updateRestartConfirm = ref(false)
 const restartInFlight = ref(false)
 const updateRestartInFlight = ref(false)
 const configSaveInFlight = ref(false)
+const domainSaveInFlight = ref(false)
+const domainDeleteInFlight = ref<string | null>(null)
+const domainDeleteConfirm = ref<string | null>(null)
+const editingDomain = ref<string | null>(null)
 const configSaveResult = ref<Awaited<ReturnType<typeof saveConfig>> | null>(null)
+const domainSaveResult = ref<Awaited<ReturnType<typeof upsertDomain>> | null>(null)
+const domainDeleteResult = ref<Awaited<ReturnType<typeof deleteDomain>> | null>(null)
 const configDraftTouched = ref(false)
 const draftInjectUnified = ref(false)
 const draftSourceProject = ref(false)
+const domainDraft = ref<DomainRegistryDraft>({
+  domain: '',
+  ownerPrincipal: '',
+  ownerPrincipalKind: 'agent',
+  mode: 'warn',
+})
 
 const tabs = computed<SettingsTab[]>(() => [
   { id: 'general', groupKey: 'basic', labelKey: 'general', titleKey: 'general', descKey: 'general', kind: 'general', cls: 'live' },
@@ -66,6 +91,7 @@ const tabs = computed<SettingsTab[]>(() => [
   { id: 'acAudit', groupKey: 'access', labelKey: 'acAudit', titleKey: 'acAudit', descKey: 'acAudit', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/access/audit' },
   { id: 'runtime', groupKey: 'server', labelKey: 'runtime', titleKey: 'runtime', descKey: 'runtime', kind: 'runtime', cls: 'live' },
   { id: 'actions', groupKey: 'server', labelKey: 'actions', titleKey: 'actions', descKey: 'actions', kind: 'actions', cls: 'live' },
+  { id: 'domains', groupKey: 'server', labelKey: 'domains', titleKey: 'domains', descKey: 'domains', kind: 'domains', cls: 'live' },
   { id: 'client', groupKey: 'server', labelKey: 'client', titleKey: 'client', descKey: 'client', kind: 'client', cls: 'live' },
   { id: 'dead', groupKey: 'server', labelKey: 'dead', titleKey: 'dead', descKey: 'dead', kind: 'dead', cls: 'stale' },
 ])
@@ -86,6 +112,7 @@ const groupedTabs = computed(() => {
 const selectedTab = computed(() => tabs.value.find((tab) => tab.id === activeTab.value) || tabs.value[0])
 const config = computed(() => configState.value.kind === 'live' ? configState.value.data : {})
 const configAvailable = computed(() => configState.value.kind === 'live')
+const domainDraftValid = computed(() => Boolean(domainDraft.value.domain.trim() && domainDraft.value.ownerPrincipal.trim()))
 const currentInjectUnified = computed(() => Boolean(config.value?.memory?.inject_unified))
 const currentSourceProject = computed(() => Boolean(config.value?.features?.enforce_source_project))
 const configDraftDirty = computed(() => configAvailable.value && (
@@ -162,6 +189,38 @@ function formatLifecycleValue(value: unknown) {
   return String(value)
 }
 
+function resetDomainDraft() {
+  domainDraft.value = {
+    domain: '',
+    ownerPrincipal: '',
+    ownerPrincipalKind: 'agent',
+    mode: 'warn',
+  }
+  domainSaveResult.value = null
+  editingDomain.value = null
+}
+
+function editDomain(row: OperatorMemoryDomain) {
+  domainDraft.value = {
+    domain: row.domain,
+    ownerPrincipal: row.ownerPrincipal,
+    ownerPrincipalKind: row.ownerPrincipalKind,
+    mode: row.mode,
+  }
+  domainSaveResult.value = null
+  domainDeleteResult.value = null
+  domainDeleteConfirm.value = null
+  editingDomain.value = row.domain
+}
+
+function formatDomainDate(value: string) {
+  return value ? value.slice(0, 19).replace('T', ' ') : '—'
+}
+
+function domainDeleteTestId(domain: string) {
+  return `domain-registry-delete-${domain.replace(/[^a-z0-9_-]+/gi, '-')}`
+}
+
 async function saveRuntimeConfig() {
   if (!configDraftDirty.value || configSaveInFlight.value) return
   configSaveInFlight.value = true
@@ -177,10 +236,49 @@ async function saveRuntimeConfig() {
   }
 }
 
+async function saveDomainDraft() {
+  if (!domainDraftValid.value || domainSaveInFlight.value) return
+  domainSaveInFlight.value = true
+  domainDeleteResult.value = null
+  try {
+    domainSaveResult.value = await upsertDomain(domainDraft.value)
+    if (domainSaveResult.value.kind === 'success') {
+      domainDraft.value = {
+        domain: domainSaveResult.value.data.domain,
+        ownerPrincipal: domainSaveResult.value.data.ownerPrincipal,
+        ownerPrincipalKind: domainSaveResult.value.data.ownerPrincipalKind,
+        mode: domainSaveResult.value.data.mode,
+      }
+    }
+  } finally {
+    domainSaveInFlight.value = false
+  }
+}
+
+async function confirmDeleteDomain(domain: string) {
+  if (domainDeleteInFlight.value) return
+  if (domainDeleteConfirm.value !== domain) {
+    domainDeleteConfirm.value = domain
+    return
+  }
+  domainDeleteInFlight.value = domain
+  domainSaveResult.value = null
+  try {
+    domainDeleteResult.value = await deleteDomain(domain)
+    if (domainDeleteResult.value.kind === 'success' && domainDraft.value.domain === domain) {
+      resetDomainDraft()
+    }
+  } finally {
+    domainDeleteInFlight.value = null
+    domainDeleteConfirm.value = null
+  }
+}
+
 function selectTab(id: string) {
   activeTab.value = id
   restartConfirm.value = false
   updateRestartConfirm.value = false
+  domainDeleteConfirm.value = null
 }
 
 function closeModal() {
@@ -463,6 +561,124 @@ onBeforeUnmount(() => {
                 </section>
               </template>
 
+              <template v-else-if="selectedTab.kind === 'domains'">
+                <section class="settings-section">
+                  <div class="settings-section-title">{{ t('settings.domains.title') }}</div>
+                  <p class="plain-help">{{ t('settings.domains.body') }}</p>
+                  <div class="settings-actions domain-toolbar">
+                    <div class="left">
+                      <span class="tag">{{ t('settings.domains.count', domainCount) }}</span>
+                      <HonestyBadge cls="live" :evidence="domainListEvidence.endpoint" />
+                      <code class="endpoint-pill">GET {{ domainListEvidence.endpoint }}</code>
+                    </div>
+                    <button class="tbtn" type="button" :disabled="domainsPending" @click="refreshDomains">{{ t('settings.refresh') }}</button>
+                  </div>
+                  <div v-if="domainsPending" class="state pending">{{ t('settings.domains.pending') }}</div>
+                  <div v-if="domainsError" class="state error">{{ t('settings.domains.error', { message: domainsError }) }}</div>
+                  <div v-if="domainSaveResult?.kind === 'success'" class="state ok">
+                    {{ t('settings.domains.notice.saved', { domain: domainSaveResult.data.domain }) }}
+                  </div>
+                  <div v-else-if="domainSaveResult?.kind === 'rollback'" class="state error">
+                    {{ t('settings.domains.notice.error', { message: domainSaveResult.error.message }) }}
+                  </div>
+                  <div v-if="domainDeleteResult?.kind === 'success'" class="state ok">
+                    {{ t('settings.domains.notice.deleted', { domain: domainDeleteResult.data.domain }) }}
+                  </div>
+                  <div v-else-if="domainDeleteResult?.kind === 'rollback'" class="state error">
+                    {{ t('settings.domains.notice.error', { message: domainDeleteResult.error.message }) }}
+                  </div>
+                </section>
+
+                <section class="settings-section domain-form">
+                  <div class="settings-section-title">{{ t('settings.domains.form.title') }}</div>
+                  <div class="domain-grid">
+                    <label>
+                      <span>{{ t('settings.domains.form.domain') }}</span>
+                      <input
+                        v-model.trim="domainDraft.domain"
+                        data-testid="domain-registry-domain"
+                        :disabled="Boolean(editingDomain)"
+                        :placeholder="t('settings.domains.form.domainPlaceholder')"
+                      />
+                    </label>
+                    <label>
+                      <span>{{ t('settings.domains.form.owner') }}</span>
+                      <input v-model.trim="domainDraft.ownerPrincipal" data-testid="domain-registry-owner" :placeholder="t('settings.domains.form.ownerPlaceholder')" />
+                    </label>
+                    <label>
+                      <span>{{ t('settings.domains.form.kind') }}</span>
+                      <select v-model="domainDraft.ownerPrincipalKind" data-testid="domain-registry-kind">
+                        <option v-for="kind in DOMAIN_OWNER_KINDS" :key="kind" :value="kind">{{ t(`settings.domains.kind.${kind}`) }}</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>{{ t('settings.domains.form.mode') }}</span>
+                      <select v-model="domainDraft.mode" data-testid="domain-registry-mode">
+                        <option v-for="mode in DOMAIN_OWNER_MODES" :key="mode" :value="mode">{{ t(`settings.domains.mode.${mode}`) }}</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="settings-actions">
+                    <div class="left">
+                      <button
+                        class="tbtn primary"
+                        type="button"
+                        data-testid="domain-registry-save"
+                        :disabled="!domainDraftValid || domainSaveInFlight"
+                        @click="saveDomainDraft"
+                      >
+                        {{ domainSaveInFlight ? t('settings.domains.form.saving') : t('settings.domains.form.save') }}
+                      </button>
+                      <button class="tbtn" type="button" :disabled="domainSaveInFlight" @click="resetDomainDraft">
+                        {{ t('settings.domains.form.reset') }}
+                      </button>
+                    </div>
+                    <span class="muted">{{ t('settings.domains.form.evidence') }} <code>PUT /api/memory-domains/{domain}</code></span>
+                  </div>
+                </section>
+
+                <section class="settings-section">
+                  <div class="settings-section-title">{{ t('settings.domains.rows.title') }}</div>
+                  <div v-if="domainState.kind === 'empty'" class="operator-note">
+                    <span class="mark">i</span>
+                    <div>
+                      <b>{{ t('settings.domains.empty.title') }}</b>
+                      <p>{{ t('settings.domains.empty.body') }}</p>
+                    </div>
+                  </div>
+                  <div v-else class="domain-list">
+                    <div v-for="row in domains" :key="row.domain" class="domain-row">
+                      <div class="domain-main">
+                        <code>{{ row.domain }}</code>
+                        <span>{{ row.ownerPrincipal }} · {{ t(`settings.domains.kind.${row.ownerPrincipalKind}`) }}</span>
+                      </div>
+                      <div class="domain-meta">
+                        <span class="bdg" :class="row.mode === 'reject' ? 'danger-soft' : row.mode === 'warn' ? 'warn-soft' : 'off'">
+                          {{ t(`settings.domains.mode.${row.mode}`) }}
+                        </span>
+                        <span class="tag">{{ formatDomainDate(row.updatedAt) }}</span>
+                      </div>
+                      <div class="domain-actions">
+                        <button class="tbtn" type="button" :aria-label="t('settings.domains.aria.edit', { domain: row.domain })" @click="editDomain(row)">
+                          {{ t('common.change') }}
+                        </button>
+                        <button
+                          class="danger"
+                          type="button"
+                          :data-testid="domainDeleteTestId(row.domain)"
+                          :disabled="Boolean(domainDeleteInFlight)"
+                          :aria-label="t('settings.domains.aria.delete', { domain: row.domain })"
+                          @click="confirmDeleteDomain(row.domain)"
+                        >
+                          {{ domainDeleteConfirm === row.domain ? t('settings.domains.rows.confirmDelete') : t('settings.domains.rows.delete') }}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <p class="plain-help">{{ t('settings.domains.rows.deleteHelp') }}</p>
+                </section>
+              </template>
+
               <template v-else-if="selectedTab.kind === 'client'">
                 <section class="settings-section">
                   <div class="settings-section-title">{{ t('settings.modal.sections.client') }}</div>
@@ -575,7 +791,10 @@ onBeforeUnmount(() => {
 .bdg { display: inline-flex; align-items: center; border-radius: var(--radius-pill); border: 1px solid var(--border); padding: 2px 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .bdg.live { color: var(--class-live); background: color-mix(in oklab, var(--class-live), transparent 90%); border-color: color-mix(in oklab, var(--class-live), transparent 65%); }
 .bdg.off { color: var(--muted); background: color-mix(in oklab, var(--surface), var(--fg) 3%); border-color: var(--border); }
+.bdg.warn-soft { color: var(--state-warn); background: color-mix(in oklab, var(--state-warn), transparent 88%); border-color: color-mix(in oklab, var(--state-warn), transparent 55%); }
+.bdg.danger-soft { color: var(--state-danger); background: color-mix(in oklab, var(--state-danger), transparent 90%); border-color: color-mix(in oklab, var(--state-danger), transparent 55%); }
 .tag { display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--fg-2); font-size: 10px; font-family: var(--font-mono); }
+.endpoint-pill { display: inline-flex; align-items: center; max-width: 100%; padding: 2px 7px; border: 1px solid var(--border-soft); border-radius: var(--radius-pill); color: var(--muted); background: color-mix(in oklab, var(--surface), var(--fg) 2%); font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); padding: 10px 12px; color: var(--fg-2); font-size: var(--text-sm); }
 .state.pending { border-color: color-mix(in oklab, var(--accent), transparent 55%); }
 .state.ok { color: var(--class-live); border-color: color-mix(in oklab, var(--class-live), transparent 45%); }
@@ -601,6 +820,17 @@ onBeforeUnmount(() => {
 .flag-status { display: flex; justify-content: flex-end; align-items: center; gap: 6px; flex-wrap: wrap; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; }
 .settings-actions .left { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.domain-toolbar { margin-top: 12px; }
+.domain-form { border: 1px solid var(--border-soft); border-radius: var(--r-md); padding: 14px; background: color-mix(in oklab, var(--surface), var(--fg) 1.5%); }
+.domain-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.domain-grid label { display: grid; gap: 5px; color: var(--muted); font-size: var(--text-xs); font-weight: 700; }
+.domain-grid input, .domain-grid select { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--fg); padding: 8px 10px; font: inherit; font-size: var(--text-sm); }
+.domain-list { display: grid; gap: 8px; }
+.domain-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; border: 1px solid var(--border-soft); border-radius: var(--r-md); padding: 10px 12px; background: color-mix(in oklab, var(--surface), var(--fg) 1.5%); }
+.domain-main { display: grid; gap: 3px; min-width: 0; }
+.domain-main code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-family: var(--font-mono); }
+.domain-main span { color: var(--muted); font-size: var(--text-xs); }
+.domain-meta, .domain-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .plain-help, .muted { color: var(--muted); font-size: var(--text-sm); line-height: 1.45; }
 .settings-note-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); }
 .surface-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--space-4); }
@@ -618,6 +848,9 @@ onBeforeUnmount(() => {
   .settings-row { grid-template-columns: 1fr; }
   .setting-control { justify-content: flex-start; }
   .pending-restart-row { grid-template-columns: 1fr; }
+  .domain-grid { grid-template-columns: 1fr; }
+  .domain-row { grid-template-columns: 1fr; align-items: stretch; }
+  .domain-meta, .domain-actions { justify-content: flex-start; }
 }
 @media (max-width: 720px) {
   .settings-overlay { padding: 12px; place-items: stretch; }

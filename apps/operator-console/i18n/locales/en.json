@@ -944,6 +944,11 @@
           "title": "Restart / update",
           "desc": "Operator actions that change the live process and require confirmation."
         },
+        "domains": {
+          "label": "Memory domains",
+          "title": "Memory domains",
+          "desc": "Explicit memory-domain owners: who writes, in which mode, and how to return a domain to implicit policy."
+        },
         "client": {
           "label": "Web UI / client",
           "title": "Web UI / client",
@@ -1044,6 +1049,55 @@
       "enabled": "enabled",
       "disabled": "disabled",
       "restartRequired": "restart"
+    },
+    "domains": {
+      "title": "Domain registry",
+      "body": "Live memory_domain_owners table. Deleting a row returns the domain to implicit legacy policy and does not delete memory records.",
+      "count": "{count} domain | {count} domains",
+      "pending": "Loading memory domains…",
+      "error": "Could not load memory domains: {message}",
+      "form": {
+        "title": "Create or edit rule",
+        "domain": "Domain",
+        "domainPlaceholder": "memory-lab",
+        "owner": "Owner",
+        "ownerPlaceholder": "agent/alice",
+        "kind": "Owner kind",
+        "mode": "Mode",
+        "save": "Save domain",
+        "saving": "Saving…",
+        "reset": "Clear",
+        "evidence": "Live endpoint:"
+      },
+      "kind": {
+        "human": "human",
+        "agent": "agent",
+        "service": "service"
+      },
+      "mode": {
+        "off": "off",
+        "warn": "warn",
+        "reject": "reject"
+      },
+      "rows": {
+        "title": "Explicit rules",
+        "delete": "Delete",
+        "confirmDelete": "Confirm delete",
+        "deleteHelp": "Deletion removes only the ownership row. Memories, the domain, and audit history are not deleted."
+      },
+      "empty": {
+        "title": "No explicit domains",
+        "body": "The server will use implicit policy until an operator adds a rule."
+      },
+      "notice": {
+        "saved": "Domain {domain} saved",
+        "deleted": "Domain {domain} returned to implicit policy",
+        "error": "Operation failed: {message}"
+      },
+      "aria": {
+        "edit": "Edit domain {domain}",
+        "delete": "Delete ownership row for domain {domain}"
+      }
     },
     "save": {
       "action": "Save config",

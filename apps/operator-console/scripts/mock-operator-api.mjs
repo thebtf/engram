@@ -13,6 +13,10 @@ function json(res, status, body) {
   res.end(payload)
 }
 
+function controlPlaneError(message, code, data) {
+  return data === undefined ? { message, code } : { message, code, data }
+}
+
 function text(res, status, body) {
   res.writeHead(status, {
     'content-type': 'text/plain; charset=utf-8',
@@ -178,6 +182,25 @@ let candidateRows = candidateFixtureRows.map((row) => ({
   affected_projects: [...row.affected_projects],
 }))
 
+let domainRows = [
+  {
+    domain: 'memory-lab',
+    owner_principal: 'agent/alice',
+    owner_principal_kind: 'agent',
+    mode: 'warn',
+    created_at: '2026-06-23T08:30:00Z',
+    updated_at: '2026-06-23T08:30:00Z',
+  },
+  {
+    domain: 'operator-console',
+    owner_principal: 'service/dashboard',
+    owner_principal_kind: 'service',
+    mode: 'reject',
+    created_at: '2026-06-23T08:45:00Z',
+    updated_at: '2026-06-23T08:45:00Z',
+  },
+]
+
 const vaultCredentials = [
   {
     id: 1,
@@ -222,6 +245,25 @@ function candidateResponse(project, status, limit) {
     status,
     limit,
   }
+}
+
+function domainRegistryResponse() {
+  return {
+    domains: domainRows
+      .slice()
+      .sort((a, b) => a.domain.localeCompare(b.domain))
+      .map((row) => ({ ...row })),
+  }
+}
+
+function validDomainPayload(body) {
+  return (
+    body &&
+    typeof body.owner_principal === 'string' &&
+    body.owner_principal.trim() &&
+    ['human', 'agent', 'service'].includes(body.owner_principal_kind) &&
+    ['off', 'warn', 'reject'].includes(body.mode)
+  )
 }
 
 function syncConfigFlags() {
@@ -433,6 +475,55 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  const domainMatch = path.match(/^\/api\/memory-domains\/([^/]+)$/)
+  if ((req.method === 'PUT' || req.method === 'DELETE') && domainMatch) {
+    let domain = ''
+    try {
+      domain = decodeURIComponent(domainMatch[1]).trim()
+    } catch {
+      json(res, 400, controlPlaneError('invalid domain encoding', 400))
+      return
+    }
+    if (!domain) {
+      json(res, 400, controlPlaneError('domain must not be empty', 400))
+      return
+    }
+
+    if (req.method === 'DELETE') {
+      const index = domainRows.findIndex((row) => row.domain === domain)
+      if (index < 0) {
+        json(res, 404, controlPlaneError('domain owner not found', 404))
+        return
+      }
+      domainRows.splice(index, 1)
+      json(res, 200, { deleted: true, domain })
+      return
+    }
+
+    try {
+      const body = await readRequestJson(req)
+      if (!validDomainPayload(body)) {
+        json(res, 400, controlPlaneError('invalid domain owner payload', 400))
+        return
+      }
+      const now = new Date().toISOString()
+      const existing = domainRows.find((row) => row.domain === domain)
+      const row = {
+        domain,
+        owner_principal: body.owner_principal.trim(),
+        owner_principal_kind: body.owner_principal_kind,
+        mode: body.mode,
+        created_at: existing?.created_at || now,
+        updated_at: now,
+      }
+      domainRows = existing ? domainRows.map((item) => item.domain === domain ? row : item) : [...domainRows, row]
+      json(res, 200, row)
+    } catch (error) {
+      json(res, 400, controlPlaneError(error instanceof Error ? error.message : String(error), 400))
+    }
+    return
+  }
+
   const vaultCredentialMatch = path.match(/^\/api\/vault\/credentials\/([^/]+)$/)
   if (vaultCredentialMatch) {
     const name = decodeURIComponent(vaultCredentialMatch[1])
@@ -611,6 +702,9 @@ const server = createServer(async (req, res) => {
         url.searchParams.get('status') || 'pending',
         Number(url.searchParams.get('limit') || 100),
       ))
+      return
+    case '/api/memory-domains':
+      json(res, 200, domainRegistryResponse())
       return
     default:
       json(res, 404, { error: 'not found' })

@@ -944,6 +944,11 @@
           "title": "Restart / update",
           "desc": "Операторские действия, которые меняют живой процесс и требуют подтверждения."
         },
+        "domains": {
+          "label": "Домены памяти",
+          "title": "Домены памяти",
+          "desc": "Явные владельцы доменов памяти: кто пишет, в каком режиме, и как вернуть домен к implicit policy."
+        },
         "client": {
           "label": "Web UI / клиент",
           "title": "Web UI / клиент",
@@ -1044,6 +1049,55 @@
       "enabled": "включено",
       "disabled": "выключено",
       "restartRequired": "restart"
+    },
+    "domains": {
+      "title": "Domain registry",
+      "body": "Live-таблица memory_domain_owners. Удаление строки возвращает домен к implicit legacy policy и не удаляет записи памяти.",
+      "count": "{count} домен | {count} домена | {count} доменов",
+      "pending": "Загружаем домены памяти…",
+      "error": "Не удалось загрузить домены памяти: {message}",
+      "form": {
+        "title": "Создать или изменить правило",
+        "domain": "Домен",
+        "domainPlaceholder": "memory-lab",
+        "owner": "Владелец",
+        "ownerPlaceholder": "agent/alice",
+        "kind": "Тип владельца",
+        "mode": "Режим",
+        "save": "Сохранить домен",
+        "saving": "Сохраняем…",
+        "reset": "Очистить",
+        "evidence": "Live endpoint:"
+      },
+      "kind": {
+        "human": "human",
+        "agent": "agent",
+        "service": "service"
+      },
+      "mode": {
+        "off": "off",
+        "warn": "warn",
+        "reject": "reject"
+      },
+      "rows": {
+        "title": "Явные правила",
+        "delete": "Удалить",
+        "confirmDelete": "Подтвердить удаление",
+        "deleteHelp": "Удаление убирает только ownership-строку. Memories, домен и аудит не удаляются."
+      },
+      "empty": {
+        "title": "Явных доменов нет",
+        "body": "Сервер будет использовать implicit policy, пока оператор не добавит правило."
+      },
+      "notice": {
+        "saved": "Домен {domain} сохранён",
+        "deleted": "Домен {domain} возвращён к implicit policy",
+        "error": "Операция не выполнена: {message}"
+      },
+      "aria": {
+        "edit": "Изменить домен {domain}",
+        "delete": "Удалить ownership-строку домена {domain}"
+      }
     },
     "save": {
       "action": "Сохранить config",
