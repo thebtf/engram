@@ -21,6 +21,11 @@ function statusClass(status?: string): 'live' | 'dormant' | 'stale' {
   if (status === 'degraded' || status === 'initializing') return 'dormant'
   return 'stale'
 }
+
+const migrationMessage = computed(() => {
+  if (migrationsState.value.kind !== 'live') return t('health.state.notLoaded')
+  return migrationsState.value.data.dirty_supported === false ? t('health.migration.dirtyUnsupported') : ''
+})
 </script>
 
 <template>
@@ -124,9 +129,7 @@ function statusClass(status?: string): 'live' | 'dormant' | 'stale' {
             <strong>{{ metric.value }}</strong>
           </div>
         </div>
-        <p class="message">
-          {{ migrationsState.kind === 'live' && migrationsState.data.dirty_supported === false ? t('health.migration.dirtyUnsupported') : t('health.state.notLoaded') }}
-        </p>
+        <p v-if="migrationMessage" class="message">{{ migrationMessage }}</p>
         <HonestyBadge :cls="migrationsState.kind === 'live' && migrationsState.data.current_version ? 'live' : 'dormant'" :evidence="migrationsState.kind === 'live' ? migrationsState.data.engine : t('health.state.notLoaded')" />
       </article>
     </section>
