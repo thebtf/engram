@@ -175,6 +175,15 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 		EditedBy: project,
 	})
 	require.NoError(t, err)
+	disabledRule, err := ruleStore.Create(ctx, &models.BehavioralRule{
+		Project:  &project,
+		Content:  "disabled project rule content",
+		Priority: 999,
+		EditedBy: project,
+	})
+	require.NoError(t, err)
+	_, err = ruleStore.SetEnabled(ctx, disabledRule.ID, false, &project)
+	require.NoError(t, err)
 	_, err = ruleStore.Create(ctx, &models.BehavioralRule{
 		Project:  &otherProject,
 		Content:  "other project rule content",
@@ -290,6 +299,9 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	assert.Equal(t, "", resp.Rules[0].Project)
 	assert.Equal(t, projectRule.ID, resp.Rules[1].Id)
 	assert.Equal(t, project, resp.Rules[1].Project)
+	for _, rule := range resp.Rules {
+		assert.NotEqual(t, disabledRule.ID, rule.Id, "disabled behavioral rules must not render into session-start rules")
+	}
 }
 
 func TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *testing.T) {
@@ -360,6 +372,15 @@ func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
 		EditedBy: project,
 	})
 	require.NoError(t, err)
+	disabledLegacyRule, err := ruleStore.Create(ctx, &models.BehavioralRule{
+		Project:  &project,
+		Content:  "RG-2 session-start disabled legacy fallback " + project,
+		Priority: 1000004,
+		EditedBy: project,
+	})
+	require.NoError(t, err)
+	_, err = ruleStore.SetEnabled(ctx, disabledLegacyRule.ID, false, &project)
+	require.NoError(t, err)
 
 	srv := &Server{db: db}
 	resp, err := srv.GetSessionStartContext(ctx, &pb.GetSessionStartContextRequest{Project: project})
@@ -384,6 +405,7 @@ func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
 	}
 	require.Contains(t, contextualByVersion, activeProjectID)
 	require.Contains(t, contextualByLegacy, legacyRule.ID)
+	require.NotContains(t, contextualByLegacy, disabledLegacyRule.ID)
 	require.Equal(t, "contextual", contextualByVersion[activeProjectID].Bucket)
 	require.Equal(t, "legacy", contextualByLegacy[legacyRule.ID].BudgetClass)
 
@@ -395,6 +417,7 @@ func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
 	require.True(t, ruleContents["RG-2 session-start router fixture "+project+"-kernel"])
 	require.True(t, ruleContents["RG-2 session-start router fixture "+project+"-active"])
 	require.True(t, ruleContents[legacyRule.Content])
+	require.False(t, ruleContents[disabledLegacyRule.Content])
 }
 
 func TestRuleRouterLegacyFallbackShape(t *testing.T) {

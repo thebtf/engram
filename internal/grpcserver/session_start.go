@@ -132,6 +132,7 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		var ruleRows []dbgorm.BehavioralRule
 		if err := s.db.WithContext(ctx).
 			Where("deleted_at IS NULL").
+			Where("enabled = ?", true).
 			Where("project = ? OR project IS NULL", project).
 			Order("priority DESC, created_at DESC").
 			Limit(rulesLimit).

@@ -282,6 +282,15 @@ func TestRuleGovernanceStore_ListLegacyBehavioralRuleFallbackKeepsLegacyRowsCont
 	})
 	require.NoError(t, err)
 	require.NoError(t, behavioralStore.Delete(ctx, deleted.ID))
+	disabled, err := behavioralStore.Create(ctx, &models.BehavioralRule{
+		Project:  strPtr(project),
+		Content:  "rg2 legacy disabled fallback",
+		Priority: 3000,
+		EditedBy: "rg2-test",
+	})
+	require.NoError(t, err)
+	_, err = behavioralStore.SetEnabled(ctx, disabled.ID, false, strPtr("rg2-test"))
+	require.NoError(t, err)
 
 	got, err := store.ListLegacyBehavioralRuleFallback(ctx, &project, 1000)
 	require.NoError(t, err)
@@ -292,6 +301,7 @@ func TestRuleGovernanceStore_ListLegacyBehavioralRuleFallbackKeepsLegacyRowsCont
 	require.Contains(t, ids, global.ID)
 	require.Contains(t, ids, projectScoped.ID)
 	require.NotContains(t, ids, deleted.ID)
+	require.NotContains(t, ids, disabled.ID, "disabled legacy fallback rows must not render into router packets")
 	require.Less(t, ids[projectScoped.ID], ids[global.ID], "legacy fallback must preserve priority ordering")
 
 	globalOnly, err := store.ListLegacyBehavioralRuleFallback(ctx, nil, 1000)

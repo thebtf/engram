@@ -258,6 +258,7 @@ func TestHandleCreateBehavioralRule_Success(t *testing.T) {
 	require.Greater(t, created.ID, int64(0))
 	require.Equal(t, "handler test: created over HTTP", created.Content)
 	require.Equal(t, 12, created.Priority)
+	require.True(t, created.Enabled)
 	require.NotNil(t, created.Project)
 	require.Equal(t, project, *created.Project)
 
@@ -295,7 +296,146 @@ func TestHandleUpdateBehavioralRule_PartialSuccess(t *testing.T) {
 	assert.Equal(t, created.Content, updated.Content)
 	assert.Equal(t, 7, updated.Priority)
 	assert.Equal(t, "operator-console", updated.EditedBy)
+	assert.True(t, updated.Enabled, "partial update must preserve enabled state")
 	assert.Greater(t, updated.Version, created.Version)
+}
+
+func TestHandleSetBehavioralRuleEnabled_Success(t *testing.T) {
+	project := "test-rules-handler-enabled-success"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: toggle me",
+		Priority: 11,
+		EditedBy: "seed",
+	})
+	require.NoError(t, err)
+	require.True(t, created.Enabled)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequest(http.MethodPatch, "/api/rules/"+idStr+"/enabled", "id", idStr)
+	req.Body = ioNopCloser(`{"enabled":false,"edited_by":"operator-console"}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleSetBehavioralRuleEnabled(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var updated models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, created.ID, updated.ID)
+	assert.False(t, updated.Enabled)
+	assert.Equal(t, "operator-console", updated.EditedBy)
+	assert.Greater(t, updated.Version, created.Version)
+
+	operatorRows, err := brs.List(context.Background(), &projectPtr, 100)
+	require.NoError(t, err)
+	require.Len(t, operatorRows, 1)
+	assert.False(t, operatorRows[0].Enabled, "disabled rule remains visible to operator list")
+
+	injectionRows, err := brs.ListEnabled(context.Background(), &projectPtr, 100)
+	require.NoError(t, err)
+	require.Empty(t, injectionRows, "disabled rule must not be injected")
+}
+
+func TestHandleSetBehavioralRuleEnabled_RequiresEnabled(t *testing.T) {
+	project := "test-rules-handler-enabled-required"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: missing enabled field",
+		Priority: 1,
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequest(http.MethodPatch, "/api/rules/"+idStr+"/enabled", "id", idStr)
+	req.Body = ioNopCloser(`{"edited_by":"operator-console"}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleSetBehavioralRuleEnabled(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleSetBehavioralRuleEnabled_NotFound(t *testing.T) {
+	project := "test-rules-handler-enabled-not-found"
+	svc, _ := newRulesTestService(t, project)
+
+	req := newCHIRequest(http.MethodPatch, "/api/rules/999999999/enabled", "id", "999999999")
+	req.Body = ioNopCloser(`{"enabled":false,"edited_by":"operator-console"}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleSetBehavioralRuleEnabled(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestHandleSetBehavioralRuleEnabled_OmittedEditedByPreservesAudit(t *testing.T) {
+	project := "test-rules-handler-enabled-preserve-edited-by"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: preserve edited_by",
+		Priority: 3,
+		EditedBy: "seed-operator",
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequest(http.MethodPatch, "/api/rules/"+idStr+"/enabled", "id", idStr)
+	req.Body = ioNopCloser(`{"enabled":false}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleSetBehavioralRuleEnabled(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var updated models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.False(t, updated.Enabled)
+	assert.Equal(t, "seed-operator", updated.EditedBy, "omitted edited_by must preserve the existing audit actor")
+}
+
+func TestSearchFallbackObservations_UsesEnabledBehavioralRulesOnly(t *testing.T) {
+	project := "test-rules-search-fallback-enabled-only"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	enabledRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: enabled fallback guidance",
+		Priority: 20,
+		EditedBy: "seed",
+	})
+	require.NoError(t, err)
+
+	disabledRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: disabled fallback guidance",
+		Priority: 30,
+		EditedBy: "seed",
+	})
+	require.NoError(t, err)
+	editedBy := "operator-console"
+	_, err = brs.SetEnabled(context.Background(), disabledRule.ID, false, &editedBy)
+	require.NoError(t, err)
+
+	observations, err := svc.searchFallbackObservations(context.Background(), "", retrievalScope{Project: project}, 100)
+	require.NoError(t, err)
+
+	byTitle := map[string]bool{}
+	for _, observation := range observations {
+		byTitle[observation.Title.String] = true
+	}
+	assert.True(t, byTitle[enabledRule.Content], "enabled rule must remain visible to fallback observations")
+	assert.False(t, byTitle[disabledRule.Content], "disabled rule must not leak into data-plane fallback observations")
 }
 
 func storeDeleteRuleByProject(ctx context.Context, brs *dbgorm.BehavioralRulesStore, project string) error {

@@ -459,13 +459,16 @@
       "project": "Область",
       "priority": "Приоритет",
       "enableTitle": "Включение / отключение",
-      "enableBody": "На текущем сервере у behavioral rule нет поля enabled, поэтому toggle не делаем operable.",
+      "enableBody": "Переключает live endpoint PATCH /api/rules/{id}/enabled; выключенные правила остаются в списке, но не инжектятся.",
+      "enabled": "включено",
+      "disabled": "выключено",
       "edit": "Править",
       "cancel": "Отмена",
       "save": "Сохранить",
       "delete": "Удалить",
       "confirmDelete": "Подтвердить",
-      "enable": "Переключить"
+      "enable": "Включить правило",
+      "disable": "Отключить правило"
     }
   },
 
