@@ -123,9 +123,9 @@
       "modelTrend": "每日可用性和成本 —"
     },
     "modelHealth": {
-      "ok": "ok",
-      "standby": "standby",
-      "degraded": "degraded",
+      "ok": "正常",
+      "standby": "待命",
+      "degraded": "降级",
       "loading": "加载中",
       "error": "错误",
       "errorShort": "无法加载模型健康：{message}"
@@ -142,7 +142,7 @@
       "semanticCount": "semantic {n}",
       "episodicCount": "episodic {n}",
       "vaultLive": "vault ok",
-      "liveEndpoint": "live endpoint"
+      "liveEndpoint": "实时端点"
     },
     "groups": {
       "memoryProduct": "记忆与产品",
