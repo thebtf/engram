@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -415,6 +416,41 @@ func (s *ConfigSuite) TestSaveSettings_MergesOperatorUpdates() {
 	cfg, err := Load()
 	s.Require().NoError(err)
 	s.Equal("haiku", cfg.Model)
+	s.False(cfg.EnforceSourceProject)
+	s.False(cfg.InjectUnified)
+}
+
+func (s *ConfigSuite) TestSaveSettings_SerializesConcurrentUpdates() {
+	tempDir, err := os.MkdirTemp("", "config-save-settings-concurrent-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	os.Setenv("HOME", tempDir)
+	os.Setenv("USERPROFILE", tempDir)
+	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0750)
+	s.Require().NoError(err)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, updates := range []map[string]any{
+		{"ENGRAM_ENFORCE_SOURCE_PROJECT": false},
+		{"ENGRAM_INJECT_UNIFIED": false},
+	} {
+		wg.Add(1)
+		go func(updates map[string]any) {
+			defer wg.Done()
+			errs <- SaveSettings(updates)
+		}(updates)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		s.Require().NoError(err)
+	}
+
+	cfg, err := Load()
+	s.Require().NoError(err)
 	s.False(cfg.EnforceSourceProject)
 	s.False(cfg.InjectUnified)
 }

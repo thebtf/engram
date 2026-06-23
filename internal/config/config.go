@@ -146,6 +146,7 @@ var (
 	globalConfig *Config
 	configOnce   sync.Once
 	configMu     sync.RWMutex
+	settingsMu   sync.Mutex
 )
 
 // DataDir returns the data directory path (~/.engram).
@@ -200,6 +201,9 @@ func SaveSettings(updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+
 	if err := EnsureDataDir(); err != nil {
 		return err
 	}
@@ -225,7 +229,36 @@ func SaveSettings(updates map[string]any) error {
 		return err
 	}
 	out = append(out, '\n')
-	return os.WriteFile(path, out, 0600)
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(out); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanupTemp = false
+	return nil
 }
 
 // EnsureAll ensures all required directories and files exist.

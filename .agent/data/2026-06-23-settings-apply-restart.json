@@ -12,7 +12,8 @@
     "Updated GET /api/flags apply metadata from mustbuild to live allowlisted PATCH /api/config evidence.",
     "Updated Settings modal to edit memory.inject_unified and features.enforce_source_project through the live mutation seam while telemetry remains disabled/read-only.",
     "Updated ru/en/zh i18n for config save action, receipt, rollback error, and honest settings descriptions.",
-    "Updated mock operator API, seam test, browser smoke, and UI surface ledger for the new live seam."
+    "Updated mock operator API, seam test, browser smoke, and UI surface ledger for the new live seam.",
+    "Addressed PR review feedback by serializing settings.json read-modify-write with a package mutex and writing through a same-directory temp file before rename."
   ],
   "remaining_gaps": [
     "Telemetry and most runtime settings remain read-only or mustbuild until backed by real server seams.",
@@ -24,6 +25,10 @@
     {
       "command": "go test ./internal/config -run \"TestConfigSuite/Test(SaveSettings_MergesOperatorUpdates|Reload_DetectsOperatorSettingsChanges)\" -count=1",
       "result": "PASS"
+    },
+    {
+      "command": "go test ./internal/config -run \"TestConfigSuite/Test(SaveSettings_MergesOperatorUpdates|SaveSettings_SerializesConcurrentUpdates|Reload_DetectsOperatorSettingsChanges)\" -count=1",
+      "result": "PASS after PR review fix"
     },
     {
       "command": "go test ./internal/config ./internal/worker -count=1",
