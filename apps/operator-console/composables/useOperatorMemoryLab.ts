@@ -41,6 +41,13 @@ export interface StoreMemoryInput {
   tags?: string[]
 }
 
+export interface MemoryActionReceipt {
+  status: string
+  action: 'suppress'
+  id: number
+  reason?: string
+}
+
 export interface MemoryActionGap extends OperatorUnsupportedAction {
   labelKey: string
   badgeKey: string
@@ -61,12 +68,6 @@ function memoryActionGap(
 }
 
 export const memoryActionGaps: readonly MemoryActionGap[] = [
-  memoryActionGap(
-    'memory-hide-noise',
-    'MCP memory.suppress',
-    'Memory suppression is not exposed by the current browser REST API.',
-    'memory.detail.actions.hideNoise',
-  ),
   memoryActionGap(
     'memory-edit-text',
     'MCP memory.edit',
@@ -283,6 +284,8 @@ export function useOperatorMemoryLab(): {
   refresh: () => Promise<void>
   storeMemory: (input: StoreMemoryInput) => Promise<OperatorMutationResult<Memory>>
   deleteMemory: (id: string) => Promise<OperatorMutationResult<unknown>>
+  suppressMemory: (id: string, reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt>>
+  suppressMemories: (ids: string[], reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt[]>>
   auditGap: ReturnType<typeof unsupportedOperatorAction>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
   actionGaps: readonly MemoryActionGap[]
@@ -356,6 +359,46 @@ export function useOperatorMemoryLab(): {
     })
   }
 
+  async function suppressMemory(id: string, reason = 'operator marked as noise') {
+    return runOperatorMutation({
+      action: 'memory-suppress',
+      evidence: endpointEvidence(`/api/memories/${id}/suppress`, 'memory-suppress'),
+      snapshot: () => [...rowsState.value],
+      optimistic: () => {
+        replaceArray(rowsState.value, rowsState.value.filter((row) => row.id !== id))
+      },
+      run: () => operatorFetchJson<MemoryActionReceipt>(`/api/memories/${id}/suppress`, jsonInit('POST', { reason }), 'memory-suppress'),
+      rollback: (snapshot) => {
+        replaceArray(rowsState.value, snapshot || [])
+      },
+      refresh,
+    })
+  }
+
+  async function suppressMemories(ids: string[], reason = 'operator bulk marked as noise') {
+    const uniqueIds = [...new Set(ids)].filter(Boolean)
+    return runOperatorMutation({
+      action: 'memory-bulk-suppress',
+      evidence: endpointEvidence('/api/memories/{id}/suppress', 'memory-bulk-suppress', {
+        reason: 'Bulk suppression applies the same live row endpoint once per selected memory.',
+      }),
+      snapshot: () => [...rowsState.value],
+      optimistic: () => {
+        const suppressed = new Set(uniqueIds)
+        replaceArray(rowsState.value, rowsState.value.filter((row) => !suppressed.has(row.id)))
+      },
+      run: async () => Promise.all(uniqueIds.map((id) => operatorFetchJson<MemoryActionReceipt>(
+        `/api/memories/${id}/suppress`,
+        jsonInit('POST', { reason }),
+        'memory-bulk-suppress',
+      ))),
+      rollback: (snapshot) => {
+        replaceArray(rowsState.value, snapshot || [])
+      },
+      refresh,
+    })
+  }
+
   const auditGap = unsupportedOperatorAction(
     'memory-audit',
     'GET /api/memories/{id}/audit',
@@ -377,6 +420,8 @@ export function useOperatorMemoryLab(): {
     refresh,
     storeMemory,
     deleteMemory,
+    suppressMemory,
+    suppressMemories,
     auditGap,
     provenanceGap,
     actionGaps: memoryActionGaps,

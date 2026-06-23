@@ -230,6 +230,7 @@
         "delete": "Delete record",
         "confirmDelete": "Confirm delete",
         "hideNoise": "Hide as noise",
+        "confirmHideNoise": "Confirm hide",
         "editText": "Edit text",
         "replace": "Replace with new version",
         "promote": "Promote importance",
@@ -239,14 +240,19 @@
     },
     "notice": {
       "deleted": "Memory record {id} deleted",
+      "suppressed": "Memory record {id} hidden as noise",
+      "bulkSuppressed": "{count} record hidden as noise | {count} records hidden as noise",
       "error": "Operation failed: {message}",
       "unknownError": "unknown error"
     },
     "bulk": {
       "hideNoise": "Hide as noise",
+      "confirmHideNoise": "Confirm hide",
+      "suppressing": "Hiding…",
       "replace": "Replace version",
       "moveProject": "Move project…",
       "note": "snapshot first · then apply",
+      "confirmNote": "click again to hide the selected records as noise",
       "mustBuildNote": "bulk actions are waiting for server endpoints; selected records can be cleared"
     }
   },

@@ -12,6 +12,8 @@ const {
   error,
   refresh,
   deleteMemory,
+  suppressMemory,
+  suppressMemories,
   auditGap,
   provenanceGap,
   actionGaps,
@@ -32,7 +34,11 @@ const openId = ref<string | null>(null)
 const page = ref(1)
 const { pageSize, pageSizeOptions } = usePersistentPageSize(MEMORY_PAGE_SIZE_STORAGE_KEY, 10)
 const deleteConfirmId = ref<string | null>(null)
+const suppressConfirmId = ref<string | null>(null)
+const bulkSuppressConfirm = ref(false)
 const deletePending = ref(false)
+const suppressPending = ref(false)
+const bulkSuppressPending = ref(false)
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 
 const projects = computed(() => [...new Set(all.map((memory) => memory.project).filter(Boolean))].sort())
@@ -71,6 +77,11 @@ const pageRange = computed(() => {
 })
 const selectedIds = computed(() => Object.entries(selected.value).filter(([, value]) => value).map(([id]) => id))
 const selectedCount = computed(() => selectedIds.value.length)
+const bulkVerbs = computed(() => {
+  if (bulkSuppressPending.value) return [t('memory.bulk.suppressing')]
+  return [bulkSuppressConfirm.value ? t('memory.bulk.confirmHideNoise') : t('memory.bulk.hideNoise')]
+})
+const bulkNote = computed(() => bulkSuppressConfirm.value ? t('memory.bulk.confirmNote') : t('memory.bulk.note'))
 const opened = computed(() => all.find((memory) => memory.id === openId.value) || null)
 const noiseRatio = computed(() => {
   const measured = all.filter((memory) => memory.utilityKnown)
@@ -88,6 +99,11 @@ watch(pageSize, () => {
 
 watch(openId, () => {
   deleteConfirmId.value = null
+  suppressConfirmId.value = null
+})
+
+watch(selectedIds, () => {
+  bulkSuppressConfirm.value = false
 })
 
 function toggleFilter(key: MemoryFilter) {
@@ -109,6 +125,7 @@ function selectAll() {
 
 function clearSelected() {
   selected.value = {}
+  bulkSuppressConfirm.value = false
 }
 
 function toggleSelected(id: string) {
@@ -140,6 +157,59 @@ async function deleteOpened() {
     }
   } finally {
     deletePending.value = false
+  }
+}
+
+async function suppressOpened() {
+  const memory = opened.value
+  if (!memory || suppressPending.value) return
+
+  if (suppressConfirmId.value !== memory.id) {
+    suppressConfirmId.value = memory.id
+    notice.value = null
+    return
+  }
+
+  suppressPending.value = true
+  try {
+    const result = await suppressMemory(memory.id)
+    if (result.kind === 'success') {
+      const nextSelected = { ...selected.value }
+      delete nextSelected[memory.id]
+      selected.value = nextSelected
+      openId.value = null
+      suppressConfirmId.value = null
+      notice.value = { kind: 'success', text: t('memory.notice.suppressed', { id: memory.id }) }
+    } else {
+      notice.value = { kind: 'error', text: t('memory.notice.error', { message: result.error?.message || t('memory.notice.unknownError') }) }
+    }
+  } finally {
+    suppressPending.value = false
+  }
+}
+
+async function handleBulkAction() {
+  if (!selectedIds.value.length || bulkSuppressPending.value) return
+
+  if (!bulkSuppressConfirm.value) {
+    bulkSuppressConfirm.value = true
+    notice.value = null
+    return
+  }
+
+  const count = selectedIds.value.length
+  bulkSuppressPending.value = true
+  try {
+    const result = await suppressMemories(selectedIds.value)
+    if (result.kind === 'success') {
+      selected.value = {}
+      bulkSuppressConfirm.value = false
+      notice.value = { kind: 'success', text: t('memory.notice.bulkSuppressed', { count }) }
+    } else {
+      notice.value = { kind: 'error', text: t('memory.notice.error', { message: result.error?.message || t('memory.notice.unknownError') }) }
+    }
+  } finally {
+    bulkSuppressPending.value = false
   }
 }
 
@@ -333,6 +403,9 @@ function isNoisyUtility(memory: Memory) {
         </section>
 
         <div class="dactions">
+          <button class="act" :disabled="suppressPending" @click="suppressOpened">
+            {{ suppressConfirmId === opened.id ? t('memory.detail.actions.confirmHideNoise') : t('memory.detail.actions.hideNoise') }}
+          </button>
           <button class="act danger" :disabled="deletePending" @click="deleteOpened">
             {{ deleteConfirmId === opened.id ? t('memory.detail.actions.confirmDelete') : t('memory.detail.actions.delete') }}
           </button>
@@ -343,7 +416,7 @@ function isNoisyUtility(memory: Memory) {
       </aside>
     </div>
 
-    <BulkBar :count="selectedCount" :verbs="[]" :note="t('memory.bulk.mustBuildNote')" @clear="clearSelected" />
+    <BulkBar :count="selectedCount" :verbs="bulkVerbs" :note="bulkNote" @act="handleBulkAction" @clear="clearSelected" />
   </div>
 </template>
 
