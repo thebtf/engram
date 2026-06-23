@@ -19,6 +19,7 @@ const issuesPagePath = join(root, 'pages', 'issues.vue')
 const queuePagePath = join(root, 'pages', 'queue.vue')
 const queueComposablePath = join(root, 'composables', 'useOperatorQueue.ts')
 const pageSizePath = join(root, 'composables', 'usePersistentPageSize.ts')
+const mockOperatorApiPath = join(root, 'scripts', 'mock-operator-api.mjs')
 
 function read(path) {
   return readFileSync(path, 'utf8')
@@ -326,9 +327,12 @@ test('settings config save is live allowlisted PATCH with restart receipt', () =
 test('settings domain registry is live GET PUT DELETE control-plane surface', () => {
   const domainRegistrySource = read(domainRegistryPath)
   const settingsModalSource = read(settingsModalPath)
+  const mockOperatorApiSource = read(mockOperatorApiPath)
 
   assert.match(domainRegistrySource, /endpointEvidence\('\/api\/memory-domains',\s*['"]memory-domain-registry['"]\)/, 'Domain registry list must carry live endpoint evidence')
   assert.match(domainRegistrySource, /loadOperatorJson<ApiMemoryDomainsListResponse>\('\/api\/memory-domains'/, 'Domain registry must load the live list endpoint')
+  assert.match(domainRegistrySource, /function assertDomain\(value: string\)/, 'Domain registry mutations must reject empty domains before constructing endpoint URLs')
+  assert.match(domainRegistrySource, /retry:\s*\{[\s\S]*source:\s*['"]memory-domain-registry['"][\s\S]*run:\s*async\s*\(\)\s*=>\s*\{[\s\S]*await refreshDomains\(\)[\s\S]*return domainStateRef\.value/, 'Domain registry error retry must return normalized OperatorMemoryDomain state')
   assert.match(domainRegistrySource, /operatorFetchJson<ApiMemoryDomain>\(endpoint,\s*\{[\s\S]*method:\s*'PUT'/, 'Domain registry upsert must call PUT /api/memory-domains/{domain}')
   assert.match(domainRegistrySource, /operatorFetchJson<ApiMemoryDomainDeleteReceipt>\(endpoint,\s*\{\s*method:\s*'DELETE'\s*\}/, 'Domain registry delete must call DELETE /api/memory-domains/{domain}')
   assert.match(domainRegistrySource, /runOperatorMutation/, 'Domain registry writes must use the rollback-capable mutation seam')
@@ -338,9 +342,15 @@ test('settings domain registry is live GET PUT DELETE control-plane surface', ()
   assert.match(settingsModalSource, /id:\s*['"]domains['"][\s\S]*kind:\s*['"]domains['"][\s\S]*cls:\s*['"]live['"]/, 'Settings must expose domain registry as a live tab')
   assert.match(settingsModalSource, /selectedTab\.kind === 'domains'/, 'Settings modal must render a dedicated domain registry branch')
   assert.match(settingsModalSource, /domainDeleteConfirm\.value !== domain/, 'Domain delete must require a confirmation click')
+  assert.match(settingsModalSource, /editingDomain\s*=\s*ref<string \| null>\(null\)/, 'Settings modal must track edit mode for existing domain rows')
+  assert.match(settingsModalSource, /:disabled="Boolean\(editingDomain\)"/, 'Settings modal must lock the domain key while editing an existing row')
   assert.match(settingsModalSource, /settings\.domains\.rows\.deleteHelp/, 'Domain delete copy must clarify that memories are not deleted')
   assert.match(settingsModalSource, /domainListEvidence\.endpoint/, 'Domain registry tab must show live endpoint evidence')
   assert.doesNotMatch(settingsModalSource, /GET \/api\/memory-domains['"],\s*kind:\s*['"]mustbuild['"]/, 'Domain registry must not be represented as mustbuild after the backend seam exists')
+
+  assert.match(mockOperatorApiSource, /function controlPlaneError\(message, code, data\)/, 'Mock operator API domain route errors must follow the control-plane error envelope')
+  assert.match(mockOperatorApiSource, /try\s*\{[\s\S]*decodeURIComponent\(domainMatch\[1\]\)\.trim\(\)[\s\S]*\}\s*catch\s*\{[\s\S]*controlPlaneError\('invalid domain encoding', 400\)/, 'Mock operator API must safely reject malformed encoded domain paths')
+  assert.doesNotMatch(mockOperatorApiSource, /json\(res,\s*(?:400|404),\s*\{\s*error:\s*['"][^'"]*domain/, 'Mock operator API domain route must not use legacy { error } responses')
 })
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {

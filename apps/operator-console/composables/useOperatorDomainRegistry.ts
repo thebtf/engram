@@ -77,6 +77,14 @@ function mapDomain(row: ApiMemoryDomain): OperatorMemoryDomain {
   }
 }
 
+function assertDomain(value: string) {
+  const domain = value.trim()
+  if (!domain) {
+    throw new Error('domain must not be empty')
+  }
+  return domain
+}
+
 function startOnce(key: string, run: () => Promise<void>) {
   const started = useState<boolean>(`live:${key}:started`, () => false)
   if (import.meta.client && !started.value) {
@@ -126,11 +134,26 @@ export function useOperatorDomainRegistry(): {
       return
     }
 
+    if (state.kind === 'error') {
+      domainStateRef.value = {
+        ...state,
+        data: domains.value,
+        retry: {
+          source: 'memory-domain-registry',
+          run: async () => {
+            await refreshDomains()
+            return domainStateRef.value
+          },
+        },
+      }
+      return
+    }
+
     domainStateRef.value = { ...state, data: domains.value }
   }
 
   async function upsertDomain(draft: DomainRegistryDraft) {
-    const domain = draft.domain.trim()
+    const domain = assertDomain(draft.domain)
     const payload: ApiMemoryDomainUpsertRequest = {
       owner_principal: draft.ownerPrincipal.trim(),
       owner_principal_kind: draft.ownerPrincipalKind,
@@ -151,7 +174,8 @@ export function useOperatorDomainRegistry(): {
   }
 
   async function deleteDomain(domain: string) {
-    const endpoint = `/api/memory-domains/${encodeURIComponent(domain.trim())}`
+    const normalizedDomain = assertDomain(domain)
+    const endpoint = `/api/memory-domains/${encodeURIComponent(normalizedDomain)}`
     return runOperatorMutation({
       action: 'memory-domain-delete',
       evidence: endpointEvidence(endpoint, 'memory-domain-delete'),

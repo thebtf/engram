@@ -13,6 +13,10 @@ function json(res, status, body) {
   res.end(payload)
 }
 
+function controlPlaneError(message, code, data) {
+  return data === undefined ? { message, code } : { message, code, data }
+}
+
 function text(res, status, body) {
   res.writeHead(status, {
     'content-type': 'text/plain; charset=utf-8',
@@ -473,16 +477,22 @@ const server = createServer(async (req, res) => {
 
   const domainMatch = path.match(/^\/api\/memory-domains\/([^/]+)$/)
   if ((req.method === 'PUT' || req.method === 'DELETE') && domainMatch) {
-    const domain = decodeURIComponent(domainMatch[1]).trim()
+    let domain = ''
+    try {
+      domain = decodeURIComponent(domainMatch[1]).trim()
+    } catch {
+      json(res, 400, controlPlaneError('invalid domain encoding', 400))
+      return
+    }
     if (!domain) {
-      json(res, 400, { error: 'domain must not be empty' })
+      json(res, 400, controlPlaneError('domain must not be empty', 400))
       return
     }
 
     if (req.method === 'DELETE') {
       const index = domainRows.findIndex((row) => row.domain === domain)
       if (index < 0) {
-        json(res, 404, { error: 'domain owner not found' })
+        json(res, 404, controlPlaneError('domain owner not found', 404))
         return
       }
       domainRows.splice(index, 1)
@@ -493,7 +503,7 @@ const server = createServer(async (req, res) => {
     try {
       const body = await readRequestJson(req)
       if (!validDomainPayload(body)) {
-        json(res, 400, { error: 'invalid domain owner payload' })
+        json(res, 400, controlPlaneError('invalid domain owner payload', 400))
         return
       }
       const now = new Date().toISOString()
@@ -509,7 +519,7 @@ const server = createServer(async (req, res) => {
       domainRows = existing ? domainRows.map((item) => item.domain === domain ? row : item) : [...domainRows, row]
       json(res, 200, row)
     } catch (error) {
-      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      json(res, 400, controlPlaneError(error instanceof Error ? error.message : String(error), 400))
     }
     return
   }

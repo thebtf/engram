@@ -62,6 +62,7 @@ const configSaveInFlight = ref(false)
 const domainSaveInFlight = ref(false)
 const domainDeleteInFlight = ref<string | null>(null)
 const domainDeleteConfirm = ref<string | null>(null)
+const editingDomain = ref<string | null>(null)
 const configSaveResult = ref<Awaited<ReturnType<typeof saveConfig>> | null>(null)
 const domainSaveResult = ref<Awaited<ReturnType<typeof upsertDomain>> | null>(null)
 const domainDeleteResult = ref<Awaited<ReturnType<typeof deleteDomain>> | null>(null)
@@ -196,6 +197,7 @@ function resetDomainDraft() {
     mode: 'warn',
   }
   domainSaveResult.value = null
+  editingDomain.value = null
 }
 
 function editDomain(row: OperatorMemoryDomain) {
@@ -208,6 +210,7 @@ function editDomain(row: OperatorMemoryDomain) {
   domainSaveResult.value = null
   domainDeleteResult.value = null
   domainDeleteConfirm.value = null
+  editingDomain.value = row.domain
 }
 
 function formatDomainDate(value: string) {
@@ -591,7 +594,12 @@ onBeforeUnmount(() => {
                   <div class="domain-grid">
                     <label>
                       <span>{{ t('settings.domains.form.domain') }}</span>
-                      <input v-model.trim="domainDraft.domain" data-testid="domain-registry-domain" :placeholder="t('settings.domains.form.domainPlaceholder')" />
+                      <input
+                        v-model.trim="domainDraft.domain"
+                        data-testid="domain-registry-domain"
+                        :disabled="Boolean(editingDomain)"
+                        :placeholder="t('settings.domains.form.domainPlaceholder')"
+                      />
                     </label>
                     <label>
                       <span>{{ t('settings.domains.form.owner') }}</span>

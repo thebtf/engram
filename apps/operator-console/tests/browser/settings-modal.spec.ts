@@ -57,6 +57,7 @@ test('settings opens as a modal overlay and keeps unwired controls honest', asyn
   await expect(dialog.getByText('memory-lab')).toBeVisible()
   await dialog.getByRole('button', { name: 'Изменить домен memory-lab' }).click()
   await expect(dialog.getByTestId('domain-registry-domain')).toHaveValue('memory-lab')
+  await expect(dialog.getByTestId('domain-registry-domain')).toBeDisabled()
   await dialog.getByTestId('domain-registry-owner').fill('agent/bob')
   await dialog.getByTestId('domain-registry-mode').selectOption('reject')
   await dialog.getByTestId('domain-registry-save').click()
