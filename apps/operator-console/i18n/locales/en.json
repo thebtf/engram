@@ -101,6 +101,7 @@
       "modelHealthError": "Model health is unavailable",
       "search": "Similarity search — subsystem degradation",
       "queue": "{n} candidate(s) waiting for review (behind VNEXT_F)",
+      "queueLive": "{n} candidate(s) await operator decision",
       "queueGated": "Review queue is off (behind {flag})",
       "books": "Context books — processing pipeline is not on the server yet",
       "noise": "Memory noise {noise} — {n} record(s) marked as noise",
@@ -266,6 +267,81 @@
       "note": "snapshot first · then apply",
       "confirmNote": "click again to hide the selected records as noise",
       "mustBuildNote": "bulk actions are waiting for server endpoints; selected records can be cleared"
+    }
+  },
+
+  "queue": {
+    "title": "Review queue",
+    "subtitle": "Memory candidates: promote useful knowledge, reject noise, or mark older candidates as superseded.",
+    "brief": {
+      "title": "The operator decides each candidate",
+      "body": "Every action goes through the server state machine; when VNEXT_F is off, the page shows an honest gated state."
+    },
+    "metrics": {
+      "pending": "waiting for decision",
+      "promotable": "promotion targets",
+      "lowConfidence": "low confidence"
+    },
+    "filters": {
+      "project": "Queue project"
+    },
+    "actions": {
+      "selectAll": "Select all",
+      "clearSelection": "Clear selection",
+      "refresh": "Refresh",
+      "promote": "Promote",
+      "reject": "Reject",
+      "supersede": "Superseded",
+      "running": "Running…",
+      "confirm": {
+        "promote": "Confirm promotion",
+        "reject": "Confirm rejection",
+        "supersede": "Confirm supersede"
+      }
+    },
+    "countInFilter": "{shown} candidates · {selected} selected",
+    "rowsLabel": "Rows",
+    "allRows": "All",
+    "pageRange": "{from}–{to} of {total}",
+    "table": {
+      "candidate": "Candidate · target · project · age",
+      "confidence": "Confidence",
+      "actions": "Decision"
+    },
+    "meta": {
+      "recurrence": "{count} recurrence | {count} recurrences"
+    },
+    "state": {
+      "pending": "Loading candidate queue…",
+      "error": "Failed to load candidate queue: {message}",
+      "empty": "The selected project has no candidates awaiting review.",
+      "gated": "Queue is disabled by flag {flag}.",
+      "retry": "Retry"
+    },
+    "empty": {
+      "title": "Queue is empty",
+      "body": "There are no candidates for the selected project right now."
+    },
+    "detail": {
+      "title": "Candidate #{id}",
+      "status": "status",
+      "target": "promotion target",
+      "tier": "memory tier",
+      "type": "knowledge type",
+      "project": "project",
+      "source": "source session",
+      "fingerprint": "fingerprint",
+      "reviewAfter": "review after",
+      "evidence": "Evidence",
+      "operatorQuestion": "Operator decision:",
+      "operatorText": "promote the candidate into memory, reject it as noise, or mark it superseded by fresher knowledge."
+    },
+    "notice": {
+      "promote": "Candidate {id} promoted to memory",
+      "reject": "Candidate {id} rejected",
+      "supersede": "Candidate {id} marked superseded",
+      "error": "Operation failed: {message}",
+      "unknownError": "unknown error"
     }
   },
 

@@ -23,11 +23,13 @@ const {
   rulesPending,
   projectsPending,
   modelsPending,
+  queuePending,
+  queueGated,
+  queueCount,
   modelsError,
   modelOK,
   modelStandby,
   modelDegraded,
-  queueGap,
   accessGap,
 } = useOperatorOverview()
 
@@ -54,6 +56,7 @@ const projectCountDisplay = computed(() => displayCount(projectCount.value, proj
 const modelCountDisplay = computed(() => displayCount(models.value.length, modelsPending.value))
 const modelOKDisplay = computed(() => displayCount(modelOK.value, modelsPending.value))
 const modelDegradedDisplay = computed(() => displayCount(modelDegraded.value, modelsPending.value))
+const queueCountDisplay = computed(() => displayCount(queueCount.value, queuePending.value))
 
 const memoryStops = computed(() => {
   const total = Math.max(1, memories.length)
@@ -105,7 +108,14 @@ const attention = computed(() => [
     label: t('overview.attention.stateLink'),
   },
   { color: 'var(--state-warn)', text: t('overview.attention.search'), to: '/health', label: t('overview.attention.stateLink') },
-  { color: 'var(--class-dormant)', text: t('overview.attention.queueGated', { flag: queueGap.evidence.flag }), to: '/queue', label: t('overview.attention.queueLink') },
+  {
+    color: queueGated.value ? 'var(--class-dormant)' : (queueCount.value > 0 ? 'var(--state-warn)' : 'var(--class-live)'),
+    text: queueGated.value
+      ? t('overview.attention.queueGated', { flag: 'VNEXT_F' })
+      : t('overview.attention.queueLive', { n: queueCountDisplay.value }),
+    to: '/queue',
+    label: t('overview.attention.queueLink'),
+  },
   { color: 'var(--class-mustbuild)', text: t('overview.attention.books'), to: '/books', label: t('overview.attention.booksLink') },
   { color: 'var(--state-warn)', text: t('overview.attention.noise', { noise: info.value.noise, n: memoryNoiseDisplay.value }), to: '/noise', label: t('overview.attention.noiseLink') },
 ])
@@ -126,9 +136,9 @@ const memoryCards = computed(() => [
     to: '/queue',
     icon: 'queue',
     name: t('nav.items.queue'),
-    big: null,
+    big: queueGated.value ? null : queueCountDisplay.value,
     sub: t('overview.cards.queue.sub'),
-    meta: [{ cls: 'gate', text: t('overview.badges.vnext') }],
+    meta: [{ cls: queueGated.value ? 'gate' : 'live', text: queueGated.value ? t('overview.badges.vnext') : t('overview.badges.liveEndpoint') }],
   },
   {
     to: '/noise',

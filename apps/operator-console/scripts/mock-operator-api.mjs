@@ -133,6 +133,45 @@ const memoryRows = [
 
 const suppressedMemoryIds = new Set()
 
+const candidateRows = [
+  {
+    id: 301,
+    status: 'pending',
+    proposed_content: 'candidate queue REST bridge should mirror MCP promotion semantics',
+    proposed_promotion_target: 'semantic',
+    proposed_tier: 'semantic',
+    proposed_epistemic_type: 'decision',
+    source_session_id: 'sess-301',
+    confidence: 0.88,
+    recurrence_count: 4,
+    fingerprint: 'fp301',
+    created_at: '2026-06-23T08:00:00Z',
+    updated_at: '2026-06-23T08:00:00Z',
+    review_after: '2026-06-24T08:00:00Z',
+    evidence_handles: ['session:sess-301'],
+    affected_projects: ['operator-console'],
+    privacy_scope: 'project',
+  },
+  {
+    id: 302,
+    status: 'pending',
+    proposed_content: 'low-confidence recall noise needs an operator decision before promotion',
+    proposed_promotion_target: 'episodic',
+    proposed_tier: 'episodic',
+    proposed_epistemic_type: 'observation',
+    source_session_id: 'sess-302',
+    confidence: 0.62,
+    recurrence_count: 1,
+    fingerprint: 'fp302',
+    created_at: '2026-06-23T09:00:00Z',
+    updated_at: '2026-06-23T09:00:00Z',
+    review_after: '2026-06-24T09:00:00Z',
+    evidence_handles: ['session:sess-302'],
+    affected_projects: ['operator-console'],
+    privacy_scope: 'project',
+  },
+]
+
 const vaultCredentials = [
   {
     id: 1,
@@ -157,6 +196,25 @@ function memoryResponseForProject(project) {
     .filter((row) => row.project === project)
     .filter((row) => !suppressedMemoryIds.has(String(row.id)))
     .map((row) => ({ ...row, tags: [...row.tags] }))
+}
+
+function candidateResponse(project, status, limit) {
+  const rows = candidateRows
+    .filter((row) => row.status === status)
+    .filter((row) => row.affected_projects.includes(project))
+    .slice(0, limit)
+    .map((row) => ({
+      ...row,
+      evidence_handles: [...row.evidence_handles],
+      affected_projects: [...row.affected_projects],
+    }))
+  return {
+    candidates: rows,
+    count: rows.length,
+    project,
+    status,
+    limit,
+  }
 }
 
 function syncConfigFlags() {
@@ -323,6 +381,42 @@ const server = createServer(async (req, res) => {
     }
     suppressedMemoryIds.add(id)
     json(res, 200, { status: 'ok' })
+    return
+  }
+
+  const candidateActionMatch = path.match(/^\/api\/memory\/candidates\/([^/]+)\/(promote|reject|supersede)$/)
+  if (req.method === 'POST' && candidateActionMatch) {
+    const id = Number(candidateActionMatch[1])
+    const action = candidateActionMatch[2]
+    const row = candidateRows.find((item) => item.id === id)
+    if (!row) {
+      json(res, 404, { error: 'candidate not found' })
+      return
+    }
+    if (row.status !== 'pending') {
+      json(res, 409, { error: 'candidate is not pending' })
+      return
+    }
+
+    if (action === 'reject') {
+      try {
+        await readRequestJson(req)
+      } catch {
+        json(res, 400, { error: 'invalid JSON body' })
+        return
+      }
+    }
+
+    row.status = action === 'promote' ? 'promoted' : action === 'reject' ? 'rejected' : 'superseded'
+    const memoryId = action === 'promote' ? 9100 + id : undefined
+    if (memoryId !== undefined) row.promoted_memory_id = memoryId
+    json(res, 200, {
+      action,
+      candidate_id: row.id,
+      candidate_status: row.status,
+      memory_id: memoryId,
+      promoted_memory_id: row.promoted_memory_id,
+    })
     return
   }
 
@@ -497,6 +591,13 @@ const server = createServer(async (req, res) => {
       return
     case '/api/memories':
       json(res, 200, memoryResponseForProject(url.searchParams.get('project') || 'operator-console'))
+      return
+    case '/api/memory/candidates':
+      json(res, 200, candidateResponse(
+        url.searchParams.get('project') || 'operator-console',
+        url.searchParams.get('status') || 'pending',
+        Number(url.searchParams.get('limit') || 100),
+      ))
       return
     default:
       json(res, 404, { error: 'not found' })
