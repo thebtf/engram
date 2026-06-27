@@ -371,6 +371,11 @@ watch(configState, () => {
   if (!configDraftTouched.value) resetConfigDraft()
 }, { immediate: true })
 
+watch([open, activeTab], ([isOpen, tab]) => {
+  if (!isOpen || tab !== 'models') return
+  void refreshModelSurfaces()
+})
+
 onBeforeUnmount(() => {
   if (!import.meta.client) return
   window.removeEventListener('keydown', onKeydown)

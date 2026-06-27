@@ -454,8 +454,9 @@ function modelRegistryName(value: unknown): string | null {
 }
 
 function mapModelRegistry(payload: ApiModelsResponse | undefined): ModelRegistrySnapshot {
+  const rawModels = Array.isArray(payload?.models) ? payload.models : []
   return {
-    models: [...new Set((payload?.models || []).map(modelRegistryName).filter((value): value is string => Boolean(value)))],
+    models: [...new Set(rawModels.map(modelRegistryName).filter((value): value is string => Boolean(value)))],
     defaultModel: modelRegistryName(payload?.default) || '—',
     currentModel: modelRegistryName(payload?.current) || '—',
   }
