@@ -374,7 +374,7 @@ watch(configState, () => {
 watch([open, activeTab], ([isOpen, tab]) => {
   if (!isOpen || tab !== 'models') return
   void refreshModelSurfaces()
-})
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   if (!import.meta.client) return
