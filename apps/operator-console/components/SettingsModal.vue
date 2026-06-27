@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { DOMAIN_OWNER_KINDS, DOMAIN_OWNER_MODES, useOperatorDomainRegistry } from '../composables/useOperatorDomainRegistry'
 import type { DomainRegistryDraft, OperatorMemoryDomain } from '../composables/useOperatorDomainRegistry'
+import { useModelRegistryState, useModelsState } from '../composables/useMockData'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
-type SettingsTabKind = 'general' | 'runtime' | 'actions' | 'domains' | 'client' | 'dead' | 'mustbuild'
+type SettingsTabKind = 'general' | 'models' | 'runtime' | 'actions' | 'domains' | 'client' | 'dead' | 'mustbuild'
 type SettingsTabClass = 'live' | 'mustbuild' | 'stale'
 
 interface SettingsTab {
@@ -53,6 +54,8 @@ const {
   deleteDomain,
   listEvidence: domainListEvidence,
 } = useOperatorDomainRegistry()
+const modelHealthState = useModelsState()
+const modelRegistryState = useModelRegistryState()
 
 const restartConfirm = ref(false)
 const updateRestartConfirm = ref(false)
@@ -79,7 +82,7 @@ const domainDraft = ref<DomainRegistryDraft>({
 
 const tabs = computed<SettingsTab[]>(() => [
   { id: 'general', groupKey: 'basic', labelKey: 'general', titleKey: 'general', descKey: 'general', kind: 'general', cls: 'live' },
-  { id: 'models', groupKey: 'models', labelKey: 'models', titleKey: 'models', descKey: 'models', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/models' },
+  { id: 'models', groupKey: 'models', labelKey: 'models', titleKey: 'models', descKey: 'models', kind: 'models', cls: 'live', evidence: 'GET /api/model-health' },
   { id: 'credentials', groupKey: 'models', labelKey: 'credentials', titleKey: 'credentials', descKey: 'credentials', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/model-credentials' },
   { id: 'bindings', groupKey: 'models', labelKey: 'bindings', titleKey: 'bindings', descKey: 'bindings', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/model-bindings' },
   { id: 'addModel', groupKey: 'models', labelKey: 'addModel', titleKey: 'addModel', descKey: 'addModel', kind: 'mustbuild', cls: 'mustbuild', evidence: 'POST /api/models' },
@@ -120,6 +123,12 @@ const configDraftDirty = computed(() => configAvailable.value && (
   draftInjectUnified.value !== currentInjectUnified.value ||
   draftSourceProject.value !== currentSourceProject.value
 ))
+const modelRows = computed(() => modelHealthState.rows.value)
+const modelRegistry = computed(() => modelRegistryState.snapshot.value)
+const modelConfiguredCount = computed(() => modelRows.value.filter((row) => row.configured).length)
+const modelSecretCount = computed(() => modelRows.value.filter((row) => row.secretSet).length)
+const modelHealthPending = computed(() => modelHealthState.pending.value && modelRows.value.length === 0)
+const modelRegistryPending = computed(() => modelRegistryState.pending.value && modelRegistry.value.models.length === 0)
 const switches = computed(() => [
   {
     key: 'injectUnified',
@@ -220,6 +229,19 @@ function formatDomainDate(value: string) {
 
 function domainDeleteTestId(domain: string) {
   return `domain-registry-delete-${domain.replace(/[^a-z0-9_-]+/gi, '-')}`
+}
+
+function modelHealthClass(health: string) {
+  if (health === 'degraded') return 'warn-soft'
+  if (health === 'ok') return 'live'
+  return 'off'
+}
+
+async function refreshModelSurfaces() {
+  await Promise.all([
+    modelHealthState.refresh(),
+    modelRegistryState.refresh(),
+  ])
 }
 
 async function saveRuntimeConfig() {
@@ -349,6 +371,11 @@ watch(configState, () => {
   if (!configDraftTouched.value) resetConfigDraft()
 }, { immediate: true })
 
+watch([open, activeTab], ([isOpen, tab]) => {
+  if (!isOpen || tab !== 'models') return
+  void refreshModelSurfaces()
+}, { immediate: true })
+
 onBeforeUnmount(() => {
   if (!import.meta.client) return
   window.removeEventListener('keydown', onKeydown)
@@ -461,6 +488,88 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="setting-control">
                       <span class="bdg live">{{ t('settings.modal.general.overlay.badge') }}</span>
+                    </div>
+                  </div>
+                </section>
+              </template>
+
+              <template v-else-if="selectedTab.kind === 'models'">
+                <section class="settings-section">
+                  <div class="settings-section-title">{{ t('settings.models.health.title') }}</div>
+                  <p class="plain-help">{{ t('settings.models.health.body') }}</p>
+                  <div class="settings-actions model-toolbar">
+                    <div class="left">
+                      <span class="tag">{{ t('settings.models.count', modelRows.length) }}</span>
+                      <span class="tag">{{ t('settings.models.configured', { count: modelConfiguredCount }) }}</span>
+                      <span class="tag">{{ t('settings.models.secrets', { count: modelSecretCount }) }}</span>
+                      <HonestyBadge cls="live" evidence="/api/model-health" />
+                      <code class="endpoint-pill">GET /api/model-health</code>
+                    </div>
+                    <button class="tbtn" type="button" :disabled="modelHealthState.pending.value || modelRegistryState.pending.value" @click="refreshModelSurfaces">
+                      {{ t('settings.refresh') }}
+                    </button>
+                  </div>
+                  <div v-if="modelHealthPending" class="state pending">{{ t('settings.models.health.pending') }}</div>
+                  <div v-else-if="modelHealthState.error.value" class="state error">{{ t('settings.models.health.error', { message: modelHealthState.error.value }) }}</div>
+                  <div v-else class="model-list">
+                    <div v-for="row in modelRows" :key="row.id" class="model-row">
+                      <div class="model-main">
+                        <code>{{ row.id }}</code>
+                        <span>{{ row.role }} · {{ row.provider }}</span>
+                      </div>
+                      <div class="model-meta">
+                        <span class="bdg" :class="modelHealthClass(row.health)">{{ t(`settings.models.health.status.${row.health}`) }}</span>
+                        <span class="tag">{{ row.source }}</span>
+                        <span class="tag">{{ row.endpoint }}</span>
+                      </div>
+                      <div class="model-detail">
+                        <b>{{ row.model }}</b>
+                        <p>{{ row.message }}</p>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="settings-section">
+                  <div class="settings-section-title">{{ t('settings.models.registry.title') }}</div>
+                  <p class="plain-help">{{ t('settings.models.registry.body') }}</p>
+                  <div v-if="modelRegistryPending" class="state pending">{{ t('settings.models.registry.pending') }}</div>
+                  <div v-else-if="modelRegistryState.error.value" class="state error">{{ t('settings.models.registry.error', { message: modelRegistryState.error.value }) }}</div>
+                  <div v-else-if="modelRegistry.models.length" class="settings-note-grid">
+                    <div v-for="model in modelRegistry.models" :key="model" class="surface-card">
+                      <b>{{ model }}</b>
+                      <p>{{ t('settings.models.registry.modelBody') }}</p>
+                      <div class="route">GET /api/models</div>
+                    </div>
+                  </div>
+                  <div v-else class="operator-note">
+                    <span class="mark">i</span>
+                    <div>
+                      <b>{{ t('settings.models.registry.emptyTitle') }}</b>
+                      <p>{{ t('settings.models.registry.emptyBody') }}</p>
+                      <HonestyBadge cls="live" evidence="/api/models" />
+                    </div>
+                  </div>
+                  <div class="metrics model-registry-metrics">
+                    <div>
+                      <span>{{ t('settings.models.registry.default') }}</span>
+                      <strong>{{ modelRegistry.defaultModel }}</strong>
+                    </div>
+                    <div>
+                      <span>{{ t('settings.models.registry.current') }}</span>
+                      <strong>{{ modelRegistry.currentModel }}</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="settings-section">
+                  <div class="settings-section-title">{{ t('settings.models.next.title') }}</div>
+                  <div class="operator-note">
+                    <span class="mark">!</span>
+                    <div>
+                      <b>{{ t('settings.models.next.bodyTitle') }}</b>
+                      <p>{{ t('settings.models.next.body') }}</p>
+                      <HonestyBadge cls="mustbuild" evidence="GET /api/model-credentials · GET /api/model-bindings · POST /api/models" />
                     </div>
                   </div>
                 </section>
@@ -838,6 +947,15 @@ onBeforeUnmount(() => {
 .flag-status { display: flex; justify-content: flex-end; align-items: center; gap: 6px; flex-wrap: wrap; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; }
 .settings-actions .left { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.model-toolbar { margin-top: 12px; }
+.model-list { display: grid; gap: 8px; margin-top: 12px; }
+.model-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; align-items: center; border: 1px solid var(--border-soft); border-radius: var(--r-md); padding: 11px 12px; background: color-mix(in oklab, var(--surface), var(--fg) 1.5%); }
+.model-main, .model-detail { min-width: 0; display: grid; gap: 3px; }
+.model-main code, .model-detail b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-family: var(--font-mono); }
+.model-main span, .model-detail p { margin: 0; color: var(--muted); font-size: var(--text-xs); line-height: 1.38; }
+.model-meta { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.model-detail { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid var(--border-soft); }
+.model-registry-metrics { margin-top: 12px; }
 .domain-toolbar { margin-top: 12px; }
 .domain-form { border: 1px solid var(--border-soft); border-radius: var(--r-md); padding: 14px; background: color-mix(in oklab, var(--surface), var(--fg) 1.5%); }
 .domain-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
@@ -866,6 +984,8 @@ onBeforeUnmount(() => {
   .settings-row { grid-template-columns: 1fr; }
   .setting-control { justify-content: flex-start; }
   .pending-restart-row { grid-template-columns: 1fr; }
+  .model-row { grid-template-columns: 1fr; align-items: stretch; }
+  .model-meta { justify-content: flex-start; }
   .domain-grid { grid-template-columns: 1fr; }
   .domain-row { grid-template-columns: 1fr; align-items: stretch; }
   .domain-meta, .domain-actions { justify-content: flex-start; }

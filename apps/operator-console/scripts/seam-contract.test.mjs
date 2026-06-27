@@ -25,6 +25,9 @@ const projectsComposablePath = join(root, 'composables', 'useOperatorProjects.ts
 const pageSizePath = join(root, 'composables', 'usePersistentPageSize.ts')
 const mockOperatorApiPath = join(root, 'scripts', 'mock-operator-api.mjs')
 const chunkReloadPluginPath = join(root, 'plugins', 'chunk-reload.client.ts')
+const ruLocalePath = join(root, 'i18n', 'locales', 'ru.json')
+const enLocalePath = join(root, 'i18n', 'locales', 'en.json')
+const zhLocalePath = join(root, 'i18n', 'locales', 'zh.json')
 
 function read(path) {
   return readFileSync(path, 'utf8')
@@ -171,6 +174,36 @@ test('overview model health is live endpoint data, not a mustbuild mock chart', 
   assert.match(overviewPageSource, /overview\.modelHealth\.ok/, 'Model-health chart labels must be keyed for i18n')
   assert.match(overviewPageSource, /overview\.modelHealth\.errorShort/, 'Model-health errors must be visible and keyed')
   assert.doesNotMatch(overviewPageSource, /modelHealthGap/, 'Overview page must not render stale modelHealthGap data')
+})
+
+test('settings models tab is live read-only model health, not a fake model editor', () => {
+  const compatibilitySource = read(compatibilityPath)
+  const settingsModalSource = read(settingsModalPath)
+  const mockApiSource = read(mockOperatorApiPath)
+  const localeSources = [read(ruLocalePath), read(enLocalePath), read(zhLocalePath)]
+
+  assert.match(compatibilitySource, /interface ApiModelsResponse/, 'model registry payload must be typed')
+  assert.match(compatibilitySource, /export const useModelRegistryState\b/, 'model registry must expose a stateful live seam')
+  assert.match(compatibilitySource, /fetchJson<ApiModelsResponse>\('\/api\/models'\)/, 'model registry must fetch the live REST endpoint')
+  assert.match(compatibilitySource, /Array\.isArray\(payload\?\.models\)/, 'model registry must tolerate malformed non-array models payloads')
+  assert.match(settingsModalSource, /useModelRegistryState/, 'Settings modal must consume the model registry seam')
+  assert.match(settingsModalSource, /useModelsState/, 'Settings modal must consume the live model-health seam')
+  assert.match(settingsModalSource, /watch\(\[open,\s*activeTab\]/, 'Settings modal must refresh model surfaces when the Models tab is opened')
+  assert.match(settingsModalSource, /\{\s*id:\s*['"]models['"][\s\S]*kind:\s*['"]models['"][\s\S]*cls:\s*['"]live['"][\s\S]*evidence:\s*['"]GET \/api\/model-health['"]/, 'Models tab must be live model-health, not mustbuild')
+  assert.doesNotMatch(settingsModalSource, /\{\s*id:\s*['"]models['"][\s\S]*kind:\s*['"]mustbuild['"][\s\S]*evidence:\s*['"]GET \/api\/models['"]/, 'Models tab must not remain a mustbuild placeholder')
+  assert.match(settingsModalSource, /selectedTab\.kind === ['"]models['"]/, 'Settings modal must render a dedicated Models tab body')
+  assert.match(settingsModalSource, /GET \/api\/model-health/, 'Models body must show model-health endpoint evidence')
+  assert.match(settingsModalSource, /GET \/api\/models/, 'Models body must show model registry endpoint evidence')
+  assert.match(settingsModalSource, /GET \/api\/model-credentials · GET \/api\/model-bindings · POST \/api\/models/, 'Unbuilt model mutations must stay explicit mustbuild evidence')
+  assert.doesNotMatch(settingsModalSource, /data-edit-model|data-delete-cred|openModelModal|modelForm/, 'Settings modal must not expose mockup-only model mutation controls')
+  assert.match(mockApiSource, /case ['"]\/api\/models['"]:/, 'Browser smoke mock must expose the live-empty /api/models endpoint')
+
+  for (const localeSource of localeSources) {
+    assert.match(localeSource, /"models":\s*\{/, 'Settings model copy must be keyed in every locale')
+    assert.match(localeSource, /"health":\s*\{/, 'Settings model health copy must be keyed in every locale')
+    assert.match(localeSource, /"registry":\s*\{/, 'Settings model registry copy must be keyed in every locale')
+    assert.match(localeSource, /"next":\s*\{/, 'Settings model mustbuild-next copy must be keyed in every locale')
+  }
 })
 
 test('memory compatibility export uses the Memory Lab live state seam', () => {

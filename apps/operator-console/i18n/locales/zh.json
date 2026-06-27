@@ -1122,6 +1122,38 @@
       "disabled": "已禁用",
       "restartRequired": "restart"
     },
+    "models": {
+      "count": "{count} 个模型",
+      "configured": "已配置 {count}",
+      "secrets": "key {count}",
+      "health": {
+        "title": "模型健康",
+        "body": "来自 GET /api/model-health 的模型角色只读快照：哪些已配置、哪里缺 key、哪些 client 已初始化。",
+        "pending": "正在加载模型状态…",
+        "error": "无法加载模型状态：{message}",
+        "status": {
+          "ok": "工作中",
+          "standby": "待命",
+          "degraded": "降级"
+        }
+      },
+      "registry": {
+        "title": "/api/models 注册表",
+        "body": "GET /api/models 仍是 live endpoint，但 v5 demolition 后它会诚实地返回空 runtime registry。这不是模型编辑器。",
+        "pending": "正在加载模型注册表…",
+        "error": "无法加载模型注册表：{message}",
+        "modelBody": "Live registry 记录。",
+        "emptyTitle": "Runtime registry 为空",
+        "emptyBody": "服务器通过外部 API 计算 embeddings，不保留 on-box model registry。上方的 model-health 才是工作快照。",
+        "default": "Default",
+        "current": "Current"
+      },
+      "next": {
+        "title": "尚未构建",
+        "bodyTitle": "模型编辑仍是 mustbuild",
+        "body": "Credentials、bindings 和 POST /api/models 会保持诚实的 placeholder controls，直到服务器暴露对应 endpoints。"
+      }
+    },
     "domains": {
       "title": "Domain registry",
       "body": "实时 memory_domain_owners 表。删除一行只会让域回到 implicit legacy policy，不会删除记忆记录。",
