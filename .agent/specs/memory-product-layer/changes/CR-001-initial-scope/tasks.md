@@ -121,6 +121,9 @@ Dependencies: none (first story group).
 - Data evidence: PASS current helper exists, but principal/domain scoping is must-build.
 - Confidence gate: if extension path gets messy, spin out sibling route/tool without changing bounded response contract.
 - AC: principal-scoped brief or equivalent exists, remains bounded, and returns scope/freshness evidence.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `internal/mcp/tools_brief.go`, `internal/mcp/tools_brief_test.go`, `internal/mcp/server.go`, `.agent/tasks/T007/implementation-log.md`.
+- Evidence: RED `go test ./internal/mcp -run "TestGetMemoryBrief" -count=1` failed on missing principal brief schema and scoped args falling through to the legacy project-injection path; GREEN same command passed; GREEN `go test ./internal/mcp ./internal/principalmemory -count=1` passed; GREEN `go test ./internal/mcp ./internal/principalmemory ./internal/worker -count=1` passed. Scoped briefs reuse the T006 principal query service, keep max `limit=10`, and return `source`, `freshness`, `generated_at`, and `scope` evidence.
 
 ### T008 — Wire touched principal-memory UI from approved design contract
 - Path: `apps/operator-console/composables/useOperatorMemoryLab.ts`, `apps/operator-console/pages/memory.vue`, touched locale files

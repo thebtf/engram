@@ -96,6 +96,12 @@
             <td>Current code already exposes a bounded principal/domain/project memory query through MCP and REST, backed by the shared principal-memory query service, existing visibility/domain filtering, and private-read audit semantics.</td>
             <td><code>internal/principalmemory/query_service.go</code>; <code>internal/mcp/tools_principal_memory.go</code>; <code>internal/worker/handlers_principal_memory.go</code>; <code>.agent/specs/memory-product-layer/contracts/principal-explorer.md</code>.</td>
           </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T007 extends <code>get_memory_brief</code> through the live T006 principal query service.</td>
+            <td>The existing brief helper stays unchanged for unscoped project briefs. Scoped calls branch into the principal-memory query service, preserving privacy/domain/audit semantics and returning explicit scope/freshness evidence.</td>
+            <td><code>internal/mcp/tools_brief.go</code>; <code>internal/mcp/tools_brief_test.go</code>; <code>internal/mcp/server.go</code>; <code>.agent/tasks/T007/implementation-log.md</code>.</td>
+          </tr>
         </tbody>
       </table>
     </section>
@@ -252,6 +258,12 @@
             <td>T006 principal explorer substrate verification</td>
             <td>PASS</td>
             <td>Focused verification <code>go test ./internal/principalmemory ./internal/mcp ./internal/worker -run "PrincipalMemory|QueryPrincipal" -count=1</code> passed; broader package verification <code>go test ./internal/principalmemory ./internal/mcp ./internal/worker -count=1</code> passed; contract <code>principal-explorer.md</code> records live MCP/REST surfaces, privacy/domain rules, attribution, bounds, audit behavior, and the missing PMQ-doc discrepancy.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T007 principal brief verification</td>
+            <td>PASS</td>
+            <td>RED <code>go test ./internal/mcp -run "TestGetMemoryBrief" -count=1</code> failed on missing principal brief schema and legacy-path fallthrough; GREEN same command passed; GREEN <code>go test ./internal/mcp ./internal/principalmemory -count=1</code> passed; GREEN <code>go test ./internal/mcp ./internal/principalmemory ./internal/worker -count=1</code> passed.</td>
           </tr>
         </tbody>
       </table>
