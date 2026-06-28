@@ -5,8 +5,9 @@
 //
 // # Public / internal split
 //
-// pkg/cognitive (this package) exports exactly six cross-subsystem
-// interfaces, all consumed via dependency injection at registration time:
+// pkg/cognitive (this package) exports seven public agent/subsystem
+// interfaces. The first six are cross-subsystem interfaces consumed via
+// dependency injection at registration time:
 //
 //   - AttentionEventSource — subsystems declaring event types they emit
 //   - CandidateProposer    — synchronously invoked by S3 ambient handler
@@ -14,6 +15,11 @@
 //   - StateWriter          — S1 owns session_state + project_state writes
 //   - AttentionEventWriter — S4a owns attention_events writes
 //   - DirectiveDistiller   — S4a transforms RawSignal into Distilled directive
+//
+// StatePlane is the ENG-MPL-1 product-facing agent-owned state-plane
+// interface. It embeds the write surface and adds read methods for native
+// session/project state and bounded resume packets. CORE does not dispatch it
+// yet; MCP/agent paths wire it once the T002/T003 store/adapters land.
 //
 // CORE-internal substrate (registry, event bus, hint queue, meter and the
 // CORE-only DTOs) lives in internal/cognitive/core/interfaces.go. Downstream
@@ -64,11 +70,11 @@
 //
 // # Reading the rest of the package
 //
-//   - types.go        — cross-subsystem payload types (AttentionEvent,
+//   - types.go        — cross-subsystem and state-plane payload types (AttentionEvent,
 //     HintProposal, ResolutionPolicy, HintSurface,
-//     HintDelivery, SessionStateSlots, ProjectStateRecord,
+//     HintDelivery, SessionStateSlots, ProjectStateRecord, ResumePacket,
 //     AttentionEventRecord, RawSignal, Distilled)
-//   - interfaces.go   — the six cross-subsystem interfaces listed above
+//   - interfaces.go   — the seven public interfaces listed above
 //   - normalize.go    — NormalizeForDiff + VolatileFields + MemorySortKey
 //     used by the FR-9 byte-identity gate
 //

@@ -119,6 +119,138 @@ type ProjectStateRecord struct {
 	UpdatedBy    string     `json:"updated_by"`
 }
 
+// StatePacketSource names the authority that produced a ResumePacket. It is
+// deliberately explicit so filesystem fallback can never masquerade as native
+// state in the deterministic resume path.
+type StatePacketSource string
+
+// Canonical StatePacketSource values.
+const (
+	StatePacketSourceNative             StatePacketSource = "native"
+	StatePacketSourceFilesystemFallback StatePacketSource = "filesystem_fallback"
+	StatePacketSourceConflict           StatePacketSource = "conflict"
+)
+
+// StateFreshness classifies whether the native packet is current enough to
+// drive resume without opening narrative filesystem state.
+type StateFreshness string
+
+// Canonical StateFreshness values.
+const (
+	StateFreshnessFresh   StateFreshness = "fresh"
+	StateFreshnessStale   StateFreshness = "stale"
+	StateFreshnessUnknown StateFreshness = "unknown"
+)
+
+// StateDriftKind classifies the relationship between native state and any
+// fallback/export state inspected by the read path.
+type StateDriftKind string
+
+// Canonical StateDriftKind values.
+const (
+	StateDriftNone          StateDriftKind = "none"
+	StateDriftNativeStale   StateDriftKind = "native_stale"
+	StateDriftFallbackNewer StateDriftKind = "fallback_newer"
+	StateDriftConflict      StateDriftKind = "conflict"
+	StateDriftUnknown       StateDriftKind = "unknown"
+)
+
+// StateScopeKind identifies which agent-owned handoff scope a state record
+// describes. The first CR uses session/project state; goal/task scopes are
+// contractually reserved so later CRs do not overload generic memory rows.
+type StateScopeKind string
+
+// Canonical StateScopeKind values.
+const (
+	StateScopeSession StateScopeKind = "session"
+	StateScopeProject StateScopeKind = "project"
+	StateScopeGoal    StateScopeKind = "goal"
+	StateScopeTask    StateScopeKind = "task"
+)
+
+// StateActionKind classifies how an agent should execute the next action.
+type StateActionKind string
+
+// Canonical StateActionKind values.
+const (
+	StateActionCommand     StateActionKind = "command"
+	StateActionInstruction StateActionKind = "instruction"
+	StateActionReviewGate  StateActionKind = "review_gate"
+)
+
+// StateVerificationKind classifies the evidence gate that must pass before a
+// resume can be considered complete.
+type StateVerificationKind string
+
+// Canonical StateVerificationKind values.
+const (
+	StateVerificationCommand  StateVerificationKind = "command"
+	StateVerificationArtifact StateVerificationKind = "artifact"
+	StateVerificationManual   StateVerificationKind = "manual"
+)
+
+// StateAction is the exact next action carried by a ResumePacket.
+type StateAction struct {
+	Kind        StateActionKind `json:"kind"`
+	Description string          `json:"description"`
+	Command     string          `json:"command,omitempty"`
+}
+
+// StateVerification is the exact evidence gate carried by a ResumePacket.
+type StateVerification struct {
+	Kind        StateVerificationKind `json:"kind"`
+	Description string                `json:"description"`
+	Command     string                `json:"command,omitempty"`
+}
+
+// StateConflict records a single native-vs-fallback disagreement without
+// forcing the reader to open the larger fallback artifact.
+type StateConflict struct {
+	Field         string `json:"field"`
+	NativeValue   string `json:"native_value,omitempty"`
+	FallbackValue string `json:"fallback_value,omitempty"`
+	Resolution    string `json:"resolution,omitempty"`
+}
+
+// StateDrift summarizes drift/conflict evidence for a ResumePacket.
+type StateDrift struct {
+	Kind      StateDriftKind  `json:"kind"`
+	Conflicts []StateConflict `json:"conflicts,omitempty"`
+	CheckedAt time.Time       `json:"checked_at,omitempty"`
+}
+
+// ResumePacketRequest scopes a native resume read. AllowFilesystemFallback is
+// explicit: a caller that wants native-only behavior leaves it false and gets a
+// non-native packet only when the implementation can prove an intentional
+// conflict path.
+type ResumePacketRequest struct {
+	Project                 string `json:"project"`
+	SessionID               string `json:"session_id,omitempty"`
+	GoalID                  string `json:"goal_id,omitempty"`
+	TaskID                  string `json:"task_id,omitempty"`
+	AllowFilesystemFallback bool   `json:"allow_filesystem_fallback,omitempty"`
+}
+
+// ResumePacket is the bounded deterministic resume payload for the native
+// state plane. The required fields are intentionally concrete: freshness,
+// drift/conflict, next action, and next verification are first-class fields,
+// not opaque metadata inside SessionStateSlots.
+type ResumePacket struct {
+	Source           StatePacketSource `json:"source"`
+	Freshness        StateFreshness    `json:"freshness"`
+	Drift            StateDrift        `json:"drift"`
+	NextAction       StateAction       `json:"next_action"`
+	NextVerification StateVerification `json:"next_verification"`
+	GeneratedAt      time.Time         `json:"generated_at"`
+
+	Project      string           `json:"project,omitempty"`
+	SessionID    string           `json:"session_id,omitempty"`
+	GoalID       string           `json:"goal_id,omitempty"`
+	TaskID       string           `json:"task_id,omitempty"`
+	FallbackPath string           `json:"fallback_path,omitempty"`
+	Scopes       []StateScopeKind `json:"scopes,omitempty"`
+}
+
 // AttentionEventRecord is the durable form of an AttentionEvent persisted
 // by S4a through the AttentionEventWriter interface. Unlike AttentionEvent
 // (which describes a runtime signal), AttentionEventRecord captures a

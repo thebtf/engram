@@ -19,6 +19,7 @@ func TestTypesExported(t *testing.T) {
 		{"HintDelivery", (*HintDelivery)(nil)},
 		{"SessionStateSlots", (*SessionStateSlots)(nil)},
 		{"ProjectStateRecord", (*ProjectStateRecord)(nil)},
+		{"ResumePacket", (*ResumePacket)(nil)},
 		{"AttentionEventRecord", (*AttentionEventRecord)(nil)},
 		{"RawSignal", (*RawSignal)(nil)},
 		{"Distilled", (*Distilled)(nil)},
@@ -63,5 +64,18 @@ func TestHintSurfaceEnum(t *testing.T) {
 	var s HintSurface = "mcp_poll"
 	if s != HintSurfaceMCPPoll {
 		t.Errorf("HintSurface(\"mcp_poll\") != HintSurfaceMCPPoll")
+	}
+}
+
+func TestStatePacketSourceEnum(t *testing.T) {
+	if StatePacketSourceNative != StatePacketSource("native") {
+		t.Errorf("StatePacketSourceNative = %q, want %q", StatePacketSourceNative, "native")
+	}
+	if StatePacketSourceFilesystemFallback != StatePacketSource("filesystem_fallback") {
+		t.Errorf("StatePacketSourceFilesystemFallback = %q, want %q",
+			StatePacketSourceFilesystemFallback, "filesystem_fallback")
+	}
+	if StatePacketSourceConflict != StatePacketSource("conflict") {
+		t.Errorf("StatePacketSourceConflict = %q, want %q", StatePacketSourceConflict, "conflict")
 	}
 }

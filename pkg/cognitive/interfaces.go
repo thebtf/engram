@@ -65,6 +65,25 @@ type StateWriter interface {
 	WriteProjectState(ctx context.Context, project string, state ProjectStateRecord) error
 }
 
+// StatePlane is the agent-owned read/write surface for native handoff state.
+// StateWriter remains the narrower write-only subsystem contract used by CORE;
+// StatePlane is the product-facing state-plane contract introduced by ENG-MPL-1
+// so MCP/agent paths can read bounded resume packets without relying on
+// filesystem archaeology.
+type StatePlane interface {
+	StateWriter
+
+	// ReadSessionState returns the native session slots for sessionID.
+	ReadSessionState(ctx context.Context, sessionID string) (SessionStateSlots, error)
+
+	// ReadProjectState returns the native project record for project.
+	ReadProjectState(ctx context.Context, project string) (ProjectStateRecord, error)
+
+	// ReadResumePacket returns the bounded resume payload for request. The
+	// implementation owns native-first and explicit-fallback semantics.
+	ReadResumePacket(ctx context.Context, request ResumePacketRequest) (ResumePacket, error)
+}
+
 // AttentionEventWriter is the agent-owned directive-capture surface
 // implemented by S4a. The single-method shape mirrors the single
 // responsibility per ADR-010: persist an AttentionEventRecord derived from

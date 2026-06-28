@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ENG-MPL-1 CR-001 Implementation Notes</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --panel: #ffffff;
+      --ink: #1d1f23;
+      --muted: #5d6470;
+      --line: #d9ddd7;
+      --aligned: #0f6b4f;
+      --amend: #9a4f00;
+      --deferred: #51627a;
+      --blocked: #9b2226;
+    }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, sans-serif; }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 48px; }
+    header, section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; margin: 0 0 16px; }
+    h1, h2 { margin: 0 0 12px; line-height: 1.2; }
+    h1 { font-size: 28px; }
+    h2 { font-size: 18px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-top: 1px solid var(--line); padding: 10px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .meta { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); color: var(--muted); }
+    .status { font-weight: 700; white-space: nowrap; }
+    .aligned { color: var(--aligned); }
+    .needs-amend { color: var(--amend); }
+    .deferred { color: var(--deferred); }
+    .blocked { color: var(--blocked); }
+    code { background: #eef0ed; border-radius: 4px; padding: 1px 5px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>ENG-MPL-1 CR-001 Implementation Notes</h1>
+      <div class="meta">
+        <div><strong>Feature</strong><br>ENG-MPL-1 Agent Knowledge and Experience Layer</div>
+        <div><strong>CR</strong><br>CR-001-initial-scope</div>
+        <div><strong>Updated</strong><br>2026-06-28</div>
+        <div><strong>Overall</strong><br><span class="status aligned">Aligned</span></div>
+      </div>
+    </header>
+
+    <section>
+      <h2>Decisions</h2>
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Decision</th><th>Why</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T001 defines packet/interface contracts only; persistence, REST/MCP adapters, and fallback behavior are later Story Group 1 tasks.</td>
+            <td>The task AC asks for binary-defined fields and agent-owned read/write interface. Store and adapter work belongs to T002/T003/T004, so adding it here would blur task atomicity.</td>
+            <td><code>tasks.md</code> T001-T004 lines 19-54; <code>plan.md</code> Phase 1 lines 215-225.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Spec Gaps</h2>
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Gap</th><th>Action</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>No T001-blocking gap found.</td>
+            <td>Proceed with type/interface/contract slice and leave store/table shape to T002.</td>
+            <td><code>completeness-report.md</code> recommendation is PROCEED with zero blocking open checks.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Alignment Checks</h2>
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Item</th><th>Current Meaning</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>Native state plane</td>
+            <td>Engram-owned handoff state for session/project/task/goal resume, separate from generic memory storage.</td>
+            <td><code>spec.md</code> FR-1 line 53; <code>plan.md</code> Data Architecture lines 145-148.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>Resume packet</td>
+            <td>Bounded read payload with freshness, drift/conflict, next action, next verification, and explicit source/fallback markers.</td>
+            <td><code>spec.md</code> FR-2 line 56 and US1 lines 129-131.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Tradeoffs</h2>
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Chosen</th><th>Alternative</th><th>Reason</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>Use concrete enums and value objects in <code>pkg/cognitive</code> for packet contract.</td>
+            <td>Use maps or opaque JSON slots for all resume packet fields.</td>
+            <td>Opaque maps would preserve flexibility but violate the T001 AC that no required packet field remains vague.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Changed Assumptions</h2>
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Assumption</th><th>Current Reading</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>Current work base</td>
+            <td>Implementation runs in isolated worktree <code>D:\Dev\engram-wt\memory-product-layer-cr001</code>, based on <code>origin/main</code> at PR #380 merge.</td>
+            <td><code>git worktree add</code> output: branch <code>work/memory-product-layer-cr001</code>, head <code>9571af3d</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Verification Evidence</h2>
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Check</th><th>Result</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T001 verification</td>
+            <td>PASS</td>
+            <td><code>go test ./pkg/cognitive ./internal/cognitive/core</code> passed after the contract implementation; <code>go test ./...</code> also passed.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T001 review gate</td>
+            <td>PASS with degraded native-review evidence</td>
+            <td><code>mcp__aimux.task</code> review gate returned allow with <code>reason=timeout</code> and no completed passes; manual lite review found no blocking issues and recorded the timeout in <code>.agent/tasks/T001/implementation-log.md</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Follow-Up / Amendments</h2>
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Item</th><th>Owner</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="status deferred">Deferred</td>
+            <td>Persistence and adapter evidence</td>
+            <td>Developer</td>
+            <td>Execute in T002-T004 after T001 contract is green.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>
