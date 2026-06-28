@@ -97,6 +97,9 @@ Dependencies: none (first story group).
 - Confidence gate: PM must run operator-seat thought experiment across happy/empty/gated/risky/rollback/recovery branches.
 - AC: contract defines controls, usage flow, backend bindings, states, and branch scenarios; PM review result recorded.
 - IF-WRONG: scenario proof exposes unusable flow → return to designer contract before any UI wiring.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `.agent/specs/memory-product-layer/design-contracts/principal-memory-surface.md`, `.agent/specs/memory-product-layer/design-contracts/principal-memory-surface.json`, `.agent/tasks/T005/implementation-log.md`.
+- Evidence: JSON sidecar parsed successfully with `pm_review.result=PASS`; Markdown contract records controls, usage flow, backend bindings, states, required branch scenarios, non-goals, and PM scenario review result.
 
 ### T006 — Build principal/domain query substrate for explorer surface
 - Path: `internal/worker/handlers_memories.go` or adjacent query handler, `internal/mcp/tools_memory*.go` or new focused query seam, `.agent/specs/memory-product-layer/contracts/principal-explorer.md`

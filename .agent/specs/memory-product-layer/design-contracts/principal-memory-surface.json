@@ -1,0 +1,149 @@
+{
+  "surface": "principal-memory-surface",
+  "feature": "ENG-MPL-1",
+  "cr": "CR-001-initial-scope",
+  "task": "T005",
+  "status": "approved",
+  "reviewed_at": "2026-06-28",
+  "blocks": [
+    "scope-bar",
+    "knowledge-summary",
+    "brief-panel",
+    "scope-evidence",
+    "state-banner"
+  ],
+  "controls": [
+    "principal-select",
+    "domain-select",
+    "project-scope",
+    "refresh",
+    "brief-refresh",
+    "attribution-toggle"
+  ],
+  "data_sources": [
+    "native-state",
+    "principal-memory-query",
+    "principal-scoped-brief",
+    "domain-registry",
+    "privacy-visibility"
+  ],
+  "server_components": [
+    "StatePlaneService",
+    "PrincipalMemoryQueryService",
+    "MemoryBriefService",
+    "DomainRegistryService",
+    "PrivacyVisibility"
+  ],
+  "api_routes": [
+    "GET /api/state/resume",
+    "T006 principal/domain query REST or MCP route",
+    "T007 get_memory_brief principal/domain scope"
+  ],
+  "states": [
+    "loading",
+    "live",
+    "empty",
+    "gated",
+    "mustbuild",
+    "stale",
+    "error",
+    "risky-confirm"
+  ],
+  "backend_bindings": {
+    "principal-select": {
+      "owner_task": "T006",
+      "required_fields": ["principal_id", "principal_label", "authorized"],
+      "state_if_absent": "gated"
+    },
+    "domain-select": {
+      "owner_task": "T006",
+      "required_fields": ["domain", "scope", "authorized"],
+      "state_if_absent": "gated"
+    },
+    "project-scope": {
+      "owner_task": "T006",
+      "required_fields": ["project", "scope_echo"],
+      "state_if_absent": "gated"
+    },
+    "refresh": {
+      "owner_task": "T006",
+      "required_fields": ["scope_echo", "freshness"],
+      "state_if_absent": "error"
+    },
+    "brief-refresh": {
+      "owner_task": "T007",
+      "required_fields": ["brief", "principal_id", "scope_echo", "freshness"],
+      "state_if_absent": "mustbuild"
+    },
+    "attribution-toggle": {
+      "owner_task": "T006",
+      "required_fields": ["attribution", "source", "visibility"],
+      "state_if_absent": "gated"
+    }
+  },
+  "scenarios": [
+    "happy-path",
+    "empty-state",
+    "validation-failure",
+    "gated-path",
+    "risky-confirmation",
+    "rollback",
+    "recovery"
+  ],
+  "branches": {
+    "happy-path": [
+      "operator selects authorized current principal",
+      "operator narrows by domain/project",
+      "surface returns bounded attributed knowledge",
+      "brief panel returns scoped brief with freshness/source evidence"
+    ],
+    "empty-state": [
+      "operator selects valid scope with no hot memory",
+      "surface renders honest empty state tied to selected scope",
+      "refresh and scope controls remain usable"
+    ],
+    "validation-failure": [
+      "operator attempts brief without principal or with invalid domain",
+      "surface marks invalid control",
+      "surface does not issue broad unscoped query"
+    ],
+    "gated-path": [
+      "operator selects unauthorized private principal or domain",
+      "surface shows gated state",
+      "surface reveals no partial private data"
+    ],
+    "risky-confirmation": [
+      "operator widens from current principal to another authorized principal",
+      "surface requires explicit confirmation or backend authorization evidence",
+      "surface remains gated if evidence is absent"
+    ],
+    "rollback": [
+      "refresh fails after a live result",
+      "surface keeps previous safe result marked stale/error",
+      "operator can retry or narrow scope"
+    ],
+    "recovery": [
+      "backend support lands after mustbuild/gated state",
+      "refresh reuses saved scope",
+      "surface moves block to live or empty without changing operator intent"
+    ]
+  },
+  "design_constraints": [
+    "honesty-states",
+    "fail-closed-private-visibility",
+    "bounded-results",
+    "attribution-visible",
+    "i18n-parity",
+    "no-row-centric-prompt-retention-copy",
+    "no-review-queue-ui",
+    "no-memory-mutation-actions"
+  ],
+  "pm_review": {
+    "result": "PASS",
+    "reviewed_by": "PM scenario proof in T005",
+    "required_branches_covered": true,
+    "backend_map_covers_visible_controls": true,
+    "ui_implementation_blocked_until": ["T006", "T007"],
+    "notes": "Every branch ends in an operable or honest blocked state. T008 must implement from this contract and must not add queue or mutation controls."
+  }
+}

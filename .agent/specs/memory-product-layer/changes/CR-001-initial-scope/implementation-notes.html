@@ -78,6 +78,12 @@
             <td>The task requires explicit fallback marker and conflict proof, while prior tasks established that native persistence should not silently depend on filesystem state. A wrapper can compare native and fallback packets without making fallback part of the native store contract.</td>
             <td><code>tasks.md</code> T004 AC; <code>spec.md</code> FR-1/FR-2 and US1; <code>plan.md</code> Phase 1 contingency.</td>
           </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T005 is artifact-only: write the principal-memory designer contract and PM scenario proof before any UI source changes.</td>
+            <td>The active spec makes missing designer contract a UI blocker. Writing the contract first keeps T008 from inventing controls, states, or backend wiring ad hoc.</td>
+            <td><code>tasks.md</code> T005 AC; <code>spec.md</code> FR-11/FR-12/FR-13; <code>plan.md</code> Design System / UI Architecture.</td>
+          </tr>
         </tbody>
       </table>
     </section>
@@ -222,6 +228,12 @@
             <td>G001 native resume proof gate</td>
             <td>PASS</td>
             <td><code>go test ./...</code> passed; gate evidence and raw output saved under <code>.agent/specs/memory-product-layer/evidence/phase-1-gate.json</code> and <code>phase-1-gate.go-test.txt</code>.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T005 design-contract verification</td>
+            <td>PASS</td>
+            <td><code>principal-memory-surface.md</code> covers controls, usage flow, backend bindings, honest states, happy/empty/validation/gated/risky/rollback/recovery branches, and PM review result; <code>principal-memory-surface.json</code> parsed successfully with <code>pm_review.result=PASS</code>.</td>
           </tr>
         </tbody>
       </table>
