@@ -48,6 +48,9 @@
 - Data evidence: PASS native-first + filesystem fallback semantics.
 - Confidence gate: verify auth/scope path stays fail-closed for project/session reads.
 - AC: MCP and REST return bounded resume/state payloads; fallback marker appears only on fallback path; no broad file archaeology on happy path.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `internal/db/gorm/state_store.go`, `internal/mcp/tools_state.go`, `internal/mcp/tools_state_test.go`, `internal/mcp/server.go`, `internal/worker/handlers_state.go`, `internal/worker/handlers_state_test.go`, `internal/worker/service.go`, `.agent/tasks/T003/implementation-log.md`.
+- Evidence: RED `go test ./internal/db/gorm ./internal/mcp ./internal/worker` failed on missing native state surface; GREEN `go test ./internal/db/gorm ./internal/mcp ./internal/worker`; GREEN pgvector/PostgreSQL 17 resume integration; GREEN `go test ./...`; REVIEW degraded native route `019f0d2d-4c3f-71cc-a547-a4880f366546` plus manual lite review with no blocking findings.
 
 ### T004 — Prove fallback and drift behavior
 - Path: `internal/*state*_test.go`, `.agent/specs/memory-product-layer/evidence/phase-1-*`

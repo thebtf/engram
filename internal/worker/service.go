@@ -167,7 +167,7 @@ type Service struct {
 	credentialStore             *gorm.CredentialStore
 	memoryStore                 *gorm.MemoryStore
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
-	stateStore                  *gorm.StateStore
+	stateStore                  statePlane
 	principalMemoryQueryService principalMemoryQueryService
 	domainOwnerStore            domainOwnerStore
 	domainRegistryService       domainRegistryService
@@ -275,7 +275,7 @@ func (s *Service) SetCandidateStore(cs *gorm.CandidateStore) {
 	s.initMu.Unlock()
 }
 
-func wireStateStore(s *Service, stateStore *gorm.StateStore) {
+func wireStateStore(s *Service, stateStore statePlane) {
 	s.initMu.Lock()
 	s.stateStore = stateStore
 	s.initMu.Unlock()
@@ -1388,6 +1388,9 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/types", s.handleGetTypes)
 		r.Get("/api/models", s.handleGetModels)
 		r.Get("/api/model-health", s.handleModelHealth)
+		r.Get("/api/state/session/{sessionID}", s.handleGetStateSession)
+		r.Get("/api/state/project/{project}", s.handleGetStateProject)
+		r.Get("/api/state/resume", s.handleGetStateResume)
 
 		// Context injection
 		r.Get("/api/context/count", s.handleContextCount)

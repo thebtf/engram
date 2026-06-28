@@ -18,6 +18,7 @@ type stateStoreReadWriteSeam interface {
 }
 
 var _ stateStoreReadWriteSeam = (*StateStore)(nil)
+var _ cognitive.StatePlane = (*StateStore)(nil)
 
 func TestStateStore_SessionStateRoundTrip(t *testing.T) {
 	db := openCandidateTestDB(t)
@@ -103,4 +104,57 @@ func TestStateStore_AuditLogWrittenOnSessionWrite(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return countAuditRows(t, db, "write_session_state") > before
 	}, 2*time.Second, 25*time.Millisecond, "state write must create audit evidence")
+}
+
+func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	sessionID := fmt.Sprintf("state-resume-session-%d", time.Now().UnixNano())
+	project := fmt.Sprintf("state-resume-project-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_session_state WHERE session_id = ?`, sessionID).Error
+		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
+		_ = db.Exec(`DELETE FROM audit_log WHERE source_session_id = ? OR reason LIKE ?`, sessionID, "%"+project+"%").Error
+	})
+
+	require.NoError(t, store.WriteSessionState(ctx, sessionID, cognitive.SessionStateSlots{
+		Execution: map[string]interface{}{
+			"next_action": map[string]interface{}{
+				"kind":        "command",
+				"description": "run state surface tests",
+				"command":     "go test ./internal/mcp ./internal/worker",
+			},
+		},
+		Horizons: map[string]interface{}{
+			"next_verification": map[string]interface{}{
+				"kind":        "command",
+				"description": "run full suite",
+				"command":     "go test ./...",
+			},
+		},
+	}))
+	require.NoError(t, store.WriteProjectState(ctx, project, cognitive.ProjectStateRecord{
+		Phase:     "state-surface",
+		Pressure:  "normal",
+		UpdatedBy: "agent",
+	}))
+
+	packet, err := store.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
+		Project:   project,
+		SessionID: sessionID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
+	require.Equal(t, cognitive.StateFreshnessFresh, packet.Freshness)
+	require.Equal(t, cognitive.StateDriftNone, packet.Drift.Kind)
+	require.Equal(t, cognitive.StateActionCommand, packet.NextAction.Kind)
+	require.Equal(t, "run state surface tests", packet.NextAction.Description)
+	require.Equal(t, "go test ./internal/mcp ./internal/worker", packet.NextAction.Command)
+	require.Equal(t, cognitive.StateVerificationCommand, packet.NextVerification.Kind)
+	require.Equal(t, "run full suite", packet.NextVerification.Description)
+	require.Equal(t, "go test ./...", packet.NextVerification.Command)
+	require.NotContains(t, string(packet.Source), "filesystem")
 }

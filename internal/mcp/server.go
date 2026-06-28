@@ -47,6 +47,7 @@ type Server struct {
 	embeddingStore          *embedding.Store
 	rerankClient            *reranking.Client
 	memoryStore             *gorm.MemoryStore
+	stateStore              statePlane
 	principalMemoryQuerySvc principalMemoryQueryService
 	domainRegistryService   domainRegistryService
 	behavioralRulesStore    *gorm.BehavioralRulesStore
@@ -143,6 +144,11 @@ func (s *Server) SetIssueStore(is *gorm.IssueStore) {
 // SetMemoryStore sets the memory store for the memories table (US3 Commit C).
 func (s *Server) SetMemoryStore(ms *gorm.MemoryStore) {
 	s.memoryStore = ms
+}
+
+// SetStateStore sets the native state-plane read/write store.
+func (s *Server) SetStateStore(store statePlane) {
+	s.stateStore = store
 }
 
 // SetBehavioralRulesStore sets the behavioral rules store (US3 Commit C).
@@ -1086,6 +1092,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.principalMemoryQuerySvc != nil {
 		tools = append(tools, principalMemoryQueryTool())
 	}
+	if s.stateStore != nil {
+		tools = append(tools, stateTool())
+	}
 
 	// Session outcome tool — only advertise when session store is available
 	if s.sessionStore != nil {
@@ -1692,6 +1701,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRecallMemory(ctx, args)
 	case "query_principal_memory":
 		return s.handleQueryPrincipalMemory(ctx, args)
+	case "get_state":
+		return s.handleGetState(ctx, args)
 	case "rate_memory":
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":

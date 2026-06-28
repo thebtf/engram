@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -218,11 +219,194 @@ func (s *StateStore) ReadProjectState(ctx context.Context, project string) (cogn
 	}, nil
 }
 
+// ReadResumePacket builds one bounded native resume packet from persisted state.
+func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
+	if err := s.requireDB(); err != nil {
+		return cognitive.ResumePacket{}, err
+	}
+	if request.SessionID == "" {
+		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: session_id is required")
+	}
+
+	sessionState, err := s.ReadSessionState(ctx, request.SessionID)
+	if err != nil {
+		return cognitive.ResumePacket{}, err
+	}
+	nextAction, err := stateActionFromSlots(sessionState)
+	if err != nil {
+		return cognitive.ResumePacket{}, err
+	}
+	nextVerification, err := stateVerificationFromSlots(sessionState)
+	if err != nil {
+		return cognitive.ResumePacket{}, err
+	}
+
+	scopes := []cognitive.StateScopeKind{cognitive.StateScopeSession}
+	if request.Project != "" {
+		if _, err := s.ReadProjectState(ctx, request.Project); err != nil {
+			return cognitive.ResumePacket{}, err
+		}
+		scopes = append(scopes, cognitive.StateScopeProject)
+	}
+
+	now := time.Now().UTC()
+	return cognitive.ResumePacket{
+		Source:           cognitive.StatePacketSourceNative,
+		Freshness:        cognitive.StateFreshnessFresh,
+		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: now},
+		NextAction:       nextAction,
+		NextVerification: nextVerification,
+		GeneratedAt:      now,
+		Project:          request.Project,
+		SessionID:        request.SessionID,
+		GoalID:           request.GoalID,
+		TaskID:           request.TaskID,
+		Scopes:           scopes,
+	}, nil
+}
+
 func (s *StateStore) requireDB() error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("state_store: db is not initialized")
 	}
 	return nil
+}
+
+func stateActionFromSlots(state cognitive.SessionStateSlots) (cognitive.StateAction, error) {
+	value, ok := state.Execution["next_action"]
+	if !ok {
+		return cognitive.StateAction{}, fmt.Errorf("state_store read_resume: execution.next_action is required")
+	}
+	return parseStateAction(value)
+}
+
+func stateVerificationFromSlots(state cognitive.SessionStateSlots) (cognitive.StateVerification, error) {
+	value, ok := state.Horizons["next_verification"]
+	if !ok {
+		return cognitive.StateVerification{}, fmt.Errorf("state_store read_resume: horizons.next_verification is required")
+	}
+	return parseStateVerification(value)
+}
+
+func parseStateAction(value interface{}) (cognitive.StateAction, error) {
+	switch v := value.(type) {
+	case cognitive.StateAction:
+		if strings.TrimSpace(v.Description) == "" {
+			return cognitive.StateAction{}, fmt.Errorf("state action description is required")
+		}
+		if v.Kind == "" {
+			v.Kind = inferActionKind(v.Command)
+		}
+		if !validActionKind(v.Kind) {
+			return cognitive.StateAction{}, fmt.Errorf("state action kind %q is invalid", v.Kind)
+		}
+		return v, nil
+	case map[string]interface{}:
+		action := cognitive.StateAction{
+			Kind:        inferActionKind(mapString(v, "command")),
+			Description: mapString(v, "description"),
+			Command:     mapString(v, "command"),
+		}
+		if kind := mapString(v, "kind"); kind != "" {
+			action.Kind = cognitive.StateActionKind(kind)
+		}
+		if strings.TrimSpace(action.Description) == "" {
+			return cognitive.StateAction{}, fmt.Errorf("state action description is required")
+		}
+		if !validActionKind(action.Kind) {
+			return cognitive.StateAction{}, fmt.Errorf("state action kind %q is invalid", action.Kind)
+		}
+		return action, nil
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return cognitive.StateAction{}, fmt.Errorf("state action description is required")
+		}
+		return cognitive.StateAction{Kind: cognitive.StateActionInstruction, Description: v}, nil
+	default:
+		return cognitive.StateAction{}, fmt.Errorf("state action has unsupported type %T", value)
+	}
+}
+
+func parseStateVerification(value interface{}) (cognitive.StateVerification, error) {
+	switch v := value.(type) {
+	case cognitive.StateVerification:
+		if strings.TrimSpace(v.Description) == "" {
+			return cognitive.StateVerification{}, fmt.Errorf("state verification description is required")
+		}
+		if v.Kind == "" {
+			v.Kind = inferVerificationKind(v.Command)
+		}
+		if !validVerificationKind(v.Kind) {
+			return cognitive.StateVerification{}, fmt.Errorf("state verification kind %q is invalid", v.Kind)
+		}
+		return v, nil
+	case map[string]interface{}:
+		verification := cognitive.StateVerification{
+			Kind:        inferVerificationKind(mapString(v, "command")),
+			Description: mapString(v, "description"),
+			Command:     mapString(v, "command"),
+		}
+		if kind := mapString(v, "kind"); kind != "" {
+			verification.Kind = cognitive.StateVerificationKind(kind)
+		}
+		if strings.TrimSpace(verification.Description) == "" {
+			return cognitive.StateVerification{}, fmt.Errorf("state verification description is required")
+		}
+		if !validVerificationKind(verification.Kind) {
+			return cognitive.StateVerification{}, fmt.Errorf("state verification kind %q is invalid", verification.Kind)
+		}
+		return verification, nil
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return cognitive.StateVerification{}, fmt.Errorf("state verification description is required")
+		}
+		return cognitive.StateVerification{Kind: cognitive.StateVerificationManual, Description: v}, nil
+	default:
+		return cognitive.StateVerification{}, fmt.Errorf("state verification has unsupported type %T", value)
+	}
+}
+
+func mapString(values map[string]interface{}, key string) string {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return fmt.Sprint(value)
+}
+
+func inferActionKind(command string) cognitive.StateActionKind {
+	if strings.TrimSpace(command) != "" {
+		return cognitive.StateActionCommand
+	}
+	return cognitive.StateActionInstruction
+}
+
+func inferVerificationKind(command string) cognitive.StateVerificationKind {
+	if strings.TrimSpace(command) != "" {
+		return cognitive.StateVerificationCommand
+	}
+	return cognitive.StateVerificationManual
+}
+
+func validActionKind(kind cognitive.StateActionKind) bool {
+	switch kind {
+	case cognitive.StateActionCommand, cognitive.StateActionInstruction, cognitive.StateActionReviewGate:
+		return true
+	default:
+		return false
+	}
+}
+
+func validVerificationKind(kind cognitive.StateVerificationKind) bool {
+	switch kind {
+	case cognitive.StateVerificationCommand, cognitive.StateVerificationArtifact, cognitive.StateVerificationManual:
+		return true
+	default:
+		return false
+	}
 }
 
 func marshalJSONObject(value map[string]interface{}) (JSONObjectRaw, error) {
