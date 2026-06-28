@@ -2,7 +2,7 @@
 
 **Feature:** ENG-MPL-1 memory-product-layer  
 **CR:** CR-001-initial-scope  
-**Task:** T009  
+**Task:** T009/T010
 **Status:** Implemented as derived backend projection  
 
 ## Boundary
@@ -19,7 +19,7 @@ Review packets are bounded projections over existing candidate, snapshot, and au
 
 ## Packet Shape
 
-Each candidate list item carries an additive `review_packet` object:
+Each candidate list item and single-candidate read response carries an additive `review_packet` object:
 
 ```json
 {
@@ -62,10 +62,19 @@ Each candidate list item carries an additive `review_packet` object:
 - Pending candidates expose exactly `promote`, `reject`, and `supersede` as allowed actions.
 - Terminal candidates expose no allowed actions, no required snapshot, and `audit.status=terminal_record`.
 - Evidence handles stay bounded and typed by their prefix before `:`, falling back to `handle`.
-- Packet shape is additive on existing REST/MCP candidate list payloads; older clients can ignore it.
+- Packet shape is additive on existing REST/MCP candidate list and read payloads; older clients can ignore it.
+
+## Read Surfaces
+
+- REST list: `GET /api/memory/candidates?project=<project>&status=pending`.
+- REST read: `GET /api/memory/candidates/{id}`.
+- MCP list: `list_candidates`.
+- MCP read: `get_candidate`.
+
+The read surfaces use the same candidate-to-packet projection as list surfaces. They do not add new persistence, queue UI state, or alternate audit/snapshot stores.
 
 ## Verification
 
 - REST: `internal/worker` candidate handler tests assert `review_packet` appears in list responses with decision, scope, evidence, snapshot, and audit fields.
 - Projection: `internal/reviewpacket` tests assert pending and terminal packet behavior.
-- MCP: `list_candidates` uses the same projection helper as REST so payload semantics stay aligned.
+- MCP: `list_candidates` and `get_candidate` use the same projection helper as REST so payload semantics stay aligned.

@@ -13,7 +13,42 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// candidateTools returns the 4 crystallization candidate MCP tool definitions.
+type candidateItem struct {
+	ReviewPacket            reviewpacket.CandidateReviewPacket `json:"review_packet"`
+	ID                      int64                              `json:"id"`
+	Status                  string                             `json:"status"`
+	ProposedContent         string                             `json:"proposed_content"`
+	ProposedPromotionTarget string                             `json:"proposed_promotion_target"`
+	ProposedTier            string                             `json:"proposed_tier"`
+	ProposedEpistemicType   string                             `json:"proposed_epistemic_type"`
+	SourceSessionID         string                             `json:"source_session_id"`
+	Confidence              float32                            `json:"confidence"`
+	RecurrenceCount         int                                `json:"recurrence_count"`
+	Fingerprint             string                             `json:"fingerprint,omitempty"`
+	CreatedAt               string                             `json:"created_at"`
+}
+
+func candidateItemFromDomain(c *models.CrystallizationCandidate) candidateItem {
+	if c == nil {
+		return candidateItem{}
+	}
+	return candidateItem{
+		ReviewPacket:            reviewpacket.FromCandidate(c),
+		ID:                      c.ID,
+		Status:                  string(c.Status),
+		ProposedContent:         c.ProposedContent,
+		ProposedPromotionTarget: c.ProposedPromotionTarget,
+		ProposedTier:            c.ProposedTier,
+		ProposedEpistemicType:   c.ProposedEpistemicType,
+		SourceSessionID:         c.SourceSessionID,
+		Confidence:              c.Confidence,
+		RecurrenceCount:         c.RecurrenceCount,
+		Fingerprint:             c.Fingerprint,
+		CreatedAt:               c.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+}
+
+// candidateTools returns the 5 crystallization candidate MCP tool definitions.
 // Only registered when ENGRAM_VNEXT_F_ENABLED=true.
 func candidateTools() []Tool {
 	return []Tool{
@@ -39,6 +74,21 @@ func candidateTools() []Tool {
 						"minimum":     1,
 						"maximum":     100,
 						"description": "Max results to return (default 20, max 100).",
+					},
+				},
+			},
+		},
+		{
+			Name:        "get_candidate",
+			Description: "Read one crystallization candidate review packet by id. Requires ENGRAM_VNEXT_F_ENABLED=true. Returns the same packet-centric payload shape used by list_candidates.",
+			tier:        tierCore,
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]any{
+					"id": map[string]any{
+						"type":        "integer",
+						"description": "REQUIRED. Candidate ID to read.",
 					},
 				},
 			},
@@ -119,40 +169,12 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("list_candidates: %w", err)
 	}
 
-	type candidateItem struct {
-		ReviewPacket            reviewpacket.CandidateReviewPacket `json:"review_packet"`
-		ID                      int64                              `json:"id"`
-		Status                  string                             `json:"status"`
-		ProposedContent         string                             `json:"proposed_content"`
-		ProposedPromotionTarget string                             `json:"proposed_promotion_target"`
-		ProposedTier            string                             `json:"proposed_tier"`
-		ProposedEpistemicType   string                             `json:"proposed_epistemic_type"`
-		SourceSessionID         string                             `json:"source_session_id"`
-		Confidence              float32                            `json:"confidence"`
-		RecurrenceCount         int                                `json:"recurrence_count"`
-		Fingerprint             string                             `json:"fingerprint,omitempty"`
-		CreatedAt               string                             `json:"created_at"`
-	}
-
 	items := make([]candidateItem, 0, len(candidates))
 	for _, c := range candidates {
 		if c == nil {
 			continue
 		}
-		items = append(items, candidateItem{
-			ReviewPacket:            reviewpacket.FromCandidate(c),
-			ID:                      c.ID,
-			Status:                  string(c.Status),
-			ProposedContent:         c.ProposedContent,
-			ProposedPromotionTarget: c.ProposedPromotionTarget,
-			ProposedTier:            c.ProposedTier,
-			ProposedEpistemicType:   c.ProposedEpistemicType,
-			SourceSessionID:         c.SourceSessionID,
-			Confidence:              c.Confidence,
-			RecurrenceCount:         c.RecurrenceCount,
-			Fingerprint:             c.Fingerprint,
-			CreatedAt:               c.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		})
+		items = append(items, candidateItemFromDomain(c))
 	}
 
 	out := map[string]any{
@@ -162,6 +184,35 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 	b, err := json.Marshal(out)
 	if err != nil {
 		return "", fmt.Errorf("list_candidates marshal: %w", err)
+	}
+	return string(b), nil
+}
+
+// handleGetCandidate implements the get_candidate MCP tool.
+func (s *Server) handleGetCandidate(ctx context.Context, args json.RawMessage) (string, error) {
+	if !vnextFEnabled() || s.candidateStore == nil {
+		return "", fmt.Errorf("get_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
+	}
+	m, err := parseArgs(args)
+	if err != nil {
+		return "", err
+	}
+	id := coerceInt64(m["id"], 0)
+	if id <= 0 {
+		return "", fmt.Errorf("get_candidate: id is required")
+	}
+
+	candidate, err := s.candidateStore.Get(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("get_candidate %d: %w", id, err)
+	}
+	if candidate == nil {
+		return "", fmt.Errorf("get_candidate: candidate %d not found", id)
+	}
+
+	b, err := json.Marshal(candidateItemFromDomain(candidate))
+	if err != nil {
+		return "", fmt.Errorf("get_candidate marshal: %w", err)
 	}
 	return string(b), nil
 }

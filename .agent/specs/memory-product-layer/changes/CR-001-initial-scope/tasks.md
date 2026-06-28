@@ -190,6 +190,9 @@ Dependencies:
 - Data evidence: PASS snapshot/audit integration
 - Confidence gate: keep tasks on existing seams unless blocker proven.
 - AC: review queue list/read works through current substrate; audit/snapshot evidence remains intact.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `internal/mcp/tools_candidates.go`, `internal/mcp/tools_candidates_test.go`, `internal/mcp/server.go`, `internal/worker/handlers_candidates.go`, `internal/worker/handlers_candidates_test.go`, `internal/worker/service.go`, `.agent/specs/memory-product-layer/contracts/review-packets.md`, `.agent/tasks/T010/implementation-log.md`.
+- Evidence: RED `go test ./internal/worker -run TestHandleGetMemoryCandidate_ReturnsReviewPacket -count=1` failed on missing `handleGetMemoryCandidate`; RED `go test ./internal/mcp -run TestHandleGetCandidate_EmptyIDReturnsError -count=1` failed on missing `handleGetCandidate`; GREEN same focused commands passed; GREEN `go test ./internal/worker ./internal/mcp ./internal/reviewpacket -count=1`. REST `GET /api/memory/candidates/{id}` and MCP `get_candidate` now return the same additive `review_packet` projection as list payloads; snapshot/audit policy remains derived from existing seams.
 
 ### T011 — Write designer contract for later review-queue surface
 - Path: `.agent/specs/memory-product-layer/design-contracts/review-queue.md`, `.json`

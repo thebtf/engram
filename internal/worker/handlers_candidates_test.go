@@ -210,6 +210,45 @@ func TestHandleListMemoryCandidates_AllProjectListsUnscopedQueue(t *testing.T) {
 	assert.Empty(t, response.Candidates[0].AffectedProjects)
 }
 
+func TestHandleGetMemoryCandidate_ReturnsReviewPacket(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {
+				ID:                      42,
+				Status:                  models.CandidateStatusPending,
+				ProposedContent:         "read path should return a packet",
+				ProposedPromotionTarget: "semantic",
+				ProposedTier:            "semantic",
+				ProposedEpistemicType:   "decision",
+				SourceSessionID:         "sess-42",
+				Fingerprint:             "abc123",
+				EvidenceHandles:         []string{"session:sess-42"},
+				AffectedProjects:        []string{"engram"},
+				PrivacyScope:            "project",
+				CreatedAt:               time.Date(2026, time.June, 23, 10, 0, 0, 0, time.UTC),
+				UpdatedAt:               time.Date(2026, time.June, 23, 10, 5, 0, 0, time.UTC),
+			},
+		},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/candidates/42", nil)
+	w := httptest.NewRecorder()
+	router := chi.NewRouter()
+	router.Get("/api/memory/candidates/{id}", service.handleGetMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response candidateReviewItem
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, int64(42), response.ID)
+	assert.Equal(t, "read path should return a packet", response.ProposedContent)
+	assert.Equal(t, "candidate:42:abc123", response.ReviewPacket.PacketID)
+	assert.Equal(t, []string{"promote", "reject", "supersede"}, response.ReviewPacket.Decision.AllowedActions)
+	assert.Equal(t, "bulk_op_snapshots", response.ReviewPacket.Snapshot.Store)
+	assert.Equal(t, "audit_log", response.ReviewPacket.Audit.Store)
+}
+
 func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 	promotedMemoryID := int64(77)
 	store := &fakeCandidateReviewStore{

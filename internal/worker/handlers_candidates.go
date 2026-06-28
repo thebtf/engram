@@ -303,6 +303,49 @@ func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// handleGetMemoryCandidate godoc
+// @Summary Read one crystallization candidate review packet
+// @Description Returns one vNext-F crystallization candidate with its bounded review_packet projection.
+// @Tags Memories
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Candidate ID"
+// @Success 200 {object} candidateReviewItem
+// @Failure 400 {string} string "invalid id"
+// @Failure 403 {string} string "feature flag required"
+// @Failure 404 {string} string "candidate not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal error"
+// @Router /api/memory/candidates/{id} [get]
+func (s *Service) handleGetMemoryCandidate(w http.ResponseWriter, r *http.Request) {
+	if !s.candidateQueueActive() {
+		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
+		return
+	}
+	store := s.currentCandidateReviewStore()
+	if store == nil {
+		http.Error(w, "candidate store not available", http.StatusServiceUnavailable)
+		return
+	}
+	id, ok := candidateIDFromRequest(r)
+	if !ok {
+		http.Error(w, "invalid candidate id", http.StatusBadRequest)
+		return
+	}
+
+	candidate, err := store.Get(r.Context(), id)
+	if err != nil {
+		writeCandidateStoreError(w, "get_candidate", id, err)
+		return
+	}
+	if candidate == nil {
+		http.Error(w, "candidate not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, candidateReviewItemFromDomain(candidate))
+}
+
 func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Request) {
 	if !s.candidateQueueActive() {
 		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)

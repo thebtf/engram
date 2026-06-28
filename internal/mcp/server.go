@@ -1720,6 +1720,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 	// Crystallization candidate tools (Milestone-F TG4 T026).
 	case "list_candidates":
 		return s.handleListCandidates(ctx, args)
+	case "get_candidate":
+		return s.handleGetCandidate(ctx, args)
 	case "promote_candidate":
 		return s.handlePromoteCandidate(ctx, args)
 	case "reject_candidate":

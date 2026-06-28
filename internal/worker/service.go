@@ -1448,6 +1448,7 @@ func (s *Service) setupRoutes() {
 		r.Put("/api/memory-domains/{domain}", s.handleUpsertMemoryDomain)
 		r.Delete("/api/memory-domains/{domain}", s.handleDeleteMemoryDomain)
 		r.Get("/api/memory/candidates", s.handleListMemoryCandidates)
+		r.Get("/api/memory/candidates/{id}", s.handleGetMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/promote", s.handlePromoteMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/reject", s.handleRejectMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/supersede", s.handleSupersedeMemoryCandidate)
