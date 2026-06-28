@@ -1,0 +1,218 @@
+{
+  "surface": "review-queue",
+  "feature": "ENG-MPL-1",
+  "cr": "CR-001-initial-scope",
+  "task": "T011",
+  "status": "approved-future-ui-contract",
+  "reviewed_at": "2026-06-28",
+  "ui_delivery_in_cr": false,
+  "blocks": [
+    "queue-header",
+    "packet-list",
+    "packet-detail",
+    "evidence-strip",
+    "snapshot-panel",
+    "audit-panel",
+    "action-rail",
+    "state-banner"
+  ],
+  "controls": [
+    "project-filter",
+    "status-filter",
+    "queue-refresh",
+    "packet-open",
+    "promote-action",
+    "reject-action",
+    "supersede-action",
+    "reason-input",
+    "snapshot-confirm",
+    "audit-receipt"
+  ],
+  "data_sources": [
+    "candidate-queue",
+    "review-packet-projection",
+    "bulk-op-snapshot-policy",
+    "candidate-audit-policy",
+    "candidate-action-receipts"
+  ],
+  "server_components": [
+    "CandidateStore",
+    "reviewpacket.FromCandidate",
+    "WorkerCandidateHandlers",
+    "MCPCandidateTools",
+    "BulkOpSnapshots",
+    "AuditLog"
+  ],
+  "api_routes": [
+    "GET /api/memory/candidates",
+    "GET /api/memory/candidates/{id}",
+    "POST /api/memory/candidates/{id}/promote",
+    "POST /api/memory/candidates/{id}/reject",
+    "POST /api/memory/candidates/{id}/supersede"
+  ],
+  "mcp_tools": [
+    "list_candidates",
+    "get_candidate",
+    "promote_candidate",
+    "reject_candidate",
+    "supersede_candidate"
+  ],
+  "states": [
+    "loading",
+    "live",
+    "empty",
+    "gated",
+    "mustbuild",
+    "stale",
+    "error",
+    "risky-confirm",
+    "rollback-needed",
+    "recovered"
+  ],
+  "packet_fields": {
+    "identity": ["review_packet.packet_id", "review_packet.candidate_id", "id", "status"],
+    "decision": [
+      "review_packet.decision.promotion_target",
+      "review_packet.decision.tier",
+      "review_packet.decision.epistemic_type",
+      "review_packet.decision.default_action",
+      "review_packet.decision.allowed_actions"
+    ],
+    "scope": [
+      "review_packet.scope.projects",
+      "review_packet.scope.privacy_scope",
+      "review_packet.scope.source_session_id"
+    ],
+    "evidence": ["review_packet.evidence"],
+    "snapshot": [
+      "review_packet.snapshot.store",
+      "review_packet.snapshot.operation",
+      "review_packet.snapshot.status",
+      "review_packet.snapshot.required"
+    ],
+    "audit": [
+      "review_packet.audit.store",
+      "review_packet.audit.action",
+      "review_packet.audit.status"
+    ]
+  },
+  "action_classes": {
+    "live": ["promote", "reject", "supersede"],
+    "read_only_when_terminal": ["promoted", "rejected", "superseded", "decayed"],
+    "mustbuild_future": ["suppress", "archive", "consolidate", "destroy", "bulk-destructive"]
+  },
+  "backend_bindings": {
+    "project-filter": {
+      "owner_task": "T010",
+      "required_fields": ["project", "scope_echo"],
+      "state_if_absent": "gated"
+    },
+    "status-filter": {
+      "owner_task": "T010",
+      "required_fields": ["status"],
+      "state_if_absent": "error"
+    },
+    "queue-refresh": {
+      "owner_task": "T010",
+      "required_routes": ["GET /api/memory/candidates", "list_candidates"],
+      "state_if_absent": "mustbuild"
+    },
+    "packet-open": {
+      "owner_task": "T010",
+      "required_routes": ["GET /api/memory/candidates/{id}", "get_candidate"],
+      "state_if_absent": "mustbuild"
+    },
+    "promote-action": {
+      "owner_task": "existing-candidate-seam",
+      "required_actions": ["promote"],
+      "state_if_absent": "gated"
+    },
+    "reject-action": {
+      "owner_task": "existing-candidate-seam",
+      "required_actions": ["reject"],
+      "state_if_absent": "gated"
+    },
+    "supersede-action": {
+      "owner_task": "existing-candidate-seam",
+      "required_actions": ["supersede"],
+      "state_if_absent": "gated"
+    },
+    "snapshot-confirm": {
+      "owner_task": "T009",
+      "required_fields": ["review_packet.snapshot.required", "review_packet.snapshot.store", "review_packet.snapshot.status"],
+      "state_if_absent": "risky-confirm"
+    },
+    "audit-receipt": {
+      "owner_task": "T009",
+      "required_fields": ["review_packet.audit.store", "review_packet.audit.action", "review_packet.audit.status"],
+      "state_if_absent": "gated"
+    }
+  },
+  "scenarios": [
+    "happy-path",
+    "empty-state",
+    "validation-failure",
+    "gated-path",
+    "risky-confirmation",
+    "rollback",
+    "recovery"
+  ],
+  "branches": {
+    "happy-path": [
+      "operator opens pending packets for project scope",
+      "operator opens one packet detail",
+      "surface shows evidence, snapshot, audit policy, and live allowed actions",
+      "operator confirms required snapshot and promotes",
+      "surface shows receipt and refreshes packet state"
+    ],
+    "empty-state": [
+      "operator selects scope with no pending packets",
+      "surface renders empty queue tied to selected scope",
+      "filters and refresh remain usable"
+    ],
+    "validation-failure": [
+      "operator opens invalid candidate id or submits invalid action input",
+      "surface marks the invalid control",
+      "surface sends no broad or destructive request"
+    ],
+    "gated-path": [
+      "feature flag, store, or authorization is absent",
+      "surface renders gated or mustbuild state",
+      "surface reveals no candidate content or enabled actions"
+    ],
+    "risky-confirmation": [
+      "packet snapshot policy is required",
+      "surface shows snapshot store and status",
+      "operator must confirm or cancel before action"
+    ],
+    "rollback": [
+      "action times out or receipt/audit evidence is missing",
+      "surface disables actions and marks rollback-needed",
+      "surface re-reads candidate before further operation"
+    ],
+    "recovery": [
+      "candidate re-read returns terminal or still-pending state",
+      "surface moves to recovered live or read-only state",
+      "operator sees current packet truth"
+    ]
+  },
+  "design_constraints": [
+    "packet-centric-not-row-centric",
+    "no-queue-ui-delivery-in-cr-001",
+    "honesty-states",
+    "fail-closed-private-visibility",
+    "allowed-actions-from-packet",
+    "snapshot-visible-before-risky-action",
+    "audit-visible-after-action",
+    "mustbuild-for-forgetting-consolidation-destroy",
+    "i18n-parity"
+  ],
+  "pm_review": {
+    "result": "PASS",
+    "reviewed_by": "PM scenario proof in T011",
+    "required_branches_covered": true,
+    "backend_map_covers_visible_controls": true,
+    "ui_implementation_blocked_until": ["future queue UI CR"],
+    "notes": "Every branch ends in an operable or honest blocked state. CR-001 ships backend substrate and this future-surface contract, not queue UI."
+  }
+}
