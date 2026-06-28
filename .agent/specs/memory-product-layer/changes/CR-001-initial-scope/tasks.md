@@ -134,6 +134,9 @@ Dependencies: none (first story group).
 - Confidence gate: do not start until T005 PASS recorded.
 - AC: touched UI matches contract controls and state behavior; no per-row “keep in prompts” semantics remain on touched principal-memory flow.
 - IF-WRONG: contract and backend seam diverge → stop, update contract or API map first.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `apps/operator-console/composables/useOperatorMemoryLab.ts`, `apps/operator-console/pages/memory.vue`, `apps/operator-console/i18n/locales/en.json`, `apps/operator-console/i18n/locales/ru.json`, `apps/operator-console/i18n/locales/zh.json`, `apps/operator-console/scripts/mock-operator-api.mjs`, `apps/operator-console/scripts/seam-contract.test.mjs`, `apps/operator-console/tests/browser/memory-actions.spec.ts`, `.agent/tasks/T008/implementation-log.md`.
+- Evidence: RED `npm run test:seam` failed on missing principal-memory surface contract; GREEN `npm run test:seam`; GREEN `npm run build`; GREEN `npm run test:browser -- tests/browser/memory-actions.spec.ts`. The browser surface uses `/api/memories/principal` for live knowledge and marks the MCP-only `get_memory_brief` panel as `mustbuild` until a browser REST bridge exists.
 
 ### G002 — GATE: principal explorer + brief + design-contract proof
 - Path: `.agent/specs/memory-product-layer/evidence/phase-2-gate.json`

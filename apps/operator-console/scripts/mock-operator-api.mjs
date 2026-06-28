@@ -127,6 +127,10 @@ const memoryRows = [
     confidence: 0.92,
     citation_count: 12,
     injection_count: 15,
+    owner_principal: 'agent/alice',
+    owner_principal_kind: 'agent',
+    agent_visibility: 'shared',
+    domain: 'operator-console',
     updated_at: '2026-06-22T10:00:00Z',
     status: 'active',
   },
@@ -140,6 +144,10 @@ const memoryRows = [
     confidence: 0.61,
     citation_count: 0,
     injection_count: 28,
+    owner_principal: 'agent/alice',
+    owner_principal_kind: 'agent',
+    agent_visibility: 'shared',
+    domain: 'memory-lab',
     updated_at: '2026-05-19T10:00:00Z',
     status: 'active',
   },
@@ -295,6 +303,64 @@ function memoryResponseForProject(project) {
     .filter((row) => row.project === project)
     .filter((row) => !suppressedMemoryIds.has(String(row.id)))
     .map((row) => ({ ...row, tags: [...row.tags] }))
+}
+
+function principalMemoryResponse(url) {
+  const principal = (url.searchParams.get('principal') || '').trim()
+  const principalKind = (url.searchParams.get('principal_kind') || 'agent').trim()
+  const project = (url.searchParams.get('project') || '').trim()
+  const domain = (url.searchParams.get('domain') || '').trim()
+  const visibility = (url.searchParams.get('visibility') || 'all').trim()
+  const includePrivate = url.searchParams.get('include_private') === 'true'
+  const requestedLimit = Number(url.searchParams.get('limit') || 10)
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(10, requestedLimit) : 10
+
+  if (!principal) {
+    return {
+      principal,
+      principal_kind: principalKind,
+      project,
+      domain,
+      items: [],
+      hidden_count: 0,
+      audit: { durable: false, action: 'principal_memory_query' },
+      audit_status: 'not_required',
+    }
+  }
+
+  const rows = memoryRows
+    .filter((row) => !suppressedMemoryIds.has(String(row.id)))
+    .filter((row) => row.owner_principal === principal)
+    .filter((row) => !project || row.project === project)
+    .filter((row) => !domain || row.domain === domain)
+    .filter((row) => visibility === 'all' || row.agent_visibility === visibility)
+
+  const visible = rows
+    .filter((row) => includePrivate || row.agent_visibility !== 'private')
+    .slice(0, limit)
+    .map((row) => ({
+      id: row.id,
+      project: row.project,
+      content: row.content,
+      tags: [...row.tags],
+      owner_principal: row.owner_principal,
+      owner_principal_kind: row.owner_principal_kind,
+      agent_visibility: row.agent_visibility,
+      domain: row.domain,
+      confidence: row.confidence,
+      created_at: row.updated_at,
+    }))
+
+  return {
+    principal,
+    principal_kind: principalKind,
+    project,
+    domain,
+    items: visible,
+    hidden_count: rows.length - visible.length,
+    audit: { durable: false, action: 'principal_memory_query' },
+    audit_status: 'not_required',
+  }
 }
 
 function candidateResponse(project, status, limit) {
@@ -999,6 +1065,9 @@ const server = createServer(async (req, res) => {
       return
     case '/api/projects':
       json(res, 200, [...projectIds])
+      return
+    case '/api/memories/principal':
+      json(res, 200, principalMemoryResponse(url))
       return
     case '/api/memories':
       json(res, 200, memoryResponseForProject(url.searchParams.get('project') || 'operator-console'))

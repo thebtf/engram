@@ -254,6 +254,49 @@ test('memory page-size contract offers persisted bounded all mode', () => {
   assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
 })
 
+test('principal memory surface follows the approved T008 contract', () => {
+  const memoryPageSource = read(memoryPagePath)
+  const memoryLabSource = read(memoryLabPath)
+  const mockOperatorApiSource = read(mockOperatorApiPath)
+  const localeSources = [read(enLocalePath), read(ruLocalePath), read(zhLocalePath)]
+
+  assert.match(memoryLabSource, /export interface PrincipalMemoryScope/, 'Principal memory scope must be a typed UI contract')
+  assert.match(memoryLabSource, /export function principalMemoryQueryPath/, 'Principal memory query URL construction must be reusable and testable')
+  assert.match(memoryLabSource, /\/api\/memories\/principal/, 'Principal memory surface must bind to the live T006 REST route')
+  assert.match(memoryLabSource, /export function useOperatorPrincipalMemorySurface/, 'Principal memory surface must have a dedicated composable')
+  assert.match(memoryLabSource, /briefState:\s*ComputedRef<OperatorLoadState<OperatorPrincipalMemoryBrief>>/, 'Brief panel state must be a typed honest load state')
+  assert.match(memoryLabSource, /MCP get_memory_brief/, 'Brief panel must name the MCP-only T007 bridge until browser REST exists')
+  assert.match(memoryLabSource, /mustBuildState<OperatorPrincipalMemoryBrief>/, 'Browser brief panel must render mustbuild instead of faking a live fetch')
+  assert.match(memoryLabSource, /riskyConfirmation/, 'Cross-principal widening must have an explicit risky-confirm branch')
+
+  assert.match(memoryPageSource, /useOperatorPrincipalMemorySurface/, 'Memory page must consume the principal-memory surface seam')
+  for (const testId of [
+    'principal-memory-surface',
+    'principal-state-banner',
+    'principal-select',
+    'domain-select',
+    'project-scope',
+    'refresh',
+    'brief-refresh',
+    'attribution-toggle',
+    'principal-knowledge-summary',
+    'principal-brief-panel',
+  ]) {
+    assert.match(memoryPageSource, new RegExp(`data-testid="${testId}"`), `Memory page must render ${testId}`)
+  }
+
+  for (const state of ['pending', 'live', 'empty', 'gated', 'mustbuild', 'stale', 'error', 'risky-confirm']) {
+    assert.match(memoryPageSource, new RegExp(`memory\\.principal\\.state\\.${state}`), `Principal surface must render ${state} copy`)
+  }
+
+  assert.match(mockOperatorApiSource, /case '\/api\/memories\/principal':[\s\S]*principalMemoryResponse\(url\)/, 'Mock operator API must serve /api/memories/principal for browser smoke')
+
+  for (const localeSource of localeSources) {
+    assert.match(localeSource, /"principal":\s*\{/, 'Principal memory copy must be keyed in every locale')
+    assert.doesNotMatch(localeSource, /keep this record in prompts|оставить запись в подсказках|保留到提示词/, 'Touched memory copy must not keep prompt-retention semantics')
+  }
+})
+
 test('candidate review queue is a live gated surface, not a SectionStub', () => {
   const queuePageSource = read(queuePagePath)
   const queueComposableSource = read(queueComposablePath)

@@ -247,10 +247,71 @@
       "gated": "此分区被 {flag} 关闭。",
       "retry": "重试"
     },
+    "principal": {
+      "title": "Principal 记忆",
+      "subtitle": "按 principal、domain 和项目查看带来源证据的知识。",
+      "controls": {
+        "principal": "Principal",
+        "kind": "类型",
+        "domain": "Domain",
+        "project": "项目",
+        "visibility": "可见性",
+        "attribution": "归因"
+      },
+      "kinds": {
+        "human": "Human",
+        "agent": "Agent",
+        "service": "Service"
+      },
+      "projects": {
+        "current": "当前",
+        "all": "所有项目"
+      },
+      "visibility": {
+        "all": "全部",
+        "shared": "Shared",
+        "private": "Private"
+      },
+      "actions": {
+        "refresh": "刷新",
+        "confirmScope": "确认 scope",
+        "briefRefresh": "Brief"
+      },
+      "state": {
+        "pending": "正在加载 principal 知识…",
+        "live": "所选 scope 的 principal 知识为 live。",
+        "empty": "所选 scope 没有匹配知识。",
+        "gated": "Scope 被阻止：{reason}",
+        "mustbuild": "此区块尚未接入 browser REST。",
+        "stale": "刷新成功前保留上一份安全结果。",
+        "error": "无法加载 principal 知识：{message}",
+        "risky-confirm": "更改 principal scope 前需要确认一次。"
+      },
+      "knowledge": {
+        "title": "知识摘要",
+        "count": "{count} 可见 · {hidden} 隐藏"
+      },
+      "empty": {
+        "title": "没有 scoped knowledge",
+        "body": "所选 principal/domain/project 返回了受支持的空响应。"
+      },
+      "evidence": {
+        "audit": "audit {status}",
+        "source": "source {source}"
+      },
+      "brief": {
+        "title": "Scoped brief",
+        "pending": "正在准备 brief 状态…",
+        "live": "Brief 内容可用。",
+        "empty": "Brief 没有返回内容。",
+        "error": "无法加载 brief：{message}",
+        "mustbuild": "Principal-scoped brief 已存在于 MCP get_memory_brief；browser REST bridge 尚不可用。"
+      }
+    },
     "detail": {
       "title": "记忆卡片",
       "operatorQuestion": "操作员决策：",
-      "operatorText": "保留到提示词、降级为上下文、送去审核，或替换为新版本。",
+      "operatorText": "先检查这条记录的状态、噪声信号、审计轨迹和替换选项，再执行更改。",
       "state": "状态",
       "tier": "使用方式",
       "type": "类别",
