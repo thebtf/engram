@@ -165,6 +165,23 @@ func TestHandleListMemoryCandidates_ReturnsProjectScopedPayload(t *testing.T) {
 	assert.Equal(t, []string{"engram"}, response.Candidates[0].AffectedProjects)
 	require.NotNil(t, response.Candidates[0].ReviewAfter)
 	assert.Equal(t, "2026-06-24T12:00:00Z", *response.Candidates[0].ReviewAfter)
+
+	packet := response.Candidates[0].ReviewPacket
+	assert.Equal(t, "candidate:42:abc123", packet.PacketID)
+	assert.Equal(t, int64(42), packet.CandidateID)
+	assert.Equal(t, "candidate_review", packet.Kind)
+	assert.Equal(t, []string{"promote", "reject", "supersede"}, packet.Decision.AllowedActions)
+	assert.Equal(t, "semantic", packet.Decision.PromotionTarget)
+	assert.Equal(t, []string{"engram"}, packet.Scope.Projects)
+	assert.Equal(t, "project", packet.Scope.PrivacyScope)
+	require.Len(t, packet.Evidence, 1)
+	assert.Equal(t, "session:sess-42", packet.Evidence[0].Handle)
+	assert.Equal(t, "session", packet.Evidence[0].Kind)
+	assert.True(t, packet.Snapshot.Required)
+	assert.Equal(t, "bulk_op_snapshots", packet.Snapshot.Store)
+	assert.Equal(t, "pre_action_required", packet.Snapshot.Status)
+	assert.Equal(t, "audit_log", packet.Audit.Store)
+	assert.Equal(t, "pending_on_action", packet.Audit.Status)
 }
 
 func TestHandleListMemoryCandidates_AllProjectListsUnscopedQueue(t *testing.T) {

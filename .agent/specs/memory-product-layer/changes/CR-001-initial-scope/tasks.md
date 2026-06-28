@@ -178,6 +178,9 @@ Dependencies:
 - Data evidence: PASS existing candidate/snapshot/audit reuse; no governance rebuild.
 - Confidence gate: if packet shape requires new persistence, prove existing seams insufficient first.
 - AC: packet contract maps existing candidate/snapshot/audit data into bounded review payloads.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `.agent/specs/memory-product-layer/contracts/review-packets.md`, `.agent/tasks/T009/implementation-log.md`, `internal/reviewpacket/candidate.go`, `internal/reviewpacket/candidate_test.go`, `internal/worker/handlers_candidates.go`, `internal/worker/handlers_candidates_test.go`, `internal/mcp/tools_candidates.go`.
+- Evidence: RED `go test ./internal/worker -run TestHandleListMemoryCandidates_ReturnsProjectScopedPayload -count=1` failed on missing `ReviewPacket`; GREEN same command; GREEN `go test ./internal/reviewpacket -count=1`; GREEN `go test ./internal/mcp -run TestHandleListCandidates -count=1`; GREEN `go test ./internal/worker ./internal/mcp ./internal/reviewpacket -count=1`. Review packets are additive projections over existing candidate rows plus snapshot/audit policy; no new persistence or queue UI was added.
 
 ### T010 — Implement queue list/read actions on existing seams
 - Path: `internal/mcp/tools_candidates.go`, related REST handlers, `internal/worker/service.go`

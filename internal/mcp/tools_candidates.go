@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -119,17 +120,18 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 	}
 
 	type candidateItem struct {
-		ID                      int64   `json:"id"`
-		Status                  string  `json:"status"`
-		ProposedContent         string  `json:"proposed_content"`
-		ProposedPromotionTarget string  `json:"proposed_promotion_target"`
-		ProposedTier            string  `json:"proposed_tier"`
-		ProposedEpistemicType   string  `json:"proposed_epistemic_type"`
-		SourceSessionID         string  `json:"source_session_id"`
-		Confidence              float32 `json:"confidence"`
-		RecurrenceCount         int     `json:"recurrence_count"`
-		Fingerprint             string  `json:"fingerprint,omitempty"`
-		CreatedAt               string  `json:"created_at"`
+		ReviewPacket            reviewpacket.CandidateReviewPacket `json:"review_packet"`
+		ID                      int64                              `json:"id"`
+		Status                  string                             `json:"status"`
+		ProposedContent         string                             `json:"proposed_content"`
+		ProposedPromotionTarget string                             `json:"proposed_promotion_target"`
+		ProposedTier            string                             `json:"proposed_tier"`
+		ProposedEpistemicType   string                             `json:"proposed_epistemic_type"`
+		SourceSessionID         string                             `json:"source_session_id"`
+		Confidence              float32                            `json:"confidence"`
+		RecurrenceCount         int                                `json:"recurrence_count"`
+		Fingerprint             string                             `json:"fingerprint,omitempty"`
+		CreatedAt               string                             `json:"created_at"`
 	}
 
 	items := make([]candidateItem, 0, len(candidates))
@@ -138,6 +140,7 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 			continue
 		}
 		items = append(items, candidateItem{
+			ReviewPacket:            reviewpacket.FromCandidate(c),
 			ID:                      c.ID,
 			Status:                  string(c.Status),
 			ProposedContent:         c.ProposedContent,

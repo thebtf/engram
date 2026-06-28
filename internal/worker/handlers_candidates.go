@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
 )
@@ -40,23 +41,24 @@ type candidateListResponse struct {
 }
 
 type candidateReviewItem struct {
-	ReviewAfter             *string  `json:"review_after,omitempty"`
-	PromotedMemoryID        *int64   `json:"promoted_memory_id,omitempty"`
-	ID                      int64    `json:"id"`
-	Status                  string   `json:"status"`
-	ProposedContent         string   `json:"proposed_content"`
-	ProposedPromotionTarget string   `json:"proposed_promotion_target"`
-	ProposedTier            string   `json:"proposed_tier"`
-	ProposedEpistemicType   string   `json:"proposed_epistemic_type"`
-	SourceSessionID         string   `json:"source_session_id"`
-	Fingerprint             string   `json:"fingerprint,omitempty"`
-	PrivacyScope            string   `json:"privacy_scope,omitempty"`
-	CreatedAt               string   `json:"created_at"`
-	UpdatedAt               string   `json:"updated_at"`
-	EvidenceHandles         []string `json:"evidence_handles"`
-	AffectedProjects        []string `json:"affected_projects"`
-	Confidence              float32  `json:"confidence"`
-	RecurrenceCount         int      `json:"recurrence_count"`
+	ReviewPacket            reviewpacket.CandidateReviewPacket `json:"review_packet"`
+	ReviewAfter             *string                            `json:"review_after,omitempty"`
+	PromotedMemoryID        *int64                             `json:"promoted_memory_id,omitempty"`
+	ID                      int64                              `json:"id"`
+	Status                  string                             `json:"status"`
+	ProposedContent         string                             `json:"proposed_content"`
+	ProposedPromotionTarget string                             `json:"proposed_promotion_target"`
+	ProposedTier            string                             `json:"proposed_tier"`
+	ProposedEpistemicType   string                             `json:"proposed_epistemic_type"`
+	SourceSessionID         string                             `json:"source_session_id"`
+	Fingerprint             string                             `json:"fingerprint,omitempty"`
+	PrivacyScope            string                             `json:"privacy_scope,omitempty"`
+	CreatedAt               string                             `json:"created_at"`
+	UpdatedAt               string                             `json:"updated_at"`
+	EvidenceHandles         []string                           `json:"evidence_handles"`
+	AffectedProjects        []string                           `json:"affected_projects"`
+	Confidence              float32                            `json:"confidence"`
+	RecurrenceCount         int                                `json:"recurrence_count"`
 }
 
 type candidateActionReceipt struct {
@@ -121,6 +123,7 @@ func candidateReviewItemFromDomain(candidate *models.CrystallizationCandidate) c
 	}
 
 	return candidateReviewItem{
+		ReviewPacket:            reviewpacket.FromCandidate(candidate),
 		ID:                      candidate.ID,
 		Status:                  string(candidate.Status),
 		ProposedContent:         candidate.ProposedContent,
