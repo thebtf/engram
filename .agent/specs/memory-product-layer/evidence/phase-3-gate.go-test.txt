@@ -1,0 +1,73 @@
+?   	github.com/thebtf/engram/apps/operator-console/node_modules/flatted/golang/pkg/flatted	[no test files]
+ok  	github.com/thebtf/engram/cmd/engram	1.049s
+?   	github.com/thebtf/engram/cmd/engram-import	[no test files]
+?   	github.com/thebtf/engram/cmd/engram-server	[no test files]
+?   	github.com/thebtf/engram/docs	[no test files]
+ok  	github.com/thebtf/engram/internal/auth	0.465s
+ok  	github.com/thebtf/engram/internal/bulkops	0.104s
+ok  	github.com/thebtf/engram/internal/chunking	0.503s
+ok  	github.com/thebtf/engram/internal/chunking/golang	0.649s
+ok  	github.com/thebtf/engram/internal/chunking/markdown	0.314s
+ok  	github.com/thebtf/engram/internal/codeindex	0.351s
+ok  	github.com/thebtf/engram/internal/cognitive/core	1.225s
+ok  	github.com/thebtf/engram/internal/collections	0.430s
+ok  	github.com/thebtf/engram/internal/config	0.812s
+ok  	github.com/thebtf/engram/internal/control	0.337s
+ok  	github.com/thebtf/engram/internal/crypto	0.423s
+ok  	github.com/thebtf/engram/internal/crystallization	0.138s
+ok  	github.com/thebtf/engram/internal/db/gorm	0.278s
+ok  	github.com/thebtf/engram/internal/db/gorm/migrationmeta	0.447s
+ok  	github.com/thebtf/engram/internal/embedding	0.148s
+ok  	github.com/thebtf/engram/internal/feedback	0.468s
+ok  	github.com/thebtf/engram/internal/governance	0.439s
+ok  	github.com/thebtf/engram/internal/graph	1.025s
+ok  	github.com/thebtf/engram/internal/grpcserver	0.207s
+ok  	github.com/thebtf/engram/internal/handlers/codeintel	1.063s
+ok  	github.com/thebtf/engram/internal/handlers/engramcore	1.101s
+ok  	github.com/thebtf/engram/internal/handlers/loom	1.008s
+ok  	github.com/thebtf/engram/internal/handlers/serverevents	1.159s
+ok  	github.com/thebtf/engram/internal/ingestion	0.310s
+ok  	github.com/thebtf/engram/internal/injection	0.493s
+?   	github.com/thebtf/engram/internal/instincts	[no test files]
+ok  	github.com/thebtf/engram/internal/lifecycle	0.784s
+ok  	github.com/thebtf/engram/internal/llm	6.822s
+ok  	github.com/thebtf/engram/internal/logbuf	0.349s
+ok  	github.com/thebtf/engram/internal/mcp	0.447s
+ok  	github.com/thebtf/engram/internal/module	0.487s
+ok  	github.com/thebtf/engram/internal/module/dispatcher	0.719s
+ok  	github.com/thebtf/engram/internal/module/lifecycle	0.993s
+ok  	github.com/thebtf/engram/internal/module/obs	0.462s
+ok  	github.com/thebtf/engram/internal/module/registry	0.423s
+ok  	github.com/thebtf/engram/internal/moduletest	0.505s
+ok  	github.com/thebtf/engram/internal/principalmemory	0.533s
+ok  	github.com/thebtf/engram/internal/privacy	0.420s
+ok  	github.com/thebtf/engram/internal/proxy	1.106s
+ok  	github.com/thebtf/engram/internal/redaction	0.432s
+ok  	github.com/thebtf/engram/internal/reranking	0.734s
+ok  	github.com/thebtf/engram/internal/retrieval	0.164s
+ok  	github.com/thebtf/engram/internal/reviewpacket	0.491s
+ok  	github.com/thebtf/engram/internal/ruleinjection	0.328s
+ok  	github.com/thebtf/engram/internal/scope	0.493s
+ok  	github.com/thebtf/engram/internal/sessions	0.713s
+ok  	github.com/thebtf/engram/internal/staleness	0.340s
+ok  	github.com/thebtf/engram/internal/stateplane	0.478s
+?   	github.com/thebtf/engram/internal/telemetry	[no test files]
+?   	github.com/thebtf/engram/internal/update	[no test files]
+ok  	github.com/thebtf/engram/internal/version	0.350s
+ok  	github.com/thebtf/engram/internal/watcher	2.426s
+ok  	github.com/thebtf/engram/internal/worker	0.410s
+ok  	github.com/thebtf/engram/internal/worker/projectevents	0.262s
+ok  	github.com/thebtf/engram/internal/worker/reaper	0.091s
+ok  	github.com/thebtf/engram/internal/worker/sdk	3.068s
+ok  	github.com/thebtf/engram/internal/worker/session	0.115s
+ok  	github.com/thebtf/engram/internal/worker/sse	7.151s
+ok  	github.com/thebtf/engram/internal/writegate	0.331s
+ok  	github.com/thebtf/engram/internal/writelint	0.944s
+ok  	github.com/thebtf/engram/pkg/cognitive	0.299s
+ok  	github.com/thebtf/engram/pkg/models	0.329s
+ok  	github.com/thebtf/engram/pkg/similarity	0.288s
+?   	github.com/thebtf/engram/pkg/strutil	[no test files]
+?   	github.com/thebtf/engram/proto/engram/v1	[no test files]
+ok  	github.com/thebtf/engram/tests/smoke	2.745s
+?   	github.com/thebtf/engram/tools/gen-data-model	[no test files]
+?   	github.com/thebtf/engram/tools/gen-data-model/datamodel	[no test files]
