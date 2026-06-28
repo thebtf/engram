@@ -167,6 +167,7 @@ type Service struct {
 	credentialStore             *gorm.CredentialStore
 	memoryStore                 *gorm.MemoryStore
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
+	stateStore                  *gorm.StateStore
 	principalMemoryQueryService principalMemoryQueryService
 	domainOwnerStore            domainOwnerStore
 	domainRegistryService       domainRegistryService
@@ -271,6 +272,12 @@ func (s *Service) GetLastPrompt(sessionID int64) string {
 func (s *Service) SetCandidateStore(cs *gorm.CandidateStore) {
 	s.initMu.Lock()
 	s.candidateStore = cs
+	s.initMu.Unlock()
+}
+
+func wireStateStore(s *Service, stateStore *gorm.StateStore) {
+	s.initMu.Lock()
+	s.stateStore = stateStore
 	s.initMu.Unlock()
 }
 
@@ -595,9 +602,11 @@ func (s *Service) initializeAsync() {
 
 	// Create audit store for Milestone D audit trail (FR-D2 / NFR-D4).
 	auditStore := gorm.NewAuditStore(store.GetDB())
+	stateStore := gorm.NewStateStore(store.GetDB(), auditStore)
 	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
+	wireStateStore(s, stateStore)
 
 	// Create purge store for Milestone D project-level hard deletion (T008).
 	// Gated behind ENGRAM_VNEXT_ENABLED: purge_project is a vnext action (Milestone D).

@@ -36,6 +36,9 @@
 - Data evidence: PASS PostgreSQL 17 store; migration/rollback note required in implementation evidence.
 - Confidence gate: if state-table shape drifts from T001 contract, stop and update contract first.
 - AC: state rows persist and load through a dedicated seam; no direct filesystem primary read remains inside native path.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `internal/db/gorm/state_store.go`, `internal/db/gorm/state_store_test.go`, `internal/db/gorm/state_store_migration_test.go`, `internal/db/gorm/migrations.go`, `internal/worker/service.go`, `internal/worker/wiring_state_store_test.go`, `docs/arch/DATA_MODEL.md`, `.agent/tasks/T002/implementation-log.md`.
+- Evidence: RED `go test ./internal/db/gorm ./internal/worker` failed on missing state-store seam; GREEN `go test ./internal/db/gorm ./internal/worker`; GREEN pgvector/PostgreSQL 17 state-store integration; GREEN `go test ./...`; REVIEW degraded native route `019f0d20-be01-78a3-823f-22ad2354926a` plus manual lite review with no blocking findings.
 
 ### T003 — Expose native resume/state read surface
 - Path: `internal/mcp/tools_state*.go`, `internal/worker/handlers_state*.go`, `internal/mcp/server.go`

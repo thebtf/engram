@@ -60,6 +60,12 @@
             <td>The task AC asks for binary-defined fields and agent-owned read/write interface. Store and adapter work belongs to T002/T003/T004, so adding it here would blur task atomicity.</td>
             <td><code>tasks.md</code> T001-T004 lines 19-54; <code>plan.md</code> Phase 1 lines 215-225.</td>
           </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T002 uses dedicated state tables and the existing audit log seam; filesystem fallback remains out of the store.</td>
+            <td>The AC requires native persistence/load through a dedicated seam. Adding fallback reads in the store would make filesystem state a hidden primary-path dependency and belongs to T003/T004 adapter proof instead.</td>
+            <td><code>tasks.md</code> T002 path and AC; <code>spec.md</code> FR-1/NFR-2; <code>architecture.md</code> StatePlaneService component map.</td>
+          </tr>
         </tbody>
       </table>
     </section>
@@ -157,6 +163,18 @@
             <td>PASS with degraded native-review evidence</td>
             <td><code>mcp__aimux.task</code> review gate returned allow with <code>reason=timeout</code> and no completed passes; manual lite review found no blocking issues and recorded the timeout in <code>.agent/tasks/T001/implementation-log.md</code>.</td>
           </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T002 verification</td>
+            <td>PASS</td>
+            <td><code>go test ./internal/db/gorm ./internal/worker</code> passed; state-store integration tests passed against <code>pgvector/pgvector:pg17</code>; <code>go test ./...</code> passed.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T002 review gate</td>
+            <td>PASS with degraded native-review evidence</td>
+            <td><code>mcp__aimux.task</code> review gate returned allow with <code>reason=timeout</code> and no completed passes; manual lite review found no blocking issues and recorded the timeout in <code>.agent/tasks/T002/implementation-log.md</code>.</td>
+          </tr>
         </tbody>
       </table>
     </section>
@@ -170,9 +188,9 @@
         <tbody>
           <tr>
             <td class="status deferred">Deferred</td>
-            <td>Persistence and adapter evidence</td>
+            <td>Adapter, fallback, and drift evidence</td>
             <td>Developer</td>
-            <td>Execute in T002-T004 after T001 contract is green.</td>
+            <td>Execute in T003-T004 now that T001 contract and T002 persistence seam are green.</td>
           </tr>
         </tbody>
       </table>

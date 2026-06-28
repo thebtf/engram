@@ -1,0 +1,106 @@
+package gorm
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/thebtf/engram/pkg/cognitive"
+)
+
+type stateStoreReadWriteSeam interface {
+	cognitive.StateWriter
+	ReadSessionState(ctx context.Context, sessionID string) (cognitive.SessionStateSlots, error)
+	ReadProjectState(ctx context.Context, project string) (cognitive.ProjectStateRecord, error)
+}
+
+var _ stateStoreReadWriteSeam = (*StateStore)(nil)
+
+func TestStateStore_SessionStateRoundTrip(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	sessionID := fmt.Sprintf("state-session-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_session_state WHERE session_id = ?`, sessionID).Error
+		_ = db.Exec(`DELETE FROM audit_log WHERE source_session_id = ? AND action = 'write_session_state'`, sessionID).Error
+	})
+
+	want := cognitive.SessionStateSlots{
+		Focus: map[string]interface{}{
+			"objective": "finish T002",
+		},
+		Execution: map[string]interface{}{
+			"next_action": "run state-store tests",
+		},
+		Horizons: map[string]interface{}{
+			"next_verification": "go test ./internal/db/gorm",
+		},
+	}
+
+	require.NoError(t, store.WriteSessionState(ctx, sessionID, want))
+
+	got, err := store.ReadSessionState(ctx, sessionID)
+	require.NoError(t, err)
+	require.Equal(t, want.Focus, got.Focus)
+	require.Equal(t, want.Execution, got.Execution)
+	require.Equal(t, want.Horizons, got.Horizons)
+}
+
+func TestStateStore_ProjectStateRoundTrip(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	project := fmt.Sprintf("state-project-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
+		_ = db.Exec(`DELETE FROM audit_log WHERE action = 'write_project_state' AND reason LIKE ?`, "%"+project+"%").Error
+	})
+
+	deadline := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
+	want := cognitive.ProjectStateRecord{
+		Phase:        "implementation",
+		DeadlineDate: &deadline,
+		Pressure:     "normal",
+		UpdatedBy:    "agent",
+	}
+
+	require.NoError(t, store.WriteProjectState(ctx, project, want))
+
+	got, err := store.ReadProjectState(ctx, project)
+	require.NoError(t, err)
+	require.Equal(t, want.Phase, got.Phase)
+	require.NotNil(t, got.DeadlineDate)
+	require.True(t, want.DeadlineDate.Equal(*got.DeadlineDate))
+	require.Equal(t, want.Pressure, got.Pressure)
+	require.Equal(t, want.UpdatedBy, got.UpdatedBy)
+}
+
+func TestStateStore_AuditLogWrittenOnSessionWrite(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	sessionID := fmt.Sprintf("state-audit-session-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_session_state WHERE session_id = ?`, sessionID).Error
+		_ = db.Exec(`DELETE FROM audit_log WHERE source_session_id = ? AND action = 'write_session_state'`, sessionID).Error
+	})
+
+	before := countAuditRows(t, db, "write_session_state")
+	require.NoError(t, store.WriteSessionState(ctx, sessionID, cognitive.SessionStateSlots{
+		Focus: map[string]interface{}{"objective": "audit state write"},
+	}))
+
+	require.Eventually(t, func() bool {
+		return countAuditRows(t, db, "write_session_state") > before
+	}, 2*time.Second, 25*time.Millisecond, "state write must create audit evidence")
+}
