@@ -60,6 +60,9 @@
 - Data evidence: PASS fallback semantics only; rollback = keep filesystem path primary.
 - Confidence gate: if native parity fails, trigger plan contingency and park write path.
 - AC: tests prove native-first read, explicit fallback marker, and drift/conflict path.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `internal/stateplane/service.go`, `internal/stateplane/service_test.go`, `internal/mcp/tools_state.go`, `internal/mcp/tools_state_test.go`, `internal/worker/handlers_state.go`, `internal/worker/handlers_state_test.go`, `internal/worker/service.go`, `.agent/specs/memory-product-layer/evidence/phase-1-fallback-drift.json`, `.agent/tasks/T004/implementation-log.md`.
+- Evidence: RED `go test ./internal/stateplane ./internal/mcp ./internal/worker` failed on missing fallback/drift wrapper and fallback flag forwarding; GREEN `go test ./internal/stateplane ./internal/mcp ./internal/worker`; GREEN `go test ./pkg/cognitive ./internal/db/gorm ./internal/stateplane ./internal/mcp ./internal/worker`; GREEN `go test ./... -count=1`; REVIEW degraded native route `019f0d43-56ee-7405-a029-d8021bb884d2` plus manual lite review with no blocking findings.
 
 ### G001 — GATE: native resume proof
 - Path: `.agent/specs/memory-product-layer/evidence/phase-1-gate.json`

@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	gormlib "gorm.io/gorm"
@@ -72,11 +73,21 @@ func (s *Service) handleGetStateResume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session_id is required", http.StatusBadRequest)
 		return
 	}
+	allowFallback := false
+	if raw := query.Get("allow_filesystem_fallback"); raw != "" {
+		var err error
+		allowFallback, err = strconv.ParseBool(raw)
+		if err != nil {
+			http.Error(w, "allow_filesystem_fallback must be a boolean", http.StatusBadRequest)
+			return
+		}
+	}
 	packet, err := store.ReadResumePacket(r.Context(), cognitive.ResumePacketRequest{
-		Project:   query.Get("project"),
-		SessionID: sessionID,
-		GoalID:    query.Get("goal_id"),
-		TaskID:    query.Get("task_id"),
+		Project:                 query.Get("project"),
+		SessionID:               sessionID,
+		GoalID:                  query.Get("goal_id"),
+		TaskID:                  query.Get("task_id"),
+		AllowFilesystemFallback: allowFallback,
 	})
 	if err != nil {
 		writeStateReadError(w, err)

@@ -44,6 +44,7 @@ import (
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/sessions"
+	"github.com/thebtf/engram/internal/stateplane"
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
@@ -603,10 +604,11 @@ func (s *Service) initializeAsync() {
 	// Create audit store for Milestone D audit trail (FR-D2 / NFR-D4).
 	auditStore := gorm.NewAuditStore(store.GetDB())
 	stateStore := gorm.NewStateStore(store.GetDB(), auditStore)
+	statePlaneSvc := stateplane.NewService(stateStore, nil)
 	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
-	wireStateStore(s, stateStore)
+	wireStateStore(s, statePlaneSvc)
 
 	// Create purge store for Milestone D project-level hard deletion (T008).
 	// Gated behind ENGRAM_VNEXT_ENABLED: purge_project is a vnext action (Milestone D).
@@ -779,6 +781,7 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetPrincipalMemoryQueryService(principalMemoryQuerySvc)
 	mcpServer.SetDomainRegistryService(domainRegistrySvc)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
+	mcpServer.SetStateStore(statePlaneSvc)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared

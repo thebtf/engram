@@ -1,0 +1,71 @@
+{
+  "feature": "memory-product-layer",
+  "cr": "CR-001-initial-scope",
+  "task": "T004",
+  "created_at": "2026-06-28T10:57:00+03:00",
+  "verdict": "PASS",
+  "acceptance": {
+    "native_first_read": "PASS",
+    "explicit_fallback_marker": "PASS",
+    "drift_conflict_path": "PASS"
+  },
+  "source_evidence": {
+    "outputs_agent_memory_design": {
+      "path": "outputs/agent-memory-design.md",
+      "status": "PASS",
+      "anchors": [
+        "line 56: session state, active goals, assignments, task contracts, and project state should move through Engram as first-class memory/state records",
+        "line 319: filesystem role is cache/export/emergency fallback only",
+        "lines 436-437: session load reads Engram-native handoff/state first and current.json becomes cache/export"
+      ]
+    },
+    "current_json_role": {
+      "path_checked": ".agent/session-state/current.json",
+      "status": "ABSENT_IN_WORKTREE",
+      "interpretation": "T004 records absence honestly and proves fallback semantics with temp JSON packet fixtures instead of pretending a role oracle exists in the isolated worktree."
+    }
+  },
+  "red": {
+    "command": "go test ./internal/stateplane ./internal/mcp ./internal/worker",
+    "exit_code": 1,
+    "summary": [
+      "internal/stateplane build failed: undefined NewService and JSONFileFallbackReader",
+      "internal/mcp TestGetStateToolResumeReturnsNativePacket failed because allow_filesystem_fallback was not forwarded",
+      "internal/worker TestHandleGetStateResumeReturnsBoundedPacket failed because allow_filesystem_fallback was not forwarded"
+    ]
+  },
+  "green": [
+    {
+      "command": "go test ./internal/stateplane ./internal/mcp ./internal/worker",
+      "exit_code": 0,
+      "summary": "ok for internal/stateplane, internal/mcp, internal/worker"
+    },
+    {
+      "command": "go test ./pkg/cognitive ./internal/db/gorm ./internal/stateplane ./internal/mcp ./internal/worker",
+      "exit_code": 0,
+      "summary": "state packet, store, fallback, MCP, and REST package checks green"
+    },
+    {
+      "command": "go test ./... -count=1",
+      "exit_code": 0,
+      "summary": "full uncached suite green"
+    }
+  ],
+  "implementation": {
+    "native_store": "GORM StateStore remains native-only.",
+    "wrapper": "internal/stateplane.Service composes native cognitive.StatePlane with optional explicit fallback reader.",
+    "fallback_reader": "internal/stateplane.JSONFileFallbackReader reads a single serialized ResumePacket fixture or configured export path.",
+    "fallback_validation": "Fallback packets must include deterministic next_action and next_verification fields before they can be returned or compared.",
+    "surface_flag": "MCP and REST resume calls forward allow_filesystem_fallback into ResumePacketRequest.",
+    "production_wiring": "worker initializeAsync wires the wrapped state plane into Service.stateStore and MCP get_state."
+  },
+  "review": {
+    "native_review_task_id": "019f0d43-56ee-7405-a029-d8021bb884d2",
+    "native_review_result": "degraded_allow_timeout",
+    "native_review_notes": "aimux review gate returned decision=allow, reason=timeout, findings=null, passes_completed=null.",
+    "manual_review_result": "PASS",
+    "manual_review_notes": "Manual review found and fixed an indeterminate fallback-packet validation gap; final re-check found no blocking issues."
+  },
+  "rollback": "Keep filesystem fallback/export path available; no migration or native write path is required to disable the wrapper behavior because fallback is opt-in and production fallback reader is nil.",
+  "residual_risk": "No production fallback path is configured in T004; this task proves explicit fallback/drift semantics and leaves actual filesystem export integration to a later state-plane expansion."
+}

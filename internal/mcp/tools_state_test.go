@@ -12,28 +12,30 @@ import (
 )
 
 type fakeStatePlane struct {
-	session cognitive.SessionStateSlots
-	project cognitive.ProjectStateRecord
-	packet  cognitive.ResumePacket
+	session     cognitive.SessionStateSlots
+	project     cognitive.ProjectStateRecord
+	packet      cognitive.ResumePacket
+	lastRequest cognitive.ResumePacketRequest
 }
 
-func (f fakeStatePlane) WriteSessionState(context.Context, string, cognitive.SessionStateSlots) error {
+func (f *fakeStatePlane) WriteSessionState(context.Context, string, cognitive.SessionStateSlots) error {
 	return nil
 }
 
-func (f fakeStatePlane) WriteProjectState(context.Context, string, cognitive.ProjectStateRecord) error {
+func (f *fakeStatePlane) WriteProjectState(context.Context, string, cognitive.ProjectStateRecord) error {
 	return nil
 }
 
-func (f fakeStatePlane) ReadSessionState(context.Context, string) (cognitive.SessionStateSlots, error) {
+func (f *fakeStatePlane) ReadSessionState(context.Context, string) (cognitive.SessionStateSlots, error) {
 	return f.session, nil
 }
 
-func (f fakeStatePlane) ReadProjectState(context.Context, string) (cognitive.ProjectStateRecord, error) {
+func (f *fakeStatePlane) ReadProjectState(context.Context, string) (cognitive.ProjectStateRecord, error) {
 	return f.project, nil
 }
 
-func (f fakeStatePlane) ReadResumePacket(context.Context, cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
+func (f *fakeStatePlane) ReadResumePacket(_ context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
+	f.lastRequest = request
 	return f.packet, nil
 }
 
@@ -41,13 +43,13 @@ func TestStateToolAdvertisedOnlyWhenStoreWired(t *testing.T) {
 	srv := NewServer(ServerOptions{Version: "test"})
 	require.NotContains(t, buildToolsList(srv), "get_state")
 
-	srv.SetStateStore(fakeStatePlane{})
+	srv.SetStateStore(&fakeStatePlane{})
 	require.Contains(t, buildToolsList(srv), "get_state")
 }
 
 func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 	srv := NewServer(ServerOptions{Version: "test"})
-	srv.SetStateStore(fakeStatePlane{
+	fakeStore := &fakeStatePlane{
 		packet: cognitive.ResumePacket{
 			Source:           cognitive.StatePacketSourceNative,
 			Freshness:        cognitive.StateFreshnessFresh,
@@ -58,9 +60,10 @@ func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 			Project:          "engram",
 			SessionID:        "session-1",
 		},
-	})
+	}
+	srv.SetStateStore(fakeStore)
 
-	result, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","session_id":"session-1"}`))
+	result, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","session_id":"session-1","allow_filesystem_fallback":true}`))
 	require.NoError(t, err)
 
 	var packet cognitive.ResumePacket
@@ -68,4 +71,5 @@ func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
 	require.Equal(t, "run focused tests", packet.NextAction.Description)
 	require.Empty(t, packet.FallbackPath)
+	require.True(t, fakeStore.lastRequest.AllowFilesystemFallback)
 }

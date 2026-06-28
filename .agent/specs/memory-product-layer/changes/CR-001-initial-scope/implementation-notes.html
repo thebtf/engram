@@ -72,6 +72,12 @@
             <td>The T003 AC requires MCP/REST bounded payloads and no broad file archaeology on the happy path. Native reads can prove that now; fallback proof needs separate fixtures and belongs to T004.</td>
             <td><code>tasks.md</code> T003/T004 split; <code>spec.md</code> FR-2 and US1.</td>
           </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T004 proves fallback and drift in a wrapper/use-case layer while keeping the GORM state store native-only.</td>
+            <td>The task requires explicit fallback marker and conflict proof, while prior tasks established that native persistence should not silently depend on filesystem state. A wrapper can compare native and fallback packets without making fallback part of the native store contract.</td>
+            <td><code>tasks.md</code> T004 AC; <code>spec.md</code> FR-1/FR-2 and US1; <code>plan.md</code> Phase 1 contingency.</td>
+          </tr>
         </tbody>
       </table>
     </section>
@@ -111,6 +117,12 @@
             <td>Resume packet</td>
             <td>Bounded read payload with freshness, drift/conflict, next action, next verification, and explicit source/fallback markers.</td>
             <td><code>spec.md</code> FR-2 line 56 and US1 lines 129-131.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>Filesystem fallback</td>
+            <td>An explicitly requested fallback/export packet source used only when native resume is unavailable or when drift comparison is requested.</td>
+            <td><code>tasks.md</code> T004 data evidence; <code>plan.md</code> State fallback row.</td>
           </tr>
         </tbody>
       </table>
@@ -192,6 +204,18 @@
             <td>T003 review gate</td>
             <td>PASS with degraded native-review evidence</td>
             <td><code>mcp__aimux.task</code> review gate returned allow with <code>reason=timeout</code> and no completed passes; manual lite review found no blocking issues and recorded the timeout in <code>.agent/tasks/T003/implementation-log.md</code>.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T004 verification</td>
+            <td>PASS</td>
+            <td>RED <code>go test ./internal/stateplane ./internal/mcp ./internal/worker</code> failed on missing fallback/drift wrapper and flag forwarding; GREEN focused/package checks passed; GREEN <code>go test ./... -count=1</code> passed. Evidence: <code>.agent/specs/memory-product-layer/evidence/phase-1-fallback-drift.json</code>.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T004 review gate</td>
+            <td>PASS with degraded native-review evidence</td>
+            <td><code>mcp__aimux.task</code> review gate returned allow with <code>reason=timeout</code> and no completed passes; manual review found and fixed fallback-packet validation hardening, then found no blocking issues.</td>
           </tr>
         </tbody>
       </table>

@@ -13,11 +13,12 @@ type statePlane interface {
 }
 
 type stateToolArgs struct {
-	Action    string `json:"action"`
-	Project   string `json:"project"`
-	SessionID string `json:"session_id"`
-	GoalID    string `json:"goal_id"`
-	TaskID    string `json:"task_id"`
+	Action                  string `json:"action"`
+	Project                 string `json:"project"`
+	SessionID               string `json:"session_id"`
+	GoalID                  string `json:"goal_id"`
+	TaskID                  string `json:"task_id"`
+	AllowFilesystemFallback bool   `json:"allow_filesystem_fallback"`
 }
 
 func stateTool() Tool {
@@ -34,6 +35,10 @@ func stateTool() Tool {
 				"session_id": map[string]any{"type": "string", "description": "Session identifier for session/resume reads"},
 				"goal_id":    map[string]any{"type": "string", "description": "Optional goal identifier for resume packet binding"},
 				"task_id":    map[string]any{"type": "string", "description": "Optional task identifier for resume packet binding"},
+				"allow_filesystem_fallback": map[string]any{
+					"type":        "boolean",
+					"description": "When true, permits explicit filesystem fallback and native-vs-fallback drift comparison for resume reads",
+				},
 			},
 		},
 	}
@@ -84,10 +89,11 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 			return "", fmt.Errorf("session_id required")
 		}
 		packet, err := s.stateStore.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
-			Project:   a.Project,
-			SessionID: a.SessionID,
-			GoalID:    a.GoalID,
-			TaskID:    a.TaskID,
+			Project:                 a.Project,
+			SessionID:               a.SessionID,
+			GoalID:                  a.GoalID,
+			TaskID:                  a.TaskID,
+			AllowFilesystemFallback: a.AllowFilesystemFallback,
 		})
 		if err != nil {
 			return "", err
