@@ -109,6 +109,9 @@ Dependencies: none (first story group).
 - Data evidence: PASS build missing explorer substrate on top of existing privacy visibility; fail-closed private visibility.
 - Confidence gate: re-check no finished principal explorer implementation is being assumed from PMQ docs.
 - AC: operator/agent can query principal/domain/project memory through a bounded substrate layered over existing privacy visibility with attribution.
+- Status: [X] Completed 2026-06-28.
+- Artifacts: `.agent/specs/memory-product-layer/contracts/principal-explorer.md`, `.agent/tasks/T006/implementation-log.md`, `internal/principalmemory/query_service.go`, `internal/mcp/tools_principal_memory.go`, `internal/worker/handlers_principal_memory.go`.
+- Evidence: current-code classification found the principal explorer substrate already live, wired through MCP and REST, and layered over existing privacy/domain/audit seams; focused verification `go test ./internal/principalmemory ./internal/mcp ./internal/worker -run "PrincipalMemory|QueryPrincipal" -count=1` passed and broader package verification `go test ./internal/principalmemory ./internal/mcp ./internal/worker -count=1` passed. Source discrepancy recorded: `.agent/specs/principal-memory-query-domain-registry/architecture.md` is absent from this worktree and absent from `HEAD`, so T006 did not assume PMQ docs as current source.
 
 ### T007 — Extend `get_memory_brief` with principal/domain scoping
 - Path: `internal/mcp/tools_brief.go`, `internal/mcp/server.go`

@@ -84,6 +84,18 @@
             <td>The active spec makes missing designer contract a UI blocker. Writing the contract first keeps T008 from inventing controls, states, or backend wiring ad hoc.</td>
             <td><code>tasks.md</code> T005 AC; <code>spec.md</code> FR-11/FR-12/FR-13; <code>plan.md</code> Design System / UI Architecture.</td>
           </tr>
+          <tr>
+            <td class="status deferred">Deferred</td>
+            <td>T006 source evidence names a PMQ architecture artifact that is absent in the isolated worktree and absent from <code>HEAD</code>.</td>
+            <td>This is a source-evidence discrepancy, not a blocker to current-code implementation. T006 used live code as the source truth and did not assume a finished PMQ explorer from missing docs.</td>
+            <td><code>tasks.md</code> T006 source-evidence row; failed <code>Get-Content</code>; failed <code>git show HEAD:.agent/specs/principal-memory-query-domain-registry/architecture.md</code>.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T006 classifies the principal explorer substrate as live instead of rebuilding it.</td>
+            <td>Current code already exposes a bounded principal/domain/project memory query through MCP and REST, backed by the shared principal-memory query service, existing visibility/domain filtering, and private-read audit semantics.</td>
+            <td><code>internal/principalmemory/query_service.go</code>; <code>internal/mcp/tools_principal_memory.go</code>; <code>internal/worker/handlers_principal_memory.go</code>; <code>.agent/specs/memory-product-layer/contracts/principal-explorer.md</code>.</td>
+          </tr>
         </tbody>
       </table>
     </section>
@@ -234,6 +246,12 @@
             <td>T005 design-contract verification</td>
             <td>PASS</td>
             <td><code>principal-memory-surface.md</code> covers controls, usage flow, backend bindings, honest states, happy/empty/validation/gated/risky/rollback/recovery branches, and PM review result; <code>principal-memory-surface.json</code> parsed successfully with <code>pm_review.result=PASS</code>.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T006 principal explorer substrate verification</td>
+            <td>PASS</td>
+            <td>Focused verification <code>go test ./internal/principalmemory ./internal/mcp ./internal/worker -run "PrincipalMemory|QueryPrincipal" -count=1</code> passed; broader package verification <code>go test ./internal/principalmemory ./internal/mcp ./internal/worker -count=1</code> passed; contract <code>principal-explorer.md</code> records live MCP/REST surfaces, privacy/domain rules, attribution, bounds, audit behavior, and the missing PMQ-doc discrepancy.</td>
           </tr>
         </tbody>
       </table>
