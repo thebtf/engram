@@ -72,6 +72,9 @@
 - ENFORCE: no downstream story starts if resume still depends on filesystem on happy path.
 - RESOLVE: if parity fails, park write path and keep read-only introspection only.
 - SAVE: write gate evidence JSON + raw command output.
+- Status: [X] Passed 2026-06-28.
+- Artifacts: `.agent/specs/memory-product-layer/evidence/phase-1-gate.json`, `.agent/specs/memory-product-layer/evidence/phase-1-gate.go-test.txt`.
+- Evidence: GREEN `go test ./...`; phase-1 gate JSON records state packet/store/fallback checks, native-first proof, explicit fallback proof, and no spec drift.
 
 Dependencies: none (first story group).
 

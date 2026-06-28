@@ -217,6 +217,12 @@
             <td>PASS with degraded native-review evidence</td>
             <td><code>mcp__aimux.task</code> review gate returned allow with <code>reason=timeout</code> and no completed passes; manual review found and fixed fallback-packet validation hardening, then found no blocking issues.</td>
           </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>G001 native resume proof gate</td>
+            <td>PASS</td>
+            <td><code>go test ./...</code> passed; gate evidence and raw output saved under <code>.agent/specs/memory-product-layer/evidence/phase-1-gate.json</code> and <code>phase-1-gate.go-test.txt</code>.</td>
+          </tr>
         </tbody>
       </table>
     </section>
