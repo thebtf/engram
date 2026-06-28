@@ -146,6 +146,9 @@ Dependencies: none (first story group).
 - ENFORCE: no review-loop UI starts before touched surface is contract-driven and honest.
 - RESOLVE: if designer contract absent or rejected, backend may ship; UI stays blocked and must-build.
 - SAVE: gate evidence + PM review note + browser artifacts.
+- Status: [X] Passed 2026-06-28.
+- Artifacts: `.agent/specs/memory-product-layer/evidence/phase-2-gate.json`, `.agent/specs/memory-product-layer/evidence/phase-2-gate.go-test.txt`, `.agent/specs/memory-product-layer/evidence/phase-2-gate.browser.txt`, `.agent/specs/memory-product-layer/evidence/phase-2-gate.parity.txt`, `.agent/specs/memory-product-layer/evidence/phase-2-gate.seam.txt`.
+- Evidence: GREEN `go test ./... -count=1`; GREEN `npm run test:browser -- tests/browser/memory-actions.spec.ts`; GREEN `npm run parity`; GREEN `npm run test:seam`; T005 PM review PASS is recorded in the approved principal-memory design contract. Story Group 3 is unblocked, with review queue UI still excluded from CR-001.
 
 Dependencies:
 - G001 -> T006, T007, T008

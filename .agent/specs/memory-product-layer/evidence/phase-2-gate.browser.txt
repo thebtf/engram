@@ -1,0 +1,15 @@
+Command: npm run test:browser -- tests/browser/memory-actions.spec.ts
+Exit code: 0
+
+> test:browser
+> playwright test tests/browser/memory-actions.spec.ts
+
+[mock-operator-api] mock operator api listening on http://127.0.0.1:37993
+[operator-console-preview] Listening on http://127.0.0.1:37992
+
+Running 2 tests using 1 worker
+
+  ok 1 [chromium] › tests\browser\memory-actions.spec.ts:3:1 › memory hide-as-noise uses the live suppress action and removes the row (463ms)
+  ok 2 [chromium] › tests\browser\memory-actions.spec.ts:45:1 › principal memory surface uses live query and honest MCP-only brief state (411ms)
+
+  2 passed (3.7s)

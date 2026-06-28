@@ -1,0 +1,33 @@
+Command: npm run test:seam
+Exit code: 0
+
+> test:seam
+> node --test scripts/seam-contract.test.mjs
+
+✔ load-state union covers every honest operator surface state
+✔ fetch seam uses runtime config, same-origin default, retryable source errors, and real fetch failure checks
+✔ fetch seam reads bodies safely instead of throwing browser-native JSON parse errors
+✔ mutation seam supports success, rollback, refresh, and honest mustbuild unsupported actions
+✔ useMockData remains an import-compatible ownership map for page CRs
+✔ overview model health is live endpoint data, not a mustbuild mock chart
+✔ settings models tab is live read-only model health, not a fake model editor
+✔ memory compatibility export uses the Memory Lab live state seam
+✔ memory lab malformed project payloads are errors, not empty memory
+✔ memory page-size contract offers persisted bounded all mode
+✔ principal memory surface follows the approved T008 contract
+✔ candidate review queue is a live gated surface, not a SectionStub
+✔ behavioral rules enabled toggle is live endpoint-backed and remains recoverable
+✔ memory detail actions keep mustbuild descriptors while live delete and audit are endpoint-backed
+✔ memory capability evidence is an exported reusable typed data contract
+✔ settings feature flags are live read-only data, not a mustbuild fake control
+✔ health flags by area are live read-only endpoint state
+✔ health migrations state is live endpoint-backed and no longer mustbuild
+✔ settings config save is live allowlisted PATCH with restart receipt
+✔ settings domain registry is live GET PUT DELETE control-plane surface
+✔ projects control plane archives projects through typed soft-delete confirmation
+✔ Nuxt UI color-mode auto-registration stays disabled
+✔ operator console recovers from stale Nuxt chunk errors after deploy
+
+tests 23
+pass 23
+fail 0
