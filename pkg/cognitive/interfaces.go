@@ -84,6 +84,31 @@ type StatePlane interface {
 	ReadResumePacket(ctx context.Context, request ResumePacketRequest) (ResumePacket, error)
 }
 
+// ExperienceProvider is the product-facing read surface for first-class
+// experience retrieval. It is intentionally separate from hot-memory retrieval:
+// callers receive bounded historical lessons with applicability and
+// anti-applicability evidence before reuse.
+type ExperienceProvider interface {
+	// QueryExperience returns bounded historical/causal lessons for request.
+	QueryExperience(ctx context.Context, request ExperienceQueryRequest) ([]ExperienceResponse, error)
+}
+
+// ForgettingClassifier is the product-facing classification surface for safe
+// forgetting/consolidation. It returns a bounded decision envelope and must not
+// mutate memory storage as part of classification.
+type ForgettingClassifier interface {
+	// ClassifyForgetting maps a request onto the explicit forgetting taxonomy.
+	ClassifyForgetting(ctx context.Context, request ForgettingClassificationRequest) (ForgettingDecision, error)
+}
+
+// TemporalTruthProvider is the product-facing read surface for selected-fact
+// temporal truth. Implementations must stay bounded to selected facts and
+// return provenance with current and prior truth answers.
+type TemporalTruthProvider interface {
+	// QueryTemporalTruth returns true-now and prior validity context for one selected fact.
+	QueryTemporalTruth(ctx context.Context, request TemporalTruthQueryRequest) (TemporalTruthResponse, error)
+}
+
 // AttentionEventWriter is the agent-owned directive-capture surface
 // implemented by S4a. The single-method shape mirrors the single
 // responsibility per ADR-010: persist an AttentionEventRecord derived from

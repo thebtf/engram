@@ -251,6 +251,291 @@ type ResumePacket struct {
 	Scopes       []StateScopeKind `json:"scopes,omitempty"`
 }
 
+// ExperienceSource names the implementation shape that produced an experience
+// response. CR-002 V1 starts with projection/materialization evidence and does
+// not assume dedicated ExperienceRecord storage.
+type ExperienceSource string
+
+// Canonical ExperienceSource values.
+const (
+	ExperienceSourceProjection   ExperienceSource = "projection"
+	ExperienceSourceMaterialized ExperienceSource = "materialized"
+	ExperienceSourceDedicated    ExperienceSource = "dedicated"
+)
+
+// ExperienceApplicabilityState is the V1 applicability gate verdict. Blocked
+// means the experience must not be silently reused for the current context.
+type ExperienceApplicabilityState string
+
+// Canonical ExperienceApplicabilityState values.
+const (
+	ExperienceApplicabilityApplies   ExperienceApplicabilityState = "applies"
+	ExperienceApplicabilityUncertain ExperienceApplicabilityState = "uncertain"
+	ExperienceApplicabilityBlocked   ExperienceApplicabilityState = "blocked"
+)
+
+// ExperienceArchiveTriggerClass identifies the finite trigger classes allowed
+// to resurface archived experience. Ordinary hot-path requests leave this list
+// empty so archive search cannot run implicitly.
+type ExperienceArchiveTriggerClass string
+
+// Canonical ExperienceArchiveTriggerClass values.
+const (
+	ExperienceArchiveTriggerWhyChanged         ExperienceArchiveTriggerClass = "why_changed"
+	ExperienceArchiveTriggerRegression         ExperienceArchiveTriggerClass = "regression"
+	ExperienceArchiveTriggerRollback           ExperienceArchiveTriggerClass = "rollback"
+	ExperienceArchiveTriggerOldDecisionRevisit ExperienceArchiveTriggerClass = "old_decision_revisit"
+	ExperienceArchiveTriggerSimilarFailure     ExperienceArchiveTriggerClass = "similar_prior_failure"
+)
+
+// ExperienceApplicability carries the gate state and rationale for a returned
+// experience. State is required; Rationale is required by contract even when the
+// caller later renders it differently.
+type ExperienceApplicability struct {
+	State     ExperienceApplicabilityState `json:"state"`
+	Rationale string                       `json:"rationale"`
+}
+
+// ExperienceAntiApplicability records a condition under which a prior lesson
+// should be downgraded or blocked for the current context.
+type ExperienceAntiApplicability struct {
+	Condition string `json:"condition"`
+	Rationale string `json:"rationale"`
+}
+
+// ExperienceSourceAttribution identifies the evidence used to produce an
+// experience response without forcing V1 to introduce dedicated storage.
+type ExperienceSourceAttribution struct {
+	Kind      string    `json:"kind"`
+	ID        string    `json:"id"`
+	Project   string    `json:"project,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+// ExperienceQueryRequest scopes an explicit experience/history read. It is
+// separate from hot-memory retrieval so causal lessons do not collapse into
+// ordinary memory ranking.
+type ExperienceQueryRequest struct {
+	Project               string                          `json:"project"`
+	Principal             string                          `json:"principal,omitempty"`
+	Domain                string                          `json:"domain,omitempty"`
+	Query                 string                          `json:"query"`
+	CurrentContext        string                          `json:"current_context,omitempty"`
+	ArchiveTriggerClasses []ExperienceArchiveTriggerClass `json:"archive_trigger_classes,omitempty"`
+	Limit                 int                             `json:"limit,omitempty"`
+}
+
+// ExperienceResponse is the bounded first-class payload for historical
+// experience retrieval. It carries lesson, applicability, anti-applicability,
+// and attribution before any caller may reuse the lesson.
+type ExperienceResponse struct {
+	Source                ExperienceSource                `json:"source"`
+	Lesson                string                          `json:"lesson"`
+	Applicability         ExperienceApplicability         `json:"applicability"`
+	AntiApplicability     []ExperienceAntiApplicability   `json:"anti_applicability"`
+	SourceAttribution     []ExperienceSourceAttribution   `json:"source_attribution"`
+	ArchiveTriggerClasses []ExperienceArchiveTriggerClass `json:"archive_trigger_classes"`
+}
+
+// ForgettingOperation names the explicit operation class for safe forgetting.
+// It deliberately avoids a boolean delete shape so callers must choose the
+// policy boundary and audit surface that match the memory-quality action.
+type ForgettingOperation string
+
+// Canonical ForgettingOperation values.
+const (
+	ForgettingOperationSuppress    ForgettingOperation = "suppress"
+	ForgettingOperationExpire      ForgettingOperation = "expire"
+	ForgettingOperationArchive     ForgettingOperation = "archive"
+	ForgettingOperationConsolidate ForgettingOperation = "consolidate"
+	ForgettingOperationDestroy     ForgettingOperation = "destroy"
+)
+
+// ForgettingReason is the classifier input signal that maps worked cases onto
+// the taxonomy. It is request intent, not permission to mutate storage.
+type ForgettingReason string
+
+// Canonical ForgettingReason values.
+const (
+	ForgettingReasonLowValue         ForgettingReason = "low_value"
+	ForgettingReasonRetentionExpired ForgettingReason = "retention_expired"
+	ForgettingReasonColdStorage      ForgettingReason = "cold_storage"
+	ForgettingReasonDuplicate        ForgettingReason = "duplicate"
+	ForgettingReasonOperatorDestroy  ForgettingReason = "operator_destroy"
+)
+
+// ForgettingDecisionState tells the caller whether a classified action is safe
+// to resolve automatically, must enter review, or is blocked.
+type ForgettingDecisionState string
+
+// Canonical ForgettingDecisionState values.
+const (
+	ForgettingDecisionAutoResolvable ForgettingDecisionState = "auto_resolvable"
+	ForgettingDecisionReviewRequired ForgettingDecisionState = "review_required"
+	ForgettingDecisionBlocked        ForgettingDecisionState = "blocked"
+)
+
+// ForgettingClassificationRequest carries enough context to classify a
+// forgetting/consolidation action without mutating the underlying memory rows.
+type ForgettingClassificationRequest struct {
+	Reason         ForgettingReason         `json:"reason"`
+	MemoryID       string                   `json:"memory_id"`
+	RelatedIDs     []string                 `json:"related_ids,omitempty"`
+	Evidence       []string                 `json:"evidence,omitempty"`
+	Project        string                   `json:"project,omitempty"`
+	PrivacyScope   string                   `json:"privacy_scope,omitempty"`
+	StructuralLoss ForgettingStructuralLoss `json:"structural_loss"`
+	Risky          bool                     `json:"risky,omitempty"`
+}
+
+// ForgettingAuditSurface names the evidence required before or after a
+// forgetting action. SnapshotStore and AuditStore align with existing
+// candidate/snapshot/audit seams; ExportPath is populated by closeout proof.
+type ForgettingAuditSurface struct {
+	Required      bool     `json:"required"`
+	SnapshotStore string   `json:"snapshot_store"`
+	AuditStore    string   `json:"audit_store"`
+	ExportPath    string   `json:"export_path"`
+	Evidence      []string `json:"evidence"`
+}
+
+// ForgettingReviewPolicy tells the caller whether a bounded operator packet is
+// required and which actions may be presented.
+type ForgettingReviewPolicy struct {
+	Required       bool                   `json:"required"`
+	PacketKind     string                 `json:"packet_kind"`
+	AllowedActions []string               `json:"allowed_actions"`
+	Packet         ForgettingReviewPacket `json:"packet"`
+}
+
+// ForgettingStructuralLoss records whether a consolidation/destructive path
+// would lose meaning, provenance, or scope. T003 wires this from fixtures; T002
+// initializes the field so the safety contract is already explicit.
+type ForgettingStructuralLoss struct {
+	UniqueMeaning bool   `json:"unique_meaning"`
+	Provenance    bool   `json:"provenance"`
+	Scope         bool   `json:"scope"`
+	Rationale     string `json:"rationale"`
+}
+
+// ForgettingPacketScope bounds the memory ids and scope carried by a review
+// packet so the operator reviews a compact exception, not raw row sludge.
+type ForgettingPacketScope struct {
+	Project      string   `json:"project,omitempty"`
+	PrivacyScope string   `json:"privacy_scope,omitempty"`
+	MemoryIDs    []string `json:"memory_ids"`
+}
+
+// ForgettingSnapshotPolicy mirrors the existing snapshot seam required before
+// risky forgetting actions execute.
+type ForgettingSnapshotPolicy struct {
+	Store     string `json:"store"`
+	Operation string `json:"operation"`
+	Status    string `json:"status"`
+	Required  bool   `json:"required"`
+}
+
+// ForgettingAuditPolicy mirrors the existing audit seam for risky forgetting
+// review packets.
+type ForgettingAuditPolicy struct {
+	Store  string `json:"store"`
+	Action string `json:"action"`
+	Status string `json:"status"`
+}
+
+// ForgettingReviewPacket is the bounded exception payload emitted for risky or
+// destructive forgetting/consolidation decisions.
+type ForgettingReviewPacket struct {
+	PacketID       string                   `json:"packet_id"`
+	Kind           string                   `json:"kind"`
+	Operation      ForgettingOperation      `json:"operation"`
+	State          ForgettingDecisionState  `json:"state"`
+	Rationale      string                   `json:"rationale"`
+	AllowedActions []string                 `json:"allowed_actions"`
+	Scope          ForgettingPacketScope    `json:"scope"`
+	Evidence       []string                 `json:"evidence"`
+	Snapshot       ForgettingSnapshotPolicy `json:"snapshot"`
+	Audit          ForgettingAuditPolicy    `json:"audit"`
+	StructuralLoss ForgettingStructuralLoss `json:"structural_loss"`
+}
+
+// ForgettingDecision is the bounded classifier output. It is a decision
+// envelope only: DataDestructionByDefault must remain false unless a later,
+// audited execution path explicitly performs an approved destructive action.
+type ForgettingDecision struct {
+	Operation                ForgettingOperation      `json:"operation"`
+	State                    ForgettingDecisionState  `json:"state"`
+	Rationale                string                   `json:"rationale"`
+	PolicyBoundary           string                   `json:"policy_boundary"`
+	Audit                    ForgettingAuditSurface   `json:"audit"`
+	Review                   ForgettingReviewPolicy   `json:"review"`
+	StructuralLoss           ForgettingStructuralLoss `json:"structural_loss"`
+	DataDestructionByDefault bool                     `json:"data_destruction_by_default"`
+}
+
+// TemporalTruthQueryState names the bounded read outcome for selected-fact
+// temporal truth. NotSelected is an explicit non-graph answer: the provider
+// refuses to infer truth for facts outside the selected scope.
+type TemporalTruthQueryState string
+
+// Canonical TemporalTruthQueryState values.
+const (
+	TemporalTruthFound       TemporalTruthQueryState = "found"
+	TemporalTruthNotSelected TemporalTruthQueryState = "not_selected"
+	TemporalTruthUnknown     TemporalTruthQueryState = "unknown"
+)
+
+// TemporalTruthScope identifies the selected high-value fact being queried.
+type TemporalTruthScope struct {
+	FactID    string `json:"fact_id"`
+	FactClass string `json:"fact_class,omitempty"`
+	Project   string `json:"project,omitempty"`
+	Selected  bool   `json:"selected"`
+	Rationale string `json:"rationale,omitempty"`
+}
+
+// TemporalTruthProvenance identifies the evidence behind a current or prior
+// truth answer.
+type TemporalTruthProvenance struct {
+	Kind       string    `json:"kind"`
+	ID         string    `json:"id"`
+	Project    string    `json:"project,omitempty"`
+	SessionID  string    `json:"session_id,omitempty"`
+	ObservedAt time.Time `json:"observed_at,omitempty"`
+}
+
+// TemporalTruthEntry is one value for a selected evolving fact, including its
+// validity window, invalidation rationale, and provenance.
+type TemporalTruthEntry struct {
+	Value                 string                    `json:"value"`
+	ValidFrom             time.Time                 `json:"valid_from"`
+	ValidUntil            *time.Time                `json:"valid_until"`
+	InvalidatedAt         *time.Time                `json:"invalidated_at"`
+	InvalidationRationale string                    `json:"invalidation_rationale"`
+	Provenance            []TemporalTruthProvenance `json:"provenance"`
+}
+
+// TemporalTruthQueryRequest scopes a selected-fact temporal truth read.
+type TemporalTruthQueryRequest struct {
+	FactID    string     `json:"fact_id"`
+	FactClass string     `json:"fact_class,omitempty"`
+	Project   string     `json:"project,omitempty"`
+	AsOf      *time.Time `json:"as_of,omitempty"`
+	Limit     int        `json:"limit,omitempty"`
+}
+
+// TemporalTruthResponse answers true-now and optionally true-then for one
+// selected evolving fact, with bounded history and provenance.
+type TemporalTruthResponse struct {
+	Scope           TemporalTruthScope        `json:"scope"`
+	State           TemporalTruthQueryState   `json:"state"`
+	TrueNow         TemporalTruthEntry        `json:"true_now"`
+	TrueThen        *TemporalTruthEntry       `json:"true_then"`
+	History         []TemporalTruthEntry      `json:"history"`
+	ProvenanceChain []TemporalTruthProvenance `json:"provenance_chain"`
+}
+
 // AttentionEventRecord is the durable form of an AttentionEvent persisted
 // by S4a through the AttentionEventWriter interface. Unlike AttentionEvent
 // (which describes a runtime signal), AttentionEventRecord captures a
