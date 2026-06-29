@@ -1,0 +1,26 @@
+{
+  "artifact": ".agent/specs/memory-product-layer/contracts/experience-storage-proof.md",
+  "decision": "projection_materialization_for_cr002_v1",
+  "rejected_for_cr002": "dedicated_experience_records_table_family",
+  "observed_at": "2026-06-29T12:20:53.5142864Z",
+  "evidence": {
+    "t001_contract": ".agent/specs/memory-product-layer/evidence/T001.tdd.json",
+    "t002_t003_tdd": ".agent/specs/memory-product-layer/evidence/T002-T003.tdd.json",
+    "g001": ".agent/specs/memory-product-layer/evidence/phase-4-gate.json",
+    "t004_t005_tdd": ".agent/specs/memory-product-layer/evidence/T004-T005.tdd.json",
+    "g002": ".agent/specs/memory-product-layer/evidence/phase-4-archive-gate.json"
+  },
+  "changed_file_review": {
+    "dedicated_experience_gorm_store_files": 0,
+    "dedicated_archive_gorm_store_files": 0,
+    "new_database_migrations_for_experience": 0
+  },
+  "next_slice_consequence": "add projection adapters first; add dedicated ExperienceRecord storage only after failing projection evidence",
+  "out_of_scope": [
+    "forgetting_consolidation",
+    "selective_temporal_truth",
+    "learned_applicability_model",
+    "broad_graph_projection",
+    "broad_operator_console_redesign"
+  ]
+}

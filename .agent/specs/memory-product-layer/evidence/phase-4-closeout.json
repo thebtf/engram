@@ -1,0 +1,41 @@
+{
+  "gate_id": "G003",
+  "observed_at": "2026-06-29T12:24:41.1620210Z",
+  "command": "go test ./...",
+  "status": "PASS",
+  "proof_artifact": ".agent/specs/memory-product-layer/contracts/experience-storage-proof.md",
+  "checks": {
+    "g001_passed": "PASS",
+    "g002_passed": "PASS",
+    "storage_proof_present": "PASS",
+    "experience_retrieval_real": "PASS",
+    "applicability_gate_real": "PASS",
+    "archive_trigger_path_real": "PASS",
+    "forgetting_consolidation_later": "PASS",
+    "temporal_truth_later": "PASS"
+  },
+  "exact_boundary": {
+    "closed_in_cr002": [
+      "first_class_experience_contract",
+      "bounded_experience_query_path",
+      "applicability_and_anti_applicability_gate",
+      "finite_archive_trigger_taxonomy",
+      "trigger_gated_archive_resurfacing",
+      "storage_shape_proof"
+    ],
+    "later_crs": [
+      "forgetting_consolidation",
+      "selective_temporal_truth",
+      "learned_applicability_model",
+      "broad_graph_projection",
+      "broad_operator_console_redesign",
+      "dedicated_experience_storage_only_after_projection_failure"
+    ]
+  },
+  "supporting_evidence": [
+    ".agent/specs/memory-product-layer/evidence/phase-4-gate.json",
+    ".agent/specs/memory-product-layer/evidence/phase-4-archive-gate.json",
+    ".agent/specs/memory-product-layer/evidence/experience-storage-proof.json",
+    ".agent/specs/memory-product-layer/evidence/phase-4-closeout-go-test-all.txt"
+  ]
+}

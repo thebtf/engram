@@ -1,0 +1,35 @@
+{
+  "task_ids": ["T004", "T005"],
+  "red": {
+    "observed_at": "2026-06-29T12:16:26.8477080Z",
+    "command": "go test ./internal/experience",
+    "test_file": "internal/experience/archive_test.go",
+    "failure_reason": "archive trigger taxonomy and archive resurfacing seam symbols were missing before production implementation",
+    "runner_stdout_excerpt": "undefined: AllowedArchiveTriggerClasses; undefined: NormalizeArchiveTriggerClasses; undefined: NewServiceWithArchive; undefined: MaxArchiveResurfacingLimit"
+  },
+  "green": {
+    "observed_at": "2026-06-29T12:19:27.8330473Z",
+    "command": "go test ./internal/experience",
+    "status": "PASS",
+    "runner_stdout_excerpt": "ok github.com/thebtf/engram/internal/experience"
+  },
+  "prove_it": {
+    "observed_at": "2026-06-29T12:19:27.8330473Z",
+    "mutation": "temporary removal of len(triggers) > 0 archive gate before archive source call",
+    "command": "go test ./internal/experience",
+    "failed_tests": 1,
+    "runner_stdout_excerpt": "TestServiceQueryExperienceSkipsArchiveWithoutTrigger expected archive calls 0 actual 1",
+    "restored_green_command": "go test ./internal/experience"
+  },
+  "coverage": {
+    "observed_at": "2026-06-29T12:19:27.8330473Z",
+    "command": "go test -cover ./internal/experience",
+    "percent": 89.0,
+    "status": "PASS"
+  },
+  "focused_contract": {
+    "observed_at": "2026-06-29T12:19:27.8330473Z",
+    "command": "go test ./internal/experience ./pkg/cognitive",
+    "status": "PASS"
+  }
+}

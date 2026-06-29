@@ -1,0 +1,9 @@
+{
+  "task_ids": ["T002", "T003"],
+  "observed_at": "2026-06-29T12:07:17.7069824Z",
+  "command": "go test ./internal/experience",
+  "status": "RED",
+  "test_file": "internal/experience/service_test.go",
+  "failure_reason": "experience service implementation symbols are missing before production code exists",
+  "runner_stdout_excerpt": "internal\\experience\\service_test.go:16:41: undefined: Service; internal\\experience\\service_test.go:26:13: undefined: NewService; internal\\experience\\service_test.go:46:56: undefined: MaxQueryLimit"
+}

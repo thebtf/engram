@@ -1,0 +1,10 @@
+{
+  "task_id": "T001",
+  "observed_at": "2026-06-29T14:53:13.7929751+03:00",
+  "command": "go test ./pkg/cognitive",
+  "status": "RED",
+  "test_file": "pkg/cognitive/types_test.go; pkg/cognitive/interfaces_test.go",
+  "test_name": "TestTypesExported; TestExperienceApplicabilityStateEnum; TestExperienceResponseContract_RequiredFieldsBinaryDefined; TestInterfaceCount_Exactly8; TestExperienceProvider_OneMethod",
+  "failure_reason": "experience contract symbols are not defined yet",
+  "runner_stdout_excerpt": "undefined: ExperienceProvider; undefined: ExperienceQueryRequest; undefined: ExperienceResponse; undefined: ExperienceApplicabilityApplies"
+}

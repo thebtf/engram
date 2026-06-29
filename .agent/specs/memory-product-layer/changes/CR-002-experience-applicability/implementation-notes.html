@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ENG-MPL-1 CR-002 Implementation Notes</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --panel: #ffffff;
+      --ink: #1d1f23;
+      --muted: #5d6470;
+      --line: #d9ddd7;
+      --aligned: #0f6b4f;
+      --amend: #9a4f00;
+      --deferred: #51627a;
+      --blocked: #9b2226;
+    }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, sans-serif; }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 48px; }
+    header, section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; margin: 0 0 16px; }
+    h1, h2 { margin: 0 0 12px; line-height: 1.2; }
+    h1 { font-size: 28px; }
+    h2 { font-size: 18px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-top: 1px solid var(--line); padding: 10px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .meta { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); color: var(--muted); }
+    .status { font-weight: 700; white-space: nowrap; }
+    .aligned { color: var(--aligned); }
+    .needs-amend { color: var(--amend); }
+    .deferred { color: var(--deferred); }
+    .blocked { color: var(--blocked); }
+    code { background: #eef0ed; border-radius: 4px; padding: 1px 5px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>ENG-MPL-1 CR-002 Implementation Notes</h1>
+      <div class="meta">
+        <div><strong>Feature</strong><br>ENG-MPL-1 Agent Knowledge and Experience Layer</div>
+        <div><strong>CR</strong><br>CR-002-experience-applicability</div>
+        <div><strong>Updated</strong><br>2026-06-29</div>
+        <div><strong>Overall</strong><br><span class="status aligned">Aligned</span></div>
+      </div>
+    </header>
+
+    <section>
+      <h2>Decisions</h2>
+      <table>
+        <thead><tr><th>Status</th><th>Decision</th><th>Why</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T001 defines public experience request/response contract and provider interface only.</td>
+            <td>CR-002 separates contract from retrieval/storage. T001 AC requires the first-class response envelope; T002-T006 own query behavior, archive resurfacing, and storage-shape proof.</td>
+            <td><code>tasks.md</code> lines 19-26; <code>spec.md</code> FR-5/FR-7/FR-8.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T002/T003 use a projection-backed internal experience service as the smallest live seam.</td>
+            <td>CR-002 requires separate experience retrieval and applicability semantics before storage proof. No dedicated table family is justified yet.</td>
+            <td><code>architecture.md</code> ADR-003; <code>tasks.md</code> T002/T003 data evidence.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T004/T005 keep archive resurfacing trigger-gated inside the experience service.</td>
+            <td>ADR-004 says always-on archive search pollutes the hot path; CR-002 needs finite triggers and bounded packets before storage proof.</td>
+            <td><code>architecture.md</code> ADR-004; <code>tasks.md</code> T004/T005 confidence gates.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T006 keeps CR-002 V1 on projection/materialization.</td>
+            <td>T002-T005 proved the required behavior without dedicated experience tables; ADR-003 requires concrete failing evidence before adding them.</td>
+            <td><code>experience-storage-proof.md</code>; G001/G002 evidence.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Spec Gaps</h2>
+      <table>
+        <thead><tr><th>Status</th><th>Gap</th><th>Action</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>No T001-blocking gap found.</td>
+            <td>Proceed with contract/envelope and leave persistence choice to T006 storage proof.</td>
+            <td><code>tasks.md</code> T001 data evidence says no dedicated storage assumption yet.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T002/T003 log path collision found.</td>
+            <td><code>.agent/tasks/T002</code> and <code>T003</code> previously held CR-001 evidence; they were rewritten for the active CR-002 tasks to avoid mixed proof.</td>
+            <td>Implementation logs now quote CR-002 AC lines 38 and 47.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Alignment Checks</h2>
+      <table>
+        <thead><tr><th>Status</th><th>Item</th><th>Current Meaning</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>Experience</td>
+            <td>Contextualized historical lesson with situation, outcome, lesson, applicability, and anti-applicability; not a hot memory row.</td>
+            <td><code>design.md</code> section 3.2; <code>spec.md</code> FR-7/FR-8.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>Applicability gate</td>
+            <td>Explicit V1 state: <code>applies</code>, <code>uncertain</code>, or <code>blocked</code>, with rationale.</td>
+            <td><code>tasks.md</code> T001/T003 AC.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Verification Evidence</h2>
+      <table>
+        <thead><tr><th>Status</th><th>Check</th><th>Result</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="status deferred">Deferred</td>
+            <td>T001 RED/GREEN</td>
+            <td>PASS</td>
+            <td>RED <code>go test ./pkg/cognitive</code> failed on undefined experience contract symbols; GREEN same command passed; prove-it enum mutation failed the targeted test; coverage <code>go test -cover ./pkg/cognitive</code> reported 94.2%.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T002/T003 RED/GREEN</td>
+            <td>PASS</td>
+            <td>RED <code>go test ./internal/experience</code> failed on missing service symbols; GREEN same command passed; prove-it blocked-to-uncertain mutation failed the targeted test; coverage <code>go test -cover ./internal/experience</code> reported 87.4%.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T002/T003 focused contract</td>
+            <td>PASS</td>
+            <td><code>go test ./internal/experience ./pkg/cognitive</code> passed, proving the new service and public experience contract compile together.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>G001 phase-4 gate</td>
+            <td>PASS</td>
+            <td><code>go test ./...</code> passed; gate JSON and raw output saved under <code>.agent/specs/memory-product-layer/evidence/</code>.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T004/T005 RED/GREEN</td>
+            <td>PASS</td>
+            <td>RED <code>go test ./internal/experience</code> failed on missing archive symbols; GREEN same command passed; prove-it removed the trigger gate and failed the ordinary-path archive-call test; coverage reported 89.0%.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>G002 archive-trigger gate</td>
+            <td>PASS</td>
+            <td><code>go test ./...</code> passed; archive gate JSON and raw output saved under <code>.agent/specs/memory-product-layer/evidence/</code>.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>T006 storage-shape proof</td>
+            <td>PASS</td>
+            <td><code>experience-storage-proof.md</code> and sidecar JSON choose projection/materialization for CR-002 V1 and defer dedicated tables until a future failing projection case exists.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>G003 CR-002 closeout</td>
+            <td>PASS</td>
+            <td><code>go test ./...</code> passed; closeout JSON names the closed CR-002 surface and later-CR boundary.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

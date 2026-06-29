@@ -1,0 +1,34 @@
+{
+  "task_id": "T001",
+  "stack": "GO",
+  "red": {
+    "observed_at": "2026-06-29T14:53:13.7929751+03:00",
+    "command": "go test ./pkg/cognitive",
+    "test_file": "pkg/cognitive/types_test.go; pkg/cognitive/interfaces_test.go",
+    "test_name": "TestTypesExported; TestExperienceApplicabilityStateEnum; TestExperienceResponseContract_RequiredFieldsBinaryDefined; TestInterfaceCount_Exactly8; TestExperienceProvider_OneMethod",
+    "failure_reason": "experience contract symbols were not defined yet",
+    "runner_stdout_excerpt": "undefined: ExperienceProvider; undefined: ExperienceQueryRequest; undefined: ExperienceResponse; undefined: ExperienceApplicabilityApplies"
+  },
+  "green": {
+    "observed_at": "2026-06-29T14:57:00+03:00",
+    "command": "go test ./pkg/cognitive",
+    "passed_tests": 1,
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "ok github.com/thebtf/engram/pkg/cognitive 0.289s"
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "GREEN implementation is contract-only and already idiomatic after gofmt"
+  },
+  "prove_it": {
+    "substituted_files": ["pkg/cognitive/types.go"],
+    "failed_tests": 1,
+    "runner_stdout_excerpt": "FAIL: TestExperienceApplicabilityStateEnum: ExperienceApplicabilityBlocked = \"blocked_stub\", want blocked"
+  },
+  "coverage": {
+    "command": "go test -cover ./pkg/cognitive",
+    "percent": 94.2,
+    "threshold": 80,
+    "status": "PASS"
+  }
+}
