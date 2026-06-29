@@ -121,6 +121,44 @@ func TestServiceQueryExperienceSetsApplicabilityStates(t *testing.T) {
 	})
 }
 
+func TestServiceQueryExperienceUsesExactTermsForRelevance(t *testing.T) {
+	service := NewService([]cognitive.ExperienceResponse{
+		fixtureExperience("candidate-1", "Cooldown-only rollback guidance belongs elsewhere.", "engram", "s1"),
+	})
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "cool",
+		CurrentContext: "cool triage request",
+		Limit:          1,
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, results)
+}
+
+func TestServiceQueryExperienceUsesExactTermsForAntiApplicability(t *testing.T) {
+	candidate := fixtureExperience("candidate-1", "Retry harness guidance for Windows shell execution.", "engram", "s1")
+	candidate.AntiApplicability = []cognitive.ExperienceAntiApplicability{
+		{
+			Condition: "win",
+			Rationale: "A bare win token should not match Windows by substring.",
+		},
+	}
+	service := NewService([]cognitive.ExperienceResponse{candidate})
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "retry harness",
+		CurrentContext: "Windows shell execution path",
+		Limit:          1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, cognitive.ExperienceApplicabilityApplies, results[0].Applicability.State)
+}
+
 func fixtureExperience(id, lesson, project, sessionID string) cognitive.ExperienceResponse {
 	return cognitive.ExperienceResponse{
 		Source: cognitive.ExperienceSourceProjection,

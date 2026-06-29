@@ -220,17 +220,17 @@ func relevanceScore(terms []string, candidate cognitive.ExperienceResponse) int 
 	if len(terms) == 0 {
 		return 1
 	}
-	text := candidateSearchText(candidate)
+	candidateTerms := candidateSearchTermSet(candidate)
 	score := 0
 	for _, term := range terms {
-		if strings.Contains(text, term) {
+		if _, ok := candidateTerms[term]; ok {
 			score++
 		}
 	}
 	return score
 }
 
-func candidateSearchText(candidate cognitive.ExperienceResponse) string {
+func candidateSearchTermSet(candidate cognitive.ExperienceResponse) map[string]struct{} {
 	parts := []string{
 		candidate.Lesson,
 		candidate.Applicability.Rationale,
@@ -246,7 +246,7 @@ func candidateSearchText(candidate cognitive.ExperienceResponse) string {
 	for _, trigger := range candidate.ArchiveTriggerClasses {
 		parts = append(parts, string(trigger))
 	}
-	return normalizeText(strings.Join(parts, " "))
+	return termSet(uniqueTerms(strings.Join(parts, " ")))
 }
 
 func classifyApplicability(request cognitive.ExperienceQueryRequest, candidate cognitive.ExperienceResponse, score int) cognitive.ExperienceApplicability {
@@ -284,20 +284,13 @@ func classifyApplicability(request cognitive.ExperienceQueryRequest, candidate c
 }
 
 func antiApplicabilityMatches(condition string, request cognitive.ExperienceQueryRequest) bool {
-	condition = normalizeText(condition)
-	if condition == "" {
+	conditionTerms := uniqueTerms(condition)
+	if len(conditionTerms) == 0 {
 		return false
 	}
-	context := normalizeText(request.Query + " " + request.CurrentContext)
-	if strings.Contains(context, condition) {
-		return true
-	}
-	terms := uniqueTerms(condition)
-	if len(terms) < 2 {
-		return strings.Contains(context, condition)
-	}
-	for _, term := range terms {
-		if !strings.Contains(context, term) {
+	contextTerms := termSet(uniqueTerms(request.Query + " " + request.CurrentContext))
+	for _, term := range conditionTerms {
+		if _, ok := contextTerms[term]; !ok {
 			return false
 		}
 	}
@@ -340,6 +333,14 @@ func uniqueTerms(text string) []string {
 	return terms
 }
 
+func termSet(terms []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(terms))
+	for _, term := range terms {
+		set[term] = struct{}{}
+	}
+	return set
+}
+
 func stopWord(term string) bool {
 	switch term {
 	case "and", "the", "for", "this", "that", "with", "from", "into", "must", "not", "may", "can", "was", "were", "are":
@@ -347,10 +348,6 @@ func stopWord(term string) bool {
 	default:
 		return false
 	}
-}
-
-func normalizeText(text string) string {
-	return strings.Join(uniqueTerms(text), " ")
 }
 
 func cloneResponses(items []cognitive.ExperienceResponse) []cognitive.ExperienceResponse {

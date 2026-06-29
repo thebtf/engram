@@ -1,0 +1,37 @@
+{
+  "task": "PR-381 exact normalized-term matching repair",
+  "scope": [
+    "internal/experience/service.go",
+    "internal/experience/service_test.go"
+  ],
+  "red": {
+    "status": "passed",
+    "command": "go test ./internal/experience -run 'TestServiceQueryExperienceUsesExactTermsFor(Relevance|AntiApplicability)' -count=1",
+    "tests": [
+      "TestServiceQueryExperienceUsesExactTermsForRelevance",
+      "TestServiceQueryExperienceUsesExactTermsForAntiApplicability"
+    ],
+    "observed_failures": [
+      "cool returned a cooldown candidate under substring/prefix matching",
+      "win blocked a request whose context term was windows"
+    ],
+    "note": "Initial relevance fixture also shared an incidental term and was tightened before final GREEN/Prove-It."
+  },
+  "green": {
+    "status": "passed",
+    "commands": [
+      "go test ./internal/experience -run 'TestServiceQueryExperienceUsesExactTermsFor(Relevance|AntiApplicability)' -count=1",
+      "go test ./internal/experience ./pkg/cognitive",
+      "go test ./..."
+    ]
+  },
+  "prove_it": {
+    "status": "passed",
+    "method": "Temporarily reintroduced prefix/substring behavior in the exact-match paths; focused tests failed, then exact implementation was restored.",
+    "command": "go test ./internal/experience -run 'TestServiceQueryExperienceUsesExactTermsFor(Relevance|AntiApplicability)' -count=1",
+    "observed_failures": [
+      "cool matched cooldown-only candidate",
+      "win blocked windows context"
+    ]
+  }
+}
