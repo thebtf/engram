@@ -1,0 +1,14 @@
+{
+  "task_ids": ["T001", "T002"],
+  "observed_at": "2026-06-29T22:37:28.9221522+03:00",
+  "stack": "GO",
+  "command": "go test ./pkg/cognitive ./internal/temporaltruth",
+  "status": "RED",
+  "test_files": [
+    "pkg/cognitive/types_test.go",
+    "pkg/cognitive/interfaces_test.go",
+    "internal/temporaltruth/service_test.go"
+  ],
+  "failure_reason": "Temporal truth contract and selected-fact query service are not implemented yet.",
+  "runner_stdout_excerpt": "undefined: TemporalTruthProvider; undefined: TemporalTruthQueryState; undefined: NewService; undefined: Record; undefined: cognitive.TemporalTruthProvenance"
+}

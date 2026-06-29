@@ -1,0 +1,47 @@
+{
+  "task_ids": ["T001", "T002"],
+  "stack": "GO",
+  "red": {
+    "observed_at": "2026-06-29T22:37:28.9221522+03:00",
+    "command": "go test ./pkg/cognitive ./internal/temporaltruth",
+    "test_files": [
+      "pkg/cognitive/types_test.go",
+      "pkg/cognitive/interfaces_test.go",
+      "internal/temporaltruth/service_test.go"
+    ],
+    "failure_reason": "Temporal truth contract and selected-fact query service were undefined before production-code edits.",
+    "runner_stdout_excerpt": "undefined: TemporalTruthProvider; undefined: TemporalTruthQueryState; undefined: NewService; undefined: Record"
+  },
+  "green": {
+    "observed_at": "2026-06-29T22:40:22.7080459+03:00",
+    "command": "go test ./pkg/cognitive ./internal/temporaltruth",
+    "passed_packages": [
+      "github.com/thebtf/engram/pkg/cognitive",
+      "github.com/thebtf/engram/internal/temporaltruth"
+    ],
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "ok github.com/thebtf/engram/pkg/cognitive; ok github.com/thebtf/engram/internal/temporaltruth"
+  },
+  "refactor": {
+    "applied": true,
+    "diff_summary": "Centralized selected-record filtering, current/then entry shaping, history bounding, and record cloning helpers."
+  },
+  "prove_it": {
+    "command": "go test ./pkg/cognitive ./internal/temporaltruth",
+    "substituted_files": [
+      "pkg/cognitive/types.go",
+      "internal/temporaltruth/service.go"
+    ],
+    "failed_tests": 2,
+    "runner_stdout_excerpt": "TemporalTruthQueryState test failed when not_selected became graph_search; QueryUnselectedFactStaysNarrow failed when selected fact filter was disabled."
+  },
+  "coverage": {
+    "command": "go test -cover ./pkg/cognitive ./internal/temporaltruth",
+    "packages": {
+      "github.com/thebtf/engram/pkg/cognitive": 94.2,
+      "github.com/thebtf/engram/internal/temporaltruth": 82.7
+    },
+    "threshold": 80,
+    "status": "PASS"
+  }
+}

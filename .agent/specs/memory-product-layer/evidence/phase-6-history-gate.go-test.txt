@@ -1,0 +1,78 @@
+go test ./...
+
+?   	github.com/thebtf/engram/apps/operator-console/node_modules/flatted/golang/pkg/flatted	[no test files]
+ok  	github.com/thebtf/engram/cmd/engram	(cached)
+?   	github.com/thebtf/engram/cmd/engram-import	[no test files]
+?   	github.com/thebtf/engram/cmd/engram-server	[no test files]
+?   	github.com/thebtf/engram/docs	[no test files]
+ok  	github.com/thebtf/engram/internal/auth	(cached)
+ok  	github.com/thebtf/engram/internal/bulkops	(cached)
+ok  	github.com/thebtf/engram/internal/chunking	(cached)
+ok  	github.com/thebtf/engram/internal/chunking/golang	(cached)
+ok  	github.com/thebtf/engram/internal/chunking/markdown	(cached)
+ok  	github.com/thebtf/engram/internal/codeindex	(cached)
+ok  	github.com/thebtf/engram/internal/cognitive/core	0.991s
+ok  	github.com/thebtf/engram/internal/collections	(cached)
+ok  	github.com/thebtf/engram/internal/config	(cached)
+ok  	github.com/thebtf/engram/internal/control	(cached)
+ok  	github.com/thebtf/engram/internal/crypto	(cached)
+ok  	github.com/thebtf/engram/internal/crystallization	(cached)
+ok  	github.com/thebtf/engram/internal/db/gorm	1.164s
+ok  	github.com/thebtf/engram/internal/db/gorm/migrationmeta	(cached)
+ok  	github.com/thebtf/engram/internal/embedding	(cached)
+ok  	github.com/thebtf/engram/internal/experience	(cached)
+ok  	github.com/thebtf/engram/internal/feedback	(cached)
+ok  	github.com/thebtf/engram/internal/forgetting	(cached)
+ok  	github.com/thebtf/engram/internal/governance	(cached)
+ok  	github.com/thebtf/engram/internal/graph	(cached)
+ok  	github.com/thebtf/engram/internal/grpcserver	(cached)
+ok  	github.com/thebtf/engram/internal/handlers/codeintel	(cached)
+ok  	github.com/thebtf/engram/internal/handlers/engramcore	(cached)
+ok  	github.com/thebtf/engram/internal/handlers/loom	(cached)
+ok  	github.com/thebtf/engram/internal/handlers/serverevents	(cached)
+ok  	github.com/thebtf/engram/internal/ingestion	(cached)
+ok  	github.com/thebtf/engram/internal/injection	(cached)
+?   	github.com/thebtf/engram/internal/instincts	[no test files]
+ok  	github.com/thebtf/engram/internal/lifecycle	(cached)
+ok  	github.com/thebtf/engram/internal/llm	(cached)
+ok  	github.com/thebtf/engram/internal/logbuf	(cached)
+ok  	github.com/thebtf/engram/internal/mcp	(cached)
+ok  	github.com/thebtf/engram/internal/module	(cached)
+ok  	github.com/thebtf/engram/internal/module/dispatcher	(cached)
+ok  	github.com/thebtf/engram/internal/module/lifecycle	(cached)
+ok  	github.com/thebtf/engram/internal/module/obs	(cached)
+ok  	github.com/thebtf/engram/internal/module/registry	(cached)
+ok  	github.com/thebtf/engram/internal/moduletest	(cached)
+ok  	github.com/thebtf/engram/internal/principalmemory	(cached)
+ok  	github.com/thebtf/engram/internal/privacy	(cached)
+ok  	github.com/thebtf/engram/internal/proxy	(cached)
+ok  	github.com/thebtf/engram/internal/redaction	(cached)
+ok  	github.com/thebtf/engram/internal/reranking	(cached)
+ok  	github.com/thebtf/engram/internal/retrieval	(cached)
+ok  	github.com/thebtf/engram/internal/reviewpacket	(cached)
+ok  	github.com/thebtf/engram/internal/ruleinjection	(cached)
+ok  	github.com/thebtf/engram/internal/scope	(cached)
+ok  	github.com/thebtf/engram/internal/sessions	(cached)
+ok  	github.com/thebtf/engram/internal/staleness	(cached)
+ok  	github.com/thebtf/engram/internal/stateplane	(cached)
+?   	github.com/thebtf/engram/internal/telemetry	[no test files]
+ok  	github.com/thebtf/engram/internal/temporaltruth	(cached)
+?   	github.com/thebtf/engram/internal/update	[no test files]
+ok  	github.com/thebtf/engram/internal/version	(cached)
+ok  	github.com/thebtf/engram/internal/watcher	(cached)
+ok  	github.com/thebtf/engram/internal/worker	(cached)
+ok  	github.com/thebtf/engram/internal/worker/projectevents	(cached)
+ok  	github.com/thebtf/engram/internal/worker/reaper	(cached)
+ok  	github.com/thebtf/engram/internal/worker/sdk	(cached)
+ok  	github.com/thebtf/engram/internal/worker/session	(cached)
+ok  	github.com/thebtf/engram/internal/worker/sse	(cached)
+ok  	github.com/thebtf/engram/internal/writegate	(cached)
+ok  	github.com/thebtf/engram/internal/writelint	(cached)
+ok  	github.com/thebtf/engram/pkg/cognitive	(cached)
+ok  	github.com/thebtf/engram/pkg/models	(cached)
+ok  	github.com/thebtf/engram/pkg/similarity	(cached)
+?   	github.com/thebtf/engram/pkg/strutil	[no test files]
+?   	github.com/thebtf/engram/proto/engram/v1	[no test files]
+ok  	github.com/thebtf/engram/tests/smoke	(cached)
+?   	github.com/thebtf/engram/tools/gen-data-model	[no test files]
+?   	github.com/thebtf/engram/tools/gen-data-model/datamodel	[no test files]

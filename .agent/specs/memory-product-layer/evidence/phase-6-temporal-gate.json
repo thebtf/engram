@@ -1,0 +1,20 @@
+{
+  "gate": "G001",
+  "observed_at": "2026-06-29T22:41:40.2070738+03:00",
+  "command": "go test ./...",
+  "status": "PASS",
+  "raw_output": ".agent/specs/memory-product-layer/evidence/phase-6-temporal-gate.go-test.txt",
+  "checks": {
+    "contract_tests_green": "PASS",
+    "temporal_query_tests_green": "PASS",
+    "temporal_truth_explicit": "PASS",
+    "provenance_first": "PASS",
+    "bounded_selected_scope": "PASS",
+    "no_graph_expansion_started": "PASS"
+  },
+  "evidence": [
+    ".agent/specs/memory-product-layer/contracts/temporal-truth.md",
+    ".agent/specs/memory-product-layer/evidence/T001-T002-temporal.red.json",
+    ".agent/specs/memory-product-layer/evidence/T001-T002-temporal.tdd.json"
+  ]
+}
