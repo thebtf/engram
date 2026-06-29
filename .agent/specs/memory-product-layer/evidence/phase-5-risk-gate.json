@@ -1,0 +1,19 @@
+{
+  "gate": "G002",
+  "observed_at": "2026-06-29T16:40:42.2046296+03:00",
+  "command": "go test ./...",
+  "status": "PASS",
+  "raw_output": ".agent/specs/memory-product-layer/evidence/phase-5-risk-gate.go-test.txt",
+  "checks": {
+    "structural_loss_tests_green": "PASS",
+    "risky_packet_tests_green": "PASS",
+    "risky_paths_escalate_with_rationale": "PASS",
+    "safe_low_risk_auto_resolvable": "PASS",
+    "no_temporal_truth_slice_started": "PASS"
+  },
+  "evidence": [
+    ".agent/specs/memory-product-layer/evidence/T003-T004.red.json",
+    ".agent/specs/memory-product-layer/evidence/T003-T004.tdd.json",
+    ".agent/specs/memory-product-layer/contracts/forgetting-taxonomy.md"
+  ]
+}

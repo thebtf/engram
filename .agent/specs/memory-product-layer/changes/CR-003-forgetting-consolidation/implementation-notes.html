@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ENG-MPL-1 CR-003 Implementation Notes</title>
+</head>
+<body>
+  <h1>ENG-MPL-1 / CR-003 Forgetting Consolidation</h1>
+  <section>
+    <h2>Running Decisions</h2>
+    <article id="t001-taxonomy-contract">
+      <h3>T001 taxonomy contract</h3>
+      <p><strong>Decision:</strong> expose suppress, expire, archive, consolidate, and destroy as first-class public contract values in the cognitive package, with documentation that names semantics, policy boundaries, and audit surface.</p>
+      <p><strong>Load-bearing claim:</strong> the taxonomy is not a disguised boolean delete path. Evidence will be contract tests, Prove-It failure against a broken contract, and the documentation contract.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+    <article id="t002-classification-service">
+      <h3>T002 classification service</h3>
+      <p><strong>Decision:</strong> implement a bounded classification service that returns decisions and audit/review metadata without mutating storage, using candidate/snapshot/audit language before adding packet routing.</p>
+      <p><strong>Load-bearing claim:</strong> low-value, duplicate, stale, archive, and risky cases classify into five operations without data destruction by default. Evidence will be classification tests and G001 suite output.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+    <article id="t003-structural-loss">
+      <h3>T003 structural-loss guard</h3>
+      <p><strong>Decision:</strong> represent structural loss as unique meaning, provenance, and scope dimensions in the classifier request/decision and force consolidation to review or destructive removal to block when loss is present.</p>
+      <p><strong>Load-bearing claim:</strong> risky merge/destruction cannot silently collapse meaning. Evidence is structural-loss fixtures plus Prove-It failure when the guard is disabled.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+    <article id="t004-risk-packets">
+      <h3>T004 risky review packets</h3>
+      <p><strong>Decision:</strong> emit bounded <code>forgetting_review</code> packets only for review-required or blocked decisions; safe suppress/expire/archive decisions remain auto-resolvable with audit.</p>
+      <p><strong>Load-bearing claim:</strong> packets reuse snapshot/audit seams and stay bounded. Evidence is packet tests asserting capped evidence, memory ids, and <code>bulk_op_snapshots</code>/<code>audit_log</code>.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+    <article id="t005-audit-export-proof">
+      <h3>T005 audit/export proof</h3>
+      <p><strong>Decision:</strong> close CR-003 with a proof artifact that names evidence, audit/export surfaces, blocked execution paths, and the temporal-truth boundary.</p>
+      <p><strong>Load-bearing claim:</strong> high-risk forgetting paths are reviewable and exportable as evidence artifacts, while destructive execution remains blocked.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+  </section>
+  <section>
+    <h2>Verification Evidence</h2>
+    <p>T001/T002 RED evidence: <code>.agent/specs/memory-product-layer/evidence/T001-T002.red.json</code>.</p>
+    <p>T001/T002 TDD evidence: <code>.agent/specs/memory-product-layer/evidence/T001-T002.tdd.json</code>.</p>
+    <p>G001 gate evidence: <code>.agent/specs/memory-product-layer/evidence/phase-5-taxonomy-gate.json</code>; raw output sidecar: <code>.agent/specs/memory-product-layer/evidence/phase-5-taxonomy-gate.go-test.txt</code>.</p>
+    <p>T003/T004 RED evidence: <code>.agent/specs/memory-product-layer/evidence/T003-T004.red.json</code>.</p>
+    <p>T003/T004 TDD evidence: <code>.agent/specs/memory-product-layer/evidence/T003-T004.tdd.json</code>.</p>
+    <p>G002 gate evidence: <code>.agent/specs/memory-product-layer/evidence/phase-5-risk-gate.json</code>; raw output sidecar: <code>.agent/specs/memory-product-layer/evidence/phase-5-risk-gate.go-test.txt</code>.</p>
+    <p>T005 proof artifact: <code>.agent/specs/memory-product-layer/contracts/forgetting-audit-proof.md</code>.</p>
+    <p>G003 closeout evidence: <code>.agent/specs/memory-product-layer/evidence/phase-5-closeout.json</code>; raw output sidecar: <code>.agent/specs/memory-product-layer/evidence/phase-5-closeout.go-test.txt</code>.</p>
+  </section>
+</body>
+</html>

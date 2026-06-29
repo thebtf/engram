@@ -1,0 +1,12 @@
+{
+  "task_ids": ["T003", "T004"],
+  "observed_at": "2026-06-29T16:36:35.9357375+03:00",
+  "stack": "GO",
+  "command": "go test ./internal/forgetting",
+  "status": "RED",
+  "test_files": [
+    "internal/forgetting/service_test.go"
+  ],
+  "failure_reason": "Structural-loss input and review packet payload were not implemented yet.",
+  "runner_stdout_excerpt": "unknown field StructuralLoss in struct literal of type cognitive.ForgettingClassificationRequest; decision.Review.Packet undefined"
+}

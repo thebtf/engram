@@ -1,0 +1,47 @@
+{
+  "task_ids": ["T001", "T002"],
+  "stack": "GO",
+  "red": {
+    "observed_at": "2026-06-29T16:27:33.7649270+03:00",
+    "command": "go test ./pkg/cognitive ./internal/forgetting",
+    "test_files": [
+      "pkg/cognitive/types_test.go",
+      "pkg/cognitive/interfaces_test.go",
+      "internal/forgetting/service_test.go"
+    ],
+    "failure_reason": "Forgetting taxonomy and classifier symbols were undefined before production-code edits.",
+    "runner_stdout_excerpt": "undefined: ForgettingClassifier; undefined: ForgettingOperation; undefined: NewClassifier"
+  },
+  "green": {
+    "observed_at": "2026-06-29T16:30:45.1766437+03:00",
+    "command": "go test ./pkg/cognitive ./internal/forgetting",
+    "passed_packages": [
+      "github.com/thebtf/engram/pkg/cognitive",
+      "github.com/thebtf/engram/internal/forgetting"
+    ],
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "ok github.com/thebtf/engram/pkg/cognitive; ok github.com/thebtf/engram/internal/forgetting"
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "GREEN implementation was already minimal and idiomatic after gofmt."
+  },
+  "prove_it": {
+    "command": "go test ./pkg/cognitive ./internal/forgetting",
+    "substituted_files": [
+      "pkg/cognitive/types.go",
+      "internal/forgetting/service.go"
+    ],
+    "failed_tests": 2,
+    "runner_stdout_excerpt": "TestForgettingOperationTaxonomy_ExplicitFiveClasses failed on destroy->delete; TestClassifier_ClassifiesFiveOperationsWithoutDestroyingByDefault failed when audit.required=false"
+  },
+  "coverage": {
+    "command": "go test -cover ./pkg/cognitive ./internal/forgetting",
+    "packages": {
+      "github.com/thebtf/engram/pkg/cognitive": 94.2,
+      "github.com/thebtf/engram/internal/forgetting": 90.9
+    },
+    "threshold": 80,
+    "status": "PASS"
+  }
+}
