@@ -42,7 +42,7 @@
       <div class="meta">
         <div><strong>Feature</strong><br>ENG-MPL-1 Agent Knowledge and Experience Layer</div>
         <div><strong>CR</strong><br>CR-001-initial-scope</div>
-        <div><strong>Updated</strong><br>2026-06-28</div>
+        <div><strong>Updated</strong><br>2026-06-29</div>
         <div><strong>Overall</strong><br><span class="status aligned">Aligned</span></div>
       </div>
     </header>
@@ -101,6 +101,12 @@
             <td>T007 extends <code>get_memory_brief</code> through the live T006 principal query service.</td>
             <td>The existing brief helper stays unchanged for unscoped project briefs. Scoped calls branch into the principal-memory query service, preserving privacy/domain/audit semantics and returning explicit scope/freshness evidence.</td>
             <td><code>internal/mcp/tools_brief.go</code>; <code>internal/mcp/tools_brief_test.go</code>; <code>internal/mcp/server.go</code>; <code>.agent/tasks/T007/implementation-log.md</code>.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>CR-001 fallback-truth patch narrows MCP/REST public state-read surfaces to native-only runtime behavior.</td>
+            <td>Live server construction wires <code>stateplane.NewService(stateStore, nil)</code>, so public callers cannot get filesystem fallback through the server runtime path. The patch removes the MCP schema option and rejects explicit fallback requests instead of adding runtime fallback wiring.</td>
+            <td><code>internal/mcp/tools_state.go</code>; <code>internal/worker/handlers_state.go</code>; <code>internal/mcp/tools_state_test.go</code>; <code>internal/worker/handlers_state_test.go</code>; <code>internal/worker/service.go</code>.</td>
           </tr>
         </tbody>
       </table>
@@ -264,6 +270,12 @@
             <td>T007 principal brief verification</td>
             <td>PASS</td>
             <td>RED <code>go test ./internal/mcp -run "TestGetMemoryBrief" -count=1</code> failed on missing principal brief schema and legacy-path fallthrough; GREEN same command passed; GREEN <code>go test ./internal/mcp ./internal/principalmemory -count=1</code> passed; GREEN <code>go test ./internal/mcp ./internal/principalmemory ./internal/worker -count=1</code> passed.</td>
+          </tr>
+          <tr>
+            <td class="status aligned">Aligned</td>
+            <td>CR-001 fallback-truth patch verification</td>
+            <td>PASS</td>
+            <td><code>go test ./internal/stateplane ./internal/mcp ./internal/worker</code> passed. MCP schema no longer advertises <code>allow_filesystem_fallback</code>; MCP and REST reject explicit fallback requests; runtime wiring remains <code>stateplane.NewService(stateStore, nil)</code>.</td>
           </tr>
         </tbody>
       </table>

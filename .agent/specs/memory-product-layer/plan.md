@@ -3,7 +3,7 @@
 **Feature:** ENG-MPL-1 (`memory-product-layer`)  
 **Plan date:** 2026-06-28  
 **Mode:** CREATE  
-**Updated for:** ENG-MPL-1 — open CRs: [CR-001-initial-scope]
+**Updated for:** ENG-MPL-1 — open CRs: [CR-001-initial-scope, CR-002-experience-applicability, CR-003-forgetting-consolidation, CR-004-selective-temporal-truth]
 
 > **Sources:** `.agent/specs/memory-product-layer/spec.md`, `prd.md`, `architecture.md`, `milestone-map.md`, `.agent/specs/constitution.md`, `.agent/specs/principal-memory-query-domain-registry/architecture.md`, `pkg/cognitive/interfaces.go`, `pkg/cognitive/types.go`, `internal/mcp/tools_brief.go`, `internal/mcp/server.go`, `internal/mcp/tools_candidates.go`, `internal/worker/service.go`, `apps/operator-console/composables/useOperatorOverview.ts`, `apps/operator-console/useOperatorMemoryLab.ts`, `apps/operator-console/i18n/locales/en.json`, `docs/DEPLOYMENT.md`
 
@@ -259,7 +259,7 @@ Suggested next step:
 
 ### Phase 3 — Usefulness / Noise Review Loop
 
-**Outcome:** packet-centric review-loop substrate exists over existing candidate/snapshot/audit seams; operator-facing queue UI follows later once the backend packet contract and approved design contract exist.
+**Outcome:** packet-centric review-loop substrate exists over existing candidate/snapshot/audit seams; the approved Review Queue mode inside Memory Lab is accepted in CR-001, while broader operator-facing queue expansion follows later only if another CR widens scope.
 
 **Scope:**
 - queue list/read substrate
@@ -269,7 +269,7 @@ Suggested next step:
 - honest metric display
 
 **Verification:**
-> Evidence route: candidate/snapshot APIs verified by `go test ./...`, packet-contract tests, and design-contract review notes. Queue browser smoke runs only when the queue UI CR is active.
+> Evidence route: candidate/snapshot APIs verified by `go test ./...`, packet-contract tests, design-contract review notes, and the accepted in-surface Review Queue mode. Queue browser smoke for broader expansion runs only when a later queue-expansion CR is active.
 - candidate queue API tests
 - snapshot/audit integration tests
 - packet contract tests

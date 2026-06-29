@@ -1,42 +1,50 @@
-## Task T003 - Implementation Log
+## Task T003 — Implementation Log
 
 ### Quoted AC
-> - AC: MCP and REST return bounded resume/state payloads; fallback marker appears only on fallback path; no broad file archaeology on happy path.
-Source: `.agent/specs/memory-product-layer/changes/CR-001-initial-scope/tasks.md`
+> AC: truth changes expose prior value, current value, invalidation rationale, and provenance chain.
+Source: .agent/specs/memory-product-layer/changes/CR-004-selective-temporal-truth/tasks.md | line 64
 
-Related requirements:
-> The native state plane must expose a deterministic resume packet containing at least freshness marker, drift/conflict flags, exact next action, and exact next verification step.
-Source: `.agent/specs/memory-product-layer/spec.md` FR-2
+> Scope:
+> - narrow temporal truth schema
+> - validity/invalidation history
+> - provenance-first retrieval
+Source: .agent/specs/memory-product-layer/plan.md | lines 317-320
+
+### Discrepancy Found
+This file previously contained CR-003 T003 structural-loss evidence while the active CR is `CR-004-selective-temporal-truth`. The task ID collided across CRs. This log is now intentionally rewritten for the active CR-004 validity/invalidation history contract.
 
 ### User Change Enabled
-Agents and API callers can ask Engram for native session state, project state, and one bounded native resume packet instead of opening filesystem continuity files on the happy path.
+The operator can inspect how a selected fact changed, including the old answer, the new answer, why the old one stopped being true, and the evidence trail.
 
 ### Claim Grounding
-- Claim: MCP returns bounded state/resume payloads. Evidence target: MCP tool schema/call tests for a state tool wired only when the state store exists.
-- Claim: REST returns bounded state/resume payloads. Evidence target: handler tests for session, project, and resume endpoints.
-- Claim: fallback marker appears only on fallback path. Evidence target: T003 native resume returns `source=native`; filesystem fallback is not invoked or synthesized in this task.
-- Claim: no broad file archaeology on happy path. Evidence target: implementation imports no filesystem packages for native reads and calls only the state-store seam.
+Claim: invalidation keeps rationale and provenance, not just timestamps. Meaning here: the response exposes prior/current entries and a provenance chain derived from the history. Evidence: RED test fails before `provenance_chain` exists; GREEN test asserts old value, current value, invalidation rationale, and both provenance handles survive.
+
+Claim: history remains narrow. Meaning here: this only replays selected-fact fixtures already accepted by G001; it does not add graph traversal. Evidence: focused service test and G002 full suite.
+
+### Terminology Alignment
+"Prior value" maps to a history entry with `valid_until`/`invalidated_at`. "Current value" maps to `true_now`. "Invalidation rationale" maps to the prior entry rationale. "Provenance chain" maps to ordered provenance from historical and current entries.
 
 ### Implementation Decision
-Extend `internal/db/gorm.StateStore` with `ReadResumePacket`, deriving `next_action` from `SessionStateSlots.Execution["next_action"]` and `next_verification` from `SessionStateSlots.Horizons["next_verification"]`. Expose read-only MCP tool `get_state` with actions `session`, `project`, and `resume`, plus REST endpoints under `/api/state/*`. Keep filesystem fallback out of T003; T004 owns explicit fallback and drift proof.
-
-### Review Evidence
-- Native review route: `mcp__aimux.task` review gate task `019f0d2d-4c3f-71cc-a547-a4880f366546` returned `decision=allow`, `reason=timeout`, with no completed passes or findings. Treating this as degraded review evidence, not as a full reviewer pass.
-- Manual lite review: diff reviewed against T003 AC, native-only/fallback boundary, MCP tool registration/dispatch, REST nil-store/not-found behavior, and exact next-action/next-verification derivation. No blocking findings found.
-- Review hardening applied: typed `cognitive.StateAction` and `cognitive.StateVerification` values are now validated for known enum kinds the same way JSON-map decoded values are.
-- Residual risk: T003 intentionally does not read filesystem fallback or compute native-vs-fallback drift. T004 owns fallback markers and conflict proof.
+Extend `TemporalTruthResponse` with `provenance_chain` and centralize chain construction in `internal/temporaltruth`. Update the temporal truth contract to name the chain. No storage migration or graph API is introduced.
 
 ### Verification Result
 AC-by-AC:
-  - AC 1: PASS - MCP `get_state` and REST `/api/state/*` return bounded native session/project/resume payloads; resume packets have `source=native`; no filesystem fallback/read code was added.
+  - AC 1: PASS — truth-change fixture exposes prior `v6`, current `v7`, invalidation rationale, and ordered provenance chain.
+  - AC 2: PASS — Prove-It failed when `provenanceChain` returned nil, proving the test is load-bearing.
 
-TDD evidence:
-  - RED: `go test ./internal/db/gorm ./internal/mcp ./internal/worker` failed on missing `ReadResumePacket`, `SetStateStore`, `Service.stateStore` interface seam, and REST resume handler.
-  - GREEN focused: `go test ./internal/db/gorm ./internal/mcp ./internal/worker` PASS.
-  - GREEN PostgreSQL 17 integration: `DATABASE_DSN=postgres://postgres:postgres@127.0.0.1:55433/engram_test?sslmode=disable go test ./internal/db/gorm -run 'TestStateStore|TestStatePlaneMigration|TestSchemaIntegrity|TestDataModelGeneratedTables' -count=1` PASS against `pgvector/pgvector:pg17`.
-  - GREEN broad: `go test ./...` PASS.
+User-observable ACs:
+  N/A — service history task, no running operator surface is changed.
 
 Overall: PASS
 
-### NEEDS_CLARIFICATION (if AMBIGUOUS result)
-N/A
+TASK_T003_PASS
+  C1 quoted AC: PASS
+  C2 source cited: PASS (.agent/specs/memory-product-layer/changes/CR-004-selective-temporal-truth/tasks.md L64; plan.md L317-L320)
+  C3 user change named: PASS
+  C4 claims grounded: PASS
+  C5 terms aligned: PASS
+  C6 decision pre-code: PASS
+  C7 ACs verified: PASS (2/2 PASS)
+  C8 UX re-verified: N/A (no user-observable ACs)
+  C9 no unresolved AMBIGUOUS: PASS
+  C10 anti-patterns: PASS (0 detected)

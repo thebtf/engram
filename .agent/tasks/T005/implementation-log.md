@@ -1,48 +1,47 @@
 ## Task T005 — Implementation Log
 
 ### Quoted AC
-> - AC: contract defines controls, usage flow, backend bindings, states, and branch scenarios; PM review result recorded.
-Source: `.agent/specs/memory-product-layer/changes/CR-001-initial-scope/tasks.md` | line 98
+> AC: proof artifact states what audit/export evidence exists, what remains blocked, and why the path is safe enough for this CR.
+Source: .agent/specs/memory-product-layer/changes/CR-003-forgetting-consolidation/tasks.md | line 104
 
-Supporting feature contract:
-> Any implied operator-facing UI/UX surface in this feature must be implemented from a designer-owned contract reviewed by PM. Missing contract is a blocker for UI delivery.
-Source: `.agent/specs/memory-product-layer/spec.md` | line 83
+> Evidence route: structural-loss test fixtures, destructive-path authorization tests, queue-escalation tests, and audit artifacts written under `.agent/specs/memory-product-layer/evidence/phase-5-*`.
+Source: .agent/specs/memory-product-layer/plan.md | line 308
 
-> For each touched operator-facing surface, the contract must define control/UX blocks, intended usage flow, API/backend bindings, and required honesty/loading/empty/error/gated states so developer implementation does not invent UI behavior ad hoc.
-Source: `.agent/specs/memory-product-layer/spec.md` | line 88
-
-> Each designer-owned UI contract must include operator usage scenarios with meaningful branch coverage: happy path, empty state, validation failure, gated path, risky confirmation, rollback, and recovery. PM must pressure-test these scenarios from the operator seat before developer implementation starts.
-Source: `.agent/specs/memory-product-layer/spec.md` | line 91
-
-> PM approval is PASS only when the contract includes all required scenarios, every branch ends in an operable or honest blocked state, and the backend wiring map covers every visible control on the touched surface.
-Source: `.agent/specs/memory-product-layer/spec.md` | line 93
+### Discrepancy Found
+This file previously contained CR-002 T005 archive-resurfacing evidence while the active CR is `CR-003-forgetting-consolidation`. The task ID collided across CRs. This log is now intentionally rewritten for the active CR-003 audit/export proof contract.
 
 ### User Change Enabled
-No direct user change — prerequisite for task T008 which delivers a designed principal-memory surface instead of an improvised one.
+The operator can see why dangerous forgetting paths are reviewable and what still cannot execute automatically.
 
 ### Claim Grounding
-- Claim: UI delivery is blocked without a reviewed contract. Meaning here: T008 cannot start until T005 records a PASS design/PM scenario review. Evidence: contract files include PM review result and branch coverage.
-- Claim: contract defines backend bindings. Meaning here: every visible control maps to a live, gated, or must-build backend seam instead of a guessed UI action. Evidence: JSON sidecar maps controls to T006/T007/T003 server bindings.
-- Claim: scenario proof covers required branches. Meaning here: happy, empty, validation failure, gated, risky confirmation, rollback, and recovery branches are explicit and each ends in operable or honest blocked state. Evidence: Markdown contract and JSON sidecar carry branch scenarios.
-- Claim: scope does not expand into queue UI. Meaning here: this contract covers principal memory inspection and principal-scoped brief only; review queue remains T011/later UI work. Evidence: non-goals and backend binding map exclude queue actions.
+Claim: audit/export evidence is named, not implied. Meaning here: the proof artifact lists concrete code fields, test evidence, gate evidence, and artifact paths. Evidence: `forgetting-audit-proof.md` cites G001/G002, TDD evidence, and contract fields.
+
+Claim: remaining blocked paths are explicit. Meaning here: destructive execution, temporal truth, and broad UI expansion are named as outside CR-003. Evidence: proof artifact boundary section and G003 closeout.
 
 ### Terminology Alignment
-- "Touched principal-memory surface" means the future operator-console flow for principal/domain/project knowledge inspection plus principal-scoped brief access.
-- "Designer contract" means the Markdown brief plus machine JSON sidecar required by plan.md, not a visual mock or code implementation.
-- "PM review" means an operator-seat thought experiment across the required branches; it is recorded in the contract artifact because no separate PM session is active for T005.
-- "Honest states" maps to loading, live, empty, gated, mustbuild, stale, error, and risky-confirm states; unsupported behavior must not look operable.
+"Audit/export proof" maps to proof artifact plus evidence sidecars under `.agent/specs/memory-product-layer/evidence/phase-5-*`. "Safe enough" means high-risk decisions are non-executing review/block packets with named audit/snapshot/export evidence, not that destructive execution is implemented.
 
 ### Implementation Decision
-Create `.agent/specs/memory-product-layer/design-contracts/principal-memory-surface.md` and `.json`. The Markdown contract will name the surface boundary, controls, usage flow, backend bindings, state behavior, scenario proof, non-goals, and PM review result. The JSON sidecar will encode the same map for T006/T007/T008 implementation checks. No production code or UI files change in T005.
+Write `.agent/specs/memory-product-layer/contracts/forgetting-audit-proof.md` as a source-backed closeout artifact. It will cite existing evidence, name audit/export surfaces, name blocked paths, and state why CR-003 can close without temporal-truth expansion.
 
 ### Verification Result
 AC-by-AC:
-  - AC 1: [PASS] — Markdown contract defines controls, usage flow, backend bindings, honest states, all required branch scenarios, and PM review result; JSON sidecar parses and records `pm_review.result=PASS`.
+  - AC 1: PASS — `forgetting-audit-proof.md` lists taxonomy/TDD/gate evidence and concrete audit/export surfaces.
+  - AC 2: PASS — proof artifact names blocked hard-delete execution, structural-loss escalation, temporal truth, and broad UI expansion, then states why classification-only review/block behavior is safe enough.
 
 User-observable ACs:
-  N/A — T005 is a design-contract artifact that gates later UI implementation.
+  N/A — proof artifact task, no running operator surface is changed.
 
-Overall: [PASS]
+Overall: PASS
 
-### NEEDS_CLARIFICATION (if AMBIGUOUS result)
-N/A
+TASK_T005_PASS
+  C1 quoted AC: PASS
+  C2 source cited: PASS (.agent/specs/memory-product-layer/changes/CR-003-forgetting-consolidation/tasks.md L104; plan.md L308)
+  C3 user change named: PASS
+  C4 claims grounded: PASS
+  C5 terms aligned: PASS
+  C6 decision pre-code: PASS
+  C7 ACs verified: PASS (2/2 PASS)
+  C8 UX re-verified: N/A (no user-observable ACs)
+  C9 no unresolved AMBIGUOUS: PASS
+  C10 anti-patterns: PASS (0 detected)

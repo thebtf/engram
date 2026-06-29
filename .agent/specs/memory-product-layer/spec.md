@@ -12,7 +12,7 @@ superseded_by: ~
 split_from: ~
 merges: []
 aliases: [memory-product-layer, memory-governance-layer, principal-memory-product]
-open_crs: [CR-001-initial-scope]
+open_crs: [CR-001-initial-scope, CR-002-experience-applicability, CR-003-forgetting-consolidation, CR-004-selective-temporal-truth]
 source_prd: prd.md
 ---
 
