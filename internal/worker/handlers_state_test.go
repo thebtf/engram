@@ -56,7 +56,7 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 	}
 	svc := &Service{stateStore: fakeStore}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1&allow_filesystem_fallback=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1", nil)
 	rec := httptest.NewRecorder()
 	svc.handleGetStateResume(rec, req)
 
@@ -65,5 +65,16 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &packet))
 	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
 	require.Empty(t, packet.FallbackPath)
-	require.True(t, fakeStore.lastRequest.AllowFilesystemFallback)
+	require.False(t, fakeStore.lastRequest.AllowFilesystemFallback)
+}
+
+func TestHandleGetStateResumeRejectsFilesystemFallbackOption(t *testing.T) {
+	svc := &Service{stateStore: &fakeWorkerStatePlane{}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1&allow_filesystem_fallback=true", nil)
+	rec := httptest.NewRecorder()
+	svc.handleGetStateResume(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "allow_filesystem_fallback is not supported")
 }

@@ -45,6 +45,10 @@ func TestStateToolAdvertisedOnlyWhenStoreWired(t *testing.T) {
 
 	srv.SetStateStore(&fakeStatePlane{})
 	require.Contains(t, buildToolsList(srv), "get_state")
+
+	tool := stateTool()
+	schema := tool.InputSchema["properties"].(map[string]any)
+	require.NotContains(t, schema, "allow_filesystem_fallback")
 }
 
 func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
@@ -63,7 +67,7 @@ func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 	}
 	srv.SetStateStore(fakeStore)
 
-	result, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","session_id":"session-1","allow_filesystem_fallback":true}`))
+	result, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","session_id":"session-1"}`))
 	require.NoError(t, err)
 
 	var packet cognitive.ResumePacket
@@ -71,5 +75,14 @@ func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
 	require.Equal(t, "run focused tests", packet.NextAction.Description)
 	require.Empty(t, packet.FallbackPath)
-	require.True(t, fakeStore.lastRequest.AllowFilesystemFallback)
+	require.False(t, fakeStore.lastRequest.AllowFilesystemFallback)
+}
+
+func TestGetStateToolRejectsFilesystemFallbackOption(t *testing.T) {
+	srv := NewServer(ServerOptions{Version: "test"})
+	srv.SetStateStore(&fakeStatePlane{})
+
+	_, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","session_id":"session-1","allow_filesystem_fallback":true}`))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "allow_filesystem_fallback is not supported")
 }

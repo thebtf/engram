@@ -18,13 +18,13 @@ type stateToolArgs struct {
 	SessionID               string `json:"session_id"`
 	GoalID                  string `json:"goal_id"`
 	TaskID                  string `json:"task_id"`
-	AllowFilesystemFallback bool   `json:"allow_filesystem_fallback"`
+	AllowFilesystemFallback *bool  `json:"allow_filesystem_fallback"`
 }
 
 func stateTool() Tool {
 	return Tool{
 		Name:        "get_state",
-		Description: "Read Engram-native state-plane payloads. Actions: session, project, resume. Returns bounded native state; filesystem fallback is explicit and not used on the native happy path.",
+		Description: "Read Engram-native state-plane payloads. Actions: session, project, resume. Returns bounded native state from the server runtime path.",
 		tier:        tierUseful,
 		InputSchema: map[string]any{
 			"type":     "object",
@@ -35,10 +35,6 @@ func stateTool() Tool {
 				"session_id": map[string]any{"type": "string", "description": "Session identifier for session/resume reads"},
 				"goal_id":    map[string]any{"type": "string", "description": "Optional goal identifier for resume packet binding"},
 				"task_id":    map[string]any{"type": "string", "description": "Optional task identifier for resume packet binding"},
-				"allow_filesystem_fallback": map[string]any{
-					"type":        "boolean",
-					"description": "When true, permits explicit filesystem fallback and native-vs-fallback drift comparison for resume reads",
-				},
 			},
 		},
 	}
@@ -88,12 +84,14 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 		if a.SessionID == "" {
 			return "", fmt.Errorf("session_id required")
 		}
+		if a.AllowFilesystemFallback != nil {
+			return "", fmt.Errorf("allow_filesystem_fallback is not supported on the server runtime state path")
+		}
 		packet, err := s.stateStore.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
-			Project:                 a.Project,
-			SessionID:               a.SessionID,
-			GoalID:                  a.GoalID,
-			TaskID:                  a.TaskID,
-			AllowFilesystemFallback: a.AllowFilesystemFallback,
+			Project:   a.Project,
+			SessionID: a.SessionID,
+			GoalID:    a.GoalID,
+			TaskID:    a.TaskID,
 		})
 		if err != nil {
 			return "", err
