@@ -53,7 +53,7 @@ func (f *fakeStatePlane) ReadResumePacket(_ context.Context, request cognitive.R
 	return cognitive.ResumePacket{
 		Source:           cognitive.StatePacketSourceNative,
 		Freshness:        cognitive.StateFreshnessFresh,
-		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: time.Now().UTC()},
+		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: time.Now().UTC()},
 		NextAction:       cognitive.StateAction{Kind: cognitive.StateActionCommand, Description: nextAction},
 		NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "verify native state"},
 		GeneratedAt:      time.Now().UTC(),
@@ -271,7 +271,7 @@ func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 		packet: cognitive.ResumePacket{
 			Source:           cognitive.StatePacketSourceNative,
 			Freshness:        cognitive.StateFreshnessFresh,
-			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: time.Now().UTC()},
+			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: time.Now().UTC()},
 			NextAction:       cognitive.StateAction{Kind: cognitive.StateActionCommand, Description: "run focused tests", Command: "go test ./internal/mcp"},
 			NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "run full suite", Command: "go test ./..."},
 			GeneratedAt:      time.Now().UTC(),
@@ -323,7 +323,7 @@ func TestGetStateToolResumeDoesNotInjectContextProjectWhenOmitted(t *testing.T) 
 		packet: cognitive.ResumePacket{
 			Source:           cognitive.StatePacketSourceNative,
 			Freshness:        cognitive.StateFreshnessFresh,
-			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: time.Now().UTC()},
+			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: time.Now().UTC()},
 			NextAction:       cognitive.StateAction{Kind: cognitive.StateActionCommand, Description: "continue session", Command: "go test ./internal/mcp"},
 			NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "run focused tests", Command: "go test ./internal/mcp"},
 			GeneratedAt:      time.Now().UTC(),

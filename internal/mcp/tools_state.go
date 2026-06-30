@@ -14,13 +14,14 @@ type statePlane interface {
 }
 
 type stateToolArgs struct {
-	Action                  string `json:"action"`
-	Project                 string `json:"project"`
-	Principal               string `json:"principal"`
-	SessionID               string `json:"session_id"`
-	GoalID                  string `json:"goal_id"`
-	TaskID                  string `json:"task_id"`
-	AllowFilesystemFallback *bool  `json:"allow_filesystem_fallback"`
+	Action                  string                     `json:"action"`
+	Project                 string                     `json:"project"`
+	Principal               string                     `json:"principal"`
+	SessionID               string                     `json:"session_id"`
+	GoalID                  string                     `json:"goal_id"`
+	TaskID                  string                     `json:"task_id"`
+	Scopes                  []cognitive.StateScopeKind `json:"scopes"`
+	AllowFilesystemFallback *bool                      `json:"allow_filesystem_fallback"`
 }
 
 type setStateToolArgs struct {
@@ -30,10 +31,13 @@ type setStateToolArgs struct {
 	State     json.RawMessage `json:"state"`
 }
 
-func resumeScopesFromFields(project, goalID, taskID string) []cognitive.StateScopeKind {
-	scopes := []cognitive.StateScopeKind{cognitive.StateScopeSession}
-	if strings.TrimSpace(project) != "" {
-		scopes = append(scopes, cognitive.StateScopeProject)
+func resumeScopesFromFields(explicit []cognitive.StateScopeKind, sessionID, goalID, taskID string) []cognitive.StateScopeKind {
+	if len(explicit) > 0 {
+		return append([]cognitive.StateScopeKind(nil), explicit...)
+	}
+	scopes := make([]cognitive.StateScopeKind, 0, 3)
+	if strings.TrimSpace(sessionID) != "" {
+		scopes = append(scopes, cognitive.StateScopeSession)
 	}
 	if strings.TrimSpace(goalID) != "" {
 		scopes = append(scopes, cognitive.StateScopeGoal)
@@ -59,6 +63,7 @@ func stateTool() Tool {
 				"session_id": map[string]any{"type": "string", "description": "Session identifier for session/resume reads"},
 				"goal_id":    map[string]any{"type": "string", "description": "Optional goal identifier for resume packet binding"},
 				"task_id":    map[string]any{"type": "string", "description": "Optional task identifier for resume packet binding"},
+				"scopes":     map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"session", "project", "goal", "task"}}, "description": "Optional explicit resume scopes. Use [\"project\"] for project-only packets; project is not inferred from the project field."},
 			},
 			"allOf": []any{
 				map[string]any{
@@ -66,7 +71,7 @@ func stateTool() Tool {
 						"properties": map[string]any{"action": map[string]any{"const": "resume"}},
 						"required":   []string{"action"},
 					},
-					"then": map[string]any{"required": []string{"principal", "session_id"}},
+					"then": map[string]any{"required": []string{"principal"}},
 				},
 			},
 		},
@@ -175,13 +180,14 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 		})
 	case "resume":
 		a.SessionID = strings.TrimSpace(a.SessionID)
-		if a.SessionID == "" {
-			return "", fmt.Errorf("session_id required")
-		}
 		a.Project = strings.TrimSpace(a.Project)
 		a.GoalID = strings.TrimSpace(a.GoalID)
 		a.TaskID = strings.TrimSpace(a.TaskID)
 		a.Principal = strings.TrimSpace(a.Principal)
+		scopes := resumeScopesFromFields(a.Scopes, a.SessionID, a.GoalID, a.TaskID)
+		if len(scopes) == 0 {
+			return "", fmt.Errorf("session_id or scopes required")
+		}
 		if a.Principal == "" {
 			return "", fmt.Errorf("principal required")
 		}
@@ -194,7 +200,7 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 			SessionID: a.SessionID,
 			GoalID:    a.GoalID,
 			TaskID:    a.TaskID,
-			Scopes:    resumeScopesFromFields(a.Project, a.GoalID, a.TaskID),
+			Scopes:    scopes,
 		})
 		if err != nil {
 			return "", err

@@ -251,12 +251,14 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 		if err := s.db.WithContext(ctx).Where("session_id = ?", request.SessionID).First(&row).Error; err != nil {
 			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_session %q: %w", request.SessionID, err)
 		}
+		var projectStateVersion string
 		if needsProjectState {
 			projectRow, err := s.readProjectStateRow(ctx, request.Project)
 			if err != nil {
 				return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume project %q: %w", request.Project, err)
 			}
-			projectEvidenceRefs = stateEvidenceRefsFromProjectRow(projectRow, stateVersionFromTime(projectRow.UpdatedAt))
+			projectStateVersion = stateVersionFromTime(projectRow.UpdatedAt)
+			projectEvidenceRefs = stateEvidenceRefsFromProjectRow(projectRow, projectStateVersion)
 		}
 		sessionState, err := sessionStateFromRow(row)
 		if err != nil {
@@ -270,8 +272,13 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 		if err != nil {
 			return cognitive.ResumePacket{}, err
 		}
-		stateVersion = stateVersionFromTime(row.UpdatedAt)
-		evidenceRefs = stateEvidenceRefsFromSlots(sessionState, request.SessionID, stateVersion)
+		sessionStateVersion := stateVersionFromTime(row.UpdatedAt)
+		if projectStateVersion != "" {
+			stateVersion = sessionStateVersion + "+project@" + projectStateVersion
+		} else {
+			stateVersion = sessionStateVersion
+		}
+		evidenceRefs = stateEvidenceRefsFromSlots(sessionState, request.SessionID, sessionStateVersion)
 		evidenceRefs = appendUniqueStateEvidenceRefs(evidenceRefs, projectEvidenceRefs...)
 	} else {
 		if request.Project == "" {
@@ -358,6 +365,8 @@ func validateStateStoreResumePacketRequest(request cognitive.ResumePacketRequest
 	if len(request.Scopes) == 0 {
 		return fmt.Errorf("state_store read_resume: scopes is required")
 	}
+	hasSession := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeSession)
+	hasProject := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeProject)
 	for _, scope := range request.Scopes {
 		switch scope {
 		case cognitive.StateScopeSession:
@@ -372,9 +381,15 @@ func validateStateStoreResumePacketRequest(request cognitive.ResumePacketRequest
 			if request.GoalID == "" {
 				return fmt.Errorf("state_store read_resume: goal_id is required for goal scope")
 			}
+			if !hasSession && !hasProject {
+				return fmt.Errorf("state_store read_resume: goal scope requires session or project scope")
+			}
 		case cognitive.StateScopeTask:
 			if request.TaskID == "" {
 				return fmt.Errorf("state_store read_resume: task_id is required for task scope")
+			}
+			if !hasSession && !hasProject {
+				return fmt.Errorf("state_store read_resume: task scope requires session or project scope")
 			}
 		default:
 			return fmt.Errorf("state_store read_resume: unsupported scope %q", scope)

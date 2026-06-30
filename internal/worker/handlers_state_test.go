@@ -52,7 +52,7 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 		packet: cognitive.ResumePacket{
 			Source:           cognitive.StatePacketSourceNative,
 			Freshness:        cognitive.StateFreshnessFresh,
-			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: time.Now().UTC()},
+			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: time.Now().UTC()},
 			NextAction:       cognitive.StateAction{Kind: cognitive.StateActionInstruction, Description: "continue T003"},
 			NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "focused tests", Command: "go test ./internal/worker"},
 			GeneratedAt:      time.Now().UTC(),
