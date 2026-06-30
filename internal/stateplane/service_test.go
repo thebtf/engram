@@ -133,8 +133,10 @@ func TestServiceReadResumePacketSynthesizesLegacyFallbackIdentity(t *testing.T) 
 
 func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
 	fallbackPath := writeFallbackPacket(t, fallbackPacket("fallback next", ""))
+	native := nativePacket("native next", "go test ./internal/stateplane")
+	native.PacketID = "resume:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	service := NewService(
-		&fakeNativePlane{packet: nativePacket("native next", "go test ./internal/stateplane")},
+		&fakeNativePlane{packet: native},
 		JSONFileFallbackReader{Path: fallbackPath},
 	)
 
@@ -147,6 +149,9 @@ func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, cognitive.StatePacketSourceMixed, packet.Source)
+	require.NotEmpty(t, packet.PacketID)
+	require.Len(t, packet.PacketID, len("resume:")+64)
+	require.NotEqual(t, native.PacketID, packet.PacketID)
 	require.Equal(t, cognitive.StateDriftConflict, packet.Drift.Kind)
 	require.Equal(t, fallbackPath, packet.FallbackPath)
 	require.NotEmpty(t, packet.Drift.Conflicts)
@@ -159,6 +164,7 @@ func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
 
 func TestServiceReadResumePacketReportsNewerFallbackDriftWhenActionsMatch(t *testing.T) {
 	native := nativePacket("native next", "go test ./internal/stateplane")
+	native.PacketID = "resume:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	fallback := fallbackPacket("native next", "fallback.json")
 	fallback.NextVerification = native.NextVerification
 	fallback.GeneratedAt = native.GeneratedAt.Add(time.Hour)
@@ -178,6 +184,9 @@ func TestServiceReadResumePacketReportsNewerFallbackDriftWhenActionsMatch(t *tes
 
 	require.NoError(t, err)
 	require.Equal(t, cognitive.StatePacketSourceMixed, packet.Source)
+	require.NotEmpty(t, packet.PacketID)
+	require.Len(t, packet.PacketID, len("resume:")+64)
+	require.NotEqual(t, native.PacketID, packet.PacketID)
 	require.Equal(t, cognitive.StateFreshnessStale, packet.Freshness)
 	require.Equal(t, cognitive.StateDriftFallbackNewer, packet.Drift.Kind)
 	require.Equal(t, "fallback.json", packet.FallbackPath)
@@ -186,6 +195,68 @@ func TestServiceReadResumePacketReportsNewerFallbackDriftWhenActionsMatch(t *tes
 	require.Contains(t, packet.EvidenceRefs, "filesystem_fallback:fallback.json")
 	require.Equal(t, synthesizedAt, packet.GeneratedAt)
 	require.Equal(t, "native next", packet.NextAction.Description)
+}
+
+func TestServiceReadResumePacketConflictPacketIDIgnoresNativeGeneratedAt(t *testing.T) {
+	native := nativePacket("native next", "go test ./internal/stateplane")
+	native.PacketID = "resume:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	native.StateVersion = "native-stable-version"
+	fallback := fallbackPacket("fallback next", "fallback.json")
+	fallback.PacketID = "resume:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	fallback.StateVersion = "fallback-stable-version"
+	fallback.GeneratedAt = native.GeneratedAt.Add(time.Hour)
+
+	first := readMixedResumePacketWithNativeGeneratedAt(t, native, fallback, native.GeneratedAt, native.GeneratedAt.Add(2*time.Hour))
+	second := readMixedResumePacketWithNativeGeneratedAt(t, native, fallback, native.GeneratedAt.Add(30*time.Minute), native.GeneratedAt.Add(3*time.Hour))
+
+	require.Equal(t, cognitive.StateDriftConflict, first.Drift.Kind)
+	require.Equal(t, cognitive.StateDriftConflict, second.Drift.Kind)
+	require.NotEmpty(t, first.PacketID)
+	require.NotEmpty(t, second.PacketID)
+	require.NotEqual(t, native.PacketID, first.PacketID)
+	require.NotEqual(t, native.PacketID, second.PacketID)
+	require.Equal(t, first.PacketID, second.PacketID)
+}
+
+func TestServiceReadResumePacketFallbackNewerPacketIDIgnoresNativeGeneratedAt(t *testing.T) {
+	native := nativePacket("native next", "go test ./internal/stateplane")
+	native.PacketID = "resume:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	native.StateVersion = "native-stable-version"
+	fallback := fallbackPacket("native next", "fallback.json")
+	fallback.PacketID = "resume:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	fallback.StateVersion = "fallback-stable-version"
+	fallback.NextVerification = native.NextVerification
+	fallback.GeneratedAt = native.GeneratedAt.Add(2 * time.Hour)
+
+	first := readMixedResumePacketWithNativeGeneratedAt(t, native, fallback, native.GeneratedAt, native.GeneratedAt.Add(3*time.Hour))
+	second := readMixedResumePacketWithNativeGeneratedAt(t, native, fallback, native.GeneratedAt.Add(30*time.Minute), native.GeneratedAt.Add(4*time.Hour))
+
+	require.Equal(t, cognitive.StateDriftFallbackNewer, first.Drift.Kind)
+	require.Equal(t, cognitive.StateDriftFallbackNewer, second.Drift.Kind)
+	require.NotEmpty(t, first.PacketID)
+	require.NotEmpty(t, second.PacketID)
+	require.NotEqual(t, native.PacketID, first.PacketID)
+	require.NotEqual(t, native.PacketID, second.PacketID)
+	require.Equal(t, first.PacketID, second.PacketID)
+}
+
+func readMixedResumePacketWithNativeGeneratedAt(t *testing.T, native, fallback cognitive.ResumePacket, nativeGeneratedAt, readAt time.Time) cognitive.ResumePacket {
+	t.Helper()
+	native.GeneratedAt = nativeGeneratedAt
+	service := NewService(
+		&fakeNativePlane{packet: native},
+		&countingFallbackReader{packet: fallback},
+	)
+	service.now = func() time.Time { return readAt }
+
+	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		Principal:               "agent:developer",
+		SessionID:               "session-1",
+		AllowFilesystemFallback: true,
+	})
+	require.NoError(t, err)
+	return packet
 }
 
 func TestServiceReadResumePacketNativeErrorWithoutFallbackAllowed(t *testing.T) {

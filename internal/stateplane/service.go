@@ -271,6 +271,89 @@ func fallbackResumePacketID(packet cognitive.ResumePacket, request cognitive.Res
 	return "resume:" + hex.EncodeToString(sum[:])
 }
 
+type resumePacketIdentityMaterial struct {
+	PacketID     string                      `json:"packet_id"`
+	Project      string                      `json:"project"`
+	Principal    string                      `json:"principal"`
+	SessionID    string                      `json:"session_id"`
+	GoalID       string                      `json:"goal_id"`
+	TaskID       string                      `json:"task_id"`
+	StateVersion string                      `json:"state_version"`
+	Source       cognitive.StatePacketSource `json:"source"`
+	Freshness    cognitive.StateFreshness    `json:"freshness"`
+	FallbackPath string                      `json:"fallback_path"`
+	EvidenceRefs []string                    `json:"evidence_refs"`
+}
+
+func mixedResumePacketID(nativePacket, fallbackPacket, packet cognitive.ResumePacket) string {
+	identity := struct {
+		Kind           string                       `json:"kind"`
+		Source         cognitive.StatePacketSource  `json:"source"`
+		Freshness      cognitive.StateFreshness     `json:"freshness"`
+		FallbackUsed   bool                         `json:"fallback_used"`
+		FallbackPath   string                       `json:"fallback_path"`
+		Project        string                       `json:"project"`
+		Principal      string                       `json:"principal"`
+		SessionID      string                       `json:"session_id"`
+		GoalID         string                       `json:"goal_id"`
+		TaskID         string                       `json:"task_id"`
+		StateVersion   string                       `json:"state_version"`
+		DriftKind      cognitive.StateDriftKind     `json:"drift_kind"`
+		DriftConflicts []cognitive.StateConflict    `json:"drift_conflicts,omitempty"`
+		EvidenceRefs   []string                     `json:"evidence_refs"`
+		NativePacket   resumePacketIdentityMaterial `json:"native_packet"`
+		FallbackPacket resumePacketIdentityMaterial `json:"fallback_packet"`
+	}{
+		Kind:           "mixed_resume_packet",
+		Source:         packet.Source,
+		Freshness:      packet.Freshness,
+		FallbackUsed:   packet.FallbackUsed,
+		FallbackPath:   strings.TrimSpace(packet.FallbackPath),
+		Project:        strings.TrimSpace(packet.Project),
+		Principal:      strings.TrimSpace(packet.Principal),
+		SessionID:      strings.TrimSpace(packet.SessionID),
+		GoalID:         strings.TrimSpace(packet.GoalID),
+		TaskID:         strings.TrimSpace(packet.TaskID),
+		StateVersion:   strings.TrimSpace(packet.StateVersion),
+		DriftKind:      packet.Drift.Kind,
+		DriftConflicts: packet.Drift.Conflicts,
+		EvidenceRefs:   normalizedEvidenceRefs(packet.EvidenceRefs),
+		NativePacket:   resumePacketIdentity(nativePacket),
+		FallbackPacket: resumePacketIdentity(fallbackPacket),
+	}
+	data, _ := json.Marshal(identity)
+	sum := sha256.Sum256(data)
+	return "resume:" + hex.EncodeToString(sum[:])
+}
+
+func resumePacketIdentity(packet cognitive.ResumePacket) resumePacketIdentityMaterial {
+	return resumePacketIdentityMaterial{
+		PacketID:     strings.TrimSpace(packet.PacketID),
+		Project:      strings.TrimSpace(packet.Project),
+		Principal:    strings.TrimSpace(packet.Principal),
+		SessionID:    strings.TrimSpace(packet.SessionID),
+		GoalID:       strings.TrimSpace(packet.GoalID),
+		TaskID:       strings.TrimSpace(packet.TaskID),
+		StateVersion: strings.TrimSpace(packet.StateVersion),
+		Source:       packet.Source,
+		Freshness:    packet.Freshness,
+		FallbackPath: strings.TrimSpace(packet.FallbackPath),
+		EvidenceRefs: normalizedEvidenceRefs(packet.EvidenceRefs),
+	}
+}
+
+func normalizedEvidenceRefs(refs []string) []string {
+	normalized := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		normalized = append(normalized, ref)
+	}
+	return normalized
+}
+
 func (s *Service) normalizeNativePacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) cognitive.ResumePacket {
 	now := s.clock()
 	if packet.Source == "" {
@@ -324,6 +407,7 @@ func (s *Service) conflictPacket(nativePacket, fallbackPacket cognitive.ResumePa
 		Conflicts: conflicts,
 		CheckedAt: now,
 	}
+	packet.PacketID = mixedResumePacketID(nativePacket, fallbackPacket, packet)
 	return packet
 }
 
@@ -340,6 +424,7 @@ func (s *Service) fallbackNewerPacket(nativePacket, fallbackPacket cognitive.Res
 		Kind:      cognitive.StateDriftFallbackNewer,
 		CheckedAt: now,
 	}
+	packet.PacketID = mixedResumePacketID(nativePacket, fallbackPacket, packet)
 	return packet
 }
 
