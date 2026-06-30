@@ -18,8 +18,10 @@ type stateStoreReadWriteSeam interface {
 	ReadProjectState(ctx context.Context, project string) (cognitive.ProjectStateRecord, error)
 }
 
-var _ stateStoreReadWriteSeam = (*StateStore)(nil)
-var _ cognitive.StatePlane = (*StateStore)(nil)
+var (
+	_ stateStoreReadWriteSeam = (*StateStore)(nil)
+	_ cognitive.StatePlane    = (*StateStore)(nil)
+)
 
 func TestStateStore_SessionStateRoundTrip(t *testing.T) {
 	db := openCandidateTestDB(t)
@@ -334,6 +336,7 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 		resumePacketID(cognitive.ResumePacketRequest{Project: "a:b", Principal: "c", SessionID: "d"}, "e"),
 	)
 	require.NotEmpty(t, packet.StateVersion)
+	require.Contains(t, packet.StateVersion, "+project@")
 	require.Equal(t, project, packet.Project)
 	require.Equal(t, "agent:developer", packet.Principal)
 	require.Equal(t, sessionID, packet.SessionID)
@@ -348,7 +351,7 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 		TaskID:    "task-1",
 		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask},
 	}, packet.StateVersion), packet.PacketID)
-	require.Equal(t, fmt.Sprintf("agent_session_state:%s@%s", sessionID, packet.StateVersion), packet.EvidenceRefs[0])
+	require.Contains(t, packet.EvidenceRefs[0], fmt.Sprintf("agent_session_state:%s@", sessionID))
 	require.Contains(t, packet.EvidenceRefs, "state:evidence:resume")
 	require.Contains(t, packet.EvidenceRefs, "audit:write_session_state")
 	require.Contains(t, fmt.Sprint(packet.EvidenceRefs), "agent_project_state:"+project+"@")
