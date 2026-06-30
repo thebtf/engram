@@ -81,9 +81,13 @@ func (s *Service) QueryExperience(ctx context.Context, request cognitive.Experie
 	}
 	limit := normalizeLimit(request.Limit)
 	candidates := cloneResponses(s.candidates)
+	var archiveEvidence ArchiveEvidenceEntry
+	archiveEvidencePending := false
+	archiveStart := -1
+	archiveEnd := -1
 	if len(triggers) > 0 {
 		archiveLimit := archiveLimit(limit)
-		archiveEvidence := ArchiveEvidenceEntry{
+		archiveEvidence = ArchiveEvidenceEntry{
 			TriggerClasses:  append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...),
 			CallerPrincipal: strings.TrimSpace(request.Principal),
 			Project:         strings.TrimSpace(request.Project),
@@ -121,18 +125,14 @@ func (s *Service) QueryExperience(ctx context.Context, request cognitive.Experie
 				}
 				filteredArchiveItems = append(filteredArchiveItems, item)
 			}
-			archiveEvidence.SessionIDs, archiveEvidence.EvidenceRefs = archiveEvidenceScope(filteredArchiveItems)
-			if len(archiveEvidence.EvidenceRefs) == 0 {
-				archiveEvidence.EvidenceRefs = archiveTriggerEvidenceRefs(triggers)
-			}
-			archiveEvidence.Returned = len(filteredArchiveItems)
-			archiveEvidence.ExperienceRetrievalRan = true
-			archiveEvidence.AntiApplicabilityBlocked = archiveAntiApplicabilityBlocked(request, filteredArchiveItems)
-			archiveEvidence.Status = "archive_resurfaced"
-			archiveEvidence.Reason = "explicit named archive trigger lookup"
+			archiveStart = len(candidates)
 			candidates = append(candidates, filteredArchiveItems...)
+			archiveEnd = len(candidates)
+			archiveEvidence.ExperienceRetrievalRan = true
+			archiveEvidencePending = true
+		} else {
+			s.recordArchiveEvidence(archiveEvidence)
 		}
-		s.recordArchiveEvidence(archiveEvidence)
 	}
 	terms := requestTerms(request)
 	type scoredCandidate struct {
@@ -163,8 +163,26 @@ func (s *Service) QueryExperience(ctx context.Context, request cognitive.Experie
 		scored = scored[:limit]
 	}
 	results := make([]cognitive.ExperienceResponse, 0, len(scored))
+	var finalArchiveItems []cognitive.ExperienceResponse
 	for _, candidate := range scored {
 		results = append(results, candidate.item)
+		if archiveEvidencePending && candidate.index >= archiveStart && candidate.index < archiveEnd {
+			finalArchiveItems = append(finalArchiveItems, candidate.item)
+		}
+	}
+	if archiveEvidencePending {
+		archiveEvidence.SessionIDs, archiveEvidence.EvidenceRefs = archiveEvidenceScope(finalArchiveItems)
+		archiveEvidence.Returned = len(finalArchiveItems)
+		archiveEvidence.AntiApplicabilityBlocked = archiveAntiApplicabilityBlocked(request, finalArchiveItems)
+		if len(finalArchiveItems) == 0 {
+			archiveEvidence.EvidenceRefs = archiveTriggerEvidenceRefs(triggers)
+			archiveEvidence.Status = "archive_not_resurfaced"
+			archiveEvidence.Reason = "explicit named archive trigger lookup returned no final results"
+		} else {
+			archiveEvidence.Status = "archive_resurfaced"
+			archiveEvidence.Reason = "explicit named archive trigger lookup"
+		}
+		s.recordArchiveEvidence(archiveEvidence)
 	}
 	return results, nil
 }

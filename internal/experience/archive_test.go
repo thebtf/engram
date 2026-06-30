@@ -148,6 +148,46 @@ func TestServiceArchiveEvidenceFiltersProjectBeforeAudit(t *testing.T) {
 	require.NotContains(t, evidence[0].EvidenceRefs, "archive:archive-other")
 }
 
+func TestServiceArchiveEvidenceReportsNoSurfacedArchiveWhenFinalSelectionDropsMatches(t *testing.T) {
+	archiveItem := archiveExperience("archive-dropped", "rollback regression archive lesson")
+	archiveItem.AntiApplicability = []cognitive.ExperienceAntiApplicability{
+		{
+			Condition: "archiveonly",
+			Rationale: "archiveonly would block if the dropped archive candidate were audited",
+		},
+	}
+	archive := &fakeArchiveSource{items: []cognitive.ExperienceResponse{archiveItem}}
+	hotWinner := fixtureExperience("hot-winner", "priority thermal quasar vector atlas hot lesson", "engram", "hot-session")
+	service := NewServiceWithArchive([]cognitive.ExperienceResponse{hotWinner}, archive)
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Principal:      "agent:developer",
+		Query:          "priority thermal quasar vector atlas",
+		CurrentContext: "archiveonly",
+		ArchiveTriggerClasses: []cognitive.ExperienceArchiveTriggerClass{
+			cognitive.ExperienceArchiveTriggerRegressionOrRollback,
+		},
+		Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "hot-winner", results[0].SourceAttribution[0].ID)
+	require.Equal(t, 1, archive.calls)
+
+	evidence := service.ArchiveEvidence()
+	require.Len(t, evidence, 1)
+	require.Zero(t, evidence[0].Returned)
+	require.True(t, evidence[0].ExperienceRetrievalRan)
+	require.False(t, evidence[0].AntiApplicabilityBlocked, "dropped archive anti-applicability must not mark final archive evidence blocked")
+	require.Empty(t, evidence[0].SessionIDs)
+	require.Equal(t, []string{"archive_trigger:regression_or_rollback"}, evidence[0].EvidenceRefs)
+	require.NotContains(t, evidence[0].EvidenceRefs, "archive:archive-dropped")
+	require.Equal(t, "archive_not_resurfaced", evidence[0].Status)
+	require.Equal(t, "explicit named archive trigger lookup returned no final results", evidence[0].Reason)
+}
+
 func TestServiceArchiveEvidenceRecordsAntiApplicabilityBlock(t *testing.T) {
 	blocked := archiveExperience("archive-blocked", "PowerShell rollback archive lesson")
 	blocked.AntiApplicability = []cognitive.ExperienceAntiApplicability{
