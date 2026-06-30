@@ -23,10 +23,11 @@ type resumeAuditCall struct {
 }
 
 type fakeNativePlane struct {
-	packet cognitive.ResumePacket
-	err    error
-	reads  int
-	audits []resumeAuditCall
+	packet   cognitive.ResumePacket
+	err      error
+	reads    int
+	requests []cognitive.ResumePacketRequest
+	audits   []resumeAuditCall
 }
 
 func (f *fakeNativePlane) WriteSessionState(context.Context, string, cognitive.SessionStateSlots) error {
@@ -45,8 +46,9 @@ func (f *fakeNativePlane) ReadProjectState(context.Context, string) (cognitive.P
 	return cognitive.ProjectStateRecord{}, nil
 }
 
-func (f *fakeNativePlane) ReadResumePacket(context.Context, cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
+func (f *fakeNativePlane) ReadResumePacket(_ context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
 	f.reads++
+	f.requests = append(f.requests, request)
 	if f.err != nil {
 		return cognitive.ResumePacket{}, f.err
 	}
@@ -64,13 +66,15 @@ func (f *fakeNativePlane) LogResumeReadAudit(_ context.Context, request cognitiv
 }
 
 type countingFallbackReader struct {
-	packet cognitive.ResumePacket
-	err    error
-	reads  int
+	packet   cognitive.ResumePacket
+	err      error
+	reads    int
+	requests []cognitive.ResumePacketRequest
 }
 
-func (f *countingFallbackReader) ReadResumePacket(context.Context, cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
+func (f *countingFallbackReader) ReadResumePacket(_ context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
 	f.reads++
+	f.requests = append(f.requests, request)
 	if f.err != nil {
 		return cognitive.ResumePacket{}, f.err
 	}
@@ -95,6 +99,34 @@ func TestServiceReadResumePacketNativeFirstDoesNotOpenFallback(t *testing.T) {
 	require.Equal(t, 1, native.reads)
 	require.Equal(t, 0, fallback.reads)
 	require.Empty(t, packet.FallbackPath)
+}
+
+func TestServiceReadResumePacketNormalizesAndDeduplicatesScopesBeforeReads(t *testing.T) {
+	native := &fakeNativePlane{err: errors.New("native missing")}
+	fallback := &countingFallbackReader{packet: fallbackPacket("fallback next", "fallback.json")}
+	service := NewService(native, fallback)
+
+	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 " engram ",
+		Principal:               " agent:developer ",
+		SessionID:               " session-1 ",
+		Scopes:                  []cognitive.StateScopeKind{" session ", cognitive.StateScopeSession, " project ", cognitive.StateScopeProject},
+		AllowFilesystemFallback: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.StatePacketSourceFilesystemFallback, packet.Source)
+	require.Equal(t, 1, native.reads)
+	require.Equal(t, 1, fallback.reads)
+	wantRequest := cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		Principal:               "agent:developer",
+		SessionID:               "session-1",
+		Scopes:                  []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject},
+		AllowFilesystemFallback: true,
+	}
+	require.Equal(t, []cognitive.ResumePacketRequest{wantRequest}, native.requests)
+	require.Equal(t, []cognitive.ResumePacketRequest{wantRequest}, fallback.requests)
 }
 
 func TestServiceReadResumePacketRejectsUnscopedRequest(t *testing.T) {

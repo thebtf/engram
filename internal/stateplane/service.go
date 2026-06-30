@@ -464,8 +464,14 @@ func normalizeResumePacketRequest(request cognitive.ResumePacketRequest) cogniti
 	request.TaskID = strings.TrimSpace(request.TaskID)
 	if len(request.Scopes) > 0 {
 		scopes := make([]cognitive.StateScopeKind, 0, len(request.Scopes))
+		seen := make(map[cognitive.StateScopeKind]struct{}, len(request.Scopes))
 		for _, scope := range request.Scopes {
-			scopes = append(scopes, cognitive.StateScopeKind(strings.TrimSpace(string(scope))))
+			normalized := cognitive.StateScopeKind(strings.TrimSpace(string(scope)))
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			scopes = append(scopes, normalized)
 		}
 		request.Scopes = scopes
 	}

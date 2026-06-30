@@ -197,19 +197,31 @@ func (s *StateStore) ReadProjectState(ctx context.Context, project string) (cogn
 	if err := s.requireDB(); err != nil {
 		return cognitive.ProjectStateRecord{}, err
 	}
+	row, err := s.readProjectStateRow(ctx, project)
+	if err != nil {
+		return cognitive.ProjectStateRecord{}, err
+	}
+	return projectStateFromRow(row), nil
+}
+
+func (s *StateStore) readProjectStateRow(ctx context.Context, project string) (projectStateRow, error) {
 	if project == "" {
-		return cognitive.ProjectStateRecord{}, fmt.Errorf("state_store read_project: project is required")
+		return projectStateRow{}, fmt.Errorf("state_store read_project: project is required")
 	}
 	var row projectStateRow
 	if err := s.db.WithContext(ctx).Where("project = ?", project).First(&row).Error; err != nil {
-		return cognitive.ProjectStateRecord{}, fmt.Errorf("state_store read_project %q: %w", project, err)
+		return projectStateRow{}, fmt.Errorf("state_store read_project %q: %w", project, err)
 	}
+	return row, nil
+}
+
+func projectStateFromRow(row projectStateRow) cognitive.ProjectStateRecord {
 	return cognitive.ProjectStateRecord{
 		Phase:        row.Phase,
 		DeadlineDate: row.DeadlineDate,
 		Pressure:     row.Pressure,
 		UpdatedBy:    row.UpdatedBy,
-	}, nil
+	}
 }
 
 // ReadResumePacket builds one bounded native resume packet from persisted state.
@@ -221,38 +233,56 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 	if err := validateStateStoreResumePacketRequest(request); err != nil {
 		return cognitive.ResumePacket{}, err
 	}
-	if request.SessionID == "" {
-		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: session_id is required")
-	}
 	if err := s.requireDB(); err != nil {
 		return cognitive.ResumePacket{}, err
 	}
 
-	var row sessionStateRow
-	if err := s.db.WithContext(ctx).Where("session_id = ?", request.SessionID).First(&row).Error; err != nil {
-		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_session %q: %w", request.SessionID, err)
-	}
-	if hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeProject) {
-		if _, err := s.ReadProjectState(ctx, request.Project); err != nil {
+	needsSessionState := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeSession)
+	needsProjectState := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeProject)
+
+	var nextAction cognitive.StateAction
+	var nextVerification cognitive.StateVerification
+	var stateVersion string
+	var evidenceRefs []string
+	if needsSessionState {
+		var row sessionStateRow
+		if err := s.db.WithContext(ctx).Where("session_id = ?", request.SessionID).First(&row).Error; err != nil {
+			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_session %q: %w", request.SessionID, err)
+		}
+		if needsProjectState {
+			if _, err := s.readProjectStateRow(ctx, request.Project); err != nil {
+				return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume project %q: %w", request.Project, err)
+			}
+		}
+		sessionState, err := sessionStateFromRow(row)
+		if err != nil {
+			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume session %q: %w", request.SessionID, err)
+		}
+		nextAction, err = stateActionFromSlots(sessionState)
+		if err != nil {
+			return cognitive.ResumePacket{}, err
+		}
+		nextVerification, err = stateVerificationFromSlots(sessionState)
+		if err != nil {
+			return cognitive.ResumePacket{}, err
+		}
+		stateVersion = stateVersionFromTime(row.UpdatedAt)
+		evidenceRefs = stateEvidenceRefsFromSlots(sessionState, request.SessionID, stateVersion)
+	} else {
+		if request.Project == "" {
+			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: project is required when session scope is not requested")
+		}
+		projectRow, err := s.readProjectStateRow(ctx, request.Project)
+		if err != nil {
 			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume project %q: %w", request.Project, err)
 		}
-	}
-	sessionState, err := sessionStateFromRow(row)
-	if err != nil {
-		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume session %q: %w", request.SessionID, err)
-	}
-	nextAction, err := stateActionFromSlots(sessionState)
-	if err != nil {
-		return cognitive.ResumePacket{}, err
-	}
-	nextVerification, err := stateVerificationFromSlots(sessionState)
-	if err != nil {
-		return cognitive.ResumePacket{}, err
+		nextAction = stateActionFromProjectRow(projectRow)
+		nextVerification = stateVerificationFromProjectRow(projectRow)
+		stateVersion = stateVersionFromTime(projectRow.UpdatedAt)
+		evidenceRefs = stateEvidenceRefsFromProjectRow(projectRow, stateVersion)
 	}
 
 	now := time.Now().UTC()
-	stateVersion := stateVersionFromTime(row.UpdatedAt)
-	evidenceRefs := stateEvidenceRefsFromSlots(sessionState, request.SessionID, stateVersion)
 	packet := cognitive.ResumePacket{
 		PacketID:         resumePacketID(request, stateVersion),
 		Project:          request.Project,
@@ -404,6 +434,40 @@ func stateEvidenceRefsFromSlots(state cognitive.SessionStateSlots, sessionID, st
 		}
 	}
 	return refs
+}
+
+func stateEvidenceRefsFromProjectRow(row projectStateRow, stateVersion string) []string {
+	return []string{fmt.Sprintf("agent_project_state:%s@%s", strings.TrimSpace(row.Project), strings.TrimSpace(stateVersion))}
+}
+
+func stateActionFromProjectRow(row projectStateRow) cognitive.StateAction {
+	project := strings.TrimSpace(row.Project)
+	if project == "" {
+		project = "unknown project"
+	}
+	details := make([]string, 0, 3)
+	if phase := strings.TrimSpace(row.Phase); phase != "" {
+		details = append(details, "phase: "+phase)
+	}
+	if pressure := strings.TrimSpace(row.Pressure); pressure != "" {
+		details = append(details, "pressure: "+pressure)
+	}
+	if row.DeadlineDate != nil && !row.DeadlineDate.IsZero() {
+		details = append(details, "deadline: "+row.DeadlineDate.UTC().Format("2006-01-02"))
+	}
+	description := fmt.Sprintf("Continue project %s from native project state", project)
+	if len(details) > 0 {
+		description += " (" + strings.Join(details, "; ") + ")"
+	}
+	return cognitive.StateAction{Kind: cognitive.StateActionInstruction, Description: description + "."}
+}
+
+func stateVerificationFromProjectRow(row projectStateRow) cognitive.StateVerification {
+	project := strings.TrimSpace(row.Project)
+	if project == "" {
+		project = "unknown project"
+	}
+	return cognitive.StateVerification{Kind: cognitive.StateVerificationManual, Description: fmt.Sprintf("Verify project %s native project state remains current before continuing.", project)}
 }
 
 func parseStateStringSlice(value interface{}) []string {
