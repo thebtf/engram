@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
@@ -37,7 +38,12 @@ type candidateReviewSnapshotStore interface {
 }
 
 type candidateReviewAtomicPromotionStore interface {
-	PromoteWithMemoryAndSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, candidateID int64, mem *models.Memory, snapshot *models.BulkOpSnapshot) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error)
+	PromoteWithMemoryAndSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, candidateID int64, mem *models.Memory, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error)
+}
+
+type candidateReviewAtomicTransitionStore interface {
+	TransitionToRejectedWithSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, id int64, reason string, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error)
+	TransitionToSupersededWithSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error)
 }
 
 type candidateListResponse struct {
@@ -115,31 +121,32 @@ func (s *Service) currentCandidateReviewSnapshotStore() candidateReviewSnapshotS
 	return s.snapshotStore
 }
 
-func (s *Service) newCandidateReviewSnapshot(action string, candidate *models.CrystallizationCandidate) (*models.BulkOpSnapshot, error) {
+func (s *Service) newCandidateReviewSnapshot(action string, candidate *models.CrystallizationCandidate, actor string) (*models.BulkOpSnapshot, error) {
 	packet := reviewpacket.FromCandidate(candidate)
 	if !packet.MutationRequirements.SnapshotRequired {
 		return nil, nil
 	}
-	return reviewpacket.NewCandidateReviewActionSnapshot(action, candidate, "system")
+	return reviewpacket.NewCandidateReviewActionSnapshot(action, candidate, actor)
 }
 
-func (s *Service) recordCandidateReviewSnapshot(ctx context.Context, action string, candidate *models.CrystallizationCandidate) (*models.BulkOpSnapshot, error) {
-	snapshot, err := s.newCandidateReviewSnapshot(action, candidate)
-	if err != nil {
-		return nil, err
+func candidateReviewActorFromContext(ctx context.Context) string {
+	id, ok := authpkg.IdentityFrom(ctx)
+	if !ok {
+		return "system"
 	}
-	if snapshot == nil {
-		return nil, nil
+	if principal, _, hasOwner := id.MemoryOwner(); hasOwner {
+		return principal
 	}
-	snapshotStore := s.currentCandidateReviewSnapshotStore()
-	if snapshotStore == nil {
-		return nil, errors.New("candidate review snapshot store is not configured")
+	if id.KeycardID != "" {
+		return id.KeycardID
 	}
-	created, err := snapshotStore.Create(ctx, snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("candidate review snapshot: %w", err)
+	if id.Source == authpkg.SourceMaster {
+		return "master"
 	}
-	return created, nil
+	if id.Source != "" {
+		return string(id.Source)
+	}
+	return "system"
 }
 
 func candidateRFC3339(value time.Time) string {
@@ -434,7 +441,8 @@ func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	snapshot, err := s.newCandidateReviewSnapshot("promote", candidate)
+	actor := candidateReviewActorFromContext(r.Context())
+	snapshot, err := s.newCandidateReviewSnapshot("promote", candidate, actor)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -451,9 +459,9 @@ func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Re
 			gormSnapshotStore = snapshotStore
 		}
 
-		updated, created, _, err := atomicStore.PromoteWithMemoryAndSnapshot(r.Context(), gormSnapshotStore, id, memory, snapshot)
+		updated, created, _, err := atomicStore.PromoteWithMemoryAndSnapshot(r.Context(), gormSnapshotStore, id, memory, snapshot, actor)
 		if err != nil {
-			if strings.Contains(err.Error(), "snapshot_store") || strings.Contains(err.Error(), "amend_promote_entries") || strings.Contains(err.Error(), "snapshot store is required") {
+			if strings.Contains(err.Error(), "snapshot_store") || strings.Contains(err.Error(), "amend_promote_entries") || strings.Contains(err.Error(), "snapshot store is required") || strings.Contains(err.Error(), "candidate_review audit store") {
 				http.Error(w, fmt.Sprintf("candidate review snapshot: %v", err), http.StatusServiceUnavailable)
 				return
 			}
@@ -535,8 +543,43 @@ func (s *Service) handleRejectMemoryCandidate(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if _, err := s.recordCandidateReviewSnapshot(r.Context(), "reject", candidate); err != nil {
+	actor := candidateReviewActorFromContext(r.Context())
+	snapshot, err := s.newCandidateReviewSnapshot("reject", candidate, actor)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if snapshot != nil {
+		atomicStore, ok := store.(candidateReviewAtomicTransitionStore)
+		if !ok {
+			http.Error(w, "candidate review snapshot requires atomic transition store", http.StatusServiceUnavailable)
+			return
+		}
+		snapshotStore, ok := s.currentCandidateReviewSnapshotStore().(*gormdb.SnapshotStore)
+		if !ok || snapshotStore == nil {
+			http.Error(w, "candidate review snapshot store is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		updated, _, err := atomicStore.TransitionToRejectedWithSnapshot(r.Context(), snapshotStore, id, req.Reason, snapshot, actor)
+		if err != nil {
+			if strings.Contains(err.Error(), "candidate review snapshot") || strings.Contains(err.Error(), "candidate_review audit store") {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			writeCandidateStoreError(w, "reject_candidate", id, err)
+			return
+		}
+		if updated == nil {
+			log.Error().Int64("candidate_id", id).Msg("candidate rejection returned nil payload")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, candidateActionReceipt{
+			Action:          "reject",
+			CandidateID:     updated.ID,
+			CandidateStatus: string(updated.Status),
+		})
 		return
 	}
 
@@ -587,8 +630,43 @@ func (s *Service) handleSupersedeMemoryCandidate(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if _, err := s.recordCandidateReviewSnapshot(r.Context(), "supersede", candidate); err != nil {
+	actor := candidateReviewActorFromContext(r.Context())
+	snapshot, err := s.newCandidateReviewSnapshot("supersede", candidate, actor)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if snapshot != nil {
+		atomicStore, ok := store.(candidateReviewAtomicTransitionStore)
+		if !ok {
+			http.Error(w, "candidate review snapshot requires atomic transition store", http.StatusServiceUnavailable)
+			return
+		}
+		snapshotStore, ok := s.currentCandidateReviewSnapshotStore().(*gormdb.SnapshotStore)
+		if !ok || snapshotStore == nil {
+			http.Error(w, "candidate review snapshot store is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		updated, _, err := atomicStore.TransitionToSupersededWithSnapshot(r.Context(), snapshotStore, id, snapshot, actor)
+		if err != nil {
+			if strings.Contains(err.Error(), "candidate review snapshot") || strings.Contains(err.Error(), "candidate_review audit store") {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			writeCandidateStoreError(w, "supersede_candidate", id, err)
+			return
+		}
+		if updated == nil {
+			log.Error().Int64("candidate_id", id).Msg("candidate supersede returned nil payload")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, candidateActionReceipt{
+			Action:          "supersede",
+			CandidateID:     updated.ID,
+			CandidateStatus: string(updated.Status),
+		})
 		return
 	}
 

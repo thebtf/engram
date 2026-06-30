@@ -851,6 +851,43 @@ func TestMigration133_BulkOpSnapshots(t *testing.T) {
 	require.False(t, pinned, "pinned must default to false")
 }
 
+func TestMigration153Rollback_PreflightsCandidateReviewSnapshots(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+	require.NoError(t, runMigrations(db))
+
+	snapshotID := fmt.Sprintf("test-m153-candidate-review-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id IN (?, ?)`, snapshotID, snapshotID+"-invalid").Error
+	})
+	require.NoError(t, db.Exec(`
+		INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+		VALUES (?, 'candidate_review_action', 'test-actor', '{}')
+	`, snapshotID).Error)
+
+	err = candidateReviewSnapshotOpTypeMigration153().Rollback(db)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "candidate_review_action snapshot rows exist")
+
+	invalidErr := db.Exec(`
+		INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+		VALUES (?, 'invalid_op_after_blocked_rollback', 'test-actor', '{}')
+	`, snapshotID+"-invalid").Error
+	require.Error(t, invalidErr, "blocked rollback must leave op_type CHECK constraint in place")
+}
+
 func TestMigration147_RuleGovernanceSnapshotStatuses(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {

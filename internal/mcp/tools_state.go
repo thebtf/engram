@@ -30,7 +30,7 @@ func stateTool() Tool {
 		tier:        tierUseful,
 		InputSchema: map[string]any{
 			"type":     "object",
-			"required": []string{"action", "principal"},
+			"required": []string{"action"},
 			"properties": map[string]any{
 				"action":     map[string]any{"type": "string", "enum": []string{"session", "project", "resume"}, "description": "State read action"},
 				"project":    map[string]any{"type": "string", "description": "Project identifier for project/resume reads"},
@@ -38,6 +38,15 @@ func stateTool() Tool {
 				"session_id": map[string]any{"type": "string", "description": "Session identifier for session/resume reads"},
 				"goal_id":    map[string]any{"type": "string", "description": "Optional goal identifier for resume packet binding"},
 				"task_id":    map[string]any{"type": "string", "description": "Optional task identifier for resume packet binding"},
+			},
+			"allOf": []any{
+				map[string]any{
+					"if": map[string]any{
+						"properties": map[string]any{"action": map[string]any{"const": "resume"}},
+						"required":   []string{"action"},
+					},
+					"then": map[string]any{"required": []string{"principal"}},
+				},
 			},
 		},
 	}

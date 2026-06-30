@@ -56,24 +56,6 @@ func (s *Server) newCandidateReviewSnapshot(action string, candidate *models.Cry
 	return reviewpacket.NewCandidateReviewActionSnapshot(action, candidate, "system")
 }
 
-func (s *Server) recordCandidateReviewSnapshot(ctx context.Context, action string, candidate *models.CrystallizationCandidate) (*models.BulkOpSnapshot, error) {
-	snapshot, err := s.newCandidateReviewSnapshot(action, candidate)
-	if err != nil {
-		return nil, err
-	}
-	if snapshot == nil {
-		return nil, nil
-	}
-	if s.snapshotStore == nil {
-		return nil, fmt.Errorf("candidate review snapshot store is not configured")
-	}
-	created, err := s.snapshotStore.Create(ctx, snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("candidate review snapshot: %w", err)
-	}
-	return created, nil
-}
-
 // candidateTools returns the 5 crystallization candidate MCP tool definitions.
 // Only registered when ENGRAM_VNEXT_F_ENABLED=true.
 func candidateTools() []Tool {
@@ -330,7 +312,7 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 	// transitions the candidate, and amends the snapshot in one DB transaction.
 	// A snapshot-amend failure rolls back the committed promotion as well, so the
 	// rollback snapshot cannot be left incomplete after an error.
-	updated, created, _, err := s.candidateStore.PromoteWithMemoryAndSnapshot(ctx, s.snapshotStore, id, mem, snapshot)
+	updated, created, _, err := s.candidateStore.PromoteWithMemoryAndSnapshot(ctx, s.snapshotStore, id, mem, snapshot, "system")
 	if err != nil {
 		if errors.Is(err, gormdb.ErrInvalidTransition) {
 			return "", fmt.Errorf("promote_candidate: %w", err)
@@ -378,11 +360,12 @@ func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage
 	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
 		return "", fmt.Errorf("reject_candidate: %w", err)
 	}
-	if _, err := s.recordCandidateReviewSnapshot(ctx, "reject", candidate); err != nil {
+	snapshot, err := s.newCandidateReviewSnapshot("reject", candidate)
+	if err != nil {
 		return "", fmt.Errorf("reject_candidate: %w", err)
 	}
 
-	updated, err := s.candidateStore.TransitionToRejected(ctx, id, reason)
+	updated, _, err := s.candidateStore.TransitionToRejectedWithSnapshot(ctx, s.snapshotStore, id, reason, snapshot, "system")
 	if err != nil {
 		if errors.Is(err, gormdb.ErrInvalidTransition) {
 			return "", fmt.Errorf("reject_candidate: %w", err)
@@ -427,11 +410,12 @@ func (s *Server) handleSupersedeCandidate(ctx context.Context, args json.RawMess
 	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
 		return "", fmt.Errorf("supersede_candidate: %w", err)
 	}
-	if _, err := s.recordCandidateReviewSnapshot(ctx, "supersede", candidate); err != nil {
+	snapshot, err := s.newCandidateReviewSnapshot("supersede", candidate)
+	if err != nil {
 		return "", fmt.Errorf("supersede_candidate: %w", err)
 	}
 
-	updated, err := s.candidateStore.TransitionToSuperseded(ctx, id)
+	updated, _, err := s.candidateStore.TransitionToSupersededWithSnapshot(ctx, s.snapshotStore, id, snapshot, "system")
 	if err != nil {
 		if errors.Is(err, gormdb.ErrInvalidTransition) {
 			return "", fmt.Errorf("supersede_candidate: %w", err)
