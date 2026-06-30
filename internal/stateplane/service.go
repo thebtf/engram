@@ -218,6 +218,11 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 		packet.Principal = request.Principal
 	}
 	now := s.clock()
+	// Synthesize GeneratedAt before anything else so StateVersion derivation
+	// can use it and fallback packets never carry the zero timestamp.
+	if packet.GeneratedAt.IsZero() {
+		packet.GeneratedAt = now
+	}
 	packet.Source = cognitive.StatePacketSourceFilesystemFallback
 	packet.FallbackPath = strings.TrimSpace(packet.FallbackPath)
 	if packet.Freshness == "" {
