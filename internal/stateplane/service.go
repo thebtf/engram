@@ -78,6 +78,7 @@ func (r JSONFileFallbackReader) ReadResumePacket(ctx context.Context, request co
 	if packet.Drift.Kind == "" {
 		packet.Drift.Kind = cognitive.StateDriftUnknown
 	}
+	packet.Drift = normalizeStateDriftConflicts(packet.Drift)
 	if packet.Principal == "" {
 		packet.Principal = request.Principal
 	}
@@ -96,6 +97,7 @@ func (r JSONFileFallbackReader) ReadResumePacket(ctx context.Context, request co
 	if len(packet.Scopes) == 0 && packet.SessionID != "" {
 		packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
 	}
+	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	packet.FallbackUsed = true
 	packet.EvidenceRefs = packetEvidenceRefs(packet, request, true)
 	return packet, nil

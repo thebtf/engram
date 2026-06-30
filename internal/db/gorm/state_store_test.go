@@ -324,7 +324,7 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 		SessionID: sessionID,
 		GoalID:    "goal-1",
 		TaskID:    "task-1",
-		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask},
+		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeTask, cognitive.StateScopeGoal, cognitive.StateScopeProject, cognitive.StateScopeSession, cognitive.StateScopeProject},
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, packet.PacketID)
@@ -339,14 +339,24 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 	require.Equal(t, sessionID, packet.SessionID)
 	require.Equal(t, "goal-1", packet.GoalID)
 	require.Equal(t, "task-1", packet.TaskID)
-	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask}, packet.Scopes)
+	require.Equal(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask}, packet.Scopes)
+	require.Equal(t, resumePacketID(cognitive.ResumePacketRequest{
+		Project:   project,
+		Principal: "agent:developer",
+		SessionID: sessionID,
+		GoalID:    "goal-1",
+		TaskID:    "task-1",
+		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask},
+	}, packet.StateVersion), packet.PacketID)
 	require.Equal(t, fmt.Sprintf("agent_session_state:%s@%s", sessionID, packet.StateVersion), packet.EvidenceRefs[0])
 	require.Contains(t, packet.EvidenceRefs, "state:evidence:resume")
 	require.Contains(t, packet.EvidenceRefs, "audit:write_session_state")
+	require.Contains(t, fmt.Sprint(packet.EvidenceRefs), "agent_project_state:"+project+"@")
 	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
 	require.False(t, packet.FallbackUsed)
 	require.Equal(t, cognitive.StateFreshnessFresh, packet.Freshness)
 	require.Equal(t, cognitive.StateDriftNone, packet.Drift.Kind)
+	require.NotNil(t, packet.Drift.Conflicts)
 	require.Equal(t, cognitive.StateActionCommand, packet.NextAction.Kind)
 	require.Equal(t, "run state surface tests", packet.NextAction.Description)
 	require.Equal(t, "go test ./internal/mcp ./internal/worker", packet.NextAction.Command)
@@ -354,6 +364,18 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 	require.Equal(t, "run full suite", packet.NextVerification.Description)
 	require.Equal(t, "go test ./...", packet.NextVerification.Command)
 	require.NotContains(t, string(packet.Source), "filesystem")
+
+	var entry AuditLogEntry
+	require.Eventually(t, func() bool {
+		return db.Where("action = ? AND actor = ? AND source_session_id = ?", "read_resume_state", "agent:developer", sessionID).
+			Order("id DESC").
+			First(&entry).Error == nil
+	}, 2*time.Second, 25*time.Millisecond, "combined resume read must audit both native evidence refs")
+	require.NotNil(t, entry.AfterState)
+	var after map[string]interface{}
+	require.NoError(t, json.Unmarshal(*entry.AfterState, &after))
+	require.Contains(t, fmt.Sprint(after["evidence_refs"]), "agent_session_state:"+sessionID+"@")
+	require.Contains(t, fmt.Sprint(after["evidence_refs"]), "agent_project_state:"+project+"@")
 }
 
 func TestStateStore_ResumePacketProjectOnlyWithoutSessionID(t *testing.T) {
@@ -390,6 +412,7 @@ func TestStateStore_ResumePacketProjectOnlyWithoutSessionID(t *testing.T) {
 	require.False(t, packet.FallbackUsed)
 	require.Equal(t, cognitive.StateFreshnessFresh, packet.Freshness)
 	require.Equal(t, cognitive.StateDriftNone, packet.Drift.Kind)
+	require.NotNil(t, packet.Drift.Conflicts)
 	require.Equal(t, []string{fmt.Sprintf("agent_project_state:%s@%s", project, packet.StateVersion)}, packet.EvidenceRefs)
 	require.Equal(t, cognitive.StateActionInstruction, packet.NextAction.Kind)
 	require.Equal(t, fmt.Sprintf("Continue project %s from native project state (phase: implementation; pressure: normal).", project), packet.NextAction.Description)
@@ -399,15 +422,16 @@ func TestStateStore_ResumePacketProjectOnlyWithoutSessionID(t *testing.T) {
 	require.Empty(t, packet.NextVerification.Command)
 }
 
-func TestResumePacketIDIncludesGoalAndTaskBindings(t *testing.T) {
+func TestResumePacketIDIncludesGoalTaskAndCanonicalScopes(t *testing.T) {
 	stateVersion := "2026-06-28T12:00:00Z"
+	canonicalScopes := []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask}
 	base := cognitive.ResumePacketRequest{
 		Project:   "engram",
 		Principal: "agent:developer",
 		SessionID: "session-1",
 		GoalID:    "goal-a",
 		TaskID:    "task-a",
-		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeSession},
+		Scopes:    canonicalScopes,
 	}
 
 	differentGoal := base
@@ -415,16 +439,21 @@ func TestResumePacketIDIncludesGoalAndTaskBindings(t *testing.T) {
 	differentTask := base
 	differentTask.TaskID = "task-b"
 	differentScopes := base
-	differentScopes.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeTask}
+	differentScopes.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
+	reversedScopes := base
+	reversedScopes.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeTask, cognitive.StateScopeGoal, cognitive.StateScopeProject, cognitive.StateScopeSession, cognitive.StateScopeProject}
 	spaced := base
 	spaced.GoalID = " goal-a "
 	spaced.TaskID = " task-a "
+	spaced.Scopes = []cognitive.StateScopeKind{" task ", " goal ", " project ", " session "}
 
 	baseID := resumePacketID(base, stateVersion)
 	require.NotEqual(t, baseID, resumePacketID(differentGoal, stateVersion))
 	require.NotEqual(t, baseID, resumePacketID(differentTask, stateVersion))
 	require.NotEqual(t, baseID, resumePacketID(differentScopes, stateVersion))
+	require.Equal(t, baseID, resumePacketID(reversedScopes, stateVersion))
 	require.Equal(t, baseID, resumePacketID(spaced, stateVersion))
+	require.Equal(t, canonicalScopes, normalizeStateStoreResumePacketRequest(reversedScopes).Scopes)
 }
 
 func TestStateStore_ResumePacketDoesNotRequireProjectState(t *testing.T) {

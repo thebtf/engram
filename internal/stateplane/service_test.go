@@ -110,7 +110,7 @@ func TestServiceReadResumePacketNormalizesAndDeduplicatesScopesBeforeReads(t *te
 		Project:                 " engram ",
 		Principal:               " agent:developer ",
 		SessionID:               " session-1 ",
-		Scopes:                  []cognitive.StateScopeKind{" session ", cognitive.StateScopeSession, " project ", cognitive.StateScopeProject},
+		Scopes:                  []cognitive.StateScopeKind{" project ", cognitive.StateScopeProject, " session ", cognitive.StateScopeSession},
 		AllowFilesystemFallback: true,
 	})
 
@@ -127,6 +127,42 @@ func TestServiceReadResumePacketNormalizesAndDeduplicatesScopesBeforeReads(t *te
 	}
 	require.Equal(t, []cognitive.ResumePacketRequest{wantRequest}, native.requests)
 	require.Equal(t, []cognitive.ResumePacketRequest{wantRequest}, fallback.requests)
+}
+
+func TestServiceReadResumePacketSerializesNoDriftConflictsAsEmptyArray(t *testing.T) {
+	native := nativePacket("native next", "go test ./internal/stateplane")
+	native.Drift.Conflicts = nil
+	service := NewService(&fakeNativePlane{packet: native}, nil)
+
+	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:   "engram",
+		Principal: "agent:developer",
+		SessionID: "session-1",
+		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeSession},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, packet.Drift.Conflicts)
+	data, err := json.Marshal(packet)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"conflicts":[]`)
+
+	fallback := fallbackPacket("native next", "fallback.json")
+	fallback.NextVerification = native.NextVerification
+	fallback.GeneratedAt = native.GeneratedAt.Add(time.Hour)
+	service = NewService(&fakeNativePlane{packet: native}, &countingFallbackReader{packet: fallback})
+	packet, err = service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		Principal:               "agent:developer",
+		SessionID:               "session-1",
+		Scopes:                  []cognitive.StateScopeKind{cognitive.StateScopeSession},
+		AllowFilesystemFallback: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, cognitive.StateDriftFallbackNewer, packet.Drift.Kind)
+	require.NotNil(t, packet.Drift.Conflicts)
+	data, err = json.Marshal(packet)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"conflicts":[]`)
 }
 
 func TestServiceReadResumePacketRejectsUnscopedRequest(t *testing.T) {
@@ -302,6 +338,71 @@ func TestServiceReadResumePacketRejectsCommandKindMissingCommand(t *testing.T) {
 	}
 }
 
+func TestServiceReadResumePacketRejectsUnknownActionAndVerificationKinds(t *testing.T) {
+	tests := []struct {
+		name     string
+		fallback bool
+		mutate   func(*cognitive.ResumePacket)
+		want     string
+	}{
+		{
+			name:   "native action",
+			mutate: func(packet *cognitive.ResumePacket) { packet.NextAction.Kind = cognitive.StateActionKind("shell") },
+			want:   "next_action.kind",
+		},
+		{
+			name: "native verification",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.NextVerification.Kind = cognitive.StateVerificationKind("script")
+			},
+			want: "next_verification.kind",
+		},
+		{
+			name:     "fallback action",
+			fallback: true,
+			mutate:   func(packet *cognitive.ResumePacket) { packet.NextAction.Kind = cognitive.StateActionKind("shell") },
+			want:     "next_action.kind",
+		},
+		{
+			name:     "fallback verification",
+			fallback: true,
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.NextVerification.Kind = cognitive.StateVerificationKind("script")
+			},
+			want: "next_verification.kind",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			packet := nativePacket("native next", "go test ./internal/stateplane")
+			service := NewService(&fakeNativePlane{packet: packet}, nil)
+			request := cognitive.ResumePacketRequest{
+				Project:   "engram",
+				Principal: "agent:developer",
+				SessionID: "session-1",
+				Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeSession},
+			}
+			if tt.fallback {
+				packet = fallbackPacket("fallback next", "fallback.json")
+				request.AllowFilesystemFallback = true
+				service = NewService(&fakeNativePlane{err: errors.New("native missing")}, &countingFallbackReader{packet: packet})
+			}
+			tt.mutate(&packet)
+			if tt.fallback {
+				service = NewService(&fakeNativePlane{err: errors.New("native missing")}, &countingFallbackReader{packet: packet})
+			} else {
+				service = NewService(&fakeNativePlane{packet: packet}, nil)
+			}
+
+			_, err := service.ReadResumePacket(context.Background(), request)
+
+			require.ErrorContains(t, err, tt.want)
+			require.ErrorContains(t, err, "not a recognized")
+		})
+	}
+}
+
 func TestServiceReadResumePacketRejectsNativePacketWithFallbackBoundaryMarkers(t *testing.T) {
 	native := nativePacket("native next", "go test ./internal/stateplane")
 	native.FallbackUsed = true
@@ -320,6 +421,41 @@ func TestServiceReadResumePacketRejectsNativePacketWithFallbackBoundaryMarkers(t
 
 	require.ErrorContains(t, err, "fallback_used")
 	require.Equal(t, 0, fallback.reads)
+}
+
+func TestServiceReadResumePacketRejectsNativeRequestBindingMismatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*cognitive.ResumePacket)
+		want   string
+	}{
+		{name: "project", mutate: func(packet *cognitive.ResumePacket) { packet.Project = "other-project" }, want: "project does not match resume request"},
+		{name: "session", mutate: func(packet *cognitive.ResumePacket) { packet.SessionID = "other-session" }, want: "session_id does not match resume request"},
+		{name: "goal", mutate: func(packet *cognitive.ResumePacket) { packet.GoalID = "other-goal" }, want: "goal_id does not match resume request"},
+		{name: "task", mutate: func(packet *cognitive.ResumePacket) { packet.TaskID = "other-task" }, want: "task_id does not match resume request"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			packet := nativePacket("native next", "go test ./internal/stateplane")
+			packet.GoalID = "goal-1"
+			packet.TaskID = "task-1"
+			packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask}
+			tt.mutate(&packet)
+			service := NewService(&fakeNativePlane{packet: packet}, &countingFallbackReader{packet: fallbackPacket("fallback next", "fallback.json")})
+
+			_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+				Project:   "engram",
+				Principal: "agent:developer",
+				SessionID: "session-1",
+				GoalID:    "goal-1",
+				TaskID:    "task-1",
+				Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeTask, cognitive.StateScopeGoal, cognitive.StateScopeProject, cognitive.StateScopeSession},
+			})
+
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
 }
 
 func TestServiceReadResumePacketExplicitFallbackMarkerOnNativeMiss(t *testing.T) {
@@ -370,6 +506,7 @@ func TestJSONFileFallbackReaderMarksExportAsFallback(t *testing.T) {
 	require.Equal(t, cognitive.StatePacketSourceFilesystemFallback, packet.Source)
 	require.Equal(t, cognitive.StateFreshnessUnknown, packet.Freshness)
 	require.Equal(t, cognitive.StateDriftUnknown, packet.Drift.Kind)
+	require.NotNil(t, packet.Drift.Conflicts)
 	require.Equal(t, "agent:developer", packet.Principal)
 	require.True(t, packet.FallbackUsed)
 	require.Equal(t, fallbackPath, packet.FallbackPath)
