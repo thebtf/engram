@@ -136,6 +136,7 @@ func TestService_TruthChangeExposesInvalidationAndProvenanceChain(t *testing.T) 
 func TestService_QueryTemporalTruthIgnoresFutureDatedTrueNow(t *testing.T) {
 	now := time.Now().UTC()
 	futureStart := now.Add(2 * time.Hour)
+	futureAsOf := now.Add(3 * time.Hour)
 	service := NewService([]Record{
 		{
 			FactID:     "release.supported_version",
@@ -144,6 +145,9 @@ func TestService_QueryTemporalTruthIgnoresFutureDatedTrueNow(t *testing.T) {
 			Value:      "v7",
 			ValidFrom:  now.Add(-24 * time.Hour),
 			ValidUntil: &futureStart,
+			Provenance: []cognitive.TemporalTruthProvenance{
+				{Kind: "release", ID: "release:v7", Project: "engram"},
+			},
 		},
 		{
 			FactID:    "release.supported_version",
@@ -151,18 +155,27 @@ func TestService_QueryTemporalTruthIgnoresFutureDatedTrueNow(t *testing.T) {
 			Project:   "engram",
 			Value:     "v8",
 			ValidFrom: futureStart,
+			Provenance: []cognitive.TemporalTruthProvenance{
+				{Kind: "release", ID: "release:v8", Project: "engram"},
+			},
 		},
 	})
 
 	response, err := service.QueryTemporalTruth(context.Background(), cognitive.TemporalTruthQueryRequest{
 		FactID:  "release.supported_version",
 		Project: "engram",
+		AsOf:    &futureAsOf,
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, cognitive.TemporalTruthFound, response.State)
 	require.NotNil(t, response.TrueNow)
 	require.Equal(t, "v7", response.TrueNow.Value)
+	require.Nil(t, response.TrueThen)
+	require.Len(t, response.History, 1)
+	require.Equal(t, "v7", response.History[0].Value)
+	require.Len(t, response.ProvenanceChain, 1)
+	require.Equal(t, "release:v7", response.ProvenanceChain[0].ID)
 }
 
 func TestService_QueryTemporalTruthFutureOnlyFactIsUnknown(t *testing.T) {

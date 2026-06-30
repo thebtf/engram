@@ -39,12 +39,12 @@ func (f *fakeStatePlane) ReadResumePacket(_ context.Context, request cognitive.R
 	return f.packet, nil
 }
 
-func TestStateToolAdvertisedOnlyWhenStoreWired(t *testing.T) {
+func TestStateToolHiddenUntilNativeWritePathIsReachable(t *testing.T) {
 	srv := NewServer(ServerOptions{Version: "test"})
 	require.NotContains(t, buildToolsList(srv), "get_state")
 
 	srv.SetStateStore(&fakeStatePlane{})
-	require.Contains(t, buildToolsList(srv), "get_state")
+	require.NotContains(t, buildToolsList(srv), "get_state")
 
 	tool := stateTool()
 	schema := tool.InputSchema["properties"].(map[string]any)

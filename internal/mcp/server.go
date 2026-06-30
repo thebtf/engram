@@ -1092,9 +1092,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.principalMemoryQuerySvc != nil {
 		tools = append(tools, principalMemoryQueryTool())
 	}
-	if s.stateStore != nil {
-		tools = append(tools, stateTool())
-	}
+	// get_state remains callable for direct internal compatibility, but is not
+	// advertised until the runtime exposes a matching native state write path.
 
 	// Session outcome tool — only advertise when session store is available
 	if s.sessionStore != nil {
