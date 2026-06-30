@@ -3,7 +3,7 @@
 **Feature:** ENG-MPL-1 (`memory-product-layer`)  
 **Plan date:** 2026-06-28  
 **Mode:** CREATE  
-**Updated for:** ENG-MPL-1 — open CRs: [CR-001-initial-scope, CR-002-experience-applicability, CR-003-forgetting-consolidation, CR-004-selective-temporal-truth]
+**Updated for:** ENG-MPL-1 — open CRs: [CR-005]
 
 > **Sources:** `.agent/specs/memory-product-layer/spec.md`, `prd.md`, `architecture.md`, `milestone-map.md`, `.agent/specs/constitution.md`, `.agent/specs/principal-memory-query-domain-registry/architecture.md`, `pkg/cognitive/interfaces.go`, `pkg/cognitive/types.go`, `internal/mcp/tools_brief.go`, `internal/mcp/server.go`, `internal/mcp/tools_candidates.go`, `internal/worker/service.go`, `apps/operator-console/composables/useOperatorOverview.ts`, `apps/operator-console/useOperatorMemoryLab.ts`, `apps/operator-console/i18n/locales/en.json`, `docs/DEPLOYMENT.md`
 
@@ -363,8 +363,51 @@ Suggested next step:
 
 ---
 
+## Plan Update: 2026-06-30 (CR-005)
+
+> Updated for: ENG-MPL-1 — open CRs: [CR-005]
+
+### Contract scope
+
+CR-005 is a post-v6.30 hardening slice. It does not add a new product milestone and does not reopen CR-001..CR-004. It turns the remaining roadmap debt into exact contracts:
+- resume packet fields and fallback/drift semantics;
+- experience contract fields and projection-first storage-origin rule;
+- applicability / anti-applicability envelope outcomes;
+- archive trigger taxonomy and logging contract;
+- review packet versus mutation execution boundary.
+
+### File responsibility map update
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `.agent/specs/memory-product-layer/contracts/contract-hardening.md` | create/maintain | PM source contract for exact CR-005 fields and taxonomy |
+| `pkg/cognitive/types.go` | modify later | align resume packet and experience/applicability value-object shapes |
+| `pkg/cognitive/interfaces.go` | modify later | align contract interfaces without broadening shipped behavior |
+| archive resurfacing / trigger seam | modify later | encode named trigger classes and logging fields |
+| experience retrieval / applicability seam | modify later | enforce applies/uncertain/blocked outcomes |
+| candidate/snapshot/audit governance seam | modify later | separate review packets from mutation execution |
+| `.agent/specs/memory-product-layer/evidence/cr-005-*` | create later | store contract, archive/applicability, and closeout proof |
+
+### Reversibility and source gates
+
+**REVERSIBILITY_AUDIT: PASS** — CR-005 is reversible/partially reversible contract hardening. It changes executable semantics only by tightening already-shipped contracts; the fallback is to keep current v6.30 behavior and amend the CR before broadening.
+
+Source Requirements: PASS against planning artifacts (`spec.md`, `contracts/contract-hardening.md`, `prd.md`, `architecture.md`, `design.md`, `milestone-map.md`). No new external framework/library/cloud dependency is introduced.
+
+### Verification route
+
+- Contract fixtures for resume packet and experience output.
+- Archive-trigger tests proving ordinary hot-path requests do not search archive.
+- Applicability tests for applies / uncertain / blocked.
+- Review-packet tests proving preview and mutation are separate.
+- Closeout proof that CR-001..CR-004 shipped behavior was not reopened.
+
+### Parallelism
+
+No `[P]` plan markers. Contract fields feed archive/applicability fixtures, which feed packet/mutation closeout proof; dependency order is intentionally sequential.
+
 ## Unresolved blockers
 
-- No blocker for Phase 1 backend work.
-- **UI work blocker:** no approved designer contract yet.
-- **Storage-shape blocker for later slices:** dedicated experience tables not yet proven.
+- No blocker for CR-005 PM packet generation or later contract-hardening implementation.
+- **UI work blocker:** no approved designer contract yet for any new operator-console surface; CR-005 does not authorize UI expansion.
+- **Storage-shape guard:** dedicated experience tables remain evidence-gated; CR-005 starts projection/materialization-first and may recommend dedicated tables only after contract fixtures prove the need.

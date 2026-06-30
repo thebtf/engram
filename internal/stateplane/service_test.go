@@ -65,6 +65,7 @@ func TestServiceReadResumePacketNativeFirstDoesNotOpenFallback(t *testing.T) {
 
 	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:   "engram",
+		Principal: "agent:developer",
 		SessionID: "session-1",
 	})
 
@@ -85,6 +86,7 @@ func TestServiceReadResumePacketExplicitFallbackMarkerOnNativeMiss(t *testing.T)
 
 	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
+		Principal:               "agent:developer",
 		SessionID:               "session-1",
 		AllowFilesystemFallback: true,
 	})
@@ -95,6 +97,9 @@ func TestServiceReadResumePacketExplicitFallbackMarkerOnNativeMiss(t *testing.T)
 	require.Equal(t, cognitive.StateDriftUnknown, packet.Drift.Kind)
 	require.Equal(t, fallbackPath, packet.FallbackPath)
 	require.Equal(t, "fallback next", packet.NextAction.Description)
+	require.Equal(t, "agent:developer", packet.Principal)
+	require.True(t, packet.FallbackUsed)
+	require.NotEmpty(t, packet.EvidenceRefs)
 }
 
 func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
@@ -106,15 +111,19 @@ func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
 
 	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
+		Principal:               "agent:developer",
 		SessionID:               "session-1",
 		AllowFilesystemFallback: true,
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, cognitive.StatePacketSourceConflict, packet.Source)
+	require.Equal(t, cognitive.StatePacketSourceMixed, packet.Source)
 	require.Equal(t, cognitive.StateDriftConflict, packet.Drift.Kind)
 	require.Equal(t, fallbackPath, packet.FallbackPath)
 	require.NotEmpty(t, packet.Drift.Conflicts)
+	require.Equal(t, "agent:developer", packet.Principal)
+	require.True(t, packet.FallbackUsed)
+	require.NotEmpty(t, packet.EvidenceRefs)
 	require.Equal(t, "next_action", packet.Drift.Conflicts[0].Field)
 	require.Equal(t, "native_retained_until_resolved", packet.Drift.Conflicts[0].Resolution)
 }
@@ -131,15 +140,19 @@ func TestServiceReadResumePacketReportsNewerFallbackDriftWhenActionsMatch(t *tes
 
 	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
+		Principal:               "agent:developer",
 		SessionID:               "session-1",
 		AllowFilesystemFallback: true,
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
+	require.Equal(t, cognitive.StatePacketSourceMixed, packet.Source)
 	require.Equal(t, cognitive.StateFreshnessStale, packet.Freshness)
 	require.Equal(t, cognitive.StateDriftFallbackNewer, packet.Drift.Kind)
 	require.Equal(t, "fallback.json", packet.FallbackPath)
+	require.Equal(t, "agent:developer", packet.Principal)
+	require.True(t, packet.FallbackUsed)
+	require.NotEmpty(t, packet.EvidenceRefs)
 	require.Equal(t, "native next", packet.NextAction.Description)
 }
 
@@ -149,6 +162,7 @@ func TestServiceReadResumePacketNativeErrorWithoutFallbackAllowed(t *testing.T) 
 
 	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:   "engram",
+		Principal: "agent:developer",
 		SessionID: "session-1",
 	})
 
@@ -165,11 +179,27 @@ func TestServiceReadResumePacketRejectsIndeterminateFallbackPacket(t *testing.T)
 
 	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
+		Principal:               "agent:developer",
 		SessionID:               "session-1",
 		AllowFilesystemFallback: true,
 	})
 
 	require.ErrorContains(t, err, "next_action.description is required")
+}
+
+func TestServiceReadResumePacketRejectsMissingPrincipalBeforeFallback(t *testing.T) {
+	service := NewService(
+		&fakeNativePlane{err: errors.New("native missing")},
+		&countingFallbackReader{packet: fallbackPacket("fallback next", "fallback.json")},
+	)
+
+	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		SessionID:               "session-1",
+		AllowFilesystemFallback: true,
+	})
+
+	require.ErrorContains(t, err, "principal is required")
 }
 
 func TestServiceReadResumePacketRejectsFallbackRequestProjectMismatchOnNativeMiss(t *testing.T) {
@@ -184,6 +214,7 @@ func TestServiceReadResumePacketRejectsFallbackRequestProjectMismatchOnNativeMis
 
 	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
+		Principal:               "agent:developer",
 		SessionID:               "session-1",
 		AllowFilesystemFallback: true,
 	})
@@ -204,6 +235,7 @@ func TestServiceReadResumePacketRejectsFallbackRequestSessionMismatchBeforeConfl
 
 	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
+		Principal:               "agent:developer",
 		SessionID:               "session-1",
 		AllowFilesystemFallback: true,
 	})
@@ -223,7 +255,9 @@ func nativePacket(actionDescription, verificationCommand string) cognitive.Resum
 		GeneratedAt:      now,
 		Project:          "engram",
 		SessionID:        "session-1",
+		Principal:        "agent:developer",
 		Scopes:           []cognitive.StateScopeKind{cognitive.StateScopeSession},
+		EvidenceRefs:     []string{"agent_session_state:session-1@2026-06-28T12:00:00Z"},
 	}
 }
 
@@ -233,6 +267,7 @@ func fallbackPacket(actionDescription, fallbackPath string) cognitive.ResumePack
 	packet.Freshness = cognitive.StateFreshnessUnknown
 	packet.Drift = cognitive.StateDrift{Kind: cognitive.StateDriftUnknown, CheckedAt: packet.GeneratedAt}
 	packet.FallbackPath = fallbackPath
+	packet.FallbackUsed = true
 	return packet
 }
 

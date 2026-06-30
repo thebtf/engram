@@ -189,10 +189,42 @@ func TestServiceQueryExperienceRequiresExplicitProjectAttributionForProjectScope
 	require.Equal(t, "engram-scoped", results[0].SourceAttribution[0].ID)
 }
 
+func TestServiceQueryExperienceUsesProvenanceWhenSourceAttributionIsEmpty(t *testing.T) {
+	candidate := fixtureExperience("provenance-only", "Provenance-only OAuth retry guidance for engram.", "engram", "s1")
+	candidate.SourceAttribution = nil
+	candidate.Provenance = []cognitive.ExperienceSourceAttribution{
+		{
+			Kind:      "session",
+			ID:        "provenance-only",
+			Project:   "engram",
+			SessionID: "s1",
+			CreatedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		},
+	}
+	service := NewService([]cognitive.ExperienceResponse{candidate})
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "OAuth retry guidance",
+		CurrentContext: "investigating an engram retry failure",
+		Limit:          1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "provenance-only", results[0].SourceAttribution[0].ID)
+	require.Equal(t, results[0].Provenance, results[0].SourceAttribution)
+}
+
 func fixtureExperience(id, lesson, project, sessionID string) cognitive.ExperienceResponse {
 	return cognitive.ExperienceResponse{
-		Source: cognitive.ExperienceSourceProjection,
-		Lesson: lesson,
+		Source:        cognitive.ExperienceSourceProjection,
+		StorageOrigin: cognitive.ExperienceSourceProjection,
+		Situation:     "prior retry investigation",
+		Decision:      "retry once before cooldown",
+		Action:        "add focused retry proof",
+		Outcome:       "regression stayed bounded",
+		Lesson:        lesson,
 		SourceAttribution: []cognitive.ExperienceSourceAttribution{
 			{
 				Kind:      "session",
@@ -203,7 +235,7 @@ func fixtureExperience(id, lesson, project, sessionID string) cognitive.Experien
 			},
 		},
 		ArchiveTriggerClasses: []cognitive.ExperienceArchiveTriggerClass{
-			cognitive.ExperienceArchiveTriggerSimilarFailure,
+			cognitive.ExperienceArchiveTriggerSimilarPriorFailure,
 		},
 	}
 }

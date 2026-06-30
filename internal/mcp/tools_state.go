@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/thebtf/engram/pkg/cognitive"
 )
@@ -15,6 +16,7 @@ type statePlane interface {
 type stateToolArgs struct {
 	Action                  string `json:"action"`
 	Project                 string `json:"project"`
+	Principal               string `json:"principal"`
 	SessionID               string `json:"session_id"`
 	GoalID                  string `json:"goal_id"`
 	TaskID                  string `json:"task_id"`
@@ -32,6 +34,7 @@ func stateTool() Tool {
 			"properties": map[string]any{
 				"action":     map[string]any{"type": "string", "enum": []string{"session", "project", "resume"}, "description": "State read action"},
 				"project":    map[string]any{"type": "string", "description": "Project identifier for project/resume reads"},
+				"principal":  map[string]any{"type": "string", "description": "Requesting principal or agent identity for resume packet binding"},
 				"session_id": map[string]any{"type": "string", "description": "Session identifier for session/resume reads"},
 				"goal_id":    map[string]any{"type": "string", "description": "Optional goal identifier for resume packet binding"},
 				"task_id":    map[string]any{"type": "string", "description": "Optional task identifier for resume packet binding"},
@@ -84,11 +87,16 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 		if a.SessionID == "" {
 			return "", fmt.Errorf("session_id required")
 		}
+		a.Principal = strings.TrimSpace(a.Principal)
+		if a.Principal == "" {
+			return "", fmt.Errorf("principal required")
+		}
 		if a.AllowFilesystemFallback != nil {
 			return "", fmt.Errorf("allow_filesystem_fallback is not supported on the server runtime state path")
 		}
 		packet, err := s.stateStore.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
 			Project:   a.Project,
+			Principal: a.Principal,
 			SessionID: a.SessionID,
 			GoalID:    a.GoalID,
 			TaskID:    a.TaskID,

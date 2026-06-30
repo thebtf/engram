@@ -376,6 +376,11 @@ func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
 	memory, err := memoryFromCandidate(candidate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -423,6 +428,19 @@ func (s *Service) handleRejectMemoryCandidate(w http.ResponseWriter, r *http.Req
 		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	candidate, err := store.Get(r.Context(), id)
+	if err != nil {
+		writeCandidateStoreError(w, "get_candidate_for_rejection", id, err)
+		return
+	}
+	if candidate == nil {
+		http.Error(w, "candidate not found", http.StatusNotFound)
+		return
+	}
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 
 	updated, err := store.TransitionToRejected(r.Context(), id, req.Reason)
 	if err != nil {
@@ -455,6 +473,20 @@ func (s *Service) handleSupersedeMemoryCandidate(w http.ResponseWriter, r *http.
 	id, ok := candidateIDFromRequest(r)
 	if !ok {
 		http.Error(w, "invalid candidate id", http.StatusBadRequest)
+		return
+	}
+
+	candidate, err := store.Get(r.Context(), id)
+	if err != nil {
+		writeCandidateStoreError(w, "get_candidate_for_supersede", id, err)
+		return
+	}
+	if candidate == nil {
+		http.Error(w, "candidate not found", http.StatusNotFound)
+		return
+	}
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 

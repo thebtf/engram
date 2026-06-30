@@ -4,7 +4,7 @@ slug: memory-product-layer
 title: Agent Knowledge and Experience Layer
 status: ACTIVE
 created: 2026-06-27
-modified: 2026-06-28
+modified: 2026-06-30
 parent: ENG-PMQ-1
 children: []
 supersedes: ~
@@ -12,7 +12,7 @@ superseded_by: ~
 split_from: ~
 merges: []
 aliases: [memory-product-layer, memory-governance-layer, principal-memory-product]
-open_crs: [CR-001-initial-scope, CR-002-experience-applicability, CR-003-forgetting-consolidation, CR-004-selective-temporal-truth]
+open_crs: [CR-005]
 source_prd: prd.md
 ---
 
@@ -23,7 +23,7 @@ source_prd: prd.md
 **Status:** Active  
 **Author:** AI Agent
 
-> **Provenance:** Specified from `.agent/specs/memory-product-layer/prd.md`, `.agent/specs/memory-product-layer/milestone-map.md`, `.agent/specs/principal-memory-query-domain-registry/architecture.md`, `pkg/cognitive/interfaces.go`, `internal/mcp/tools_brief.go`, and current operator-console copy surfaces.
+> **Provenance:** Specified from `.agent/specs/memory-product-layer/prd.md`, `.agent/specs/memory-product-layer/milestone-map.md`, `outputs/agent-memory-design.md`, `.agent/specs/principal-memory-query-domain-registry/architecture.md`, `pkg/cognitive/interfaces.go`, `internal/mcp/tools_brief.go`, and current operator-console copy surfaces.  
 > **Confidence:** VERIFIED for current-code/current-artifact claims read this session; INFERRED only for some later milestone shape choices.
 
 ## Overview
@@ -97,6 +97,15 @@ Every touched surface in this feature must classify unsupported behavior as `mus
 
 ### FR-15: Releaseable Increment Boundaries
 The feature must be decomposed into independently shippable increments aligned to the milestone map so each milestone ends in a functional operator-visible improvement.
+
+### FR-16: Contract Hardening Continuation
+The next post-v6.30 continuation slice must harden exact packet, schema, taxonomy, and boundary contracts before further behavioral expansion. The hardened contracts must cover resume packets, experience contracts, applicability envelopes, archive trigger classes, review packets, and mutation execution boundaries.
+
+### FR-17: Archive Trigger Logging Contract
+Archive/cold retrieval trigger classes must be explicit and logged. Every archive-triggered retrieval must record trigger class, caller/session/project scope, bounded result limit, whether experience retrieval ran, whether anti-applicability blocked reuse, and evidence references.
+
+### FR-18: Review Packet / Mutation Boundary
+Review packets must propose, preview, and explain risky decisions; mutation paths must separately validate structural-loss, privacy scope, and audit write before applying state or memory changes. No packet surface may silently mutate memory or state.
 
 ## Non-Functional Requirements
 
@@ -206,8 +215,9 @@ Touched operator-console surfaces must preserve honesty, i18n, and parity discip
 - `ENG-PMQ-1` principal query/domain registry substrate.
 - Existing retrieval/injection/feedback/decay mechanisms as seeds, not finished product.
 - Designer-owned contract artifacts under `.agent/specs/memory-product-layer/design-contracts/` for every implied operator-facing UI/UX slice.
-- Future architecture decision for dedicated state plane storage boundary.
-- Future architecture decision for `ExperienceRecord` minimum schema.
+- Contract-hardening packet at `.agent/specs/memory-product-layer/contracts/contract-hardening.md` for CR-005 exact fields and taxonomy.
+- Native state plane storage boundary is settled for V1 as a dedicated state-plane table/service family with filesystem fallback/export.
+- Experience storage remains projection/materialization-first until CR-005 evidence proves dedicated tables are necessary.
 
 ## Success Criteria
 
@@ -225,11 +235,15 @@ Touched operator-console surfaces must preserve honesty, i18n, and parity discip
 
 ## Open Questions
 
-- [NEEDS CLARIFICATION] What minimum fields make an `ExperienceRecord` worth persistence in V1?
-- [NEEDS CLARIFICATION] Should the native state plane live in a dedicated store/table family or inside the current memory store with hard type boundaries?
-- [NEEDS CLARIFICATION] Which forgetting modes may be fully automatic by default, and which must escalate?
-- [NEEDS CLARIFICATION] Which exact trigger classes may invoke archive retrieval automatically?
-- [NEEDS CLARIFICATION] What is the minimum applicability envelope that blocks bad reuse in V1 without overfitting?
+No implementation-shaping open questions remain for the next bounded slice. CR-005 resolves the prior ambiguity into explicit contract decisions:
+
+| Prior question | CR-005 decision |
+| --- | --- |
+| What minimum fields make an `ExperienceRecord` worth persistence? | V1 requires an experience contract with situation, time span, decision/action, outcome/revision, lesson, applicability, anti-applicability, provenance, and storage origin. Dedicated storage remains evidence-gated. |
+| Should native state live in a dedicated state store? | Yes for state plane: dedicated state-plane tables/service semantics, with filesystem as fallback/export only. |
+| Which forgetting modes may be automatic? | Suppress/expire/archive may be automatic under safe policy; consolidation requires structural-loss guard and may escalate; destroy is never automatic by default. |
+| Which trigger classes may invoke archive retrieval automatically? | Only the named CR-005 classes: historical why, regression/rollback, revisit old decision, similar prior failure, temporal truth change, or explicit archive lookup. |
+| What minimum applicability envelope blocks bad reuse? | `applies_when`, `does_not_apply_when`, `required_context`, confidence, block reason, and override evidence; strong anti-applicability blocks silent auto-reuse. |
 
 ## Strangler Fig
 

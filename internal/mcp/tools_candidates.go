@@ -249,6 +249,7 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 				preview["proposed_content"] = c.ProposedContent
 				preview["status"] = string(c.Status)
 				preview["proposed_tier"] = c.ProposedTier
+				preview["review_packet"] = reviewpacket.FromCandidate(c)
 			}
 		}
 		b, jsonErr := json.Marshal(preview)
@@ -273,6 +274,9 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 	}
 	if candidate.Status != models.CandidateStatusPending {
 		return "", fmt.Errorf("promote_candidate: candidate %d is not pending (status=%s)", id, candidate.Status)
+	}
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		return "", fmt.Errorf("promote_candidate: %w", err)
 	}
 
 	// Build a memory from the candidate's proposed content.
@@ -334,6 +338,16 @@ func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("reject_candidate: id is required")
 	}
 	reason := coerceString(m["reason"], "")
+	candidate, err := s.candidateStore.Get(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("reject_candidate get %d: %w", id, err)
+	}
+	if candidate == nil {
+		return "", fmt.Errorf("reject_candidate: candidate %d not found", id)
+	}
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		return "", fmt.Errorf("reject_candidate: %w", err)
+	}
 
 	updated, err := s.candidateStore.TransitionToRejected(ctx, id, reason)
 	if err != nil {
@@ -369,6 +383,16 @@ func (s *Server) handleSupersedeCandidate(ctx context.Context, args json.RawMess
 	id := coerceInt64(m["id"], 0)
 	if id <= 0 {
 		return "", fmt.Errorf("supersede_candidate: id is required")
+	}
+	candidate, err := s.candidateStore.Get(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("supersede_candidate get %d: %w", id, err)
+	}
+	if candidate == nil {
+		return "", fmt.Errorf("supersede_candidate: candidate %d not found", id)
+	}
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		return "", fmt.Errorf("supersede_candidate: %w", err)
 	}
 
 	updated, err := s.candidateStore.TransitionToSuperseded(ctx, id)

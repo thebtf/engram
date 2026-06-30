@@ -15,15 +15,17 @@ const (
 )
 
 type CandidateReviewPacket struct {
-	Decision    CandidateDecisionPolicy `json:"decision"`
-	Scope       CandidateScope          `json:"scope"`
-	Snapshot    CandidateSnapshotPolicy `json:"snapshot"`
-	Audit       CandidateAuditPolicy    `json:"audit"`
-	PacketID    string                  `json:"packet_id"`
-	Kind        string                  `json:"kind"`
-	Status      string                  `json:"status"`
-	CandidateID int64                   `json:"candidate_id"`
-	Evidence    []CandidateEvidence     `json:"evidence"`
+	Decision             CandidateDecisionPolicy       `json:"decision"`
+	Scope                CandidateScope                `json:"scope"`
+	Snapshot             CandidateSnapshotPolicy       `json:"snapshot"`
+	Audit                CandidateAuditPolicy          `json:"audit"`
+	MutationRequirements CandidateMutationRequirements `json:"mutation_requirements"`
+	PacketID             string                        `json:"packet_id"`
+	Kind                 string                        `json:"kind"`
+	Status               string                        `json:"status"`
+	CandidateID          int64                         `json:"candidate_id"`
+	Evidence             []CandidateEvidence           `json:"evidence"`
+	ReadOnly             bool                          `json:"read_only"`
 }
 
 type CandidateDecisionPolicy struct {
@@ -58,11 +60,19 @@ type CandidateAuditPolicy struct {
 	Status string `json:"status"`
 }
 
+type CandidateMutationRequirements struct {
+	StructuralLossCheckRequired bool `json:"structural_loss_check_required"`
+	PrivacyScopeRequired        bool `json:"privacy_scope_required"`
+	AuditWriteRequired          bool `json:"audit_write_required"`
+	SnapshotRequired            bool `json:"snapshot_required"`
+}
+
 func FromCandidate(candidate *models.CrystallizationCandidate) CandidateReviewPacket {
 	if candidate == nil {
 		return CandidateReviewPacket{
 			Kind:     CandidatePacketKind,
 			Evidence: []CandidateEvidence{},
+			ReadOnly: true,
 		}
 	}
 
@@ -96,6 +106,8 @@ func FromCandidate(candidate *models.CrystallizationCandidate) CandidateReviewPa
 			Action: "candidate_review",
 			Status: auditStatus(candidate.Status),
 		},
+		MutationRequirements: mutationRequirements(candidate.Status),
+		ReadOnly:             true,
 	}
 }
 
@@ -133,6 +145,51 @@ func auditStatus(status models.CandidateStatus) string {
 		return "pending_on_action"
 	}
 	return "terminal_record"
+}
+
+func mutationRequirements(status models.CandidateStatus) CandidateMutationRequirements {
+	if status != models.CandidateStatusPending {
+		return CandidateMutationRequirements{}
+	}
+	return CandidateMutationRequirements{
+		StructuralLossCheckRequired: true,
+		PrivacyScopeRequired:        true,
+		AuditWriteRequired:          true,
+		SnapshotRequired:            true,
+	}
+}
+
+func ValidateCandidateMutation(candidate *models.CrystallizationCandidate) error {
+	if candidate == nil {
+		return fmt.Errorf("candidate mutation requires a candidate")
+	}
+	return ValidateMutationBoundary(FromCandidate(candidate))
+}
+
+func ValidateMutationBoundary(packet CandidateReviewPacket) error {
+	if packet.Kind != CandidatePacketKind {
+		return fmt.Errorf("candidate mutation requires %s packet", CandidatePacketKind)
+	}
+	if len(packet.Decision.AllowedActions) == 0 {
+		return fmt.Errorf("candidate mutation requires a pending review packet")
+	}
+	if !packet.MutationRequirements.StructuralLossCheckRequired {
+		return fmt.Errorf("candidate mutation requires structural-loss check")
+	}
+	if packet.MutationRequirements.PrivacyScopeRequired && strings.TrimSpace(packet.Scope.PrivacyScope) == "" {
+		return fmt.Errorf("candidate mutation requires privacy_scope")
+	}
+	if packet.MutationRequirements.SnapshotRequired {
+		if packet.Snapshot.Store != SnapshotStore || !packet.Snapshot.Required || packet.Snapshot.Status != "pre_action_required" {
+			return fmt.Errorf("candidate mutation requires pre-action structural snapshot policy")
+		}
+	}
+	if packet.MutationRequirements.AuditWriteRequired {
+		if packet.Audit.Store != AuditStore || packet.Audit.Action != "candidate_review" || packet.Audit.Status != "pending_on_action" {
+			return fmt.Errorf("candidate mutation requires pending audit write policy")
+		}
+	}
+	return nil
 }
 
 func evidenceFromHandles(handles []string) []CandidateEvidence {

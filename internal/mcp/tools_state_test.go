@@ -49,6 +49,7 @@ func TestStateToolHiddenUntilNativeWritePathIsReachable(t *testing.T) {
 	tool := stateTool()
 	schema := tool.InputSchema["properties"].(map[string]any)
 	require.NotContains(t, schema, "allow_filesystem_fallback")
+	require.Contains(t, schema, "principal")
 }
 
 func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
@@ -62,12 +63,13 @@ func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 			NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "run full suite", Command: "go test ./..."},
 			GeneratedAt:      time.Now().UTC(),
 			Project:          "engram",
+			Principal:        "agent:developer",
 			SessionID:        "session-1",
 		},
 	}
 	srv.SetStateStore(fakeStore)
 
-	result, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","session_id":"session-1"}`))
+	result, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1"}`))
 	require.NoError(t, err)
 
 	var packet cognitive.ResumePacket
@@ -76,15 +78,25 @@ func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 	require.Equal(t, "run focused tests", packet.NextAction.Description)
 	require.Empty(t, packet.FallbackPath)
 	require.False(t, fakeStore.lastRequest.AllowFilesystemFallback)
+	require.Equal(t, "agent:developer", fakeStore.lastRequest.Principal)
 }
 
 func TestGetStateToolRejectsFilesystemFallbackOption(t *testing.T) {
 	srv := NewServer(ServerOptions{Version: "test"})
 	srv.SetStateStore(&fakeStatePlane{})
 
-	_, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","session_id":"session-1","allow_filesystem_fallback":true}`))
+	_, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1","allow_filesystem_fallback":true}`))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "allow_filesystem_fallback is not supported")
+}
+
+func TestGetStateToolResumeRequiresPrincipal(t *testing.T) {
+	srv := NewServer(ServerOptions{Version: "test"})
+	srv.SetStateStore(&fakeStatePlane{})
+
+	_, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","session_id":"session-1"}`))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "principal required")
 }
 
 func TestGetStateToolResumeDoesNotInjectContextProjectWhenOmitted(t *testing.T) {
@@ -103,7 +115,8 @@ func TestGetStateToolResumeDoesNotInjectContextProjectWhenOmitted(t *testing.T) 
 	srv.SetStateStore(fakeStore)
 	ctx := contextWithProject(context.Background(), "context-project")
 
-	_, err := srv.callTool(ctx, "get_state", json.RawMessage(`{"action":"resume","session_id":"session-1"}`))
+	_, err := srv.callTool(ctx, "get_state", json.RawMessage(`{"action":"resume","principal":"agent:developer","session_id":"session-1"}`))
 	require.NoError(t, err)
 	require.Empty(t, fakeStore.lastRequest.Project)
+	require.Equal(t, "agent:developer", fakeStore.lastRequest.Principal)
 }

@@ -26,11 +26,17 @@ type ArchiveSource interface {
 
 // ArchiveEvidenceEntry records one trigger-gated archive resurfacing decision.
 type ArchiveEvidenceEntry struct {
-	TriggerClasses []cognitive.ExperienceArchiveTriggerClass `json:"trigger_classes"`
-	RequestedLimit int                                       `json:"requested_limit"`
-	Returned       int                                       `json:"returned"`
-	Status         string                                    `json:"status"`
-	Reason         string                                    `json:"reason,omitempty"`
+	TriggerClasses           []cognitive.ExperienceArchiveTriggerClass `json:"trigger_classes"`
+	CallerPrincipal          string                                    `json:"caller_principal"`
+	Project                  string                                    `json:"project"`
+	SessionIDs               []string                                  `json:"session_ids"`
+	RequestedLimit           int                                       `json:"requested_limit"`
+	Returned                 int                                       `json:"returned"`
+	ExperienceRetrievalRan   bool                                      `json:"experience_retrieval_ran"`
+	AntiApplicabilityBlocked bool                                      `json:"anti_applicability_blocked"`
+	EvidenceRefs             []string                                  `json:"evidence_refs"`
+	Status                   string                                    `json:"status"`
+	Reason                   string                                    `json:"reason"`
 }
 
 // Service returns first-class experience responses from projected candidates.
@@ -75,29 +81,53 @@ func (s *Service) QueryExperience(ctx context.Context, request cognitive.Experie
 	}
 	limit := normalizeLimit(request.Limit)
 	candidates := cloneResponses(s.candidates)
-	if len(triggers) > 0 && s.archive != nil {
+	if len(triggers) > 0 {
 		archiveLimit := archiveLimit(limit)
-		archiveRequest := request
-		archiveRequest.ArchiveTriggerClasses = triggers
-		archiveRequest.Limit = archiveLimit
-		archiveItems, err := s.archive.QueryArchiveExperience(ctx, archiveRequest, triggers, archiveLimit)
-		if err != nil {
-			return nil, err
+		archiveEvidence := ArchiveEvidenceEntry{
+			TriggerClasses:  append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...),
+			CallerPrincipal: strings.TrimSpace(request.Principal),
+			Project:         strings.TrimSpace(request.Project),
+			RequestedLimit:  archiveLimit,
+			Status:          "archive_unavailable",
+			Reason:          "named archive trigger supplied but archive source is not configured",
+			EvidenceRefs:    archiveTriggerEvidenceRefs(triggers),
 		}
-		if len(archiveItems) > archiveLimit {
-			archiveItems = archiveItems[:archiveLimit]
+		if s.archive != nil {
+			archiveRequest := request
+			archiveRequest.ArchiveTriggerClasses = triggers
+			archiveRequest.Limit = archiveLimit
+			archiveItems, err := s.archive.QueryArchiveExperience(ctx, archiveRequest, triggers, archiveLimit)
+			if err != nil {
+				archiveEvidence.Returned = 0
+				archiveEvidence.ExperienceRetrievalRan = true
+				archiveEvidence.AntiApplicabilityBlocked = false
+				archiveEvidence.Status = "archive_error"
+				archiveEvidence.Reason = "archive source returned error"
+				if len(archiveEvidence.EvidenceRefs) == 0 {
+					archiveEvidence.EvidenceRefs = archiveTriggerEvidenceRefs(triggers)
+				}
+				s.recordArchiveEvidence(archiveEvidence)
+				return nil, err
+			}
+			if len(archiveItems) > archiveLimit {
+				archiveItems = archiveItems[:archiveLimit]
+			}
+			for i := range archiveItems {
+				archiveItems[i] = cloneResponse(archiveItems[i])
+				archiveItems[i].ArchiveTriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...)
+			}
+			archiveEvidence.SessionIDs, archiveEvidence.EvidenceRefs = archiveEvidenceScope(archiveItems)
+			if len(archiveEvidence.EvidenceRefs) == 0 {
+				archiveEvidence.EvidenceRefs = archiveTriggerEvidenceRefs(triggers)
+			}
+			archiveEvidence.Returned = len(archiveItems)
+			archiveEvidence.ExperienceRetrievalRan = true
+			archiveEvidence.AntiApplicabilityBlocked = archiveAntiApplicabilityBlocked(request, archiveItems)
+			archiveEvidence.Status = "archive_resurfaced"
+			archiveEvidence.Reason = "explicit named archive trigger lookup"
+			candidates = append(candidates, archiveItems...)
 		}
-		for i := range archiveItems {
-			archiveItems[i] = cloneResponse(archiveItems[i])
-			archiveItems[i].ArchiveTriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...)
-		}
-		s.recordArchiveEvidence(ArchiveEvidenceEntry{
-			TriggerClasses: append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...),
-			RequestedLimit: archiveLimit,
-			Returned:       len(archiveItems),
-			Status:         "archive_resurfaced",
-		})
-		candidates = append(candidates, archiveItems...)
+		s.recordArchiveEvidence(archiveEvidence)
 	}
 	terms := requestTerms(request)
 	type scoredCandidate struct {
@@ -144,6 +174,8 @@ func (s *Service) ArchiveEvidence() []ArchiveEvidenceEntry {
 	out := make([]ArchiveEvidenceEntry, 0, len(s.archiveEvidence))
 	for _, entry := range s.archiveEvidence {
 		entry.TriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), entry.TriggerClasses...)
+		entry.SessionIDs = append([]string(nil), entry.SessionIDs...)
+		entry.EvidenceRefs = append([]string(nil), entry.EvidenceRefs...)
 		out = append(out, entry)
 	}
 	return out
@@ -159,12 +191,66 @@ func (s *Service) recordArchiveEvidence(entry ArchiveEvidenceEntry) {
 	}
 }
 
+func archiveEvidenceScope(items []cognitive.ExperienceResponse) ([]string, []string) {
+	var sessionIDs []string
+	var evidenceRefs []string
+	for _, item := range items {
+		attributions := append([]cognitive.ExperienceSourceAttribution(nil), item.Provenance...)
+		attributions = append(attributions, item.SourceAttribution...)
+		for _, attribution := range attributions {
+			sessionIDs = appendUniqueString(sessionIDs, attribution.SessionID)
+			evidenceRefs = appendUniqueString(evidenceRefs, attributionEvidenceRef(attribution))
+		}
+	}
+	return sessionIDs, evidenceRefs
+}
+
+func archiveAntiApplicabilityBlocked(request cognitive.ExperienceQueryRequest, items []cognitive.ExperienceResponse) bool {
+	for _, item := range items {
+		for _, anti := range item.AntiApplicability {
+			if antiApplicabilityMatches(anti.Condition, request) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func archiveTriggerEvidenceRefs(triggers []cognitive.ExperienceArchiveTriggerClass) []string {
+	refs := make([]string, 0, len(triggers))
+	for _, trigger := range triggers {
+		refs = appendUniqueString(refs, "archive_trigger:"+string(trigger))
+	}
+	return refs
+}
+
+func attributionEvidenceRef(attribution cognitive.ExperienceSourceAttribution) string {
+	kind := strings.TrimSpace(attribution.Kind)
+	id := strings.TrimSpace(attribution.ID)
+	if kind != "" && id != "" {
+		return kind + ":" + id
+	}
+	if sessionID := strings.TrimSpace(attribution.SessionID); sessionID != "" {
+		return "agent_session_state:" + sessionID
+	}
+	return id
+}
+
+func appendUniqueString(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" || slices.Contains(values, value) {
+		return values
+	}
+	return append(values, value)
+}
+
 var allowedArchiveTriggerClasses = []cognitive.ExperienceArchiveTriggerClass{
-	cognitive.ExperienceArchiveTriggerWhyChanged,
-	cognitive.ExperienceArchiveTriggerRegression,
-	cognitive.ExperienceArchiveTriggerRollback,
-	cognitive.ExperienceArchiveTriggerOldDecisionRevisit,
-	cognitive.ExperienceArchiveTriggerSimilarFailure,
+	cognitive.ExperienceArchiveTriggerHistoricalWhy,
+	cognitive.ExperienceArchiveTriggerRegressionOrRollback,
+	cognitive.ExperienceArchiveTriggerRevisitOldDecision,
+	cognitive.ExperienceArchiveTriggerSimilarPriorFailure,
+	cognitive.ExperienceArchiveTriggerTemporalTruthChange,
+	cognitive.ExperienceArchiveTriggerExplicitLookup,
 }
 
 func AllowedArchiveTriggerClasses() []cognitive.ExperienceArchiveTriggerClass {
@@ -358,8 +444,20 @@ func cloneResponses(items []cognitive.ExperienceResponse) []cognitive.Experience
 }
 
 func cloneResponse(item cognitive.ExperienceResponse) cognitive.ExperienceResponse {
+	if item.StorageOrigin == "" {
+		item.StorageOrigin = item.Source
+	}
 	item.AntiApplicability = append([]cognitive.ExperienceAntiApplicability(nil), item.AntiApplicability...)
-	item.SourceAttribution = append([]cognitive.ExperienceSourceAttribution(nil), item.SourceAttribution...)
+	sourceAttribution := append([]cognitive.ExperienceSourceAttribution(nil), item.SourceAttribution...)
+	provenance := append([]cognitive.ExperienceSourceAttribution(nil), item.Provenance...)
+	if len(sourceAttribution) == 0 && len(provenance) > 0 {
+		sourceAttribution = append([]cognitive.ExperienceSourceAttribution(nil), provenance...)
+	}
+	if len(provenance) == 0 && len(sourceAttribution) > 0 {
+		provenance = append([]cognitive.ExperienceSourceAttribution(nil), sourceAttribution...)
+	}
+	item.SourceAttribution = sourceAttribution
+	item.Provenance = provenance
 	item.ArchiveTriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), item.ArchiveTriggerClasses...)
 	return item
 }

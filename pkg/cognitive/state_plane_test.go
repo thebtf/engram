@@ -14,12 +14,19 @@ func TestResumePacketContract_RequiredFieldsBinaryDefined(t *testing.T) {
 		jsonTag string
 		kind    reflect.Kind
 	}{
+		"PacketID":         {jsonTag: "packet_id", kind: reflect.String},
+		"Project":          {jsonTag: "project", kind: reflect.String},
+		"Principal":        {jsonTag: "principal", kind: reflect.String},
+		"SessionID":        {jsonTag: "session_id", kind: reflect.String},
+		"StateVersion":     {jsonTag: "state_version", kind: reflect.String},
 		"Source":           {jsonTag: "source", kind: reflect.String},
+		"FallbackUsed":     {jsonTag: "fallback_used", kind: reflect.Bool},
 		"Freshness":        {jsonTag: "freshness", kind: reflect.String},
 		"Drift":            {jsonTag: "drift", kind: reflect.Struct},
 		"NextAction":       {jsonTag: "next_action", kind: reflect.Struct},
 		"NextVerification": {jsonTag: "next_verification", kind: reflect.Struct},
 		"GeneratedAt":      {jsonTag: "generated_at", kind: reflect.Struct},
+		"EvidenceRefs":     {jsonTag: "evidence_refs", kind: reflect.Slice},
 	}
 
 	for name, want := range required {
@@ -36,15 +43,21 @@ func TestResumePacketContract_RequiredFieldsBinaryDefined(t *testing.T) {
 	}
 }
 
-func TestResumePacketEnums_PinNativeFallbackAndConflict(t *testing.T) {
+func TestResumePacketEnums_PinNativeFallbackAndContractSourceTaxonomy(t *testing.T) {
 	if StatePacketSourceNative != StatePacketSource("native") {
 		t.Fatalf("StatePacketSourceNative = %q, want native", StatePacketSourceNative)
 	}
 	if StatePacketSourceFilesystemFallback != StatePacketSource("filesystem_fallback") {
 		t.Fatalf("StatePacketSourceFilesystemFallback = %q, want filesystem_fallback", StatePacketSourceFilesystemFallback)
 	}
+	if StatePacketSourceImported != StatePacketSource("imported") {
+		t.Fatalf("StatePacketSourceImported = %q, want imported", StatePacketSourceImported)
+	}
+	if StatePacketSourceMixed != StatePacketSource("mixed") {
+		t.Fatalf("StatePacketSourceMixed = %q, want mixed", StatePacketSourceMixed)
+	}
 	if StatePacketSourceConflict != StatePacketSource("conflict") {
-		t.Fatalf("StatePacketSourceConflict = %q, want conflict", StatePacketSourceConflict)
+		t.Fatalf("StatePacketSourceConflict = %q, want legacy conflict compatibility value", StatePacketSourceConflict)
 	}
 	if StateFreshnessFresh != StateFreshness("fresh") {
 		t.Fatalf("StateFreshnessFresh = %q, want fresh", StateFreshnessFresh)

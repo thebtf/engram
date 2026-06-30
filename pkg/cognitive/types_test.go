@@ -94,6 +94,60 @@ func TestExperienceApplicabilityStateEnum(t *testing.T) {
 	}
 }
 
+func TestExperienceArchiveTriggerTaxonomy_CR005BoundedClasses(t *testing.T) {
+	cases := map[ExperienceArchiveTriggerClass]string{
+		ExperienceArchiveTriggerHistoricalWhy:        "historical_why",
+		ExperienceArchiveTriggerRegressionOrRollback: "regression_or_rollback",
+		ExperienceArchiveTriggerRevisitOldDecision:   "revisit_old_decision",
+		ExperienceArchiveTriggerSimilarPriorFailure:  "similar_prior_failure",
+		ExperienceArchiveTriggerTemporalTruthChange:  "temporal_truth_change",
+		ExperienceArchiveTriggerExplicitLookup:       "explicit_archive_lookup",
+	}
+
+	if len(cases) != 6 {
+		t.Fatalf("archive trigger taxonomy collapsed: got %d classes, want 6", len(cases))
+	}
+	for class, want := range cases {
+		if string(class) != want {
+			t.Fatalf("archive trigger class %q string value: got %q, want %q", class, class, want)
+		}
+	}
+}
+
+func TestExperienceQueryRequestContract_RequiredFieldsBinaryDefined(t *testing.T) {
+	typ := reflect.TypeOf(ExperienceQueryRequest{})
+	required := map[string]struct {
+		jsonTag string
+		kind    reflect.Kind
+	}{
+		"Project":               {"project", reflect.String},
+		"Principal":             {"principal,omitempty", reflect.String},
+		"Situation":             {"situation,omitempty", reflect.String},
+		"TimeSpan":              {"time_span,omitempty", reflect.Struct},
+		"Decision":              {"decision,omitempty", reflect.String},
+		"Action":                {"action,omitempty", reflect.String},
+		"Outcome":               {"outcome,omitempty", reflect.String},
+		"Revision":              {"revision,omitempty", reflect.String},
+		"Reversal":              {"reversal,omitempty", reflect.String},
+		"StorageOrigin":         {"storage_origin,omitempty", reflect.String},
+		"ArchiveTriggerClasses": {"archive_trigger_classes,omitempty", reflect.Slice},
+		"Limit":                 {"limit,omitempty", reflect.Int},
+	}
+
+	for name, want := range required {
+		field, ok := typ.FieldByName(name)
+		if !ok {
+			t.Fatalf("ExperienceQueryRequest missing required field %s", name)
+		}
+		if got := field.Tag.Get("json"); got != want.jsonTag {
+			t.Fatalf("ExperienceQueryRequest.%s json tag = %q, want %q", name, got, want.jsonTag)
+		}
+		if got := field.Type.Kind(); got != want.kind {
+			t.Fatalf("ExperienceQueryRequest.%s kind = %s, want %s", name, got, want.kind)
+		}
+	}
+}
+
 func TestExperienceResponseContract_RequiredFieldsBinaryDefined(t *testing.T) {
 	typ := reflect.TypeOf(ExperienceResponse{})
 	required := map[string]struct {
@@ -101,9 +155,18 @@ func TestExperienceResponseContract_RequiredFieldsBinaryDefined(t *testing.T) {
 		kind    reflect.Kind
 	}{
 		"Source":                {"source", reflect.String},
+		"StorageOrigin":         {"storage_origin", reflect.String},
+		"Situation":             {"situation", reflect.String},
+		"TimeSpan":              {"time_span", reflect.Struct},
+		"Decision":              {"decision", reflect.String},
+		"Action":                {"action", reflect.String},
+		"Outcome":               {"outcome", reflect.String},
+		"Revision":              {"revision", reflect.String},
+		"Reversal":              {"reversal", reflect.String},
 		"Lesson":                {"lesson", reflect.String},
 		"Applicability":         {"applicability", reflect.Struct},
 		"AntiApplicability":     {"anti_applicability", reflect.Slice},
+		"Provenance":            {"provenance", reflect.Slice},
 		"SourceAttribution":     {"source_attribution", reflect.Slice},
 		"ArchiveTriggerClasses": {"archive_trigger_classes", reflect.Slice},
 	}

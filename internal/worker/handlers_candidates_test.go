@@ -259,6 +259,9 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 				ProposedContent:         "ship the operator queue",
 				ProposedTier:            "semantic",
 				AffectedProjects:        []string{"engram"},
+				SourceSessionID:         "sess-42",
+				EvidenceHandles:         []string{"session:sess-42"},
+				PrivacyScope:            "project",
 				ProposedPromotionTarget: "semantic",
 			},
 		},
@@ -299,6 +302,9 @@ func TestHandlePromoteMemoryCandidate_RejectsUnscopedPromotion(t *testing.T) {
 				Status:          models.CandidateStatusPending,
 				ProposedContent: "unscoped candidate must not create a projectless memory",
 				ProposedTier:    "semantic",
+				SourceSessionID: "sess-42",
+				EvidenceHandles: []string{"session:sess-42"},
+				PrivacyScope:    "project",
 			},
 		},
 	}
@@ -313,8 +319,36 @@ func TestHandlePromoteMemoryCandidate_RejectsUnscopedPromotion(t *testing.T) {
 	assert.Equal(t, int64(0), store.promoteID)
 }
 
+func TestHandlePromoteMemoryCandidate_RejectsMissingPrivacyScopeBeforeMutation(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {
+				ID:               42,
+				Status:           models.CandidateStatusPending,
+				ProposedContent:  "privacy scope must be validated before mutation",
+				ProposedTier:     "semantic",
+				AffectedProjects: []string{"engram"},
+			},
+		},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/promote", nil)
+	router.Post("/api/memory/candidates/{id}/promote", service.handlePromoteMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "privacy_scope")
+	assert.Equal(t, int64(0), store.promoteID)
+}
+
 func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testing.T) {
-	store := &fakeCandidateReviewStore{rejectErr: fmt.Errorf("%w: promoted -> rejected", gormdb.ErrInvalidTransition)}
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project"},
+		},
+		rejectErr: fmt.Errorf("%w: promoted -> rejected", gormdb.ErrInvalidTransition),
+	}
 	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
 	body := []byte(`{"reason":"not durable enough"}`)
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", body)
@@ -328,7 +362,12 @@ func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testi
 }
 
 func TestHandleRejectMemoryCandidate_ContextCanceledAsClientClosed(t *testing.T) {
-	store := &fakeCandidateReviewStore{rejectErr: context.Canceled}
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project"},
+		},
+		rejectErr: context.Canceled,
+	}
 	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", nil)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
@@ -340,7 +379,12 @@ func TestHandleRejectMemoryCandidate_ContextCanceledAsClientClosed(t *testing.T)
 }
 
 func TestHandleRejectMemoryCandidate_DeadlineExceededAsGatewayTimeout(t *testing.T) {
-	store := &fakeCandidateReviewStore{rejectErr: context.DeadlineExceeded}
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project"},
+		},
+		rejectErr: context.DeadlineExceeded,
+	}
 	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", nil)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)

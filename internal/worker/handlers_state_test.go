@@ -56,12 +56,13 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 			NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "focused tests", Command: "go test ./internal/worker"},
 			GeneratedAt:      time.Now().UTC(),
 			Project:          "engram",
+			Principal:        "agent:developer",
 			SessionID:        "session-1",
 		},
 	}
 	svc := &Service{stateStore: fakeStore}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&principal=agent:developer&session_id=session-1", nil)
 	rec := httptest.NewRecorder()
 	svc.handleGetStateResume(rec, req)
 
@@ -71,17 +72,29 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
 	require.Empty(t, packet.FallbackPath)
 	require.False(t, fakeStore.lastRequest.AllowFilesystemFallback)
+	require.Equal(t, "agent:developer", fakeStore.lastRequest.Principal)
 }
 
 func TestHandleGetStateResumeRejectsFilesystemFallbackOption(t *testing.T) {
 	svc := &Service{stateStore: &fakeWorkerStatePlane{}}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1&allow_filesystem_fallback=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&principal=agent:developer&session_id=session-1&allow_filesystem_fallback=true", nil)
 	rec := httptest.NewRecorder()
 	svc.handleGetStateResume(rec, req)
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "allow_filesystem_fallback is not supported")
+}
+
+func TestHandleGetStateResumeRequiresPrincipal(t *testing.T) {
+	svc := &Service{stateStore: &fakeWorkerStatePlane{}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1", nil)
+	rec := httptest.NewRecorder()
+	svc.handleGetStateResume(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "principal is required")
 }
 
 func TestHandleGetStateResumeHidesInternalReadError(t *testing.T) {
@@ -90,7 +103,7 @@ func TestHandleGetStateResumeHidesInternalReadError(t *testing.T) {
 	}
 	svc := &Service{stateStore: fakeStore}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&principal=agent:developer&session_id=session-1", nil)
 	rec := httptest.NewRecorder()
 	svc.handleGetStateResume(rec, req)
 
