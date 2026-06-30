@@ -129,6 +129,59 @@ func TestServiceReadResumePacketNormalizesAndDeduplicatesScopesBeforeReads(t *te
 	require.Equal(t, []cognitive.ResumePacketRequest{wantRequest}, fallback.requests)
 }
 
+func TestServiceReadResumePacketSynthesizesFallbackIDWithRequestedScopes(t *testing.T) {
+	fallback := fallbackPacket("fallback next", "fallback.json")
+	fallback.PacketID = ""
+	fallback.Scopes = nil
+	service := NewService(&fakeNativePlane{err: errors.New("native missing")}, &countingFallbackReader{packet: fallback})
+
+	sessionPacket, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		Principal:               "agent:developer",
+		SessionID:               "session-1",
+		Scopes:                  []cognitive.StateScopeKind{cognitive.StateScopeSession},
+		AllowFilesystemFallback: true,
+	})
+	require.NoError(t, err)
+
+	projectPacket, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		Principal:               "agent:developer",
+		SessionID:               "session-1",
+		Scopes:                  []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject},
+		AllowFilesystemFallback: true,
+	})
+	require.NoError(t, err)
+
+	require.NotEqual(t, sessionPacket.PacketID, projectPacket.PacketID)
+	require.Equal(t, []cognitive.StateScopeKind{cognitive.StateScopeSession}, sessionPacket.Scopes)
+	require.Equal(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject}, projectPacket.Scopes)
+}
+
+func TestServiceReadResumePacketFallbackNewerParsesCompositeNativeStateVersion(t *testing.T) {
+	persistedAt := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	native := nativePacket("native next", "go test ./internal/stateplane")
+	native.GeneratedAt = persistedAt.Add(time.Hour)
+	native.StateVersion = persistedAt.Format(time.RFC3339Nano) + "+project@" + persistedAt.Add(30*time.Minute).Format(time.RFC3339Nano)
+	fallback := fallbackPacket("native next", "fallback.json")
+	fallback.NextVerification = native.NextVerification
+	fallback.GeneratedAt = persistedAt.Add(45 * time.Minute)
+	service := NewService(&fakeNativePlane{packet: native}, &countingFallbackReader{packet: fallback})
+	service.now = func() time.Time { return persistedAt.Add(2 * time.Hour) }
+
+	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		Principal:               "agent:developer",
+		SessionID:               "session-1",
+		Scopes:                  []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject},
+		AllowFilesystemFallback: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.StateDriftFallbackNewer, packet.Drift.Kind)
+	require.Equal(t, cognitive.StatePacketSourceMixed, packet.Source)
+}
+
 func TestServiceReadResumePacketSerializesNoDriftConflictsAsEmptyArray(t *testing.T) {
 	native := nativePacket("native next", "go test ./internal/stateplane")
 	native.Drift.Conflicts = nil
