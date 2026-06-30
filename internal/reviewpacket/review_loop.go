@@ -115,6 +115,11 @@ type ReviewActionReceipt struct {
 }
 
 func BuildReviewQueue(candidates []*models.CrystallizationCandidate, status models.CandidateStatus, limit int, now time.Time) ReviewQueueRead {
+	metrics := BuildReviewMetrics(candidates, limit, now)
+	return BuildReviewQueueWithMetrics(candidates, status, limit, now, metrics)
+}
+
+func BuildReviewQueueWithMetrics(candidates []*models.CrystallizationCandidate, status models.CandidateStatus, limit int, now time.Time, metrics ReviewMetrics) ReviewQueueRead {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -126,14 +131,13 @@ func BuildReviewQueue(candidates []*models.CrystallizationCandidate, status mode
 		packets = append(packets, PacketSummaryFromCandidate(candidate, now))
 	}
 
-	metrics := BuildReviewMetrics(candidates, limit, now)
 	state := ReviewStateLive
 	if len(packets) == 0 {
 		state = ReviewStateEmpty
 	}
 	return ReviewQueueRead{
 		Packets:   packets,
-		Backlog:   ReviewQueueBacklog{BoundedTotal: len(packets), ReadyCount: metrics.ReadyCount, Limit: limit, State: metrics.State, SparseReason: metrics.SparseReason},
+		Backlog:   ReviewQueueBacklog{BoundedTotal: metrics.BacklogTotal, ReadyCount: metrics.ReadyCount, Limit: limit, State: metrics.State, SparseReason: metrics.SparseReason},
 		Metrics:   metrics,
 		Freshness: metrics.Freshness,
 		State:     state,

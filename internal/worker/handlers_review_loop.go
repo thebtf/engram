@@ -152,15 +152,16 @@ func (s *Service) handleReadMemoryReviewQueue(w http.ResponseWriter, r *http.Req
 		writeJSONStatus(w, http.StatusInternalServerError, reviewpacket.ErrorReviewQueue(err, limit, time.Now().UTC()))
 		return
 	}
+	now := time.Now().UTC()
+	metrics := reviewpacket.BuildReviewMetrics(candidates, limit, now)
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("risky_only")), "true") {
-		metrics := reviewpacket.BuildReviewMetrics(candidates, limit, time.Now().UTC())
-		if metrics.State == reviewpacket.ReviewStateSparse {
-			writeJSON(w, reviewpacket.GatedReviewQueue("risky_only requires complete confidence telemetry", limit, time.Now().UTC()))
+		if strings.Contains(metrics.SparseReason, "confidence telemetry") {
+			writeJSON(w, reviewpacket.GatedReviewQueue("risky_only requires complete confidence telemetry", limit, now))
 			return
 		}
 		candidates = filterRiskyReviewCandidates(candidates)
 	}
-	writeJSON(w, reviewpacket.BuildReviewQueue(candidates, status, limit, time.Now().UTC()))
+	writeJSON(w, reviewpacket.BuildReviewQueueWithMetrics(candidates, status, limit, now, metrics))
 }
 
 func filterRiskyReviewCandidates(candidates []*models.CrystallizationCandidate) []*models.CrystallizationCandidate {

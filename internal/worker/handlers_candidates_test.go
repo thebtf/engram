@@ -581,6 +581,32 @@ func TestHandleReadMemoryReviewQueue_ReturnsPacketCentricQueueAndSparseMetrics(t
 	assert.Contains(t, response.Metrics.SparseReason, "confidence telemetry")
 }
 
+func TestHandleReadMemoryReviewQueue_RiskyOnlyKeepsUnfilteredMetricsAndBacklog(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		listRows: []*models.CrystallizationCandidate{
+			{ID: 42, Status: models.CandidateStatusPending, SourceSessionID: "sess-42", AffectedProjects: []string{"engram"}, PrivacyScope: "project", Fingerprint: "abc123", Confidence: 0.4},
+			{ID: 43, Status: models.CandidateStatusPending, SourceSessionID: "sess-43", AffectedProjects: []string{"engram"}, PrivacyScope: "project", Fingerprint: "def456", Confidence: 0.8},
+		},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/review-queue?project=engram&status=pending&limit=5&risky_only=true", nil)
+	w := httptest.NewRecorder()
+
+	service.handleReadMemoryReviewQueue(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response reviewpacket.ReviewQueueRead
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Len(t, response.Packets, 1)
+	assert.Equal(t, "candidate:42:abc123", response.Packets[0].PacketID)
+	assert.Equal(t, 2, response.Metrics.BacklogTotal)
+	assert.Equal(t, 2, response.Metrics.ReadyCount)
+	assert.Equal(t, 1, response.Metrics.RiskyCount)
+	assert.Equal(t, reviewpacket.ReviewStateLive, response.Metrics.State)
+	assert.Equal(t, 2, response.Backlog.BoundedTotal)
+	assert.Equal(t, 2, response.Backlog.ReadyCount)
+}
+
 func TestHandlePreviewMemoryReviewPacketAction_DoesNotMutate(t *testing.T) {
 	store := &fakeCandidateReviewStore{
 		getRows: map[int64]*models.CrystallizationCandidate{

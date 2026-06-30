@@ -13,6 +13,20 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+type reviewLoopCandidateLister interface {
+	ListByStatus(ctx context.Context, project string, status models.CandidateStatus, limit int) ([]*models.CrystallizationCandidate, error)
+}
+
+func (s *Server) currentReviewLoopCandidateLister() reviewLoopCandidateLister {
+	if s.reviewLoopCandidateStoreSeam != nil {
+		return s.reviewLoopCandidateStoreSeam
+	}
+	if s.candidateStore == nil {
+		return nil
+	}
+	return s.candidateStore
+}
+
 func reviewLoopCandidateTools() []Tool {
 	return []Tool{
 		{
@@ -75,14 +89,18 @@ func reviewPacketIDSchema(includeAction bool) map[string]any {
 }
 
 func (s *Server) handleReviewMetricsRead(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
+	if !vnextFEnabled() {
 		return "", fmt.Errorf("review_metrics.read requires ENGRAM_VNEXT_F_ENABLED=true")
+	}
+	store := s.currentReviewLoopCandidateLister()
+	if store == nil {
+		return "", fmt.Errorf("review_metrics.read requires candidateStore to be wired")
 	}
 	project, status, limit, _, _, err := parseReviewLoopReadArgs(args)
 	if err != nil {
 		return "", err
 	}
-	candidates, err := s.candidateStore.ListByStatus(ctx, project, status, limit)
+	candidates, err := store.ListByStatus(ctx, project, status, limit)
 	if err != nil {
 		return marshalReviewLoop("review_metrics.read", reviewpacket.ErrorReviewMetrics(err, time.Now().UTC()))
 	}
@@ -90,8 +108,12 @@ func (s *Server) handleReviewMetricsRead(ctx context.Context, args json.RawMessa
 }
 
 func (s *Server) handleReviewQueueRead(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
+	if !vnextFEnabled() {
 		return "", fmt.Errorf("review_queue.read requires ENGRAM_VNEXT_F_ENABLED=true")
+	}
+	store := s.currentReviewLoopCandidateLister()
+	if store == nil {
+		return "", fmt.Errorf("review_queue.read requires candidateStore to be wired")
 	}
 	project, status, limit, packetType, riskyOnly, err := parseReviewLoopReadArgs(args)
 	if err != nil {
@@ -100,18 +122,19 @@ func (s *Server) handleReviewQueueRead(ctx context.Context, args json.RawMessage
 	if !reviewLoopMCPPacketTypeSupported(packetType) {
 		return marshalReviewLoop("review_queue.read", reviewpacket.GatedReviewQueue("unsupported packet_type for CR-008 review queue", limit, time.Now().UTC()))
 	}
-	candidates, err := s.candidateStore.ListByStatus(ctx, project, status, limit)
+	candidates, err := store.ListByStatus(ctx, project, status, limit)
 	if err != nil {
 		return marshalReviewLoop("review_queue.read", reviewpacket.ErrorReviewQueue(err, limit, time.Now().UTC()))
 	}
+	now := time.Now().UTC()
+	metrics := reviewpacket.BuildReviewMetrics(candidates, limit, now)
 	if riskyOnly {
-		metrics := reviewpacket.BuildReviewMetrics(candidates, limit, time.Now().UTC())
-		if metrics.State == reviewpacket.ReviewStateSparse {
-			return marshalReviewLoop("review_queue.read", reviewpacket.GatedReviewQueue("risky_only requires complete confidence telemetry", limit, time.Now().UTC()))
+		if strings.Contains(metrics.SparseReason, "confidence telemetry") {
+			return marshalReviewLoop("review_queue.read", reviewpacket.GatedReviewQueue("risky_only requires complete confidence telemetry", limit, now))
 		}
 		candidates = filterRiskyMCPReviewCandidates(candidates)
 	}
-	return marshalReviewLoop("review_queue.read", reviewpacket.BuildReviewQueue(candidates, status, limit, time.Now().UTC()))
+	return marshalReviewLoop("review_queue.read", reviewpacket.BuildReviewQueueWithMetrics(candidates, status, limit, now, metrics))
 }
 
 func (s *Server) handleReviewPacketDetail(ctx context.Context, args json.RawMessage) (string, error) {
