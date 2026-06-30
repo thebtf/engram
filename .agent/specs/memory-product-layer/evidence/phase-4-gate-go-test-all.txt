@@ -1,0 +1,76 @@
+go test ./...
+
+?   	github.com/thebtf/engram/apps/operator-console/node_modules/flatted/golang/pkg/flatted	[no test files]
+ok  	github.com/thebtf/engram/cmd/engram	(cached)
+?   	github.com/thebtf/engram/cmd/engram-import	[no test files]
+?   	github.com/thebtf/engram/cmd/engram-server	[no test files]
+?   	github.com/thebtf/engram/docs	[no test files]
+ok  	github.com/thebtf/engram/internal/auth	0.458s
+ok  	github.com/thebtf/engram/internal/bulkops	0.992s
+ok  	github.com/thebtf/engram/internal/chunking	(cached)
+ok  	github.com/thebtf/engram/internal/chunking/golang	(cached)
+ok  	github.com/thebtf/engram/internal/chunking/markdown	(cached)
+ok  	github.com/thebtf/engram/internal/codeindex	(cached)
+ok  	github.com/thebtf/engram/internal/cognitive/core	0.998s
+ok  	github.com/thebtf/engram/internal/collections	(cached)
+ok  	github.com/thebtf/engram/internal/config	(cached)
+ok  	github.com/thebtf/engram/internal/control	(cached)
+ok  	github.com/thebtf/engram/internal/crypto	(cached)
+ok  	github.com/thebtf/engram/internal/crystallization	0.810s
+ok  	github.com/thebtf/engram/internal/db/gorm	0.979s
+ok  	github.com/thebtf/engram/internal/db/gorm/migrationmeta	(cached)
+ok  	github.com/thebtf/engram/internal/embedding	0.847s
+ok  	github.com/thebtf/engram/internal/experience	(cached)
+ok  	github.com/thebtf/engram/internal/feedback	0.517s
+ok  	github.com/thebtf/engram/internal/governance	(cached)
+ok  	github.com/thebtf/engram/internal/graph	(cached)
+ok  	github.com/thebtf/engram/internal/grpcserver	0.274s
+ok  	github.com/thebtf/engram/internal/handlers/codeintel	(cached)
+ok  	github.com/thebtf/engram/internal/handlers/engramcore	1.037s
+ok  	github.com/thebtf/engram/internal/handlers/loom	0.600s
+ok  	github.com/thebtf/engram/internal/handlers/serverevents	(cached)
+ok  	github.com/thebtf/engram/internal/ingestion	(cached)
+ok  	github.com/thebtf/engram/internal/injection	0.524s
+?   	github.com/thebtf/engram/internal/instincts	[no test files]
+ok  	github.com/thebtf/engram/internal/lifecycle	(cached)
+ok  	github.com/thebtf/engram/internal/llm	(cached)
+ok  	github.com/thebtf/engram/internal/logbuf	(cached)
+ok  	github.com/thebtf/engram/internal/mcp	0.482s
+ok  	github.com/thebtf/engram/internal/module	(cached)
+ok  	github.com/thebtf/engram/internal/module/dispatcher	(cached)
+ok  	github.com/thebtf/engram/internal/module/lifecycle	(cached)
+ok  	github.com/thebtf/engram/internal/module/obs	(cached)
+ok  	github.com/thebtf/engram/internal/module/registry	(cached)
+ok  	github.com/thebtf/engram/internal/moduletest	(cached)
+ok  	github.com/thebtf/engram/internal/principalmemory	0.512s
+ok  	github.com/thebtf/engram/internal/privacy	(cached)
+ok  	github.com/thebtf/engram/internal/proxy	0.756s
+ok  	github.com/thebtf/engram/internal/redaction	(cached)
+ok  	github.com/thebtf/engram/internal/reranking	(cached)
+ok  	github.com/thebtf/engram/internal/retrieval	1.071s
+ok  	github.com/thebtf/engram/internal/reviewpacket	0.414s
+ok  	github.com/thebtf/engram/internal/ruleinjection	(cached)
+ok  	github.com/thebtf/engram/internal/scope	(cached)
+ok  	github.com/thebtf/engram/internal/sessions	0.625s
+ok  	github.com/thebtf/engram/internal/staleness	(cached)
+ok  	github.com/thebtf/engram/internal/stateplane	0.383s
+?   	github.com/thebtf/engram/internal/telemetry	[no test files]
+?   	github.com/thebtf/engram/internal/update	[no test files]
+ok  	github.com/thebtf/engram/internal/version	(cached)
+ok  	github.com/thebtf/engram/internal/watcher	(cached)
+ok  	github.com/thebtf/engram/internal/worker	0.400s
+ok  	github.com/thebtf/engram/internal/worker/projectevents	(cached)
+ok  	github.com/thebtf/engram/internal/worker/reaper	(cached)
+ok  	github.com/thebtf/engram/internal/worker/sdk	(cached)
+ok  	github.com/thebtf/engram/internal/worker/session	0.928s
+ok  	github.com/thebtf/engram/internal/worker/sse	(cached)
+ok  	github.com/thebtf/engram/internal/writegate	0.308s
+ok  	github.com/thebtf/engram/internal/writelint	0.983s
+ok  	github.com/thebtf/engram/pkg/cognitive	(cached)
+ok  	github.com/thebtf/engram/pkg/models	(cached)
+ok  	github.com/thebtf/engram/pkg/similarity	(cached)
+?   	github.com/thebtf/engram/pkg/strutil	[no test files]
+?   	github.com/thebtf/engram/proto/engram/v1	[no test files]
+ok  	github.com/thebtf/engram/tests/smoke	4.385s
+?   	github.com/thebtf/engram/tools/gen-data-model	[no test files]
+?   	github.com/thebtf/engram/tools/gen-data-model/datamodel	[no test files]

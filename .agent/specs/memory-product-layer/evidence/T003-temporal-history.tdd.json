@@ -1,0 +1,45 @@
+{
+  "task_id": "T003",
+  "stack": "GO",
+  "red": {
+    "observed_at": "2026-06-29T22:44:07.0862595+03:00",
+    "command": "go test ./pkg/cognitive ./internal/temporaltruth",
+    "test_files": [
+      "pkg/cognitive/types_test.go",
+      "internal/temporaltruth/service_test.go"
+    ],
+    "failure_reason": "Temporal truth response did not expose provenance_chain.",
+    "runner_stdout_excerpt": "TemporalTruthResponse missing required field ProvenanceChain; response.ProvenanceChain undefined"
+  },
+  "green": {
+    "observed_at": "2026-06-29T22:45:50.5794096+03:00",
+    "command": "go test ./pkg/cognitive ./internal/temporaltruth",
+    "passed_packages": [
+      "github.com/thebtf/engram/pkg/cognitive",
+      "github.com/thebtf/engram/internal/temporaltruth"
+    ],
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "ok github.com/thebtf/engram/pkg/cognitive; ok github.com/thebtf/engram/internal/temporaltruth"
+  },
+  "refactor": {
+    "applied": true,
+    "diff_summary": "Added centralized provenanceChain helper over bounded history entries."
+  },
+  "prove_it": {
+    "command": "go test ./internal/temporaltruth",
+    "substituted_files": [
+      "internal/temporaltruth/service.go"
+    ],
+    "failed_tests": 1,
+    "runner_stdout_excerpt": "TestService_TruthChangeExposesInvalidationAndProvenanceChain failed when provenanceChain returned nil."
+  },
+  "coverage": {
+    "command": "go test -cover ./pkg/cognitive ./internal/temporaltruth",
+    "packages": {
+      "github.com/thebtf/engram/pkg/cognitive": 94.2,
+      "github.com/thebtf/engram/internal/temporaltruth": 85.4
+    },
+    "threshold": 80,
+    "status": "PASS"
+  }
+}

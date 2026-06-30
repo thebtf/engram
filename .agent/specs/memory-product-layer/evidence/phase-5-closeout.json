@@ -1,0 +1,29 @@
+{
+  "gate": "G003",
+  "observed_at": "2026-06-29T16:45:04.6186525+03:00",
+  "command": "go test ./...",
+  "status": "PASS",
+  "raw_output": ".agent/specs/memory-product-layer/evidence/phase-5-closeout.go-test.txt",
+  "checks": {
+    "g001_passed": "PASS",
+    "g002_passed": "PASS",
+    "audit_export_proof_present": "PASS",
+    "forgetting_taxonomy_real": "PASS",
+    "structural_loss_guard_real": "PASS",
+    "risky_packet_routing_real": "PASS",
+    "temporal_truth_later": "PASS"
+  },
+  "proof_artifact": ".agent/specs/memory-product-layer/contracts/forgetting-audit-proof.md",
+  "next_cr_boundary": [
+    "Selective Temporal Truth",
+    "learned applicability model",
+    "broad graph projection",
+    "broad operator-console redesign"
+  ],
+  "evidence": [
+    ".agent/specs/memory-product-layer/evidence/phase-5-taxonomy-gate.json",
+    ".agent/specs/memory-product-layer/evidence/phase-5-risk-gate.json",
+    ".agent/specs/memory-product-layer/contracts/forgetting-taxonomy.md",
+    ".agent/specs/memory-product-layer/contracts/forgetting-audit-proof.md"
+  ]
+}

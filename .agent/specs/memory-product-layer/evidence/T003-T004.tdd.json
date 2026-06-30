@@ -1,0 +1,44 @@
+{
+  "task_ids": ["T003", "T004"],
+  "stack": "GO",
+  "red": {
+    "observed_at": "2026-06-29T16:36:35.9357375+03:00",
+    "command": "go test ./internal/forgetting",
+    "test_files": [
+      "internal/forgetting/service_test.go"
+    ],
+    "failure_reason": "Structural-loss input and review packet payload were missing before production-code edits.",
+    "runner_stdout_excerpt": "unknown field StructuralLoss; decision.Review.Packet undefined"
+  },
+  "green": {
+    "observed_at": "2026-06-29T16:39:12.5912239+03:00",
+    "command": "go test ./internal/forgetting ./pkg/cognitive",
+    "passed_packages": [
+      "github.com/thebtf/engram/internal/forgetting",
+      "github.com/thebtf/engram/pkg/cognitive"
+    ],
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "ok github.com/thebtf/engram/internal/forgetting; ok github.com/thebtf/engram/pkg/cognitive"
+  },
+  "refactor": {
+    "applied": true,
+    "diff_summary": "Centralized structural-loss detection, packet building, packet id generation, and bounded evidence cap helpers."
+  },
+  "prove_it": {
+    "command": "go test ./internal/forgetting",
+    "substituted_files": [
+      "internal/forgetting/service.go"
+    ],
+    "failed_tests": 3,
+    "runner_stdout_excerpt": "Structural-loss rationale tests failed when hasStructuralLoss returned false; bounded packet test failed when maxPacketEvidence=99"
+  },
+  "coverage": {
+    "command": "go test -cover ./internal/forgetting ./pkg/cognitive",
+    "packages": {
+      "github.com/thebtf/engram/internal/forgetting": 93.9,
+      "github.com/thebtf/engram/pkg/cognitive": 94.2
+    },
+    "threshold": 80,
+    "status": "PASS"
+  }
+}

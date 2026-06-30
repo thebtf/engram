@@ -47,6 +47,7 @@ type Server struct {
 	embeddingStore          *embedding.Store
 	rerankClient            *reranking.Client
 	memoryStore             *gorm.MemoryStore
+	stateStore              statePlane
 	principalMemoryQuerySvc principalMemoryQueryService
 	domainRegistryService   domainRegistryService
 	behavioralRulesStore    *gorm.BehavioralRulesStore
@@ -143,6 +144,11 @@ func (s *Server) SetIssueStore(is *gorm.IssueStore) {
 // SetMemoryStore sets the memory store for the memories table (US3 Commit C).
 func (s *Server) SetMemoryStore(ms *gorm.MemoryStore) {
 	s.memoryStore = ms
+}
+
+// SetStateStore sets the native state-plane read/write store.
+func (s *Server) SetStateStore(store statePlane) {
+	s.stateStore = store
 }
 
 // SetBehavioralRulesStore sets the behavioral rules store (US3 Commit C).
@@ -1086,6 +1092,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.principalMemoryQuerySvc != nil {
 		tools = append(tools, principalMemoryQueryTool())
 	}
+	// get_state remains callable for direct internal compatibility, but is not
+	// advertised until the runtime exposes a matching native state write path.
 
 	// Session outcome tool — only advertise when session store is available
 	if s.sessionStore != nil {
@@ -1118,9 +1126,15 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					"type":     "object",
 					"required": []string{},
 					"properties": map[string]any{
-						"topic":   map[string]any{"type": "string", "description": "Topic hint for memory relevance filtering"},
-						"project": map[string]any{"type": "string", "description": "Project name (auto-detected if omitted)"},
-						"limit":   map[string]any{"type": "integer", "description": "Max memories to return (default: 5, max: 10)"},
+						"topic":           map[string]any{"type": "string", "description": "Topic hint for memory relevance filtering"},
+						"project":         map[string]any{"type": "string", "description": "Project name (auto-detected if omitted)"},
+						"principal":       map[string]any{"type": "string", "description": "Optional principal identifier for a principal-scoped brief."},
+						"principal_kind":  map[string]any{"type": "string", "enum": []string{"human", "agent", "service"}, "default": "human", "description": "Principal kind used when principal is set."},
+						"domain":          map[string]any{"type": "string", "description": "Optional memory domain for scoped briefs."},
+						"visibility":      map[string]any{"type": "string", "enum": []string{"private", "shared", "all"}, "description": "Optional principal visibility filter for scoped briefs."},
+						"include_private": map[string]any{"type": "boolean", "description": "Request private rows for the scoped principal. Cross-principal private widening requires admin identity and durable audit."},
+						"session_id":      map[string]any{"type": "string", "description": "Optional session id for private-read audit provenance."},
+						"limit":           map[string]any{"type": "integer", "description": "Max memories to return (default: 5, max: 10)"},
 					},
 				},
 			},
@@ -1692,6 +1706,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRecallMemory(ctx, args)
 	case "query_principal_memory":
 		return s.handleQueryPrincipalMemory(ctx, args)
+	case "get_state":
+		return s.handleGetState(ctx, args)
 	case "rate_memory":
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":
@@ -1703,6 +1719,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 	// Crystallization candidate tools (Milestone-F TG4 T026).
 	case "list_candidates":
 		return s.handleListCandidates(ctx, args)
+	case "get_candidate":
+		return s.handleGetCandidate(ctx, args)
 	case "promote_candidate":
 		return s.handlePromoteCandidate(ctx, args)
 	case "reject_candidate":

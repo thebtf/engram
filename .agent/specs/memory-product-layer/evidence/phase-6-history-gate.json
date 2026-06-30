@@ -1,0 +1,18 @@
+{
+  "gate": "G002",
+  "observed_at": "2026-06-29T22:47:02.8618919+03:00",
+  "command": "go test ./...",
+  "status": "PASS",
+  "raw_output": ".agent/specs/memory-product-layer/evidence/phase-6-history-gate.go-test.txt",
+  "checks": {
+    "validity_invalidation_fixtures_green": "PASS",
+    "truth_evolution_visible": "PASS",
+    "provenance_first": "PASS",
+    "no_broad_graph_claims": "PASS"
+  },
+  "evidence": [
+    ".agent/specs/memory-product-layer/evidence/T003-temporal-history.red.json",
+    ".agent/specs/memory-product-layer/evidence/T003-temporal-history.tdd.json",
+    ".agent/specs/memory-product-layer/contracts/temporal-truth.md"
+  ]
+}

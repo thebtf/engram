@@ -1,0 +1,35 @@
+{
+  "task_ids": ["T002", "T003"],
+  "red": {
+    "observed_at": "2026-06-29T12:07:17.7069824Z",
+    "command": "go test ./internal/experience",
+    "test_file": "internal/experience/service_test.go",
+    "failure_reason": "experience service implementation symbols were missing before production code existed",
+    "runner_stdout_excerpt": "undefined: Service; undefined: NewService; undefined: MaxQueryLimit"
+  },
+  "green": {
+    "observed_at": "2026-06-29T12:09:05.4754597Z",
+    "command": "go test ./internal/experience",
+    "status": "PASS",
+    "runner_stdout_excerpt": "ok github.com/thebtf/engram/internal/experience"
+  },
+  "prove_it": {
+    "observed_at": "2026-06-29T12:10:11.5620306Z",
+    "mutation": "temporary anti-applicability branch returned uncertain instead of blocked",
+    "command": "go test ./internal/experience",
+    "failed_tests": 1,
+    "runner_stdout_excerpt": "TestServiceQueryExperienceSetsApplicabilityStates/blocked expected blocked actual uncertain",
+    "restored_green_command": "go test ./internal/experience"
+  },
+  "coverage": {
+    "observed_at": "2026-06-29T12:10:11.5620306Z",
+    "command": "go test -cover ./internal/experience",
+    "percent": 87.4,
+    "status": "PASS"
+  },
+  "focused_contract": {
+    "observed_at": "2026-06-29T12:10:11.5620306Z",
+    "command": "go test ./internal/experience ./pkg/cognitive",
+    "status": "PASS"
+  }
+}

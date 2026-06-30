@@ -1,0 +1,9 @@
+{
+  "task_ids": ["T004", "T005"],
+  "observed_at": "2026-06-29T12:16:26.8477080Z",
+  "command": "go test ./internal/experience",
+  "status": "RED",
+  "test_file": "internal/experience/archive_test.go",
+  "failure_reason": "archive trigger taxonomy and resurfacing seam symbols are missing before production implementation",
+  "runner_stdout_excerpt": "undefined: AllowedArchiveTriggerClasses; undefined: NormalizeArchiveTriggerClasses; undefined: NewServiceWithArchive; undefined: MaxArchiveResurfacingLimit"
+}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useOperatorMemoryLab, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
+import { PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
 import { MEMORY_PAGE_SIZE_STORAGE_KEY, resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import type { Memory } from '../composables/useMockData'
 import type { OperatorLoadState } from '../composables/useOperatorApi'
@@ -19,11 +19,16 @@ const {
   provenanceGap,
   actionGaps,
 } = useOperatorMemoryLab()
+const project = ref('all')
+const principalSurface = useOperatorPrincipalMemorySurface(project)
+const principalScope = principalSurface.scope
+const principalLoadState = principalSurface.loadState
+const principalBriefState = principalSurface.briefState
+const principalAttributionVisible = principalSurface.attributionVisible
 
 type MemoryFilter = 'active' | 'flagged' | 'stale' | 'low' | 'chain'
 type MemoryAuditState = OperatorLoadState<MemoryAuditResponse>
 
-const project = ref('all')
 const filters = ref<Record<MemoryFilter, boolean>>({
   active: false,
   flagged: false,
@@ -89,6 +94,28 @@ const bulkVerbs = computed(() => {
 const bulkNote = computed(() => bulkSuppressConfirm.value ? t('memory.bulk.confirmNote') : t('memory.bulk.note'))
 const opened = computed(() => all.find((memory) => memory.id === openId.value) || null)
 const auditEntries = computed(() => auditState.value?.data?.entries || [])
+const principalStateKind = computed(() => principalSurface.riskyConfirmation.value ? 'risky-confirm' : principalLoadState.value.kind)
+const principalSummary = computed(() => principalLoadState.value.data)
+const principalItems = computed(() => principalSummary.value?.items || [])
+const principalProjectOptions = computed(() => [PRINCIPAL_CURRENT_PROJECT, 'all', ...projects.value])
+const principalStateText = computed(() => {
+  if (principalStateKind.value === 'pending') return t('memory.principal.state.pending')
+  if (principalStateKind.value === 'live') return t('memory.principal.state.live')
+  if (principalStateKind.value === 'empty') return t('memory.principal.state.empty')
+  if (principalStateKind.value === 'gated') return t('memory.principal.state.gated', { reason: principalLoadState.value.kind === 'gated' ? principalLoadState.value.reason : '-' })
+  if (principalStateKind.value === 'mustbuild') return t('memory.principal.state.mustbuild')
+  if (principalStateKind.value === 'stale') return t('memory.principal.state.stale')
+  if (principalStateKind.value === 'error') return t('memory.principal.state.error', { message: principalLoadState.value.kind === 'error' ? principalLoadState.value.error.message : '-' })
+  if (principalStateKind.value === 'risky-confirm') return t('memory.principal.state.risky-confirm')
+  return t('memory.principal.state.gated', { reason: '-' })
+})
+const principalBriefText = computed(() => {
+  if (principalBriefState.value.kind === 'mustbuild') return t('memory.principal.brief.mustbuild')
+  if (principalBriefState.value.kind === 'error') return t('memory.principal.brief.error', { message: principalBriefState.value.error.message })
+  if (principalBriefState.value.kind === 'empty') return t('memory.principal.brief.empty')
+  if (principalBriefState.value.kind === 'pending') return t('memory.principal.brief.pending')
+  return t('memory.principal.brief.live')
+})
 const noiseRatio = computed(() => {
   const measured = all.filter((memory) => memory.utilityKnown)
   if (!measured.length) return '—'
@@ -263,6 +290,18 @@ function formatConfidence(memory: Memory) {
   return `${Math.round(memory.conf * 100)}%`
 }
 
+function formatPrincipalConfidence(value: number | null) {
+  return typeof value === 'number' ? `${Math.round(value * 100)}%` : '—'
+}
+
+function refreshPrincipalMemory() {
+  void principalSurface.refresh()
+}
+
+function refreshPrincipalBrief() {
+  principalSurface.refreshBrief()
+}
+
 function confidenceWidth(memory: Memory) {
   return memory.confidenceKnown ? `${Math.round(memory.conf * 100)}%` : '0%'
 }
@@ -303,6 +342,138 @@ function formatAuditTime(timestamp?: string) {
       <div class="legend-right">
         <span class="lg"><span class="ld live" />{{ t('memory.legend.used') }}</span>
         <span class="lg"><span class="ld warn" />{{ t('memory.legend.shownUnused') }}</span>
+      </div>
+    </section>
+
+    <section class="principal-surface" data-testid="principal-memory-surface">
+      <div class="principal-head">
+        <div>
+          <h2>{{ t('memory.principal.title') }}</h2>
+          <p>{{ t('memory.principal.subtitle') }}</p>
+        </div>
+        <span class="principal-chip" :data-state="principalStateKind">{{ principalStateKind }}</span>
+      </div>
+
+      <div class="principal-scopebar">
+        <label class="scope-field">
+          <span>{{ t('memory.principal.controls.principal') }}</span>
+          <input
+            id="principal-select"
+            v-model.trim="principalScope.principal"
+            class="scope-input"
+            data-testid="principal-select"
+            list="principal-options"
+            autocomplete="off"
+          >
+          <datalist id="principal-options">
+            <option v-for="item in principalSurface.principalOptions.value" :key="item" :value="item" />
+          </datalist>
+        </label>
+        <label class="scope-field compact">
+          <span>{{ t('memory.principal.controls.kind') }}</span>
+          <select v-model="principalScope.principalKind" class="scope-input">
+            <option value="human">{{ t('memory.principal.kinds.human') }}</option>
+            <option value="agent">{{ t('memory.principal.kinds.agent') }}</option>
+            <option value="service">{{ t('memory.principal.kinds.service') }}</option>
+          </select>
+        </label>
+        <label class="scope-field">
+          <span>{{ t('memory.principal.controls.domain') }}</span>
+          <input
+            id="domain-select"
+            v-model.trim="principalScope.domain"
+            class="scope-input"
+            data-testid="domain-select"
+            list="principal-domain-options"
+            autocomplete="off"
+          >
+          <datalist id="principal-domain-options">
+            <option v-for="item in principalSurface.domainOptions.value" :key="item" :value="item" />
+          </datalist>
+        </label>
+        <label class="scope-field compact">
+          <span>{{ t('memory.principal.controls.project') }}</span>
+          <select id="project-scope" v-model="principalScope.project" class="scope-input" data-testid="project-scope">
+            <option v-for="item in principalProjectOptions" :key="item" :value="item">
+              {{ item === PRINCIPAL_CURRENT_PROJECT ? t('memory.principal.projects.current') : item === 'all' ? t('memory.principal.projects.all') : item }}
+            </option>
+          </select>
+        </label>
+        <label class="scope-field compact">
+          <span>{{ t('memory.principal.controls.visibility') }}</span>
+          <select v-model="principalScope.visibility" class="scope-input">
+            <option value="all">{{ t('memory.principal.visibility.all') }}</option>
+            <option value="shared">{{ t('memory.principal.visibility.shared') }}</option>
+            <option value="private">{{ t('memory.principal.visibility.private') }}</option>
+          </select>
+        </label>
+        <label class="toggle-line">
+          <input v-model="principalAttributionVisible" type="checkbox" data-testid="attribution-toggle">
+          <span>{{ t('memory.principal.controls.attribution') }}</span>
+        </label>
+        <button class="tbtn" data-testid="refresh" :disabled="principalStateKind === 'pending'" @click="refreshPrincipalMemory">
+          {{ principalStateKind === 'risky-confirm' ? t('memory.principal.actions.confirmScope') : t('memory.principal.actions.refresh') }}
+        </button>
+        <button class="tbtn" data-testid="brief-refresh" @click="refreshPrincipalBrief">
+          {{ t('memory.principal.actions.briefRefresh') }}
+        </button>
+      </div>
+
+      <div class="statebar principal-state" :data-state="principalStateKind" data-testid="principal-state-banner">
+        <span>{{ principalStateText }}</span>
+        <span class="mono">{{ principalLoadState.evidence.endpoint }}</span>
+      </div>
+
+      <div class="principal-grid">
+        <section class="principal-panel" :data-state="principalStateKind" data-testid="principal-knowledge-summary">
+          <div class="principal-panel-head">
+            <h3>{{ t('memory.principal.knowledge.title') }}</h3>
+            <span>{{ t('memory.principal.knowledge.count', { count: principalItems.length, hidden: principalSummary?.hiddenCount || 0 }) }}</span>
+          </div>
+          <div v-if="principalStateKind === 'pending'" class="mid">{{ t('memory.principal.state.pending') }}</div>
+          <div v-else-if="principalStateKind === 'error'" class="callout danger">
+            {{ principalStateText }}
+          </div>
+          <div v-else-if="principalStateKind === 'gated' || principalStateKind === 'risky-confirm'" class="callout muted">
+            {{ principalStateText }}
+          </div>
+          <div v-else-if="!principalItems.length" class="principal-empty">
+            <b>{{ t('memory.principal.empty.title') }}</b>
+            <span>{{ t('memory.principal.empty.body') }}</span>
+          </div>
+          <ol v-else class="principal-list">
+            <li v-for="item in principalItems" :key="item.id">
+              <p>{{ item.content }}</p>
+              <div class="principal-meta">
+                <span>{{ item.project }}</span>
+                <span>{{ item.domain }}</span>
+                <span>{{ formatPrincipalConfidence(item.confidence) }}</span>
+              </div>
+              <div v-if="principalAttributionVisible" class="principal-attribution">
+                <span>{{ item.ownerPrincipal }}</span>
+                <span>{{ item.ownerPrincipalKind }}</span>
+                <span>{{ item.visibility }}</span>
+                <span>{{ formatAuditTime(item.createdAt) }}</span>
+              </div>
+            </li>
+          </ol>
+          <div class="principal-evidence">
+            <span>{{ t('memory.principal.evidence.audit', { status: principalSummary?.auditStatus || 'not_required' }) }}</span>
+            <span>{{ t('memory.principal.evidence.source', { source: principalSummary?.source || 'principal-memory-query' }) }}</span>
+          </div>
+        </section>
+
+        <section class="principal-panel brief" :data-state="principalBriefState.kind" data-testid="principal-brief-panel">
+          <div class="principal-panel-head">
+            <h3>{{ t('memory.principal.brief.title') }}</h3>
+            <span>{{ principalBriefState.kind }}</span>
+          </div>
+          <p>{{ principalBriefText }}</p>
+          <div class="principal-evidence">
+            <span class="mono">{{ principalBriefState.evidence.endpoint }}</span>
+            <span>{{ principalBriefState.evidence.source }}</span>
+          </div>
+        </section>
       </div>
     </section>
 
@@ -511,6 +682,40 @@ function formatAuditTime(timestamp?: string) {
 .statebar[data-state="error"] { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
 .statebar[data-state="gated"] { border-color:color-mix(in oklab,var(--class-dormant),transparent 45%); }
 .statebar[data-state="empty"] { color:var(--muted); }
+.statebar[data-state="mustbuild"] { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 45%); }
+.statebar[data-state="stale"], .statebar[data-state="risky-confirm"] { border-color:color-mix(in oklab,var(--class-stale),transparent 45%); }
+.principal-surface { display:flex; flex-direction:column; gap:12px; padding:14px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
+.principal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.principal-head h2 { margin:0 0 4px; font-size:var(--text-lg); font-weight:800; }
+.principal-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
+.principal-chip { flex:none; padding:4px 9px; border:1px solid var(--border); border-radius:var(--radius-pill); color:var(--fg-2); font-family:var(--font-mono); font-size:var(--text-xs); font-weight:800; }
+.principal-chip[data-state="live"] { border-color:color-mix(in oklab,var(--class-live),transparent 45%); color:var(--class-live); }
+.principal-chip[data-state="error"], .principal-chip[data-state="risky-confirm"] { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
+.principal-chip[data-state="mustbuild"] { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 45%); color:var(--class-mustbuild); }
+.principal-scopebar { display:grid; grid-template-columns:minmax(170px,1.4fr) 116px minmax(150px,1fr) minmax(150px,1fr) 126px auto auto auto; gap:8px; align-items:end; }
+.scope-field { min-width:0; display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:var(--text-xs); font-weight:800; }
+.scope-field.compact { min-width:112px; }
+.scope-input { width:100%; min-height:32px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); color:var(--fg); padding:0 10px; font-size:var(--text-sm); }
+.toggle-line { min-height:32px; display:inline-flex; align-items:center; gap:7px; color:var(--fg-2); font-size:var(--text-xs); font-weight:800; white-space:nowrap; }
+.toggle-line input { width:16px; height:16px; accent-color:var(--accent); }
+.principal-state .mono { color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.principal-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr); gap:12px; align-items:start; }
+.principal-panel { min-width:0; display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); }
+.principal-panel[data-state="live"] { border-color:color-mix(in oklab,var(--class-live),transparent 62%); }
+.principal-panel[data-state="error"] { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
+.principal-panel[data-state="mustbuild"] { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 52%); }
+.principal-panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--muted); font-size:var(--text-xs); font-weight:800; }
+.principal-panel-head h3 { margin:0; color:var(--fg); font-size:var(--text-base); }
+.principal-empty { min-height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; color:var(--muted); text-align:center; }
+.principal-empty b { color:var(--fg-2); }
+.principal-list { display:flex; flex-direction:column; gap:9px; margin:0; padding:0; list-style:none; }
+.principal-list li { display:flex; flex-direction:column; gap:7px; padding:10px 0; border-top:1px solid var(--border-soft); }
+.principal-list li:first-child { border-top:0; padding-top:0; }
+.principal-list p { margin:0; font-family:var(--font-mono); font-size:var(--text-sm); line-height:1.45; }
+.principal-meta, .principal-attribution, .principal-evidence { display:flex; align-items:center; gap:8px; flex-wrap:wrap; color:var(--muted); font-size:var(--text-xs); }
+.principal-attribution span, .principal-meta span { padding:2px 7px; border:1px solid var(--border); border-radius:var(--radius-pill); background:var(--surface); }
+.principal-evidence { padding-top:8px; border-top:1px solid var(--border-soft); }
+.principal-panel.brief p { margin:0; color:var(--fg-2); font-size:var(--text-sm); line-height:1.45; }
 .area-body { display:grid; grid-template-columns:minmax(0,1fr); gap:14px; }
 .area-body.detail-open { grid-template-columns:minmax(0,1fr) minmax(340px,384px); align-items:start; }
 .grid { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); overflow:hidden; }
@@ -580,9 +785,14 @@ function formatAuditTime(timestamp?: string) {
 @media (max-width:1120px) {
   .area-body.detail-open { grid-template-columns:1fr; }
   .detail { position:static; }
+  .principal-scopebar { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .principal-grid { grid-template-columns:1fr; }
 }
 @media (max-width:760px) {
   .legend { align-items:flex-start; flex-direction:column; }
+  .principal-head { flex-direction:column; }
+  .principal-scopebar { grid-template-columns:1fr; }
+  .principal-state { align-items:flex-start; flex-direction:column; }
   .grid-h { display:none; }
   .mrow { grid-template-columns:22px 8px minmax(0,1fr); }
   .heat, .rowmenu { grid-column:3; justify-self:start; }

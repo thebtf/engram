@@ -1,0 +1,20 @@
+{
+  "gate_id": "G002",
+  "observed_at": "2026-06-29T12:20:53.5142864Z",
+  "command": "go test ./...",
+  "status": "PASS",
+  "checks": {
+    "trigger_tests": "PASS",
+    "bounded_resurfacing_tests": "PASS",
+    "archive_path_explicit": "PASS",
+    "archive_path_bounded": "PASS",
+    "archive_absent_from_ordinary_hot_path": "PASS",
+    "no_forgetting_or_consolidation_slice_started": "PASS"
+  },
+  "supporting_evidence": [
+    ".agent/specs/memory-product-layer/evidence/T004-T005.red.json",
+    ".agent/specs/memory-product-layer/evidence/T004-T005.tdd.json",
+    ".agent/specs/memory-product-layer/evidence/phase-4-archive-gate-go-test-all.txt"
+  ],
+  "notes": "G002 covers T004-T005 archive trigger taxonomy and trigger-gated resurfacing. Storage proof T006 remains."
+}

@@ -44,6 +44,7 @@ import (
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/sessions"
+	"github.com/thebtf/engram/internal/stateplane"
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
@@ -167,6 +168,7 @@ type Service struct {
 	credentialStore             *gorm.CredentialStore
 	memoryStore                 *gorm.MemoryStore
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
+	stateStore                  statePlane
 	principalMemoryQueryService principalMemoryQueryService
 	domainOwnerStore            domainOwnerStore
 	domainRegistryService       domainRegistryService
@@ -271,6 +273,12 @@ func (s *Service) GetLastPrompt(sessionID int64) string {
 func (s *Service) SetCandidateStore(cs *gorm.CandidateStore) {
 	s.initMu.Lock()
 	s.candidateStore = cs
+	s.initMu.Unlock()
+}
+
+func wireStateStore(s *Service, stateStore statePlane) {
+	s.initMu.Lock()
+	s.stateStore = stateStore
 	s.initMu.Unlock()
 }
 
@@ -595,9 +603,12 @@ func (s *Service) initializeAsync() {
 
 	// Create audit store for Milestone D audit trail (FR-D2 / NFR-D4).
 	auditStore := gorm.NewAuditStore(store.GetDB())
+	stateStore := gorm.NewStateStore(store.GetDB(), auditStore)
+	statePlaneSvc := stateplane.NewService(stateStore, nil)
 	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
+	wireStateStore(s, statePlaneSvc)
 
 	// Create purge store for Milestone D project-level hard deletion (T008).
 	// Gated behind ENGRAM_VNEXT_ENABLED: purge_project is a vnext action (Milestone D).
@@ -770,6 +781,7 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetPrincipalMemoryQueryService(principalMemoryQuerySvc)
 	mcpServer.SetDomainRegistryService(domainRegistrySvc)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
+	mcpServer.SetStateStore(statePlaneSvc)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared
@@ -1379,6 +1391,9 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/types", s.handleGetTypes)
 		r.Get("/api/models", s.handleGetModels)
 		r.Get("/api/model-health", s.handleModelHealth)
+		r.Get("/api/state/session/{sessionID}", s.handleGetStateSession)
+		r.Get("/api/state/project/{project}", s.handleGetStateProject)
+		r.Get("/api/state/resume", s.handleGetStateResume)
 
 		// Context injection
 		r.Get("/api/context/count", s.handleContextCount)
@@ -1433,6 +1448,7 @@ func (s *Service) setupRoutes() {
 		r.Put("/api/memory-domains/{domain}", s.handleUpsertMemoryDomain)
 		r.Delete("/api/memory-domains/{domain}", s.handleDeleteMemoryDomain)
 		r.Get("/api/memory/candidates", s.handleListMemoryCandidates)
+		r.Get("/api/memory/candidates/{id}", s.handleGetMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/promote", s.handlePromoteMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/reject", s.handleRejectMemoryCandidate)
 		r.Post("/api/memory/candidates/{id}/supersede", s.handleSupersedeMemoryCandidate)

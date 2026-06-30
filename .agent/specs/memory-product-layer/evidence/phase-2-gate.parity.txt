@@ -1,0 +1,17 @@
+Command: npm run parity
+Exit code: 0
+
+> parity
+> node scripts/parity-check.repo.mjs
+
+contract DESIGN.md design_version : 2026.06.21
+PARITY.json design_version        : 2026.06.21
+
+✓ Contract version in sync (2026.06.21).
+✓ No section flagged drifted.
+
+Fidelity: interactive 9 · full 2 · stub 4 · structural 2
+Open gaps: 31
+✓ Every port page has a parity row.
+
+✓ parity-check passed.

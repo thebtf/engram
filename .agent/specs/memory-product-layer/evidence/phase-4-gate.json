@@ -1,0 +1,21 @@
+{
+  "gate_id": "G001",
+  "observed_at": "2026-06-29T12:12:24.4069140Z",
+  "command": "go test ./...",
+  "status": "PASS",
+  "checks": {
+    "contract_tests": "PASS",
+    "retrieval_tests": "PASS",
+    "applicability_gate_tests": "PASS",
+    "experience_separate_from_hot_memory": "PASS",
+    "bounded_by_explicit_applicability_semantics": "PASS",
+    "no_forgetting_or_temporal_slice_started": "PASS"
+  },
+  "supporting_evidence": [
+    ".agent/specs/memory-product-layer/evidence/T001.tdd.json",
+    ".agent/specs/memory-product-layer/evidence/T002-T003.red.json",
+    ".agent/specs/memory-product-layer/evidence/T002-T003.tdd.json",
+    ".agent/specs/memory-product-layer/evidence/phase-4-gate-go-test-all.txt"
+  ],
+  "notes": "G001 covers T001-T003. Archive resurfacing T004/T005 and storage proof T006 remain later CR-002 tasks."
+}

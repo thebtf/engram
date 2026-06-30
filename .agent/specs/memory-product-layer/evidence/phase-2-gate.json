@@ -1,0 +1,72 @@
+{
+  "feature": "memory-product-layer",
+  "cr": "CR-001-initial-scope",
+  "gate": "G002",
+  "created_at": "2026-06-28T11:58:47+03:00",
+  "verdict": "PASS",
+  "checks": {
+    "principal_query_substrate": {
+      "status": "PASS",
+      "evidence": "T006 classified the existing principal query substrate as live and verified internal/principalmemory, internal/mcp, and internal/worker principal query paths."
+    },
+    "principal_brief_scoping": {
+      "status": "PASS",
+      "evidence": "T007 extended get_memory_brief with principal/domain scope and verified internal/mcp plus internal/principalmemory/worker packages."
+    },
+    "design_contract": {
+      "status": "PASS",
+      "evidence": "T005 PM review result is PASS and T008 implemented only the approved principal-memory-surface controls/states."
+    },
+    "browser_surface": {
+      "status": "PASS",
+      "evidence": "Targeted Playwright smoke proved the memory page keeps existing suppress behavior and moves the principal-memory surface from gated to live, while the brief panel remains mustbuild with MCP get_memory_brief evidence."
+    },
+    "locale_and_parity": {
+      "status": "PASS",
+      "evidence": "Seam contract test validates EN/RU/ZH principal copy and removal of prompt-retention copy; parity check reports contract version in sync and no drifted sections."
+    },
+    "scope_guard": {
+      "status": "PASS",
+      "evidence": "No review queue UI, forgetting/consolidation controls, experience/applicability work, or temporal-truth work was added in Story Group 2."
+    }
+  },
+  "commands": [
+    {
+      "command": "npm run test:seam",
+      "exit_code": 0,
+      "raw_output": ".agent/specs/memory-product-layer/evidence/phase-2-gate.seam.txt",
+      "summary": "Operator-console seam contract, T008 principal surface checks, and locale copy checks passed."
+    },
+    {
+      "command": "npm run build",
+      "exit_code": 0,
+      "summary": "Nuxt production build passed during T008 verification."
+    },
+    {
+      "command": "npm run test:browser -- tests/browser/memory-actions.spec.ts",
+      "exit_code": 0,
+      "raw_output": ".agent/specs/memory-product-layer/evidence/phase-2-gate.browser.txt",
+      "summary": "Memory browser smoke passed, including principal live query and MCP-only brief state."
+    },
+    {
+      "command": "npm run parity",
+      "exit_code": 0,
+      "raw_output": ".agent/specs/memory-product-layer/evidence/phase-2-gate.parity.txt",
+      "summary": "Operator-console parity contract passed with no drifted sections."
+    },
+    {
+      "command": "go test ./... -count=1",
+      "exit_code": 0,
+      "raw_output": ".agent/specs/memory-product-layer/evidence/phase-2-gate.go-test.txt",
+      "summary": "Full uncached Go suite passed after Story Group 2."
+    }
+  ],
+  "enforcement": {
+    "story_group_3_unblocked": true,
+    "reason": "Principal explorer substrate, scoped brief path, approved touched UI, browser smoke, locale/parity, and full Go suite are green."
+  },
+  "next": {
+    "task": "T009",
+    "note": "Begin packet projection contract for review-loop backend substrate; do not add review queue UI in CR-001."
+  }
+}

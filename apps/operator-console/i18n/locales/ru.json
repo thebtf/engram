@@ -247,10 +247,71 @@
       "gated": "Раздел отключён флагом {flag}.",
       "retry": "Повторить"
     },
+    "principal": {
+      "title": "Память principal",
+      "subtitle": "Знания по principal, домену и проекту с evidence источника.",
+      "controls": {
+        "principal": "Principal",
+        "kind": "Тип",
+        "domain": "Домен",
+        "project": "Проект",
+        "visibility": "Видимость",
+        "attribution": "Атрибуция"
+      },
+      "kinds": {
+        "human": "Human",
+        "agent": "Agent",
+        "service": "Service"
+      },
+      "projects": {
+        "current": "Текущий",
+        "all": "Все проекты"
+      },
+      "visibility": {
+        "all": "Все",
+        "shared": "Shared",
+        "private": "Private"
+      },
+      "actions": {
+        "refresh": "Обновить",
+        "confirmScope": "Подтвердить scope",
+        "briefRefresh": "Brief"
+      },
+      "state": {
+        "pending": "Загружаем знания principal…",
+        "live": "Знания principal live для выбранного scope.",
+        "empty": "Для выбранного scope нет подходящих знаний.",
+        "gated": "Scope закрыт: {reason}",
+        "mustbuild": "Этот блок ещё не подключён к browser REST.",
+        "stale": "Показываем предыдущий безопасный результат до успешного refresh.",
+        "error": "Не удалось загрузить знания principal: {message}",
+        "risky-confirm": "Смена principal scope требует подтверждения перед более широким чтением."
+      },
+      "knowledge": {
+        "title": "Сводка знаний",
+        "count": "видно {count} · скрыто {hidden}"
+      },
+      "empty": {
+        "title": "Нет scoped knowledge",
+        "body": "Выбранный principal/domain/project вернул пустой поддержанный ответ."
+      },
+      "evidence": {
+        "audit": "audit {status}",
+        "source": "source {source}"
+      },
+      "brief": {
+        "title": "Scoped brief",
+        "pending": "Готовим состояние brief…",
+        "live": "Brief доступен.",
+        "empty": "Brief не вернул содержимое.",
+        "error": "Не удалось загрузить brief: {message}",
+        "mustbuild": "Principal-scoped brief есть в MCP get_memory_brief; browser REST bridge пока отсутствует."
+      }
+    },
     "detail": {
       "title": "Карточка памяти",
       "operatorQuestion": "Что решает оператор:",
-      "operatorText": "оставить запись в подсказках, понизить до контекста, отправить на проверку или заменить новой версией.",
+      "operatorText": "проверить состояние записи, сигнал шума, аудит и варианты замены перед изменением.",
       "state": "состояние",
       "tier": "как использовать",
       "type": "категория",

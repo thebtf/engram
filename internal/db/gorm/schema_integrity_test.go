@@ -30,6 +30,7 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 		"session_transcripts.session_id":        "external SDK session identifier (TEXT), not a row FK",
 		"session_transcripts.claude_session_id": "external Claude session identifier (TEXT), not a row FK",
 		"sdk_sessions.claude_session_id":        "external Claude session identifier (TEXT), not a row FK",
+		"agent_session_state.session_id":        "external SDK session identifier (TEXT), not a row FK",
 		// session_segments.session_id is an external-session-string (TEXT, not a
 		// FK to sdk_sessions.id). The former reasoning_traces.sdk_session_id entry
 		// was removed in CR-2b: migration 137 drops reasoning_traces, so a whitelist

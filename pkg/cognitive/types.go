@@ -119,6 +119,423 @@ type ProjectStateRecord struct {
 	UpdatedBy    string     `json:"updated_by"`
 }
 
+// StatePacketSource names the authority that produced a ResumePacket. It is
+// deliberately explicit so filesystem fallback can never masquerade as native
+// state in the deterministic resume path.
+type StatePacketSource string
+
+// Canonical StatePacketSource values.
+const (
+	StatePacketSourceNative             StatePacketSource = "native"
+	StatePacketSourceFilesystemFallback StatePacketSource = "filesystem_fallback"
+	StatePacketSourceConflict           StatePacketSource = "conflict"
+)
+
+// StateFreshness classifies whether the native packet is current enough to
+// drive resume without opening narrative filesystem state.
+type StateFreshness string
+
+// Canonical StateFreshness values.
+const (
+	StateFreshnessFresh   StateFreshness = "fresh"
+	StateFreshnessStale   StateFreshness = "stale"
+	StateFreshnessUnknown StateFreshness = "unknown"
+)
+
+// StateDriftKind classifies the relationship between native state and any
+// fallback/export state inspected by the read path.
+type StateDriftKind string
+
+// Canonical StateDriftKind values.
+const (
+	StateDriftNone          StateDriftKind = "none"
+	StateDriftNativeStale   StateDriftKind = "native_stale"
+	StateDriftFallbackNewer StateDriftKind = "fallback_newer"
+	StateDriftConflict      StateDriftKind = "conflict"
+	StateDriftUnknown       StateDriftKind = "unknown"
+)
+
+// StateScopeKind identifies which agent-owned handoff scope a state record
+// describes. The first CR uses session/project state; goal/task scopes are
+// contractually reserved so later CRs do not overload generic memory rows.
+type StateScopeKind string
+
+// Canonical StateScopeKind values.
+const (
+	StateScopeSession StateScopeKind = "session"
+	StateScopeProject StateScopeKind = "project"
+	StateScopeGoal    StateScopeKind = "goal"
+	StateScopeTask    StateScopeKind = "task"
+)
+
+// StateActionKind classifies how an agent should execute the next action.
+type StateActionKind string
+
+// Canonical StateActionKind values.
+const (
+	StateActionCommand     StateActionKind = "command"
+	StateActionInstruction StateActionKind = "instruction"
+	StateActionReviewGate  StateActionKind = "review_gate"
+)
+
+// StateVerificationKind classifies the evidence gate that must pass before a
+// resume can be considered complete.
+type StateVerificationKind string
+
+// Canonical StateVerificationKind values.
+const (
+	StateVerificationCommand  StateVerificationKind = "command"
+	StateVerificationArtifact StateVerificationKind = "artifact"
+	StateVerificationManual   StateVerificationKind = "manual"
+)
+
+// StateAction is the exact next action carried by a ResumePacket.
+type StateAction struct {
+	Kind        StateActionKind `json:"kind"`
+	Description string          `json:"description"`
+	Command     string          `json:"command,omitempty"`
+}
+
+// StateVerification is the exact evidence gate carried by a ResumePacket.
+type StateVerification struct {
+	Kind        StateVerificationKind `json:"kind"`
+	Description string                `json:"description"`
+	Command     string                `json:"command,omitempty"`
+}
+
+// StateConflict records a single native-vs-fallback disagreement without
+// forcing the reader to open the larger fallback artifact.
+type StateConflict struct {
+	Field         string `json:"field"`
+	NativeValue   string `json:"native_value,omitempty"`
+	FallbackValue string `json:"fallback_value,omitempty"`
+	Resolution    string `json:"resolution,omitempty"`
+}
+
+// StateDrift summarizes drift/conflict evidence for a ResumePacket.
+type StateDrift struct {
+	Kind      StateDriftKind  `json:"kind"`
+	Conflicts []StateConflict `json:"conflicts,omitempty"`
+	CheckedAt time.Time       `json:"checked_at,omitempty"`
+}
+
+// ResumePacketRequest scopes a native resume read. AllowFilesystemFallback is
+// explicit: a caller that wants native-only behavior leaves it false and gets a
+// non-native packet only when the implementation can prove an intentional
+// conflict path.
+type ResumePacketRequest struct {
+	Project                 string `json:"project"`
+	SessionID               string `json:"session_id,omitempty"`
+	GoalID                  string `json:"goal_id,omitempty"`
+	TaskID                  string `json:"task_id,omitempty"`
+	AllowFilesystemFallback bool   `json:"allow_filesystem_fallback,omitempty"`
+}
+
+// ResumePacket is the bounded deterministic resume payload for the native
+// state plane. The required fields are intentionally concrete: freshness,
+// drift/conflict, next action, and next verification are first-class fields,
+// not opaque metadata inside SessionStateSlots.
+type ResumePacket struct {
+	Source           StatePacketSource `json:"source"`
+	Freshness        StateFreshness    `json:"freshness"`
+	Drift            StateDrift        `json:"drift"`
+	NextAction       StateAction       `json:"next_action"`
+	NextVerification StateVerification `json:"next_verification"`
+	GeneratedAt      time.Time         `json:"generated_at"`
+
+	Project      string           `json:"project,omitempty"`
+	SessionID    string           `json:"session_id,omitempty"`
+	GoalID       string           `json:"goal_id,omitempty"`
+	TaskID       string           `json:"task_id,omitempty"`
+	FallbackPath string           `json:"fallback_path,omitempty"`
+	Scopes       []StateScopeKind `json:"scopes,omitempty"`
+}
+
+// ExperienceSource names the implementation shape that produced an experience
+// response. CR-002 V1 starts with projection/materialization evidence and does
+// not assume dedicated ExperienceRecord storage.
+type ExperienceSource string
+
+// Canonical ExperienceSource values.
+const (
+	ExperienceSourceProjection   ExperienceSource = "projection"
+	ExperienceSourceMaterialized ExperienceSource = "materialized"
+	ExperienceSourceDedicated    ExperienceSource = "dedicated"
+)
+
+// ExperienceApplicabilityState is the V1 applicability gate verdict. Blocked
+// means the experience must not be silently reused for the current context.
+type ExperienceApplicabilityState string
+
+// Canonical ExperienceApplicabilityState values.
+const (
+	ExperienceApplicabilityApplies   ExperienceApplicabilityState = "applies"
+	ExperienceApplicabilityUncertain ExperienceApplicabilityState = "uncertain"
+	ExperienceApplicabilityBlocked   ExperienceApplicabilityState = "blocked"
+)
+
+// ExperienceArchiveTriggerClass identifies the finite trigger classes allowed
+// to resurface archived experience. Ordinary hot-path requests leave this list
+// empty so archive search cannot run implicitly.
+type ExperienceArchiveTriggerClass string
+
+// Canonical ExperienceArchiveTriggerClass values.
+const (
+	ExperienceArchiveTriggerWhyChanged         ExperienceArchiveTriggerClass = "why_changed"
+	ExperienceArchiveTriggerRegression         ExperienceArchiveTriggerClass = "regression"
+	ExperienceArchiveTriggerRollback           ExperienceArchiveTriggerClass = "rollback"
+	ExperienceArchiveTriggerOldDecisionRevisit ExperienceArchiveTriggerClass = "old_decision_revisit"
+	ExperienceArchiveTriggerSimilarFailure     ExperienceArchiveTriggerClass = "similar_prior_failure"
+)
+
+// ExperienceApplicability carries the gate state and rationale for a returned
+// experience. State is required; Rationale is required by contract even when the
+// caller later renders it differently.
+type ExperienceApplicability struct {
+	State     ExperienceApplicabilityState `json:"state"`
+	Rationale string                       `json:"rationale"`
+}
+
+// ExperienceAntiApplicability records a condition under which a prior lesson
+// should be downgraded or blocked for the current context.
+type ExperienceAntiApplicability struct {
+	Condition string `json:"condition"`
+	Rationale string `json:"rationale"`
+}
+
+// ExperienceSourceAttribution identifies the evidence used to produce an
+// experience response without forcing V1 to introduce dedicated storage.
+type ExperienceSourceAttribution struct {
+	Kind      string    `json:"kind"`
+	ID        string    `json:"id"`
+	Project   string    `json:"project,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+// ExperienceQueryRequest scopes an explicit experience/history read. It is
+// separate from hot-memory retrieval so causal lessons do not collapse into
+// ordinary memory ranking.
+type ExperienceQueryRequest struct {
+	Project               string                          `json:"project"`
+	Principal             string                          `json:"principal,omitempty"`
+	Domain                string                          `json:"domain,omitempty"`
+	Query                 string                          `json:"query"`
+	CurrentContext        string                          `json:"current_context,omitempty"`
+	ArchiveTriggerClasses []ExperienceArchiveTriggerClass `json:"archive_trigger_classes,omitempty"`
+	Limit                 int                             `json:"limit,omitempty"`
+}
+
+// ExperienceResponse is the bounded first-class payload for historical
+// experience retrieval. It carries lesson, applicability, anti-applicability,
+// and attribution before any caller may reuse the lesson.
+type ExperienceResponse struct {
+	Source                ExperienceSource                `json:"source"`
+	Lesson                string                          `json:"lesson"`
+	Applicability         ExperienceApplicability         `json:"applicability"`
+	AntiApplicability     []ExperienceAntiApplicability   `json:"anti_applicability"`
+	SourceAttribution     []ExperienceSourceAttribution   `json:"source_attribution"`
+	ArchiveTriggerClasses []ExperienceArchiveTriggerClass `json:"archive_trigger_classes"`
+}
+
+// ForgettingOperation names the explicit operation class for safe forgetting.
+// It deliberately avoids a boolean delete shape so callers must choose the
+// policy boundary and audit surface that match the memory-quality action.
+type ForgettingOperation string
+
+// Canonical ForgettingOperation values.
+const (
+	ForgettingOperationSuppress    ForgettingOperation = "suppress"
+	ForgettingOperationExpire      ForgettingOperation = "expire"
+	ForgettingOperationArchive     ForgettingOperation = "archive"
+	ForgettingOperationConsolidate ForgettingOperation = "consolidate"
+	ForgettingOperationDestroy     ForgettingOperation = "destroy"
+)
+
+// ForgettingReason is the classifier input signal that maps worked cases onto
+// the taxonomy. It is request intent, not permission to mutate storage.
+type ForgettingReason string
+
+// Canonical ForgettingReason values.
+const (
+	ForgettingReasonLowValue         ForgettingReason = "low_value"
+	ForgettingReasonRetentionExpired ForgettingReason = "retention_expired"
+	ForgettingReasonColdStorage      ForgettingReason = "cold_storage"
+	ForgettingReasonDuplicate        ForgettingReason = "duplicate"
+	ForgettingReasonOperatorDestroy  ForgettingReason = "operator_destroy"
+)
+
+// ForgettingDecisionState tells the caller whether a classified action is safe
+// to resolve automatically, must enter review, or is blocked.
+type ForgettingDecisionState string
+
+// Canonical ForgettingDecisionState values.
+const (
+	ForgettingDecisionAutoResolvable ForgettingDecisionState = "auto_resolvable"
+	ForgettingDecisionReviewRequired ForgettingDecisionState = "review_required"
+	ForgettingDecisionBlocked        ForgettingDecisionState = "blocked"
+)
+
+// ForgettingClassificationRequest carries enough context to classify a
+// forgetting/consolidation action without mutating the underlying memory rows.
+type ForgettingClassificationRequest struct {
+	Reason         ForgettingReason         `json:"reason"`
+	MemoryID       string                   `json:"memory_id"`
+	RelatedIDs     []string                 `json:"related_ids,omitempty"`
+	Evidence       []string                 `json:"evidence,omitempty"`
+	Project        string                   `json:"project,omitempty"`
+	PrivacyScope   string                   `json:"privacy_scope,omitempty"`
+	StructuralLoss ForgettingStructuralLoss `json:"structural_loss"`
+	Risky          bool                     `json:"risky,omitempty"`
+}
+
+// ForgettingAuditSurface names the evidence required before or after a
+// forgetting action. SnapshotStore and AuditStore align with existing
+// candidate/snapshot/audit seams; ExportPath is populated by closeout proof.
+type ForgettingAuditSurface struct {
+	Required      bool     `json:"required"`
+	SnapshotStore string   `json:"snapshot_store"`
+	AuditStore    string   `json:"audit_store"`
+	ExportPath    string   `json:"export_path"`
+	Evidence      []string `json:"evidence"`
+}
+
+// ForgettingReviewPolicy tells the caller whether a bounded operator packet is
+// required and which actions may be presented.
+type ForgettingReviewPolicy struct {
+	Required       bool                   `json:"required"`
+	PacketKind     string                 `json:"packet_kind"`
+	AllowedActions []string               `json:"allowed_actions"`
+	Packet         ForgettingReviewPacket `json:"packet"`
+}
+
+// ForgettingStructuralLoss records whether a consolidation/destructive path
+// would lose meaning, provenance, or scope. T003 wires this from fixtures; T002
+// initializes the field so the safety contract is already explicit.
+type ForgettingStructuralLoss struct {
+	UniqueMeaning bool   `json:"unique_meaning"`
+	Provenance    bool   `json:"provenance"`
+	Scope         bool   `json:"scope"`
+	Rationale     string `json:"rationale"`
+}
+
+// ForgettingPacketScope bounds the memory ids and scope carried by a review
+// packet so the operator reviews a compact exception, not raw row sludge.
+type ForgettingPacketScope struct {
+	Project      string   `json:"project,omitempty"`
+	PrivacyScope string   `json:"privacy_scope,omitempty"`
+	MemoryIDs    []string `json:"memory_ids"`
+}
+
+// ForgettingSnapshotPolicy mirrors the existing snapshot seam required before
+// risky forgetting actions execute.
+type ForgettingSnapshotPolicy struct {
+	Store     string `json:"store"`
+	Operation string `json:"operation"`
+	Status    string `json:"status"`
+	Required  bool   `json:"required"`
+}
+
+// ForgettingAuditPolicy mirrors the existing audit seam for risky forgetting
+// review packets.
+type ForgettingAuditPolicy struct {
+	Store  string `json:"store"`
+	Action string `json:"action"`
+	Status string `json:"status"`
+}
+
+// ForgettingReviewPacket is the bounded exception payload emitted for risky or
+// destructive forgetting/consolidation decisions.
+type ForgettingReviewPacket struct {
+	PacketID       string                   `json:"packet_id"`
+	Kind           string                   `json:"kind"`
+	Operation      ForgettingOperation      `json:"operation"`
+	State          ForgettingDecisionState  `json:"state"`
+	Rationale      string                   `json:"rationale"`
+	AllowedActions []string                 `json:"allowed_actions"`
+	Scope          ForgettingPacketScope    `json:"scope"`
+	Evidence       []string                 `json:"evidence"`
+	Snapshot       ForgettingSnapshotPolicy `json:"snapshot"`
+	Audit          ForgettingAuditPolicy    `json:"audit"`
+	StructuralLoss ForgettingStructuralLoss `json:"structural_loss"`
+}
+
+// ForgettingDecision is the bounded classifier output. It is a decision
+// envelope only: DataDestructionByDefault must remain false unless a later,
+// audited execution path explicitly performs an approved destructive action.
+type ForgettingDecision struct {
+	Operation                ForgettingOperation      `json:"operation"`
+	State                    ForgettingDecisionState  `json:"state"`
+	Rationale                string                   `json:"rationale"`
+	PolicyBoundary           string                   `json:"policy_boundary"`
+	Audit                    ForgettingAuditSurface   `json:"audit"`
+	Review                   ForgettingReviewPolicy   `json:"review"`
+	StructuralLoss           ForgettingStructuralLoss `json:"structural_loss"`
+	DataDestructionByDefault bool                     `json:"data_destruction_by_default"`
+}
+
+// TemporalTruthQueryState names the bounded read outcome for selected-fact
+// temporal truth. NotSelected is an explicit non-graph answer: the provider
+// refuses to infer truth for facts outside the selected scope.
+type TemporalTruthQueryState string
+
+// Canonical TemporalTruthQueryState values.
+const (
+	TemporalTruthFound       TemporalTruthQueryState = "found"
+	TemporalTruthNotSelected TemporalTruthQueryState = "not_selected"
+	TemporalTruthUnknown     TemporalTruthQueryState = "unknown"
+)
+
+// TemporalTruthScope identifies the selected high-value fact being queried.
+type TemporalTruthScope struct {
+	FactID    string `json:"fact_id"`
+	FactClass string `json:"fact_class,omitempty"`
+	Project   string `json:"project,omitempty"`
+	Selected  bool   `json:"selected"`
+	Rationale string `json:"rationale,omitempty"`
+}
+
+// TemporalTruthProvenance identifies the evidence behind a current or prior
+// truth answer.
+type TemporalTruthProvenance struct {
+	Kind       string    `json:"kind"`
+	ID         string    `json:"id"`
+	Project    string    `json:"project,omitempty"`
+	SessionID  string    `json:"session_id,omitempty"`
+	ObservedAt time.Time `json:"observed_at,omitempty"`
+}
+
+// TemporalTruthEntry is one value for a selected evolving fact, including its
+// validity window, invalidation rationale, and provenance.
+type TemporalTruthEntry struct {
+	Value                 string                    `json:"value"`
+	ValidFrom             time.Time                 `json:"valid_from"`
+	ValidUntil            *time.Time                `json:"valid_until"`
+	InvalidatedAt         *time.Time                `json:"invalidated_at"`
+	InvalidationRationale string                    `json:"invalidation_rationale"`
+	Provenance            []TemporalTruthProvenance `json:"provenance"`
+}
+
+// TemporalTruthQueryRequest scopes a selected-fact temporal truth read.
+type TemporalTruthQueryRequest struct {
+	FactID    string     `json:"fact_id"`
+	FactClass string     `json:"fact_class,omitempty"`
+	Project   string     `json:"project,omitempty"`
+	AsOf      *time.Time `json:"as_of,omitempty"`
+	Limit     int        `json:"limit,omitempty"`
+}
+
+// TemporalTruthResponse answers true-now and optionally true-then for one
+// selected evolving fact, with bounded history and provenance.
+type TemporalTruthResponse struct {
+	Scope           TemporalTruthScope        `json:"scope"`
+	State           TemporalTruthQueryState   `json:"state"`
+	TrueNow         *TemporalTruthEntry       `json:"true_now,omitempty"`
+	TrueThen        *TemporalTruthEntry       `json:"true_then"`
+	History         []TemporalTruthEntry      `json:"history"`
+	ProvenanceChain []TemporalTruthProvenance `json:"provenance_chain"`
+}
+
 // AttentionEventRecord is the durable form of an AttentionEvent persisted
 // by S4a through the AttentionEventWriter interface. Unlike AttentionEvent
 // (which describes a runtime signal), AttentionEventRecord captures a

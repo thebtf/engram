@@ -1,16 +1,19 @@
-import type { ComputedRef } from 'vue'
+import type { ComputedRef, Ref } from 'vue'
 import type { Memory } from './useMockData'
 import type { OperatorLoadState, OperatorMutationResult, OperatorUnsupportedAction } from './useOperatorApi'
 import {
   emptyState,
   endpointEvidence,
   errorState,
+  gatedState,
   liveState,
   loadOperatorJson,
+  mustBuildState,
   OperatorFetchError,
   operatorFetchJson,
   pendingState,
   runOperatorMutation,
+  staleState,
   toOperatorSourceError,
   unsupportedOperatorAction,
 } from './useOperatorApi'
@@ -32,8 +35,90 @@ interface ApiMemory {
   source_sessions?: string[]
 }
 
+interface ApiPrincipalMemoryAudit {
+  durable?: boolean
+  action?: string
+}
+
+interface ApiPrincipalMemoryItem {
+  id?: number | string
+  project?: string
+  content?: string
+  tags?: string[]
+  owner_principal?: string
+  owner_principal_kind?: string
+  agent_visibility?: string
+  domain?: string
+  confidence?: number
+  created_at?: string
+}
+
+interface ApiPrincipalMemoryQueryResponse {
+  principal?: string
+  principal_kind?: string
+  project?: string
+  domain?: string
+  items?: ApiPrincipalMemoryItem[]
+  hidden_count?: number
+  audit?: ApiPrincipalMemoryAudit
+  audit_status?: string
+}
+
 // Per-project fetch cap; matches the server-side /api/memories maximum limit.
 const MEMORY_LIST_LIMIT = 500
+const PRINCIPAL_MEMORY_LIMIT = 10
+const PRINCIPAL_BRIEF_REASON = 'Principal-scoped brief exists in MCP get_memory_brief, but no browser REST bridge is available yet.'
+export const PRINCIPAL_CURRENT_PROJECT = 'current'
+
+export type PrincipalKind = 'human' | 'agent' | 'service'
+export type PrincipalVisibility = 'all' | 'shared' | 'private'
+
+export interface PrincipalMemoryScope {
+  principal: string
+  principalKind: PrincipalKind
+  project: string
+  domain: string
+  visibility: PrincipalVisibility
+  includePrivate: boolean
+  limit: number
+}
+
+export interface OperatorPrincipalMemoryItem {
+  id: string
+  project: string
+  content: string
+  tags: string[]
+  ownerPrincipal: string
+  ownerPrincipalKind: string
+  visibility: string
+  domain: string
+  confidence: number | null
+  createdAt: string
+}
+
+export interface OperatorPrincipalMemorySummary {
+  scope: PrincipalMemoryScope
+  principal: string
+  principalKind: string
+  project: string
+  domain: string
+  items: OperatorPrincipalMemoryItem[]
+  hiddenCount: number
+  auditStatus: string
+  audit: {
+    durable: boolean
+    action: string
+  }
+  source: string
+  freshness: string
+}
+
+export interface OperatorPrincipalMemoryBrief {
+  scope: PrincipalMemoryScope
+  source: string
+  freshness: string
+  lines: string[]
+}
 
 export interface StoreMemoryInput {
   project: string
@@ -111,6 +196,168 @@ export const memoryActionGaps: readonly MemoryActionGap[] = [
     'memory.detail.actions.flag',
   ),
 ]
+
+function blankPrincipalScope(): PrincipalMemoryScope {
+  return {
+    principal: '',
+    principalKind: 'agent',
+    project: 'all',
+    domain: '',
+    visibility: 'all',
+    includePrivate: false,
+    limit: PRINCIPAL_MEMORY_LIMIT,
+  }
+}
+
+function clean(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function clampPrincipalLimit(limit: number): number {
+  return Number.isInteger(limit) && limit > 0 ? Math.min(10, limit) : PRINCIPAL_MEMORY_LIMIT
+}
+
+function normalizePrincipalKind(value?: string): PrincipalKind {
+  return value === 'human' || value === 'service' || value === 'agent' ? value : 'agent'
+}
+
+function normalizeVisibility(value?: string): PrincipalVisibility {
+  return value === 'shared' || value === 'private' || value === 'all' ? value : 'all'
+}
+
+function clonePrincipalScope(scope: PrincipalMemoryScope): PrincipalMemoryScope {
+  return {
+    principal: scope.principal.trim(),
+    principalKind: normalizePrincipalKind(scope.principalKind),
+    project: scope.project.trim(),
+    domain: scope.domain.trim(),
+    visibility: normalizeVisibility(scope.visibility),
+    includePrivate: Boolean(scope.includePrivate),
+    limit: clampPrincipalLimit(scope.limit),
+  }
+}
+
+function resolvePrincipalProject(project: string, currentProject = ''): string {
+  const normalizedProject = project.trim()
+  if (normalizedProject === PRINCIPAL_CURRENT_PROJECT) {
+    const resolvedCurrentProject = clean(currentProject)
+    return resolvedCurrentProject && resolvedCurrentProject !== 'all' ? resolvedCurrentProject : ''
+  }
+  return normalizedProject
+}
+
+function principalQueryScope(scope: PrincipalMemoryScope, currentProject = ''): PrincipalMemoryScope {
+  const normalized = clonePrincipalScope(scope)
+  return {
+    ...normalized,
+    project: resolvePrincipalProject(normalized.project, currentProject),
+  }
+}
+
+export function principalMemoryQueryPath(scope: PrincipalMemoryScope, currentProject = ''): string {
+  const normalized = principalQueryScope(scope, currentProject)
+  const params = new URLSearchParams()
+  params.set('principal', normalized.principal)
+  params.set('principal_kind', normalized.principalKind)
+  params.set('visibility', normalized.visibility)
+  params.set('limit', String(normalized.limit))
+  if (normalized.project && normalized.project !== 'all') params.set('project', normalized.project)
+  if (normalized.domain && normalized.domain !== 'all') params.set('domain', normalized.domain)
+  if (normalized.includePrivate || normalized.visibility === 'private') params.set('include_private', 'true')
+  return `/api/memories/principal?${params.toString()}`
+}
+
+function emptyPrincipalSummary(scope: PrincipalMemoryScope): OperatorPrincipalMemorySummary {
+  const normalized = clonePrincipalScope(scope)
+  return {
+    scope: normalized,
+    principal: normalized.principal,
+    principalKind: normalized.principalKind,
+    project: normalized.project,
+    domain: normalized.domain,
+    items: [],
+    hiddenCount: 0,
+    auditStatus: 'not_required',
+    audit: { durable: false, action: 'principal_memory_query' },
+    source: 'principal-memory-query',
+    freshness: 'live',
+  }
+}
+
+function emptyPrincipalBrief(scope: PrincipalMemoryScope): OperatorPrincipalMemoryBrief {
+  return {
+    scope: clonePrincipalScope(scope),
+    source: 'principal-scoped-brief',
+    freshness: 'mustbuild',
+    lines: [],
+  }
+}
+
+function principalPayloadError(path: string, detail: string, payload: unknown): OperatorFetchError {
+  const message = `Invalid principal memory payload from ${path}: ${detail}${payloadPreview(payload)}`
+  return new OperatorFetchError(message, {
+    message,
+    source: 'principal-memory-query',
+    path,
+    method: 'GET',
+    retryable: false,
+  })
+}
+
+function mapPrincipalMemoryItem(row: ApiPrincipalMemoryItem): OperatorPrincipalMemoryItem {
+  return {
+    id: row.id === undefined || row.id === null ? '-' : String(row.id),
+    project: clean(row.project) || 'global',
+    content: clean(row.content) || '-',
+    tags: Array.isArray(row.tags) ? row.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+    ownerPrincipal: clean(row.owner_principal),
+    ownerPrincipalKind: clean(row.owner_principal_kind) || 'unknown',
+    visibility: clean(row.agent_visibility) || 'shared',
+    domain: clean(row.domain) || 'general',
+    confidence: typeof row.confidence === 'number' ? row.confidence : null,
+    createdAt: clean(row.created_at),
+  }
+}
+
+function mapPrincipalMemoryResponse(
+  payload: unknown,
+  path: string,
+  scope: PrincipalMemoryScope,
+): OperatorPrincipalMemorySummary {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw principalPayloadError(path, 'expected an object response', payload)
+  }
+
+  const response = payload as ApiPrincipalMemoryQueryResponse
+  if (!Array.isArray(response.items)) {
+    throw principalPayloadError(path, 'expected items array', payload)
+  }
+
+  const normalizedScope = clonePrincipalScope({
+    ...scope,
+    principal: clean(response.principal) || scope.principal,
+    principalKind: normalizePrincipalKind(clean(response.principal_kind) || scope.principalKind),
+    project: clean(response.project) || scope.project,
+    domain: clean(response.domain) || scope.domain,
+  })
+
+  return {
+    scope: normalizedScope,
+    principal: normalizedScope.principal,
+    principalKind: normalizedScope.principalKind,
+    project: normalizedScope.project,
+    domain: normalizedScope.domain,
+    items: response.items.map(mapPrincipalMemoryItem),
+    hiddenCount: typeof response.hidden_count === 'number' ? response.hidden_count : 0,
+    auditStatus: clean(response.audit_status) || 'not_required',
+    audit: {
+      durable: Boolean(response.audit?.durable),
+      action: clean(response.audit?.action) || 'principal_memory_query',
+    },
+    source: 'principal-memory-query',
+    freshness: 'live',
+  }
+}
 
 function jsonInit(method: 'POST' | 'DELETE', body?: unknown): RequestInit {
   const init: RequestInit = { method }
@@ -291,6 +538,159 @@ async function loadMemoryRows(): Promise<Memory[]> {
   }
 
   return [...deduped.values()]
+}
+
+export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>): {
+  scope: Ref<PrincipalMemoryScope>
+  loadState: ComputedRef<OperatorLoadState<OperatorPrincipalMemorySummary>>
+  briefState: ComputedRef<OperatorLoadState<OperatorPrincipalMemoryBrief>>
+  attributionVisible: Ref<boolean>
+  riskyConfirmation: Ref<boolean>
+  principalOptions: ComputedRef<string[]>
+  domainOptions: ComputedRef<string[]>
+  refresh: () => Promise<void>
+  refreshBrief: () => void
+} {
+  const scope = useState<PrincipalMemoryScope>('live:principal-memory:scope', blankPrincipalScope)
+  const queryEvidence = endpointEvidence('/api/memories/principal?principal={principal}', 'principal-memory-query')
+  const state = useState<OperatorLoadState<OperatorPrincipalMemorySummary>>(
+    'live:principal-memory:state',
+    () => gatedState(queryEvidence, 'principal-select', 'Select a principal before issuing a scoped query.', emptyPrincipalSummary(scope.value)),
+  )
+  const briefEvidence = endpointEvidence('MCP get_memory_brief', 'principal-scoped-brief')
+  const briefStateRef = useState<OperatorLoadState<OperatorPrincipalMemoryBrief>>(
+    'live:principal-memory:brief-state',
+    () => mustBuildState<OperatorPrincipalMemoryBrief>(briefEvidence, PRINCIPAL_BRIEF_REASON, emptyPrincipalBrief(scope.value)),
+  )
+  const attributionVisible = useState<boolean>('live:principal-memory:attribution-visible', () => true)
+  const riskyConfirmation = useState<boolean>('live:principal-memory:risky-confirmation', () => false)
+  const confirmedPrincipal = useState<string>('live:principal-memory:confirmed-principal', () => '')
+
+  const loadState = computed(() => state.value)
+  const briefState = computed(() => briefStateRef.value)
+  const principalOptions = computed(() => {
+    const values = new Set<string>()
+    if (scope.value.principal.trim()) values.add(scope.value.principal.trim())
+    for (const item of state.value.data?.items || []) {
+      if (item.ownerPrincipal) values.add(item.ownerPrincipal)
+    }
+    return [...values].sort()
+  })
+  const domainOptions = computed(() => {
+    const values = new Set<string>()
+    if (scope.value.domain.trim()) values.add(scope.value.domain.trim())
+    for (const item of state.value.data?.items || []) {
+      if (item.domain) values.add(item.domain)
+    }
+    return [...values].sort()
+  })
+
+  function refreshBrief() {
+    briefStateRef.value = mustBuildState<OperatorPrincipalMemoryBrief>(
+      endpointEvidence('MCP get_memory_brief', 'principal-scoped-brief', {
+        reason: PRINCIPAL_BRIEF_REASON,
+      }),
+      PRINCIPAL_BRIEF_REASON,
+      emptyPrincipalBrief(scope.value),
+    )
+  }
+
+  async function refresh(forceWiden = false) {
+    const normalizedScope = clonePrincipalScope(scope.value)
+    const currentProjectValue = currentProject?.value || ''
+    const queryScope = principalQueryScope(normalizedScope, currentProjectValue)
+    scope.value.limit = normalizedScope.limit
+    scope.value.principalKind = normalizedScope.principalKind
+    scope.value.visibility = normalizedScope.visibility
+    scope.value.project = normalizedScope.project || PRINCIPAL_CURRENT_PROJECT
+
+    if (!normalizedScope.principal) {
+      riskyConfirmation.value = false
+      state.value = gatedState(
+        queryEvidence,
+        'principal-select',
+        'Select a principal before issuing a scoped query.',
+        state.value.data || emptyPrincipalSummary(queryScope),
+      )
+      refreshBrief()
+      return
+    }
+
+    if (normalizedScope.project === PRINCIPAL_CURRENT_PROJECT && !queryScope.project) {
+      riskyConfirmation.value = false
+      state.value = gatedState(
+        endpointEvidence('/api/memories/principal', 'principal-memory-query', {
+          reason: 'Current project scope needs a concrete project before querying.',
+        }),
+        'project-scope',
+        'Select a concrete project before using current project scope.',
+        state.value.data || emptyPrincipalSummary(queryScope),
+      )
+      refreshBrief()
+      return
+    }
+
+    if (
+      confirmedPrincipal.value &&
+      confirmedPrincipal.value !== normalizedScope.principal &&
+      !forceWiden &&
+      !riskyConfirmation.value
+    ) {
+      riskyConfirmation.value = true
+      state.value = staleState(
+        endpointEvidence('/api/memories/principal', 'principal-memory-query', {
+          reason: 'Changing principal scope needs explicit confirmation before a broader read.',
+        }),
+        'Changing principal scope needs explicit confirmation before a broader read.',
+        state.value.data || emptyPrincipalSummary(queryScope),
+      )
+      refreshBrief()
+      return
+    }
+
+    riskyConfirmation.value = false
+    confirmedPrincipal.value = normalizedScope.principal
+
+    const path = principalMemoryQueryPath(normalizedScope, currentProjectValue)
+    const evidence = endpointEvidence(path, 'principal-memory-query')
+    state.value = pendingState(evidence, state.value.data || emptyPrincipalSummary(queryScope))
+    try {
+      const payload = await operatorFetchJson<unknown>(path, undefined, 'principal-memory-query')
+      const summary = mapPrincipalMemoryResponse(payload, path, queryScope)
+      state.value = summary.items.length
+        ? liveState(evidence, summary)
+        : emptyState(evidence, summary)
+    } catch (nextError) {
+      const mapped = toOperatorSourceError(nextError, {
+        source: 'principal-memory-query',
+        path,
+        method: 'GET',
+      })
+      state.value = errorState(evidence, mapped, {
+        source: 'principal-memory-query',
+        run: async () => {
+          await refresh(true)
+          return state.value
+        },
+      }, state.value.data || emptyPrincipalSummary(queryScope))
+    } finally {
+      refreshBrief()
+    }
+  }
+
+  startOnce('principal-memory', refresh)
+
+  return {
+    scope,
+    loadState,
+    briefState,
+    attributionVisible,
+    riskyConfirmation,
+    principalOptions,
+    domainOptions,
+    refresh,
+    refreshBrief,
+  }
 }
 
 export function useOperatorMemoryLab(): {

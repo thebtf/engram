@@ -1,0 +1,28 @@
+{
+  "gate": "G003",
+  "observed_at": "2026-06-29T22:50:45.5617369+03:00",
+  "command": "go test ./...",
+  "status": "PASS",
+  "raw_output": ".agent/specs/memory-product-layer/evidence/phase-6-closeout.go-test.txt",
+  "checks": {
+    "g001_passed": "PASS",
+    "g002_passed": "PASS",
+    "narrow_scope_proof_present": "PASS",
+    "temporal_truth_queryable": "PASS",
+    "provenance_first": "PASS",
+    "intentionally_narrow": "PASS"
+  },
+  "proof_artifact": ".agent/specs/memory-product-layer/contracts/temporal-truth-scope-proof.md",
+  "remaining_exclusions": [
+    "learned applicability model",
+    "broad graph projection",
+    "broad operator-console redesign",
+    "full company-brain ingestion platform"
+  ],
+  "evidence": [
+    ".agent/specs/memory-product-layer/evidence/phase-6-temporal-gate.json",
+    ".agent/specs/memory-product-layer/evidence/phase-6-history-gate.json",
+    ".agent/specs/memory-product-layer/contracts/temporal-truth.md",
+    ".agent/specs/memory-product-layer/contracts/temporal-truth-scope-proof.md"
+  ]
+}

@@ -4717,6 +4717,70 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		memoryPrincipalsMigration149(),
 		memoryDomainOwnersMigration150(),
 		behavioralRulesEnabledMigration151(),
+		{
+			ID: "152_agent_state_plane",
+			Migrate: func(tx *gorm.DB) error {
+				sqls := []string{
+					`CREATE TABLE IF NOT EXISTS agent_session_state (
+						id          BIGSERIAL PRIMARY KEY,
+						session_id  TEXT NOT NULL,
+						focus       JSONB NOT NULL DEFAULT '{}'::jsonb,
+						execution   JSONB NOT NULL DEFAULT '{}'::jsonb,
+						horizons    JSONB NOT NULL DEFAULT '{}'::jsonb,
+						created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT agent_session_state_session_id_not_blank
+							CHECK (btrim(session_id) <> ''),
+						CONSTRAINT agent_session_state_focus_object
+							CHECK (jsonb_typeof(focus) = 'object'),
+						CONSTRAINT agent_session_state_execution_object
+							CHECK (jsonb_typeof(execution) = 'object'),
+						CONSTRAINT agent_session_state_horizons_object
+							CHECK (jsonb_typeof(horizons) = 'object')
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_state_session_id
+						ON agent_session_state (session_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_agent_session_state_updated_at
+						ON agent_session_state (updated_at DESC)`,
+					`CREATE TABLE IF NOT EXISTS agent_project_state (
+						id            BIGSERIAL PRIMARY KEY,
+						project       TEXT NOT NULL,
+						phase         TEXT NOT NULL DEFAULT '',
+						deadline_date TIMESTAMPTZ,
+						pressure      TEXT NOT NULL DEFAULT '',
+						updated_by    TEXT NOT NULL DEFAULT 'agent',
+						created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT agent_project_state_project_not_blank
+							CHECK (btrim(project) <> ''),
+						CONSTRAINT agent_project_state_updated_by_not_blank
+							CHECK (btrim(updated_by) <> '')
+					)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_project_state_project
+						ON agent_project_state (project)`,
+					`CREATE INDEX IF NOT EXISTS idx_agent_project_state_updated_at
+						ON agent_project_state (updated_at DESC)`,
+				}
+				for _, stmt := range sqls {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 152: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: func(tx *gorm.DB) error {
+				sqls := []string{
+					`DROP TABLE IF EXISTS agent_project_state`,
+					`DROP TABLE IF EXISTS agent_session_state`,
+				}
+				for _, stmt := range sqls {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

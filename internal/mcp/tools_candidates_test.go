@@ -56,3 +56,19 @@ func TestHandleListCandidates_FlagOffReturnsError(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), "ENGRAM_VNEXT_F_ENABLED"),
 		"error must mention the feature flag, got: %v", err)
 }
+
+func TestHandleGetCandidate_EmptyIDReturnsError(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	s := NewServer(ServerOptions{Version: "test"})
+	s.candidateStore = nonNilCandidateStore()
+
+	args, err := json.Marshal(map[string]any{})
+	require.NoError(t, err)
+
+	_, callErr := s.handleGetCandidate(context.Background(), args)
+	require.Error(t, callErr, "missing id must return an error")
+	require.True(t,
+		strings.Contains(callErr.Error(), "id is required"),
+		"error must mention 'id is required', got: %v", callErr)
+}

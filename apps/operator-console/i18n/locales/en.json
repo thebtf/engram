@@ -247,10 +247,71 @@
       "gated": "This section is disabled by {flag}.",
       "retry": "Retry"
     },
+    "principal": {
+      "title": "Principal memory",
+      "subtitle": "Scoped knowledge by principal, domain, and project with source evidence.",
+      "controls": {
+        "principal": "Principal",
+        "kind": "Kind",
+        "domain": "Domain",
+        "project": "Project",
+        "visibility": "Visibility",
+        "attribution": "Attribution"
+      },
+      "kinds": {
+        "human": "Human",
+        "agent": "Agent",
+        "service": "Service"
+      },
+      "projects": {
+        "current": "Current",
+        "all": "All projects"
+      },
+      "visibility": {
+        "all": "All",
+        "shared": "Shared",
+        "private": "Private"
+      },
+      "actions": {
+        "refresh": "Refresh",
+        "confirmScope": "Confirm scope",
+        "briefRefresh": "Brief"
+      },
+      "state": {
+        "pending": "Loading principal knowledge…",
+        "live": "Principal knowledge is live for the selected scope.",
+        "empty": "No matching knowledge for the selected scope.",
+        "gated": "Scope is gated: {reason}",
+        "mustbuild": "This block is not browser-wired yet.",
+        "stale": "Previous safe result is shown until refresh succeeds.",
+        "error": "Could not load principal knowledge: {message}",
+        "risky-confirm": "Changing principal scope needs one confirmation before reading broader knowledge."
+      },
+      "knowledge": {
+        "title": "Knowledge summary",
+        "count": "{count} visible · {hidden} hidden"
+      },
+      "empty": {
+        "title": "No scoped knowledge",
+        "body": "The selected principal/domain/project returned an empty supported response."
+      },
+      "evidence": {
+        "audit": "audit {status}",
+        "source": "source {source}"
+      },
+      "brief": {
+        "title": "Scoped brief",
+        "pending": "Preparing brief state…",
+        "live": "Brief content is available.",
+        "empty": "Brief returned no content.",
+        "error": "Could not load brief: {message}",
+        "mustbuild": "Principal-scoped brief exists in MCP get_memory_brief; the browser REST bridge is not available yet."
+      }
+    },
     "detail": {
       "title": "Memory card",
       "operatorQuestion": "Operator decides:",
-      "operatorText": "keep this record in prompts, downgrade it to context, send it to review, or replace it with a newer version.",
+      "operatorText": "review this record's state, noise signal, audit trail, and replacement options before changing it.",
       "state": "state",
       "tier": "how to use",
       "type": "category",

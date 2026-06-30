@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
 )
@@ -40,23 +41,24 @@ type candidateListResponse struct {
 }
 
 type candidateReviewItem struct {
-	ReviewAfter             *string  `json:"review_after,omitempty"`
-	PromotedMemoryID        *int64   `json:"promoted_memory_id,omitempty"`
-	ID                      int64    `json:"id"`
-	Status                  string   `json:"status"`
-	ProposedContent         string   `json:"proposed_content"`
-	ProposedPromotionTarget string   `json:"proposed_promotion_target"`
-	ProposedTier            string   `json:"proposed_tier"`
-	ProposedEpistemicType   string   `json:"proposed_epistemic_type"`
-	SourceSessionID         string   `json:"source_session_id"`
-	Fingerprint             string   `json:"fingerprint,omitempty"`
-	PrivacyScope            string   `json:"privacy_scope,omitempty"`
-	CreatedAt               string   `json:"created_at"`
-	UpdatedAt               string   `json:"updated_at"`
-	EvidenceHandles         []string `json:"evidence_handles"`
-	AffectedProjects        []string `json:"affected_projects"`
-	Confidence              float32  `json:"confidence"`
-	RecurrenceCount         int      `json:"recurrence_count"`
+	ReviewPacket            reviewpacket.CandidateReviewPacket `json:"review_packet"`
+	ReviewAfter             *string                            `json:"review_after,omitempty"`
+	PromotedMemoryID        *int64                             `json:"promoted_memory_id,omitempty"`
+	ID                      int64                              `json:"id"`
+	Status                  string                             `json:"status"`
+	ProposedContent         string                             `json:"proposed_content"`
+	ProposedPromotionTarget string                             `json:"proposed_promotion_target"`
+	ProposedTier            string                             `json:"proposed_tier"`
+	ProposedEpistemicType   string                             `json:"proposed_epistemic_type"`
+	SourceSessionID         string                             `json:"source_session_id"`
+	Fingerprint             string                             `json:"fingerprint,omitempty"`
+	PrivacyScope            string                             `json:"privacy_scope,omitempty"`
+	CreatedAt               string                             `json:"created_at"`
+	UpdatedAt               string                             `json:"updated_at"`
+	EvidenceHandles         []string                           `json:"evidence_handles"`
+	AffectedProjects        []string                           `json:"affected_projects"`
+	Confidence              float32                            `json:"confidence"`
+	RecurrenceCount         int                                `json:"recurrence_count"`
 }
 
 type candidateActionReceipt struct {
@@ -121,6 +123,7 @@ func candidateReviewItemFromDomain(candidate *models.CrystallizationCandidate) c
 	}
 
 	return candidateReviewItem{
+		ReviewPacket:            reviewpacket.FromCandidate(candidate),
 		ID:                      candidate.ID,
 		Status:                  string(candidate.Status),
 		ProposedContent:         candidate.ProposedContent,
@@ -298,6 +301,49 @@ func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Requ
 		Status:     string(status),
 		Limit:      limit,
 	})
+}
+
+// handleGetMemoryCandidate godoc
+// @Summary Read one crystallization candidate review packet
+// @Description Returns one vNext-F crystallization candidate with its bounded review_packet projection.
+// @Tags Memories
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Candidate ID"
+// @Success 200 {object} candidateReviewItem
+// @Failure 400 {string} string "invalid id"
+// @Failure 403 {string} string "feature flag required"
+// @Failure 404 {string} string "candidate not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal error"
+// @Router /api/memory/candidates/{id} [get]
+func (s *Service) handleGetMemoryCandidate(w http.ResponseWriter, r *http.Request) {
+	if !s.candidateQueueActive() {
+		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
+		return
+	}
+	store := s.currentCandidateReviewStore()
+	if store == nil {
+		http.Error(w, "candidate store not available", http.StatusServiceUnavailable)
+		return
+	}
+	id, ok := candidateIDFromRequest(r)
+	if !ok {
+		http.Error(w, "invalid candidate id", http.StatusBadRequest)
+		return
+	}
+
+	candidate, err := store.Get(r.Context(), id)
+	if err != nil {
+		writeCandidateStoreError(w, "get_candidate", id, err)
+		return
+	}
+	if candidate == nil {
+		http.Error(w, "candidate not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, candidateReviewItemFromDomain(candidate))
 }
 
 func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Request) {

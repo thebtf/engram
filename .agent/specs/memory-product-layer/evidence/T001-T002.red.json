@@ -1,0 +1,14 @@
+{
+  "task_ids": ["T001", "T002"],
+  "observed_at": "2026-06-29T16:27:33.7649270+03:00",
+  "stack": "GO",
+  "command": "go test ./pkg/cognitive ./internal/forgetting",
+  "status": "RED",
+  "test_files": [
+    "pkg/cognitive/types_test.go",
+    "pkg/cognitive/interfaces_test.go",
+    "internal/forgetting/service_test.go"
+  ],
+  "failure_reason": "Forgetting taxonomy and classifier symbols are not implemented yet.",
+  "runner_stdout_excerpt": "pkg/cognitive/interfaces_test.go:81:26: undefined: ForgettingClassifier; pkg/cognitive/types_test.go:126:15: undefined: ForgettingOperation; internal/forgetting/service_test.go:12:13: undefined: NewClassifier"
+}

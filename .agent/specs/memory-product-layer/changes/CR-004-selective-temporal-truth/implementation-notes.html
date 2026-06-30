@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ENG-MPL-1 CR-004 Implementation Notes</title>
+</head>
+<body>
+  <h1>ENG-MPL-1 / CR-004 Selective Temporal Truth</h1>
+  <section>
+    <h2>Developer ACK</h2>
+    <p><strong>Status:</strong> Aligned.</p>
+    <p><strong>Scope:</strong> implement selected-fact temporal truth only: contract, bounded query path, validity/invalidation history, provenance-first retrieval, and narrow-scope proof.</p>
+    <p><strong>Out of scope:</strong> learned applicability model, broad graph projection, broad operator-console redesign, and full company-brain ingestion platform.</p>
+  </section>
+  <section>
+    <h2>Running Decisions</h2>
+    <article id="t001-temporal-contract">
+      <h3>T001 temporal truth contract</h3>
+      <p><strong>Decision:</strong> expose selected-fact temporal truth as a bounded cognitive contract with current truth, prior truth, validity windows, invalidation rationale, and provenance.</p>
+      <p><strong>Load-bearing claim:</strong> the contract is not a universal truth graph. Evidence will be contract tests and the scope proof.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+    <article id="t002-temporal-query">
+      <h3>T002 bounded query path</h3>
+      <p><strong>Decision:</strong> implement a minimal in-process temporal truth service over selected fixtures, with no broad graph traversal or cross-domain inference.</p>
+      <p><strong>Load-bearing claim:</strong> callers can answer true now vs then with provenance and prior validity context within the selected scope only.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+    <article id="t003-history-chain">
+      <h3>T003 validity / invalidation history</h3>
+      <p><strong>Decision:</strong> expose a bounded <code>provenance_chain</code> derived from truth history so prior/current value changes carry evidence as well as timestamps.</p>
+      <p><strong>Load-bearing claim:</strong> invalidation keeps rationale and provenance, not just time windows. Evidence is the T003 RED/GREEN/Prove-It fixture.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+    <article id="t004-scope-proof">
+      <h3>T004 narrow-scope proof</h3>
+      <p><strong>Decision:</strong> close the CR with a proof artifact naming selected classes, excluded graph work, and why the service stayed selected-fact only.</p>
+      <p><strong>Load-bearing claim:</strong> temporal truth did not become broad graphification. Evidence is the scope proof plus Prove-It broadening failures.</p>
+      <p><strong>Status:</strong> Aligned.</p>
+    </article>
+  </section>
+  <section>
+    <h2>Verification Evidence</h2>
+    <p>T001/T002 RED evidence: <code>.agent/specs/memory-product-layer/evidence/T001-T002-temporal.red.json</code>.</p>
+    <p>T001/T002 TDD evidence: <code>.agent/specs/memory-product-layer/evidence/T001-T002-temporal.tdd.json</code>.</p>
+    <p>G001 gate evidence: <code>.agent/specs/memory-product-layer/evidence/phase-6-temporal-gate.json</code>; raw output sidecar: <code>.agent/specs/memory-product-layer/evidence/phase-6-temporal-gate.go-test.txt</code>.</p>
+    <p>T003 RED evidence: <code>.agent/specs/memory-product-layer/evidence/T003-temporal-history.red.json</code>.</p>
+    <p>T003 TDD evidence: <code>.agent/specs/memory-product-layer/evidence/T003-temporal-history.tdd.json</code>.</p>
+    <p>G002 gate evidence: <code>.agent/specs/memory-product-layer/evidence/phase-6-history-gate.json</code>; raw output sidecar: <code>.agent/specs/memory-product-layer/evidence/phase-6-history-gate.go-test.txt</code>.</p>
+    <p>T004 proof artifact: <code>.agent/specs/memory-product-layer/contracts/temporal-truth-scope-proof.md</code>.</p>
+    <p>G003 closeout evidence: <code>.agent/specs/memory-product-layer/evidence/phase-6-closeout.json</code>; raw output sidecar: <code>.agent/specs/memory-product-layer/evidence/phase-6-closeout.go-test.txt</code>.</p>
+  </section>
+</body>
+</html>

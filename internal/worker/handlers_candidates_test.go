@@ -165,6 +165,23 @@ func TestHandleListMemoryCandidates_ReturnsProjectScopedPayload(t *testing.T) {
 	assert.Equal(t, []string{"engram"}, response.Candidates[0].AffectedProjects)
 	require.NotNil(t, response.Candidates[0].ReviewAfter)
 	assert.Equal(t, "2026-06-24T12:00:00Z", *response.Candidates[0].ReviewAfter)
+
+	packet := response.Candidates[0].ReviewPacket
+	assert.Equal(t, "candidate:42:abc123", packet.PacketID)
+	assert.Equal(t, int64(42), packet.CandidateID)
+	assert.Equal(t, "candidate_review", packet.Kind)
+	assert.Equal(t, []string{"promote", "reject", "supersede"}, packet.Decision.AllowedActions)
+	assert.Equal(t, "semantic", packet.Decision.PromotionTarget)
+	assert.Equal(t, []string{"engram"}, packet.Scope.Projects)
+	assert.Equal(t, "project", packet.Scope.PrivacyScope)
+	require.Len(t, packet.Evidence, 1)
+	assert.Equal(t, "session:sess-42", packet.Evidence[0].Handle)
+	assert.Equal(t, "session", packet.Evidence[0].Kind)
+	assert.True(t, packet.Snapshot.Required)
+	assert.Equal(t, "bulk_op_snapshots", packet.Snapshot.Store)
+	assert.Equal(t, "pre_action_required", packet.Snapshot.Status)
+	assert.Equal(t, "audit_log", packet.Audit.Store)
+	assert.Equal(t, "pending_on_action", packet.Audit.Status)
 }
 
 func TestHandleListMemoryCandidates_AllProjectListsUnscopedQueue(t *testing.T) {
@@ -191,6 +208,45 @@ func TestHandleListMemoryCandidates_AllProjectListsUnscopedQueue(t *testing.T) {
 	assert.Equal(t, candidateQueueAllProjects, response.Project)
 	require.Len(t, response.Candidates, 1)
 	assert.Empty(t, response.Candidates[0].AffectedProjects)
+}
+
+func TestHandleGetMemoryCandidate_ReturnsReviewPacket(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {
+				ID:                      42,
+				Status:                  models.CandidateStatusPending,
+				ProposedContent:         "read path should return a packet",
+				ProposedPromotionTarget: "semantic",
+				ProposedTier:            "semantic",
+				ProposedEpistemicType:   "decision",
+				SourceSessionID:         "sess-42",
+				Fingerprint:             "abc123",
+				EvidenceHandles:         []string{"session:sess-42"},
+				AffectedProjects:        []string{"engram"},
+				PrivacyScope:            "project",
+				CreatedAt:               time.Date(2026, time.June, 23, 10, 0, 0, 0, time.UTC),
+				UpdatedAt:               time.Date(2026, time.June, 23, 10, 5, 0, 0, time.UTC),
+			},
+		},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/candidates/42", nil)
+	w := httptest.NewRecorder()
+	router := chi.NewRouter()
+	router.Get("/api/memory/candidates/{id}", service.handleGetMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response candidateReviewItem
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, int64(42), response.ID)
+	assert.Equal(t, "read path should return a packet", response.ProposedContent)
+	assert.Equal(t, "candidate:42:abc123", response.ReviewPacket.PacketID)
+	assert.Equal(t, []string{"promote", "reject", "supersede"}, response.ReviewPacket.Decision.AllowedActions)
+	assert.Equal(t, "bulk_op_snapshots", response.ReviewPacket.Snapshot.Store)
+	assert.Equal(t, "audit_log", response.ReviewPacket.Audit.Store)
 }
 
 func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {

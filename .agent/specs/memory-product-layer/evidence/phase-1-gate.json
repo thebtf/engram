@@ -1,0 +1,59 @@
+{
+  "feature": "memory-product-layer",
+  "cr": "CR-001-initial-scope",
+  "gate": "G001",
+  "created_at": "2026-06-28T11:05:00+03:00",
+  "verdict": "PASS",
+  "checks": {
+    "state_packet_tests": {
+      "status": "PASS",
+      "evidence": "T001/T004 targeted verification includes pkg/cognitive contract tests; latest package bundle passed go test ./pkg/cognitive ./internal/db/gorm ./internal/stateplane ./internal/mcp ./internal/worker."
+    },
+    "store_tests": {
+      "status": "PASS",
+      "evidence": "internal/db/gorm package passed in the latest state/store/surface bundle."
+    },
+    "fallback_drift_tests": {
+      "status": "PASS",
+      "evidence": "internal/stateplane tests prove native-first read, explicit fallback marker, conflict path, and fallback packet validation."
+    },
+    "native_first_path": {
+      "status": "PASS",
+      "evidence": "internal/stateplane.Service returns native packet without reading fallback when allow_filesystem_fallback is false; worker initializeAsync wires wrapped state plane into REST and MCP."
+    },
+    "fallback_explicit": {
+      "status": "PASS",
+      "evidence": "fallback is request-gated by ResumePacketRequest.AllowFilesystemFallback and surface flag allow_filesystem_fallback."
+    },
+    "spec_drift": {
+      "status": "PASS",
+      "evidence": "T004 kept GORM StateStore native-only and did not expand into principal explorer, experience/applicability, forgetting/consolidation, temporal truth, or queue UI delivery."
+    }
+  },
+  "commands": [
+    {
+      "command": "go test ./pkg/cognitive ./internal/db/gorm ./internal/stateplane ./internal/mcp ./internal/worker",
+      "exit_code": 0,
+      "summary": "state packet, store, fallback, MCP, and REST package checks green"
+    },
+    {
+      "command": "go test ./... -count=1",
+      "exit_code": 0,
+      "summary": "full uncached suite green after T004 code changes"
+    },
+    {
+      "command": "go test ./...",
+      "exit_code": 0,
+      "raw_output": ".agent/specs/memory-product-layer/evidence/phase-1-gate.go-test.txt",
+      "summary": "G001 exact command passed"
+    }
+  ],
+  "enforcement": {
+    "downstream_story_group_2_unblocked": true,
+    "reason": "Native resume happy path no longer depends on filesystem fallback; fallback is explicit and conflict-producing when requested."
+  },
+  "next": {
+    "task": "T005",
+    "note": "Story Group 2 may start after this gate; UI implementation still waits for the designer contract task."
+  }
+}

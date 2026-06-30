@@ -9,14 +9,15 @@ import (
 	"testing"
 )
 
-// TestInterfaceCount_Exactly6 parses interfaces.go via go/parser and asserts
-// that EXACTLY six top-level interface declarations exist with the canonical
-// names enumerated in T003 AC + arch ADR-010. This is the anti-stub guard:
-// any drift below 6 (a missing interface) or above 6 (a stray addition)
+// TestInterfaceCount_Exactly10 parses interfaces.go via go/parser and asserts
+// that EXACTLY ten top-level interface declarations exist with the canonical
+// names enumerated in T003 AC + arch ADR-010 plus ENG-MPL-1 T001's StatePlane
+// and CR-002 T001 ExperienceProvider plus CR-003 T001 ForgettingClassifier
+// plus CR-004 T001 TemporalTruthProvider product contracts. This is the anti-stub guard: any drift below 10 (a missing interface) or above 10 (a stray addition)
 // fails the count assertion AND the name-set assertion. Detecting both
 // directions makes the test resistant to "loosen the test until green"
 // symptom patches (AP-e).
-func TestInterfaceCount_Exactly6(t *testing.T) {
+func TestInterfaceCount_Exactly10(t *testing.T) {
 	const path = "interfaces.go"
 
 	fset := token.NewFileSet()
@@ -49,15 +50,55 @@ func TestInterfaceCount_Exactly6(t *testing.T) {
 		"AttentionEventWriter",
 		"CandidateProposer",
 		"DirectiveDistiller",
+		"ExperienceProvider",
+		"ForgettingClassifier",
 		"HintEmitter",
+		"StatePlane",
 		"StateWriter",
+		"TemporalTruthProvider",
 	}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("interface set mismatch:\n  got:  %v\n  want: %v", got, want)
 	}
-	if len(got) != 6 {
-		t.Fatalf("interface count: got %d, want 6", len(got))
+	if len(got) != 10 {
+		t.Fatalf("interface count: got %d, want 10", len(got))
+	}
+}
+
+func TestExperienceProvider_OneMethod(t *testing.T) {
+	typ := reflect.TypeOf((*ExperienceProvider)(nil)).Elem()
+
+	if got, want := typ.NumMethod(), 1; got != want {
+		t.Fatalf("ExperienceProvider.NumMethod: got %d, want %d", got, want)
+	}
+	method := typ.Method(0)
+	if got, want := method.Name, "QueryExperience"; got != want {
+		t.Fatalf("ExperienceProvider method name: got %q, want %q", got, want)
+	}
+}
+
+func TestForgettingClassifier_OneMethod(t *testing.T) {
+	typ := reflect.TypeOf((*ForgettingClassifier)(nil)).Elem()
+
+	if got, want := typ.NumMethod(), 1; got != want {
+		t.Fatalf("ForgettingClassifier.NumMethod: got %d, want %d", got, want)
+	}
+	method := typ.Method(0)
+	if got, want := method.Name, "ClassifyForgetting"; got != want {
+		t.Fatalf("ForgettingClassifier method name: got %q, want %q", got, want)
+	}
+}
+
+func TestTemporalTruthProvider_OneMethod(t *testing.T) {
+	typ := reflect.TypeOf((*TemporalTruthProvider)(nil)).Elem()
+
+	if got, want := typ.NumMethod(), 1; got != want {
+		t.Fatalf("TemporalTruthProvider.NumMethod: got %d, want %d", got, want)
+	}
+	method := typ.Method(0)
+	if got, want := method.Name, "QueryTemporalTruth"; got != want {
+		t.Fatalf("TemporalTruthProvider method name: got %q, want %q", got, want)
 	}
 }
 
@@ -78,6 +119,27 @@ func TestStateWriter_TwoMethods(t *testing.T) {
 	want := []string{"WriteProjectState", "WriteSessionState"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("StateWriter method names: got %v, want %v", got, want)
+	}
+}
+
+// TestStatePlane_FiveMethods enforces ENG-MPL-1 T001: the native state plane
+// has one agent-owned interface with both write and read surfaces, including a
+// bounded resume packet read.
+func TestStatePlane_FiveMethods(t *testing.T) {
+	typ := reflect.TypeOf((*StatePlane)(nil)).Elem()
+
+	if got, want := typ.NumMethod(), 5; got != want {
+		t.Fatalf("StatePlane.NumMethod: got %d, want %d", got, want)
+	}
+
+	got := []string{}
+	for i := 0; i < typ.NumMethod(); i++ {
+		got = append(got, typ.Method(i).Name)
+	}
+	sort.Strings(got)
+	want := []string{"ReadProjectState", "ReadResumePacket", "ReadSessionState", "WriteProjectState", "WriteSessionState"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("StatePlane method names: got %v, want %v", got, want)
 	}
 }
 
