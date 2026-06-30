@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -322,6 +323,9 @@ func normalizeStateStoreResumePacketRequest(request cognitive.ResumePacketReques
 			seen[normalized] = struct{}{}
 			scopes = append(scopes, normalized)
 		}
+		sort.Slice(scopes, func(i, j int) bool {
+			return scopes[i] < scopes[j]
+		})
 		request.Scopes = scopes
 	}
 	return request
