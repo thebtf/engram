@@ -784,7 +784,7 @@ func TestServiceReadResumePacketRejectsFallbackWithoutPathBeforeMixedPacket(t *t
 	require.ErrorContains(t, err, "fallback_path is required")
 }
 
-func TestServiceReadResumePacketRejectsFallbackMissingStableIdentity(t *testing.T) {
+func TestServiceReadResumePacketSynthesizesTimestampOnFallbackMissingGeneratedAt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fallback-resume.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{
 		"source":"filesystem_fallback",
@@ -800,9 +800,10 @@ func TestServiceReadResumePacketRejectsFallbackMissingStableIdentity(t *testing.
 		&fakeNativePlane{err: errors.New("native missing")},
 		JSONFileFallbackReader{Path: path},
 	)
-	service.now = func() time.Time { return time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC) }
+	clockTime := time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return clockTime }
 
-	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
 		Principal:               "agent:developer",
 		SessionID:               "session-1",
@@ -810,7 +811,13 @@ func TestServiceReadResumePacketRejectsFallbackMissingStableIdentity(t *testing.
 		AllowFilesystemFallback: true,
 	})
 
-	require.ErrorContains(t, err, "generated_at or state_version is required")
+	// normalizeFallbackPacket synthesizes GeneratedAt = now when absent so the
+	// packet is valid and reaches callers with a real timestamp instead of zero.
+	require.NoError(t, err)
+	require.Equal(t, cognitive.StatePacketSourceFilesystemFallback, packet.Source)
+	require.False(t, packet.GeneratedAt.IsZero(), "GeneratedAt must be synthesized from clock")
+	require.Equal(t, clockTime.UTC(), packet.GeneratedAt.UTC())
+	require.NotEmpty(t, packet.StateVersion)
 }
 
 func TestServiceReadResumePacketRejectsMissingPrincipalBeforeFallback(t *testing.T) {
