@@ -356,16 +356,47 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 	require.NotContains(t, string(packet.Source), "filesystem")
 }
 
-func TestStateStore_ResumePacketProjectOnlyRequiresSessionID(t *testing.T) {
-	store := &StateStore{}
+func TestStateStore_ResumePacketProjectOnlyWithoutSessionID(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewStateStore(db, nil)
+	ctx := context.Background()
 
-	_, err := store.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
-		Project:   "engram",
+	project := fmt.Sprintf("state-resume-project-only-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
+	})
+
+	require.NoError(t, store.WriteProjectState(ctx, project, cognitive.ProjectStateRecord{
+		Phase:     "implementation",
+		Pressure:  "normal",
+		UpdatedBy: "agent",
+	}))
+
+	packet, err := store.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
+		Project:   project,
 		Principal: "agent:developer",
 		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeProject},
 	})
+	require.NoError(t, err)
 
-	require.ErrorContains(t, err, "state_store read_resume: session_id is required")
+	require.NotEmpty(t, packet.PacketID)
+	require.NotEmpty(t, packet.StateVersion)
+	require.False(t, packet.GeneratedAt.IsZero())
+	require.Equal(t, project, packet.Project)
+	require.Equal(t, "agent:developer", packet.Principal)
+	require.Empty(t, packet.SessionID)
+	require.Equal(t, []cognitive.StateScopeKind{cognitive.StateScopeProject}, packet.Scopes)
+	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
+	require.False(t, packet.FallbackUsed)
+	require.Equal(t, cognitive.StateFreshnessFresh, packet.Freshness)
+	require.Equal(t, cognitive.StateDriftNone, packet.Drift.Kind)
+	require.Equal(t, []string{fmt.Sprintf("agent_project_state:%s@%s", project, packet.StateVersion)}, packet.EvidenceRefs)
+	require.Equal(t, cognitive.StateActionInstruction, packet.NextAction.Kind)
+	require.Equal(t, fmt.Sprintf("Continue project %s from native project state (phase: implementation; pressure: normal).", project), packet.NextAction.Description)
+	require.Empty(t, packet.NextAction.Command)
+	require.Equal(t, cognitive.StateVerificationManual, packet.NextVerification.Kind)
+	require.Equal(t, fmt.Sprintf("Verify project %s native project state remains current before continuing.", project), packet.NextVerification.Description)
+	require.Empty(t, packet.NextVerification.Command)
 }
 
 func TestResumePacketIDIncludesGoalAndTaskBindings(t *testing.T) {

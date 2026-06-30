@@ -1,14 +1,12 @@
 package gorm
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -324,9 +322,6 @@ func normalizeStateStoreResumePacketRequest(request cognitive.ResumePacketReques
 			seen[normalized] = struct{}{}
 			scopes = append(scopes, normalized)
 		}
-		slices.SortFunc(scopes, func(a, b cognitive.StateScopeKind) int {
-			return cmp.Compare(string(a), string(b))
-		})
 		request.Scopes = scopes
 	}
 	return request
@@ -336,12 +331,12 @@ func validateStateStoreResumePacketRequest(request cognitive.ResumePacketRequest
 	if len(request.Scopes) == 0 {
 		return fmt.Errorf("state_store read_resume: scopes is required")
 	}
-	if request.SessionID == "" {
-		return fmt.Errorf("state_store read_resume: session_id is required")
-	}
 	for _, scope := range request.Scopes {
 		switch scope {
 		case cognitive.StateScopeSession:
+			if request.SessionID == "" {
+				return fmt.Errorf("state_store read_resume: session_id is required for session scope")
+			}
 		case cognitive.StateScopeProject:
 			if request.Project == "" {
 				return fmt.Errorf("state_store read_resume: project is required for project scope")
