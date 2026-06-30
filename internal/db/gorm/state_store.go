@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -170,6 +171,9 @@ func (s *StateStore) WriteProjectState(ctx context.Context, project string, stat
 	if updatedBy == "" {
 		updatedBy = "agent"
 	}
+	if updatedBy != "agent" {
+		return fmt.Errorf("state_store write_project: updated_by must be agent")
+	}
 	now := time.Now().UTC()
 	row := &projectStateRow{
 		Project:      project,
@@ -244,9 +248,12 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 	scopes := []cognitive.StateScopeKind{cognitive.StateScopeSession}
 	if request.Project != "" {
 		if _, err := s.ReadProjectState(ctx, request.Project); err != nil {
-			return cognitive.ResumePacket{}, err
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return cognitive.ResumePacket{}, err
+			}
+		} else {
+			scopes = append(scopes, cognitive.StateScopeProject)
 		}
-		scopes = append(scopes, cognitive.StateScopeProject)
 	}
 
 	now := time.Now().UTC()

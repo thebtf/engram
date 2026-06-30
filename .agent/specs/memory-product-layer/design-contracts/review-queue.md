@@ -49,7 +49,7 @@ An operator can review a bounded exception queue, open one decision packet, unde
 | `supersede-action` | Button | Marks candidate superseded | existing candidate supersede seam | gated unless packet allows `supersede` |
 | `reason-input` | Text input | Collects rejection reason when reject is chosen | reject request body | optional |
 | `snapshot-confirm` | Confirmation control | Confirms operator saw required pre-action snapshot policy | `review_packet.snapshot.required` | risky-confirm or gated |
-| `audit-receipt` | Read-only panel | Displays action receipt and audit outcome | action response plus audit seam | error if action succeeded but receipt absent |
+| `audit-receipt` | Read-only panel | Displays action receipt and audit outcome | action response plus audit seam | rollback-needed if action outcome or receipt/audit evidence is ambiguous |
 
 Controls intentionally excluded from enabled behavior: suppress, archive, consolidate, destroy, bulk destructive action, and temporal truth mutation. If shown for roadmap context, each must render as `mustbuild` with no submit path.
 
@@ -79,6 +79,8 @@ Controls intentionally excluded from enabled behavior: suppress, archive, consol
 | Promote receipt | `POST /api/memory/candidates/{id}/promote` or MCP `promote_candidate` | existing candidate seam | gated |
 | Reject receipt | `POST /api/memory/candidates/{id}/reject` or MCP `reject_candidate` | existing candidate seam | gated |
 | Supersede receipt | `POST /api/memory/candidates/{id}/supersede` or MCP `supersede_candidate` | existing candidate seam | gated |
+| Reject reason input | reject request body `reason` field for `reject-action` | existing candidate seam | error |
+| Audit receipt | action response plus `review_packet.audit.*` post-action evidence | existing candidate seam / T009 | rollback-needed |
 
 ## Honest States
 

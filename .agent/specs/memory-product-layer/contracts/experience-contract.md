@@ -40,7 +40,7 @@ trigger classes:
 - `regression`
 - `rollback`
 - `old_decision_revisit`
-- `similar_prior_failure`
+- `similar_failure`
 
 Unknown trigger strings are invalid and must fail before archive lookup.
 Duplicate trigger classes are deduped into canonical order.

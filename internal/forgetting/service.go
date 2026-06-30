@@ -84,6 +84,11 @@ func newDecision(
 		reviewRequired = true
 		rationale = rationale + "; structural loss guard triggered: " + request.StructuralLoss.Rationale
 	}
+	if request.Risky && state == cognitive.ForgettingDecisionAutoResolvable {
+		state = cognitive.ForgettingDecisionReviewRequired
+		reviewRequired = true
+		rationale = rationale + "; risky request context requires review"
+	}
 
 	decision := cognitive.ForgettingDecision{
 		Operation:      operation,

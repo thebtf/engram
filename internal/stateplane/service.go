@@ -136,7 +136,7 @@ func (s *Service) ReadResumePacket(ctx context.Context, request cognitive.Resume
 			return cognitive.ResumePacket{}, fmt.Errorf("stateplane read_resume: native and fallback failed: %w", errors.Join(nativeErr, fallbackErr))
 		}
 		fallbackPacket = s.normalizeFallbackPacket(fallbackPacket, request)
-		if err := validateFallbackPacket(fallbackPacket); err != nil {
+		if err := validateFallbackPacket(fallbackPacket, request); err != nil {
 			return cognitive.ResumePacket{}, err
 		}
 		return fallbackPacket, nil
@@ -146,7 +146,7 @@ func (s *Service) ReadResumePacket(ctx context.Context, request cognitive.Resume
 	}
 
 	fallbackPacket = s.normalizeFallbackPacket(fallbackPacket, request)
-	if err := validateFallbackPacket(fallbackPacket); err != nil {
+	if err := validateFallbackPacket(fallbackPacket, request); err != nil {
 		return cognitive.ResumePacket{}, err
 	}
 	conflicts := packetConflicts(nativePacket, fallbackPacket)
@@ -218,7 +218,7 @@ func (s *Service) clock() time.Time {
 	return time.Now().UTC()
 }
 
-func validateFallbackPacket(packet cognitive.ResumePacket) error {
+func validateFallbackPacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) error {
 	if packet.NextAction.Description == "" {
 		return fmt.Errorf("stateplane fallback: next_action.description is required")
 	}
@@ -230,6 +230,18 @@ func validateFallbackPacket(packet cognitive.ResumePacket) error {
 	}
 	if packet.NextVerification.Kind == "" {
 		return fmt.Errorf("stateplane fallback: next_verification.kind is required")
+	}
+	if request.Project != "" && packet.Project != request.Project {
+		return fmt.Errorf("stateplane fallback: project does not match resume request")
+	}
+	if request.SessionID != "" && packet.SessionID != request.SessionID {
+		return fmt.Errorf("stateplane fallback: session_id does not match resume request")
+	}
+	if request.GoalID != "" && packet.GoalID != request.GoalID {
+		return fmt.Errorf("stateplane fallback: goal_id does not match resume request")
+	}
+	if request.TaskID != "" && packet.TaskID != request.TaskID {
+		return fmt.Errorf("stateplane fallback: task_id does not match resume request")
 	}
 	return nil
 }

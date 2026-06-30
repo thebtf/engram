@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,6 +19,7 @@ type fakeWorkerStatePlane struct {
 	project     cognitive.ProjectStateRecord
 	packet      cognitive.ResumePacket
 	lastRequest cognitive.ResumePacketRequest
+	resumeErr   error
 }
 
 func (f *fakeWorkerStatePlane) WriteSessionState(context.Context, string, cognitive.SessionStateSlots) error {
@@ -38,6 +40,9 @@ func (f *fakeWorkerStatePlane) ReadProjectState(context.Context, string) (cognit
 
 func (f *fakeWorkerStatePlane) ReadResumePacket(_ context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
 	f.lastRequest = request
+	if f.resumeErr != nil {
+		return cognitive.ResumePacket{}, f.resumeErr
+	}
 	return f.packet, nil
 }
 
@@ -77,4 +82,19 @@ func TestHandleGetStateResumeRejectsFilesystemFallbackOption(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "allow_filesystem_fallback is not supported")
+}
+
+func TestHandleGetStateResumeHidesInternalReadError(t *testing.T) {
+	fakeStore := &fakeWorkerStatePlane{
+		resumeErr: errors.New("database dsn credential leaked in wrapped error"),
+	}
+	svc := &Service{stateStore: fakeStore}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1", nil)
+	rec := httptest.NewRecorder()
+	svc.handleGetStateResume(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, rec.Body.String(), "state read failed")
+	require.NotContains(t, rec.Body.String(), "database dsn credential")
 }

@@ -86,3 +86,24 @@ func TestGetStateToolRejectsFilesystemFallbackOption(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "allow_filesystem_fallback is not supported")
 }
+
+func TestGetStateToolResumeDoesNotInjectContextProjectWhenOmitted(t *testing.T) {
+	srv := NewServer(ServerOptions{Version: "test"})
+	fakeStore := &fakeStatePlane{
+		packet: cognitive.ResumePacket{
+			Source:           cognitive.StatePacketSourceNative,
+			Freshness:        cognitive.StateFreshnessFresh,
+			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: time.Now().UTC()},
+			NextAction:       cognitive.StateAction{Kind: cognitive.StateActionCommand, Description: "continue session", Command: "go test ./internal/mcp"},
+			NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "run focused tests", Command: "go test ./internal/mcp"},
+			GeneratedAt:      time.Now().UTC(),
+			SessionID:        "session-1",
+		},
+	}
+	srv.SetStateStore(fakeStore)
+	ctx := contextWithProject(context.Background(), "context-project")
+
+	_, err := srv.callTool(ctx, "get_state", json.RawMessage(`{"action":"resume","session_id":"session-1"}`))
+	require.NoError(t, err)
+	require.Empty(t, fakeStore.lastRequest.Project)
+}

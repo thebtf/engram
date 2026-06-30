@@ -137,6 +137,12 @@
       "required_actions": ["supersede"],
       "state_if_absent": "gated"
     },
+    "reason-input": {
+      "owner_task": "existing-candidate-seam",
+      "required_routes": ["POST /api/memory/candidates/{id}/reject"],
+      "request_fields": ["reason"],
+      "state_if_absent": "error"
+    },
     "snapshot-confirm": {
       "owner_task": "T009",
       "required_fields": ["review_packet.snapshot.required", "review_packet.snapshot.store", "review_packet.snapshot.status"],
@@ -145,7 +151,7 @@
     "audit-receipt": {
       "owner_task": "T009",
       "required_fields": ["review_packet.audit.store", "review_packet.audit.action", "review_packet.audit.status"],
-      "state_if_absent": "gated"
+      "state_if_absent": "rollback-needed"
     }
   },
   "scenarios": [

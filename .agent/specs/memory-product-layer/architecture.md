@@ -119,7 +119,7 @@ flowchart TD
 
     subgraph Infra[Infrastructure]
         PG[(PostgreSQL 17)]
-        FS[current.json / CONTINUITY.md fallback]
+        FS[current.json / CONTINUITY.md export]
         AUD[Audit log]
     end
 
@@ -150,7 +150,7 @@ flowchart TD
     EXP --> PG
     GOVX --> PG
     STATE --> PG
-    STATE -.fallback/export.-> FS
+    STATE -.explicit export/recovery.-> FS
     GOVX --> AUD
     STATE --> AUD
     EXP --> AUD
@@ -160,7 +160,7 @@ flowchart TD
 
 | Component | Responsibility | Dependencies | Owner layer |
 | --- | --- | --- | --- |
-| `StatePlaneService` | Native read/write for session, goal, task, and project state; deterministic resume packet | Auth identity, PostgreSQL, audit log, filesystem fallback adapter | Use case |
+| `StatePlaneService` | Native read/write for session, goal, task, and project state; deterministic resume packet | Auth identity, PostgreSQL, audit log, explicit export/recovery adapter | Use case |
 | `KnowledgeQueryService` | Principal/domain/project-scoped hot memory queries and bounded briefs | Memory store, scope/privacy policy, retrieval scoring | Use case |
 | `ExperienceService` | Retrieve/store contextualized historical experience via a first-class contract; V1 storage may begin as projection/materialization rather than dedicated tables | Existing evidence sources, archive service, applicability gate | Use case |
 | `ApplicabilityGate` | Decide whether historical lesson applies, blocks, or downgrades | Current context, experience envelope, anti-applicability rules | Domain/use case |
@@ -214,7 +214,7 @@ Owns PostgreSQL persistence, legacy filesystem fallback/export, audit emission, 
 2. Entry layer authenticates caller and resolves project/session.
 3. `StatePlaneService` reads native state tables.
 4. Service builds one resume packet: freshness, drift/conflict, next action, next verification.
-5. If native state absent or unreadable, service uses filesystem adapter as explicit fallback.
+5. If native state is absent or unreadable, service returns a bounded missing/unreadable response instead of silently mining filesystem state.
 6. Response returns bounded packet, not broad file archaeology.
 
 ### Happy path B — principal knowledge query
@@ -254,7 +254,7 @@ Owns PostgreSQL persistence, legacy filesystem fallback/export, audit emission, 
 
 ### Error paths
 
-- **Native state missing** → explicit fallback to filesystem, emit drift/fallback marker.
+- **Native state missing** → bounded native-missing/drift/failure response; explicit filesystem export/recovery is a separate requested path, not the deterministic happy path.
 - **Cross-principal private widening** → fail closed.
 - **Archive trigger absent** → archive path skipped.
 - **Applicability blocked** → experience shown as blocked/warning, not auto-applied.
@@ -342,7 +342,7 @@ What changes:
 
 Rollout shape:
 1. add state tables + inert read/write seams,
-2. ship native state read path behind explicit fallback,
+2. ship native state read path with explicit export/recovery compatibility outside the happy path,
 3. extend PMQ + adaptive brief seams into principal knowledge + brief surfaces,
 4. extend candidate/snapshot/audit seams into packet-centric review loop and touched-surface UX migration,
 5. ship experience/applicability contract,

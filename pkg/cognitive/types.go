@@ -530,7 +530,7 @@ type TemporalTruthQueryRequest struct {
 type TemporalTruthResponse struct {
 	Scope           TemporalTruthScope        `json:"scope"`
 	State           TemporalTruthQueryState   `json:"state"`
-	TrueNow         TemporalTruthEntry        `json:"true_now"`
+	TrueNow         *TemporalTruthEntry       `json:"true_now,omitempty"`
 	TrueThen        *TemporalTruthEntry       `json:"true_then"`
 	History         []TemporalTruthEntry      `json:"history"`
 	ProvenanceChain []TemporalTruthProvenance `json:"provenance_chain"`

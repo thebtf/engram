@@ -71,7 +71,7 @@ func (s *Service) QueryTemporalTruth(ctx context.Context, request cognitive.Temp
 	sort.SliceStable(matches, func(i, j int) bool {
 		return matches[i].ValidFrom.Before(matches[j].ValidFrom)
 	})
-	nowEntry, ok := currentEntry(matches)
+	nowEntry, ok := currentEntry(matches, time.Now().UTC())
 	if !ok {
 		return cognitive.TemporalTruthResponse{
 			State: cognitive.TemporalTruthUnknown,
@@ -86,7 +86,7 @@ func (s *Service) QueryTemporalTruth(ctx context.Context, request cognitive.Temp
 	response := cognitive.TemporalTruthResponse{
 		Scope:           scopeFromRecord(matches[len(matches)-1], true, "selected high-value evolving fact"),
 		State:           cognitive.TemporalTruthFound,
-		TrueNow:         nowEntry,
+		TrueNow:         &nowEntry,
 		History:         history,
 		ProvenanceChain: provenanceChain(history),
 	}
@@ -118,16 +118,11 @@ func (s *Service) selectedRecords(request cognitive.TemporalTruthQueryRequest) [
 	return matches
 }
 
-func currentEntry(records []Record) (cognitive.TemporalTruthEntry, bool) {
+func currentEntry(records []Record, now time.Time) (cognitive.TemporalTruthEntry, bool) {
 	if len(records) == 0 {
 		return cognitive.TemporalTruthEntry{}, false
 	}
-	for i := len(records) - 1; i >= 0; i-- {
-		if records[i].ValidUntil == nil {
-			return entryFromRecord(records[i]), true
-		}
-	}
-	return cognitive.TemporalTruthEntry{}, false
+	return entryAt(records, now)
 }
 
 func entryAt(records []Record, when time.Time) (cognitive.TemporalTruthEntry, bool) {

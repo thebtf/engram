@@ -217,7 +217,7 @@ func TestTemporalTruthResponseContract_RequiredBoundedFields(t *testing.T) {
 	}{
 		"Scope":           {"scope", reflect.Struct},
 		"State":           {"state", reflect.String},
-		"TrueNow":         {"true_now", reflect.Struct},
+		"TrueNow":         {"true_now,omitempty", reflect.Ptr},
 		"TrueThen":        {"true_then", reflect.Ptr},
 		"History":         {"history", reflect.Slice},
 		"ProvenanceChain": {"provenance_chain", reflect.Slice},

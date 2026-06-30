@@ -3,6 +3,7 @@ package experience
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ const (
 	DefaultQueryLimit          = 5
 	MaxQueryLimit              = 10
 	MaxArchiveResurfacingLimit = 10
+	MaxArchiveEvidenceEntries  = 100
 )
 
 // ArchiveSource supplies cold historical experience only after a named trigger.
@@ -151,6 +153,10 @@ func (s *Service) recordArchiveEvidence(entry ArchiveEvidenceEntry) {
 	s.archiveMu.Lock()
 	defer s.archiveMu.Unlock()
 	s.archiveEvidence = append(s.archiveEvidence, entry)
+	if len(s.archiveEvidence) > MaxArchiveEvidenceEntries {
+		start := len(s.archiveEvidence) - MaxArchiveEvidenceEntries
+		s.archiveEvidence = append([]ArchiveEvidenceEntry(nil), s.archiveEvidence[start:]...)
+	}
 }
 
 var allowedArchiveTriggerClasses = []cognitive.ExperienceArchiveTriggerClass{
@@ -186,12 +192,7 @@ func NormalizeArchiveTriggerClasses(classes []cognitive.ExperienceArchiveTrigger
 }
 
 func validArchiveTriggerClass(class cognitive.ExperienceArchiveTriggerClass) bool {
-	for _, allowed := range allowedArchiveTriggerClasses {
-		if class == allowed {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedArchiveTriggerClasses, class)
 }
 
 func archiveLimit(requestLimit int) int {
@@ -302,18 +303,16 @@ func projectMatches(project string, attributions []cognitive.ExperienceSourceAtt
 	if project == "" {
 		return true
 	}
-	hasProjectAttribution := false
 	for _, attribution := range attributions {
 		attrProject := strings.TrimSpace(attribution.Project)
 		if attrProject == "" {
 			continue
 		}
-		hasProjectAttribution = true
 		if attrProject == project {
 			return true
 		}
 	}
-	return !hasProjectAttribution
+	return false
 }
 
 func uniqueTerms(text string) []string {

@@ -23,7 +23,7 @@ source_prd: prd.md
 **Status:** Active  
 **Author:** AI Agent
 
-> **Provenance:** Specified from `.agent/specs/memory-product-layer/prd.md`, `.agent/specs/memory-product-layer/milestone-map.md`, `outputs/agent-memory-design.md`, `.agent/specs/principal-memory-query-domain-registry/architecture.md`, `pkg/cognitive/interfaces.go`, `internal/mcp/tools_brief.go`, and current operator-console copy surfaces.  
+> **Provenance:** Specified from `.agent/specs/memory-product-layer/prd.md`, `.agent/specs/memory-product-layer/milestone-map.md`, `.agent/specs/principal-memory-query-domain-registry/architecture.md`, `pkg/cognitive/interfaces.go`, `internal/mcp/tools_brief.go`, and current operator-console copy surfaces.
 > **Confidence:** VERIFIED for current-code/current-artifact claims read this session; INFERRED only for some later milestone shape choices.
 
 ## Overview

@@ -262,14 +262,18 @@ test('principal memory surface follows the approved T008 contract', () => {
 
   assert.match(memoryLabSource, /export interface PrincipalMemoryScope/, 'Principal memory scope must be a typed UI contract')
   assert.match(memoryLabSource, /export function principalMemoryQueryPath/, 'Principal memory query URL construction must be reusable and testable')
+  assert.match(memoryLabSource, /PRINCIPAL_CURRENT_PROJECT\s*=\s*['"]current['"]/, 'Principal memory current-project scope must use a non-empty UI sentinel')
+  assert.match(memoryLabSource, /principalMemoryQueryPath\(scope: PrincipalMemoryScope,\s*currentProject = ['"]['"]\)/, 'Principal memory query path must accept the current page project for current-project scope')
+  assert.match(memoryLabSource, /normalized\.includePrivate\s*\|\|\s*normalized\.visibility === ['"]private['"]/, 'Private visibility must request include_private instead of returning hidden-only private results')
   assert.match(memoryLabSource, /\/api\/memories\/principal/, 'Principal memory surface must bind to the live T006 REST route')
-  assert.match(memoryLabSource, /export function useOperatorPrincipalMemorySurface/, 'Principal memory surface must have a dedicated composable')
+  assert.match(memoryLabSource, /export function useOperatorPrincipalMemorySurface\(currentProject\?: Ref<string>\)/, 'Principal memory surface must have a dedicated composable with current-project binding')
   assert.match(memoryLabSource, /briefState:\s*ComputedRef<OperatorLoadState<OperatorPrincipalMemoryBrief>>/, 'Brief panel state must be a typed honest load state')
   assert.match(memoryLabSource, /MCP get_memory_brief/, 'Brief panel must name the MCP-only T007 bridge until browser REST exists')
   assert.match(memoryLabSource, /mustBuildState<OperatorPrincipalMemoryBrief>/, 'Browser brief panel must render mustbuild instead of faking a live fetch')
   assert.match(memoryLabSource, /riskyConfirmation/, 'Cross-principal widening must have an explicit risky-confirm branch')
 
-  assert.match(memoryPageSource, /useOperatorPrincipalMemorySurface/, 'Memory page must consume the principal-memory surface seam')
+  assert.match(memoryPageSource, /useOperatorPrincipalMemorySurface\(project\)/, 'Memory page must bind principal current-project scope to the active project filter')
+  assert.doesNotMatch(memoryPageSource, /<option value="">\{\{ t\('memory\.principal\.projects\.current'\) \}\}<\/option>/, 'Principal current-project option must not use an empty value that becomes an unscoped backend query')
   for (const testId of [
     'principal-memory-surface',
     'principal-state-banner',

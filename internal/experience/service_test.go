@@ -44,7 +44,7 @@ func TestServiceQueryExperienceReturnsBoundedHistoricalPayloads(t *testing.T) {
 
 func TestServiceQueryExperienceCapsRequestedLimit(t *testing.T) {
 	candidates := make([]cognitive.ExperienceResponse, 0, MaxQueryLimit+3)
-	for i := 0; i < MaxQueryLimit+3; i++ {
+	for i := range MaxQueryLimit + 3 {
 		candidates = append(candidates, fixtureExperience(fmt.Sprintf("retry-%02d", i), "retry failure historical lesson", "engram", fmt.Sprintf("s-%02d", i)))
 	}
 	service := NewService(candidates)
@@ -157,6 +157,36 @@ func TestServiceQueryExperienceUsesExactTermsForAntiApplicability(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, cognitive.ExperienceApplicabilityApplies, results[0].Applicability.State)
+}
+
+func TestServiceQueryExperienceRequiresExplicitProjectAttributionForProjectScopedQueries(t *testing.T) {
+	service := NewService([]cognitive.ExperienceResponse{
+		fixtureExperience("engram-scoped", "OAuth retry guidance for engram only.", "engram", "s1"),
+		{
+			Source: cognitive.ExperienceSourceProjection,
+			Lesson: "Unscoped lesson must not leak into project-scoped queries.",
+			SourceAttribution: []cognitive.ExperienceSourceAttribution{
+				{
+					Kind:      "session",
+					ID:        "unscoped",
+					Project:   "",
+					SessionID: "s2",
+					CreatedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	})
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "OAuth retry guidance",
+		CurrentContext: "investigating an engram retry failure",
+		Limit:          5,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "engram-scoped", results[0].SourceAttribution[0].ID)
 }
 
 func fixtureExperience(id, lesson, project, sessionID string) cognitive.ExperienceResponse {

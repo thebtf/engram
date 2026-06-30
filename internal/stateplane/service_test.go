@@ -2,6 +2,7 @@ package stateplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -147,6 +148,46 @@ func TestServiceReadResumePacketRejectsIndeterminateFallbackPacket(t *testing.T)
 	require.ErrorContains(t, err, "next_action.description is required")
 }
 
+func TestServiceReadResumePacketRejectsFallbackRequestProjectMismatchOnNativeMiss(t *testing.T) {
+	packet := fallbackPacket("fallback next", "")
+	packet.Project = "other-project"
+	packet.SessionID = "session-1"
+	path := writeFallbackPacketJSON(t, packet)
+	service := NewService(
+		&fakeNativePlane{err: errors.New("native missing")},
+		JSONFileFallbackReader{Path: path},
+	)
+
+	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		SessionID:               "session-1",
+		AllowFilesystemFallback: true,
+	})
+
+	require.ErrorContains(t, err, "project")
+	require.ErrorContains(t, err, "resume request")
+}
+
+func TestServiceReadResumePacketRejectsFallbackRequestSessionMismatchBeforeConflict(t *testing.T) {
+	packet := fallbackPacket("fallback next", "")
+	packet.Project = "engram"
+	packet.SessionID = "other-session"
+	path := writeFallbackPacketJSON(t, packet)
+	service := NewService(
+		&fakeNativePlane{packet: nativePacket("native next", "go test ./internal/stateplane")},
+		JSONFileFallbackReader{Path: path},
+	)
+
+	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		SessionID:               "session-1",
+		AllowFilesystemFallback: true,
+	})
+
+	require.ErrorContains(t, err, "session_id")
+	require.ErrorContains(t, err, "resume request")
+}
+
 func nativePacket(actionDescription, verificationCommand string) cognitive.ResumePacket {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	return cognitive.ResumePacket{
@@ -185,6 +226,15 @@ func writeFallbackPacket(t *testing.T, packet cognitive.ResumePacket) string {
 		"session_id":"session-1",
 		"scopes":["session"]
 	}`)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	return path
+}
+
+func writeFallbackPacketJSON(t *testing.T, packet cognitive.ResumePacket) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "fallback-resume.json")
+	data, err := json.Marshal(packet)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 	return path
 }

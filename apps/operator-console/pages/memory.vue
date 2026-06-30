@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
+import { PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
 import { MEMORY_PAGE_SIZE_STORAGE_KEY, resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import type { Memory } from '../composables/useMockData'
 import type { OperatorLoadState } from '../composables/useOperatorApi'
@@ -19,7 +19,8 @@ const {
   provenanceGap,
   actionGaps,
 } = useOperatorMemoryLab()
-const principalSurface = useOperatorPrincipalMemorySurface()
+const project = ref('all')
+const principalSurface = useOperatorPrincipalMemorySurface(project)
 const principalScope = principalSurface.scope
 const principalLoadState = principalSurface.loadState
 const principalBriefState = principalSurface.briefState
@@ -28,7 +29,6 @@ const principalAttributionVisible = principalSurface.attributionVisible
 type MemoryFilter = 'active' | 'flagged' | 'stale' | 'low' | 'chain'
 type MemoryAuditState = OperatorLoadState<MemoryAuditResponse>
 
-const project = ref('all')
 const filters = ref<Record<MemoryFilter, boolean>>({
   active: false,
   flagged: false,
@@ -97,7 +97,7 @@ const auditEntries = computed(() => auditState.value?.data?.entries || [])
 const principalStateKind = computed(() => principalSurface.riskyConfirmation.value ? 'risky-confirm' : principalLoadState.value.kind)
 const principalSummary = computed(() => principalLoadState.value.data)
 const principalItems = computed(() => principalSummary.value?.items || [])
-const principalProjectOptions = computed(() => ['all', ...projects.value])
+const principalProjectOptions = computed(() => [PRINCIPAL_CURRENT_PROJECT, 'all', ...projects.value])
 const principalStateText = computed(() => {
   if (principalStateKind.value === 'pending') return t('memory.principal.state.pending')
   if (principalStateKind.value === 'live') return t('memory.principal.state.live')
@@ -394,9 +394,8 @@ function formatAuditTime(timestamp?: string) {
         <label class="scope-field compact">
           <span>{{ t('memory.principal.controls.project') }}</span>
           <select id="project-scope" v-model="principalScope.project" class="scope-input" data-testid="project-scope">
-            <option value="">{{ t('memory.principal.projects.current') }}</option>
             <option v-for="item in principalProjectOptions" :key="item" :value="item">
-              {{ item === 'all' ? t('memory.principal.projects.all') : item }}
+              {{ item === PRINCIPAL_CURRENT_PROJECT ? t('memory.principal.projects.current') : item === 'all' ? t('memory.principal.projects.all') : item }}
             </option>
           </select>
         </label>

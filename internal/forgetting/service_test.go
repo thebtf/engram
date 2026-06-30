@@ -205,3 +205,22 @@ func TestClassifier_SafeLowRiskActionsDoNotEmitPackets(t *testing.T) {
 		require.Empty(t, decision.Review.Packet.PacketID)
 	}
 }
+
+func TestClassifier_RiskyAutoResolvableActionsRouteToReviewPackets(t *testing.T) {
+	service := NewClassifier()
+	cases := []cognitive.ForgettingClassificationRequest{
+		{Reason: cognitive.ForgettingReasonLowValue, MemoryID: "low", Risky: true},
+		{Reason: cognitive.ForgettingReasonRetentionExpired, MemoryID: "expired", Risky: true},
+		{Reason: cognitive.ForgettingReasonColdStorage, MemoryID: "cold", Risky: true},
+	}
+
+	for _, request := range cases {
+		decision, err := service.ClassifyForgetting(context.Background(), request)
+		require.NoError(t, err)
+		require.Equal(t, cognitive.ForgettingDecisionReviewRequired, decision.State)
+		require.True(t, decision.Review.Required)
+		require.Equal(t, "forgetting_review", decision.Review.Packet.Kind)
+		require.NotEmpty(t, decision.Review.Packet.PacketID)
+		require.Contains(t, decision.Rationale, "risky")
+	}
+}

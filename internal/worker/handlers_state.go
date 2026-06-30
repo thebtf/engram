@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
 
 	"github.com/thebtf/engram/pkg/cognitive"
@@ -94,5 +95,6 @@ func writeStateReadError(w http.ResponseWriter, err error) {
 		http.Error(w, "state not found", http.StatusNotFound)
 		return
 	}
-	http.Error(w, err.Error(), http.StatusInternalServerError)
+	log.Error().Err(err).Msg("state read failed")
+	http.Error(w, "state read failed", http.StatusInternalServerError)
 }

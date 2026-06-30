@@ -49,9 +49,6 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
-	if a.Project == "" {
-		a.Project = projectFromContext(ctx)
-	}
 
 	switch a.Action {
 	case "session":
@@ -68,6 +65,9 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 			"state":      state,
 		})
 	case "project":
+		if a.Project == "" {
+			a.Project = projectFromContext(ctx)
+		}
 		if a.Project == "" {
 			return "", fmt.Errorf("project required")
 		}

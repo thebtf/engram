@@ -52,6 +52,7 @@ func TestService_QuerySelectedFactReturnsTrueNowThenHistoryAndProvenance(t *test
 	require.True(t, response.Scope.Selected)
 	require.Equal(t, "deploy.primary_region", response.Scope.FactID)
 	require.Equal(t, "deployment_setting", response.Scope.FactClass)
+	require.NotNil(t, response.TrueNow)
 	require.Equal(t, "eu-central-1", response.TrueNow.Value)
 	require.NotNil(t, response.TrueThen)
 	require.Equal(t, "us-east-1", response.TrueThen.Value)
@@ -84,7 +85,7 @@ func TestService_QueryUnselectedFactStaysNarrow(t *testing.T) {
 	require.Equal(t, cognitive.TemporalTruthNotSelected, response.State)
 	require.False(t, response.Scope.Selected)
 	require.Empty(t, response.History)
-	require.Empty(t, response.TrueNow.Value)
+	require.Nil(t, response.TrueNow)
 }
 
 func TestService_TruthChangeExposesInvalidationAndProvenanceChain(t *testing.T) {
@@ -122,6 +123,7 @@ func TestService_TruthChangeExposesInvalidationAndProvenanceChain(t *testing.T) 
 	})
 
 	require.NoError(t, err)
+	require.NotNil(t, response.TrueNow)
 	require.Equal(t, "v7", response.TrueNow.Value)
 	require.Len(t, response.History, 2)
 	require.Equal(t, "v6", response.History[0].Value)
@@ -129,4 +131,57 @@ func TestService_TruthChangeExposesInvalidationAndProvenanceChain(t *testing.T) 
 	require.Len(t, response.ProvenanceChain, 2)
 	require.Equal(t, "release:v6", response.ProvenanceChain[0].ID)
 	require.Equal(t, "release:v7", response.ProvenanceChain[1].ID)
+}
+
+func TestService_QueryTemporalTruthIgnoresFutureDatedTrueNow(t *testing.T) {
+	now := time.Now().UTC()
+	futureStart := now.Add(2 * time.Hour)
+	service := NewService([]Record{
+		{
+			FactID:     "release.supported_version",
+			FactClass:  "release_policy",
+			Project:    "engram",
+			Value:      "v7",
+			ValidFrom:  now.Add(-24 * time.Hour),
+			ValidUntil: &futureStart,
+		},
+		{
+			FactID:    "release.supported_version",
+			FactClass: "release_policy",
+			Project:   "engram",
+			Value:     "v8",
+			ValidFrom: futureStart,
+		},
+	})
+
+	response, err := service.QueryTemporalTruth(context.Background(), cognitive.TemporalTruthQueryRequest{
+		FactID:  "release.supported_version",
+		Project: "engram",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.TemporalTruthFound, response.State)
+	require.NotNil(t, response.TrueNow)
+	require.Equal(t, "v7", response.TrueNow.Value)
+}
+
+func TestService_QueryTemporalTruthFutureOnlyFactIsUnknown(t *testing.T) {
+	service := NewService([]Record{
+		{
+			FactID:    "release.supported_version",
+			FactClass: "release_policy",
+			Project:   "engram",
+			Value:     "v8",
+			ValidFrom: time.Now().UTC().Add(2 * time.Hour),
+		},
+	})
+
+	response, err := service.QueryTemporalTruth(context.Background(), cognitive.TemporalTruthQueryRequest{
+		FactID:  "release.supported_version",
+		Project: "engram",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.TemporalTruthUnknown, response.State)
+	require.Nil(t, response.TrueNow)
 }

@@ -15,7 +15,7 @@ It does not cover review queue UI, forgetting/consolidation actions, experience/
 
 ## User Outcome
 
-An operator can choose a principal and scope, inspect bounded attributed knowledge, request a scoped brief, and see whether each visible capability is live, empty, gated, mustbuild, stale, or failed.
+An operator can choose a principal and scope, inspect bounded attributed knowledge, request a scoped brief, and see whether each visible capability is live, empty, gated, mustbuild, stale, or error.
 
 ## Blocks
 

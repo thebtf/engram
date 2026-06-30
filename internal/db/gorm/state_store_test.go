@@ -84,6 +84,28 @@ func TestStateStore_ProjectStateRoundTrip(t *testing.T) {
 	require.Equal(t, want.UpdatedBy, got.UpdatedBy)
 }
 
+func TestStateStore_ProjectStateRejectsNonAgentUpdatedBy(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	project := fmt.Sprintf("state-project-updated-by-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
+	})
+
+	err := store.WriteProjectState(ctx, project, cognitive.ProjectStateRecord{
+		Phase:     "operator-write",
+		Pressure:  "normal",
+		UpdatedBy: "operator",
+	})
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "updated_by")
+	require.ErrorContains(t, err, "agent")
+}
+
 func TestStateStore_AuditLogWrittenOnSessionWrite(t *testing.T) {
 	db := openCandidateTestDB(t)
 	auditStore := NewAuditStore(db)
@@ -157,4 +179,41 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 	require.Equal(t, "run full suite", packet.NextVerification.Description)
 	require.Equal(t, "go test ./...", packet.NextVerification.Command)
 	require.NotContains(t, string(packet.Source), "filesystem")
+}
+
+func TestStateStore_ResumePacketDoesNotRequireProjectState(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	sessionID := fmt.Sprintf("state-resume-session-only-%d", time.Now().UnixNano())
+	project := fmt.Sprintf("state-resume-missing-project-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_session_state WHERE session_id = ?`, sessionID).Error
+		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
+		_ = db.Exec(`DELETE FROM audit_log WHERE source_session_id = ? OR reason LIKE ?`, sessionID, "%"+project+"%").Error
+	})
+
+	require.NoError(t, store.WriteSessionState(ctx, sessionID, cognitive.SessionStateSlots{
+		Execution: map[string]interface{}{
+			"next_action": "continue from session-only state",
+		},
+		Horizons: map[string]interface{}{
+			"next_verification": "go test ./internal/db/gorm",
+		},
+	}))
+
+	packet, err := store.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
+		Project:   project,
+		SessionID: sessionID,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
+	require.Equal(t, project, packet.Project)
+	require.Equal(t, sessionID, packet.SessionID)
+	require.Contains(t, packet.Scopes, cognitive.StateScopeSession)
+	require.NotContains(t, packet.Scopes, cognitive.StateScopeProject)
+	require.Equal(t, "continue from session-only state", packet.NextAction.Description)
 }

@@ -68,6 +68,7 @@ interface ApiPrincipalMemoryQueryResponse {
 const MEMORY_LIST_LIMIT = 500
 const PRINCIPAL_MEMORY_LIMIT = 10
 const PRINCIPAL_BRIEF_REASON = 'Principal-scoped brief exists in MCP get_memory_brief, but no browser REST bridge is available yet.'
+export const PRINCIPAL_CURRENT_PROJECT = 'current'
 
 export type PrincipalKind = 'human' | 'agent' | 'service'
 export type PrincipalVisibility = 'all' | 'shared' | 'private'
@@ -200,7 +201,7 @@ function blankPrincipalScope(): PrincipalMemoryScope {
   return {
     principal: '',
     principalKind: 'agent',
-    project: '',
+    project: PRINCIPAL_CURRENT_PROJECT,
     domain: '',
     visibility: 'all',
     includePrivate: false,
@@ -236,8 +237,24 @@ function clonePrincipalScope(scope: PrincipalMemoryScope): PrincipalMemoryScope 
   }
 }
 
-export function principalMemoryQueryPath(scope: PrincipalMemoryScope): string {
+function resolvePrincipalProject(project: string, currentProject = ''): string {
+  const normalizedProject = project.trim()
+  if (normalizedProject === PRINCIPAL_CURRENT_PROJECT) {
+    return clean(currentProject) || 'all'
+  }
+  return normalizedProject
+}
+
+function principalQueryScope(scope: PrincipalMemoryScope, currentProject = ''): PrincipalMemoryScope {
   const normalized = clonePrincipalScope(scope)
+  return {
+    ...normalized,
+    project: resolvePrincipalProject(normalized.project, currentProject),
+  }
+}
+
+export function principalMemoryQueryPath(scope: PrincipalMemoryScope, currentProject = ''): string {
+  const normalized = principalQueryScope(scope, currentProject)
   const params = new URLSearchParams()
   params.set('principal', normalized.principal)
   params.set('principal_kind', normalized.principalKind)
@@ -245,7 +262,7 @@ export function principalMemoryQueryPath(scope: PrincipalMemoryScope): string {
   params.set('limit', String(normalized.limit))
   if (normalized.project && normalized.project !== 'all') params.set('project', normalized.project)
   if (normalized.domain && normalized.domain !== 'all') params.set('domain', normalized.domain)
-  if (normalized.includePrivate) params.set('include_private', 'true')
+  if (normalized.includePrivate || normalized.visibility === 'private') params.set('include_private', 'true')
   return `/api/memories/principal?${params.toString()}`
 }
 
@@ -522,7 +539,7 @@ async function loadMemoryRows(): Promise<Memory[]> {
   return [...deduped.values()]
 }
 
-export function useOperatorPrincipalMemorySurface(): {
+export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>): {
   scope: Ref<PrincipalMemoryScope>
   loadState: ComputedRef<OperatorLoadState<OperatorPrincipalMemorySummary>>
   briefState: ComputedRef<OperatorLoadState<OperatorPrincipalMemoryBrief>>
@@ -579,9 +596,12 @@ export function useOperatorPrincipalMemorySurface(): {
 
   async function refresh(forceWiden = false) {
     const normalizedScope = clonePrincipalScope(scope.value)
+    const currentProjectValue = currentProject?.value || ''
+    const queryScope = principalQueryScope(normalizedScope, currentProjectValue)
     scope.value.limit = normalizedScope.limit
     scope.value.principalKind = normalizedScope.principalKind
     scope.value.visibility = normalizedScope.visibility
+    scope.value.project = normalizedScope.project || PRINCIPAL_CURRENT_PROJECT
 
     if (!normalizedScope.principal) {
       riskyConfirmation.value = false
@@ -589,7 +609,7 @@ export function useOperatorPrincipalMemorySurface(): {
         queryEvidence,
         'principal-select',
         'Select a principal before issuing a scoped query.',
-        state.value.data || emptyPrincipalSummary(normalizedScope),
+        state.value.data || emptyPrincipalSummary(queryScope),
       )
       refreshBrief()
       return
@@ -607,7 +627,7 @@ export function useOperatorPrincipalMemorySurface(): {
           reason: 'Changing principal scope needs explicit confirmation before a broader read.',
         }),
         'Changing principal scope needs explicit confirmation before a broader read.',
-        state.value.data || emptyPrincipalSummary(normalizedScope),
+        state.value.data || emptyPrincipalSummary(queryScope),
       )
       refreshBrief()
       return
@@ -616,12 +636,12 @@ export function useOperatorPrincipalMemorySurface(): {
     riskyConfirmation.value = false
     confirmedPrincipal.value = normalizedScope.principal
 
-    const path = principalMemoryQueryPath(normalizedScope)
+    const path = principalMemoryQueryPath(normalizedScope, currentProjectValue)
     const evidence = endpointEvidence(path, 'principal-memory-query')
-    state.value = pendingState(evidence, state.value.data || emptyPrincipalSummary(normalizedScope))
+    state.value = pendingState(evidence, state.value.data || emptyPrincipalSummary(queryScope))
     try {
       const payload = await operatorFetchJson<unknown>(path, undefined, 'principal-memory-query')
-      const summary = mapPrincipalMemoryResponse(payload, path, normalizedScope)
+      const summary = mapPrincipalMemoryResponse(payload, path, queryScope)
       state.value = summary.items.length
         ? liveState(evidence, summary)
         : emptyState(evidence, summary)
@@ -637,7 +657,7 @@ export function useOperatorPrincipalMemorySurface(): {
           await refresh(true)
           return state.value
         },
-      }, state.value.data || emptyPrincipalSummary(normalizedScope))
+      }, state.value.data || emptyPrincipalSummary(queryScope))
     } finally {
       refreshBrief()
     }

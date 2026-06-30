@@ -107,6 +107,30 @@ func TestServiceQueryExperienceAddsBoundedArchiveOnAllowedTrigger(t *testing.T) 
 	require.Equal(t, "archive_resurfaced", evidence[0].Status)
 }
 
+func TestServiceArchiveEvidenceRetainsBoundedRecentEntries(t *testing.T) {
+	archive := &fakeArchiveSource{
+		items: []cognitive.ExperienceResponse{
+			archiveExperience("archive-1", "rollback archive lesson"),
+		},
+	}
+	service := NewServiceWithArchive(nil, archive)
+
+	for i := 0; i < MaxArchiveEvidenceEntries+2; i++ {
+		_, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+			Project:        "engram",
+			Query:          "rollback archive lesson",
+			CurrentContext: "rollback investigation needs archive context",
+			ArchiveTriggerClasses: []cognitive.ExperienceArchiveTriggerClass{
+				cognitive.ExperienceArchiveTriggerRollback,
+			},
+			Limit: 1,
+		})
+		require.NoError(t, err)
+	}
+
+	require.Len(t, service.ArchiveEvidence(), MaxArchiveEvidenceEntries)
+}
+
 type fakeArchiveSource struct {
 	items    []cognitive.ExperienceResponse
 	triggers []cognitive.ExperienceArchiveTriggerClass
