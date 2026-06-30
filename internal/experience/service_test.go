@@ -137,6 +137,82 @@ func TestServiceQueryExperienceUsesExactTermsForRelevance(t *testing.T) {
 	require.Empty(t, results)
 }
 
+func TestServiceQueryExperienceMatchesFirstClassFacetTerms(t *testing.T) {
+	tests := []struct {
+		name  string
+		match func(*cognitive.ExperienceResponse, *cognitive.ExperienceQueryRequest)
+	}{
+		{
+			name: "situation",
+			match: func(candidate *cognitive.ExperienceResponse, request *cognitive.ExperienceQueryRequest) {
+				candidate.Situation = "situationmatch"
+				request.Situation = "situationmatch"
+			},
+		},
+		{
+			name: "decision",
+			match: func(candidate *cognitive.ExperienceResponse, request *cognitive.ExperienceQueryRequest) {
+				candidate.Decision = "decisionmatch"
+				request.Decision = "decisionmatch"
+			},
+		},
+		{
+			name: "action",
+			match: func(candidate *cognitive.ExperienceResponse, request *cognitive.ExperienceQueryRequest) {
+				candidate.Action = "actionmatch"
+				request.Action = "actionmatch"
+			},
+		},
+		{
+			name: "outcome",
+			match: func(candidate *cognitive.ExperienceResponse, request *cognitive.ExperienceQueryRequest) {
+				candidate.Outcome = "outcomematch"
+				request.Outcome = "outcomematch"
+			},
+		},
+		{
+			name: "revision",
+			match: func(candidate *cognitive.ExperienceResponse, request *cognitive.ExperienceQueryRequest) {
+				candidate.Revision = "revisionmatch"
+				request.Revision = "revisionmatch"
+			},
+		},
+		{
+			name: "reversal",
+			match: func(candidate *cognitive.ExperienceResponse, request *cognitive.ExperienceQueryRequest) {
+				candidate.Reversal = "reversalmatch"
+				request.Reversal = "reversalmatch"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := fixtureExperience("facet-"+tt.name, "historical guidance unrelated baseline", "engram", "s1")
+			candidate.Situation = ""
+			candidate.Decision = ""
+			candidate.Action = ""
+			candidate.Outcome = ""
+			candidate.Revision = ""
+			candidate.Reversal = ""
+			request := cognitive.ExperienceQueryRequest{
+				Project:        "engram",
+				Query:          "nonmatching prompt",
+				CurrentContext: "neutral context",
+				Limit:          1,
+			}
+			tt.match(&candidate, &request)
+
+			service := NewService([]cognitive.ExperienceResponse{candidate})
+			results, err := service.QueryExperience(context.Background(), request)
+
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, "facet-"+tt.name, results[0].SourceAttribution[0].ID)
+		})
+	}
+}
+
 func TestServiceQueryExperienceUsesExactTermsForAntiApplicability(t *testing.T) {
 	candidate := fixtureExperience("candidate-1", "Retry harness guidance for Windows shell execution.", "engram", "s1")
 	candidate.AntiApplicability = []cognitive.ExperienceAntiApplicability{

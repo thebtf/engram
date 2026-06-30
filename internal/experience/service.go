@@ -305,7 +305,17 @@ func normalizeLimit(limit int) int {
 }
 
 func requestTerms(request cognitive.ExperienceQueryRequest) []string {
-	return uniqueTerms(request.Query + " " + request.CurrentContext)
+	parts := []string{
+		request.Query,
+		request.CurrentContext,
+		request.Situation,
+		request.Decision,
+		request.Action,
+		request.Outcome,
+		request.Revision,
+		request.Reversal,
+	}
+	return uniqueTerms(strings.Join(parts, " "))
 }
 
 func relevanceScore(terms []string, candidate cognitive.ExperienceResponse) int {
@@ -324,6 +334,12 @@ func relevanceScore(terms []string, candidate cognitive.ExperienceResponse) int 
 
 func candidateSearchTermSet(candidate cognitive.ExperienceResponse) map[string]struct{} {
 	parts := []string{
+		candidate.Situation,
+		candidate.Decision,
+		candidate.Action,
+		candidate.Outcome,
+		candidate.Revision,
+		candidate.Reversal,
 		candidate.Lesson,
 		candidate.Applicability.Rationale,
 		string(candidate.Applicability.State),
@@ -380,7 +396,7 @@ func antiApplicabilityMatches(condition string, request cognitive.ExperienceQuer
 	if len(conditionTerms) == 0 {
 		return false
 	}
-	contextTerms := termSet(uniqueTerms(request.Query + " " + request.CurrentContext))
+	contextTerms := termSet(requestTerms(request))
 	for _, term := range conditionTerms {
 		if _, ok := contextTerms[term]; !ok {
 			return false
