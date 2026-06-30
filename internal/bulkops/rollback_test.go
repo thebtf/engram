@@ -267,7 +267,7 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 	)
 	require.NoError(t, err)
 	snap.SourceSessionID = candidate.SourceSessionID
-	snap.CreatedAt = time.Now().UTC().Add(time.Second)
+	snap.CreatedAt = time.Now().UTC().Add(-time.Second)
 	createdSnap, err := snapStore.Create(ctx, snap)
 	require.NoError(t, err)
 
@@ -284,6 +284,9 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 	require.NotNil(t, updatedCandidate.PromotedMemoryID)
 	require.Equal(t, createdMemory.ID, *updatedCandidate.PromotedMemoryID)
 	require.NoError(t, snapStore.AmendPromoteEntries(ctx, createdSnap.SnapshotID, []int64{createdMemory.ID}))
+	assert.True(t, createdMemory.CreatedAt.After(createdSnap.CreatedAt), "fixture must create promoted memory after snapshot")
+	assert.True(t, createdMemory.UpdatedAt.After(createdSnap.CreatedAt), "fixture must create promoted memory updated timestamp after snapshot")
+	assert.False(t, createdMemory.UpdatedAt.After(createdMemory.CreatedAt), "fixture must represent an unmodified promoted memory")
 
 	result, err := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore, candidateStore)
 	require.NoError(t, err)
@@ -298,4 +301,99 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 	var memoryCount int64
 	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).Where("id = ?", createdMemory.ID).Count(&memoryCount).Error)
 	assert.Equal(t, int64(0), memoryCount, "rollback must hard-delete the memory created by promote")
+}
+
+func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, nil)
+	ctx := context.Background()
+	admin := adminIdentity()
+
+	candidate, err := candidateStore.Create(ctx, &models.CrystallizationCandidate{
+		SourceSessionID:         "rollback-candidate-edited-session",
+		ProposedContent:         "candidate review promote rollback must preserve edited memory",
+		ProposedTier:            "semantic",
+		ProposedEpistemicType:   "decision",
+		ProposedPromotionTarget: "semantic",
+		EvidenceHandles:         []string{"session:rollback-candidate-edited-session"},
+		PrivacyScope:            "project",
+		Status:                  models.CandidateStatusPending,
+		Fingerprint:             fmt.Sprintf("rollback-candidate-review-edited-%d", time.Now().UnixNano()),
+		AffectedProjects:        []string{"tg6-candidate-rollback-edited-test"},
+		Confidence:              0.9,
+		RecurrenceCount:         2,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
+		_ = db.Exec("DELETE FROM memories WHERE project = ?", "tg6-candidate-rollback-edited-test").Error
+		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'rollback-candidate-review-edited-%'`).Error
+		_ = db.Exec(`DELETE FROM audit_log WHERE action IN ('rollback','rollback_attempted_with_conflict') AND actor = 'master'`).Error
+	})
+
+	candidateBefore, err := json.Marshal(candidate)
+	require.NoError(t, err)
+	beforeState, err := json.Marshal(map[string]models.SnapshotEntry{
+		fmt.Sprintf("candidate:%d", candidate.ID): {
+			Kind:   models.EntryKindRestore,
+			Before: candidateBefore,
+		},
+	})
+	require.NoError(t, err)
+
+	snap, err := models.NewBulkOpSnapshot(
+		"rollback-candidate-review-edited-001",
+		models.SnapshotOpCandidateReviewAction,
+		"master",
+		json.RawMessage(beforeState),
+	)
+	require.NoError(t, err)
+	snap.SourceSessionID = candidate.SourceSessionID
+	snap.CreatedAt = time.Now().UTC().Add(time.Second)
+	createdSnap, err := snapStore.Create(ctx, snap)
+	require.NoError(t, err)
+
+	updatedCandidate, createdMemory, err := candidateStore.PromoteWithMemory(ctx, candidate.ID, &models.Memory{
+		Content:       candidate.ProposedContent,
+		Project:       "tg6-candidate-rollback-edited-test",
+		Tier:          "semantic",
+		EpistemicType: "decision",
+		Tags:          []string{fmt.Sprintf("candidate:%d", candidate.ID), "crystallized"},
+		SourceAgent:   "crystallization",
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPromoted, updatedCandidate.Status)
+	require.NotNil(t, updatedCandidate.PromotedMemoryID)
+	require.Equal(t, createdMemory.ID, *updatedCandidate.PromotedMemoryID)
+	require.NoError(t, snapStore.AmendPromoteEntries(ctx, createdSnap.SnapshotID, []int64{createdMemory.ID}))
+
+	editedAt := createdMemory.CreatedAt.Add(2 * time.Second)
+	require.NoError(t, db.Exec(
+		`UPDATE memories SET updated_at = ?, content = 'edited promoted memory' WHERE id = ?`,
+		editedAt,
+		createdMemory.ID,
+	).Error)
+
+	result, err := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore, candidateStore)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrRollbackConflict)
+	require.NotNil(t, result)
+	assert.Contains(t, result.ConflictIDs, createdMemory.ID)
+
+	afterAttempt, err := memStore.Get(ctx, createdMemory.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "edited promoted memory", afterAttempt.Content)
+
+	stillPromoted, err := candidateStore.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.Equal(t, models.CandidateStatusPromoted, stillPromoted.Status)
+	require.NotNil(t, stillPromoted.PromotedMemoryID)
+	assert.Equal(t, createdMemory.ID, *stillPromoted.PromotedMemoryID)
+
+	stillCommitted, err := snapStore.Get(ctx, createdSnap.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, models.SnapshotStatusCommitted, stillCommitted.Status)
 }

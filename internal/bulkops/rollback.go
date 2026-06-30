@@ -93,15 +93,15 @@ func Rollback(
 		return nil, fmt.Errorf("rollback: decode before_state: %w", err)
 	}
 
-	// Conflict check (EC-F3): for every affected memory ID, verify updated_at <= snapshot.created_at.
-	// AffectedMemoryIDs contains actual memory IDs (post-amend for bulk_promote), but IDs with
-	// EntryKindDelete were CREATED by the op (not pre-existing) and are expected to have
-	// updated_at > snapshot.created_at — exclude them from the conflict check. Only pre-existing
-	// rows (EntryKindRestore / legacy flat) need the timestamp guard.
+	// Conflict check (EC-F3): pre-existing rows conflict when updated after the snapshot.
+	// EntryKindDelete rows were created by the operation, so they use a different guard:
+	// rollback may hard-delete them only while updated_at still equals created_at.
 	var idsToCheck []int64
+	var createdIDsToCheck []int64
 	for _, id := range snap.AffectedMemoryIDs {
 		if entry, ok := snapshotEntryForMemoryID(typedEntries, id); ok && entry.Kind == models.EntryKindDelete {
-			continue // op-created row; rollback will hard-delete it — no conflict possible
+			createdIDsToCheck = append(createdIDsToCheck, id)
+			continue
 		}
 		idsToCheck = append(idsToCheck, id)
 	}
@@ -109,6 +109,11 @@ func Rollback(
 	if err != nil {
 		return nil, fmt.Errorf("rollback: conflict detection: %w", err)
 	}
+	createdConflictIDs, err := detectCreatedRowConflicts(ctx, memoryStore, createdIDsToCheck)
+	if err != nil {
+		return nil, fmt.Errorf("rollback: created-row conflict detection: %w", err)
+	}
+	conflictIDs = append(conflictIDs, createdConflictIDs...)
 	if len(conflictIDs) > 0 {
 		// Write conflict audit entry and return error — no restore occurs.
 		if auditStore != nil {
@@ -267,6 +272,36 @@ func detectConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids [
 			return nil, fmt.Errorf("detectConflicts: get memory %d: %w", id, err)
 		}
 		if mem.UpdatedAt.After(snapshotTime) {
+			conflicts = append(conflicts, id)
+		}
+	}
+	return conflicts, nil
+}
+
+// detectCreatedRowConflicts returns op-created memory IDs that were modified after creation.
+// EntryKindDelete rollback hard-deletes rows that did not exist before the operation, so
+// snapshot.created_at is not a valid conflict boundary for them. Instead, the safe-delete
+// invariant is created_at == updated_at; any later update means rollback must refuse to
+// destroy user-visible edits.
+func detectCreatedRowConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids []int64) ([]int64, error) {
+	if memoryStore == nil || len(ids) == 0 {
+		return nil, nil
+	}
+	var conflicts []int64
+	for _, id := range ids {
+		var mem gormdb.Memory
+		err := memoryStore.GetDB().WithContext(ctx).
+			Unscoped().
+			Where("id = ?", id).
+			First(&mem).Error
+		if err != nil {
+			if errors.Is(err, gormpkg.ErrRecordNotFound) {
+				// Already hard-deleted rows have nothing left for rollback to destroy.
+				continue
+			}
+			return nil, fmt.Errorf("detectCreatedRowConflicts: get memory %d: %w", id, err)
+		}
+		if mem.UpdatedAt.After(mem.CreatedAt) {
 			conflicts = append(conflicts, id)
 		}
 	}
