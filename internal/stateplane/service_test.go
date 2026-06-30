@@ -197,6 +197,24 @@ func TestServiceReadResumePacketReportsNewerFallbackDriftWhenActionsMatch(t *tes
 	require.Equal(t, "native next", packet.NextAction.Description)
 }
 
+func TestServiceReadResumePacketComparesFallbackAgainstNativeStateVersion(t *testing.T) {
+	native := nativePacket("native next", "go test ./internal/stateplane")
+	native.PacketID = "resume:1111111111111111111111111111111111111111111111111111111111111111"
+	native.StateVersion = native.GeneratedAt.Format(time.RFC3339Nano)
+	fallback := fallbackPacket("native next", "fallback.json")
+	fallback.PacketID = "resume:2222222222222222222222222222222222222222222222222222222222222222"
+	fallback.NextVerification = native.NextVerification
+	fallback.GeneratedAt = native.GeneratedAt.Add(time.Hour)
+	nativeReadAt := fallback.GeneratedAt.Add(time.Hour)
+
+	packet := readMixedResumePacketWithNativeGeneratedAt(t, native, fallback, nativeReadAt, nativeReadAt.Add(time.Hour))
+
+	require.Equal(t, cognitive.StatePacketSourceMixed, packet.Source)
+	require.Equal(t, cognitive.StateDriftFallbackNewer, packet.Drift.Kind)
+	require.Equal(t, cognitive.StateFreshnessStale, packet.Freshness)
+	require.Equal(t, "fallback.json", packet.FallbackPath)
+}
+
 func TestServiceReadResumePacketConflictPacketIDIgnoresNativeGeneratedAt(t *testing.T) {
 	native := nativePacket("native next", "go test ./internal/stateplane")
 	native.PacketID = "resume:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"

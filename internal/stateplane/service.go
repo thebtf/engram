@@ -520,10 +520,23 @@ func packetConflicts(nativePacket, fallbackPacket cognitive.ResumePacket) []cogn
 }
 
 func fallbackIsNewer(nativePacket, fallbackPacket cognitive.ResumePacket) bool {
-	if nativePacket.GeneratedAt.IsZero() || fallbackPacket.GeneratedAt.IsZero() {
+	if fallbackPacket.GeneratedAt.IsZero() {
 		return false
 	}
-	return fallbackPacket.GeneratedAt.After(nativePacket.GeneratedAt)
+	nativeStateTime, ok := nativePersistedStateTime(nativePacket)
+	if !ok || nativeStateTime.IsZero() {
+		return false
+	}
+	return fallbackPacket.GeneratedAt.After(nativeStateTime)
+}
+
+func nativePersistedStateTime(packet cognitive.ResumePacket) (time.Time, bool) {
+	if stateVersion := strings.TrimSpace(packet.StateVersion); stateVersion != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, stateVersion); err == nil {
+			return parsed, true
+		}
+	}
+	return packet.GeneratedAt, !packet.GeneratedAt.IsZero()
 }
 
 func packetEvidenceRefs(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest, fallback bool) []string {
