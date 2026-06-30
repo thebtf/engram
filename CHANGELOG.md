@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.30.0] - 2026-06-30
+
+### Added
+
+- **ENG-MPL-1 knowledge and experience slices (#381, #382).** Added the native state plane, principal-scoped brief/explorer substrate, packet-centric review loop, first-class experience retrieval with applicability gates, explicit forgetting taxonomy, and selective temporal truth with bounded contracts and evidence artifacts.
+
+### Fixed
+
+- **Runtime state and review follow-up hardening (#381, #382).** Runtime state surfaces no longer advertise server-path filesystem fallback, experience/project matching now uses exact-term and explicit project attribution, fallback-newer drift is reported honestly, and temporal `true_now` / `true_then` history handling is preserved after late review repairs.
+
 ## [6.29.0] - 2026-06-20
 
 ### Added
