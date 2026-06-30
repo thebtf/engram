@@ -88,7 +88,7 @@ func (s *Service) QueryTemporalTruth(ctx context.Context, request cognitive.Temp
 		History:         history,
 		ProvenanceChain: provenanceChain(history),
 	}
-	if nowEntry, ok := currentEntry(matches, queryClock); ok {
+	if nowEntry, ok := currentEntry(visibleMatches, queryClock); ok {
 		response.State = cognitive.TemporalTruthFound
 		response.TrueNow = &nowEntry
 	} else {
