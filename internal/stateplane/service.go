@@ -153,6 +153,9 @@ func (s *Service) ReadResumePacket(ctx context.Context, request cognitive.Resume
 	if len(conflicts) > 0 {
 		return s.conflictPacket(nativePacket, fallbackPacket, conflicts), nil
 	}
+	if fallbackIsNewer(nativePacket, fallbackPacket) {
+		return s.fallbackNewerPacket(nativePacket, fallbackPacket), nil
+	}
 	return nativePacket, nil
 }
 
@@ -206,6 +209,18 @@ func (s *Service) conflictPacket(nativePacket, fallbackPacket cognitive.ResumePa
 	packet.Drift = cognitive.StateDrift{
 		Kind:      cognitive.StateDriftConflict,
 		Conflicts: conflicts,
+		CheckedAt: now,
+	}
+	return packet
+}
+
+func (s *Service) fallbackNewerPacket(nativePacket, fallbackPacket cognitive.ResumePacket) cognitive.ResumePacket {
+	now := s.clock()
+	packet := nativePacket
+	packet.Freshness = cognitive.StateFreshnessStale
+	packet.FallbackPath = fallbackPacket.FallbackPath
+	packet.Drift = cognitive.StateDrift{
+		Kind:      cognitive.StateDriftFallbackNewer,
 		CheckedAt: now,
 	}
 	return packet
@@ -265,6 +280,13 @@ func packetConflicts(nativePacket, fallbackPacket cognitive.ResumePacket) []cogn
 	addConflict("goal_id", nativePacket.GoalID, fallbackPacket.GoalID)
 	addConflict("task_id", nativePacket.TaskID, fallbackPacket.TaskID)
 	return conflicts
+}
+
+func fallbackIsNewer(nativePacket, fallbackPacket cognitive.ResumePacket) bool {
+	if nativePacket.GeneratedAt.IsZero() || fallbackPacket.GeneratedAt.IsZero() {
+		return false
+	}
+	return fallbackPacket.GeneratedAt.After(nativePacket.GeneratedAt)
 }
 
 func valueString(value interface{}) string {

@@ -119,6 +119,30 @@ func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
 	require.Equal(t, "native_retained_until_resolved", packet.Drift.Conflicts[0].Resolution)
 }
 
+func TestServiceReadResumePacketReportsNewerFallbackDriftWhenActionsMatch(t *testing.T) {
+	native := nativePacket("native next", "go test ./internal/stateplane")
+	fallback := fallbackPacket("native next", "fallback.json")
+	fallback.NextVerification = native.NextVerification
+	fallback.GeneratedAt = native.GeneratedAt.Add(time.Hour)
+	service := NewService(
+		&fakeNativePlane{packet: native},
+		&countingFallbackReader{packet: fallback},
+	)
+
+	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		SessionID:               "session-1",
+		AllowFilesystemFallback: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
+	require.Equal(t, cognitive.StateFreshnessStale, packet.Freshness)
+	require.Equal(t, cognitive.StateDriftFallbackNewer, packet.Drift.Kind)
+	require.Equal(t, "fallback.json", packet.FallbackPath)
+	require.Equal(t, "native next", packet.NextAction.Description)
+}
+
 func TestServiceReadResumePacketNativeErrorWithoutFallbackAllowed(t *testing.T) {
 	nativeErr := errors.New("native missing")
 	service := NewService(&fakeNativePlane{err: nativeErr}, JSONFileFallbackReader{Path: "fallback.json"})
