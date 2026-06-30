@@ -5,80 +5,177 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 )
+
+func requireContractField(t *testing.T, typ reflect.Type, name, jsonTag string, wantType reflect.Type) {
+	t.Helper()
+	field, ok := typ.FieldByName(name)
+	if !ok {
+		t.Fatalf("%s missing required field %s", typ.Name(), name)
+	}
+	if got := field.Tag.Get("json"); got != jsonTag {
+		t.Fatalf("%s.%s json tag = %q, want %q", typ.Name(), name, got, jsonTag)
+	}
+	if got := field.Type; got != wantType {
+		t.Fatalf("%s.%s type = %s, want %s", typ.Name(), name, got, wantType)
+	}
+}
 
 func TestResumePacketContract_RequiredFieldsBinaryDefined(t *testing.T) {
 	typ := reflect.TypeOf(ResumePacket{})
 
 	required := map[string]struct {
 		jsonTag string
-		kind    reflect.Kind
+		typ     reflect.Type
 	}{
-		"PacketID":         {jsonTag: "packet_id", kind: reflect.String},
-		"Project":          {jsonTag: "project", kind: reflect.String},
-		"Principal":        {jsonTag: "principal", kind: reflect.String},
-		"SessionID":        {jsonTag: "session_id", kind: reflect.String},
-		"StateVersion":     {jsonTag: "state_version", kind: reflect.String},
-		"Source":           {jsonTag: "source", kind: reflect.String},
-		"FallbackUsed":     {jsonTag: "fallback_used", kind: reflect.Bool},
-		"Freshness":        {jsonTag: "freshness", kind: reflect.String},
-		"Drift":            {jsonTag: "drift", kind: reflect.Struct},
-		"NextAction":       {jsonTag: "next_action", kind: reflect.Struct},
-		"NextVerification": {jsonTag: "next_verification", kind: reflect.Struct},
-		"GeneratedAt":      {jsonTag: "generated_at", kind: reflect.Struct},
-		"EvidenceRefs":     {jsonTag: "evidence_refs", kind: reflect.Slice},
+		"PacketID":         {jsonTag: "packet_id", typ: reflect.TypeOf("")},
+		"Project":          {jsonTag: "project", typ: reflect.TypeOf("")},
+		"Principal":        {jsonTag: "principal", typ: reflect.TypeOf("")},
+		"SessionID":        {jsonTag: "session_id", typ: reflect.TypeOf("")},
+		"StateVersion":     {jsonTag: "state_version", typ: reflect.TypeOf("")},
+		"Source":           {jsonTag: "source", typ: reflect.TypeOf(StatePacketSource(""))},
+		"FallbackUsed":     {jsonTag: "fallback_used", typ: reflect.TypeOf(false)},
+		"Freshness":        {jsonTag: "freshness", typ: reflect.TypeOf(StateFreshness(""))},
+		"Drift":            {jsonTag: "drift", typ: reflect.TypeOf(StateDrift{})},
+		"NextAction":       {jsonTag: "next_action", typ: reflect.TypeOf(StateAction{})},
+		"NextVerification": {jsonTag: "next_verification", typ: reflect.TypeOf(StateVerification{})},
+		"GeneratedAt":      {jsonTag: "generated_at", typ: reflect.TypeOf(time.Time{})},
+		"EvidenceRefs":     {jsonTag: "evidence_refs", typ: reflect.TypeOf([]string{})},
+		"Scopes":           {jsonTag: "scopes", typ: reflect.TypeOf([]StateScopeKind{})},
 	}
 
 	for name, want := range required {
-		field, ok := typ.FieldByName(name)
-		if !ok {
-			t.Fatalf("ResumePacket missing required field %s", name)
-		}
-		if got := field.Tag.Get("json"); got != want.jsonTag {
-			t.Fatalf("ResumePacket.%s json tag = %q, want %q", name, got, want.jsonTag)
-		}
-		if got := field.Type.Kind(); got != want.kind {
-			t.Fatalf("ResumePacket.%s kind = %s, want %s", name, got, want.kind)
-		}
+		requireContractField(t, typ, name, want.jsonTag, want.typ)
 	}
 }
 
+func TestResumePacketRequestContract_ExplicitScopeAndFallbackFields(t *testing.T) {
+	typ := reflect.TypeOf(ResumePacketRequest{})
+
+	required := map[string]struct {
+		jsonTag string
+		typ     reflect.Type
+	}{
+		"Project":                 {jsonTag: "project", typ: reflect.TypeOf("")},
+		"Principal":               {jsonTag: "principal", typ: reflect.TypeOf("")},
+		"SessionID":               {jsonTag: "session_id,omitempty", typ: reflect.TypeOf("")},
+		"GoalID":                  {jsonTag: "goal_id,omitempty", typ: reflect.TypeOf("")},
+		"TaskID":                  {jsonTag: "task_id,omitempty", typ: reflect.TypeOf("")},
+		"Scopes":                  {jsonTag: "scopes", typ: reflect.TypeOf([]StateScopeKind{})},
+		"AllowFilesystemFallback": {jsonTag: "allow_filesystem_fallback,omitempty", typ: reflect.TypeOf(false)},
+	}
+
+	for name, want := range required {
+		requireContractField(t, typ, name, want.jsonTag, want.typ)
+	}
+}
+
+func TestResumePacketNestedContract_DriftConflictActionVerification(t *testing.T) {
+	action := reflect.TypeOf(StateAction{})
+	requireContractField(t, action, "Kind", "kind", reflect.TypeOf(StateActionKind("")))
+	requireContractField(t, action, "Description", "description", reflect.TypeOf(""))
+	requireContractField(t, action, "Command", "command,omitempty", reflect.TypeOf(""))
+
+	verification := reflect.TypeOf(StateVerification{})
+	requireContractField(t, verification, "Kind", "kind", reflect.TypeOf(StateVerificationKind("")))
+	requireContractField(t, verification, "Description", "description", reflect.TypeOf(""))
+	requireContractField(t, verification, "Command", "command,omitempty", reflect.TypeOf(""))
+
+	drift := reflect.TypeOf(StateDrift{})
+	requireContractField(t, drift, "Kind", "kind", reflect.TypeOf(StateDriftKind("")))
+	requireContractField(t, drift, "Conflicts", "conflicts", reflect.TypeOf([]StateConflict{}))
+	requireContractField(t, drift, "CheckedAt", "checked_at,omitempty", reflect.TypeOf(time.Time{}))
+
+	conflict := reflect.TypeOf(StateConflict{})
+	requireContractField(t, conflict, "Field", "field", reflect.TypeOf(""))
+	requireContractField(t, conflict, "NativeValue", "native_value,omitempty", reflect.TypeOf(""))
+	requireContractField(t, conflict, "FallbackValue", "fallback_value,omitempty", reflect.TypeOf(""))
+	requireContractField(t, conflict, "Resolution", "resolution,omitempty", reflect.TypeOf(""))
+}
+
 func TestResumePacketEnums_PinNativeFallbackAndContractSourceTaxonomy(t *testing.T) {
-	if StatePacketSourceNative != StatePacketSource("native") {
-		t.Fatalf("StatePacketSourceNative = %q, want native", StatePacketSourceNative)
+	for _, tt := range []struct {
+		want string
+		got  StatePacketSource
+	}{
+		{want: "native", got: StatePacketSourceNative},
+		{want: "filesystem_fallback", got: StatePacketSourceFilesystemFallback},
+		{want: "imported", got: StatePacketSourceImported},
+		{want: "mixed", got: StatePacketSourceMixed},
+		{want: "conflict", got: StatePacketSourceConflict},
+	} {
+		if string(tt.got) != tt.want {
+			t.Fatalf("StatePacketSource value = %q, want %q", tt.got, tt.want)
+		}
 	}
-	if StatePacketSourceFilesystemFallback != StatePacketSource("filesystem_fallback") {
-		t.Fatalf("StatePacketSourceFilesystemFallback = %q, want filesystem_fallback", StatePacketSourceFilesystemFallback)
+
+	for _, tt := range []struct {
+		want string
+		got  StateFreshness
+	}{
+		{want: "fresh", got: StateFreshnessFresh},
+		{want: "stale", got: StateFreshnessStale},
+		{want: "unknown", got: StateFreshnessUnknown},
+	} {
+		if string(tt.got) != tt.want {
+			t.Fatalf("StateFreshness value = %q, want %q", tt.got, tt.want)
+		}
 	}
-	if StatePacketSourceImported != StatePacketSource("imported") {
-		t.Fatalf("StatePacketSourceImported = %q, want imported", StatePacketSourceImported)
+
+	for _, tt := range []struct {
+		want string
+		got  StateDriftKind
+	}{
+		{want: "none", got: StateDriftNone},
+		{want: "native_stale", got: StateDriftNativeStale},
+		{want: "fallback_newer", got: StateDriftFallbackNewer},
+		{want: "conflict", got: StateDriftConflict},
+		{want: "unknown", got: StateDriftUnknown},
+	} {
+		if string(tt.got) != tt.want {
+			t.Fatalf("StateDriftKind value = %q, want %q", tt.got, tt.want)
+		}
 	}
-	if StatePacketSourceMixed != StatePacketSource("mixed") {
-		t.Fatalf("StatePacketSourceMixed = %q, want mixed", StatePacketSourceMixed)
+
+	for _, tt := range []struct {
+		want string
+		got  StateScopeKind
+	}{
+		{want: "session", got: StateScopeSession},
+		{want: "project", got: StateScopeProject},
+		{want: "goal", got: StateScopeGoal},
+		{want: "task", got: StateScopeTask},
+	} {
+		if string(tt.got) != tt.want {
+			t.Fatalf("StateScopeKind value = %q, want %q", tt.got, tt.want)
+		}
 	}
-	if StatePacketSourceConflict != StatePacketSource("conflict") {
-		t.Fatalf("StatePacketSourceConflict = %q, want legacy conflict compatibility value", StatePacketSourceConflict)
+
+	for _, tt := range []struct {
+		want string
+		got  StateActionKind
+	}{
+		{want: "command", got: StateActionCommand},
+		{want: "instruction", got: StateActionInstruction},
+		{want: "review_gate", got: StateActionReviewGate},
+	} {
+		if string(tt.got) != tt.want {
+			t.Fatalf("StateActionKind value = %q, want %q", tt.got, tt.want)
+		}
 	}
-	if StateFreshnessFresh != StateFreshness("fresh") {
-		t.Fatalf("StateFreshnessFresh = %q, want fresh", StateFreshnessFresh)
-	}
-	if StateFreshnessStale != StateFreshness("stale") {
-		t.Fatalf("StateFreshnessStale = %q, want stale", StateFreshnessStale)
-	}
-	if StateDriftConflict != StateDriftKind("conflict") {
-		t.Fatalf("StateDriftConflict = %q, want conflict", StateDriftConflict)
-	}
-	if StateActionCommand != StateActionKind("command") {
-		t.Fatalf("StateActionCommand = %q, want command", StateActionCommand)
-	}
-	if StateActionReviewGate != StateActionKind("review_gate") {
-		t.Fatalf("StateActionReviewGate = %q, want review_gate", StateActionReviewGate)
-	}
-	if StateVerificationCommand != StateVerificationKind("command") {
-		t.Fatalf("StateVerificationCommand = %q, want command", StateVerificationCommand)
-	}
-	if StateVerificationArtifact != StateVerificationKind("artifact") {
-		t.Fatalf("StateVerificationArtifact = %q, want artifact", StateVerificationArtifact)
+
+	for _, tt := range []struct {
+		want string
+		got  StateVerificationKind
+	}{
+		{want: "command", got: StateVerificationCommand},
+		{want: "artifact", got: StateVerificationArtifact},
+		{want: "manual", got: StateVerificationManual},
+	} {
+		if string(tt.got) != tt.want {
+			t.Fatalf("StateVerificationKind value = %q, want %q", tt.got, tt.want)
+		}
 	}
 }
 

@@ -52,7 +52,7 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 		packet: cognitive.ResumePacket{
 			Source:           cognitive.StatePacketSourceNative,
 			Freshness:        cognitive.StateFreshnessFresh,
-			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: time.Now().UTC()},
+			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: time.Now().UTC()},
 			NextAction:       cognitive.StateAction{Kind: cognitive.StateActionInstruction, Description: "continue T003"},
 			NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "focused tests", Command: "go test ./internal/worker"},
 			GeneratedAt:      time.Now().UTC(),
@@ -75,6 +75,7 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 	require.False(t, fakeStore.lastRequest.AllowFilesystemFallback)
 	require.Equal(t, "agent:developer", fakeStore.lastRequest.Principal)
 	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession}, fakeStore.lastRequest.Scopes)
 }
 
 func TestHandleGetStateResumeUsesAuthenticatedPrincipalOverQuery(t *testing.T) {
@@ -99,6 +100,7 @@ func TestHandleGetStateResumeUsesAuthenticatedPrincipalOverQuery(t *testing.T) {
 	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
 	require.Equal(t, "goal-1", fakeStore.lastRequest.GoalID)
 	require.Equal(t, "task-1", fakeStore.lastRequest.TaskID)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeGoal, cognitive.StateScopeTask}, fakeStore.lastRequest.Scopes)
 }
 
 func TestHandleGetStateResumeRejectsFilesystemFallbackOption(t *testing.T) {
@@ -123,7 +125,23 @@ func TestHandleGetStateResumeRequiresPrincipalWithoutAuth(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "principal is required")
 }
 
-func TestHandleGetStateResumeRequiresNonBlankSessionID(t *testing.T) {
+func TestHandleGetStateResumeSupportsExplicitProjectOnlyScope(t *testing.T) {
+	fakeStore := &fakeWorkerStatePlane{
+		packet: cognitive.ResumePacket{Source: cognitive.StatePacketSourceNative, Project: "engram", Principal: "agent:developer"},
+	}
+	svc := &Service{stateStore: fakeStore}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&principal=agent:developer&scopes=project", nil)
+	rec := httptest.NewRecorder()
+	svc.handleGetStateResume(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "engram", fakeStore.lastRequest.Project)
+	require.Empty(t, fakeStore.lastRequest.SessionID)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeProject}, fakeStore.lastRequest.Scopes)
+}
+
+func TestHandleGetStateResumeRequiresScopeBinding(t *testing.T) {
 	svc := &Service{stateStore: &fakeWorkerStatePlane{}}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&principal=agent:developer&session_id=%20%20", nil)
@@ -131,7 +149,7 @@ func TestHandleGetStateResumeRequiresNonBlankSessionID(t *testing.T) {
 	svc.handleGetStateResume(rec, req)
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
-	require.Contains(t, rec.Body.String(), "session_id is required")
+	require.Contains(t, rec.Body.String(), "session_id or scopes is required")
 }
 
 func TestHandleGetStateResumeHidesInternalReadError(t *testing.T) {

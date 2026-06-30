@@ -124,10 +124,10 @@ type ProjectStateRecord struct {
 // state in the deterministic resume path.
 type StatePacketSource string
 
-// Canonical StatePacketSource values. CR-005 contract-facing packets use
-// native, filesystem_fallback, imported, or mixed. StatePacketSourceConflict is
-// retained only as a legacy compatibility value for older callers that still
-// distinguish conflict in Source instead of Drift.Kind.
+// Canonical StatePacketSource values. CR-006 contract-facing packets use
+// native, filesystem_fallback, imported, or mixed. Conflicts are represented
+// by Drift.Kind; StatePacketSourceConflict is retained only as a legacy
+// compatibility value for older callers that still encoded conflict in Source.
 const (
 	StatePacketSourceNative             StatePacketSource = "native"
 	StatePacketSourceFilesystemFallback StatePacketSource = "filesystem_fallback"
@@ -160,9 +160,9 @@ const (
 	StateDriftUnknown       StateDriftKind = "unknown"
 )
 
-// StateScopeKind identifies which agent-owned handoff scope a state record
-// describes. The first CR uses session/project state; goal/task scopes are
-// contractually reserved so later CRs do not overload generic memory rows.
+// StateScopeKind identifies which agent-owned handoff scope a state record or
+// resume request describes. Session, project, goal, and task are explicit so
+// native state cannot collapse scoped handoff data into generic memory rows.
 type StateScopeKind string
 
 // Canonical StateScopeKind values.
@@ -194,14 +194,16 @@ const (
 	StateVerificationManual   StateVerificationKind = "manual"
 )
 
-// StateAction is the exact next action carried by a ResumePacket.
+// StateAction is the exact next action carried by a ResumePacket; Kind and
+// Description are required.
 type StateAction struct {
 	Kind        StateActionKind `json:"kind"`
 	Description string          `json:"description"`
 	Command     string          `json:"command,omitempty"`
 }
 
-// StateVerification is the exact evidence gate carried by a ResumePacket.
+// StateVerification is the exact evidence gate carried by a ResumePacket; Kind
+// and Description are required.
 type StateVerification struct {
 	Kind        StateVerificationKind `json:"kind"`
 	Description string                `json:"description"`
@@ -217,30 +219,33 @@ type StateConflict struct {
 	Resolution    string `json:"resolution,omitempty"`
 }
 
-// StateDrift summarizes drift/conflict evidence for a ResumePacket.
+// StateDrift summarizes drift/conflict evidence for a ResumePacket. Conflicts
+// is required and empty when no conflict was found.
 type StateDrift struct {
 	Kind      StateDriftKind  `json:"kind"`
-	Conflicts []StateConflict `json:"conflicts,omitempty"`
+	Conflicts []StateConflict `json:"conflicts"`
 	CheckedAt time.Time       `json:"checked_at,omitempty"`
 }
 
 // ResumePacketRequest scopes a native resume read. Principal binds the read to
-// the caller identity, and AllowFilesystemFallback remains explicit so fallback
-// state can never be reported as native state by accident.
+// the caller identity, Scopes names the handoff scope(s) being requested, and
+// AllowFilesystemFallback remains explicit so fallback state can never be
+// reported as native state by accident.
 type ResumePacketRequest struct {
-	Project                 string `json:"project"`
-	Principal               string `json:"principal,omitempty"`
-	SessionID               string `json:"session_id,omitempty"`
-	GoalID                  string `json:"goal_id,omitempty"`
-	TaskID                  string `json:"task_id,omitempty"`
-	AllowFilesystemFallback bool   `json:"allow_filesystem_fallback,omitempty"`
+	Project                 string           `json:"project"`
+	Principal               string           `json:"principal"`
+	SessionID               string           `json:"session_id,omitempty"`
+	GoalID                  string           `json:"goal_id,omitempty"`
+	TaskID                  string           `json:"task_id,omitempty"`
+	Scopes                  []StateScopeKind `json:"scopes"`
+	AllowFilesystemFallback bool             `json:"allow_filesystem_fallback,omitempty"`
 }
 
 // ResumePacket is the bounded deterministic resume payload for the native
 // state plane. The required fields are intentionally concrete: packet identity,
-// principal/session scope, state version, freshness, drift/conflict, next
-// action, next verification, and evidence references are first-class fields,
-// not opaque metadata inside SessionStateSlots.
+// principal/session scope, explicit state scopes, state version, source/fallback
+// authority, freshness, drift/conflict, next action, next verification, and
+// evidence references are first-class fields, not opaque metadata.
 type ResumePacket struct {
 	PacketID         string            `json:"packet_id"`
 	Project          string            `json:"project"`
@@ -259,7 +264,7 @@ type ResumePacket struct {
 	GoalID       string           `json:"goal_id,omitempty"`
 	TaskID       string           `json:"task_id,omitempty"`
 	FallbackPath string           `json:"fallback_path,omitempty"`
-	Scopes       []StateScopeKind `json:"scopes,omitempty"`
+	Scopes       []StateScopeKind `json:"scopes"`
 }
 
 // ExperienceSource names the implementation shape that produced an experience

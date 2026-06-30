@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,10 @@ import (
 // FallbackReader reads an explicit filesystem/export resume packet.
 type FallbackReader interface {
 	ReadResumePacket(ctx context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error)
+}
+
+type resumeReadAuditLogger interface {
+	LogResumeReadAudit(ctx context.Context, request cognitive.ResumePacketRequest, packet cognitive.ResumePacket, action, result, reason string)
 }
 
 // Service composes the native state plane with an optional explicit fallback
@@ -53,20 +58,29 @@ func (r JSONFileFallbackReader) ReadResumePacket(ctx context.Context, request co
 		return cognitive.ResumePacket{}, ctx.Err()
 	default:
 	}
-	if r.Path == "" {
+	path := strings.TrimSpace(r.Path)
+	if path == "" {
 		return cognitive.ResumePacket{}, fmt.Errorf("stateplane fallback: path is required")
 	}
-	data, err := os.ReadFile(r.Path)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return cognitive.ResumePacket{}, fmt.Errorf("stateplane fallback read %q: %w", r.Path, err)
+		return cognitive.ResumePacket{}, fmt.Errorf("stateplane fallback read %q: %w", path, err)
 	}
 	var packet cognitive.ResumePacket
 	if err := json.Unmarshal(data, &packet); err != nil {
-		return cognitive.ResumePacket{}, fmt.Errorf("stateplane fallback parse %q: %w", r.Path, err)
+		return cognitive.ResumePacket{}, fmt.Errorf("stateplane fallback parse %q: %w", path, err)
 	}
 	packet.Source = cognitive.StatePacketSourceFilesystemFallback
-	if packet.FallbackPath == "" {
-		packet.FallbackPath = r.Path
+	packet.FallbackPath = path
+	if packet.Freshness == "" {
+		packet.Freshness = cognitive.StateFreshnessUnknown
+	}
+	if packet.Drift.Kind == "" {
+		packet.Drift.Kind = cognitive.StateDriftUnknown
+	}
+	packet.Drift = normalizeStateDriftConflicts(packet.Drift)
+	if packet.Principal == "" {
+		packet.Principal = request.Principal
 	}
 	if packet.Project == "" {
 		packet.Project = request.Project
@@ -83,6 +97,9 @@ func (r JSONFileFallbackReader) ReadResumePacket(ctx context.Context, request co
 	if len(packet.Scopes) == 0 && packet.SessionID != "" {
 		packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
 	}
+	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
+	packet.FallbackUsed = true
+	packet.EvidenceRefs = packetEvidenceRefs(packet, request, true)
 	return packet, nil
 }
 
@@ -128,11 +145,14 @@ func (s *Service) ReadResumePacket(ctx context.Context, request cognitive.Resume
 	if err := requireResumePrincipal(request); err != nil {
 		return cognitive.ResumePacket{}, err
 	}
+	if err := validateResumePacketRequest(request); err != nil {
+		return cognitive.ResumePacket{}, err
+	}
 
 	nativePacket, nativeErr := s.native.ReadResumePacket(ctx, request)
 	if nativeErr == nil {
 		nativePacket = s.normalizeNativePacket(nativePacket, request)
-		if err := validatePacketPrincipal("stateplane native", nativePacket, request); err != nil {
+		if err := validateNativePacket(nativePacket, request); err != nil {
 			return cognitive.ResumePacket{}, err
 		}
 	}
@@ -152,9 +172,11 @@ func (s *Service) ReadResumePacket(ctx context.Context, request cognitive.Resume
 		if err := validateFallbackPacket(fallbackPacket, request); err != nil {
 			return cognitive.ResumePacket{}, err
 		}
+		s.auditResumeRead(ctx, request, fallbackPacket, "read_resume_fallback", "fallback_after_native_error", "explicit filesystem fallback returned after native read error")
 		return fallbackPacket, nil
 	}
 	if fallbackErr != nil {
+		s.auditResumeRead(ctx, request, nativePacket, "read_resume_fallback_error", "native_after_fallback_error", fmt.Sprintf("explicit filesystem fallback read failed; native retained: %v", fallbackErr))
 		return nativePacket, nil
 	}
 
@@ -164,10 +186,14 @@ func (s *Service) ReadResumePacket(ctx context.Context, request cognitive.Resume
 	}
 	conflicts := packetConflicts(nativePacket, fallbackPacket)
 	if len(conflicts) > 0 {
-		return s.conflictPacket(nativePacket, fallbackPacket, conflicts), nil
+		packet := s.conflictPacket(nativePacket, fallbackPacket, conflicts)
+		s.auditResumeRead(ctx, request, packet, "read_resume_conflict", "mixed_conflict", "native and filesystem fallback disagreed; native retained until resolved")
+		return packet, nil
 	}
 	if fallbackIsNewer(nativePacket, fallbackPacket) {
-		return s.fallbackNewerPacket(nativePacket, fallbackPacket), nil
+		packet := s.fallbackNewerPacket(nativePacket, fallbackPacket)
+		s.auditResumeRead(ctx, request, packet, "read_resume_fallback_newer", "mixed_fallback_newer", "filesystem fallback generated_at is newer than native state_version")
+		return packet, nil
 	}
 	return nativePacket, nil
 }
@@ -179,12 +205,21 @@ func (s *Service) requireNative() error {
 	return nil
 }
 
+func (s *Service) auditResumeRead(ctx context.Context, request cognitive.ResumePacketRequest, packet cognitive.ResumePacket, action, result, reason string) {
+	auditor, ok := s.native.(resumeReadAuditLogger)
+	if !ok || auditor == nil {
+		return
+	}
+	auditor.LogResumeReadAudit(ctx, request, packet, action, result, reason)
+}
+
 func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) cognitive.ResumePacket {
 	if packet.Principal == "" {
 		packet.Principal = request.Principal
 	}
 	now := s.clock()
 	packet.Source = cognitive.StatePacketSourceFilesystemFallback
+	packet.FallbackPath = strings.TrimSpace(packet.FallbackPath)
 	if packet.Freshness == "" {
 		packet.Freshness = cognitive.StateFreshnessUnknown
 	}
@@ -194,11 +229,11 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	if packet.Drift.CheckedAt.IsZero() {
 		packet.Drift.CheckedAt = now
 	}
-	if packet.GeneratedAt.IsZero() {
-		packet.GeneratedAt = now
-	}
+	packet.Drift = normalizeStateDriftConflicts(packet.Drift)
 	if strings.TrimSpace(packet.StateVersion) == "" {
-		packet.StateVersion = fallbackStateVersion(packet.GeneratedAt)
+		if !packet.GeneratedAt.IsZero() {
+			packet.StateVersion = fallbackStateVersion(packet.GeneratedAt)
+		}
 	} else {
 		packet.StateVersion = strings.TrimSpace(packet.StateVersion)
 	}
@@ -214,13 +249,16 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	if packet.TaskID == "" {
 		packet.TaskID = request.TaskID
 	}
+	// F6: default Scopes to request.Scopes before synthesizing identity so
+	// fallback packet IDs distinguish scope-distinct resume packets.
+	if len(packet.Scopes) == 0 {
+		packet.Scopes = append([]cognitive.StateScopeKind(nil), request.Scopes...)
+	}
+	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	if strings.TrimSpace(packet.PacketID) == "" {
 		packet.PacketID = fallbackResumePacketID(packet, request)
 	} else {
 		packet.PacketID = strings.TrimSpace(packet.PacketID)
-	}
-	if len(packet.Scopes) == 0 && packet.SessionID != "" {
-		packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
 	}
 	packet.FallbackUsed = true
 	packet.EvidenceRefs = packetEvidenceRefs(packet, request, true)
@@ -248,6 +286,7 @@ func fallbackResumePacketID(packet cognitive.ResumePacket, request cognitive.Res
 		RequestSessionID string                      `json:"request_session_id"`
 		RequestGoalID    string                      `json:"request_goal_id"`
 		RequestTaskID    string                      `json:"request_task_id"`
+		Scopes           []cognitive.StateScopeKind  `json:"scopes"`
 		StateVersion     string                      `json:"state_version"`
 		GeneratedAt      string                      `json:"generated_at"`
 	}{
@@ -263,6 +302,7 @@ func fallbackResumePacketID(packet cognitive.ResumePacket, request cognitive.Res
 		RequestSessionID: strings.TrimSpace(request.SessionID),
 		RequestGoalID:    strings.TrimSpace(request.GoalID),
 		RequestTaskID:    strings.TrimSpace(request.TaskID),
+		Scopes:           append([]cognitive.StateScopeKind(nil), packet.Scopes...),
 		StateVersion:     strings.TrimSpace(packet.StateVersion),
 		GeneratedAt:      fallbackStateVersion(packet.GeneratedAt),
 	}
@@ -356,9 +396,6 @@ func normalizedEvidenceRefs(refs []string) []string {
 
 func (s *Service) normalizeNativePacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) cognitive.ResumePacket {
 	now := s.clock()
-	if packet.Source == "" {
-		packet.Source = cognitive.StatePacketSourceNative
-	}
 	if packet.Freshness == "" {
 		packet.Freshness = cognitive.StateFreshnessFresh
 	}
@@ -368,9 +405,7 @@ func (s *Service) normalizeNativePacket(packet cognitive.ResumePacket, request c
 	if packet.Drift.CheckedAt.IsZero() {
 		packet.Drift.CheckedAt = now
 	}
-	if packet.GeneratedAt.IsZero() {
-		packet.GeneratedAt = now
-	}
+	packet.Drift = normalizeStateDriftConflicts(packet.Drift)
 	if packet.Project == "" {
 		packet.Project = request.Project
 	}
@@ -386,10 +421,7 @@ func (s *Service) normalizeNativePacket(packet cognitive.ResumePacket, request c
 	if packet.TaskID == "" {
 		packet.TaskID = request.TaskID
 	}
-	if len(packet.Scopes) == 0 && packet.SessionID != "" {
-		packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
-	}
-	packet.EvidenceRefs = packetEvidenceRefs(packet, request, false)
+	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	return packet
 }
 
@@ -422,6 +454,7 @@ func (s *Service) fallbackNewerPacket(nativePacket, fallbackPacket cognitive.Res
 	packet.GeneratedAt = now
 	packet.Drift = cognitive.StateDrift{
 		Kind:      cognitive.StateDriftFallbackNewer,
+		Conflicts: []cognitive.StateConflict{},
 		CheckedAt: now,
 	}
 	packet.PacketID = mixedResumePacketID(nativePacket, fallbackPacket, packet)
@@ -441,12 +474,83 @@ func normalizeResumePacketRequest(request cognitive.ResumePacketRequest) cogniti
 	request.SessionID = strings.TrimSpace(request.SessionID)
 	request.GoalID = strings.TrimSpace(request.GoalID)
 	request.TaskID = strings.TrimSpace(request.TaskID)
+	request.Scopes = canonicalizeResumeScopes(request.Scopes)
 	return request
+}
+
+func canonicalizeResumeScopes(scopes []cognitive.StateScopeKind) []cognitive.StateScopeKind {
+	if len(scopes) == 0 {
+		return nil
+	}
+	seen := make(map[cognitive.StateScopeKind]struct{}, len(scopes))
+	for _, scope := range scopes {
+		seen[cognitive.StateScopeKind(strings.TrimSpace(string(scope)))] = struct{}{}
+	}
+	ordered := make([]cognitive.StateScopeKind, 0, len(seen))
+	for _, scope := range []cognitive.StateScopeKind{
+		cognitive.StateScopeSession,
+		cognitive.StateScopeProject,
+		cognitive.StateScopeGoal,
+		cognitive.StateScopeTask,
+	} {
+		if _, ok := seen[scope]; ok {
+			ordered = append(ordered, scope)
+			delete(seen, scope)
+		}
+	}
+	if len(seen) == 0 {
+		return ordered
+	}
+	extra := make([]string, 0, len(seen))
+	for scope := range seen {
+		extra = append(extra, string(scope))
+	}
+	sort.Strings(extra)
+	for _, scope := range extra {
+		ordered = append(ordered, cognitive.StateScopeKind(scope))
+	}
+	return ordered
+}
+
+func normalizeStateDriftConflicts(drift cognitive.StateDrift) cognitive.StateDrift {
+	if drift.Kind != cognitive.StateDriftConflict && drift.Conflicts == nil {
+		drift.Conflicts = []cognitive.StateConflict{}
+	}
+	return drift
 }
 
 func requireResumePrincipal(request cognitive.ResumePacketRequest) error {
 	if request.Principal == "" {
 		return fmt.Errorf("stateplane read_resume: principal is required")
+	}
+	return nil
+}
+
+func validateResumePacketRequest(request cognitive.ResumePacketRequest) error {
+	if len(request.Scopes) == 0 {
+		return fmt.Errorf("stateplane read_resume: scopes is required")
+	}
+	for _, scope := range request.Scopes {
+		switch scope {
+		case cognitive.StateScopeSession:
+			if request.SessionID == "" {
+				return fmt.Errorf("stateplane read_resume: session_id is required for session scope")
+			}
+		case cognitive.StateScopeProject:
+			if request.Project == "" {
+				return fmt.Errorf("stateplane read_resume: project is required for project scope")
+			}
+		case cognitive.StateScopeGoal:
+			if request.GoalID == "" {
+				return fmt.Errorf("stateplane read_resume: goal_id is required for goal scope")
+			}
+		case cognitive.StateScopeTask:
+			if request.TaskID == "" {
+				return fmt.Errorf("stateplane read_resume: task_id is required for task scope")
+			}
+		default:
+			return fmt.Errorf("stateplane read_resume: unsupported scope %q", scope)
+		}
 	}
 	return nil
 }
@@ -461,27 +565,150 @@ func validatePacketPrincipal(prefix string, packet cognitive.ResumePacket, reque
 	return nil
 }
 
+func validateDeterministicResumePacketFields(prefix string, packet cognitive.ResumePacket) error {
+	if strings.TrimSpace(packet.PacketID) == "" {
+		return fmt.Errorf("%s: packet_id is required", prefix)
+	}
+	if strings.TrimSpace(packet.StateVersion) == "" {
+		return fmt.Errorf("%s: state_version is required", prefix)
+	}
+	if packet.GeneratedAt.IsZero() {
+		return fmt.Errorf("%s: generated_at is required", prefix)
+	}
+	if len(normalizedEvidenceRefs(packet.EvidenceRefs)) == 0 {
+		return fmt.Errorf("%s: evidence_refs is required", prefix)
+	}
+	if err := validatePacketScopes(prefix, packet.Scopes); err != nil {
+		return err
+	}
+	if err := validateStateAction(prefix, packet.NextAction); err != nil {
+		return err
+	}
+	if err := validateStateVerification(prefix, packet.NextVerification); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePacketScopes(prefix string, scopes []cognitive.StateScopeKind) error {
+	if len(scopes) == 0 {
+		return fmt.Errorf("%s: scopes is required", prefix)
+	}
+	for _, scope := range scopes {
+		switch cognitive.StateScopeKind(strings.TrimSpace(string(scope))) {
+		case cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask:
+		default:
+			return fmt.Errorf("%s: unsupported scope %q", prefix, scope)
+		}
+	}
+	return nil
+}
+
+func validateStateAction(prefix string, action cognitive.StateAction) error {
+	kind := cognitive.StateActionKind(strings.TrimSpace(string(action.Kind)))
+	if kind == "" {
+		return fmt.Errorf("%s: next_action.kind is required", prefix)
+	}
+	switch kind {
+	case cognitive.StateActionCommand, cognitive.StateActionInstruction, cognitive.StateActionReviewGate:
+	default:
+		return fmt.Errorf("%s: next_action.kind %q is not a recognized action kind", prefix, kind)
+	}
+	if strings.TrimSpace(action.Description) == "" {
+		return fmt.Errorf("%s: next_action.description is required", prefix)
+	}
+	if kind == cognitive.StateActionCommand && strings.TrimSpace(action.Command) == "" {
+		return fmt.Errorf("%s: next_action.command is required for command kind", prefix)
+	}
+	return nil
+}
+
+func validateStateVerification(prefix string, verification cognitive.StateVerification) error {
+	kind := cognitive.StateVerificationKind(strings.TrimSpace(string(verification.Kind)))
+	if kind == "" {
+		return fmt.Errorf("%s: next_verification.kind is required", prefix)
+	}
+	switch kind {
+	case cognitive.StateVerificationCommand, cognitive.StateVerificationArtifact, cognitive.StateVerificationManual:
+	default:
+		return fmt.Errorf("%s: next_verification.kind %q is not a recognized verification kind", prefix, kind)
+	}
+	if strings.TrimSpace(verification.Description) == "" {
+		return fmt.Errorf("%s: next_verification.description is required", prefix)
+	}
+	if kind == cognitive.StateVerificationCommand && strings.TrimSpace(verification.Command) == "" {
+		return fmt.Errorf("%s: next_verification.command is required for command kind", prefix)
+	}
+	return nil
+}
+
+func validateNativePacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) error {
+	if err := validatePacketPrincipal("stateplane native", packet, request); err != nil {
+		return err
+	}
+	if request.Project != "" && packet.Project != request.Project {
+		return fmt.Errorf("stateplane native: project does not match resume request")
+	}
+	if request.SessionID != "" && packet.SessionID != request.SessionID {
+		return fmt.Errorf("stateplane native: session_id does not match resume request")
+	}
+	if request.GoalID != "" && packet.GoalID != request.GoalID {
+		return fmt.Errorf("stateplane native: goal_id does not match resume request")
+	}
+	if request.TaskID != "" && packet.TaskID != request.TaskID {
+		return fmt.Errorf("stateplane native: task_id does not match resume request")
+	}
+	if packet.Source != cognitive.StatePacketSourceNative {
+		return fmt.Errorf("stateplane native: source %q is not native", packet.Source)
+	}
+	if err := validateDeterministicResumePacketFields("stateplane native", packet); err != nil {
+		return err
+	}
+	if packet.FallbackUsed {
+		return fmt.Errorf("stateplane native: fallback_used must be false")
+	}
+	if strings.TrimSpace(packet.FallbackPath) != "" {
+		return fmt.Errorf("stateplane native: fallback_path must be empty")
+	}
+	for _, ref := range packet.EvidenceRefs {
+		if strings.HasPrefix(strings.TrimSpace(ref), "filesystem_fallback:") {
+			return fmt.Errorf("stateplane native: filesystem fallback evidence is not allowed")
+		}
+	}
+	return nil
+}
+
 func validateFallbackPacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) error {
 	if err := validatePacketPrincipal("stateplane fallback", packet, request); err != nil {
 		return err
 	}
+	if packet.Source != cognitive.StatePacketSourceFilesystemFallback {
+		return fmt.Errorf("stateplane fallback: source must be filesystem_fallback")
+	}
+	fallbackPath := strings.TrimSpace(packet.FallbackPath)
+	if fallbackPath == "" {
+		return fmt.Errorf("stateplane fallback: fallback_path is required")
+	}
 	if len(packet.EvidenceRefs) == 0 {
 		return fmt.Errorf("stateplane fallback: evidence_refs is required")
+	}
+	if !evidenceRefsContain(packet.EvidenceRefs, "filesystem_fallback:"+fallbackPath) {
+		return fmt.Errorf("stateplane fallback: evidence_refs must include filesystem fallback path")
 	}
 	if !packet.FallbackUsed {
 		return fmt.Errorf("stateplane fallback: fallback_used must be true")
 	}
-	if packet.NextAction.Description == "" {
-		return fmt.Errorf("stateplane fallback: next_action.description is required")
+	if packet.GeneratedAt.IsZero() {
+		return fmt.Errorf("stateplane fallback: generated_at is required")
 	}
-	if packet.NextAction.Kind == "" {
-		return fmt.Errorf("stateplane fallback: next_action.kind is required")
+	if strings.TrimSpace(packet.StateVersion) == "" {
+		return fmt.Errorf("stateplane fallback: state_version is required")
 	}
-	if packet.NextVerification.Description == "" {
-		return fmt.Errorf("stateplane fallback: next_verification.description is required")
+	if err := validateStateAction("stateplane fallback", packet.NextAction); err != nil {
+		return err
 	}
-	if packet.NextVerification.Kind == "" {
-		return fmt.Errorf("stateplane fallback: next_verification.kind is required")
+	if err := validateStateVerification("stateplane fallback", packet.NextVerification); err != nil {
+		return err
 	}
 	if request.Project != "" && packet.Project != request.Project {
 		return fmt.Errorf("stateplane fallback: project does not match resume request")
@@ -532,11 +759,35 @@ func fallbackIsNewer(nativePacket, fallbackPacket cognitive.ResumePacket) bool {
 
 func nativePersistedStateTime(packet cognitive.ResumePacket) (time.Time, bool) {
 	if stateVersion := strings.TrimSpace(packet.StateVersion); stateVersion != "" {
-		if parsed, err := time.Parse(time.RFC3339Nano, stateVersion); err == nil {
+		if parsed, ok := parseNativeStateVersionTime(stateVersion); ok {
 			return parsed, true
 		}
 	}
 	return packet.GeneratedAt, !packet.GeneratedAt.IsZero()
+}
+
+func parseNativeStateVersionTime(stateVersion string) (time.Time, bool) {
+	stateVersion = strings.TrimSpace(stateVersion)
+	if parsed, err := time.Parse(time.RFC3339Nano, stateVersion); err == nil {
+		return parsed, true
+	}
+	parts := strings.Split(stateVersion, "+project@")
+	if len(parts) != 2 {
+		return time.Time{}, false
+	}
+	latest := time.Time{}
+	for _, raw := range parts {
+		raw = strings.TrimPrefix(strings.TrimSpace(raw), "session:")
+		raw = strings.TrimPrefix(raw, "project:")
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return time.Time{}, false
+		}
+		if latest.IsZero() || parsed.After(latest) {
+			latest = parsed
+		}
+	}
+	return latest, true
 }
 
 func packetEvidenceRefs(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest, fallback bool) []string {
@@ -598,6 +849,16 @@ func appendUniqueEvidenceRef(refs []string, ref string) []string {
 		}
 	}
 	return append(refs, ref)
+}
+
+func evidenceRefsContain(refs []string, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	for _, ref := range refs {
+		if strings.TrimSpace(ref) == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func valueString(value interface{}) string {

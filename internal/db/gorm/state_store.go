@@ -6,8 +6,8 @@ import (
 	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -198,67 +198,104 @@ func (s *StateStore) ReadProjectState(ctx context.Context, project string) (cogn
 	if err := s.requireDB(); err != nil {
 		return cognitive.ProjectStateRecord{}, err
 	}
+	row, err := s.readProjectStateRow(ctx, project)
+	if err != nil {
+		return cognitive.ProjectStateRecord{}, err
+	}
+	return projectStateFromRow(row), nil
+}
+
+func (s *StateStore) readProjectStateRow(ctx context.Context, project string) (projectStateRow, error) {
 	if project == "" {
-		return cognitive.ProjectStateRecord{}, fmt.Errorf("state_store read_project: project is required")
+		return projectStateRow{}, fmt.Errorf("state_store read_project: project is required")
 	}
 	var row projectStateRow
 	if err := s.db.WithContext(ctx).Where("project = ?", project).First(&row).Error; err != nil {
-		return cognitive.ProjectStateRecord{}, fmt.Errorf("state_store read_project %q: %w", project, err)
+		return projectStateRow{}, fmt.Errorf("state_store read_project %q: %w", project, err)
 	}
+	return row, nil
+}
+
+func projectStateFromRow(row projectStateRow) cognitive.ProjectStateRecord {
 	return cognitive.ProjectStateRecord{
 		Phase:        row.Phase,
 		DeadlineDate: row.DeadlineDate,
 		Pressure:     row.Pressure,
 		UpdatedBy:    row.UpdatedBy,
-	}, nil
+	}
 }
 
 // ReadResumePacket builds one bounded native resume packet from persisted state.
 func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
-	request.Principal = strings.TrimSpace(request.Principal)
-	request.SessionID = strings.TrimSpace(request.SessionID)
+	request = normalizeStateStoreResumePacketRequest(request)
 	if request.Principal == "" {
 		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: principal is required")
 	}
-	if request.SessionID == "" {
-		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: session_id is required")
+	if err := validateStateStoreResumePacketRequest(request); err != nil {
+		return cognitive.ResumePacket{}, err
 	}
 	if err := s.requireDB(); err != nil {
 		return cognitive.ResumePacket{}, err
 	}
 
-	var row sessionStateRow
-	if err := s.db.WithContext(ctx).Where("session_id = ?", request.SessionID).First(&row).Error; err != nil {
-		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_session %q: %w", request.SessionID, err)
-	}
-	sessionState, err := sessionStateFromRow(row)
-	if err != nil {
-		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume session %q: %w", request.SessionID, err)
-	}
-	nextAction, err := stateActionFromSlots(sessionState)
-	if err != nil {
-		return cognitive.ResumePacket{}, err
-	}
-	nextVerification, err := stateVerificationFromSlots(sessionState)
-	if err != nil {
-		return cognitive.ResumePacket{}, err
-	}
+	needsSessionState := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeSession)
+	needsProjectState := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeProject)
 
-	scopes := []cognitive.StateScopeKind{cognitive.StateScopeSession}
-	if request.Project != "" {
-		if _, err := s.ReadProjectState(ctx, request.Project); err != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return cognitive.ResumePacket{}, err
-			}
-		} else {
-			scopes = append(scopes, cognitive.StateScopeProject)
+	var nextAction cognitive.StateAction
+	var nextVerification cognitive.StateVerification
+	var stateVersion string
+	var evidenceRefs []string
+	var projectEvidenceRefs []string
+	if needsSessionState {
+		var row sessionStateRow
+		if err := s.db.WithContext(ctx).Where("session_id = ?", request.SessionID).First(&row).Error; err != nil {
+			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_session %q: %w", request.SessionID, err)
 		}
+		var projectStateVersion string
+		if needsProjectState {
+			projectRow, err := s.readProjectStateRow(ctx, request.Project)
+			if err != nil {
+				return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume project %q: %w", request.Project, err)
+			}
+			projectStateVersion = stateVersionFromTime(projectRow.UpdatedAt)
+			projectEvidenceRefs = stateEvidenceRefsFromProjectRow(projectRow, projectStateVersion)
+		}
+		sessionState, err := sessionStateFromRow(row)
+		if err != nil {
+			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume session %q: %w", request.SessionID, err)
+		}
+		nextAction, err = stateActionFromSlots(sessionState)
+		if err != nil {
+			return cognitive.ResumePacket{}, err
+		}
+		nextVerification, err = stateVerificationFromSlots(sessionState)
+		if err != nil {
+			return cognitive.ResumePacket{}, err
+		}
+		sessionStateVersion := stateVersionFromTime(row.UpdatedAt)
+		if projectStateVersion != "" {
+			stateVersion = sessionStateVersion + "+project@" + projectStateVersion
+		} else {
+			stateVersion = sessionStateVersion
+		}
+		evidenceRefs = stateEvidenceRefsFromSlots(sessionState, request.SessionID, sessionStateVersion)
+		evidenceRefs = appendUniqueStateEvidenceRefs(evidenceRefs, projectEvidenceRefs...)
+	} else {
+		if request.Project == "" {
+			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: project is required when session scope is not requested")
+		}
+		projectRow, err := s.readProjectStateRow(ctx, request.Project)
+		if err != nil {
+			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume project %q: %w", request.Project, err)
+		}
+		nextAction = stateActionFromProjectRow(projectRow)
+		nextVerification = stateVerificationFromProjectRow(projectRow)
+		stateVersion = stateVersionFromTime(projectRow.UpdatedAt)
+		evidenceRefs = stateEvidenceRefsFromProjectRow(projectRow, stateVersion)
 	}
 
 	now := time.Now().UTC()
-	stateVersion := stateVersionFromTime(row.UpdatedAt)
-	evidenceRefs := stateEvidenceRefsFromSlots(sessionState, request.SessionID, stateVersion)
-	return cognitive.ResumePacket{
+	packet := cognitive.ResumePacket{
 		PacketID:         resumePacketID(request, stateVersion),
 		Project:          request.Project,
 		Principal:        request.Principal,
@@ -267,15 +304,106 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 		Source:           cognitive.StatePacketSourceNative,
 		FallbackUsed:     false,
 		Freshness:        cognitive.StateFreshnessFresh,
-		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: now},
+		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: now},
 		NextAction:       nextAction,
 		NextVerification: nextVerification,
 		GeneratedAt:      now,
 		EvidenceRefs:     evidenceRefs,
 		GoalID:           request.GoalID,
 		TaskID:           request.TaskID,
-		Scopes:           scopes,
-	}, nil
+		Scopes:           append([]cognitive.StateScopeKind(nil), request.Scopes...),
+	}
+	s.LogResumeReadAudit(ctx, request, packet, "read_resume_state", "native", "native resume packet returned")
+	return packet, nil
+}
+
+func normalizeStateStoreResumePacketRequest(request cognitive.ResumePacketRequest) cognitive.ResumePacketRequest {
+	request.Project = strings.TrimSpace(request.Project)
+	request.Principal = strings.TrimSpace(request.Principal)
+	request.SessionID = strings.TrimSpace(request.SessionID)
+	request.GoalID = strings.TrimSpace(request.GoalID)
+	request.TaskID = strings.TrimSpace(request.TaskID)
+	request.Scopes = canonicalizeStateStoreResumeScopes(request.Scopes)
+	return request
+}
+
+func canonicalizeStateStoreResumeScopes(scopes []cognitive.StateScopeKind) []cognitive.StateScopeKind {
+	if len(scopes) == 0 {
+		return nil
+	}
+	seen := make(map[cognitive.StateScopeKind]struct{}, len(scopes))
+	for _, scope := range scopes {
+		seen[cognitive.StateScopeKind(strings.TrimSpace(string(scope)))] = struct{}{}
+	}
+	ordered := make([]cognitive.StateScopeKind, 0, len(seen))
+	for _, scope := range []cognitive.StateScopeKind{
+		cognitive.StateScopeSession,
+		cognitive.StateScopeProject,
+		cognitive.StateScopeGoal,
+		cognitive.StateScopeTask,
+	} {
+		if _, ok := seen[scope]; ok {
+			ordered = append(ordered, scope)
+			delete(seen, scope)
+		}
+	}
+	if len(seen) == 0 {
+		return ordered
+	}
+	extra := make([]string, 0, len(seen))
+	for scope := range seen {
+		extra = append(extra, string(scope))
+	}
+	sort.Strings(extra)
+	for _, scope := range extra {
+		ordered = append(ordered, cognitive.StateScopeKind(scope))
+	}
+	return ordered
+}
+
+func validateStateStoreResumePacketRequest(request cognitive.ResumePacketRequest) error {
+	if len(request.Scopes) == 0 {
+		return fmt.Errorf("state_store read_resume: scopes is required")
+	}
+	hasSession := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeSession)
+	for _, scope := range request.Scopes {
+		switch scope {
+		case cognitive.StateScopeSession:
+			if request.SessionID == "" {
+				return fmt.Errorf("state_store read_resume: session_id is required for session scope")
+			}
+		case cognitive.StateScopeProject:
+			if request.Project == "" {
+				return fmt.Errorf("state_store read_resume: project is required for project scope")
+			}
+		case cognitive.StateScopeGoal:
+			if request.GoalID == "" {
+				return fmt.Errorf("state_store read_resume: goal_id is required for goal scope")
+			}
+			if !hasSession {
+				return fmt.Errorf("state_store read_resume: goal scope requires session scope")
+			}
+		case cognitive.StateScopeTask:
+			if request.TaskID == "" {
+				return fmt.Errorf("state_store read_resume: task_id is required for task scope")
+			}
+			if !hasSession {
+				return fmt.Errorf("state_store read_resume: task scope requires session scope")
+			}
+		default:
+			return fmt.Errorf("state_store read_resume: unsupported scope %q", scope)
+		}
+	}
+	return nil
+}
+
+func hasStateStoreResumeScope(scopes []cognitive.StateScopeKind, want cognitive.StateScopeKind) bool {
+	for _, scope := range scopes {
+		if scope == want {
+			return true
+		}
+	}
+	return false
 }
 
 func sessionStateFromRow(row sessionStateRow) (cognitive.SessionStateSlots, error) {
@@ -299,19 +427,22 @@ func sessionStateFromRow(row sessionStateRow) (cognitive.SessionStateSlots, erro
 }
 
 func resumePacketID(request cognitive.ResumePacketRequest, stateVersion string) string {
+	request = normalizeStateStoreResumePacketRequest(request)
 	identity := struct {
-		Project      string `json:"project"`
-		Principal    string `json:"principal"`
-		SessionID    string `json:"session_id"`
-		GoalID       string `json:"goal_id"`
-		TaskID       string `json:"task_id"`
-		StateVersion string `json:"state_version"`
+		Project      string                     `json:"project"`
+		Principal    string                     `json:"principal"`
+		SessionID    string                     `json:"session_id"`
+		GoalID       string                     `json:"goal_id"`
+		TaskID       string                     `json:"task_id"`
+		Scopes       []cognitive.StateScopeKind `json:"scopes"`
+		StateVersion string                     `json:"state_version"`
 	}{
-		Project:      strings.TrimSpace(request.Project),
-		Principal:    strings.TrimSpace(request.Principal),
-		SessionID:    strings.TrimSpace(request.SessionID),
-		GoalID:       strings.TrimSpace(request.GoalID),
-		TaskID:       strings.TrimSpace(request.TaskID),
+		Project:      request.Project,
+		Principal:    request.Principal,
+		SessionID:    request.SessionID,
+		GoalID:       request.GoalID,
+		TaskID:       request.TaskID,
+		Scopes:       append([]cognitive.StateScopeKind(nil), request.Scopes...),
 		StateVersion: strings.TrimSpace(stateVersion),
 	}
 	data, _ := json.Marshal(identity)
@@ -344,6 +475,56 @@ func stateEvidenceRefsFromSlots(state cognitive.SessionStateSlots, sessionID, st
 		}
 	}
 	return refs
+}
+
+func stateEvidenceRefsFromProjectRow(row projectStateRow, stateVersion string) []string {
+	return []string{fmt.Sprintf("agent_project_state:%s@%s", strings.TrimSpace(row.Project), strings.TrimSpace(stateVersion))}
+}
+
+func appendUniqueStateEvidenceRefs(refs []string, values ...string) []string {
+	seen := make(map[string]bool, len(refs)+len(values))
+	for _, ref := range refs {
+		seen[strings.TrimSpace(ref)] = true
+	}
+	for _, ref := range values {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+func stateActionFromProjectRow(row projectStateRow) cognitive.StateAction {
+	project := strings.TrimSpace(row.Project)
+	if project == "" {
+		project = "unknown project"
+	}
+	details := make([]string, 0, 3)
+	if phase := strings.TrimSpace(row.Phase); phase != "" {
+		details = append(details, "phase: "+phase)
+	}
+	if pressure := strings.TrimSpace(row.Pressure); pressure != "" {
+		details = append(details, "pressure: "+pressure)
+	}
+	if row.DeadlineDate != nil && !row.DeadlineDate.IsZero() {
+		details = append(details, "deadline: "+row.DeadlineDate.UTC().Format("2006-01-02"))
+	}
+	description := fmt.Sprintf("Continue project %s from native project state", project)
+	if len(details) > 0 {
+		description += " (" + strings.Join(details, "; ") + ")"
+	}
+	return cognitive.StateAction{Kind: cognitive.StateActionInstruction, Description: description + "."}
+}
+
+func stateVerificationFromProjectRow(row projectStateRow) cognitive.StateVerification {
+	project := strings.TrimSpace(row.Project)
+	if project == "" {
+		project = "unknown project"
+	}
+	return cognitive.StateVerification{Kind: cognitive.StateVerificationManual, Description: fmt.Sprintf("Verify project %s native project state remains current before continuing.", project)}
 }
 
 func parseStateStringSlice(value interface{}) []string {
@@ -549,6 +730,85 @@ func unmarshalJSONObject(raw JSONObjectRaw) (map[string]interface{}, error) {
 		out = map[string]interface{}{}
 	}
 	return out, nil
+}
+
+type resumeReadAuditState struct {
+	Project                 string                      `json:"project,omitempty"`
+	Principal               string                      `json:"principal,omitempty"`
+	SessionID               string                      `json:"session_id,omitempty"`
+	GoalID                  string                      `json:"goal_id,omitempty"`
+	TaskID                  string                      `json:"task_id,omitempty"`
+	RequestedScopes         []cognitive.StateScopeKind  `json:"requested_scopes,omitempty"`
+	PacketScopes            []cognitive.StateScopeKind  `json:"packet_scopes,omitempty"`
+	AllowFilesystemFallback bool                        `json:"allow_filesystem_fallback"`
+	Source                  cognitive.StatePacketSource `json:"source"`
+	Result                  string                      `json:"result"`
+	PacketID                string                      `json:"packet_id,omitempty"`
+	StateVersion            string                      `json:"state_version,omitempty"`
+	FallbackUsed            bool                        `json:"fallback_used"`
+	FallbackPath            string                      `json:"fallback_path,omitempty"`
+	Freshness               cognitive.StateFreshness    `json:"freshness,omitempty"`
+	DriftKind               cognitive.StateDriftKind    `json:"drift_kind,omitempty"`
+	ConflictCount           int                         `json:"conflict_count"`
+	EvidenceRefs            []string                    `json:"evidence_refs,omitempty"`
+}
+
+// LogResumeReadAudit records the selected resume read source using audit_log conventions.
+func (s *StateStore) LogResumeReadAudit(_ context.Context, request cognitive.ResumePacketRequest, packet cognitive.ResumePacket, action, result, reason string) {
+	if action == "" {
+		action = "read_resume_state"
+	}
+	if result == "" {
+		result = string(packet.Source)
+	}
+	if reason == "" {
+		reason = "resume read source selected"
+	}
+	request = normalizeStateStoreResumePacketRequest(request)
+	actor := request.Principal
+	if actor == "" {
+		actor = strings.TrimSpace(packet.Principal)
+	}
+	sourceSessionID := request.SessionID
+	if sourceSessionID == "" {
+		sourceSessionID = strings.TrimSpace(packet.SessionID)
+	}
+	s.logAuditAsync(action, actor, sourceSessionID, reason, resumeReadAuditStateFrom(request, packet, result))
+}
+
+func resumeReadAuditStateFrom(request cognitive.ResumePacketRequest, packet cognitive.ResumePacket, result string) resumeReadAuditState {
+	requestedScopes := append([]cognitive.StateScopeKind(nil), request.Scopes...)
+	packetScopes := append([]cognitive.StateScopeKind(nil), packet.Scopes...)
+	evidenceRefs := append([]string(nil), packet.EvidenceRefs...)
+	return resumeReadAuditState{
+		Project:                 firstNonEmpty(request.Project, packet.Project),
+		Principal:               firstNonEmpty(request.Principal, packet.Principal),
+		SessionID:               firstNonEmpty(request.SessionID, packet.SessionID),
+		GoalID:                  firstNonEmpty(request.GoalID, packet.GoalID),
+		TaskID:                  firstNonEmpty(request.TaskID, packet.TaskID),
+		RequestedScopes:         requestedScopes,
+		PacketScopes:            packetScopes,
+		AllowFilesystemFallback: request.AllowFilesystemFallback,
+		Source:                  packet.Source,
+		Result:                  strings.TrimSpace(result),
+		PacketID:                strings.TrimSpace(packet.PacketID),
+		StateVersion:            strings.TrimSpace(packet.StateVersion),
+		FallbackUsed:            packet.FallbackUsed,
+		FallbackPath:            strings.TrimSpace(packet.FallbackPath),
+		Freshness:               packet.Freshness,
+		DriftKind:               packet.Drift.Kind,
+		ConflictCount:           len(packet.Drift.Conflicts),
+		EvidenceRefs:            evidenceRefs,
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (s *StateStore) logAuditAsync(action, actor, sourceSessionID, reason string, afterState interface{}) {
