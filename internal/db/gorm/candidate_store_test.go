@@ -554,6 +554,19 @@ func TestCandidateStore_PromoteWithMemoryAndSnapshot_WritesCandidateReviewAudit(
 	require.Contains(t, entry.Reason, "review action promote")
 }
 
+func TestCandidateStore_PreserveWithMemoryAndSnapshot_RequiresCandidateReviewSnapshotBeforeMutation(t *testing.T) {
+	cs := NewCandidateStore(nil, nil)
+	mem := &models.Memory{Content: "preserve requires snapshot", Project: "test-project", EpistemicType: "decision", Tier: "episodic", SourceAgent: "crystallization"}
+
+	updated, created, snapshot, err := cs.PreserveWithMemoryAndSnapshot(context.Background(), nil, 42, mem, nil, "agent/reviewer")
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "candidate_review snapshot is required")
+	require.Nil(t, updated)
+	require.Nil(t, created)
+	require.Nil(t, snapshot)
+}
+
 func TestCandidateStore_TransitionToRejectedWithSnapshot_WritesCandidateReviewAudit(t *testing.T) {
 	db := openCandidateTestDB(t)
 	auditStore := NewAuditStore(db)

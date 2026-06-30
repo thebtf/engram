@@ -381,14 +381,52 @@ func (s *CandidateStore) PromoteWithMemoryAndSnapshot(
 	snapshot *models.BulkOpSnapshot,
 	actor string,
 ) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error) {
+	return s.promoteWithMemoryAndSnapshotAction(ctx, snapshotStore, candidateID, mem, snapshot, actor, "promote", "promote_with_memory_snapshot")
+}
+
+// PreserveWithMemoryAndSnapshot is the CR-008 preserve action seam. It reuses
+// the candidate promotion mutation while recording the candidate_review audit
+// reason as an explicit preserve action.
+func (s *CandidateStore) PreserveWithMemoryAndSnapshot(
+	ctx context.Context,
+	snapshotStore *SnapshotStore,
+	candidateID int64,
+	mem *models.Memory,
+	snapshot *models.BulkOpSnapshot,
+	actor string,
+) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error) {
+	if !candidateReviewAuditRequired(snapshot) {
+		return nil, nil, nil, fmt.Errorf("preserve_with_memory_snapshot: candidate_review snapshot is required")
+	}
+	return s.promoteWithMemoryAndSnapshotAction(ctx, snapshotStore, candidateID, mem, snapshot, actor, "preserve", "preserve_with_memory_snapshot")
+}
+
+func (s *CandidateStore) promoteWithMemoryAndSnapshotAction(
+	ctx context.Context,
+	snapshotStore *SnapshotStore,
+	candidateID int64,
+	mem *models.Memory,
+	snapshot *models.BulkOpSnapshot,
+	actor string,
+	reviewAction string,
+	operation string,
+) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error) {
 	if err := validatePromoteMemory(mem); err != nil {
 		return nil, nil, nil, err
 	}
+	reviewAction = strings.TrimSpace(reviewAction)
+	if reviewAction == "" {
+		reviewAction = "promote"
+	}
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = "promote_with_memory_snapshot"
+	}
 	if snapshot != nil && snapshotStore == nil {
-		return nil, nil, nil, fmt.Errorf("promote_with_memory_snapshot: snapshot store is required")
+		return nil, nil, nil, fmt.Errorf("%s: snapshot store is required", operation)
 	}
 	if candidateReviewAuditRequired(snapshot) && s.auditStore == nil {
-		return nil, nil, nil, fmt.Errorf("promote_with_memory_snapshot: candidate_review audit store is required")
+		return nil, nil, nil, fmt.Errorf("%s: candidate_review audit store is required", operation)
 	}
 
 	var beforeCandidate *models.CrystallizationCandidate
@@ -416,7 +454,7 @@ func (s *CandidateStore) PromoteWithMemoryAndSnapshot(
 			}
 		}
 		if candidateReviewAuditRequired(snapshot) {
-			return s.logCandidateReviewAuditTx(ctx, tx, "promote", actor, "", beforeCandidate, updatedCandidate)
+			return s.logCandidateReviewAuditTx(ctx, tx, reviewAction, actor, "", beforeCandidate, updatedCandidate)
 		}
 		return nil
 	})
@@ -585,6 +623,20 @@ func (s *CandidateStore) TransitionToRejectedWithSnapshot(
 	actor string,
 ) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
 	return s.transitionWithSnapshot(ctx, snapshotStore, id, models.CandidateStatusRejected, "reject", reason, snapshot, actor)
+}
+
+// TransitionToSuppressedWithSnapshot is the CR-008 suppress action seam. It reuses
+// the candidate rejection transition while recording the candidate_review audit
+// reason as an explicit suppress action.
+func (s *CandidateStore) TransitionToSuppressedWithSnapshot(
+	ctx context.Context,
+	snapshotStore *SnapshotStore,
+	id int64,
+	reason string,
+	snapshot *models.BulkOpSnapshot,
+	actor string,
+) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+	return s.transitionWithSnapshot(ctx, snapshotStore, id, models.CandidateStatusRejected, "suppress", reason, snapshot, actor)
 }
 
 // TransitionToSupersededWithSnapshot creates the candidate-review snapshot,

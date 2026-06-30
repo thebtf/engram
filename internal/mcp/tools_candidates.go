@@ -63,10 +63,10 @@ func requireCandidateReviewSnapshot(operation string, snapshot *models.BulkOpSna
 	return nil
 }
 
-// candidateTools returns the 5 crystallization candidate MCP tool definitions.
+// candidateTools returns crystallization candidate and CR-008 review-loop MCP tool definitions.
 // Only registered when ENGRAM_VNEXT_F_ENABLED=true.
 func candidateTools() []Tool {
-	return []Tool{
+	tools := []Tool{
 		{
 			Name:        "list_candidates",
 			Description: "List crystallization candidates. Requires ENGRAM_VNEXT_F_ENABLED=true. Returns candidates filtered by project and optional status. Use promote_candidate / reject_candidate to act on results.",
@@ -158,6 +158,7 @@ func candidateTools() []Tool {
 			},
 		},
 	}
+	return append(tools, reviewLoopCandidateTools()...)
 }
 
 // handleListCandidates implements the list_candidates MCP tool.

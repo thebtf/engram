@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -97,6 +98,10 @@ func (f *fakeCandidateReviewStore) PromoteWithMemoryAndSnapshot(ctx context.Cont
 	return updated, created, snapshot, nil
 }
 
+func (f *fakeCandidateReviewStore) PreserveWithMemoryAndSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, candidateID int64, mem *models.Memory, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error) {
+	return f.PromoteWithMemoryAndSnapshot(ctx, snapshotStore, candidateID, mem, snapshot, actor)
+}
+
 func (f *fakeCandidateReviewStore) TransitionToRejected(ctx context.Context, id int64, reason string) (*models.CrystallizationCandidate, error) {
 	f.rejectID = id
 	f.rejectReason = reason
@@ -119,6 +124,10 @@ func (f *fakeCandidateReviewStore) TransitionToRejectedWithSnapshot(ctx context.
 		return nil, nil, err
 	}
 	return updated, snapshot, nil
+}
+
+func (f *fakeCandidateReviewStore) TransitionToSuppressedWithSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, id int64, reason string, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+	return f.TransitionToRejectedWithSnapshot(ctx, snapshotStore, id, reason, snapshot, actor)
 }
 
 func (f *fakeCandidateReviewStore) TransitionToSuperseded(ctx context.Context, id int64) (*models.CrystallizationCandidate, error) {
@@ -533,4 +542,225 @@ func TestHandleRejectMemoryCandidate_DeadlineExceededAsGatewayTimeout(t *testing
 
 	require.Equal(t, http.StatusGatewayTimeout, w.Code)
 	assert.Contains(t, w.Body.String(), "candidate request deadline exceeded")
+}
+
+func TestHandleReadMemoryReviewQueue_ReturnsPacketCentricQueueAndSparseMetrics(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		listRows: []*models.CrystallizationCandidate{{
+			ID:               42,
+			Status:           models.CandidateStatusPending,
+			SourceSessionID:  "sess-42",
+			EvidenceHandles:  []string{"session:sess-42"},
+			AffectedProjects: []string{"engram"},
+			PrivacyScope:     "project",
+			Fingerprint:      "abc123",
+		}},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/review-queue?project=engram&status=pending&limit=5", nil)
+	w := httptest.NewRecorder()
+
+	service.handleReadMemoryReviewQueue(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "engram", store.listProject)
+	assert.Equal(t, models.CandidateStatusPending, store.listStatus)
+	assert.Equal(t, 5, store.listLimit)
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	require.Contains(t, raw, "packets")
+	require.NotContains(t, raw, "candidates", "CR-008 queue read must not be a raw candidate row dump")
+
+	var response reviewpacket.ReviewQueueRead
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Len(t, response.Packets, 1)
+	assert.Equal(t, "candidate:42:abc123", response.Packets[0].PacketID)
+	assert.Equal(t, reviewpacket.ReviewPacketTypeUsefulnessNoise, response.Packets[0].PacketType)
+	assert.GreaterOrEqual(t, response.Packets[0].ProvenanceCount, 4)
+	assert.Equal(t, reviewpacket.ReviewStateSparse, response.Metrics.State)
+	assert.Contains(t, response.Metrics.SparseReason, "confidence telemetry")
+}
+
+func TestHandleReadMemoryReviewQueue_RiskyOnlyKeepsUnfilteredMetricsAndBacklog(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		listRows: []*models.CrystallizationCandidate{
+			{ID: 42, Status: models.CandidateStatusPending, SourceSessionID: "sess-42", AffectedProjects: []string{"engram"}, PrivacyScope: "project", Fingerprint: "abc123", Confidence: 0.4},
+			{ID: 43, Status: models.CandidateStatusPending, SourceSessionID: "sess-43", AffectedProjects: []string{"engram"}, PrivacyScope: "project", Fingerprint: "def456", Confidence: 0.8},
+		},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/review-queue?project=engram&status=pending&limit=5&risky_only=true", nil)
+	w := httptest.NewRecorder()
+
+	service.handleReadMemoryReviewQueue(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response reviewpacket.ReviewQueueRead
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Len(t, response.Packets, 1)
+	assert.Equal(t, "candidate:42:abc123", response.Packets[0].PacketID)
+	assert.Equal(t, 2, response.Metrics.BacklogTotal)
+	assert.Equal(t, 2, response.Metrics.ReadyCount)
+	assert.Equal(t, 1, response.Metrics.RiskyCount)
+	assert.Equal(t, reviewpacket.ReviewStateLive, response.Metrics.State)
+	assert.Equal(t, 2, response.Backlog.BoundedTotal)
+	assert.Equal(t, 2, response.Backlog.ReadyCount)
+}
+
+func TestHandlePreviewMemoryReviewPacketAction_DoesNotMutate(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project", AffectedProjects: []string{"engram"}, Fingerprint: "abc123"},
+		},
+	}
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	body := []byte(`{"action_type":"suppress"}`)
+	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:abc123/preview", body)
+	router.Post("/api/memory/review-packets/{packetID}/preview", service.handlePreviewMemoryReviewPacketAction)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, int64(0), store.rejectID)
+	assert.Equal(t, int64(0), store.promoteID)
+	var preview reviewpacket.ReviewActionPreview
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &preview))
+	assert.Equal(t, reviewpacket.ReviewActionSuppress, preview.ActionType)
+	assert.Equal(t, "reject", preview.CandidateAction)
+	assert.Equal(t, "candidate:42:abc123", preview.StaleMarker)
+}
+
+func TestHandleApplyMemoryReviewPacketAction_PreserveAndSuppressUseSnapshotBackedTransitions(t *testing.T) {
+	t.Run("preserve", func(t *testing.T) {
+		promotedMemoryID := int64(77)
+		store := &fakeCandidateReviewStore{
+			getRows: map[int64]*models.CrystallizationCandidate{
+				42: {ID: 42, Status: models.CandidateStatusPending, ProposedContent: "preserve useful memory", ProposedTier: "semantic", SourceSessionID: "sess-42", PrivacyScope: "project", AffectedProjects: []string{"engram"}, Fingerprint: "abc123"},
+			},
+			transitionRows: map[int64]*models.CrystallizationCandidate{
+				42: {ID: 42, Status: models.CandidateStatusPromoted, PromotedMemoryID: &promotedMemoryID, Fingerprint: "abc123"},
+			},
+			promotedMemory: &models.Memory{ID: promotedMemoryID},
+		}
+		snapshotStore := gormdb.NewSnapshotStore(nil)
+		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+		body := []byte(`{"action_type":" preserve "}`)
+		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:abc123/apply", body)
+		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
+
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, int64(42), store.promoteID)
+		require.NotNil(t, store.promoteSnapshot)
+		assert.True(t, store.promoteSnapshotStore == snapshotStore)
+		assert.Contains(t, string(store.promoteSnapshot.Parameters), `"action":"preserve"`)
+		var receipt reviewpacket.ReviewActionReceipt
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &receipt))
+		assert.Equal(t, reviewpacket.ReviewActionPreserve, receipt.ActionType)
+		assert.Equal(t, "promote", receipt.CandidateAction)
+		assert.Equal(t, "promoted", receipt.UpdatedPacketStatus)
+		assert.NotEmpty(t, receipt.SnapshotID)
+		assert.Equal(t, promotedMemoryID, receipt.MemoryID)
+	})
+
+	t.Run("suppress", func(t *testing.T) {
+		store := &fakeCandidateReviewStore{
+			getRows: map[int64]*models.CrystallizationCandidate{
+				43: {ID: 43, Status: models.CandidateStatusPending, SourceSessionID: "sess-43", PrivacyScope: "project", AffectedProjects: []string{"engram"}, Fingerprint: "def456"},
+			},
+			transitionRows: map[int64]*models.CrystallizationCandidate{
+				43: {ID: 43, Status: models.CandidateStatusRejected, Fingerprint: "def456"},
+			},
+		}
+		snapshotStore := gormdb.NewSnapshotStore(nil)
+		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+		body := []byte(`{"action_type":"suppress","reason":"noise"}`)
+		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:43:def456/apply", body)
+		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
+
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, int64(43), store.rejectID)
+		assert.Equal(t, "noise", store.rejectReason)
+		require.NotNil(t, store.rejectSnapshot)
+		assert.True(t, store.rejectSnapshotStore == snapshotStore)
+		assert.Contains(t, string(store.rejectSnapshot.Parameters), `"action":"suppress"`)
+		var receipt reviewpacket.ReviewActionReceipt
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &receipt))
+		assert.Equal(t, reviewpacket.ReviewActionSuppress, receipt.ActionType)
+		assert.Equal(t, "reject", receipt.CandidateAction)
+		assert.Equal(t, "rejected", receipt.UpdatedPacketStatus)
+		assert.NotEmpty(t, receipt.SnapshotID)
+	})
+}
+
+func TestHandleApplyMemoryReviewPacketAction_RejectsUnsupportedAndStalePackets(t *testing.T) {
+	t.Run("unsupported", func(t *testing.T) {
+		store := &fakeCandidateReviewStore{
+			getRows: map[int64]*models.CrystallizationCandidate{
+				42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project", AffectedProjects: []string{"engram"}, Fingerprint: "abc123"},
+			},
+		}
+		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+		body := []byte(`{"action_type":"destroy"}`)
+		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:abc123/apply", body)
+		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
+
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "unsupported_review_action")
+		assert.Equal(t, int64(0), store.rejectID)
+		assert.Equal(t, int64(0), store.promoteID)
+	})
+
+	t.Run("stale", func(t *testing.T) {
+		store := &fakeCandidateReviewStore{
+			getRows: map[int64]*models.CrystallizationCandidate{
+				42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project", AffectedProjects: []string{"engram"}, Fingerprint: "new456"},
+			},
+		}
+		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+		body := []byte(`{"action_type":"suppress"}`)
+		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:old123/apply", body)
+		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
+
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusConflict, w.Code)
+		assert.Contains(t, w.Body.String(), "stale_review_packet")
+		assert.Equal(t, int64(0), store.rejectID)
+	})
+}
+
+func TestHandleReadMemoryReviewMetrics_ReturnsGatedAndErrorStatesHonestly(t *testing.T) {
+	t.Run("gated", func(t *testing.T) {
+		service := &Service{candidateReviewStoreSeam: &fakeCandidateReviewStore{}}
+		req := httptest.NewRequest(http.MethodGet, "/api/memory/review-metrics", nil)
+		w := httptest.NewRecorder()
+
+		service.handleReadMemoryReviewMetrics(w, req)
+
+		require.Equal(t, http.StatusForbidden, w.Code)
+		var metrics reviewpacket.ReviewMetrics
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &metrics))
+		assert.Equal(t, reviewpacket.ReviewStateGated, metrics.State)
+		assert.Contains(t, metrics.SparseReason, candidateQueueFlag)
+	})
+
+	t.Run("error", func(t *testing.T) {
+		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: &fakeCandidateReviewStore{listErr: fmt.Errorf("db unavailable")}}
+		req := httptest.NewRequest(http.MethodGet, "/api/memory/review-metrics", nil)
+		w := httptest.NewRecorder()
+
+		service.handleReadMemoryReviewMetrics(w, req)
+
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+		var metrics reviewpacket.ReviewMetrics
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &metrics))
+		assert.Equal(t, reviewpacket.ReviewStateError, metrics.State)
+		assert.Contains(t, metrics.SparseReason, "db unavailable")
+	})
 }
