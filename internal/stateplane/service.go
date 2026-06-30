@@ -237,6 +237,16 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	} else {
 		packet.StateVersion = strings.TrimSpace(packet.StateVersion)
 	}
+	// F5: when state_version is present but generated_at is absent, synthesize
+	// GeneratedAt so clients get a valid timestamp. Both absent is still an error
+	// caught by validateFallbackPacket.
+	if packet.GeneratedAt.IsZero() && strings.TrimSpace(packet.StateVersion) != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, packet.StateVersion); err == nil {
+			packet.GeneratedAt = parsed.UTC()
+		} else {
+			packet.GeneratedAt = now
+		}
+	}
 	if packet.Project == "" {
 		packet.Project = request.Project
 	}
@@ -254,8 +264,10 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	} else {
 		packet.PacketID = strings.TrimSpace(packet.PacketID)
 	}
-	if len(packet.Scopes) == 0 && packet.SessionID != "" {
-		packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
+	// F6: default Scopes to request.Scopes so fallback packets always cover
+	// what the caller requested, regardless of packet.SessionID presence.
+	if len(packet.Scopes) == 0 {
+		packet.Scopes = append([]cognitive.StateScopeKind(nil), request.Scopes...)
 	}
 	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	packet.FallbackUsed = true
